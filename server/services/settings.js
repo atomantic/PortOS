@@ -5,28 +5,20 @@ import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue, drainDetachedWrites, trackDetachedWrite } from '../lib/fileWriteQueue.js';
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
-// `./userActions.js` is imported lazily at its single call site below, NOT here.
-// It reaches the DB schema/query layer, and settings.js is imported by nearly
-// every service — a static edge instantiated that subtree in ~200 suites that
-// never write a ledger row.
+// `./userActions.js` is imported lazily at its single call site: it reaches the DB
+// layer, and a static edge from this widely imported module instantiated that subtree
+// in ~200 suites.
 
-// POLLUTING_KEYS (`__proto__`/`constructor`/`prototype`) is the project-wide
-// prototype-pollution denylist (defined in server/lib/objects.js). Without it,
-// rebuilding the cleaned object via `cleaned[k] = v` against a payload that
-// JSON.parse exposed those names on would invoke the prototype setter and
-// mutate Object.prototype. Settings never legitimately uses these keys.
+// POLLUTING_KEYS (server/lib/objects.js) is the prototype-pollution denylist: rebuilding
+// via `cleaned[k] = v` on a JSON.parse payload with these names would mutate
+// Object.prototype. Settings never legitimately uses them.
 
 const SETTINGS_FILE = join(PATHS.data, 'settings.json');
 
-// Keys that belong to the MortalLoom iCloud store (MortalLoom.json), NOT to
-// PortOS settings (data/settings.json). A historical bug or hand-edit can pollute
-// settings.json with these top-level arrays/objects, which then bloats every
-// `GET /api/settings` response and rides forward through every
-// `saveSettings({ ...current, x: y })` mutation. Strip them on both read and
-// write so the corruption auto-heals on the next save and can't propagate.
-// Superset of ARRAY_KEYS in mortalLoomStore.js — also includes the non-array
-// store objects `profile` and `genomeScanRecord` observed in the actual
-// corruption. Keep both sides in sync when MortalLoom adds new store keys.
+// Keys of the MortalLoom iCloud store (MortalLoom.json), not PortOS settings. A stray
+// write can pollute settings.json with them, bloating `GET /api/settings`; strip on
+// read and write so it self-heals. Superset of ARRAY_KEYS in mortalLoomStore.js (adds
+// `profile`, `genomeScanRecord`); keep both in sync.
 const MORTALLOOM_STORE_KEYS = new Set([
   'alcoholDrinks', 'alcoholPresets', 'bloodTests', 'bodyEntries',
   'epigeneticTests', 'eyeExams', 'goals', 'habits', 'healthMetrics',
@@ -34,12 +26,9 @@ const MORTALLOOM_STORE_KEYS = new Set([
   'profile', 'genomeScanRecord'
 ]);
 
-// Pure rebuild — drops MortalLoom store keys and prototype-pollution keys.
-// Non-plain-object inputs (arrays, null, primitives) pass through unchanged;
-// rebuilding them as `{}` would silently coerce-then-lose the original value.
-// Warning emission is the caller's responsibility (see `save()`) so a single
-// updateSettings call produces at most one log line, tied to a successful
-// persisted write.
+// Pure rebuild dropping MortalLoom store and pollution keys. Non-plain-object inputs
+// pass through (rebuilding as `{}` would lose the value). Warning is the caller's job
+// (see `save()`) so one updateSettings call logs at most once.
 const stripStoreKeys = (settings) => {
   if (!isPlainObject(settings)) return settings;
   const cleaned = {};
@@ -51,26 +40,16 @@ const stripStoreKeys = (settings) => {
   return cleaned;
 };
 
-// Tiny pub/sub so cache holders (annotationIdentity, etc.) can invalidate on
-// writes without each subscribing through socket.io. Listeners receive the
-// merged settings object so they can pick fields they care about. Use a
-// shared module-level emitter so duplicate imports observe the same bus.
+// Pub/sub so cache holders invalidate on writes without socket.io; listeners receive the
+// merged settings. Shared module-level emitter so duplicate imports see one bus.
 export const settingsEvents = new EventEmitter();
-// Cache holders that subscribe per-process can accumulate without bound on
-// hot-reload — bump the cap so vitest's per-test re-imports don't trip the
-// default-10-listeners warning.
+// Raised listener cap: hot-reload / per-test re-imports trip the default-10 warning.
 settingsEvents.setMaxListeners(50);
 
-// Reads are always silent — a polluted file would otherwise spam logs on
-// every GET /api/settings. `save()` warns based on what it's HANDED, so:
-// - `updateSettings(patch)` exposes both disk pollution (via the unstripped
-//   raw snapshot) AND patch pollution to save(), yielding one consolidated
-//   warning per successful write.
-// - Manual `getSettings() → modify → saveSettings(...)` flows hand save() an
-//   already-stripped object, so no warning fires — but those flows also
-//   can't reintroduce store-key pollution, so silence is correct.
-// - A direct `saveSettings(badObject)` with store keys warns once after the
-//   write resolves.
+// Reads are silent (a polluted file would spam every GET). `save()` warns on what it is
+// HANDED: `updateSettings(patch)` exposes disk and patch pollution for one consolidated
+// warning; a manual getSettings() -> saveSettings() hands save() stripped data (no
+// warning, and it can't reintroduce pollution); a direct saveSettings(bad) warns once.
 const loadRaw = async () => {
   const raw = await tryReadFile(SETTINGS_FILE);
   return hydratePrivateKeys(safeJSONParse(raw ?? '{}', {}), PATHS.data);
@@ -79,68 +58,40 @@ const loadRaw = async () => {
 /**
  * Security-sensitive STRICT read of settings.json for the auth gate (#2684).
  *
- * The normal loadRaw()/getSettings() path collapses THREE distinct states to
- * `{}`: an ABSENT file (fresh install — legitimately no settings), a file that
- * exists but can't be READ (permission / I/O error), and a file that reads but
- * won't PARSE (truncated / corrupt JSON, or a non-object root). For feature
- * reads that collapse is fine, but for the auth-enabled decision it fails OPEN:
- * a corrupt settings.json makes `isAuthEnabled()` compute `false` over `{}` and
- * silently disables the password gate (see `server/services/authGate.js`).
+ * loadRaw()/getSettings() collapse ABSENT, unreadable and unparseable files to `{}`,
+ * which would make a corrupt file fail OPEN (auth disabled). This preserves the
+ * distinction so security callers fail CLOSED:
+ *   { present: false, corrupt: false } absent (ENOENT): auth legitimately off
+ *   { present: true,  corrupt: true }  unreadable/unparseable: fail closed
+ *   { present: true,  corrupt: false } parsed cleanly into `settings`
  *
- * This read preserves the distinction so a security caller can fail CLOSED on
- * the two failure modes while still treating a genuinely absent file as
- * "auth off" (the correct default for a fresh install):
- *   { present: false, corrupt: false } → absent (ENOENT): auth legitimately off
- *   { present: true,  corrupt: true }  → exists but unreadable/unparseable: fail closed
- *   { present: true,  corrupt: false } → parsed cleanly into `settings`
- *
- * `settings` is always a plain object (`{}` in the two non-clean cases) so
- * callers can read it unconditionally; they gate their fail-closed behavior on
- * `corrupt`. The default path is the real SETTINGS_FILE; the optional argument
- * exists so unit tests can point it at a temp file without touching real data.
+ * `settings` is always a plain object, so callers gate on `corrupt`. The optional
+ * argument lets tests point at a temp file.
  */
 export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
-  // `tryReadFileStrict` keeps the distinction `tryReadFile` collapses, straight
-  // off the read's own errno — no second `access()` probe, which could disagree
-  // with the read it is explaining. `ok: false` = we could NOT confirm absence
-  // (EACCES on the file or a parent dir, ENOTDIR, EIO) → fail closed.
+  // `tryReadFileStrict` reports absence from the read's own errno (no second `access()`
+  // probe that could disagree). `ok: false` = absence unconfirmed (EACCES, ENOTDIR, EIO):
+  // fail closed.
   const { ok, value: raw } = await tryReadFileStrict(filePath);
   if (!ok) return { present: true, corrupt: true, settings: {} };
   if (raw === null) return { present: false, corrupt: false, settings: {} };
-  // Present and read. safeJSONParse returns null for malformed/empty input; a
-  // valid-JSON but non-object root (array, string, number) is likewise not a
-  // settings document — either way, treat it as corrupt rather than reading
-  // properties off it.
+  // safeJSONParse returns null for malformed/empty input; a non-object root is likewise
+  // not a settings document. Treat both as corrupt.
   const parsed = safeJSONParse(raw, null);
   if (!isPlainObject(parsed)) return { present: true, corrupt: true, settings: {} };
   return { present: true, corrupt: false, settings: parsed };
 };
 
-// Read-side cache. `getSettings()` is called 100+ times across the codebase
-// (many per request), and each call previously did a fresh filesystem read +
-// JSON.parse. Settings is app-wide, rarely-changing data — a textbook memoize.
-// Correctness contract:
-// - The cache is populated lazily on the first `getSettings()` and refreshed
-//   from the `settings:updated` event the SAME emitter already fires on every
-//   `save()` — so any write through the app (saveSettings/updateSettings/
-//   updateSettingsWith) keeps the cache warm and consistent.
-// - Write paths (`save`, `updateSettings`, `updateSettingsWith`) deliberately
-//   still read `loadRaw()` off disk inside the write queue for their
-//   read-merge-write, so their base snapshot is always the freshest persisted
-//   truth, never the cache. The post-write `settings:updated` then syncs the
-//   cache. This keeps the write-ordering guarantees intact.
-// - `null` = not-yet-loaded (distinct from a legitimately empty `{}`), so a
-//   fresh process reads disk exactly once.
-// - The prior `stripStoreKeys(await loadRaw())` handed every caller a fresh deep
-//   object graph, so callers may mutate nested settings in place. To preserve
-//   that isolation the cache is never handed out directly: reads deep-clone it,
-//   and the `settings:updated` listener stores a private clone (save() emits the
-//   same `cleaned` object it also returns to its caller). structuredClone is the
-//   right tool for this JSON-shaped data and stays far cheaper than the disk
-//   read + full-tree JSON.parse it replaces.
-// The local review bridge writes from another process. Reviewer-selection
-// reads explicitly refresh from disk metadata; ordinary getSettings() calls
-// keep this hot cache without paying a stat on every read.
+// Read-side cache: getSettings() is called 100+ times, so memoize.
+// - Populated lazily; refreshed from the `settings:updated` event save() already emits,
+//   so every write path keeps it coherent.
+// - Write paths still read `loadRaw()` from disk inside the write queue, so their
+//   read-merge-write base is never the cache.
+// - `null` = not-yet-loaded, distinct from a legitimately empty `{}`.
+// - Callers may mutate nested settings in place, so the cache is never handed out:
+//   reads deep-clone it and the listener stores a private clone.
+// The local review bridge writes from another process; reviewer-selection reads refresh
+// from disk metadata explicitly, while ordinary getSettings() skips the stat.
 const readSettingsSignature = async () => {
   try {
     const { mtimeMs, size } = await stat(SETTINGS_FILE);
@@ -158,31 +109,23 @@ settingsEvents.on('settings:updated', (cleaned) => {
   settingsCache = structuredClone(cleaned);
 });
 
-// Test-only: drop the read cache so a suite that stubs the on-disk file per
-// test observes each fresh stub. Production code never calls this — writes keep
-// the cache coherent via the `settings:updated` event above.
+// Test-only: drop the read cache so suites stubbing the on-disk file see each stub.
 export const __resetSettingsCache = () => {
   settingsCache = null;
   settingsSignature = undefined;
 };
 
-// Re-sync the read cache with the current on-disk settings.json and notify every
-// `settings:updated` listener. Call after a process replaces settings.json
-// OUTSIDE the normal save() path — e.g. a backup restore rsyncs it into place —
-// since such a write bypasses the save()-emitted event the cache rides on and
-// would otherwise leave every settings consumer serving pre-restore values.
+// Re-sync the read cache with on-disk settings.json and notify `settings:updated`
+// listeners. Call after something replaces the file OUTSIDE save() (e.g. a backup
+// restore), which bypasses the event the cache rides on.
 const reloadSettingsFromDisk = async (signaturePromise = readSettingsSignature()) => {
   const signature = await signaturePromise;
   const { corrupt, settings } = await readSettingsStrict();
   if (corrupt) {
-    // Do NOT broadcast a corrupt on-disk settings.json as `{}` (issue #2684). The
-    // concrete path is a backup restore of a malformed snapshot: backup.js calls
-    // reloadSettings() after installing it. Emitting `settings:updated` with `{}`
-    // would prime the read cache AND the auth enabled-cache to an empty/disabled
-    // state — reopening the gate (FAIL OPEN) and sticking there because the cache
-    // is no longer null. Invalidate instead: drop the read cache and signal
-    // consumers (auth) to drop theirs, so the next read goes to disk and fails
-    // closed / re-reads. Self-heals on the next clean read.
+    // Do NOT broadcast a corrupt settings.json as `{}` (#2684), e.g. from a backup restore
+    // of a malformed snapshot: it would prime the read cache and the auth enabled-cache to
+    // an empty/disabled state, reopening the gate (FAIL OPEN). Invalidate instead so the
+    // next read goes to disk and fails closed.
     settingsCache = null;
     settingsSignature = undefined;
     settingsEvents.emit('settings:invalidated');
@@ -196,10 +139,9 @@ const reloadSettingsFromDisk = async (signaturePromise = readSettingsSignature()
 
 export const reloadSettings = () => reloadSettingsFromDisk();
 
-// Serialize all writes to settings.json on a single tail so an updateSettings
-// read-merge-write can't interleave with a concurrent save (two browser tabs,
-// a background job racing a user save) and clobber the other's patch. Ordinary
-// reads stay off the queue; explicit disk refreshes serialize their cache events.
+// Serialize all settings.json writes on one tail so a read-merge-write can't interleave
+// with a concurrent save and clobber a patch. Reads stay off the queue; explicit disk
+// refreshes serialize their cache events.
 const queueWrite = createFileWriteQueue();
 
 // Share the write queue so an older disk snapshot cannot emit after a newer
@@ -220,14 +162,10 @@ export const refreshSettingsIfChangedOnDisk = () => queueWrite(async () => {
  */
 export const withLiveSettingsRestore = (restore) => queueWrite(restore);
 
-// Longest scalar the ledger keeps verbatim. A settings value longer than this
-// is a blob (a prompt template, a key list), and the useful fact for "what did I
-// change?" is THAT it changed, not its full text.
+// Longest scalar kept verbatim; longer values are blobs where only THAT they changed matters.
 const LEDGER_SCALAR_MAX_CHARS = 120;
 
-// `undefined` counts: it is how "the key was not set before" arrives, and a
-// first-time set is exactly the case where a before/after pair is most useful.
-// It is normalized to null in the recorded value.
+// `undefined` counts (first-time set); recorded as null.
 const isShortScalar = (value) => (
   value === null
   || value === undefined
@@ -236,19 +174,11 @@ const isShortScalar = (value) => (
   || (typeof value === 'string' && value.length <= LEDGER_SCALAR_MAX_CHARS)
 );
 
-// Shallow top-level diff of the settings object. Top-level is the right grain:
-// the settings file is a map of feature slices, and "the `federation` slice
-// changed" is the answerable question — a deep diff would produce a per-leaf
-// path list nobody reads and would carry slice internals into the log.
-//
-// Values are only kept for SHORT SCALARS; everything else records the fact of the
-// change alone. Secret-shaped keys are NOT filtered here — `recordUserAction`
-// redacts by key name and lists the paths under `payload.redactedKeys`, so the
-// denylist has exactly one home.
-//
-// Equality goes through `canonicalStringify` (key-order independent) so a slice
-// that was merely REBUILT — same values, different insertion order — is not
-// reported as an edit the user did not make.
+// Shallow top-level diff: settings is a map of feature slices, so "the `federation`
+// slice changed" is the answerable question; a deep diff would leak slice internals.
+// Only SHORT SCALARS keep values. Secret-shaped keys are NOT filtered here:
+// `recordUserAction` redacts by key name, so the denylist has one home. Equality uses
+// `canonicalStringify` so a merely rebuilt slice is not reported as an edit.
 const diffSettings = (prev, next) => {
   const keys = [...new Set([...Object.keys(prev), ...Object.keys(next)])].sort();
   const keysChanged = [];
@@ -266,37 +196,24 @@ const diffSettings = (prev, next) => {
 };
 
 /**
- * Persist settings.
- *
- * `actor` (#5594) names WHO is saving, and defaults to `'system'` — the honest
- * default, because most callers here are schedulers, sync hooks, and internal
- * feature writes. Settings HTTP mutations pass `'user'`. `reloadSettings` does
- * not call this at all, so a backup restore is excluded by construction.
+ * Persist settings. `actor` (#5594) names WHO is saving, defaulting to `'system'`
+ * (schedulers, sync hooks); HTTP mutations pass `'user'`. `reloadSettings` does not
+ * call this, so backup restore is excluded by construction.
  */
 const save = async (settings, { actor = 'system', skipUserAction = false } = {}, previousSettings) => {
   const cleaned = stripStoreKeys(settings);
-  // Stamp `timezoneUpdatedAt` whenever the effective `timezone` actually
-  // changes, so timezone-dependent schedulers can gate catch-up/re-evaluation
-  // logic on "when did the zone last change" (see meatspacePostReminder's
-  // missed-slot catch-up, #2040). Compare against the previous on-disk value so
-  // unrelated settings saves NEVER touch the field. The read runs inside the
-  // same queued write turn (every caller wraps save in queueWrite), so the
-  // comparison is against the freshest persisted snapshot, and any prior
-  // `timezoneUpdatedAt` on an unchanged-timezone save rides through untouched
-  // via the merged object.
+  // Stamp `timezoneUpdatedAt` only when the effective `timezone` changes, so schedulers
+  // can gate catch-up on it (#2040). Compared against the previous on-disk value inside
+  // the same queued write turn, so unrelated saves never touch it.
   const prev = isPlainObject(cleaned) ? previousSettings ?? stripStoreKeys(await loadRaw()) : null;
-  // Diff BEFORE the timezoneUpdatedAt stamp below, so a timezone change reports
-  // `keysChanged: ['timezone']` rather than dragging in the derived stamp.
+  // Diff BEFORE the stamp below so a timezone change reports `keysChanged: ['timezone']`.
   const change = isPlainObject(prev) ? diffSettings(prev, cleaned) : null;
   if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
     cleaned.timezoneUpdatedAt = Date.now();
   }
-  // Stamp `backupConfigUpdatedAt` whenever a registration-affecting backup
-  // field actually changes (cron expression, enabled, or destination) — the
-  // same shape as `timezoneUpdatedAt` above — so backupScheduler.js's
-  // missed-slot catch-up (#8456) can tell "this config produced the missed
-  // slot" from "the config was edited after the slot was missed" and skip a
-  // catch-up the current settings never scheduled.
+  // Stamp `backupConfigUpdatedAt` when a registration-affecting backup field (cron,
+  // enabled, destination) changes, like `timezoneUpdatedAt`, so backupScheduler's
+  // missed-slot catch-up (#8456) skips a slot the current config never scheduled.
   if (isPlainObject(prev)) {
     const prevBackup = isPlainObject(prev.backup) ? prev.backup : {};
     const nextBackup = isPlainObject(cleaned.backup) ? cleaned.backup : {};
@@ -334,16 +251,11 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {},
   return cleaned;
 };
 
-// Record a settings change in the operator-action ledger (#5594) as detached
-// bookkeeping: the row is a Postgres write, and awaiting it inside the queued
-// save turn made a DB outage stall every later settings write for the pool
-// connect timeout and then reject a save whose file was already on disk — which
-// in turn skipped setPassword's session revocation (#12018). The ledger is an
-// audit trail, not part of the save's success contract, so the chain is not
-// awaited by the caller and owns its own rejection. It is tracked so a drain
-// point (`flushSettingsLedger`, the test runner's per-test teardown) can wait
-// for it: a suite that removes its temp data root under an in-flight row would
-// otherwise see the row recreate the directory and leak it.
+// Record a settings change in the operator-action ledger (#5594) as DETACHED bookkeeping:
+// awaiting a Postgres write inside the queued save turn let a DB outage stall every
+// later save and reject one already on disk (skipping setPassword's session revocation,
+// #12018). The chain is tracked so `flushSettingsLedger` can drain it; otherwise a suite
+// removing its temp data root would see an in-flight row recreate the directory.
 const recordSettingsChange = (actor, change) => {
   const happenedAt = new Date().toISOString();
   const changedKeys = change.keysChanged.join(',');
@@ -355,11 +267,9 @@ const recordSettingsChange = (actor, change) => {
       payload: { keysChanged: change.keysChanged, changes: change.changes },
       source: { service: 'settings', fn: 'save' },
       happenedAt,
-      // Timestamp because a save is not an idempotent retry, PLUS the changed
-      // keys because `toISOString()` only resolves to the millisecond — two
-      // distinct saves landing in the same one would otherwise silently collapse
-      // to a single row. Deterministic (not random) so a genuine duplicate still
-      // dedupes.
+      // Timestamp (a save is not an idempotent retry) plus changed keys, since
+      // `toISOString()` is millisecond-grained and same-ms saves would collapse.
+      // Deterministic, so a genuine duplicate still dedupes.
       dedupeKey: `settings.update:${happenedAt}:${changedKeys.slice(0, 200)}`,
     }))
     .catch((error) => {
@@ -375,25 +285,17 @@ export const flushSettingsLedger = () => drainDetachedWrites();
 /**
  * `getSettings`, but reporting whether the snapshot came from a CORRUPT read.
  *
- * `getSettings()` deliberately hands back an empty object when settings.json is
- * malformed or unreadable, which makes "corrupt" indistinguishable from "fresh
- * install with nothing configured". That is the right default for most readers —
- * they want a usable object — but it is wrong for any caller whose decision is
- * spend-bearing or privacy-bearing, where guessing "nothing is configured" can
- * silently do the opposite of what the user set up (see the federated media
- * router, which must fail loudly rather than render locally).
+ * getSettings() returns `{}` for malformed/unreadable files, which is indistinguishable
+ * from a fresh install. That is wrong for spend- or privacy-bearing decisions (e.g. the
+ * federated media router must fail loudly rather than render locally).
  *
  * @returns {Promise<{corrupt: boolean, settings: object}>}
  */
 export const getSettingsWithStatus = async () => {
   if (settingsCache === null) {
-    // Route the cold read through the STRICT reader so a corrupt/unreadable
-    // settings.json does NOT poison the cache with `{}` (issue #2684). Caching a
-    // corrupt-derived empty object would strand every consumer — verifyPassword,
-    // schedulers, feature reads — on empty settings until a save() or restart,
-    // defeating the no-restart self-heal the auth fail-closed path promises. This
-    // covers BOTH failure modes (malformed content and an unreadable-but-present
-    // file); only a genuinely ABSENT file (fresh install) caches `{}`.
+    // Cold read goes through the STRICT reader so a corrupt file does not poison the cache
+    // with `{}` (#2684), which would strand consumers until a save or restart. Only a
+    // genuinely ABSENT file caches `{}`.
     const signature = await readSettingsSignature();
     const { corrupt, settings } = await readSettingsStrict();
     const loaded = stripStoreKeys(await hydratePrivateKeys(settings, PATHS.data));
@@ -444,18 +346,11 @@ export const updateSettings = (patch, options) => queueWrite(async () => {
   return save(merged, options, previous);
 });
 
-// Read-modify-write INSIDE the write queue. For callers whose merge semantics
-// `updateSettings`' shallow `{ ...raw, ...patch }` can't express — a deep merge
-// (`deepMerge(current, …)`), or building the next object by spreading/deleting a
-// sub-key. `mutate(current)` receives the freshest stripped settings (same shape
-// `getSettings()` returns) and returns the FULL next settings object to persist.
-//
-// This closes the stale-base window in the old `getSettings() → modify →
-// saveSettings(...)` pattern: there, a concurrent `updateSettings` landing
-// between the external read and the queued write was clobbered by the caller's
-// stale pre-image. Here the read and the write share one queued turn, so the
-// mutator always sees the latest persisted snapshot. An unreadable or malformed
-// file refuses (loadWriteBase) rather than handing the mutator an empty base.
+// Read-modify-write INSIDE the write queue, for merges `updateSettings`' shallow spread
+// can't express (deep merge, deleting a sub-key). `mutate(current)` gets the freshest
+// stripped settings and returns the FULL next object. The read and write share one
+// queued turn, closing the stale-base window of getSettings() -> saveSettings(). An
+// unreadable or malformed file refuses (loadWriteBase) rather than yielding an empty base.
 export const updateSettingsWith = (mutate, options) => queueWrite(async () => {
   const current = stripStoreKeys(await loadWriteBase());
   const previous = structuredClone(current);

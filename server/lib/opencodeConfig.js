@@ -1,17 +1,6 @@
 /**
  * OpenCode configuration helpers: builds the `OPENCODE_CONFIG_CONTENT` env for a provider and model.
  *
- * `buildOpencodeEnvVars(provider, model)` builds `OPENCODE_CONFIG_CONTENT` declaring
- * model ids under the namespace the provider's marker selects: a local runtime
- * (`ollama` / `mtplx` / `llama` / `vllm` / `sglang`, bare ids) or a hosted gateway
- * from `providerGateways.js` (`vendor/model` ids kept whole). It attaches the key for
- * a key-bearing namespace and pins `small_model` to the run model so OpenCode's side
- * calls can't land on a billed built-in default. Under a `no-tool` public-review
- * profile it applies `hardenOpencodeConfigForNoTool`, OpenCode's enforced tool-free
- * recipe (no read-only argv flag exists; `providerVendors.js` pairs it with
- * `run --agent` + `OPENCODE_PUBLIC_REVIEW_AGENT`), copying `agent.build`'s generation
- * settings onto that agent.
- *
  * OpenCode requires every `--model` id to be declared in its config. For a custom
  * `@ai-sdk/openai-compatible` provider, models live UNDER the provider entry as
  * `provider.<id>.models.<bareModelId>` (no top-level `models` map; keys are the BARE

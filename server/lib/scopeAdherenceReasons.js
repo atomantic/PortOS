@@ -2,13 +2,6 @@
  * Operator-facing labels for the codes `scoreAdherence` can return instead of
  * a verdict (`server/services/scopeAdherence.js`).
  *
- * Operator-facing labels for the codes `scoreAdherence` returns instead of a verdict:
- * `SCOPE_ADHERENCE_REASONS`, `SCOPE_ADHERENCE_REASON_FALLBACK`, and `scopeAdherenceReasonLabel(code,
- * fallback?)` (own-property lookup, so a code naming an `Object.prototype` key cannot render as a
- * function). Re-exported by `client/src/lib/scopeAdherenceReasons.js` rather than mirrored — a mirror
- * would need a parity test, and that would need the server→client import
- * `scripts/server-imports-no-client.test.js` forbids. Keep it import-free so it stays bundleable.
- *
  * ONE definition, here, re-exported by `client/src/lib/scopeAdherenceReasons.js`
  * — not a hand-maintained mirror with a parity test. The client may import a
  * pure `server/lib` leaf; the reverse edge is what

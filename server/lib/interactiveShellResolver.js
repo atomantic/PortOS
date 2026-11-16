@@ -1,21 +1,6 @@
 /**
  * Pick the shell binary a PTY session (the Shell page, agent TUI shells) runs.
  *
- * `resolveInteractiveShell()` — picks the shell binary a PTY session runs (Shell page, agent TUI
- * shells). On Windows the old `COMSPEC` default meant `cmd.exe`, where no command a user would type
- * reaches another drive: `cd I:` silently PRINTS that drive's cwd and stays put, a bare `I:\` is "not
- * recognized as a command", and `cd 'I:\path'` is a syntax error (no single-quote quoting) — so a
- * Windows install with its repos on a second drive was stuck on `C:`. Resolves PORTOS_SHELL → newest
- * `pwsh.exe` under `%ProgramFiles%\PowerShell\<major>` (majors enumerated and sorted numerically, so a
- * future 8 needs no code change) → any `pwsh.exe` on PATH via `findCommandOnPath` (scoop/choco/Store
- * shim) → `powershell.exe` 5.1 (ships with Windows) → `cmd.exe` last. PowerShell crosses drives with
- * every form. On POSIX: PORTOS_SHELL → existing `SHELL` → `/bin/bash` `/usr/bin/bash` `/bin/sh`
- * `/usr/bin/sh` then zsh if present → bare `bash`/`sh` via `findCommandOnPath` → bare `sh` last —
- * never a hard-coded missing `/bin/zsh` (PM2/containers often lack `SHELL` and zsh; node-pty then
- * `execvp`s and the Shell page shows only `execvp(3) failed`). Memoized;
- * `_resetInteractiveShellCache()` for tests. `resolveInteractiveShellWith({platform, env, exists,
- * readdir, findOnPath})` is the un-memoized injectable form for tests.
- *
  * THE PROBLEM (Windows). The default used to be `COMSPEC`, i.e. `cmd.exe`, and
  * `cmd.exe` cannot get you onto another drive by any command a user would
  * reasonably type:

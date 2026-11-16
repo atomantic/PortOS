@@ -1,19 +1,5 @@
 /**
  * Guitar-tab / chord-sheet / ChordPro text parser for SongBook (`/songbook`).
- *
- * `parseTabSheet(text)` → `{ lines, meta, errors }` classifying each line
- * (`section`/`chords`/`lyric`/`tabstaff`/`chordlyric`/`blank`/`text`) with chord names + column
- * offsets, plus ChordPro meta (`{title:}`/`{artist:}`/`{key:}`/`{capo:}`); `detectFormat(text)` →
- * `'chordpro' | 'tab' | 'plain'`; `normalizePastedTab(text)` uses the shared
- * `server/lib/xmlEntities.js` decoder (ordinary spaces for `&nbsp;`) and cleans HTML
- * remnants/entities, CRLF, tabs→spaces, blank-line runs; `transposeChordName(name, n)` /
- * `transposeText(text, n)` transpose chord symbols (slash chords, sensible sharp/flat spelling,
- * column-preserving on chord lines); `chordLineSegments`, `pairedLineChunks`, and `chordLyricRows`
- * build aligned, word-wrapping chord/lyric display rows; `TAB_ARTICULATIONS` documents tab-staff
- * technique characters for the viewer legend; `CHORD_TOKEN_RE` exported for reuse, plus `NOTE_TO_PC` /
- * `spellPitchClass` exported minimally so `chordShapes.js` derives voicings from the same pitch-class
- * tables. Forgiving — never throws, unknown lines classify as `text`. NOT the lead-sheet parser
- * (`scoreNotation.js`).
  */
 
 import { decodeXmlEntities } from '../../../server/lib/xmlEntities.js';

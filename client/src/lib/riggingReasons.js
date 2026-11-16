@@ -2,12 +2,6 @@
  * Client mirror of the character-rigging readiness reason labels in
  * `server/services/rigging/readiness.js`.
  *
- * Client mirror of the character-rigging readiness reason labels in
- * `server/services/rigging/readiness.js`: `RIGGING_UNAVAILABLE_REASONS` (reason code -> user-facing
- * label), `RIGGING_REASON_FALLBACK`, and `riggingReasonLabel(code, fallback?)`. Render these anywhere
- * a `GET /api/rigging/readiness` reason is shown; never re-declare the codes. Parity + code coverage
- * enforced by `server/services/rigging/unavailableReasons.parity.test.js`.
- *
  * The server returns stable kebab-case reason codes (`unsupported-platform`, `module-unimportable`, …)
  * whenever rigging is not ready; this is the label side the UI renders.
  *

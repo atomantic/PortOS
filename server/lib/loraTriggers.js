@@ -1,18 +1,6 @@
 /**
  * LoRA trigger-word weaving (issue #4665).
  *
- * Pure trigger-word weaving for renders that load a LoRA (#4665): `weaveLoraTriggers(prompt,
- * triggerWordLists)` → `{ prompt, added }` appends each selected LoRA's FIRST activation token to the
- * prompt when it is not already there, in selection order, as a trailing comma clause so the user's
- * own phrasing keeps its position and weight. `promptHasTriggerWord` is the whole-token,
- * case-insensitive presence test (`aria_tok` does not match inside `aria_token`); `firstTriggerWord`
- * picks the canonical token out of a Civitai `trainedWords` list. Idempotent, so a re-render of an
- * already-woven prompt is a no-op. Consumed by `services/imageGen/local.js` and
- * `services/videoGen/local.js` (paired with `services/loras.js#readTriggerWordsByFilename` for the
- * sidecar reads). The comic pipeline shares it rather than opting out — its own "<Name> (<trigger>)"
- * clause uses the same token, so the weave adds nothing there except for the characters that clause
- * drops.
- *
  * PortOS records each installed LoRA's activation vocabulary at install time
  * (`civitai.js#buildSidecar` → `triggerWords`, `huggingfaceLora.js` → the HF
  * instance prompt, `loraTraining/sidecar.js` → the dataset's trained token),

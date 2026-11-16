@@ -1,6 +1,4 @@
 // 3D force simulation parameters
-//
-// 3D force simulation parameters for BrainGraph / OpenWorld.
 const REPULSION = 500;
 const SPRING_K = 0.008;
 const SPRING_REST = 12;

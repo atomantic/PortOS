@@ -1,16 +1,6 @@
 /**
  * Wave sketch contract — music an LLM *draws* instead of scores.
  *
- * Drawn-waveform music contract v1 (browser-safe; new paintings are v2 — see `paintedCanvas.js`): the
- * LLM draws single-cycle `shapes` (point polylines in [-1, 1]) played by `voices` as timed strokes
- * with optional glide, shape morph, and drawn envelope, plus a whole-piece `contour`.
- * `normalizeWaveSketch(raw)` is the one lenient, idempotent validator (null when nothing playable
- * survives); `synthesizeWaveSketch(sketch)` → deterministic mono PCM (seeded noise), so the client
- * preview and server render match; `pcmPeaks(pcm, columns)` for drawing it; `WAVE_SKETCH_LIMITS`.
- * `normalizeWaveSketch` dispatches a `version: 2` sketch to `normalizePaintedCanvas`;
- * `synthesizeSketchChannels(sketch)` renders either version to its channel list;
- * `isPaintedCanvas(sketch)`.
- *
  * Rather than naming instruments or writing Tone.js/Strudel code, the model
  * draws the sound itself:
  *

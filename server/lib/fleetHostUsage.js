@@ -1,20 +1,6 @@
 /**
  * Who is spending this machine's GPU, and how much of it.
  *
- * The INBOUND side of the dedicated inference host — who is spending this machine's GPU.
- * `createFleetHostUsageLedger({ now, maxClients, maxRecent, retentionDays })` → `beginRequest` /
- * `endRequest` / `snapshot` / `toJSON` / `hydrate`: a bounded per-client ledger keyed by the socket's
- * remote address (the gateway authenticates every peer with ONE shared host key, so the wire carries
- * no per-peer identity), holding request/error counts, observed token totals, 30 days of daily buckets
- * and the last 50 completed requests. `findReportedUsage(text)` lifts the LAST `usage` object out of
- * an OpenAI-compatible body, searched backwards because a `stream_options.include_usage` stream emits
- * `"usage": null` on every frame before the populated one; `createUsageSniffer()` is the bounded 64 KB
- * tail buffer the gateway taps a response stream with. Tokens are recorded only where the upstream
- * reported them — `tokenReports` counts how many requests carried a reading, so the report can say "12
- * of 40" rather than implying the rest were free. No prompt or completion text is ever held. Peer
- * NAMES are resolved at report time by `services/fleetLlmUsage.js`; contrast `fleetQuotas.js`, which
- * merges this install's OUTBOUND subscription quotas.
- *
  * The dedicated inference host (`services/fleetLlmGateway.js`) publishes one
  * OpenAI-compatible endpoint on the tailnet and admits one generation at a
  * time. Until this module existed the only thing it could say about that was

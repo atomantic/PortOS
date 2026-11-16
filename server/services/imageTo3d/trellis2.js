@@ -68,54 +68,28 @@ export function isTrellis2Installed({ base, exists = existsSync } = {}) {
 }
 
 /**
- * The Python modules `generate.py`'s Metal texture-baking path needs. It gates the
- * high-quality bake on `o_voxel.postprocess._BACKEND === 'metal' && _HAS_DR`, which
- * in turn requires `mtldiffrast` (the Metal rasterizer) and `mtlbvh` to have built.
- * When ANY is missing it silently falls back to a pure-Python KDTree/xatlas baker —
- * see `TRELLIS2_FALLBACK_BAKE_HELP` for why that fallback is unusable.
- */
+/** Modules the Metal bake gate needs; any missing silently falls back to the KDTree/xatlas baker (see `TRELLIS2_FALLBACK_BAKE_HELP`). */
 export const TRELLIS2_METAL_BAKE_MODULES = ['o_voxel', 'mtldiffrast', 'mtlbvh'];
 
 /**
- * `flex_gemm` (from `mtlgemm`) is not required for the Metal bake, but the baker
- * prefers its sparse grid-sample over a `torch.nn.functional` fallback — upstream
- * notes the fallback produces concentric ring artifacts on curved surfaces. Absent
- * ⇒ the bake still runs, just a notch lower quality.
- */
+/** Optional: `flex_gemm` provides sparse grid-sample; without it the bake still runs at slightly lower quality (ring artifacts). */
 export const TRELLIS2_BAKE_QUALITY_MODULES = ['flex_gemm'];
 
 /**
- * Why a degraded install matters, in the user's terms. `setup.sh` installs the four
- * Metal packages with `|| echo "… continuing without …"` and still exits 0, so a
- * host missing the Xcode **Metal Toolchain** (the packages compile `.metal` sources)
- * completes the install "successfully" and every later render silently takes the
- * KDTree/xatlas fallback baker.
- *
- * That fallback is not merely lower quality — it is unusable on TRELLIS.2 output. It
- * UV-unwraps the mesh *after* decimating to 200k triangles, into a 1024² atlas: a
- * median of **~1.9 texels per triangle**, with a quarter of all triangles landing on
- * less than a single texel (measured on the #2952 reference render). Its hole-fill
- * then blurs unfilled black texels back over every chart edge. The geometry comes out
- * correct; the surface comes out as dark colored confetti.
+/**
+ * `setup.sh` exits 0 even when the Metal packages fail to build (e.g. no Xcode Metal Toolchain), so later renders
+ * silently take the fallback baker. That baker is unusable on TRELLIS.2 output: it unwraps after decimating to
+ * 200k triangles into a 1024² atlas (~1.9 texels/triangle), producing a speckled surface.
  */
 export const TRELLIS2_FALLBACK_BAKE_HELP = 'TRELLIS.2 is installed, but its Metal '
   + 'texture-baking backend is missing, so renders fall back to a low-resolution '
   + 'baker that produces correct geometry with a scrambled, speckled surface.';
 
 /**
- * Probe whether the venv can take `generate.py`'s Metal texture-baking path.
- *
- * Uses `importlib.util.find_spec`, which resolves a module WITHOUT importing it — so
- * the probe costs ~20 ms and never pulls in torch. That is cheap enough to run on
- * every `/targets` request, and it keys on exactly the modules the `use_metal` gate
- * needs, so it cannot drift from what `generate.py` actually checks.
- *
- * Returns `quality: 'metal'` (good), `'fallback'` (installed but will produce the
- * confetti surface described in `TRELLIS2_FALLBACK_BAKE_HELP`), or `'unknown'` when
- * the probe itself could not run — deliberately distinct from `'fallback'` so a
- * broken probe never renders a scary warning about a possibly-fine install
- * (AGENTS.md sentinel rule: "failed to determine" ≠ "determined to be bad").
- *
+/**
+ * Probe whether the venv can take the Metal bake path via `importlib.util.find_spec` (no import, ~20 ms, no torch),
+ * keyed on the modules the `use_metal` gate checks. `'unknown'` means the probe could not run; it stays distinct
+ * from `'fallback'` so a broken probe never warns about a possibly-fine install.
  * @param {{base?: string, execFileImpl?: Function, exists?: (p: string) => boolean}} [opts]
  * @returns {Promise<{quality: 'metal'|'fallback'|'unknown', modules: Record<string, boolean>,
  *                    missing: string[], degradedQuality: string[], help?: string}>}
@@ -129,12 +103,8 @@ export async function probeTrellis2TextureBake({
   if (!exists(python)) {
     return { quality: 'unknown', modules: {}, missing: [], degradedQuality: [] };
   }
-  // Shared spawn + parse (`probePythonModules`). Was an inline copy whose `JSON.parse`
-  // ran INSIDE the execFile callback, where a throw escapes the enclosing promise —
-  // the `.catch()` fires on a later tick and cannot see it — and reaches the event
-  // loop, killing the process. Any non-JSON on stdout from a healthy venv (a
-  // `sitecustomize`/`.pth` print, a conda activation hook) turned a `/3d` page load
-  // into a server restart. The shared helper parses after the callback resolves.
+  // The helper parses after the execFile callback resolves; a throw inside that callback escapes the
+  // promise and kills the process.
   const modules = await probePythonModules({
     python,
     modules: [...TRELLIS2_METAL_BAKE_MODULES, ...TRELLIS2_BAKE_QUALITY_MODULES],
@@ -155,21 +125,11 @@ export async function probeTrellis2TextureBake({
 }
 
 /**
- * Whether the Xcode Metal Toolchain is present — the prerequisite `setup.sh`
- * documents for building `mtldiffrast`/`mtlbvh`/`mtlgemm`. Checked BEFORE a ~15 GB
- * install so the user can fix it first, instead of discovering an hour later that
- * every render bakes garbage. Absent ⇒ the install still works, it just degrades.
- *
- * Non-macOS hosts report `available: null` (the check does not apply) rather than
- * `false`, so a Linux/Windows caller never sees a macOS-only warning.
- *
- * **Missing is not the same as unfixable.** `xcodebuild -downloadComponent` ships
- * with *full Xcode*; a host whose active developer dir is the Command Line Tools
- * has no `xcodebuild` to run it with. Those two cases get different answers —
- * `installable: true` means the install can just fetch it (see
- * `TRELLIS2_METAL_TOOLCHAIN_STEP`), while `blocker: 'requires-xcode'` means no
- * amount of retrying will help and the hint must name Xcode rather than a command
- * that is guaranteed to fail.
+/**
+ * Whether the Xcode Metal Toolchain (needed to build `mtldiffrast`/`mtlbvh`/`mtlgemm`) is present, checked before
+ * the ~15 GB install. Absent only degrades output. Non-macOS hosts report `available: null`, never `false`.
+ * `installable: true` means the install can fetch it (`TRELLIS2_METAL_TOOLCHAIN_STEP`); `blocker: 'requires-xcode'`
+ * means only the Command Line Tools are active, so `xcodebuild -downloadComponent` is absent and the hint must name Xcode.
  *
  * @param {{execFileImpl?: Function, platformImpl?: () => string}} [opts]
  * @returns {Promise<{available: boolean|null, installable?: boolean,
@@ -180,8 +140,7 @@ export async function probeMetalToolchain({
   platformImpl = platform,
 } = {}) {
   if (platformImpl() !== 'darwin') return { available: null };
-  // Subprocess boundary outside the request lifecycle — every outcome resolves,
-  // nothing throws into the route (AGENTS.md child-process exception).
+  // Every outcome resolves; nothing throws into the route.
   const run = (command, args) => new Promise((resolve) => {
     execFileImpl(command, args, { timeout: 15000 }, (err, stdout) => {
       resolve(err ? null : String(stdout ?? ''));
@@ -191,8 +150,7 @@ export async function probeMetalToolchain({
   if (await run('xcrun', ['-sdk', 'macosx', 'metal', '--version']) !== null) {
     return { available: true };
   }
-  // Only full Xcode carries `xcodebuild -downloadComponent`. `xcode-select -p`
-  // under the Command Line Tools resolves to /Library/Developer/CommandLineTools.
+  // Only full Xcode ships `xcodebuild -downloadComponent`; the Command Line Tools resolve to /Library/Developer/CommandLineTools.
   const developerDir = await run('xcode-select', ['-p']);
   const hasXcode = !!developerDir && /Xcode.*\.app/i.test(developerDir);
   return hasXcode
@@ -204,25 +162,15 @@ export async function probeMetalToolchain({
 export const TRELLIS2_METAL_TOOLCHAIN_HINT = 'The Xcode Metal Toolchain is required '
   + 'to compile the Metal extensions. Setup will download it automatically.';
 
-/**
- * A missing toolchain on a host with only the Command Line Tools. Nothing PortOS
- * can run fixes this, so the hint names the real prerequisite instead of a command
- * that would fail.
- */
+/** Only the Command Line Tools are active: nothing PortOS can run fixes it, so the hint names the real prerequisite. */
 export const TRELLIS2_REQUIRES_XCODE_HINT = 'The Xcode Metal Toolchain is not '
   + 'installed and cannot be downloaded, because only the Command Line Tools are '
   + 'active on this host. Install Xcode from the App Store and run `sudo xcode-select '
   + '--switch /Applications/Xcode.app`, then retry setup.';
 
 /**
- * The step that fetches the Metal Toolchain. Verified on-device during #3041: it
- * runs unattended — no sudo, no interactive prompt, exit 0 — and afterwards
- * `xcrun metal` resolves and the port's four Metal packages compile.
- *
- * Marked `optional` because a missing texture bake degrades output but does not
- * break it: geometry is unaffected, and the `verify` step reports the degraded
- * result. A host that cannot fetch the toolchain must still be able to install and
- * render, so this step warns and continues rather than aborting the install.
+ * Fetches the Metal Toolchain unattended (no sudo, no prompt). `optional`: a missing bake degrades output, so the
+ * step warns and continues rather than aborting the install.
  */
 export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
   stage: 'metal-toolchain',
@@ -232,12 +180,8 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
 });
 
 /**
- * The port's `--output` is a filename **stem**, NOT a full path — `generate.py`
- * appends the extension itself (`glb_path = f"{args.output}.glb"`, plus sibling
- * `.obj` / `_basecolor.png`). Callers hand us the real disk path they want the GLB
- * at (`…/model.glb`), so strip a single trailing `.glb` before it reaches the CLI —
- * otherwise the port writes `…/model.glb.glb` and PortOS serves a 404 at `…/model.glb`.
- * Confirmed against the real `generate.py` during #2952 hands-on validation.
+ * The port's `--output` is a filename stem; `generate.py` appends `.glb` itself, so strip one trailing `.glb`
+ * or the port writes `model.glb.glb` and `model.glb` 404s.
  * @param {string} outputPath
  * @returns {string}
  */
@@ -245,37 +189,18 @@ export function trellis2OutputStem(outputPath) {
   return String(outputPath).replace(/\.glb$/i, '');
 }
 
-/**
- * trellis-mac exposes the first three sizes directly. For high-memory machines,
- * PortOS's runner also exposes the underlying TRELLIS.2 exporter's supported 4K
- * bake without forking the generation pipeline.
- */
+/** The first three are trellis-mac's; PortOS's runner adds the exporter's 4K bake. */
 export const TRELLIS2_TEXTURE_SIZES = [512, 1024, 2048, 4096];
 
-/**
- * `generate.py` supports a fast 512 pipeline and two higher-resolution variants.
- * 1024-cascade keeps the proven 512 sparse-structure pass, then refines shape and
- * surface attributes against 1024px image conditioning. That is the useful quality
- * step for details landing on the right parts of a generated object.
- */
+/** Fast 512 pipeline plus higher-resolution variants; 1024-cascade refines shape and attributes against 1024px conditioning. */
 export const TRELLIS2_PIPELINE_TYPES = ['512', '1024', '1024_cascade'];
 export const TRELLIS2_BASELINE_PIPELINE_TYPE = '512';
 export const TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE = '1024_cascade';
 
-/**
- * The Apple port documents an ~18 GB peak for its benchmarked 512 lane and does
- * not publish a 1024-cascade memory ceiling. Keep the supported 24 GB floor on the
- * known lane, and opt into the higher-resolution texture model only with a
- * conservative second 24 GB of headroom.
- */
+/** The port publishes ~18 GB peak for 512 and no 1024-cascade ceiling; the high lane requires a conservative second 24 GB. */
 export const TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB = 48;
 
-/**
- * Pick the texture-generation lane from physical unified memory.
- *
- * @param {number} unifiedMemoryGb
- * @returns {'512'|'1024_cascade'}
- */
+/** Pick the texture-generation lane from physical unified memory. */
 export function selectTrellis2PipelineType(unifiedMemoryGb) {
   return Number(unifiedMemoryGb) >= TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB
     ? TRELLIS2_HIGH_QUALITY_PIPELINE_TYPE
@@ -283,23 +208,11 @@ export function selectTrellis2PipelineType(unifiedMemoryGb) {
 }
 
 /**
- * Resolve a request's abstract detail tier to this port's `--pipeline-type`.
- *
- * `'auto'` (the default) keeps the historical hardware-derived behaviour; any other
- * tier is looked up in the target descriptor's `detailTiers`, so the tier vocabulary
- * lives in the registry rather than being restated here.
- *
- * An unmapped tier falls back to the hardware-derived choice rather than throwing.
- * That is deliberate: the route enum and the descriptor are validated against each
- * other by `targets.test.js`, so reaching this branch means a registry edit went
- * wrong — and degrading to the tier the host would have picked anyway is a far better
- * outcome than failing a render the user already waited on.
- *
- * The descriptor is read lazily, at call time, for the same reason `hfGatedRepoHelp`
- * does: resolving it at module scope would make merely importing this file depend on
- * `targets.js` being fully materialized, which a partial test mock of that module
- * breaks.
- *
+ * Resolve a request's detail tier to `--pipeline-type`. `'auto'` is hardware-derived; other tiers come from the
+ * target descriptor's `detailTiers`. An unmapped tier degrades to the hardware choice rather than failing a render
+ * the user already waited on (`targets.test.js` cross-validates, so it means a registry edit went wrong).
+ * The descriptor is read at call time: resolving at module scope would make importing this file depend on
+ * `targets.js` being materialized, which partial test mocks break.
  * @param {string} detail one of DETAIL_TIERS
  * @param {number} unifiedMemoryGb
  * @returns {string} a value from TRELLIS2_PIPELINE_TYPES
@@ -308,12 +221,8 @@ export function resolveTrellis2PipelineType(detail, unifiedMemoryGb) {
   if (!detail || detail === 'auto') return selectTrellis2PipelineType(unifiedMemoryGb);
   const mapped = getTarget('trellis2')?.detailTiers?.[detail];
   if (mapped && TRELLIS2_PIPELINE_TYPES.includes(mapped)) {
-    // A tier ABOVE what this host's memory would have chosen is allowed on purpose:
-    // overriding the hardware heuristic is the point of the knob, and PortOS's
-    // 48 GB threshold is explicitly a conservative guess (the port publishes no
-    // 1024-cascade memory ceiling). But say so in the log, because the likely
-    // failure on an undersized host is an OOM or a watchdog kill many minutes in,
-    // and this line is what connects that to the choice.
+    // Exceeding the host's memory-derived tier is intentional (the 48 GB threshold is a conservative guess),
+    // but log it: an OOM or watchdog kill minutes in is otherwise unexplained.
     const hostChoice = selectTrellis2PipelineType(unifiedMemoryGb);
     if (mapped !== hostChoice) {
       console.log(`🎚️ TRELLIS.2 detail '${detail}' → pipeline ${mapped} (host default for ${unifiedMemoryGb} GB is ${hostChoice})`);
@@ -324,22 +233,11 @@ export function resolveTrellis2PipelineType(detail, unifiedMemoryGb) {
   return selectTrellis2PipelineType(unifiedMemoryGb);
 }
 
-/**
- * PortOS asks for at least a 2K atlas, overriding `generate.py`'s 1K default. The
- * bake UV-unwraps a 200k-triangle mesh into a single atlas, so texel budget per
- * triangle is the binding constraint on surface quality. Hosts with the same
- * conservative memory headroom used for 1024-cascade get a 4K bake (four times
- * the 2K texel budget); supported 24 GB hosts stay on the proven 2K path.
- */
+/** At least a 2K atlas (generate.py defaults to 1K): texels per triangle bound quality on a 200k-triangle mesh. Hosts with 1024-cascade headroom get 4K. */
 export const TRELLIS2_DEFAULT_TEXTURE_SIZE = 2048;
 export const TRELLIS2_HIGH_QUALITY_TEXTURE_SIZE = 4096;
 
-/**
- * Pick the UV-atlas resolution from physical unified memory.
- *
- * @param {number} unifiedMemoryGb
- * @returns {2048|4096}
- */
+/** Pick the UV-atlas resolution from physical unified memory. */
 export function selectTrellis2TextureSize(unifiedMemoryGb) {
   return Number(unifiedMemoryGb) >= TRELLIS2_HIGH_QUALITY_MIN_MEMORY_GB
     ? TRELLIS2_HIGH_QUALITY_TEXTURE_SIZE
@@ -347,24 +245,10 @@ export function selectTrellis2TextureSize(unifiedMemoryGb) {
 }
 
 /**
- * The generate invocation:
- * `<venv-python> [4k-adapter] generate.py <image> [--output <stem>] --texture-size <n>
- *  [--seed <n>] [--steps <n>]`.
- *
- * Pure. Throws when no source image is given (a render with no input is a bug, not
- * an empty run), and when `textureSize` is not one of PortOS's accepted values
- * — better to fail here than to have argparse abort a job we already queued.
- * `outputPath` is the desired `.glb` disk path; it is reduced to the stem the port
- * expects (see `trellis2OutputStem`).
- *
- * `seed` is passed only when provided — callers that care about reproducible runs
- * (models.js resolves one per run) always pass it; a bare CLI-style call keeps the
- * port's own default. `steps: null` deliberately omits `--steps` so the pipeline's
- * per-phase default (12) applies — see renderOptions.js for the sentinel contract.
- *
- * `meshQuality` is forwarded verbatim to `trellis2MeshQualityArgs` (decimation
- * target, hole filling, exporter knobs) — an empty object emits only the `--`
- * separator, i.e. exactly upstream's behaviour.
+ * `<venv-python> [4k-adapter] generate.py <image> [--output <stem>] --texture-size <n> [--seed <n>] [--steps <n>]`.
+ * Pure. Throws on a missing image or unsupported `textureSize` (better than argparse aborting a queued job).
+ * `outputPath` is reduced to the port's stem. `seed` is passed only when provided; `steps: null` omits `--steps` so the
+ * per-phase default applies (renderOptions.js). `meshQuality` goes to `trellis2MeshQualityArgs`; empty emits only `--`.
  *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
  *          pipelineType?: string, steps?: number|null, seed?: number|null,
@@ -393,15 +277,11 @@ export function buildGenerateArgs({
       `buildGenerateArgs: pipelineType must be one of ${TRELLIS2_PIPELINE_TYPES.join(', ')}`,
     );
   }
-  // Validates steps/seed and emits their flags — shared with the CUDA lane so
-  // neither the ranges nor the flag names can drift (renderOptions.js).
+  // Shared with the CUDA lane so ranges and flag names can't drift (renderOptions.js).
   const optionArgs = renderOptionArgs('buildGenerateArgs', { steps, seed });
   const generateScript = trellis2GenerateScript(base, exists);
-  // The runner adapter is now on EVERY invocation, not just the 4K one. It used
-  // to be conditional because widening `--texture-size` was its only job; it now
-  // also carries the mesh-quality overrides (decimation target, hole filling,
-  // exporter knobs), which apply at every memory tier. Its own flags come first
-  // and are terminated by `--`, after which upstream's argv begins verbatim.
+  // The runner adapter is on every invocation: it carries the mesh-quality overrides. Its flags end at `--`,
+  // after which upstream's argv follows verbatim.
   const args = [
     trellis2GenerateRunnerScript(),
     ...trellis2MeshQualityArgs(meshQuality),
@@ -416,19 +296,10 @@ export function buildGenerateArgs({
 }
 
 /**
- * The port's real progress vocabulary, confirmed against `generate.py` during #2952
- * hands-on validation. `generate.py` prints **no overall percentage** — it emits an
- * ordered sequence of stage banners (plus per-phase `tqdm` sampling bars). Each
- * banner maps to a fixed, monotonically-increasing whole-render percent so the UI
- * advances through a multi-minute render instead of sitting at 0 until the final
- * `Saved:` line. Order is roughly: load model → sample (the long phase) → decode
- * mesh → bake textures → export. Ordered most-specific first.
+ * Progress banners from `generate.py`, which prints no overall percentage: each banner maps to a fixed, increasing
+ * whole-render percent. Most-specific first.
  */
-// The whole-render percent lives across three schemes that must stay mutually
-// ordered: these banner percents, the tqdm sampling band's [10,50] ceiling
-// (TQDM_BAND below), and the export percent (92). Invariant: sampling-ceiling (50)
-// < first post-sampling banner (55) < … < export (92). The monotonicity unit test
-// guards it — keep these ordered if you retune the curve.
+// Invariant: sampling ceiling (50, TQDM_BAND) < first post-sampling banner (55) < … < export (92); keep ordered when retuning.
 const GENERATE_STAGE_SIGNATURES = [
   { re: /loading pipeline/i, stage: 'loading', percent: 3 },
   { re: /^loading weights:/i, stage: 'loading', percent: 3 },
@@ -448,14 +319,9 @@ const TQDM_PCT_RE = /(\d{1,3})\s*%/;
 const TQDM_BAND = { base: 10, span: 40 };
 
 /**
- * Parse one line of `generate.py` output into a progress frame, or null when the
- * line carries no signal. The port has no single overall percentage, so this maps
- * its real stage banners to monotonic percents (see `GENERATE_STAGE_SIGNATURES`),
- * treats a written `.glb` path as the terminal export signal (carrying the asset
- * path), and scales a bare `tqdm` percentage into the sampling band `[10,50]` — a
- * per-phase bar hits 100% three times, so a raw pass-through would prematurely fill
- * the whole render's bar during the first phase; scaling keeps it inside the sampler
- * stage while the later banners carry it home.
+/**
+ * Parse one `generate.py` line into a progress frame, or null. Banners map to monotonic percents, a written `.glb` is
+ * the terminal export signal, and a bare tqdm percent is scaled into `[10,50]` (each phase bar hits 100% three times).
  * @param {string} line
  * @returns {{stage: string, percent?: number, assetPath?: string, message: string}|null}
  */
@@ -463,11 +329,9 @@ export function parseGenerateProgress(line) {
   const text = String(line ?? '').trim();
   if (!text) return null;
 
-  // A written .glb is the terminal export signal — it carries the produced asset path.
   const glb = text.match(GLB_PATH_RE);
   if (glb) return { stage: 'export', percent: 92, assetPath: glb[1], message: text };
 
-  // Named stage banners drive the whole-render percent.
   for (const sig of GENERATE_STAGE_SIGNATURES) {
     if (sig.re.test(text)) return { stage: sig.stage, percent: sig.percent, message: text };
   }
@@ -483,19 +347,8 @@ export function parseGenerateProgress(line) {
 }
 
 /**
- * Signatures of a *transient* network failure during the install's git clones /
- * pip fetches — the kind that self-heals on a retry rather than indicating a real
- * config/hardware problem. The reference failure (#2952) was a mid-clone
- * `curl 56 Recv failure: Connection reset by peer` → `early EOF` →
- * `fetch-pack: invalid index-pack output` → git exiting 128 while cloning one of
- * `setup.sh`'s ~half-dozen deps. Kept broad (git-over-HTTPS, DNS, TLS, pip) because
- * every match only *earns a retry* of an idempotent step — a false positive costs
- * one extra attempt, never a wrong install.
- */
-/**
- * Whether a captured chunk of install output looks like a transient network error.
- * Exported so the route/UI and tests share the exact classification instead of
- * re-implementing the pattern.
+ * Whether install output looks like a transient network error (git clone / pip), which self-heals on retry. Kept broad:
+ * a false positive costs one extra attempt of an idempotent step. Shared by route/UI and tests.
  * @type {(text: string) => boolean}
  */
 export const isTransientInstallError = textMatcher([
@@ -509,19 +362,8 @@ export const isTransientInstallError = textMatcher([
 ]);
 
 /**
- * Signatures of a Hugging Face **auth / gated-repo** failure during a render. The
- * TRELLIS.2 pipeline pulls a gated dependency model (`facebook/dinov3-…`) at load
- * time; on a host with no `HF_TOKEN` (or one whose account hasn't accepted that
- * model's terms) `from_pretrained` raises `GatedRepoError` / a `401` and the render
- * exits non-zero — which is otherwise indistinguishable from a real crash. Detecting
- * it lets the runner surface an actionable "authenticate with Hugging Face" message
- * instead of a bare "exited 1". Confirmed against the real failure during #2952
- * on-device validation (gated `facebook/dinov3-vitl16-pretrain-lvd1689m`).
- */
-/**
- * Whether a captured chunk of render output looks like a Hugging Face auth/gated-repo
- * failure (see the signature list above). Exported so the runner and tests share one
- * classification.
+ * Hugging Face auth / gated-repo failure: the pipeline pulls a gated model (`facebook/dinov3-…`) at load, and without
+ * an accepted token `from_pretrained` raises `GatedRepoError`/401, which exits non-zero like any crash. Shared with tests.
  * @type {(text: string) => boolean}
  */
 export const isHfAuthError = textMatcher([
@@ -532,20 +374,10 @@ export const isHfAuthError = textMatcher([
 ]);
 
 /**
- * Human-actionable guidance for the gated-dependency failure above. Points at the
- * in-app token field first — PortOS injects its stored Hugging Face token into the
- * render's environment (see `runTrellis2Generate`'s `env`), so pasting one on the 3D
- * page is the fix; the CLI/env route is the fallback for someone already set up that
- * way. Terms acceptance is a separate step a token alone doesn't cover.
- */
-/**
- * Build that guidance for a target, naming its own gated repos so the registry stays
- * the single source and the two lanes can't drift on the wording.
- *
- * Resolved lazily, at failure time, rather than at module scope: this module is in the
- * import graph of every registry consumer, and reading a descriptor at import time
- * makes merely LOADING it depend on `targets.js` being fully materialized — which a
- * partial test mock of that module breaks, taking the whole graph down with it.
+ * Actionable guidance for the gated-dependency failure: the in-app token field first (PortOS injects its stored HF token
+ * into the render env), then terms acceptance, which a token alone doesn't cover. Names the target's own gated repos.
+ * Resolved at failure time, not module scope: reading a descriptor at import would make loading this file depend on
+ * `targets.js` being materialized, which partial test mocks break.
  * @param {string} targetId
  * @returns {string}
  */
@@ -553,9 +385,7 @@ export function hfGatedRepoHelp(targetId) {
   const target = getTarget(targetId);
   const name = target?.label || 'This model';
   const repos = target?.gatedRepos ?? [];
-  // A target with NO gated repos still reaches here on an auth failure — but telling
-  // that user to "accept the terms" for an unnamed model is advice they cannot act on.
-  // For those targets the realistic cause is an unauthenticated rate limit, so say so.
+  // No gated repos: "accept the terms" is unactionable; the realistic cause is an unauthenticated rate limit.
   if (!repos.length) {
     return `${name} could not download a model from Hugging Face. It has no gated `
       + 'dependencies, so this is most likely an unauthenticated rate limit — add your '
@@ -570,24 +400,10 @@ export function hfGatedRepoHelp(targetId) {
 }
 
 /**
- * Signatures of the macOS **GPU watchdog** killing a long-running Metal kernel
- * mid-render — the one MPS-only failure mode that is neither a crash nor a setup
- * problem, and the reason it needs its own classifier.
- *
- * The mechanism (documented by the port itself, in `generate.py`'s
- * `_watchdog_help_message`): when a single Metal dispatch in the SLat decoder runs
- * long enough, macOS kills the command buffer and prints
- * `kIOGPUCommandBufferCallbackErrorImpactingInteractivity` to **stderr without
- * raising a Python exception**. Execution continues over empty tensors and dies
- * downstream, so the user-visible symptom is a bare non-zero exit after a render
- * that had already run for many minutes.
- *
- * Keyed on the port's own help banner and the two downstream exception texts rather
- * than on the Metal error itself: the Metal line is emitted early and
- * `appendTail`'s 4000-char window has usually evicted it by the time the process
- * exits, whereas the banner is the last thing printed before `sys.exit(2)`. Kept to
- * phrases that cannot appear in a healthy render, since a false positive would
- * mislabel an unrelated crash.
+ * macOS GPU watchdog killing a long Metal dispatch in the SLat decoder: it prints
+ * `kIOGPUCommandBufferCallbackErrorImpactingInteractivity` to stderr without a Python exception, so the render dies later
+ * with a bare non-zero exit. Keyed on the port's help banner and downstream exception texts (printed last, so still in
+ * `appendTail`'s 4000-char window) and on phrases that cannot appear in a healthy render.
  * @type {(text: string) => boolean}
  */
 export const isMpsWatchdogError = textMatcher([
@@ -598,26 +414,10 @@ export const isMpsWatchdogError = textMatcher([
 ]);
 
 /**
- * What the user can actually do about a watchdog kill.
- *
- * Deliberately does NOT repeat the port's own suggestions from
- * `generate.py:_watchdog_help_message`, two of which are now known not to work.
- * trellis-mac#8 (M2 Ultra / macOS 26.4.1) records headless-over-SSH with displays
- * physically unplugged, `SPARSE_CONV_BACKEND=none`, and per-block
- * `torch.mps.synchronize()` as all TESTED AND FAILED; `MTL_CAPTURE_ENABLED=1` is a
- * single-source claim that in that same report completed with a shattered mesh. What
- * is reported to clear it is sleeping the *panel* — mlx#3267, where the env-var-plus-
- * `pmset displaysleepnow` combination worked and the env var alone did not.
- *
- * Also deliberately does NOT tell the user to reduce steps: the watchdog fires on a
- * single long *dispatch*, not on total render time, so fewer sampler steps shortens
- * the run without making the offending kernel any shorter. Lowering the pipeline tier
- * is the knob that actually shrinks the dispatch, which is why that is the one named.
- *
- * PortOS does not set `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` on the user's behalf: in the
- * mlx#3267 A/B, relaxing the timeout with the panel awake turned a clean kernel kill
- * into a hard reboot. Trading a failed render for a lost session is not a default we
- * get to pick for someone.
+ * Watchdog guidance. Omits the port's own suggestions reported not to work (headless SSH, `SPARSE_CONV_BACKEND=none`,
+ * per-block synchronize; trellis-mac#8). Sleeping the panel is what is reported to clear it (mlx#3267). Does not suggest
+ * fewer steps: the kill is per long dispatch, so only a lower pipeline tier shortens it. Never sets
+ * `AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1`: with the panel awake it turned a kernel kill into a hard reboot.
  */
 export const TRELLIS2_WATCHDOG_HELP = 'The macOS GPU watchdog stopped this render: a '
   + 'single Metal kernel in the shape decoder ran long enough for macOS to kill the '
@@ -632,21 +432,11 @@ export const TRELLIS2_WATCHDOG_HELP = 'The macOS GPU watchdog stopped this rende
   + 'immediately rather than minutes in, check the input before the GPU.'
 
 /**
- * Which GLB post-process a run should apply — extracted so the decision is testable
- * on its own rather than as a side effect of a spawn.
- *
- * Three layers can flatten alpha (the exporter's `alpha_mode`, this rewrite, and the
- * viewer's `forceOpaque` prop). They have to agree, or a mesh exported as BLEND still
- * renders solid and reads as a broken exporter.
- *
- *  - `override !== undefined` wins outright, and **an explicit `null` therefore means
- *    "run nothing"**. That is not incidental: a parameter default only applies to
- *    `undefined`, so `null` already meant this before the fallback became computed,
- *    and using `??` here would quietly turn it back into force-opaque — absent vs.
- *    explicitly-empty, per AGENTS.md.
- *  - Otherwise force-opaque applies unless the caller asked the exporter for a
- *    transparent material. The rewrite still defaults on because an older o_voxel
- *    promoted to BLEND off a single low-alpha texel, which is what it was written for.
+ * Which GLB post-process a run applies. Three layers can flatten alpha (exporter `alpha_mode`, this rewrite, the viewer's
+ * `forceOpaque`) and must agree, or a BLEND mesh still renders solid.
+ *  - `override !== undefined` wins, so an explicit `null` means "run nothing" (`??` would turn it back into force-opaque).
+ *  - Otherwise force-opaque applies unless the exporter was asked for transparency; it defaults on because older o_voxel
+ *    promoted to BLEND off a single low-alpha texel.
  *
  * @param {string|null} alphaMode
  * @param {Function|null|undefined} override
@@ -659,38 +449,15 @@ export function resolveGlbPostprocess(alphaMode, override) {
 }
 
 /**
- * Run a single image→GLB generation. The one real-subprocess boundary — GUARDED:
- * throws `TRELLIS2_NOT_INSTALLED` unless the model is present, so it can never run
- * from a cold boot. `spawnImpl`/`exists` are injectable so the wiring (right command,
- * progress streaming, resolve-with-asset) is unit-testable without a real render.
- *
- * Returns `{ promise, kill }` so a caller can
- * terminate the render mid-flight — e.g. when the user deletes the record while
- * its GLB is still rendering. `kill` routes through the shared
- * `killWithEscalation` (SIGTERM, then SIGKILL after a grace window if the child
- * ignored it), the same cancel convention every other spawn-based media job uses.
- *
- * **`env`** (optional) is the child environment to spawn under. The pipeline pulls
- * gated Hugging Face repos at load time, so the caller resolves the token env
- * (`await hfChildEnv()` in `models.js#executeRender`) and passes
- * it in — this function stays synchronous so its `{ promise, kill }` contract holds.
- * Omitted → the child inherits `process.env` as before.
- *
- * A successful render is normalized to opaque before it resolves. The Apple port
- * auto-enables BLEND from isolated low-alpha texels, while upstream TRELLIS
- * documents OPAQUE as the default; leaving BLEND active turns prediction noise
- * into visible holes in both PortOS and downloaded GLBs.
- *
- * **`decimationTarget`** defaults to the memory-derived tier rather than upstream's
- * 200K clamp — see `trellis2MeshQuality.js` for why that clamp is now wrong. Pass an
- * explicit value to override; pass `TRELLIS2_DECIMATION_UPSTREAM_CLAMP` to reproduce
- * upstream output exactly.
- *
- * **`alphaMode`** suppresses the force-opaque post-process when it asks for
- * transparency. Those two would otherwise fight: telling the exporter to emit BLEND
- * and then rewriting every BLEND material back to OPAQUE is a silent no-op that
- * looks like a broken exporter. `null` keeps the historical behaviour (exporter
- * default + force-opaque normalization).
+ * Run one image→GLB generation: the real-subprocess boundary, GUARDED (throws `TRELLIS2_NOT_INSTALLED` unless present,
+ * so it never runs from a cold boot). `spawnImpl`/`exists` are injectable.
+ * Returns `{ promise, kill }`; `kill` routes through `killWithEscalation` (SIGTERM, then SIGKILL).
+ * `env` is the child environment (omitted → inherits `process.env`); the caller resolves the HF token env
+ * (`hfChildEnv()` in `models.js#executeRender`) so this stays synchronous.
+ * A successful render is normalized to opaque: the Apple port auto-enables BLEND from isolated low-alpha texels.
+ * `decimationTarget` defaults to the memory-derived tier (see `trellis2MeshQuality.js`); pass
+ * `TRELLIS2_DECIMATION_UPSTREAM_CLAMP` to reproduce upstream. `alphaMode` asking for transparency suppresses the
+ * force-opaque post-process, which would otherwise undo the exporter's BLEND.
  *
  * @param {{imagePath: string, outputPath?: string, base?: string, textureSize?: number,
  *          pipelineType?: string, unifiedMemoryGb?: number,
@@ -729,8 +496,7 @@ export function runTrellis2Generate({
     err.code = 'TRELLIS2_NOT_INSTALLED';
     return { promise: Promise.reject(err), kill: () => {} };
   }
-  // An explicit `pipelineType` still wins (direct callers and tests use it); a
-  // request expresses itself as a detail tier instead.
+  // Explicit `pipelineType` wins over the detail tier.
   const resolvedPipelineType = pipelineType ?? resolveTrellis2PipelineType(detail, unifiedMemoryGb);
   const resolvedTextureSize = textureSize ?? selectTrellis2TextureSize(unifiedMemoryGb);
   const resolvedDecimationTarget = decimationTarget
@@ -750,18 +516,11 @@ export function runTrellis2Generate({
       remesh,
       alphaMode,
       normalMap,
-      // Emitted only alongside --normal-map, but ALWAYS passed when it is: the Python
-      // side has its own default, and leaving this unset meant the JS constant was
-      // dead config — lowering it in response to a crash report would have changed
-      // nothing while its tests kept passing.
+      // Always passed with --normal-map so the JS constant is live config rather than shadowed by the Python default.
       ...(normalMap ? { normalMapMaxSourceFaces } : {}),
     },
   });
-  // Force-opaque normalization is skipped exactly when the caller asked the
-  // exporter for a transparent material — see the `alphaMode` note above. The
-  // default (`null`) keeps the historical force-opaque behaviour, which still
-  // matters for installs carrying an older o_voxel that auto-promoted to BLEND
-  // off a single low-alpha texel.
+  // Skipped when the caller asked the exporter for a transparent material (see `alphaMode` above).
   const resolvedPostprocess = resolveGlbPostprocess(alphaMode, postprocessGlb);
   return runGenerateSubprocess({
     command,
@@ -775,12 +534,10 @@ export function runTrellis2Generate({
     onProgress,
     spawnImpl,
     postprocessGlb: resolvedPostprocess,
-    // A gated-dependency / HF-auth failure is a user-fixable setup problem, not a
-    // crash — surface it as such with actionable guidance instead of "exited N".
+    // A gated-dependency / HF-auth failure is a setup problem, not a crash.
     classifiers: [
       { test: isHfAuthError, code: `${CODE_PREFIX}_HF_AUTH_REQUIRED`, help: () => hfGatedRepoHelp('trellis2') },
-      // MPS-only: the watchdog exits non-zero with no exception, so without this it
-      // reads as a generic crash after a render the user already waited minutes for.
+      // MPS-only: the watchdog exits non-zero with no exception.
       { test: isMpsWatchdogError, code: `${CODE_PREFIX}_MPS_WATCHDOG`, help: TRELLIS2_WATCHDOG_HELP },
     ],
   });

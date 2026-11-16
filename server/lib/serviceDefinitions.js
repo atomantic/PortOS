@@ -2,21 +2,6 @@
  * `SERVICE_DEFINITIONS` — every backend a harness can be pointed at, as ONE
  * table (#7562, the first slice of #7561).
  *
- * `SERVICE_DEFINITIONS` (#7562) — every backend a harness can be pointed at, as ONE table:
- * subscription services (claude-subscription, codex-subscription, antigravity, grok-build, cursor),
- * API-key services (anthropic, openai, google, xai, bedrock, kimi, the three hosted gateways
- * orcarouter/openrouter/nvidia-nim, opencode-zen, cerebras, a generic openai-compatible endpoint), one
- * `local` row per `LOCAL_RUNTIMES` id, and `fleet-host`. Each row: `family`, `transports` (`anthropic`
- * / `openai` with a default base URL, or none for a local daemon whose port is an install fact),
- * `credential` (env var names, key URL), the `plans` it may be declared under (`SERVICE_PLANS`), a
- * `catalog` strategy with an optional per-plan filter (OpenRouter `:free`, OpenCode Zen `*-free`), and
- * where relevant `localRuntime`, `harnessOnly`, `gateway` (the rows `PROVIDER_GATEWAYS` derives from)
- * and `piProvider` (Pi's built-in name). `resolveServiceInstance(input)` is the pure instance shape
- * the epic composes over (definition + `slug` + `plan` + resolved `transports` + raw `credentials`),
- * `serviceDefinitionById` / `serviceDefinitionForLocalRuntime` look rows up, `serviceError(code,
- * message)` mints the typed errors. Imports nothing, so `providerGateways.js` and the browser can
- * reach it.
- *
  * Before this file, "which backends exist?" was answered by four registries
  * that never met: `PROVIDER_GATEWAYS` (hosted OpenAI-compatible gateways),
  * `LOCAL_RUNTIMES` (daemons on this machine), the AI rows of

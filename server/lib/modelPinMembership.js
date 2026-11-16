@@ -2,16 +2,6 @@
  * Which LOCAL daemon backs a provider, and whether a stored model pin is one
  * that provider may still be handed.
  *
- * Split out of `localProviderRuntime.js` (which re-exports every name here, so
- * its existing importers are untouched) for one reason: the browser needs this
- * rule. A picker that renders a stored pin has to know whether the catalog
- * still lists it, and `localProviderRuntime.js` reaches `opencodeConfig.js` —
- * and through it `zod`, which is not a client dependency — to resolve
- * ENDPOINTS, a question no picker asks. This leaf carries only what the
- * membership rule needs (`providerModels.js`, `localEndpoint.js`, `ports.js`),
- * all of which the client already imports, so `client/src/utils/providerModels.js`
- * can mirror the server's answer instead of re-deriving a second one.
- *
  * The endpoint half stayed behind in `localProviderRuntime.js`.
  */
 

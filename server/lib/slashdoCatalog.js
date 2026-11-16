@@ -3,17 +3,6 @@
  * `lib/slashdo/commands/do/*.md` workflows PortOS offers as a one-click agent run
  * (#3114).
  *
- * The single catalog of which bundled slashdo workflows PortOS offers as a one-click agent run —
- * `SLASHDO_WORKFLOWS` (`{command, label, description, icon, templateName, templatePrompt?, settings,
- * appTypes, configurable?}`), `getSlashdoWorkflow()` (the allowlist gate for `POST
- * /api/cos/tasks/slashdo`), `SLASHDO_COMMAND_NAMES`, `slashdoWorkflowsForApp(isSwiftApp)`,
- * `SLASHDO_APP_TYPES`, and the two run-shape postures `WORKFLOW_OWNS_ITS_OWN_GIT` (commit-shaped) /
- * `WORKFLOW_REPORTS_NO_CODE` (report-shaped — carries `worktreeChangesExpected: false` so a
- * filed-issue/printed-report run retains its non-code deliverable posture). Backs the Agent Operations
- * buttons, the CoS quick templates (`taskTemplates.js`), and the route allowlist, replacing two
- * catalogs that had drifted. `client/src/lib/slashdoCatalog.js` decorates this list with button
- * styling rather than restating it.
- *
  * Before this module there were two catalogs that had already drifted:
  * `SLASHDO_COMMANDS` in `server/routes/cosTaskRoutes.js` (feeding the app
  * overview's Agent Operations buttons) and `BUILT_IN_TEMPLATES` in

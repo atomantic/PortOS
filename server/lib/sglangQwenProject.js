@@ -2,19 +2,6 @@
  * Where the SGLang Qwen3.8-27B compose project lives, and whether its weights
  * are already on disk.
  *
- * `resolveSglangProjectDir()` / `inspectSglangQwenProject()` → `{dir, hasProject, composeFile,
- * hasWeights, weightsRoot}` for the operator's SGLang Qwen3.8-27B project, plus
- * `sglangStartBlockedReason(project)` → the prose refusal (or `null`). Sibling of `vllmQwenProject.js`
- * with the same tri-state `hasWeights` contract (`true` found / `false` caches read and empty / `null`
- * no cache readable) and the same directory-reads-only rule — never docker, never a registry. Differs
- * in that PortOS OWNS this launch line (SGLang publishes an image but no compose project), so the
- * refusals point at the compose file in `docs/features/sglang-qwen38.md` rather than at a `git clone`.
- * Also this stack's keyed view of `recordedProjectDir.js` — `readRecordedSglangProjectDir(envPath?)` /
- * `recordSglangProjectDir(dir, envPath?)` / `sglangProjectDirIsSettled()` plus `SGLANG_PROJECT_LEAF` —
- * so `resolveSglangProjectDir()` reads `SGLANG_QWEN_PROJECT_DIR` → the UNC path
- * `services/sglangQwenManager.js` detected and recorded on Windows → `~/sglang-qwen38`. Overrides:
- * `SGLANG_QWEN_PROJECT_DIR`, `SGLANG_QWEN_WEIGHTS_DIR`.
- *
  * The sibling of `lib/vllmQwenProject.js`, for the same reason and with the same
  * hard rule: **a readiness check only reads directory entries.** It never runs
  * docker, contacts a registry, or reads a weight file. `docker compose up -d` in

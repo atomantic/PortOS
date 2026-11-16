@@ -1,20 +1,6 @@
 /**
  * Where `npm install --global` actually writes its executables.
  *
- * `adoptNpmGlobalBinDir()` — puts the directory `npm install --global` actually writes to onto
- * `process.env.PATH`, from one cached `npm prefix -g`. npm resolves its prefix through a config
- * cascade (cli flags, `npm_config_*`, project/user/global npmrc, a builtin npmrc that interpolates env
- * vars), so guessing it from `%APPDATA%`/`$HOME` reproduces the bug on the next host — only npm can
- * answer. Exists because a host whose npm prefix is NOT the directory its Node installer put on PATH
- * (a machine-wide Windows prefix vs the per-user `%APPDATA%\npm` default, `NPM_CONFIG_PREFIX`,
- * nvm/Volta) installed `codex` successfully and then reported it unrunnable, advising a restart that
- * inherits the same PATH. Called at boot in BOTH processes that spawn provider CLIs
- * (`services/bootstrap.js`, `cos-runner/index.js`) and again from `providerRuntimeInstaller.js`'s
- * probe, because on a first install the prefix directory did not exist when boot looked.
- * `inspectNpmGlobalCommand()` also verifies the selected executable against a declared bin in a
- * conventional global package tree and returns private evidence for a targeted uninstall; linked or
- * ambiguous packages are refused, and the original installer is not inferred.
- *
  * The AI Providers page installs a CLI with a fixed `npm install --global` and
  * then asks whether PortOS can run it. Those two questions have different
  * answers on any host whose npm prefix is not the directory the platform's Node

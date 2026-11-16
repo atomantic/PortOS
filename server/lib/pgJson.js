@@ -1,15 +1,6 @@
 /**
  * Text repair for values bound to PostgreSQL.
  *
- * text repair for values bound to PostgreSQL, which refuses a lone UTF-16 surrogate in `jsonb` and NUL
- * in `jsonb`/`text` where every file store accepted both. `normalizePgString(s)` → `toWellFormed()`
- * with NUL → U+FFFD (the same lossy repair a UTF-8 file write applied). `toPgJson(value)` →
- * `JSON.stringify` that repairs string values and object keys; **use it, never bare `JSON.stringify`,
- * for a parameter bound to a `json`/`jsonb` column or `::jsonb` cast** (`pgJsonConventions.test.js`
- * enforces this). `normalizePgParams(params)` is applied by `db.js` `query()` and the
- * `withTransaction` client: repairs string and array-element params (never unescapes `\^@`) and
- * serializes plain-object params via `toPgJson`.
- *
  * `jsonb` refuses a lone UTF-16 surrogate (`\ud83d`, e.g. an emoji cut in half by
  * `.slice()`) and both `jsonb` and `text` refuse NUL. Every file store these
  * records came from tolerated both, so a write that used to succeed started

@@ -1,12 +1,6 @@
 /**
  * `useMediaJobReconnectSettle(getPendingIds, settle)` re-fetches pending media jobs on socket
  * reconnect and settles those that already finished while disconnected.
- *
- * `useMediaJobReconnectSettle(getPendingIds, settle)`: on socket `connect`, fetches each pending
- * media-job id and calls `settle(jobId, job)` for jobs already `completed`/`failed`/`canceled` (a
- * terminal event missed during the disconnect is never replayed, #15167). No polling; skips ids that
- * cleared in the meantime. Use when: A surface that clears its busy state only from `*-gen:*` socket
- * events and must not stay stuck after a reconnect.
  */
 
 import { useEffect, useRef } from 'react';

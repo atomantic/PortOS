@@ -1,16 +1,6 @@
 /**
  * Reading the provider connection graph honestly (#6369 → #7567).
  *
- * What every AI Providers surface shares about a service instance (#7567, #8014): `catalogSummary`
- * reads its catalog state honestly (keeps `unknown` / `known`-and-empty /
- * `failed`-with-retained-models distinct), `serviceReadinessCopy` / `SERVICE_READINESS_COPY` give one
- * phrasing per `readiness` value (badge tone + label, and the predicate the compose popover and
- * compatibility matrix append to the service's name), `draftFromTransports` / `transportsFromDraft`
- * round-trip its `transports` map through a text form, dropping a blank endpoint rather than sending
- * an empty one, and `classifyServiceCategory` / `SERVICE_CATEGORIES` / `serviceMatchesQuery` /
- * `sortServices` / `servicePresetAction` group the Services view by what the definition offers (not
- * the instance's selected plan) and decide whether a card may start a derived preset.
- *
  * What is left of the Backend Connections drawer's helpers after the AI
  * Providers page absorbed that drawer into its Services view: a connection is
  * a service instance, and what every surface shares is how its catalog state

@@ -1,21 +1,6 @@
 // Melody synth playback for the lead-sheet notation — turns a parsed score (see scoreNotation.js) into
 // a soft "reference tone" you can hear before you sing it.
 //
-// Melody synth playback for the lead-sheet notation — companion to `songPlayback.js` (which stacks
-// recorded vocal takes), this synthesizes the WRITTEN melody as soft `OscillatorNode` reference tones
-// on a lazy shared `AudioContext` (no MIDI.js / Tone.js). `buildSchedule(score, bpm?)` is the pure
-// notes→`{ midi, freq, startSec, durSec }` mapping (A4=440, quarter-beat = `(60/bpm)·(beatValue/4)` so
-// it honors the time signature; `midi` feeds the `<PianoRoll>` key mapping);
-// `noteToFrequency`/`midiToFreq`/`pitchToMidi` convert pitches; `createScorePlayer(score, { bpm,
-// onNote, onEnded })` plays/pauses/stops with a lookahead scheduler and emits the now-sounding note
-// index for the `<ScoreSheet>` playhead; `createMultiScorePlayer(parts, { bpm, onNote, onEnded })`
-// synthesizes several parts (melody + checked harmony) together on one master bus (level backs off as
-// voices stack) with a per-part `onNote(partId, index)` playhead, plus `position()`/`duration()`
-// (score-seconds) for the continuous piano-roll visualizer. Both players are thin schedulers over the
-// shared `lookaheadTransport.js`. Also exports the pieces `midiPlayback.js` shares: `scheduleTone`
-// (attack/release envelope) and `makeSafeCall(label)` (interval-callback guard); the `SYNTH_TIMING`
-// lookahead constants now live in `lookaheadTransport.js`.
-//
 // Companion to songPlayback.js: that mixer stacks RECORDED vocal takes, this one synthesizes the
 // WRITTEN melody as oscillator tones so a singer can preview the intended pitch line.
 //

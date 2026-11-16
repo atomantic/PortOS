@@ -2,17 +2,6 @@
  * llama-server launcher presets — a target on its own, or a target paired with
  * a speculative-decoding drafter.
  *
- * Curated llama-server launch presets (target + optional drafter GGUF paths, `--spec-type`, and the
- * Hugging Face repo/quant each file comes from) plus `findSpecDecodePreset` / `specDecodeSource` /
- * `hfSearchUrl`. A preset whose spec type drafts with nothing (`none`, any `ngram-*`) carries an empty
- * `draftModel` and is just a launch line for one checkpoint — which is what makes this the home for a
- * model only llama-server can load, e.g. `ternary-bonsai-2-27b`, whose ternary packs stock llama.cpp
- * (and therefore Ollama and LM Studio) cannot run. Also owns the `--spec-type` vocabulary:
- * `SPEC_TYPE_SUGGESTIONS` (published to the launcher card), `parseSpecTypes` (the flag is a
- * comma-separated list) and `isDraftSpecType` (the `draft-` prefix is what needs a drafter GGUF —
- * every `ngram-*` type runs without one). Server-owned so the launcher card can offer a Download
- * button per file. Pure.
- *
  * Server-owned because the paths are only half the story: each preset also
  * carries the Hugging Face repo the GGUF comes from, so PortOS can report
  * "downloaded / not downloaded" per file and fetch the missing ones itself.

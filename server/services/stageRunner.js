@@ -3,15 +3,8 @@
  *
  * Single entry point for "run a named stage from `data/prompts/stages/` against
  * the active (or stage-pinned) provider, with tier-aware model resolution and
- * runner.js-tracked transcripts." Replaces two parallel implementations:
- *
- *   - server/services/writersRoom/evaluator.js (callApiProvider + callCliProvider
- *     + buildCliInvocation — bypassed runner.js, lost transcript persistence)
- *   - server/services/pipeline/textStages.js#callLLM (already used runner.js but
- *     lacked tier-name resolution and stage.provider pinning)
- *
- * Both call paths now route here so a single CLI-spawn fix applies once and
- * every stage call lands in `data/runs/<runId>/` for replay.
+ * runner.js-tracked transcripts." Every stage call lands in `data/runs/<runId>/`
+ * for replay.
  */
 
 import { callerModeRejection } from '../lib/callerModePolicy.js';
@@ -30,39 +23,25 @@ import {
   knownProviderContextWindow,
   catalogModelContextWindow,
 } from '../lib/providerContextWindows.js';
-// The Ollama `num_ctx` ceiling — the same module the pre-dispatch gate resolves
-// it through, so the budgeter and the gate cannot disagree again (#7466). The
-// dependency-free `internal/` leaf, not the toolkit barrel: that reaches `fs`
-// and `child_process`, and this module is inside the server suite's import budget.
+// The Ollama `num_ctx` ceiling, resolved through the same module as the pre-dispatch gate so
+// budgeter and gate agree (#7466). The dependency-free `internal/` leaf, not the toolkit barrel
+// (which reaches `fs`/`child_process`; this module is inside the server suite's import budget).
 import { clampToRuntimeContextWindow } from '../lib/aiToolkit/internal/ollamaBacked.js';
-// …and the rung of that ceiling the toolkit cannot resolve for itself: the
-// ambient `OLLAMA_CONTEXT_LENGTH` PortOS launches the daemon with (#7472).
+// …and the rung the toolkit cannot resolve itself: the ambient `OLLAMA_CONTEXT_LENGTH` (#7472).
 import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
 import { createRun, patchRunMetadata } from './runner.js';
 import { canonicalStageModelTier, isStageModelTier } from '../lib/stageModelTiers.js';
 import { resolveProviderModelTier, MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from '../lib/aiToolkit/constants.js';
 
-// Every stage-config field that names a ROUTE. `withStagePinsIgnored`
-// (lib/stagePinPolicy.js) strips exactly these so a run told to use ONE
-// provider/model actually does — see that module for why the switch is an
-// async-context flag. Enumerated HERE, once: the resolvers below then need no
-// per-pin conditionals, and adding a routing pin to the stage schema means
-// adding it to this list and nowhere else.
+// Every stage-config field that names a ROUTE. `withStagePinsIgnored` (lib/stagePinPolicy.js)
+// strips exactly these, so a run told to use ONE provider/model does. Enumerated once here:
+// a new routing pin is added to this list and nowhere else.
 const ROUTING_PIN_FIELDS = Object.freeze(['provider', 'effort', 'judgeProvider', 'judgeModel']);
 
-// The stage as the resolvers below should see it. Identity unless the current
-// run asked to ignore pins, in which case the routing fields above are dropped.
-//
-// Two fields deliberately SURVIVE:
-//   - a `model` TIER (default/light/medium/heavy/ultra) — a per-provider mapping, not
-//     a pin. It already loses to `modelDefault`, and it is the right fallback
-//     for a run that forced a provider without naming a model. Only an explicit
-//     model id is dropped.
-//   - `timeout` — it encodes how long the stage's WORK takes (a whole-manuscript
-//     editorial pass vs a one-line classification), not which provider runs it.
-//     Dropping it to the provider default would abort the long stages, not
-//     rescue them; a timeout genuinely too tight for a forced local model is a
-//     stage-config edit, not a run option.
+// The stage as the resolvers should see it: identity unless the run ignores pins, in which
+// case the routing fields above are dropped. Two fields SURVIVE: a `model` TIER (a
+// per-provider mapping, not a pin; only an explicit model id is dropped) and `timeout`
+// (how long the stage's WORK takes; dropping it would abort long stages).
 export function effectiveStage(stage) {
   if (!stage || !stagePinsIgnored()) return stage;
   const stripped = { ...stage };
@@ -71,32 +50,20 @@ export function effectiveStage(stage) {
   return stripped;
 }
 
-// First-element fallback when defaultModel is unset on a provider that
-// exposes a `models` array (some toolkit-configured providers ship a model
-// list but no explicit default). Without this, API-side runners that require
-// an explicit model would receive `null` and 400. Mirrors the older pipeline
-// fallback that the shared runner replaced.
+// First-element fallback when a provider ships a `models` array but no default; API runners
+// that require an explicit model would otherwise receive `null` and 400.
 const providerFallbackModel = (provider) =>
   provider.defaultModel
   || (Array.isArray(provider.models) && provider.models[0])
   || null;
 
-// Per-call timeout bounds come from the canonical aiToolkit/constants.js
-// (imported at the top of the file). The runner, the route validator, and
-// the toolkit's own provider/run validation all reject the same shapes.
-// Internal callers (extractors, pipeline stages) hit the runner directly,
-// so it must enforce the same bounds as the HTTP boundary or a caller
-// could slip through a value the schema would reject.
+// Timeout bounds come from aiToolkit/constants.js. Internal callers hit the runner directly,
+// so it must enforce the same bounds as the HTTP boundary.
 
-// Normalize a stage- or caller-supplied timeout into a positive integer
-// milliseconds value (or `undefined` to mean "fall through to provider
-// default"). Reject NaN, non-integer, exponent/hex string forms, and
-// anything outside [STAGE_TIMEOUT_MIN_MS, STAGE_TIMEOUT_MAX_MS] — matches
-// parseTimeoutMs on the client and the route validator's preprocess. The
-// digit-only string gate is critical: `Number('1e3')` is 1000 and
-// `Number.isInteger(1000)` is true, so without the gate an internal caller
-// passing `'1e3'` would be silently accepted here while the validator
-// rejects the same shape.
+// Normalize a timeout into a positive integer ms (or `undefined` → provider default). Rejects
+// NaN, non-integers, exponent/hex strings and anything outside [STAGE_TIMEOUT_MIN_MS,
+// STAGE_TIMEOUT_MAX_MS], matching the client and route validator. The digit-only string gate
+// matters: `Number('1e3')` is an integer 1000 the validator would reject.
 function normalizeTimeout(raw) {
   if (raw == null) return undefined;
   let n;
@@ -121,27 +88,18 @@ export function resolveModel(provider, modelHint) {
 
 // Compose the model hint for a stage with soft-default awareness (#1558).
 //
-// The model dimension is NOT symmetric with the provider dimension. A
-// `stage.provider` is opt-in — almost no stage sets one — so a run-level
-// `providerDefault` applies to the common (unpinned) case and only loses to the
-// rare deliberate `stage.provider` pin. But nearly every stage in the shipped
-// `stage-config.json` carries a `stage.model` *tier* value (`default`/`light`/
-// `medium`/`heavy`/`ultra`) — that tier is the model-dimension equivalent of "no
-// provider pinned", a default mapping, NOT a deliberate per-stage model choice.
-// So a run-level `modelDefault` must OVERRIDE a stage's tier (otherwise
-// launching Series Autopilot with a model would be a no-op on ~every stage),
-// while still LOSING to a deliberate explicit-model pin (an actual model id like
-// `lmstudio:gptoss-20b`, the case #1558 set out to protect).
+// Not symmetric with the provider dimension: nearly every stage carries a `stage.model`
+// *tier* (a default mapping, not a deliberate choice), so a run-level `modelDefault` must
+// OVERRIDE a tier while still LOSING to an explicit model-id pin.
 //
 // Precedence, strongest first:
-//   1. modelOverride        — hard per-call model id (manual "regenerate with model X")
-//   2. explicit stage.model — a deliberate pin (non-tier model id) beats the run default
-//   3. modelDefault         — the run-level soft default (Series Autopilot's run model)
-//   4. stage.model tier     — the stage's default tier mapping (default/light/medium/heavy/ultra)
+//   1. modelOverride        — hard per-call model id
+//   2. explicit stage.model — a deliberate (non-tier) pin
+//   3. modelDefault         — the run-level soft default
+//   4. stage.model tier     — the stage's default tier mapping
 //   5. provider default     — resolveModel's own fallback
 //
-// Takes an `effectiveStage`-masked stage, so step 2 is already gone for a run
-// that forced one model across every stage.
+// Takes an `effectiveStage`-masked stage, so step 2 is gone for a run that forced one model.
 function resolveModelHint(stage, options = {}) {
   const stageModel = stage?.model;
   const stagePin = stageModel && !isStageModelTier(stageModel) ? stageModel : null;
@@ -151,59 +109,40 @@ function resolveModelHint(stage, options = {}) {
 
 // Compose the reasoning-effort hint for a stage (#3641).
 //
-// Effort is symmetric with the PROVIDER dimension, not the model one: no stage
-// carries a default effort the way nearly every stage carries a model *tier*,
-// so `stage.effort` is always a deliberate opt-in pin and therefore beats the
-// blanket run-level default.
+// Symmetric with the PROVIDER dimension: `stage.effort` is always a deliberate pin, so it
+// beats the run-level default.
 //
 // Precedence, strongest first:
-//   1. effortOverride — hard per-call effort ("run THIS request at max")
-//   2. stage.effort   — a deliberate per-stage pin (stage-config.json)
-//   3. effortDefault  — the run-level soft default (Series Autopilot's run effort)
-//   4. null           — no flag emitted; the provider's own config decides
+//   1. effortOverride — hard per-call effort
+//   2. stage.effort   — a deliberate per-stage pin
+//   3. effortDefault  — the run-level soft default
+//   4. null           — no flag; the provider's own config decides
 //
-// The result is safe to pass unconditionally: `runPromptThroughProvider` clamps
-// it to the provider's (and, for Antigravity, the model's) ladder and drops it
-// entirely for a provider with no effort control.
-//
-// Takes an `effectiveStage`-masked stage, so step 2 is already gone for a run
-// that forced one route across every stage.
+// Safe to pass unconditionally: `runPromptThroughProvider` clamps it to the provider's
+// ladder and drops it for a provider with no effort control. Takes an `effectiveStage`-masked stage.
 export function resolveEffortHint(stage, options = {}) {
   return options.effortOverride || stage?.effort || options.effortDefault || null;
 }
 
-// The local-backend concurrency gate (cap concurrent in-flight calls per local
-// endpoint so N parallel stage calls don't thrash one GPU's VRAM) lives in
-// promptRunner.js — the actual execution layer — so it covers the initially
-// selected provider, a proactive createRun swap, AND a runtime fallback that
-// lands on a local backend. Re-exported here for callers/tests that reference
-// the gate by its historical stageRunner path. `isLocalEndpoint` is shared from
-// the same module so the context-window heuristic below and the gate agree on
-// what "local" means.
+// The local-backend concurrency gate lives in promptRunner.js (the execution layer, covering
+// swaps and runtime fallbacks) and is re-exported here for its historical path.
+// `isLocalEndpoint` is shared so the context-window heuristic below agrees on "local".
 export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
 export { isLocalEndpoint };
 
-// CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;
-// non-local API providers are cloud. Local backends (ollama/lmstudio on
-// localhost) are the only genuinely small-window case.
+// CLI/TUI providers are frontier models and non-local API providers are cloud; only local
+// backends are the small-window case.
 const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;
   if (provider?.type === 'api') return !isLocalEndpoint(provider.endpoint);
   return false;
 };
 
-// Which window this provider/model CLAIMS, before the runtime ceiling: an
-// explicit `contextWindow` wins, else the window the provider's own catalog
-// reported for this model, else a known model window for the resolved model,
-// else a known provider-level window for configured-default process providers,
-// else `numCtx`, else a large default for frontier providers, else null (the
-// budgeter applies a conservative floor for unknown local backends). The rungs
-// themselves live in lib/providerContextWindows.js, the pure leaf the browser's
-// provider-card meter shares.
-//
-// `numCtx` still ends the ladder, but it only DECIDES for a non-Ollama local
-// endpoint, where it is a user's hint about a window the endpoint ignores. On
-// an Ollama-backed provider the clamp has already bounded every rung above it.
+// Which window this provider/model CLAIMS, before the runtime ceiling: explicit
+// `contextWindow`, then the provider catalog's window, a known model window, a known
+// provider window, `numCtx`, a large frontier default, else null (the budgeter applies a
+// floor). Rungs live in lib/providerContextWindows.js, shared with the browser's meter.
+// `numCtx` only DECIDES for a non-Ollama local endpoint; on Ollama the clamp already bounds it.
 function claimedContextWindow(provider, model) {
   if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);
   const catalogWindow = catalogModelContextWindow(provider, model);
@@ -218,19 +157,15 @@ function claimedContextWindow(provider, model) {
 }
 
 /**
- * Planning-time context window for a provider/model — the number the prompt
- * budgeter chunks against: the claimed window held to what the daemon will
- * actually serve. The ceiling bounds every rung, an explicit override included
- * (a user preference the daemon cannot honor past its launch window). See
- * {@link clampToRuntimeContextWindow} for the rule and why it is shared.
+ * Planning-time context window for a provider/model — what the prompt budgeter
+ * chunks against: the claimed window held to what the daemon will actually serve
+ * (the ceiling bounds every rung, an explicit override included; see
+ * {@link clampToRuntimeContextWindow}).
  *
- * The provider is projected through `withOllamaRuntimeContextWindow` first so
- * the ceiling sees BOTH rungs the daemon was launched from — `numCtx` and the
- * ambient `OLLAMA_CONTEXT_LENGTH`. Without it an install that configures the
- * window through the env var alone budgeted at the model's catalog window and
- * the call died at dispatch (#7472). The projection is in-memory and never
- * persisted; `resolveStageContext` deliberately does NOT do it for us, because
- * both of its branches (probe and no-probe) must get the same ceiling.
+ * The provider is projected through `withOllamaRuntimeContextWindow` first so the
+ * ceiling sees both `numCtx` and the ambient `OLLAMA_CONTEXT_LENGTH` (#7472). The
+ * projection is in-memory and never persisted; `resolveStageContext` must not do
+ * it itself because both of its branches need the same ceiling.
  */
 export function effectiveContextWindow(provider, model) {
   const runtime = withOllamaRuntimeContextWindow(provider);
@@ -239,14 +174,12 @@ export function effectiveContextWindow(provider, model) {
 
 /**
  * Resolve which provider/model a stage WOULD run against (without executing)
- * plus its planning context window — for callers that must budget the prompt
- * before building it (e.g. manuscript editorial chunking).
+ * plus its planning context window, for callers that budget the prompt before
+ * building it (e.g. manuscript editorial chunking). Resolves the PRIMARY
+ * provider; a smaller-window runtime fallback is not reflected.
  *
- * Best-effort planning: this resolves the PRIMARY provider; a runtime fallback
- * to a different (possibly smaller-window) provider is not reflected here.
- *
- * WHICH provider/model a stage would use is {@link resolveStageRoute}, and it
- * makes no network call. Use that when the window is not what you came for.
+ * Use {@link resolveStageRoute} when only the route is needed; it makes no
+ * network call.
  */
 export async function resolveStageRoute(stageName, options = {}) {
   const stage = effectiveStage(getStage(stageName));
@@ -256,56 +189,37 @@ export async function resolveStageRoute(stageName, options = {}) {
 }
 
 /**
- * {@link resolveStageRoute} plus the window to budget the prompt against.
+ * {@link resolveStageRoute} plus the window to budget the prompt against,
+ * measured against what a local daemon is SERVING now (the pre-dispatch gate,
+ * #7441, reads the same live listing and would refuse an oversized prompt). The
+ * listing is TTL-cached and shared with that gate (one `/v1/models` per endpoint
+ * per 15s); a down or silent daemon contributes nothing.
  *
- * That window is measured against what a local daemon is SERVING right now, not
- * only against what the provider record remembers. Without it the chunker
- * planned to the blanket 128K assumption for a seeded local wrapper, built the
- * oversized prompt, and the pre-dispatch gate (#7441, which already reads the
- * live listing) refused it — a run lost to a limit the budgeter could have
- * respected. The listing is TTL-cached and shared with that gate, so a chunked
- * run spends at most one `/v1/models` per endpoint per 15s rather than one per
- * stage; a daemon that is down or silent contributes nothing, and the ladder
- * resolves exactly as it did before.
- *
- * `provider` is returned UNMERGED — callers read it for the record's identity,
- * and observed runtime state has no business riding a provider record around.
+ * `provider` is returned UNMERGED: observed runtime state must not ride a
+ * provider record around.
  */
 export async function resolveStageContext(stageName, options = {}) {
   const { provider, model } = await resolveStageRoute(stageName, options);
-  // An explicit `contextWindow` already short-circuits the ladder's first rung,
-  // so observing one could not change the answer — skip the probe rather than
-  // spend a round trip (up to the probe timeout on a black-holed endpoint) on a
-  // result that is provably discarded. (The `numCtx` ceiling still applies: it
-  // reads the provider RECORD, which an observation never touches.)
+  // An explicit `contextWindow` short-circuits the first rung, so observing could not change the
+  // answer: skip the probe. (The `numCtx` ceiling reads the provider RECORD and still applies.)
   if (Number(provider?.contextWindow) > 0) {
     return { provider, model, contextWindow: effectiveContextWindow(provider, model) };
   }
-  // Budget-only enrichment, so a probe or module-load failure must never turn
-  // planning into a new failure mode — fall back to the provider as stored.
+  // Budget-only enrichment: a probe or module-load failure must not become a planning failure.
   const observed = await withObservedContextWindowsLazy(provider).catch(() => provider);
   return { provider, model, contextWindow: effectiveContextWindow(observed, model) };
 }
 
 // Provider resolution precedence, strongest first:
-//   1. `providerOverride` — an explicit per-call choice ("run THIS request with
-//      provider X right now", e.g. a route's regenerate-with-provider button).
-//      The most specific signal, so it beats even a stage pin. Throws if the
-//      requested provider is unavailable — the caller asked for it by name.
-//   2. `stage.provider` — a deliberate per-stage pin (Prompts page /
-//      stage-config.json). Beats a blanket run-level default so a pinned stage
-//      keeps running on its chosen provider even when something sets a different
-//      default for everything else (e.g. Series Autopilot's run provider).
-//   3. `providerDefault` — a blanket run-level default that applies ONLY to
-//      stages without their own pin. Unlike an override it is a soft preference:
-//      if it's unavailable we fall through to the active provider rather than
-//      throwing, because it was never a per-call demand.
+//   1. `providerOverride` — explicit per-call choice; beats even a stage pin. Throws if
+//      unavailable, since the caller asked for it by name.
+//   2. `stage.provider` — a deliberate per-stage pin; beats a run-level default.
+//   3. `providerDefault` — a run-level default for unpinned stages only. Soft: if
+//      unavailable, fall through to the active provider rather than throw.
 //   4. The active provider — the system-wide fallback.
 //
-// Takes an `effectiveStage`-masked stage, so step 2 is already gone for a run
-// that forced one provider across every stage. Because the pin is *stripped*
-// rather than demoted, such a run also stops throwing STAGE_PROVIDER_UNAVAILABLE
-// for a stage pinned to a provider that no longer exists.
+// Takes an `effectiveStage`-masked stage; the pin is *stripped*, not demoted, so a run that
+// forced one provider also stops throwing STAGE_PROVIDER_UNAVAILABLE for a vanished pin.
 async function resolveProviderForStage(stage, { providerOverride, providerDefault, callerPolicy } = {}) {
   const permitted = (provider) => {
     const rejection = callerPolicy ? callerModeRejection(provider, callerPolicy) : null;
@@ -333,8 +247,7 @@ async function resolveProviderForStage(stage, { providerOverride, providerDefaul
   if (providerDefault) {
     const fallback = await getProviderById(providerDefault).catch(() => null);
     if (fallback?.enabled) return permitted(fallback);
-    // Soft default: an unavailable run default is not a hard error — drop to the
-    // active provider below instead of throwing.
+    // Soft default: drop to the active provider rather than throw.
   }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return permitted(active);
@@ -342,35 +255,22 @@ async function resolveProviderForStage(stage, { providerOverride, providerDefaul
 }
 
 /**
- * Resolve the JUDGE provider/model for a WRITER stage — the writer/judge model
- * split (#2167, CWQE Phase 3). autonovel found this essential: "the model that
- * evaluates must differ from the model that writes — intentionally different to
- * avoid self-congratulation." A calibrated quality judge scored by the SAME model
- * that drafted the text grades itself generous.
+ * Resolve the JUDGE provider/model for a WRITER stage — the writer/judge split
+ * (#2167): the model that evaluates must differ from the one that writes, or it
+ * grades itself generous.
  *
- * A writer stage config may carry `judgeProvider` (and optional `judgeModel`).
- * When set, the judge runs on that provider/model. When UNSET, the judge falls
- * back to the writer stage's own resolved provider/model — a working default that
- * still scores the draft, while the UI encourages the user to configure a
- * different (harsher) judge model.
+ * A writer stage config may carry `judgeProvider` (and optional `judgeModel`);
+ * when UNSET the judge falls back to the writer's own resolved provider/model.
  *
- * Returns `{ provider, model }` (model may be null → provider's own default).
- * The caller passes these as `providerOverride`/`modelOverride` to
- * `runStagedLLM('pipeline-judge-issue', …)` so the judge PROMPT runs against the
- * resolved judge provider rather than its own stage-config default.
+ * Returns `{ provider, model }` (model may be null → provider's own default); the
+ * caller passes them as `providerOverride`/`modelOverride` to
+ * `runStagedLLM('pipeline-judge-issue', …)`.
  */
 export async function resolveJudgeForStage(stage, options = {}) {
-  // An explicit per-call `providerOverride` is a deliberate "judge with THIS
-  // provider right now" demand — it beats a stage-level judge pin (mirrors how
-  // resolveProviderForStage lets providerOverride beat stage.provider).
-  //
-  // The stage is masked first because this one is CALLER-supplied (pipelineJudge
-  // / foundationJudge / seriesGenerate hand us a writer stage they read
-  // themselves) rather than read from `getStage` here. A run that forced one
-  // route loses the stage judge pin with it and falls through to the writer
-  // resolution below — note that this collapses the writer/judge split for that
-  // stage unless the run configured its own judge route, which sets
-  // `providerOverride` and short-circuits above.
+  // An explicit per-call `providerOverride` beats a stage-level judge pin. The stage is masked
+  // first because it is CALLER-supplied: a run that forced one route loses the judge pin and
+  // falls through to writer resolution, collapsing the split unless the run set its own
+  // judge route (which sets `providerOverride` and short-circuits above).
   stage = effectiveStage(stage);
   if (!options.providerOverride && stage?.judgeProvider) {
     const pinned = await getProviderById(stage.judgeProvider).catch(() => null);
@@ -382,70 +282,40 @@ export async function resolveJudgeForStage(stage, options = {}) {
       { status: 503, code: 'STAGE_JUDGE_PROVIDER_UNAVAILABLE' }
     );
   }
-  // No judge pin (or an explicit override): default to the writer stage's own
-  // resolved provider/model. Reuses the exact writer-resolution precedence so the
-  // judge lands on the same provider the draft ran on (self-judge fallback) until
-  // a distinct judge is configured — the UI encourages picking a harsher model.
+  // No judge pin or override: self-judge fallback via the writer's resolution precedence.
   const provider = await resolveProviderForStage(stage, options);
   const model = resolveModel(provider, resolveModelHint(stage, options));
   return { provider, model };
 }
 
 /**
- * Extract the first balanced object/array from an LLM response. Some
- * providers prepend explanation prose; the prompt asks for JSON only but
- * we have to be defensive. Walks the same fence-stripped text as
- * `lib/jsonExtract` so stages benefit from string-aware brace walking +
- * Codex `}}]` and trailing-comma repairs.
+ * Extract the first balanced object/array from an LLM response. Walks the same
+ * fence-stripped text as `lib/jsonExtract` (string-aware brace walking, Codex
+ * `}}]` and trailing-comma repairs).
  *
- * Picks the earliest *parseable* top-level block, regardless of whether
- * it's an object or array. This is the only safe heuristic given:
- *   - Banner lines like `[workdir, /tmp]` precede the real JSON, so
- *     `indexOf('[')` is a lying delimiter peek.
- *   - An object response may legitimately contain an inner array field
- *     (e.g. `{"a":[1,2]}`), and a raw walker run with `blockType: 'array'`
- *     would happily return that `[1,2]` if asked.
- * By gathering balanced candidates for BOTH shapes, parsing each in
- * source order, and returning the first that parses, banners get
- * skipped (their contents don't parse as JSON) and the wrapper shape
- * is preserved (`[{"a":1}]` parses as the array; `{"a":[1,2]}` parses
- * as the object because the `{` opener comes before the inner `[`).
+ * Picks the earliest *parseable* top-level block of either shape: banner lines
+ * like `[workdir, /tmp]` make `indexOf('[')` lie, and an object may contain an
+ * inner array (`{"a":[1,2]}`). Candidates of BOTH shapes are parsed in source
+ * order, so banners are skipped and the wrapper shape is preserved.
  *
- * When `promptToStrip` is supplied, any verbatim occurrence of that
- * string is removed from `text` BEFORE walking. This handles CLI
- * runners (notably Codex) that echo the input prompt to stdout — the
- * prompt itself frequently contains fenced JSON schema examples that
- * would otherwise parse and win on source-order ranking. Stripping
- * the echo leaves only the model's actual response in the text the
- * walker sees.
+ * `promptToStrip` is removed verbatim from `text` BEFORE walking: CLI runners
+ * (notably Codex) echo the prompt, whose fenced JSON schema examples would
+ * otherwise win on source order.
  */
 export function extractJson(text, { promptToStrip } = {}) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
   if (typeof promptToStrip === 'string' && promptToStrip) {
-    // Remove every verbatim occurrence so we don't have to guess where
-    // a CLI runner inserted line wrapping or trim. The prompt is fixed
-    // text we built ourselves a few lines up — split-join is safer
-    // than building a regex (which would need escaping).
+    // Verbatim split-join: the prompt is fixed text we built, and a regex would need escaping.
     text = text.split(promptToStrip).join('');
   }
 
-  // Trim leading + trailing fences via stripCodeFences (note: it strips
-  // each side independently, so a response that only has a leading
-  // ```json with no closing fence will still get its opener removed —
-  // that's intentional and matches every other JSON-from-LLM helper in
-  // the codebase). What we DELIBERATELY do NOT do here is grab the
-  // first inner ```…``` fenced block: on Codex CLI runs the prompt
-  // itself can echo to stdout before the model response, and many
-  // stage prompts contain fenced JSON schema examples that would
-  // precede the real answer. Walking the whole text with
-  // findBalancedBlocks is safer — an echoed schema either parses
-  // (and gets ranked by source order) or fails parse-with-repair and
-  // is silently skipped in favor of the real response.
+  // Trim leading/trailing fences via stripCodeFences (each side independently, so a lone
+  // leading ```json is still removed). Deliberately NOT the first inner fenced block: an
+  // echoed prompt's schema examples would precede the real answer. Walking the whole text is
+  // safer, since an echoed schema either parses (ranked by source order) or is skipped.
   const s = stripCodeFences(text.trim());
 
-  // Collect candidates of BOTH shapes with their source-text positions.
-  // findBalancedBlocks returns block substrings in order; indexOf gives
-  // us the start so we can interleave the two shape lists.
+  // Collect candidates of BOTH shapes with source positions (indexOf gives the start).
   const candidates = [];
   let cursor = 0;
   for (const block of findBalancedBlocks(s, { startChar: '{', endChar: '}' })) {
@@ -461,9 +331,7 @@ export function extractJson(text, { promptToStrip } = {}) {
   }
   candidates.sort((a, b) => a.start - b.start);
 
-  // Fall back to the raw text if neither shape walker found anything —
-  // the response might still be parseable JSON (e.g. a bare number or
-  // string literal). tryParseWithRepair handles those too.
+  // Fall back to the raw text: it may still be a bare number or string literal.
   if (!candidates.length) candidates.push({ block: s, start: 0 });
 
   let lastError;
@@ -473,41 +341,31 @@ export function extractJson(text, { promptToStrip } = {}) {
     lastError = parsed.error;
   }
 
-  // No fallback to jsonExtract.extractJson here: that helper grabs the
-  // first inner ```…``` fenced block, which is exactly the prompt-echo
-  // failure mode this implementation was rewritten to avoid. Surface
-  // the last parse error from the candidate loop so callers see the
-  // concrete reason instead of a generic "no JSON block found".
+  // No fallback to jsonExtract.extractJson (it grabs the first inner fenced block, the
+  // prompt-echo failure mode). Surface the last parse error for a concrete reason.
   throw new Error(`Invalid JSON in AI response: ${lastError?.message || 'no JSON block found'}`);
 }
 
 /**
  * Run a named stage end-to-end. Returns `{ content, model, providerId, runId }`
- * (or the parsed JSON in the `content` field when `returnsJson` is true).
+ * (or the parsed JSON in `content` when `returnsJson` is true).
  *
  * Options:
  *   - providerOverride: explicit per-call provider id, beats stage.provider
- *   - providerDefault: blanket run-level provider id used ONLY when the stage has
- *     no pin of its own; loses to stage.provider and falls through to the active
- *     provider if unavailable (see resolveProviderForStage)
+ *   - providerDefault: run-level provider id used ONLY when the stage has no pin;
+ *     falls through to the active provider if unavailable (resolveProviderForStage)
  *   - modelOverride: explicit model id (hard), beats everything
- *   - modelDefault: blanket run-level model id (Series Autopilot's run model,
- *     #1558). Soft: it OVERRIDES a stage's tier value (default/light/medium/heavy/ultra)
- *     but LOSES to a deliberate explicit-model pin (a non-tier model id) and to a
- *     hard modelOverride. See resolveModelHint for the full precedence — the model
- *     dimension is deliberately NOT symmetric with providerDefault because nearly
- *     every stage carries a tier value while stage.provider is opt-in.
+ *   - modelDefault: run-level model id (#1558). Soft: overrides a stage's tier
+ *     value but loses to an explicit-model pin and to modelOverride
+ *     (see resolveModelHint)
  *   - effortOverride: explicit per-call reasoning effort (hard), beats a stage pin
- *   - effortDefault: blanket run-level reasoning effort (Series Autopilot's run
- *     effort, #3641). Soft: it applies only to stages with no `stage.effort` pin.
- *     Clamped to the provider's ladder and dropped for effort-incapable providers
- *     by the runner, so it is safe to pass unconditionally. See resolveEffortHint.
+ *   - effortDefault: run-level reasoning effort (#3641). Soft: only for stages with
+ *     no `stage.effort` pin; the runner clamps or drops it (see resolveEffortHint)
  *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - maxTokens: API output cap, when the caller budgets an output reserve
  *   - callerPolicy: server-selected execution-mode policy, enforced on pins and every fallback
  *   - returnsJson: parse `content` via `extractJson` before returning
- *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
- *     'writers-room-evaluate') so /runs is filterable
+ *   - source: free-form tag persisted on the run record so /runs is filterable
  */
 export async function runStagedLLM(stageName, variables, options = {}) {
   const stage = effectiveStage(getStage(stageName));
@@ -517,16 +375,14 @@ export async function runStagedLLM(stageName, variables, options = {}) {
 
 /**
  * Run an INLINE (caller-supplied) prompt end-to-end — no named stage template.
- * Same provider/model resolution, runner.js transcript persistence, runtime
- * fallback, and JSON extraction as `runStagedLLM`, but the prompt body is passed
- * directly. With no stage there is no stage-pinned provider/model/timeout, so it
+ * Same resolution, transcript persistence, fallback and JSON extraction as
+ * `runStagedLLM`; with no stage there is no pinned provider/model/timeout, so it
  * resolves to `options.providerOverride` (or the active provider). Used by
- * user-defined editorial checks (#1346) whose prompt is authored from the UI.
+ * user-defined editorial checks (#1346).
  *
- * Same options as runStagedLLM (providerOverride / modelOverride /
- * timeoutOverride / returnsJson / source / allowFallback). Set
- * `allowFallback: false` when the caller budgeted an already-rendered prompt
- * against the resolved provider and a smaller fallback could not accept it.
+ * Same options as runStagedLLM plus `allowFallback`: pass `false` when the caller
+ * budgeted an already-rendered prompt against the resolved provider and a
+ * smaller fallback could not accept it.
  */
 export async function runInlineLLM(prompt, options = {}) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -537,21 +393,14 @@ export async function runInlineLLM(prompt, options = {}) {
 
 /**
  * Run a caller-supplied (inline) prompt but resolve the provider/model/timeout
- * from a NAMED STAGE's pin — not just the active/overridden provider. Use this for
- * an inline helper call that SUPPORTS a stage-pinned check (e.g. a cross-chunk
- * setup summary for an editorial stage pinned to a private local provider): the
- * helper then runs on the SAME provider as the stage, so manuscript text is never
- * silently routed to a different (e.g. cloud) provider than the stage chose. The
- * prompt body is still caller-supplied (no stage template is rendered). With a
- * falsy `stageName` this is identical to `runInlineLLM` (active/overridden provider).
+ * from a NAMED STAGE's pin, so an inline helper for a stage pinned to a private
+ * local provider runs on the SAME provider as the stage and manuscript text is
+ * never routed elsewhere. With a falsy `stageName` this equals `runInlineLLM`.
  *
- * That routing guarantee is only as strong as the stage pin behind it: a run
- * inside `withStagePinsIgnored` has asked for ONE provider everywhere, so this
- * follows the run's provider rather than the stage's. The Autopilot Options copy
- * warns at the checkbox; see lib/stagePinPolicy.js.
+ * The guarantee is only as strong as the pin: inside `withStagePinsIgnored` this
+ * follows the run's provider (see lib/stagePinPolicy.js).
  *
- * Same options as runStagedLLM (providerOverride / modelOverride /
- * timeoutOverride / returnsJson / source).
+ * Same options as runStagedLLM.
  */
 export async function runStageScopedInlineLLM(stageName, prompt, options = {}) {
   if (typeof prompt !== 'string' || !prompt.trim()) {
@@ -562,77 +411,54 @@ export async function runStageScopedInlineLLM(stageName, prompt, options = {}) {
 }
 
 /**
- * Shared execution body for runStagedLLM / runInlineLLM. Takes an already-built
- * prompt + an optional resolved stage (null for inline), resolves the provider/
- * model/timeout, creates the run record, executes through the shared runner
- * (with runtime fallback reconciliation), and returns
- * `{ content, model, providerId, runId }`. `label` is the free-form name used in
- * the log line (the stage name, or the inline source tag).
+ * Shared execution body for runStagedLLM / runInlineLLM: takes a built prompt and
+ * an optional resolved stage (null for inline), resolves provider/model/timeout,
+ * creates the run record, executes through the shared runner (with runtime
+ * fallback reconciliation), and returns `{ content, model, providerId, runId }`.
+ * `label` names the log line.
  */
 async function executeStagePrompt({ stage, label, prompt, options }) {
   const provider = await resolveProviderForStage(stage, options);
   const resolvedModel = resolveModel(provider, resolveModelHint(stage, options));
   const effectiveEffort = resolveEffortHint(stage, options);
-  // resolveEffectiveModel gates the override per provider type and, for
-  // CLI providers with a baked --model/-m flag in args, extracts the
-  // args-pinned model id so the run record + log line reflect what
-  // truly executes (rather than guessing from defaultModel, which can
-  // diverge from the args-baked value).
+  // resolveEffectiveModel gates the override per provider type and extracts a CLI provider's
+  // args-baked model id, so the record reflects what truly executes.
   let effectiveProvider = provider;
   let effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
 
-  // Per-stage timeout override; timeoutOverride from the caller beats
-  // stage.timeout, which beats the provider default. `normalizeTimeout`
-  // coerces via `Number(...)` (so legacy stringified values from
-  // pre-validation installs still resolve), rejects non-finite or ≤0
-  // (so a stray "0" can't silently instant-cancel), and caps at
-  // STAGE_TIMEOUT_MAX_MS — applied to BOTH stage.timeout and the caller
-  // override, since `runPromptThroughProvider`/`executeCliRun` treat `0`
-  // as "no timeout" and would happily run unbounded if we forwarded a
-  // garbage override.
+  // timeoutOverride beats stage.timeout beats the provider default. `normalizeTimeout` accepts
+  // legacy stringified values, rejects non-finite or ≤0 (a "0" must not instant-cancel) and
+  // caps at STAGE_TIMEOUT_MAX_MS for BOTH sources, since the runner treats `0` as no timeout.
   const stageTimeout = normalizeTimeout(stage?.timeout);
   const overrideTimeout = normalizeTimeout(options.timeoutOverride);
   const effectiveTimeout = overrideTimeout ?? stageTimeout;
 
-  // createRun may pick a fallback provider when the requested one is marked
-  // unavailable by providerStatusService. Capture the full result and
-  // reconcile, mirroring the promptRunner.js#createRun caller-runId path —
-  // otherwise execution would proceed against the original provider while
-  // /runs metadata claims the fallback ran. Pass `timeout` with a fallback
-  // to `provider.timeout` so the run record's persisted timeout reflects
-  // what executeXxxRun actually enforces (the runner falls back to
-  // `effectiveProvider.timeout` when no override is set — mirror that here
-  // so the recorded value isn't a misleading `undefined`).
+  // createRun may pick a fallback provider when the requested one is unavailable. Capture the
+  // result and reconcile (as promptRunner.js#createRun does) so /runs doesn't claim the
+  // fallback ran while the original executes. `timeout` falls back to `provider.timeout`,
+  // mirroring the runner, so the recorded value isn't `undefined`.
   const runResult = await createRun({
     providerId: provider.id,
-    // The staged runner pre-creates records; constrain that proactive swap too.
+    // Constrain this proactive swap too.
     ...(options.callerPolicy ? { requestCapabilities: buildRequestCapabilities({ prompt, callerPolicy: options.callerPolicy }) } : {}),
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
     effort: effectiveEffort,
     allowFallback: options.allowFallback !== false,
-    // createRun.timeout is returned but not persisted into metadata.json
-    // by the toolkit (only providerId/model/source/etc. are written at
-    // creation time). We always patch below to record the effective
-    // timeout so /runs can show what executeXxxRun actually enforced.
+    // createRun.timeout is not persisted into metadata by the toolkit; patched below.
     timeout: effectiveTimeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS,
   });
   const { runId } = runResult;
   const fellBack = runResult.provider && runResult.provider.id !== provider.id;
   if (fellBack) {
     effectiveProvider = runResult.provider;
-    // Re-resolve against the FALLBACK provider. Do NOT pass `resolvedModel` —
-    // that was resolved against the PRIMARY (e.g. codex's
-    // `codex-configured-default`) and forwarding it leaks a model id the
-    // fallback can't run. Prefer the configured `fallbackModel`; null falls
-    // through to the fallback provider's own default / args-baked model.
+  // Re-resolve against the FALLBACK provider without `resolvedModel` (resolved for the
+  // PRIMARY; it would leak a model id the fallback can't run). Prefer `fallbackModel`.
     effectiveModel = resolveEffectiveModel(effectiveProvider, runResult.fallbackModel ?? null);
   }
-  // Always patch metadata with the effective timeout (the toolkit doesn't
-  // persist `timeout` in its initial metadata.json write). On fallback we
-  // also patch provider id/name/model so /runs attribution matches the
-  // provider that actually ran. Best-effort: attribution, not load-bearing.
+  // Always patch the effective timeout; on fallback also provider id/name/model so /runs
+  // attribution matches. Best-effort, not load-bearing.
   const recordedTimeout = effectiveTimeout ?? effectiveProvider.timeout ?? DEFAULT_TIMEOUT_MS;
   const metadataPatch = { timeout: recordedTimeout, effort: effectiveEffort };
   if (fellBack) {
@@ -643,29 +469,17 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
   patchRunMetadata(runId, metadataPatch).catch(() => { /* best-effort */ });
   console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${label} → ${runId.slice(0, 8)}`);
 
-  // Stage runs pre-create the run record (so the runId can be logged BEFORE
-  // the LLM call starts), then thread that id through the shared runner.
-  // On runtime fallback (primary attempted + failed, fallback retried + won)
-  // `runPromptThroughProvider` ignores our pre-created `runId` and creates
-  // a fresh one for the fallback's record — so the successful output lives
-  // at `result.runId`, NOT the `runId` we passed in. The pre-created record
-  // stays as the failed-primary entry. Capture the post-fallback attribution
-  // (runId / model / providerId) here so the persisted stage result points
-  // at the run that actually produced the text — otherwise pipeline history
-  // / restore links land on a failed record.
-  // The local-backend concurrency gate is applied INSIDE runPromptThroughProvider
-  // (around each actual execution — primary, proactive swap, and runtime
-  // fallback), so we do NOT wrap here: a second gate on the same local endpoint
-  // would deadlock against the inner one (outer holds the only slot, inner waits
-  // forever).
+  // The run record is pre-created so the runId can be logged BEFORE the call. On runtime
+  // fallback `runPromptThroughProvider` creates a fresh record, so the output lives at
+  // `result.runId`, not the id we passed; capture the post-fallback attribution so history
+  // links don't land on the failed primary. The local-backend concurrency gate is applied
+  // INSIDE runPromptThroughProvider; wrapping here would deadlock against the inner one.
   const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
     maxTokens: options.maxTokens,
     callerPolicy: options.callerPolicy,
-    // Reasoning effort (#3641). Always passed: the runner clamps it to the
-    // provider's ladder and omits the flag entirely for a provider with no
-    // effort control, so no capability check is needed here.
+    // Always passed: the runner clamps it or omits the flag for a provider with no effort control.
     effort: effectiveEffort,
     allowFallback: options.allowFallback !== false,
     onRunCreated: options.onRunCreated,
@@ -682,10 +496,8 @@ async function executeStagePrompt({ stage, label, prompt, options }) {
     finalModel = runResult2.model ?? finalModel;
     console.log(`⚡ stage fallback succeeded: ${finalProvider.id} / ${finalModel || '(default)'} / ${label} → ${finalRunId.slice(0, 8)}`);
   }
-  // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
-  // `codex\n<reply>` + token-stats footer). Carve out the assistant reply
-  // before either parsing JSON or returning text. Idempotent for non-Codex
-  // providers — returns input unchanged when the banner isn't present.
+  // Codex CLI dumps banner + metadata + echoed prompt + reply + footer: carve out the reply.
+  // Idempotent for other providers.
   const cleaned = extractCodexAssistant(text);
   const content = options.returnsJson ? extractJson(cleaned, { promptToStrip: prompt }) : cleaned;
   return { content, model: finalModel || null, providerId: finalProvider.id, runId: finalRunId,

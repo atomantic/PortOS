@@ -1,20 +1,6 @@
 /**
  * LoRA adapter-effect report — normalization, freshness and verdict rules.
  *
- * LoRA adapter-effect report rules — the JS half of the `scripts/lora_effect_probe.py` diagnostic
- * (#4872). `client/src/lib/loraEffect.js` re-exports `LORA_EFFECT_STATUSES` from here;
- * `loraEffect.test.js` holds `LORA_EFFECT_PROBE_VERSION` in lockstep with the probe`s `PROBE_VERSION`
- * — drift silently disables the cache. `LORA_EFFECT_STATUSES`
- * (`ok`/`zero`/`nonfinite`/`unreadable`/`unmeasurable`) + `isKnownLoraEffectStatus`;
- * `normalizeLoraEffectReport(raw,{sizeBytes,mtimeMs,measuredAt})` coerces every non-finite number to
- * `null`, drops statistics when nothing was measured so "no data" can never read as "measured 0.0",
- * and downgrades a `zero` status that no measurement backs;
- * `readCachedLoraEffectReport(raw,{sizeBytes,mtimeMs})` returns a stored report only while its probe
- * version, file size AND mtime all still match, which is what lets `listLoras()` surface one without
- * ever spawning a probe; `loraEffectIssue(report)` is the user-facing refusal phrase for a measured
- * entirely-zero adapter and `null` for EVERY other status; `formatLoraEffect(report)` is the one-line
- * log/UI summary.
- *
  * The measurement itself lives in `scripts/lora_effect_probe.py` (it needs
  * numpy to multiply the rank matrices); this module owns everything PortOS
  * decides ABOUT a measurement, so the rules are testable without spawning a

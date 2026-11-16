@@ -274,36 +274,24 @@ export function recoveryWorktreeReason({ prunable, locked, managed }) {
 }
 
 /**
+/**
  * Why this branch must be left ALONE this cycle — the dispatch-side counterpart to
  * `worktreeProtectionReason`'s teardown gate. Three cases that gate doesn't cover:
  *
- * 1. **Liveness we could not determine.** An `agent-*` worktree whose owner's
- *    liveness is UNKNOWN (`knownAgentIds` returned null) is presumed live —
- *    the same posture `worktreeProtectionReason` and `isAbandonedAgentWorktree`
- *    take. Fail safe toward not-touching.
- * 2. **A live agent whose worktree is already GONE.** Ownership is in the branch
- *    NAME, not the worktree: CoS branches are `cos/<taskId>/<agentId>` and the
- *    worktree basename is that same `<agentId>`. An agent that removed its worktree
- *    while still running — `/do:pr`'s Phase-7 cleanup does exactly this, before the
- *    session ends — leaves a pushed branch with an open PR and no worktree row, which
- *    otherwise classifies IN_REVIEW and gets handed to the coordinator while its own
- *    agent is still working. That is the bug this whole guard exists to prevent,
- *    surviving in a narrower window. So the branch name is checked too.
- * 3. **A claim directory, which is a claim MARKER and not a live process.** The
- *    claim flow has no durable local agent id for its branch, so treating the
- *    directory's existence as liveness hides clean, open-PR claims after the
- *    claim agent has exited — exactly the branches branch-reconcile exists to
- *    finish. So this side passes `allowLiveClaim`; a dirty claim is then
- *    surfaced as `ABANDONED_WIP` by `isAbandonedClaimWorktree`, while cleanup
- *    keeps its destructive hold through `worktreeProtectionReason` until the
- *    claim is stale or provably shipped. A lock still outranks it: the gate
- *    tests the lock BEFORE the claim, so a locked claim tree reports
- *    `worktree-locked` on its own — and so does a live agent, on the same
- *    ordering. The scheduler augments `activeAgentIds` with the basenames of
- *    live agents' recorded worktree paths, so a claim basename held by a live
- *    agent still wins over the dispatch-side carve-out.
+ * 1. Unknown liveness: an `agent-*` worktree whose owner's liveness is unknown
+ *    (`knownAgentIds` null) is presumed live.
+ * 2. A live agent whose worktree is already gone: ownership is in the branch NAME
+ *    (`cos/<taskId>/<agentId>`; the worktree basename is the same `<agentId>`). An agent
+ *    that removed its worktree mid-run (`/do:pr` Phase-7 cleanup) leaves a pushed branch
+ *    with an open PR that would classify IN_REVIEW, so the branch name is checked too.
+ * 3. A claim directory is a claim MARKER, not a live process: the claim flow has no
+ *    durable local agent id, so treating its existence as liveness would hide clean
+ *    open-PR claims after the agent exited. This side passes `allowLiveClaim`; a dirty
+ *    claim surfaces as `ABANDONED_WIP` while cleanup keeps its hold via
+ *    `worktreeProtectionReason`. A lock (tested before the claim) or a live agent whose
+ *    recorded worktree basename the scheduler adds to `activeAgentIds` still wins.
  *
- * A branch with no worktree at all and no live owner is simply free (null).
+ * A branch with no worktree at all and no live owner is free (null).
  *
  * @param {{ branch?:string|null, path:string|null, locked?:boolean, activeAgentIds?:Set<string> }} input
  * @returns {string|null} a stable reason slug, or null when nobody owns it

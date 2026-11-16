@@ -1,14 +1,6 @@
 /**
  * Adapters between Code Review Defaults' per-reviewer scalar fields and token-keyed reviewer model and
  * effort maps (`reviewerModelsFromDefaults`, `reviewerEffortsToDefaults`, etc.).
- *
- * `reviewerModelsFromDefaults` / `reviewerModelsToDefaults` / `reviewerEffortsFromDefaults` /
- * `reviewerEffortsToDefaults` — adapt the Code Review Defaults' per-reviewer SCALARS (`codexModel`,
- * `ollamaModel`, `claudeEffort`, …) to and from the token-keyed maps `ReviewerPicker`'s Model and
- * Effort columns take. Mirrors `reviewerModelsFromDefaults` / `reviewerEffortsFromDefaults` in
- * `server/lib/reviewerConfig.js`. Also preserves configured-provider model and effort pins in the
- * additive `providerModels` / `providerEfforts` maps, keyed by `provider:<id>`; empty maps clear
- * overrides without changing builtin scalars.
  */
 
 import { isProviderReviewer } from './reviewerPins';

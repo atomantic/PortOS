@@ -1,11 +1,6 @@
 /**
  * `excerptRangeFits(startSec, endSec, totalSec, fps)` checks whether a code or document excerpt window
  * fits a frame-quantized render.
- *
- * `excerptRangeFits(startSec, endSec, totalSec, fps)`: whether a code/document excerpt window fits a
- * frame-quantized render, allowing the end up to one frame past it (scene ends follow the analysed
- * song length; the caller clamps). The start must fall inside the render; an unknown fps allows no
- * slack.
  */
 
 /**

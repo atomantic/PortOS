@@ -2,22 +2,6 @@
  * Derive the agent-free resilience-assay sandbox for a foundation FROM ITS OWN
  * BODY (#7625, epic #7453).
  *
- * Derives the agent-free resilience-assay sandbox for a foundation FROM ITS OWN BODY (#7625), closing
- * the hole where the promote gate replayed whatever module the author named in a free-text
- * `contributionId`. `foundationSandbox({ kind, id, body }, { findControllerDefinition })` returns the
- * `{ id, createSandbox, invariants }` contribution `runResilienceAssay()` consumes, or a reader-facing
- * refusal. One derivation per declared kind: `controller` replays the shipped definition named by
- * `body.controller.definitionId` against THIS INSTALL'S `body.controller.config` (not upstream's
- * `exampleConfig`); `district-template` requires `body.placement` to reproduce from its own
- * layout/anchor/seed through `generateDistrictTemplatePlacement` and hands the body to the harness as
- * the projection source; `schema`/`affordance` are replayed by the declarative interpreter over
- * `EIDOVERSE_DECLARED_FIELD_TYPES`, which refuses an affordance recorded as prose rather than as `{
- * reads, writes }` over declared fields. The binding label both the packaging side and a receiving
- * peer re-derive is computed by `derivedContributionId` in `eidoverseFoundations.js`, which declares
- * the schema that carries it (and which this module would otherwise import in a cycle, via the
- * creative toolkit). Executes only code PortOS ships; no caller-supplied path is ever resolved. Pure
- * apart from the injected definition lookup.
- *
  * The promote gate's whole promise is "a contribution still works without its
  * creator narrating it". #7460 built the harness and #7455 made the server run
  * it rather than accept a caller's verdict — but the harness was pointed at

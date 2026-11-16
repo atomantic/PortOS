@@ -1,15 +1,6 @@
 /**
  * `supersededStillsCheckpoint(project, readiness)` retires only an old stills checkpoint from
  * presentation once a current final render and approvals supersede it, preserving run history.
- *
- * Fully-autonomous Music Video vocabulary: `AUTONOMOUS_STAGES` (brief → lyrics → style → song →
- * analyze → produce), optional `AUTONOMOUS_CHECKPOINT_IDS`, `normalizeAutonomousSettings` /
- * `normalizeAutonomousBrief` / `normalizeAutopilotParams` (the shared run settings, a run's stored
- * brief, and the scheduled task's params), `autonomousMedium` / `autonomousPool` (tool picks → footage
- * vs code, production route pool), `sunoSongFields` + Suno limits/URL helpers, `normalizeSunoOptions`
- * (the brief's optional `suno` form options: exclude styles, vocal gender, model version), and
- * `pickBrainIdea` / `ideaToPrompt` for the scheduled task. Pure; the client drawer and the run service
- * import it.
  */
 
 import { MUSIC_VIDEO_MEDIA_MODES, musicVideoMediaMode } from './musicVideoMediaPolicy.js';

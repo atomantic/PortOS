@@ -1,13 +1,6 @@
 // One-shot WebAudio preview for the Music Designer's LLM-made wave sketches (#8376): v1 drawings
 // (mono) and v2 painted canvases (stereo, #8464).
 //
-// One-shot WebAudio preview for the Music Designer's LLM-made wave sketches (#8376; stereo painted
-// canvases #8464) — `createWaveSketchPlayer({ onEnded })` → `{ play(pcm | channels), stop(),
-// position() }` over the shared `audioContext.js` context. Plays PCM from `synthesizeSketchChannels`
-// (`server/lib/waveSketch.js`, the same deterministic synth the server renders the saved take with); a
-// `stop()` during the resume makes `play` resolve false instead of sounding late. No React —
-// `WaveformPanel` drives it in both the Music Designer and the Tracks editor.
-//
 // The PCM comes from `synthesizeSketchChannels` in server/lib/waveSketch.js — the same deterministic
 // synth the server renders a saved take with — so what plays here is exactly what gets saved.
 //

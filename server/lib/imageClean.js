@@ -1,15 +1,6 @@
 // Image cleaning primitives — removes the C2PA `caBX` metadata chunk (when present) and runs a
 // median(3) + sharpen pass to reduce visible AI-generation artifacts on gpt-image / FLUX output.
 //
-// `cleanImageBuffer(buf, { metadata, denoise })` (composable opt-in pipeline: lossless metadata/C2PA
-// strip + optional median/sharpen denoise) · `stripPngMetadataChunks` / `stripPngC2PAChunk` (lossless
-// PNG-chunk removers) · `compositeIgnoreZone(base, original, mask, { feather })` (preserve-region
-// compositing: restore original pixels into a feathered mask over a diffused result) ·
-// `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in
-// `routes/imageClean.js` wraps `cleanImageBuffer` and appends a CPU light diffusion pass
-// (`applyLightRegen` from `services/imageGen/regen.js`) for the `diffusion=light` SynthID-disruption
-// step.
-//
 // Lives in lib/ (not routes/) so services can call it without crossing the routes→services dependency
 // direction. The HTTP route in `server/routes/imageClean.js` is a thin wrapper that just imports
 // `cleanImageBuffer` from here.

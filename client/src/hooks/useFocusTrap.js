@@ -1,13 +1,6 @@
 /**
  * `useFocusTrap(active, containerRef, { initialFocusRef })` moves focus into a container on open and
  * traps Tab and Shift+Tab inside it.
- *
- * `useFocusTrap(active, containerRef, { initialFocusRef? })` — moves focus into the container on open
- * (`initialFocusRef` if given, else the first focusable), traps Tab/Shift+Tab so it can't escape to
- * the page behind — including from an `initialFocusRef` aimed at a `tabIndex={-1}` element, which is
- * outside the tab order and would otherwise fall through to the browser — and restores focus to the
- * opener on close (WCAG 2.4.3 / 2.1.2). Use when: Modal surfaces (dialogs, drawers, lightboxes).
- * Already wired into `Modal` and `Drawer` — reach for it when hand-rolling a new overlay.
  */
 
 import { useEffect, useRef } from 'react';

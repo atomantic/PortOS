@@ -1,14 +1,6 @@
 /**
  * Watches PortOS restarting itself and reloads the page once it answers again, polling system health
  * for a version change or down-to-up transition.
- *
- * Watches PortOS restarting ITSELF and reloads the page once it answers again: arms on the update
- * stream's restart step, on `portos:update:complete`, or on a socket disconnect confirmed unreachable,
- * then polls `/api/system/health` for a version change, a down→up dip, or an uptime reset. `update.sh`
- * pm2-deletes the server mid-run, so there is no completion event to await. Use when: Only a surface
- * that launches a PortOS self-update WITHOUT going through an app operation — today just the Update
- * page. `useAppOperation` already wires it, so App Management surfaces read `restarting` from there
- * instead.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';

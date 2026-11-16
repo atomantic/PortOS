@@ -1,17 +1,6 @@
 /**
  * Clip lengths grok's `image_to_video` tool actually delivers.
  *
- * Clip lengths grok's `image_to_video` actually delivers — `GROK_VIDEO_RESOLUTIONS` +
- * `grokVideoResolution(width, height)` (the tool’s `resolution_name`: 720p once the requested short
- * side is above 480, since the tool otherwise defaults to 480p, #14491), `GROK_VIDEO_DURATIONS` (`[6,
- * 10, 15]`; 6/10 measured in #3022, where a 2s/3s request returned the same 6.04s clip; 15 from xAI's
- * 1–15 s API limit, confirmed per clip by the probe in `videoGen/grok.js`),
- * `GROK_VIDEO_DEFAULT_DURATION`, `resolveGrokDuration()` (validate an already-grok-shaped request,
- * else default), and `nearestGrokDuration()` (round a length authored against another backend's
- * continuous contract UP to the shortest clip that covers it — for translating a CD/commission
- * `targetDurationSeconds`). Dependency-free so `validation.js` / `routes/videoGen.js` can derive their
- * schemas from the same list the services gate on.
- *
  * **Measured, not assumed** (#3022). PortOS never passes grok a `duration`
  * parameter — both the general video path (`buildGrokVideoPrompt`) and the
  * sprite walk path (`buildWalkTuiTask`) ask the grok *agent* in prose ("animate

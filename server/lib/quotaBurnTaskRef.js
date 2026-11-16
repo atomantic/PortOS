@@ -1,17 +1,6 @@
 /**
  * Quota-burn step → scheduled-task REFERENCE, plus its per-invocation overrides.
  *
- * The quota-burn STEP model: a discriminated scheduled-task reference (`builtin` task type + validated
- * target app, or `custom` app-job id whose own scope is authoritative) plus the per-invocation
- * `overrides` bag (provider/model/effort/params — unset inherits the task's saved settings, and
- * nothing written here edits the schedule). `normalizeQuotaBurnTaskRef` /
- * `normalizeQuotaBurnOverrides` / `normalizeQuotaBurnParams`, the `QUOTA_BURN_UNAVAILABLE` reason
- * codes, `resolveQuotaBurnStepAvailability` (catalog passed IN, so this stays pure) /
- * `applyQuotaBurnAvailability`, `quotaBurnStepIsDispatchable`, and `evaluateOnDemandEligibility` — the
- * ONE on-demand gate ladder (`enabled` / instance feature / invocation eligibility / target scope /
- * per-app switch / master Improve) shared with `taskSchedule.triggerOnDemandTask`, with
- * `enabledAppIdsByTaskType` deriving its per-app input.
- *
  * A burn step used to BE its work: a copied prompt in a free-form `params` bag
  * keyed by a `jobType` from a quota-only enum, with no durable link back to the
  * scheduled task it was cloned from. Preset identity was never persisted at all

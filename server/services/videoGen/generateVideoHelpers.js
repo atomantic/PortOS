@@ -96,14 +96,10 @@ export const PROMPT_ENCODE_BEGIN_MARKER = 'STAGE:encode-prompt';
 export const PROMPT_ENCODE_END_MARKER = 'STAGE:encode-prompt-done';
 
 /**
- * A render status line goes out on BOTH wires, always: the videoGen job's own
- * SSE stream, and `videoGenEvents` for the mediaJobQueue dispatcher to forward
- * to the page's stream. Publishing on one alone is the bug this collapses —
- * the cloud lanes broadcast only on the first, so the Video Gen page saw
- * nothing between "Starting render…" and completion.
- *
- * `frame` carries the message and the phase (and, for a download line, its byte
- * counts); the client maps the phase to a named render step.
+ * A render status line goes out on BOTH wires, always: the videoGen job's own SSE stream, and
+ * `videoGenEvents` for the mediaJobQueue dispatcher to forward to the page's stream (cloud lanes that
+ * broadcast on one alone left the Video Gen page blank until completion). `frame` carries the message
+ * and phase (and byte counts for a download line).
  */
 function publishRenderStatus(job, jobId, frame) {
   broadcastSse(job, { type: 'status', ...frame });
@@ -111,13 +107,9 @@ function publishRenderStatus(job, jobId, frame) {
 }
 
 /**
- * Build the stdout/stderr line handler for one generation. Parses the
- * python child's STATUS:/STAGE:/DOWNLOAD:/tqdm protocol into SSE frames
- * (`broadcastSse`) + queue-dispatcher events (`videoGenEvents`).
- *
- * Returns a `handleLine(raw)` fn: true when the line was a recognized
- * progress/status/noise line the caller should suppress from raw logging,
- * false for an unhandled line worth raw-logging.
+ * Build the stdout/stderr line handler for one generation. Parses the python child's
+ * STATUS:/STAGE:/DOWNLOAD:/tqdm protocol into SSE frames + queue-dispatcher events. Returns
+ * `handleLine(raw)`: true when the line was recognized progress/noise to suppress from raw logging.
  *
  * @param {object} ctx
  * @param {object} ctx.job - the in-flight job record (broadcastSse target)
@@ -125,8 +117,7 @@ function publishRenderStatus(job, jobId, frame) {
  * @param {RegExp} ctx.pythonNoiseRe - lines to silently drop (PYTHON_NOISE_RE)
  */
 export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
-  // Phase tracking — download vs inference, so tqdm bars with byte counts can
-  // be formatted as "Downloading model · first run · X.X GB" during downloads.
+  // Phase tracking (download vs inference) so tqdm byte-count bars read as "Downloading model".
   let currentPhase = 'starting';
   let isDownloading = false;
   // History-calibrated wall-clock estimate for this render (#3801), stamped on
@@ -323,30 +314,18 @@ export function makeVideoGenLineHandler({ job, jobId, pythonNoiseRe }) {
 }
 
 /**
- * Version marker stamped on every history record written by this (finish-aware)
- * writer — see `describeRenderConditioning`. It is the POSITIVE signal that the
- * record's conditioning inventory is trustworthy: a legacy record written
- * before #3696 carries no `renderInputsVersion` and no `conditioning`, which is
- * indistinguishable from "this render used no conditioning" if you only look at
- * the absence. Consumers (the client's Finish gate) must require this marker,
- * so legacy/incomplete records degrade to "not finishable" instead of being
- * wrongly assumed reproducible.
+ * Version marker stamped on every history record written by this (finish-aware) writer. It is the
+ * POSITIVE signal that the record's conditioning inventory is trustworthy: a legacy record (pre-#3696)
+ * carries no `conditioning`, indistinguishable from "used none". The client's Finish gate must
+ * require this marker so legacy records degrade to "not finishable".
  */
 export const RENDER_INPUTS_VERSION = 1;
 
 /**
- * Inventory the conditioning inputs one render actually used, as a stable,
- * sorted list of kind strings. An empty array means the render was driven by
- * nothing but the prompt + seed + dials — i.e. fully reproducible from what the
- * history record already stores, which is the precondition for Finish (#3696).
- *
- * Deliberately records KINDS, not paths: staging/temp upload paths are
- * machine-specific and short-lived, and history is user-facing (the same reason
- * IC references are stamped by basename). Recording the fact of conditioning is
- * enough to answer "can this be re-rendered from the record alone?" — which is
- * the only question this feeds.
- *
- * Pure. Tolerates missing/`null` fields (the common text-to-video call).
+ * Inventory the conditioning inputs one render actually used, as a sorted list of kind strings. An
+ * empty array means the render was driven by prompt + seed + dials alone, i.e. reproducible from the
+ * history record (the precondition for Finish, #3696). Records KINDS, not paths: staging paths are
+ * machine-specific and history is user-facing. Pure; tolerates missing/`null` fields.
  */
 export function describeRenderConditioning({
   sourceImagePath = null,
@@ -412,13 +391,10 @@ export function parseLoraStrategyLine(line) {
 }
 
 /**
- * Render a runtime fingerprint (either the `RUNTIME:` payload a helper script
- * emits — `{ runtime, versions, chip, os, python }` — or the Node-side
- * `hostRuntimeFingerprint()` block) as one human-readable line:
- * `ltx2 | mlx 0.22.0, torch 2.5.1 | Apple M4 Max | macOS-15.4-arm64`.
- * Shared by the startup log line and by signal-death failure messages so a
- * crash report self-documents the exact stack it crashed on. Pure; tolerates a
- * missing/partial payload (returns '' when nothing is known).
+ * Render a runtime fingerprint (the helper script's `RUNTIME:` payload or the Node-side
+ * `hostRuntimeFingerprint()` block) as one line:
+ * `ltx2 | mlx 0.22.0, torch 2.5.1 | Apple M4 Max | macOS-15.4-arm64`. Pure; returns '' when nothing
+ * is known.
  * @param {object|null|undefined} fp
  * @returns {string}
  */
@@ -431,27 +407,18 @@ export function formatRuntimeFingerprint(fp) {
 
 // Signal → actionable cause for a render child that died on a signal.
 //
-// Apple Silicon reality drives this map. A common real-world render abort is
-// the macOS Metal command-buffer watchdog killing an over-long GPU command
-// buffer (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), which the
-// MLX/Metal layer surfaces as SIGABRT (exit -6) — NOT as a Python-level
-// assertion. Reporting that as a bare `Killed by signal SIGABRT` (or as a
-// "C-level assertion failed" hint, the mistake upstream made) sends users
-// hunting a model/PortOS bug when the fix is to shrink the work per command
-// buffer — but only captured stderr can prove it (see abortCause); a bare SIGABRT
-// is reported as an unexplained native abort. SIGBUS/SIGSEGV are the other native-crash arrivals from the same
-// layer. SIGKILL stays the OOM message it has always been.
+// A common Apple Silicon abort is the macOS Metal command-buffer watchdog killing an over-long GPU
+// buffer (`kIOGPUCommandBufferCallbackErrorImpactingInteractivity`), which MLX surfaces as SIGABRT
+// (exit -6), not a Python assertion. A bare `Killed by signal SIGABRT` sends users hunting a model bug
+// when the fix is less work per buffer, but only captured stderr can prove it (see abortCause); a bare
+// SIGABRT is reported as an unexplained native abort. SIGBUS/SIGSEGV are the other native-crash
+// arrivals. SIGKILL stays the OOM message.
 //
-// Keys are the signal NAMES Node reports on `close` (spawnDetached decodes the
-// supervisor's 128+signum status back into the same names).
+// Keys are the signal NAMES Node reports on `close` (spawnDetached decodes 128+signum).
 //
-// NOTE on the SIGABRT advice: the LoRA-trainer mitigation for this same watchdog
-// is "let the display sleep" (docs/TROUBLESHOOTING.md), but that is NOT offered
-// here — generateVideo holds a `caffeinate -dis` assertion for the child's whole
-// lifetime, so display sleep is impossible during a render by construction.
-// Telling the user to do something the render itself prevents would be worse
-// than saying nothing. Running the machine headless still works (caffeinate
-// can't wake a display that isn't attached), so that's what we point at.
+// The LoRA-trainer mitigation ("let the display sleep") is NOT offered: generateVideo holds a
+// `caffeinate -dis` assertion for the child's lifetime, so display sleep is impossible by
+// construction. Running headless still works, so that is what we point at.
 const nativeCrashCause = (signal) => `Render crashed (${signal}) — a native fault inside the MLX/Metal layer, not a PortOS-level error. Retry with a lower resolution/frame count; if it repeats on the same model, reinstall that runtime from Settings → Video (a mismatched mlx / mlx-metal pair in the venv is the usual cause).`;
 
 const SIGNAL_DEATH_CAUSES = Object.freeze({
@@ -468,9 +435,8 @@ const ASSERTION_ABORT_CAUSE = 'Render aborted (SIGABRT) — the native layer hit
 const UNEXPLAINED_ABORT_CAUSE = 'Render aborted (SIGABRT) — a native abort with no diagnostic line captured, so the cause is unknown. Check the runtime log; retrying at a lower resolution/frame count may help.';
 const NATIVE_ASSERTION_RE = /\bassertion\b.*\bfailed\b|\bfailed\b.*\bassertion\b|__assert_rtn|Assertion`/i;
 
-// Classify from the child's ORIGINAL stderr only, before any explanatory text
-// exists, so an enum name quoted in our own advice can never act as proof. The
-// veto and signature regexes are the same ones that gate retry eligibility.
+// Classify from the child's ORIGINAL stderr, before any explanatory text exists, so an enum name
+// quoted in our own advice can never act as proof. Same regexes that gate retry eligibility.
 function abortCause(stderr, { platform, arch, mlxRuntime }) {
   const text = typeof stderr === 'string' ? stderr : '';
   if (/kIOGPUCommandBufferCallbackErrorOutOfMemory/i.test(text)) return OOM_ABORT_CAUSE;
@@ -481,14 +447,11 @@ function abortCause(stderr, { platform, arch, mlxRuntime }) {
 }
 
 /**
- * Failure reason for a render child that exited on a signal. Pure.
- *
- * Unmapped signals keep the historical `Killed by signal <SIG>` wording so a
- * novel signal is still reported verbatim rather than mis-attributed. SIGABRT is
- * explained only from captured evidence: the Metal watchdog is named solely for a
- * recognised timeout/interactivity signature on an Apple-silicon MLX runtime;
- * otherwise OOM, innocent-victim, assertion or a generic unexplained abort. The
- * resolved runtime fingerprint is appended when known.
+ * Failure reason for a render child that exited on a signal. Pure. Unmapped signals keep the
+ * `Killed by signal <SIG>` wording. SIGABRT is explained only from captured evidence: the Metal
+ * watchdog is named solely for a recognised timeout/interactivity signature on an Apple-silicon MLX
+ * runtime; otherwise OOM, innocent-victim, assertion or a generic unexplained abort. The resolved
+ * runtime fingerprint is appended when known.
  *
  * @param {string|null} signal - signal name from `proc.on('close', (code, signal))`
  * @param {object} [opts]
@@ -506,38 +469,26 @@ export function describeSignalDeath(signal, { fingerprint = null, stderr = '', m
   return fp ? `${cause} [runtime: ${fp}]` : cause;
 }
 
-// The macOS Metal command-buffer watchdog reports WHY it killed a buffer via a
-// `kIOGPUCommandBufferCallbackError*` enum name in the abort text. Two of those
-// mean "this buffer ran too long for the compositor to stay responsive", which
-// is the failure a smaller prompt-encode buffer actually fixes:
+// The Metal watchdog reports WHY it killed a buffer via a `kIOGPUCommandBufferCallbackError*` enum
+// name. Two mean "this buffer ran too long", which a smaller prompt-encode buffer fixes:
 //   - ...ErrorTimeout                — the classic signature
-//   - ...ErrorImpactingInteractivity — what newer Apple silicon / macOS report
-//     instead, and the reason a Timeout-only match never armed the retry there.
-// MLX also surfaces the timeout case in prose ("Caused GPU Timeout Error"), so
-// that phrasing is accepted too.
+//   - ...ErrorImpactingInteractivity — newer Apple silicon / macOS report this instead
+// MLX also surfaces the timeout in prose ("Caused GPU Timeout Error"), accepted too.
 const METAL_WATCHDOG_RE = /kIOGPUCommandBufferCallbackError(?:Timeout|ImpactingInteractivity)|Caused GPU Timeout Error/i;
-// ...and two that must NOT arm it. An out-of-memory abort is not a watchdog
-// timeout — a shorter prompt does not fix it, and retrying burns another model
-// load on a machine that is already out of headroom. An innocent victim was
-// killed because SOME OTHER process wedged the GPU, so this render's prompt
-// length is irrelevant. Either name anywhere in the captured text vetoes the
-// retry, even alongside a timeout: a mixed abort is exactly the case where the
-// timeout is a downstream symptom rather than the cause.
+// Two must NOT arm it: an out-of-memory abort (a shorter prompt does not fix it and a retry burns
+// another model load), and an innocent victim (another process wedged the GPU). Either name anywhere
+// in the captured text vetoes the retry even alongside a timeout, where the timeout is a symptom.
 const METAL_WATCHDOG_VETO_RE = /kIOGPUCommandBufferCallbackError(?:OutOfMemory|InnocentVictim)/i;
 
 /**
- * Whether a render child died to the macOS Metal command-buffer watchdog WHILE
- * the Gemma prompt encoder was running. Pure.
+ * Whether a render child died to the Metal watchdog WHILE the Gemma prompt encoder was running. Pure.
  *
- * `promptEncodePhase` is a three-state sentinel, and all three states are
- * distinct on purpose:
- *   - `null`     — the runner never reported an encode boundary. Every runtime
- *                  other than the LTX-2 MLX helper is permanently here, so an
- *                  unreported phase can never be mistaken for a live encode.
- *   - `'active'` — the encode began and never finished. The ONLY qualifying
- *                  state: the child died mid-encode, before any denoise step.
- *   - `'done'`   — the encode finished. Anything that aborts after this is a
- *                  denoise/decode failure that a shorter prompt cannot fix.
+ * `promptEncodePhase` is a three-state sentinel:
+ *   - `null`     — no encode boundary reported (every runtime except the LTX-2 MLX helper), so an
+ *                  unreported phase is never mistaken for a live encode.
+ *   - `'active'` — the encode began and never finished: the ONLY qualifying state.
+ *   - `'done'`   — the encode finished; a later abort is a denoise/decode failure a shorter prompt
+ *                  cannot fix.
  *
  * @param {object} [opts]
  * @param {string|null} [opts.signal] - signal name from `proc.on('close')`
@@ -546,8 +497,7 @@ const METAL_WATCHDOG_VETO_RE = /kIOGPUCommandBufferCallbackError(?:OutOfMemory|I
  * @returns {boolean}
  */
 export function isPromptEncodingMetalWatchdog({ signal = null, stderr = '', promptEncodePhase = null } = {}) {
-  // The Metal layer raises a C++ exception that terminate() turns into SIGABRT;
-  // a watchdog kill never arrives as a clean non-zero exit.
+  // The Metal layer's C++ exception is turned into SIGABRT by terminate(); never a clean non-zero exit.
   if (signal !== 'SIGABRT') return false;
   if (promptEncodePhase !== 'active') return false;
   const text = typeof stderr === 'string' ? stderr : '';
@@ -567,13 +517,11 @@ export const METAL_BUFFER_RETRY_ENV = Object.freeze({
 });
 
 /**
- * Decide whether a render may be relaunched once with tiny MLX command buffers
- * after a Metal watchdog abort ANYWHERE in the render, including inside the Gemma
- * prompt encoder. The prompt token sequence is never shortened to recover: the
- * encoder keeps only the LAST max_length tokens, so a lowered sequence budget
- * would silently drop the start of an accepted prompt. Pure — returns the plan, never acts.
- * Apple-silicon MLX runtimes only; OutOfMemory / InnocentVictim aborts never
- * qualify (smaller buffers do not fix them). One retry per job.
+ * Decide whether a render may be relaunched once with tiny MLX command buffers after a Metal watchdog
+ * abort ANYWHERE in the render, including the Gemma prompt encoder. The prompt token sequence is never
+ * shortened to recover: the encoder keeps only the LAST max_length tokens, so that would silently drop
+ * the start of an accepted prompt. Pure — returns the plan. Apple-silicon MLX only; OutOfMemory /
+ * InnocentVictim aborts never qualify. One retry per job.
  *
  * @returns {{ env: Record<string, string> }|null}
  */
@@ -587,55 +535,42 @@ export function planMetalBufferRetry({ signal = null, stderr = '', retriesUsed =
 }
 
 /**
- * Whether a PortOS-fired completion-watchdog SIGKILL should be treated as
- * success rather than a failure. The watchdog is armed after a completion
- * marker and only guards a post-completion teardown hang. It is a SUCCESS when
- * a real output file is already on disk and non-empty; a kill with no output on
- * disk still fails loudly.
+ * Whether a PortOS-fired completion-watchdog SIGKILL should be treated as success: the watchdog only
+ * guards a post-completion teardown hang, so it is a SUCCESS when a real, non-empty output is on disk.
  */
 export function isWatchdogSuccess({ completionWatchdogFired, signal, outputPath }) {
   return completionWatchdogFired && signal === 'SIGKILL'
     && existsSync(outputPath) && statSync(outputPath).size > 0;
 }
 
-// ── verified post-completion native teardown abort (#6501) ──────────────────
+// ── verified post-completion native teardown abort (#6501) ──
 //
-// The MiniMax H3 MLX runner can finish its render, mux the clip, print the
-// `emit_result` completion contract from scripts/_minimax_h3_common.py, and
-// THEN abort inside native interpreter teardown. The clip on disk is complete;
-// only the interpreter died. Without recognition, that delivered render is
-// absent from history and counted against the media queue's repeated-failure
-// hold.
+// The MiniMax H3 MLX runner can finish, mux the clip and print the `emit_result` completion contract
+// (scripts/_minimax_h3_common.py), THEN abort inside native interpreter teardown. The clip is complete;
+// unrecognized, it is absent from history and counts toward the media queue's repeated-failure hold.
 //
-// This is deliberately the narrowest possible recovery. It is NOT a general
-// "the file looks fine, call it a win" rule: an ordinary nonzero exit, a
-// missing python module, an idle timeout, a user cancel, a truncated clip and
-// a pre-completion crash all keep failing exactly as before.
+// This is the narrowest possible recovery, NOT a general "the file looks fine" rule: an ordinary
+// nonzero exit, missing module, idle timeout, user cancel, truncated clip and pre-completion crash all
+// keep failing.
 
 /**
- * The single runtime this recovery covers. `minimax_h3_cuda` (Windows/Linux
- * diffusers) and `minimax_h3_ref2va` (the signed native release) are excluded
- * by construction rather than by an allowlist that could drift open — neither
- * has the MLX teardown fault, and both must keep their current outcomes.
+ * The single runtime this recovery covers. `minimax_h3_cuda` and `minimax_h3_ref2va` lack the MLX
+ * teardown fault and are excluded by construction, not by an allowlist that could drift open.
  */
 export const POST_COMPLETION_ABORT_RUNTIME = 'minimax_h3';
 
 /**
- * Signals that can carry a native-interpreter teardown abort. SIGABRT only for
- * now: a bare nonzero exit is an ordinary failure, SIGKILL belongs to the
- * completion watchdog (and to the OOM killer), and SIGSEGV/SIGBUS are real
- * native crashes that can equally well happen mid-render.
+ * Signals that can carry a native-interpreter teardown abort. SIGABRT only: a bare nonzero exit is an
+ * ordinary failure, SIGKILL belongs to the completion watchdog/OOM killer, and SIGSEGV/SIGBUS are real
+ * native crashes that can happen mid-render.
  */
 const NATIVE_TEARDOWN_SIGNALS = new Set(['SIGABRT']);
 
 /**
- * The cheap synchronous gate: does this child's death even LOOK like the H3
- * MLX teardown abort? Runs before the (async, ffprobe-backed) output
- * verification so an ordinary failure never pays for a probe.
- *
- * `childKilled` is `proc.killed`, i.e. PortOS asked this child to die — a user
- * cancel or either watchdog. A death we caused is never a spontaneous teardown
- * abort to recover from, whatever signal it finally landed on.
+ * The cheap synchronous gate: does this child's death even LOOK like the H3 MLX teardown abort?
+ * Runs before the async ffprobe verification so an ordinary failure never pays for a probe.
+ * `childKilled` is `proc.killed` (PortOS asked it to die: cancel or watchdog); a death we caused is
+ * never a spontaneous teardown abort, whatever signal it landed on.
  *
  * @param {object} opts
  * @param {string} [opts.runtime] - the render model's runtime id
@@ -645,46 +580,33 @@ const NATIVE_TEARDOWN_SIGNALS = new Set(['SIGABRT']);
  * @returns {boolean}
  */
 export function isNativeTeardownAbort({ runtime = null, signal = null, childKilled = false, platform = process.platform } = {}) {
-  // MLX is Apple-Silicon only, so a Windows/Linux host reporting this runtime
-  // is a misconfiguration rather than the fault this recovery knows about.
+  // MLX is Apple-Silicon only; another host reporting it is a misconfiguration.
   if (platform !== 'darwin') return false;
   if (runtime !== POST_COMPLETION_ABORT_RUNTIME) return false;
   if (childKilled) return false;
   return NATIVE_TEARDOWN_SIGNALS.has(signal);
 }
 
-// A filesystem whose mtime resolution is whole seconds (rather than APFS/ext4
-// nanoseconds) can stamp a file written milliseconds after the spawn with the
-// second BEFORE it. One second of slack absorbs that without weakening the
-// check that matters — a stale output from an earlier render is minutes old.
+// Whole-second mtime filesystems can stamp a file written just after spawn with the prior second;
+// one second of slack absorbs that while a stale earlier output is minutes old.
 const OUTPUT_MTIME_SLACK_MS = 1000;
 
-// The muxer can round a stream's reported length by a frame or two, and the
-// container duration of a clip carrying an audio track is not exactly
-// frames/fps. Both tolerances stay tight on purpose: the probe exists to
-// reject a TRUNCATED clip, which loses far more than this.
+// The muxer can round a stream's length by a frame or two and container duration with audio is not
+// exactly frames/fps. Both tolerances stay tight: the probe exists to reject a TRUNCATED clip.
 const frameTolerance = (expectedFrames) => Math.max(2, Math.ceil(expectedFrames * 0.02));
 const durationToleranceSeconds = (expectedSeconds) => Math.max(0.25, expectedSeconds * 0.05);
 
 /**
- * Verify that a post-completion abort really did leave the requested render on
- * disk. Every check must pass; each returns the reason it did not so the caller
- * can log why a teardown abort stayed a failure.
+ * Verify that a post-completion abort really did leave the requested render on disk. Every check
+ * must pass; each returns the reason it did not so the caller can log why the abort stayed a failure.
  *
- * The checks, in order of cost:
- *   1. This child reported EVERY expected output by its exact path. The caller
- *      collects that evidence per child, so a stray progress sentence, an
- *      unrelated path, or a previous child's result cannot satisfy it.
- *   2. The request is measurable — we know when the render started and how many
- *      frames at what rate it asked for. Missing any of that is "cannot
- *      verify", which is a refusal, never a pass.
- *   3. Each file exists, is non-empty, and was written AFTER this render
- *      started. File existence alone is not evidence: a same-named output from
- *      an earlier render would satisfy it.
- *   4. ffprobe reads a frame count and a duration consistent with the request.
- *      A probe that could not answer (`null` — no ffprobe, unreadable file) is
- *      an explicit "unknown" and refuses recovery; it must never collapse into
- *      "consistent".
+ * In order of cost:
+ *   1. This child reported EVERY expected output by exact path (collected per child, so a stray
+ *      sentence, unrelated path or previous child's result cannot satisfy it).
+ *   2. The request is measurable (start time, frames, rate); missing any is a refusal, never a pass.
+ *   3. Each file exists, is non-empty, and was written AFTER this render started.
+ *   4. ffprobe reads a frame count and duration consistent with the request. A probe that could not
+ *      answer (`null`) refuses recovery; it never collapses into "consistent".
  *
  * @param {object} ctx
  * @param {string[]} ctx.outputPaths - every file this render was asked to write
@@ -741,25 +663,17 @@ export async function verifyPostCompletionOutputs({ outputPaths, completedOutput
 }
 
 /**
- * Hold a freshly spawned render child's terminal event until its real handlers
- * are wired (#4617).
+ * Hold a freshly spawned render child's terminal event until its real handlers are wired (#4617).
  *
- * `spawnDetached` defers its first emission to a `setImmediate` so a caller that
- * subscribes synchronously misses nothing — but generateVideo must first hand
- * the machine accelerator claim to the child's PID, and that await does real
- * file I/O. A child that dies inside that window (a venv that imports and
- * aborts, an OOM kill, a launcher that never produced a PID) emits with nobody
- * listening: the 'close' is lost and the job sits `running` forever still
- * holding the claim, while a lost 'error' is worse — an EventEmitter with no
- * 'error' listener THROWS, which outside the request lifecycle takes the whole
- * server down.
+ * `spawnDetached` defers its first emission to a `setImmediate`, but generateVideo must first hand the
+ * accelerator claim to the child's PID (real file I/O). A child dying in that window emits with nobody
+ * listening: a lost 'close' leaves the job `running` forever holding the claim, and a lost 'error'
+ * THROWS (no listener), taking the server down outside the request lifecycle.
  *
- * Attach this in the SAME tick the spawn resolved. It returns a `take()` that
- * detaches these listeners and hands back the first terminal event seen, or
- * `null` when the child is still alive — read it immediately before the real
- * listeners go on, with no await in between, or the gap reopens. Leaving it
- * attached is also valid: for a child that is being abandoned rather than
- * wired, it stays a harmless sink that keeps an 'error' from going unhandled.
+ * Attach in the SAME tick the spawn resolved. It returns a `take()` that detaches these listeners and
+ * hands back the first terminal event seen, or `null` while the child is alive; call it immediately
+ * before the real listeners go on, with no await between. Leaving it attached is also valid for an
+ * abandoned child: a harmless sink that keeps an 'error' from going unhandled.
  */
 export function bufferChildExit(proc, { bufferOutput = false } = {}) {
   let buffered = null;
@@ -791,8 +705,8 @@ export function bufferChildExit(proc, { bufferOutput = false } = {}) {
 /** How long a finished output waits for a backup cut before giving up (a cut spans rsync and the database dump). */
 export const FINISHED_OUTPUT_ADMISSION_MS = 60 * 60 * 1000;
 
-// Only fresh, unreferenced outputs belong here. Callers retain the publication
-// latch so a later notification failure never sends committed bytes to cleanup.
+// Only fresh, unreferenced outputs belong here; callers keep the publication latch so a later
+// notification failure never sends committed bytes to cleanup.
 export async function discardUnpublishedVideo({ jobId, outputPath }) {
   return withBackupAssetPublication(async () => {
     const results = await Promise.allSettled([
@@ -805,10 +719,9 @@ export async function discardUnpublishedVideo({ jobId, outputPath }) {
 }
 
 /**
- * Success path of generateVideo's `close` handler: faststart-optimize the
- * output, generate a thumbnail, prepend the history entry, and emit the
- * `complete` SSE frame + `completed` queue event. Mutates `job.status` to
- * 'complete'. Returns the thumbnail name.
+ * Success path of generateVideo's `close` handler: faststart-optimize the output, generate a
+ * thumbnail, prepend the history entry, emit `complete` SSE + `completed` queue event. Mutates
+ * `job.status`. Returns the thumbnail name.
  *
  * @param {object} ctx
  * @param {object} ctx.job
@@ -824,9 +737,8 @@ export async function discardUnpublishedVideo({ jobId, outputPath }) {
  *   spawned. Defaults to `job.renderStartedAtMs`, which generateVideo stamps.
  */
 export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, mutateHistory, startedAtMs = job?.renderStartedAtMs, terminal = true, publication = {} }) {
-  // The render already exists, so a backup cut holding admission is a pause,
-  // not a failure: wait it out, heartbeating so the queue watchdog never
-  // reaps a finished clip as idle.
+  // The render already exists, so a backup cut holding admission is a pause, not a failure; heartbeat
+  // so the queue watchdog never reaps a finished clip as idle.
   const waitForBackup = () => {
     const message = 'Waiting for the backup to finish before saving the video';
     videoGenEvents.emit('activity', { generationId: jobId });
@@ -841,24 +753,16 @@ export async function finalizeGeneratedVideo({ job, jobId, outputPath, filename,
       if (!thumbnail) await unlinkGuarded(join(PATHS.videoThumbnails, `${jobId}.jpg`)).catch(error => {
         if (error.code !== 'ENOENT') throw error;
       });
-      // Serialized append through the shared history tail so a concurrent write
-      // path (a full-video download completing, another render finalizing) can't
-      // read the same stale array and clobber this record on save.
+      // Serialized append through the shared history tail so a concurrent writer can't clobber this
+      // record from a stale array.
       //
-      // Persist the runtime fingerprint captured from the child's startup RUNTIME:
-      // line (set on `job` by makeVideoGenLineHandler) so each history record
-      // self-documents the exact ltx/mlx/torch + chip + OS stack it rendered on.
-      // Absent (sentinel) when the runtime didn't emit one — e.g. the bare
-      // `mlx_video.generate_av` path we don't control.
+      // Persist the runtime fingerprint from the child's startup RUNTIME: line (set on `job` by
+      // makeVideoGenLineHandler); absent when the runtime emitted none (the bare `mlx_video.generate_av`).
       //
-      // Wall-clock render timing (#3801) is what makes a future render estimable:
-      // videoGen/eta.js calibrates its cost model purely from these measurements.
-      // Stamped ONLY when we actually observed the spawn instant — an entry with
-      // no `renderMs` is an explicit absent sentinel that the estimator skips,
-      // which is why the timing spread is conditional rather than defaulted to 0
-      // (a zero-duration sample would drag every estimate toward "instant").
-      // The window measured is spawn → output finalized, i.e. what the user waits
-      // through, including the thumbnail/faststart tail above.
+      // Wall-clock render timing (#3801) calibrates videoGen/eta.js. Stamped ONLY when we observed the
+      // spawn instant: an entry with no `renderMs` is an absent sentinel the estimator skips, so the
+      // spread is conditional (a zero sample would drag estimates toward "instant"). It spans spawn →
+      // output finalized, including the thumbnail/faststart tail above.
       const timing = renderTimingFields(startedAtMs);
       await mutateHistory((history) => {
         history.unshift({

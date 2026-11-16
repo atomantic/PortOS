@@ -1,15 +1,6 @@
 /**
  * Learning verdict sentinels (issue #4107)
  *
- * The three-way success-criteria verdict a completed agent run carries on `result.validationPassed`
- * (#4107). `true`/`false` = a declared criterion was met/missed; `null` = none declared (record the
- * run, fall back to the exit code); `SKIP_LEARNING_VERDICT` = nothing ever evaluated the run, so
- * task-learning must not record it at all (a programmatic-I/O output hook that bailed on
- * `no-app`/`app-not-found`). `isSkipLearningVerdict(v)` gates the skip; `toValidationVerdict(v)`
- * narrows anything non-boolean — including the sentinel — back to `null` for downstream telemetry.
- * JSON-safe string (not a Symbol) because the verdict is persisted and read back by the learning
- * backfill, and older readers already narrow on `typeof v === 'boolean'`. Pure.
- *
  * The success-criteria verdict a completed agent run carries on
  * `result.validationPassed` has THREE distinct meanings, and the repo's
  * sentinel rule ("never let absent/failed collapse into valid") applies to all

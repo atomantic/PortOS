@@ -1,22 +1,6 @@
 // `startMemoRecording()` → `{ stream, stop, cancel }` handle whose `stop()` resolves to `{
 // audioBase64, mimeType, peak, durationMs }` (16 kHz mono WAV, base64).
 //
-// The live `stream` lets a tuner tap the same mic. `createStreamAnalyser(stream, { fftSize })` → `{
-// analyser, context, close }` taps an `AnalyserNode` off an existing stream (no second getUserMedia).
-// Plus `blobToWav16k` (decode a recorded blob → `{ wav, peak }`), `float32ToWav16k(samples,
-// sourceRate)` (resample a raw Float32 PCM buffer, e.g. an AudioWorklet capture, → `{ wav, peak }`; `{
-// wav: null, peak: 0 }` for empty input), `encodePcmToWav`, `MAX_VOICE_AUDIO_BYTES` (8 MiB),
-// `RECORDING_TOO_LONG_MESSAGE`, `TARGET_SAMPLE_RATE` (16000), `pickRecordingMimeType`,
-// `arrayBufferToBase64`. Shared WAV-encode/resample path for both this standalone memo-capture flow
-// AND the live voice-agent recorder in `services/voiceClient.js`. **`openAnalysisMic({ getUserMedia
-// })`** → `{ stream, processing }` is the ONE way a pitch-analysis surface opens a mic: it requests
-// `ANALYSIS_AUDIO_CONSTRAINTS` (echo cancellation / noise suppression / AGC off — plain booleans,
-// never `{ exact }`, so a browser that can't honor one still opens the mic) and reads
-// `track.getSettings()` back so the UI can say what actually stuck. `readAppliedProcessing(stream)`
-// reports each stage as `true` / `false` / `null` (browser didn't say — never collapse unknown into
-// off) and `hasUnwantedProcessing(p)` gates the warning. Memo capture deliberately keeps the
-// speech-tuned defaults; Whisper wants them.
-//
 // Browser audio recording → 16 kHz mono WAV → base64, for one-shot memo
 // capture (catalog voice ingest). whisper.cpp accepts WAV only, so we decode
 // whatever MediaRecorder produced and resample to 16 kHz mono before encoding.

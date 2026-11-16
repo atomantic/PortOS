@@ -1,16 +1,6 @@
 /**
  * The CoS task STATUS TRANSITION vocabulary (#6620).
  *
- * The CoS task STATUS TRANSITION vocabulary (#6620) — `resolveTaskStatusTransition(previousStatus,
- * nextStatus)` classifies one update's status pair ONCE and returns `{ action, isRevive, isRequeue,
- * entersInProgress, leavesInProgress, leavesBlocked, isTerminal }`, so `writeTaskUpdate`'s
- * blocked/pause clear, resume-pointer drop, retry-hold retire, claim release, requeue stamp and
- * emitted `tasks:changed` action all read one answer instead of re-deriving seven. A falsy
- * `nextStatus` means "this patch carries no status" (a lease-renewal heartbeat) and releases nothing.
- * `isTerminalTaskStatus(status)` is the shared `completed`/`blocked` predicate `cosTaskStore` and
- * `cosTaskMerge` both read. Pure — metadata predicates (is this block a pause?) stay at the
- * application site.
- *
  * `writeTaskUpdate` (services/cosTaskStore.js) applies half a dozen lifecycle
  * rules to a task update — clear the blocked/pause metadata, drop a spent resume
  * pointer, retire the retry hold, release the federation claim, stamp or clear

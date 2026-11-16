@@ -1,8 +1,6 @@
 /**
  * Vector Math Utilities
  *
- * Vector math utilities (cosine, etc.).
- *
  * Pure functions for vector operations used in semantic search.
  */
 

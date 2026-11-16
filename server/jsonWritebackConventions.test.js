@@ -1,23 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
+import { trackedFiles } from '../scripts/lib/trackedFiles.js';
 import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile, buildJsonReadWrapperRegistry } from './test/jsonWritebackScan.js';
 import { JSON_WRITEBACK_EXCEPTIONS } from './test/jsonWritebackExceptions.js';
 
-function sourceFiles(directory, prefix = '') {
-  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
-    const relative = `${prefix}${entry.name}`;
-    if (entry.isDirectory()) return sourceFiles(join(directory, entry.name), `${relative}/`);
-    return entry.name.endsWith('.js') && !entry.name.endsWith('.test.js') ? [relative] : [];
-  });
+const serverRoot = fileURLToPath(new URL('./', import.meta.url));
+
+// Enumerate via git so a populated node_modules is never walked.
+function sourceFiles() {
+  return trackedFiles(serverRoot, ['*.js']).filter(path => !path.endsWith('.test.js'));
 }
 
 // Regression: a newly introduced fallback cannot silently become a write-back
 // base. Existing exceptions must disappear when their source pair disappears.
 it('classifies every same-path non-strict service read/write pair with no stale exceptions', () => {
-  const root = fileURLToPath(new URL('./', import.meta.url));
-  const modules = new Map(sourceFiles(root).map(file => [file, readFileSync(join(root, file), 'utf8')]));
+  const modules = new Map(sourceFiles().map(file => [file, readFileSync(join(serverRoot, file), 'utf8')]));
   const registry = buildJsonReadWrapperRegistry(modules);
   const candidates = [...modules].flatMap(([file, source]) => {
     if (!file.startsWith('services/') || !mayReadJsonFile(source, registry)) return [];

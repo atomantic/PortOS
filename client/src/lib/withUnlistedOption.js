@@ -1,12 +1,6 @@
 /**
  * `withUnlistedOption(list, value, makeOption, { key })` keeps a stored but no-longer-listed value
  * selectable in a select by appending a synthesized option.
- *
- * `withUnlistedOption(list, value, makeOption, {key = 'id'})` — keeps a stored-but-no-longer-listed
- * pin (a retired model, a deleted persona, a stale voice/album link) selectable in a `<select>`
- * instead of the value silently painting blank and a save dropping it: returns `list` unchanged when
- * `value` is blank or already present under `key`, else prepends `makeOption(value)`. `key` overrides
- * the matched field for a list keyed by something other than `id` (e.g. `'name'` for a voice list).
  */
 
 /**

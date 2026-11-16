@@ -1,12 +1,6 @@
 /**
  * The shared cast-integrity contract (#6415).
  *
- * The shared cast-integrity contract (#6415), stated in `characterIntegrityVocabulary.js`'s terms:
- * `characterIntegrityDepth` (minor roles / flat arcs / an explained `unknown` psychology get lighter
- * requirements), the no-provider `characterCompletenessFindings` / `buildCastIntegrityReport`, the
- * validating `mergeSemanticFindings`, and `characterFingerprint` (reports are derived, never persisted
- * — the fingerprint is what makes a stale one detectable).
- *
  * "Every field is filled" and "this character holds together" are different
  * questions, and until now only the first had an answer. `missingBibleFields`
  * counts blanks; `applyExpansion` fills blanks; neither can say that a fully

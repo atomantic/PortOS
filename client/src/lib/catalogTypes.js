@@ -2,13 +2,6 @@
  * The catalog ingredient type registry as the UI consumes it — the server
  * registry in `server/lib/catalogTypes.js` plus the per-type editor layout.
  *
- * The catalog ingredient type registry as the UI consumes it. `CATALOG_TYPES` is PROJECTED from
- * `server/lib/catalogTypes.js` (label, badge color, primary-content key/label, snippet fallback chain,
- * `editableListFields` and its `BIBLE_LIMITS` caps) and decorated with the client-only editor layout
- * (`editorSections` / `editorFields`); `RELATION_KINDS`, `MEDIA_KINDS`, `canonicalTagKey`,
- * `payloadSnippet`, `USER_TYPE_FIELD_KINDS` are re-exported outright. Also the badge/ref-role lookups
- * and the user-defined-type normalization `useCatalogTypes` merges in.
- *
  * The registry itself is NOT copied. `CATALOG_TYPES` below is projected from
  * the server entries, so `label` / `badgeColor` / the primary-content key and
  * label / the snippet fallback chain / `editableListFields` (and its
