@@ -14,6 +14,11 @@
  *     tries each online peer until the sidecar is recovered. Drives the manual
  *     "Pull missing prompts" action (Unsorted view in MediaCollectionDetail +
  *     the sync drawer) via POST /api/peer-sync/pull-metadata.
+ *
+ * Federation: the sidecar's `originInstanceId` is set once and synced, never taken from a
+ * peer's copy of an image already held here. `hidden`, `pendingDelete` and
+ * `suppliedByInstanceId` are machine-local: stripped from served sidecars, kept from the
+ * local copy on pull, and excluded from `sidecarGenParamsHash`.
  */
 
 import { existsSync } from 'fs';

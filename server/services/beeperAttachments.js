@@ -24,6 +24,10 @@
  * already holding bytes is exempted from eviction, because a file Beeper can
  * no longer supply is the last copy in existence.
  *
+ * Storage: `asset-file-db-indexed` — machine-local, never federated (message
+ * content is PII). The bytes are a lazy cache, excluded from backup by default
+ * (overridable), while the `beeper_attachments` rows ride the Postgres dump.
+ *
  * Nothing here ever sends anything through a messaging API.
  */
 

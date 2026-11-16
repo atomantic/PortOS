@@ -1,3 +1,11 @@
+/**
+ * Password-free access warning shown until the operator accepts the risk or sets a password.
+ *
+ * Browser storage: acceptance is a per-origin `localStorage` preference under the
+ * versioned `portos-password-risk-v1` key, bound to the server's revision — not an
+ * app record, never federated or backed up, and no API can acknowledge it for
+ * another browser. Missing or unreadable storage asks for consent again.
+ */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import { getAuthStatus, getPasswordRiskStatus } from '../services/apiAuth.js';

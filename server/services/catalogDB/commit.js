@@ -3,6 +3,11 @@
  *
  * Keeps transaction ownership inside the catalog data layer so HTTP callers
  * cannot accidentally persist only part of a scrap's accepted extraction.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `catalog_commit_receipts` pin a
+ * unique operation UUID, request fingerprint and original response, committed atomically
+ * with the batch and retained indefinitely to preserve retry identity; covered by
+ * PostgreSQL backup, no seed.
  */
 
 import { createHash } from 'node:crypto';

@@ -16,6 +16,12 @@
  *   - listAssets(...)          — bounded gallery reads; legacy callers may
  *                                still request an unbounded array
  *
+ * Storage: `asset-file-db-indexed` — machine-local, never federated: each install
+ * rebuilds it from its own disk, so there is no sync cursor or tombstone. Image
+ * sidecars and `video-history.json` stay authoritative; rows are a derived mirror
+ * keyed `image:<filename>` / `video:<jobId>`. Snapshot dumps exclude the rows, and
+ * a database restore rebuilds them from local files before releasing recovery.
+ *
  * The image + video disk readers are dynamically imported inside reconcile so
  * importing this module (e.g. for upsertAsset from a generation hook) never
  * pulls in the heavy media-gen stack, and so tests can run the SQL paths

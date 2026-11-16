@@ -1,3 +1,11 @@
+/**
+ * Calendar daily reviews — per-day event confirmations that feed goal progress.
+ *
+ * Storage: `file-primary` (`data/calendar/daily-reviews/<date>.json`) — machine-local,
+ * no peer sync category. Per-event `pendingOperations` record each confirmation
+ * intent before goal effects run, so a read or retry replays it locally (no AI or
+ * calendar call); fields are additive, so no backfill, seed or migration.
+ */
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import * as calendarSync from './calendarSync.js';

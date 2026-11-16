@@ -12,6 +12,10 @@
  * the store version it was planned against; a write planned against an older
  * version is refused with `COS_AGENTS_STALE`, so a stale cache (for example
  * after a database restore) can never delete or overwrite rows it did not see.
+ *
+ * Storage: `db-primary` — machine-local, never federated: records describe this
+ * machine's agent processes and worktrees. Imported from state.json's `agents`
+ * map, so no data.reference seed; backed up by the Postgres dump.
  */
 
 import { join } from 'node:path';

@@ -1,3 +1,9 @@
+/**
+ * PortOS browser process: launches and supervises the CDP Chrome instance.
+ *
+ * Storage: `ephemeral-file` — `data/browser-profile/` is a machine-local
+ * cache/cookie profile, never federated, and a non-overridable backup exclude.
+ */
 import { probeCdpVersion } from './cdpProbe.js';
 import { spawn } from 'child_process';
 import { createServer } from 'http';

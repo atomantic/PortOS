@@ -1,4 +1,13 @@
-/** Shipped public reference data and machine-local PortOS benchmark observations. */
+/**
+ * Shipped public reference data and machine-local PortOS benchmark observations.
+ *
+ * Storage: `file-primary` (`data/model-comparison.json`) — machine-local, never
+ * federated, because provider access and run interpretation are install-specific.
+ * Inspectable/importable JSON with no app-record relations; schema v1 is seeded,
+ * future/malformed versions are rejected and writes serialize while keeping the
+ * last good catalog. The public view merges shipped evidence on read and persists
+ * no derived store. Rsync backups include it.
+ */
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { readFile } from 'fs/promises';

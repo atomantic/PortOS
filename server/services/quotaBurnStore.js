@@ -12,10 +12,10 @@
  * recorded", which is exactly right on a fresh install, so there is no migration
  * to run and nothing for `setup-data.js` to overwrite.
  *
- * Deliberately NOT federated, for the same reason the dispatch ledger isn't:
- * quota belongs to a particular machine and provider account. Two peers sharing
- * a burn plan would each think they owned the other's window budget, and the
- * "which managed app" targets differ per machine anyway.
+ * Storage: `file-primary` (`quota-burn.json`; the others are `ephemeral-file`,
+ * regenerable and safe to delete) — machine-local, never federated: quota belongs
+ * to one machine and provider account, so peers sharing a plan would spend each
+ * other's window budget, and step targets name this machine's task types and apps.
  *
  * Every read normalizes, so a config file written by an older PortOS (or by
  * hand) loads without a migration step — `normalizeQuotaBurnConfig` fills the

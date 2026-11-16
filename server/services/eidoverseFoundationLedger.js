@@ -15,10 +15,13 @@
  * the sandbox is derived from the foundation's own body (#7625), so "what was
  * evaluated" and "what gets promoted" are the same object.
  *
- * Storage is `data/eidoverse/foundations.json` — file-primary, MACHINE LOCAL and
- * never federated (`docs/STORAGE.md`). Only a promoted packaged candidate leaves
- * the install (`listPromotedFoundationCandidates()`). No `data.reference/` seed:
- * an absent file is an empty ledger.
+ * Storage: `file-primary` (`data/eidoverse/foundations.json`) — machine-local,
+ * never federated as records: only a promoted foundation's packaged candidate
+ * envelope (`listPromotedFoundationCandidates()`, served by
+ * `services/sharing/peerEidoverseFoundationSync.js`, version-gated as
+ * `eidoverseFoundations`) leaves the install, never the `style` layer. Inherited
+ * records live under disjoint `peer:<origin>:<id>` keys. No `data.reference/` seed
+ * or migration: an absent file is the empty ledger and additions are nullable.
  *
  * Withdrawal (#7632) records a TOMBSTONE keyed on the candidate's
  * content-addressed fingerprint; it rides the offering so a receiver DROPS its

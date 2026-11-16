@@ -23,7 +23,9 @@
  * must never queue AI work the user didn't ask for (root AGENTS.md, AI Provider
  * Usage Policy).
  *
- * Storage:
+ * Storage: `file-primary` — the transcript IS an external file (mirrored into the
+ * Obsidian vault and synced through iCloud); the index is machine-local, never
+ * federated. Files:
  *   data/brain/youtube/index.json          — machine-local ingest index (paths!)
  *   data/brain/youtube/<videoId>.md        — canonical transcript copy
  *   data/brain/youtube/<videoId>.mp3       — audio, when ingestAudio was on

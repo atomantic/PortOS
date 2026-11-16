@@ -1,6 +1,10 @@
 /** Durable handoff for asynchronous quota, maintenance and swarm refill requests. A nonce fences
  * settlement, while only a proven missing owner PID permits crash reconciliation.
- * Live or ambiguous owners never expire. All transitions share the schedule queue. */
+ * Live or ambiguous owners never expire. All transitions share the schedule queue.
+ *
+ * Storage: `file-primary` (`onDemandHandoffs` in `data/cos/task-schedule.json`) — machine-local, never
+ * federated. Accepted-task/refusal receipts are durable control state, not preflight telemetry; an absent
+ * map means no handoffs, so no migration is needed. */
 import { randomUUID } from 'node:crypto';
 import { loadSchedule, updateSchedule } from './taskScheduleStore.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';

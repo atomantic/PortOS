@@ -7,6 +7,11 @@ import { selectPersistentMindContextEvents } from '../lib/persistentMindContextE
  * machine-local cache, so assembling one turn never requires an unbounded JSONL
  * read. A corrupt/unreadable cache fails closed rather than becoming `[]` and
  * overwriting the only summaries of history that has left raw retention.
+ *
+ * Storage: `file-primary` — `data/cos/persistent-mind-rollups.json`, machine-local,
+ * never federated: it quotes one human's private conversation (machine-local
+ * privacy ADR). Not regenerable once raw events leave retention, hence fail-closed.
+ * Bounded at 100 rollups, backed up with `data/cos/`; absent is empty, no seed.
  */
 
 import { join } from 'path';

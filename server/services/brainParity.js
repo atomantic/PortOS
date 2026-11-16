@@ -32,6 +32,11 @@
  * Deliberately NOT wired into the sync cycle: it is a distinct on-demand
  * operation so a routine sync never pays for a full manifest exchange.
  *
+ * Storage: `ephemeral-file` — `data/brain_parity_reports.json`, machine-local,
+ * never federated: this install's view of a peer (each peer computes its own).
+ * A regenerable point-in-time observation; absent reads as "nothing audited yet",
+ * and per-type id lists cap at 25 with a `truncated` flag.
+ *
  * Backward compatible in both directions. A peer too old to serve
  * `/api/brain/reconcile/manifest` (404) is reported as `peer-too-old` rather
  * than as divergence, and older peers simply never call our manifest route.

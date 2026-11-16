@@ -121,8 +121,8 @@ Missing or conflicting evidence remains uncertain. No generic rollback or force
 Ready button exists. Proven completion releases only the operation's own hold and
 re-evaluates the already-saved scheduling policies; it never enables a policy.
 
-The durable receiver ledger and restore reconciliation are documented in
-[STORAGE](../STORAGE.md#receiver-execution-ledger-foundation-10127). Fixtures cover
+The durable receiver ledger and its restore reconciliation are described in the header of
+[`peerExecutionLedger.js`](../../server/services/peerExecutionLedger.js). Fixtures cover
 authorization refusal, planning compatibility, revocation/rotation during drain,
 replay, resume fencing, crash gaps, delayed completion and negative resource/hash
 checks without operating any live peer.

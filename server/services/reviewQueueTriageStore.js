@@ -6,6 +6,11 @@
  * it never copies a queue title, summary, prompt, or source payload.
  * PostgreSQL is authoritative for normal installs. The JSON backend is the
  * documented development/test escape hatch only.
+ *
+ * Storage: `db-primary` — machine-local, never federated, even for federated Brain sources.
+ * `review_queue_triage` holds action identity plus snooze/dismissal/delivery markers and
+ * durable health-correction baselines; a new occurrence/revision resets presentation but a
+ * text revision does not reset delivery. Covered by the normal `pg_dump`.
  */
 
 import { join } from 'node:path';

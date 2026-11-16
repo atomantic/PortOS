@@ -23,9 +23,9 @@
  * stated no reset expires on a bounded TTL so an install that stops burning
  * can't be blocked forever.
  *
- * Storage is `ephemeral-file` per docs/STORAGE.md — regenerable runtime
- * telemetry with an hours-long horizon, alongside the dispatch ledger in
- * `data/cos/`.
+ * Storage: `ephemeral-file` (`data/cos/quota-burn-denials.json`) — machine-local,
+ * never federated. Regenerable telemetry with a 5-hour TTL; deleting it only risks
+ * one dispatch into a still-exhausted window.
  */
 
 import { join } from 'path';

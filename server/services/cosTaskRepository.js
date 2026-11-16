@@ -11,6 +11,11 @@
  * completed tasks are reached by id or history paging, never loaded wholesale.
  * `version` bumps on every write so a cached working set can be checked with a
  * single-row read.
+ *
+ * Storage: `db-primary` — the working set federates through peer-sync
+ * `cos-tasks` (claim-aware per-task merge in cosTaskStore.mergePeerTasks); older
+ * completed history is machine-local. Imported from the retired TASKS.md /
+ * COS-TASKS.md files, so no data.reference seed; backed up by the Postgres dump.
  */
 
 import { join } from 'node:path';

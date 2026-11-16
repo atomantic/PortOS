@@ -5,6 +5,11 @@
  * namespaced preset id. This module owns the local, DB-primary binding that
  * can be promoted independently on each install, plus the managed directory
  * that holds benchmark renders, training runs, and local engine artifacts.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `voice_profiles` /
+ * `voice_profile_renders` bind `(universeId, characterId)` and the latest rendered line
+ * per `(issueId, lineId)`; portable records never store a local profile id. Assets live
+ * under `data/voice-profiles/<profileId>/`; backup covers the dump and that directory.
  */
 
 import { createHash, randomUUID } from 'node:crypto';

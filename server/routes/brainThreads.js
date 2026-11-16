@@ -12,6 +12,11 @@
  *
  * Mounted from the brain barrel at /threads → /api/brain/threads/...
  *
+ * Storage: `file-primary` (`data/brain/threads/<id>/index.json`) — federated on the
+ * Brain channel like every Brain entity type. File-primary because the Brain sync,
+ * tombstone and reconcile pipeline is keyed off `BRAIN_ENTITY_TYPES`; `refs` is a
+ * bounded (≤100) per-record array and search uses `brainSearchIndex`.
+ *
  * `source`, `externalState` and `closedAt` are server-managed: the write schemas
  * have no key for them, so Zod's unknown-key stripping drops a client-supplied
  * value (the brainSongbook.js `practice`/`attachments` convention). `source` and

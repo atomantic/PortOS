@@ -1,3 +1,12 @@
+/**
+ * History of explicit media prompt examinations.
+ *
+ * Storage: `db-primary` (`media_prompt_examinations`) — machine-local, never
+ * federated. Immutable records whose source references are descriptive locators,
+ * not foreign keys, so they outlive source media deletion; no binaries or
+ * credentials. Additive boot DDL with no seed or backfill; the JSON adapter is
+ * dev/test only. PostgreSQL dumps cover it.
+ */
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';

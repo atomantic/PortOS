@@ -1,4 +1,11 @@
-/** Auditioned library voices; assigning creates an immutable character snapshot. */
+/**
+ * Auditioned library voices; assigning creates an immutable character snapshot.
+ *
+ * Storage: `db-primary` — machine-local, never federated. Library records are unbound
+ * `voice_profiles` rows (`library: true`); assignment copies the approved reference into a
+ * bound snapshot, keeping the unique approved-binding index. Reference WAVs are managed
+ * assets under the backed-up voice-profile directory; no seed ships.
+ */
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, writeFile, copyFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';

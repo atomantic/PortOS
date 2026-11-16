@@ -23,9 +23,8 @@
  *   I/O and no clock, so "replay after restart" is the same code path as "read
  *   the current status", and a test can assert both with one call.
  *
- * The ledger is machine-local and never federated (see `docs/STORAGE.md`).
- * I/O, rotation, and the seen-id sets live in
- * `server/services/agentRunEventLog.js`.
+ * The ledger is machine-local and never federated. I/O, rotation, the seen-id
+ * sets and the storage classification live in `server/services/agentRunEventLog.js`.
  */
 
 import { z } from 'zod';

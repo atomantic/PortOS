@@ -13,12 +13,10 @@
  *      (for the installed-model list), so `localLlm.js` could not import the
  *      store back from there. It imports this module instead.
  *
- * ## Storage (docs/STORAGE.md)
- *
- * `file-primary`, **intentionally machine-local — never federated.** An
- * assessment is a statement about THIS machine's hardware; a peer's copy would
- * be actively misleading (a peer's 8 GB laptop must not inherit a 128 GB box's
- * "fits" verdict). No sync cursor, no tombstone, no schema-version entry.
+ * Storage: `file-primary` (`data/local-llm/assessments.json`) — machine-local, never
+ * federated: an assessment describes THIS machine's hardware (an 8 GB laptop must
+ * not inherit a 128 GB box's "fits"). One capped record per model, no sync cursor
+ * or tombstone; backed up because a run costs minutes of local compute.
  *
  * ## Privacy
  *

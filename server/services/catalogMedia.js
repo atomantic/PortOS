@@ -11,6 +11,11 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
 // federates through peerMediaLibrarySync — the same two-layer path gallery
 // attachments already use. Nothing here calls hashImageForManifest; the library
 // replica hashes the file when it federates.
+//
+// Storage: `asset-file-db-indexed` — `catalog_ingredient_media` rows federate via
+// catalogSync, bytes via the private media-library channel. GLB models
+// (`data/models/*.glb`, `kind: model`) go only to receivers that opt in with
+// `models=1`; uploads hold the backup asset-publication lease.
 
 import { randomUUID } from 'crypto';
 import { readFile } from 'fs/promises';

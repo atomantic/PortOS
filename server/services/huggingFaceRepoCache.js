@@ -8,9 +8,12 @@
 // barely changes: a published GGUF repo's file sizes are immutable, and new quants
 // appear on the order of weeks, not minutes.
 //
-// So the cache is deliberately long-lived (CACHE_TTL_MS) and survives restarts. It
-// is `ephemeral-file` under docs/STORAGE.md — pure regenerable cache, losing it
-// costs one refetch — so it lives in `data/cache/` and is excluded from backup.
+// So the cache is deliberately long-lived (CACHE_TTL_MS) and survives restarts.
+//
+// Storage: `ephemeral-file` — machine-local, never federated: a regenerable
+// projection of the Hub's API in `data/cache/` (losing it costs one refetch) that
+// only spares THIS install's cold-start requests. Non-overridable backup exclude;
+// purgeable from Data Manager (`cache` category).
 //
 // Records are stored WHOLE rather than projected down to the fields enrichment
 // currently reads. A projection would be ~10x smaller (≈440B vs ≈5KB per repo),

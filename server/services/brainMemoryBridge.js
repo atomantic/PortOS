@@ -7,6 +7,13 @@
  * Brain JSON files remain the operational data store for the brain UI.
  * This bridge creates/updates corresponding entries in the memories table
  * tagged with sourceAppId='brain'.
+ *
+ * Storage: `db-primary` — `brain_memory_links` (brain `type:id` → memory UUID),
+ * machine-local, never federated: each machine bridges to its own memory ids. A
+ * link commits with its memory write and survives a memory purge so the next sync
+ * heals it. `data/brain/memory-bridge-map.json` is only a compatibility cache; if
+ * it is corrupt before any links were imported while brain memories exist, sync
+ * refuses to guess identities.
  */
 
 import { readFile } from 'fs/promises';

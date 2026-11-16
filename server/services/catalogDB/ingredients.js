@@ -4,6 +4,10 @@
  * catalog_ingredients + catalog_ingredient_revisions: the typed catalog rows
  * (characters/places/objects/ideas/scenes/concepts) and their per-edit history.
  * Also the FTS / vector / hybrid (RRF) search paths over the ingredient corpus.
+ *
+ * Storage: `db-primary` — federated through the catalog peer sync (`sync_feed` streams).
+ * `catalog_ingredients` are typed relational records (JSONB payload, tags, embeddings,
+ * generated `search_tsv`, soft-delete tombstones, sync sequence) queried by search and refs.
  */
 
 import { isDeepStrictEqual } from 'node:util';

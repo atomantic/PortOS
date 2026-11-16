@@ -48,13 +48,11 @@
  * EXISTS is authoritative and never merged with the seed — that is what lets a
  * user delete `scanner` and have it stay deleted.
  *
- * **`file-primary`, per docs/STORAGE.md.** `data/sprites/animation-tracks.json`
- * is a small, hand-editable, machine-local authoring config that the on-disk
- * sprite tree is meaningless without — a stored row names the `setKind` strings
- * an approved set on THIS machine already carries, so the two travel together or
- * neither means anything. No cross-record queries, no relationships beyond the
- * `kinds` strings, no sync cursor: same class as the LoRA-dataset and MortalLoom
- * stores, and it rides the rsync snapshot rather than a Postgres dump.
+ * Storage: `file-primary` (`data/sprites/animation-tracks.json`) — machine-local,
+ * never federated. A small hand-editable config inseparable from the on-disk
+ * sprite tree (rows name the `setKind` strings approved sets already carry), with
+ * no cross-record queries or sync cursor. Seeded from `data.reference/` (also the
+ * read fallback, above); backed up by the rsync snapshot.
  *
  * **A bad stored row fails loudly at LOAD, not at render.** The merged table goes
  * through `assertAnimationTrackRows` — the same guard the compiled table runs at

@@ -7,6 +7,11 @@
  * missing bytes via the shared asset-pull primitives. Independent of the
  * per-record subscription pipeline.
  *
+ * Federation: standalone media-library bytes (`asset-file-db-indexed`) mirror only to
+ * `peer.fullSync` peers and honor backup `DEFAULT_EXCLUDES`; the derived `media_assets`
+ * index is rebuilt locally and video thumbnails are regenerated, never byte-federated.
+ * The manifest envelope is version-gated by `PORTOS_SCHEMA_VERSIONS.mediaLibrary`.
+ *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
 import { join } from 'path';

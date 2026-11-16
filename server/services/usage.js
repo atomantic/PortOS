@@ -1,3 +1,10 @@
+/**
+ * AI usage ledger: per-provider/model counters, cost estimates and native-usage overlays.
+ * 
+ * Storage: `file-primary` (`data/usage.json`) — machine-local; federates only as an aggregate digest via
+ * the `usage` snapshot category, never merged back. A legacy `interactiveScan` object from the retired
+ * scanner may remain and is no longer written.
+ */
 import { join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';

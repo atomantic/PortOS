@@ -1,4 +1,13 @@
-/** Retire regenerable renders without touching source takes or the cutting-room floor. */
+/**
+ * Retire regenerable renders without touching source takes or the cutting-room floor.
+ *
+ * Storage: `file-primary` (`data/videos/.music-video-render-cleanup.json`) —
+ * machine-local, never federated. A v1 recovery journal of retired final-render
+ * history records pending byte removal: written before the index/history change,
+ * retried on the next cleanup or final render, backed up beside its videos.
+ * Unknown/malformed versions fail closed; created only on retirement and removed
+ * when empty, so no seed or migration.
+ */
 import { unlink, stat, lstat } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';

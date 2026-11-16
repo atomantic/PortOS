@@ -4,6 +4,10 @@
  * catalog_scraps: raw source text (paste/import). A long paste chunks into a
  * parent row (full text, chunk_index 0) + N child rows the extractor reads in
  * document order. Thin SQL wrappers over `catalog_scraps`; no business logic.
+ *
+ * Storage: `db-primary` — federated through the catalog peer sync (`sync_feed` streams).
+ * A scrap is the provenance grouping seam alongside refs: `catalog_ingredient_sources`
+ * links each extracted ingredient back to the scrap it came from.
  */
 
 import { query, withTransaction, arrayToPgvector } from '../../lib/db.js';

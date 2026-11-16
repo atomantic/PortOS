@@ -9,6 +9,10 @@
  * (`settings.musicVideoPublishing.artistStyles`, beside `platforms`), so every
  * browser that opens this install sees the same styles. A song's own tweaks
  * stay on the song; nothing here changes a cover until it is applied.
+ *
+ * Storage: `file-primary` (`data/settings.json`, keyed by lowercased artist name) —
+ * machine-local; settings are not synced between machines. No migration: a design
+ * saved before `titleStyle`/`tagLayout` existed normalizes to the previous look.
  */
 import { normalizeCoverDesign } from '../../../lib/musicVideoCoverOverlay.js';
 import { ServerError } from '../../../lib/errorHandler.js';

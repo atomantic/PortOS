@@ -5,6 +5,10 @@
  * metadata (playlist names, descriptions, track/artist/album names, artwork
  * URLs, and service links) under data/spotify/; raw API responses never leave
  * the request and this snapshot is not part of federation.
+ *
+ * Storage: `file-primary` (`data/spotify/playlists.json`) — machine-local, never
+ * federated; listening evidence lives in the federated Brain activity record. No
+ * sync cursor or tombstone.
  */
 import { dataPath, ensureDir, atomicWrite, readJSONFile, sleep } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';

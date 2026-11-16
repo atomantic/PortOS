@@ -3,6 +3,11 @@
  *
  * Non-rewound receiver execution epoch and restore-owner journal; default-deny on stale evidence or
  * pending/conflicting recovery. Invalidates grants on identity changes and refuses stale epochs.
+ *
+ * Storage: `file-primary` (`data/peer-execution-authority.json`) — machine-local, never federated and
+ * never restored from a snapshot. Non-rewound epoch fencing; an absent file initializes only over empty
+ * execution tables, so damage can never silently reset consumption. `peer-execution-recovery.jsonl` is
+ * temporary restore evidence streamed in bounded pages, not a parallel store.
  */
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';

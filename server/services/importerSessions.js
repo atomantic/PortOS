@@ -13,10 +13,12 @@
  * re-analyze of the same text into the same series recomputes the same id and
  * reads the same session back.
  *
- * Machine-local `file-primary` store (`data/importer-sessions.json`), never
- * federated — it records what THIS machine's commit did to THIS machine's
- * records; docs/STORAGE.md carries the classification. Absent file = no
- * sessions, so no seed and no migration.
+ * Storage: `file-primary` (`data/importer-sessions.json`) — machine-local, never
+ * federated: it records what THIS machine's commit did to THIS machine's records
+ * (peers get the issues through record sync). A bounded ledger (newest 500) with no
+ * relations or search; entries are honored only while their issues exist. v1; any
+ * other version reads as empty, and absent = no sessions, so no seed or migration.
+ * Rsync backups include it.
  */
 
 import { createHash } from 'crypto';

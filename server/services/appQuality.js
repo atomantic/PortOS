@@ -1,5 +1,14 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
-/** DB-primary audit measurements with read-through app federation. Reads never dispatch AI work. */
+/**
+ * DB-primary audit measurements with read-through app federation. Reads never dispatch AI work.
+ *
+ * Storage: `db-primary` (`app_quality_measurements`) — machine-local rows and
+ * prose; only a numeric projection is offered to identified, sync-enabled peers
+ * with outbound sharing (`appQualityFederation.js`). Immutable assessments queried
+ * latest-per-category, so Postgres. App ids are opaque keys into the file-backed
+ * registry (reads keep only registered apps). Additive boot DDL; no seed or
+ * backfill fabricates scores. The Postgres backup covers it.
+ */
 import { ensureSchema, query } from '../lib/db.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';

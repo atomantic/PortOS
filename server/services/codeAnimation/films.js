@@ -1,4 +1,12 @@
-/** Machine-local Production film adapter. Explicit actions only; no provider calls. */
+/**
+ * Machine-local Production film adapter. Explicit actions only; no provider calls.
+ *
+ * Storage: `db-primary` (`kind: 'film'` rows in `code_animation_projects`) — machine-local, never
+ * federated; absent `kind` reads as `package`, so no rewrite or seed. Row locks serialize film updates.
+ * Storage: `file-primary` (`data/code-animation/films/<projectId>/src/`) — operator-authored source,
+ * backed up; `manifest.json`/`song.json` are derived, and the anchored `renders/` backup filter excludes
+ * regenerable frames, videos, cuts and logs (accepted finals are copied into `data/videos/`).
+ */
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/paths.js';

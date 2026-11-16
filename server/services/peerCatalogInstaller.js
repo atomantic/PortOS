@@ -1,4 +1,10 @@
-/** Receiver-reviewed, pinned, single-file GGUF imports. No peer-provided recipe. */
+/**
+ * Receiver-reviewed, pinned, single-file GGUF imports. No peer-provided recipe.
+ *
+ * Storage: `file-primary` (`data/peer-execution-catalog.json`) — machine-local operator config, never
+ * federated or restored from snapshots. Reviews bind immutable source pins, license, runtime and artifact
+ * requirements; absent or unknown entries deny, and no seed or migration creates reviews.
+ */
 import { createHash } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import * as fs from 'node:fs/promises';

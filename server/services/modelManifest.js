@@ -28,8 +28,8 @@
  * models — pruning on that would erase a correct manifest and silently tell the
  * user their weights are gone. Untrusted backends are left exactly as they were.
  *
- * Storage class: `ephemeral-file` (docs/STORAGE.md). It is machine-local and
- * fully re-derivable by scanning, which is also why it is excluded from backup:
+ * Storage: `ephemeral-file` — machine-local, never federated. Fully re-derivable
+ * by scanning (absent = nothing tracked yet, no seed), and a non-overridable backup exclude:
  * restoring one machine's model inventory onto another describes weights that
  * machine does not have.
  */

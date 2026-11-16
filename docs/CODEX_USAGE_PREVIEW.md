@@ -72,7 +72,7 @@ work under #15030 and #15031.
 Run reconciliation and the native history reader read the same sources under separate
 limits, so these do not change what a preview reports. Each pass decodes at most
 5,000 unindexed files, 64 GiB or 20 seconds of work and stores each verified
-projection (see [Storage](./STORAGE.md#codex-accounting-source-inventory)). Sources
+projection (see the storage header in [`codexInventoryCache.js`](../server/services/codexInventoryCache.js)). Sources
 already stored spend none of that budget. A pass that leaves work reports
 `indexing_pending` with counts, holds the Codex native-history fold and run claims, and the next
 pass continues, so a history larger than one pass converges. A single source is

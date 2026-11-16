@@ -22,6 +22,11 @@ import { isNonBlankStr } from '../lib/textUtils.js';
  *
  * Days are UTC calendar days, matching `usageRange.js`. Scans read local files
  * only; no provider calls.
+ *
+ * Storage: `file-primary` (`data/claude-code-transcript-usage.json`, `data/codex-native-usage.json`,
+ * `data/grok-native-usage.json`, `data/agy-native-usage.json`) — machine-local, not synced; peers see it
+ * only in the usage digest after `nativeUsageOverlay.js`. Derived from app records but the only copy once
+ * an app prunes them; a missing file is a first full scan (no seed/migration).
  */
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;

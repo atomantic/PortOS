@@ -19,6 +19,12 @@
  *    snapshot is a no-op, and a node forwards what it knows about third
  *    instances, so a chain (A↔B↔C) converges without A and C ever talking.
  *
+ * Storage: `ephemeral-file` — derived, replicated state (each peer's own
+ * `usage.json` is authoritative), so a lost file self-heals next sync cycle.
+ * Federates through the default-on `usage` snapshot category with tombstones
+ * keyed on `instanceId`, so a removed peer's digest retires everywhere. Capped at
+ * 64 instances (oldest `capturedAt` evicted).
+ *
  * Privacy: the digest carries provider ids, model ids, token/session/message
  * counts, day+month buckets and an instance name. No prompts, no transcripts,
  * no record contents, no PII — see

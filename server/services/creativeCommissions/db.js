@@ -19,6 +19,11 @@
  * (`createRecordWriteQueue`, identical to universeBuilder/storyBuilder), so reads
  * here return `data` verbatim (the columns are a queryable mirror, never read
  * back) and writes are plain upserts.
+ *
+ * Storage: `db-primary` — the brief/identity federates as `creativeCommission` so synced
+ * `commissionFeedback` attaches to the same commission; schedule, runs, assignment,
+ * enabled and feedback view stay machine-local so a schedule never double-runs. Raw
+ * taste sources and per-run recipes never cross the wire.
  */
 
 import { query } from '../../lib/db.js';

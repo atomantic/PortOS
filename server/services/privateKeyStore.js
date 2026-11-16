@@ -1,5 +1,11 @@
 // Machine-local integration keys. Only settings.js writes this store at runtime,
 // inside its existing write queue. No public reader returns key material.
+//
+// Storage: `file-primary` (`data/private/api-keys.json`) — machine-local, never
+// federated. Permission-protected (dir 0700, file 0600 on POSIX), not encrypted,
+// never under HTTP asset routes; filesystem backups include it. No seed: migration
+// 357 copies legacy settings keys, and legacy settings are still read until their
+// next save. Stored keys win over environment fallbacks.
 import { chmod, mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';

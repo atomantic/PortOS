@@ -62,8 +62,8 @@ newer work. An assembly failure keeps partial media and provides a visible reaso
 with links to repair settings, review artifacts, inspect queues or open Timeline.
 
 Execution authority belongs to the creating install. Synced replicas cannot
-start a second production. See [Storage](../STORAGE.md) for JSONB, file assets,
-backup and cross-version gates. Legacy generalized Creative Director projects
+start a second production. See the storage header in [`projectsDB.js`](../../server/services/creativeDirector/projectsDB.js) for JSONB, file assets
+and cross-version gates. Legacy generalized Creative Director projects
 retain their prior behavior.
 
 ## Verification without provider charges

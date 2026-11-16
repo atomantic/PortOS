@@ -1,4 +1,10 @@
-/** Machine-local, durable shot-planning checkpoints. Never restart provider work at boot. */
+/**
+ * Machine-local, durable shot-planning checkpoints. Never restart provider work at boot.
+ *
+ * Storage: `file-primary` (`data/fableloom-shot-runs/`) — machine-local, never federated. One atomic
+ * journal per story/episode keeps drafts, verdicts and feedback across restarts; story records stay in
+ * PostgreSQL, and an interrupted run reads as failed without a provider call.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';

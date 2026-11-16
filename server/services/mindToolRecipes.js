@@ -1,4 +1,12 @@
-/** db-primary, machine-local recipe library; definitions and revisions, never private tool results. */
+/**
+ * db-primary, machine-local recipe library; definitions and revisions, never private tool results.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `mind_tool_recipes` /
+ * `mind_tool_recipe_versions` hold authored read-tool definitions and immutable revisions;
+ * no execution output, and no definitions enter federation/status payloads. Backup covers
+ * both tables; empty installs get no recipe seed, and unknown future definitions are kept
+ * but unavailable.
+ */
 import { randomUUID } from 'node:crypto';
 import { query, withTransaction, ensureSchema } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';

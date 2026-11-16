@@ -2,6 +2,10 @@
  * Normalized POST run store dispatcher (#4441).
  * PostgreSQL is authoritative in normal installs; the legacy JSON layout stays
  * as the development/test escape hatch so existing focused suites need no DB.
+ *
+ * Storage: `db-primary` — machine-local, never federated: `post_runs` / `post_attempts`
+ * are personal cognitive-performance history. Attempt sets replace in one transaction with
+ * stable client ids for idempotent retries; not in `auditedTables`.
  */
 
 import { join } from 'path';

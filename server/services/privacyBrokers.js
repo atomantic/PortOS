@@ -1,7 +1,10 @@
 /**
  * Data-broker database + case ledger (issue #2144, epic #2138).
  *
- * db-primary Postgres per docs/STORAGE.md: `privacy_brokers` is the curated
+ * Storage: `db-primary` — machine-local, never federated, by product guarantee (see below).
+ * Broker-case evidence identity is sealed with the vault key and erased on removal.
+ *
+ * `privacy_brokers` is the curated
  * (+ later BADBOOL / CA-registry) database of people-search brokers the
  * exposure-scan / opt-out engine works; `privacy_broker_cases` is the per-broker
  * ledger with a SERVICE-ENFORCED state machine. Machine-local — no federation,

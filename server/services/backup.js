@@ -1942,7 +1942,7 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl, workflow-maintenance and backup-admission) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE.md).',
+      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl, workflow-maintenance and backup-admission) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE_RECOVERY.md).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }

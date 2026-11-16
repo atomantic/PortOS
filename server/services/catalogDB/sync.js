@@ -15,6 +15,11 @@
  * reset rewind, a role/data resend, or the #8315 upgrade replay that resends
  * every catalog row once) can't revive a tombstone that happened after the
  * peer's own clock. See `upsertRefFromPeer` for the full rationale.
+ *
+ * Storage: `db-primary` — receiver-local, never federated. `catalog_pending_applies` is
+ * the durable inbox for tags/scraps arriving before their parents: full wire rows survive
+ * restart, duplicates coalesce by kind/id, and there is no TTL because unresolved data must
+ * not expire. Covered by PostgreSQL backup; installed empty without a seed.
  */
 
 import { normalizeLibrary } from '../../lib/catalogMediaLibrary.js';

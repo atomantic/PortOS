@@ -1,4 +1,12 @@
-/** Machine-local inference reservations. Attempts stay charged after failure or restart. */
+/**
+ * Machine-local inference reservations. Attempts stay charged after failure or restart.
+ *
+ * Storage: `file-primary` (`data/cos/maintainer-inference.json`) — machine-local,
+ * never federated. A bounded budget (one UTC day, current turn, last reservation;
+ * no prompt or report content) with serialized atomic writes. Absence is the unused
+ * allowance, so no seed or migration; deleting it is not a routine reset because it
+ * reopens spending permission. Normal data backups include it.
+ */
 import { z } from 'zod';
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';

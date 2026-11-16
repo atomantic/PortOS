@@ -1,6 +1,10 @@
 /**
  * Durable Code Animation job records. PostgreSQL indexes the gallery metadata;
  * the generated HTML stays in its managed data directory as a file asset.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `code_animation_jobs` holds the
+ * job record; `data/code-animations/<id>.html` and its regenerable `<id>.jpg` poster are
+ * managed files. The DB dump covers records and filesystem backup covers the HTML.
  */
 
 import { readFile, stat } from 'fs/promises';

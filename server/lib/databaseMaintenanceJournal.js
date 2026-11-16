@@ -8,6 +8,10 @@
  * import receipts, durable forward-only stages through `verified`, per-pid target proofs from a
  * restarted server, token-persisting same-operation recovery, and `releaseAdmission` (authority
  * record, then completed archive); source-only cancellation archives an unowned accepted operation.
+ *
+ * Storage: `file-primary` — machine-local, never federated. `data/database-maintenance/operation.json` must be
+ * readable while either backend is unavailable, so it cannot live in PostgreSQL; its directory is the admission
+ * fence. Lifecycle and recovery commands: docs/DATABASE_MAINTENANCE.md.
  */
 
 import { existsSync, lstatSync, mkdirSync, linkSync, unlinkSync, openSync, closeSync, fsyncSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';

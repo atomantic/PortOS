@@ -30,13 +30,11 @@
  * laptop asleep for three days wakes to one tick, not to eight hundred
  * ambient verbs it owes the world.
  *
- * Storage is `data/eidoverse/controllers.json` — `file-primary` and MACHINE
- * LOCAL, the same class as `foundations.json` and `portos-world.json` beside
- * it (`docs/STORAGE.md`). None of it federates: a controller install names
- * this install's world entities and carries its author's intent, and the
- * machine-local privacy ADR keeps records off the federation layer. There is
- * no `data.reference/` seed — an absent file IS the empty set every install
- * starts from. Migration 425 adds unknown completed-delivery history to older stores.
+ * Storage: `file-primary` (`data/eidoverse/controllers.json`) — machine-local,
+ * never federated: an install names this world's entities and carries its
+ * author's intent (machine-local privacy ADR); a controller reaches a peer only as
+ * a promoted foundation's body. No `data.reference/` seed — an absent file is the
+ * empty set; controller state (e.g. riddle-ledger's round) lives inside it.
  */
 
 import { join } from 'node:path';

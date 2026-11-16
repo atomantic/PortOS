@@ -629,10 +629,12 @@ export function foundationFromInheritedCandidate({ candidate, requiredDisturbanc
 }
 
 /**
- * Proposal → commit → promote — and, for a local copy of a peer's, → inherit — as an ORDERED,
- * read-only projection over fields the record already persists. No new storage: a ledger written
- * before this function existed still projects a correct lineage the instant it is read, which is
- * what lets `docs/STORAGE.md`'s "no migration owed" hold for this change too.
+ * Proposal → commit → promote — and, for a local copy of a peer's, → inherit
+ * — as an ORDERED, read-only projection over fields the record already
+ * persists. No new storage: a ledger written before this function existed
+ * still projects a correct lineage the instant it is read, which is what lets
+ * the ledger's "no migration owed" storage note (`server/services/eidoverseFoundationLedger.js`) hold here too.
+ *
  * @param {object|null} record
  * @returns {Array<{ type: string, at: string, [key: string]: unknown }>}
  */

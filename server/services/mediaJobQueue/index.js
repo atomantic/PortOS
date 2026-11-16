@@ -29,6 +29,13 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * training and idempotent remote jobs reconcile against their surviving work.
  * Completed/failed/canceled entries older than 24h or beyond the 500-most-
  * recent are pruned to keep the file small.
+ *
+ * Storage: `ephemeral-file` — machine-local dispatch state, never federated or
+ * sent in peer capability/status payloads; covered by the filesystem backup.
+ * Admission is durable (a job resolves only once a snapshot holding it is
+ * written) and an unreadable snapshot latches persistence off to preserve it.
+ * `videoHolds`, `videoExecution(s)` receipts and `durabilityPending` live in
+ * this same envelope; job history and lineage are the `db-primary` target.
  */
 
 import { EventEmitter } from 'events';

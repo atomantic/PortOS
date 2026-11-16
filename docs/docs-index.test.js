@@ -38,7 +38,6 @@ const RATCHET_SLACK_BYTES = 2 * 1024;
 // Each ceiling must stay within 2 KB of the file's actual size so shrinking
 // a doc forces its entry down or out.
 const SIZE_RATCHET_CEILINGS = {
-  'STORAGE.md': 233548,
   'BACKUP.md': 48200,
   'BACKUP_PUBLICATION_ADMISSION.md': 41800,
   'GITHUB_ACTIONS.md': 98951,

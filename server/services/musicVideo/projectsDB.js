@@ -1,4 +1,14 @@
-/** Music Video PostgreSQL project store. */
+/**
+ * Music Video PostgreSQL project store.
+ *
+ * Storage: `db-primary` — federates through the `musicVideoProjects` sync
+ * category, schema-gated so an older peer cannot drop newer fields (shot action
+ * contracts, dependency provenance, narrative events, reactive sections), which
+ * are versioned fields on this record with no separate store, seed or backfill.
+ * Install-local pointers (`devArtifacts`, `composition.document`, `blender`) are
+ * wire-local: `stripMusicVideoLocalRenderPins` strips them and
+ * `mergeProjectRecord` restores them over a newer remote.
+ */
 
 import { randomUUID } from 'crypto';
 import { withTransaction } from '../../lib/db.js';

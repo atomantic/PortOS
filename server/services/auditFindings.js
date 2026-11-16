@@ -1,4 +1,12 @@
-/** Machine-local audit disposition receipts in the existing agent archive. */
+/**
+ * Machine-local audit disposition receipts in the existing agent archive.
+ *
+ * Storage: `file-primary` (`metadata.auditFindings` in the agent archive, copied
+ * from per-agent `.agent-audit-findings-*.json` workspace checkpoints) —
+ * machine-local, never federated and not part of quality federation. Lives in the
+ * archive so it survives worktree removal and age retention; explicit archive
+ * deletion removes it. Runs without the version marker are not retroactively failed.
+ */
 import { auditFindingsSchema, auditFindingsCheckpointPath, auditFindingsInstructions, parseAuditFindings } from '../lib/auditFindings.js';
 import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
 import { safeJSONParse, tryReadFile } from '../lib/jsonIo.js';
