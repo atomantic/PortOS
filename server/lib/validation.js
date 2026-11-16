@@ -445,46 +445,6 @@ export const referenceRepoUpdateSchema = z.object({
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
-const standardizePlanFileSchema = z.string().trim().min(1).max(500)
-  .refine((file) => {
-    const segments = file.split(/[/\\]/);
-    return !file.startsWith('/')
-      && !file.startsWith('\\')
-      && !/^[A-Za-z]:/.test(file)
-      && !segments.includes('..');
-  }, { message: 'file must be a repo-relative path without parent traversal' });
-
-const standardizePlanProcessSchema = z.object({
-  name: z.string().trim().min(1).max(120)
-}).passthrough();
-
-const standardizePlanStrayPortSchema = z.object({
-  file: standardizePlanFileSchema,
-  variable: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(120),
-  value: z.number().int().min(1).max(65535),
-  line: z.number().int().positive(),
-  action: z.enum(['remove', 'keep'])
-}).passthrough();
-
-export const standardizePlanSchema = z.object({
-  currentState: z.object({
-    hasGit: z.boolean()
-  }).passthrough(),
-  proposedChanges: z.object({
-    createEcosystem: z.boolean(),
-    ecosystemContent: z.string().min(1).max(1_000_000),
-    processes: z.array(standardizePlanProcessSchema).max(100),
-    strayPorts: z.array(standardizePlanStrayPortSchema).max(500)
-  }).passthrough()
-}).passthrough();
-
-export const standardizeApplySchema = z.object({
-  repoPath: z.string().trim().min(1).max(4096).optional(),
-  appId: z.string().trim().min(1).max(200).optional(),
-  plan: standardizePlanSchema,
-  overwriteEcosystem: z.boolean().optional().default(false)
-});
-
 // Game studio (#3177): managed-app binding, reusable asset bindings, bundle
 // compile, and user-triggered AI feedback.
 const gameNameSchema = z.string().trim().min(1).max(120);
@@ -2599,46 +2559,9 @@ export const settingsSlicePatchSchema = z.preprocess((value, ctx) => {
 // LM STUDIO (server/routes/lmstudio.js)
 // =============================================================================
 
-// PUT /api/lmstudio/config — persisted straight into module-level state
-// (lmStudioManager's `config`) that every other LM Studio call site reads via
-// getBaseUrl(). A malformed baseUrl must be rejected up front rather than
-// degrading local-LLM connectivity until the process restarts.
-export const lmStudioConfigSchema = z.object({
-  baseUrl: z.string().trim().url().optional(),
-  timeout: z.number().int().positive().optional(),
-  defaultThinkingModel: z.string().trim().min(1).optional(),
-});
-
-// Shared by /download, /load, /unload — each acts on a single model id.
+// POST /api/lmstudio/unload body — the single model to unload.
 export const lmStudioModelIdSchema = z.object({
   modelId: z.string().trim().min(1),
-});
-
-// POST /api/lmstudio/completion
-export const lmStudioCompletionSchema = z.object({
-  prompt: z.string().min(1),
-  model: z.string().trim().min(1).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  systemPrompt: z.string().optional(),
-});
-
-// POST /api/lmstudio/analyze-task
-export const lmStudioAnalyzeTaskSchema = z.object({
-  description: z.string().min(1),
-  id: z.string().optional(),
-  metadata: z.record(z.any()).optional(),
-});
-
-// POST /api/lmstudio/classify-memory
-export const lmStudioClassifyMemorySchema = z.object({
-  content: z.string().min(1),
-});
-
-// POST /api/lmstudio/embeddings
-export const lmStudioEmbeddingsSchema = z.object({
-  text: z.string().min(1),
-  model: z.string().trim().min(1).optional(),
 });
 
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
@@ -3118,12 +3041,6 @@ const nonEmptyString = z.string().min(1);
 const optionalString = z.string().optional();
 const nullishString = z.string().nullish();
 
-// Project detection (routes/detect.js)
-export const detectRepoBodySchema = z.object({ path: nonEmptyString });
-export const detectPortBodySchema = z.object({ port: z.coerce.number().int().min(1).max(65535) });
-export const detectPm2BodySchema = z.object({ name: nonEmptyString });
-export const detectAiBodySchema = z.object({ path: nonEmptyString, providerId: nullishString });
-
 // Messages (routes/messages.js)
 export const MESSAGE_TOKEN_PROVIDERS = ['outlook', 'teams'];
 export const messageSyncBodySchema = z.object({ mode: z.enum(['unread', 'full']).optional() });
@@ -3232,7 +3149,6 @@ export const moltworldQueueFailBodySchema = z.object({ error: nullishString });
 export const referenceRepoReviewedBodySchema = z.object({ sha: z.string().trim().default('') });
 export const scaffoldTemplateCreateBodySchema = z.object({ templateId: nonEmptyString, name: nonEmptyString, targetPath: nonEmptyString });
 export const screenshotUploadBodySchema = z.object({ data: nonEmptyString, filename: nullishString });
-export const standardizeTargetBodySchema = z.object({ repoPath: nullishString, appId: nullishString, providerId: nullishString });
 export const systemHealthThresholdsBodySchema = z.object({
   memoryWarn: z.coerce.number().finite(),
   memoryCritical: z.coerce.number().finite(),

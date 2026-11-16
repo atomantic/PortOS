@@ -485,52 +485,6 @@ async function getRecommendedThinkingModel() {
 }
 
 /**
- * Make a quick completion request for local thinking
- * @param {string} prompt - Prompt text
- * @param {Object} options - Completion options
- * @returns {Promise<Object>} - Completion result
- */
-async function quickCompletion(prompt, options = {}) {
-  const available = await checkLMStudioAvailable()
-  if (!available) {
-    return { success: false, error: 'LM Studio not available' }
-  }
-
-  const model = options.model || await getRecommendedThinkingModel()
-  if (!model) {
-    return { success: false, error: 'No model available' }
-  }
-
-  try {
-    const response = await lmStudioRequest('/v1/chat/completions', {
-      method: 'POST',
-      body: JSON.stringify({
-        model,
-        messages: [
-          ...(options.systemPrompt ? [{ role: 'system', content: options.systemPrompt }] : []),
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: options.maxTokens || 512,
-        temperature: options.temperature ?? 0.7,
-        stream: false
-      }),
-      timeout: options.timeout || 30000
-    })
-
-    const content = response.choices?.[0]?.message?.content || ''
-
-    return {
-      success: true,
-      content,
-      model,
-      usage: response.usage
-    }
-  } catch (err) {
-    return { success: false, error: err.message, model }
-  }
-}
-
-/**
  * Get embeddings from local model
  * @param {string} text - Text to embed
  * @param {Object} options - Embedding options
@@ -601,36 +555,11 @@ async function getStatus() {
 }
 
 /**
- * Live base URL — reflects runtime `updateConfig()` patches, not just startup
- * env. Used by sibling services (e.g. the local code-review endpoint) so a
- * relocated LM Studio install doesn't desync between the catalog UI and the
- * code path that actually talks to the server.
+ * Base URL used by sibling services (e.g. the local code-review endpoint) so they
+ * talk to the same LM Studio server as the catalog UI.
  */
 function getBaseUrl() {
   return config.baseUrl
-}
-
-/**
- * Update configuration
- * @param {Object} newConfig - New configuration
- * @returns {Object} - Updated configuration
- */
-function updateConfig(newConfig) {
-  if (newConfig.baseUrl) {
-    config.baseUrl = newConfig.baseUrl
-    isAvailable = null // Force recheck
-    lastCheckAt = null
-  }
-
-  if (newConfig.timeout) {
-    config.timeout = newConfig.timeout
-  }
-
-  if (newConfig.defaultThinkingModel) {
-    config.defaultThinkingModel = newConfig.defaultThinkingModel
-  }
-
-  return { ...config }
 }
 
 /**
@@ -1049,15 +978,11 @@ export {
   getLastLoadedModelsError,
   getAvailableModels,
   downloadModel,
-  loadModel,
   loadModelWithArgs,
   unloadModel,
-  getRecommendedThinkingModel,
-  quickCompletion,
   getEmbeddings,
   getStatus,
   getBaseUrl,
-  updateConfig,
   resetCache,
   isAppInstalled,
   getLastListError,

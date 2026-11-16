@@ -1,84 +1,18 @@
-import { observeModelMutations } from '../services/modelObservation.js';
 /**
  * LM Studio Routes
  *
- * REST endpoints for LM Studio model management.
+ * Only model unload is exposed over REST (the Local LLM panel calls it). Status,
+ * listing, load and download go through `/api/local-llm`.
  */
 
 import { Router } from 'express'
+import { observeModelMutations } from '../services/modelObservation.js'
 import * as lmStudioManager from '../services/lmStudioManager.js'
-import * as localThinking from '../services/localThinking.js'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import {
-  validateRequest,
-  lmStudioConfigSchema,
-  lmStudioModelIdSchema,
-  lmStudioCompletionSchema,
-  lmStudioAnalyzeTaskSchema,
-  lmStudioClassifyMemorySchema,
-  lmStudioEmbeddingsSchema
-} from '../lib/validation.js'
+import { validateRequest, lmStudioModelIdSchema } from '../lib/validation.js'
 
 const router = Router()
 router.use(observeModelMutations('loaded-models', 'provider-readiness'));
-
-/**
- * GET /api/lmstudio/status
- * Check LM Studio availability and loaded models
- */
-router.get('/status', asyncHandler(async (req, res) => {
-  const status = await lmStudioManager.getStatus()
-  const thinkingStats = localThinking.getStats()
-
-  res.json({
-    ...status,
-    thinkingStats
-  })
-}))
-
-/**
- * GET /api/lmstudio/models
- * List available/loaded models
- */
-router.get('/models', asyncHandler(async (req, res) => {
-  const available = await lmStudioManager.checkLMStudioAvailable()
-
-  if (!available) {
-    throw new ServerError('LM Studio not available', { status: 503, context: { available: false } })
-  }
-
-  const models = await lmStudioManager.getLoadedModels(true)
-  const recommended = await lmStudioManager.getRecommendedThinkingModel()
-
-  res.json({
-    available: true,
-    count: models.length,
-    models,
-    recommendedThinkingModel: recommended
-  })
-}))
-
-/**
- * POST /api/lmstudio/download
- * Download a model by ID
- */
-router.post('/download', asyncHandler(async (req, res) => {
-  const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
-
-  const result = await lmStudioManager.downloadModel(modelId)
-  res.json(result)
-}))
-
-/**
- * POST /api/lmstudio/load
- * Load a model into memory
- */
-router.post('/load', asyncHandler(async (req, res) => {
-  const { modelId } = validateRequest(lmStudioModelIdSchema, req.body)
-
-  const result = await lmStudioManager.loadModel(modelId)
-  res.json(result)
-}))
 
 /**
  * POST /api/lmstudio/unload
@@ -92,77 +26,6 @@ router.post('/unload', asyncHandler(async (req, res) => {
     throw new ServerError(result.error || 'Unload failed', { status: 502, context: { modelId } })
   }
   res.json(result)
-}))
-
-/**
- * POST /api/lmstudio/completion
- * Quick completion using local model
- */
-router.post('/completion', asyncHandler(async (req, res) => {
-  const { prompt, model, maxTokens, temperature, systemPrompt } = validateRequest(lmStudioCompletionSchema, req.body)
-
-  const result = await lmStudioManager.quickCompletion(prompt, {
-    model,
-    maxTokens,
-    temperature,
-    systemPrompt
-  })
-
-  res.json(result)
-}))
-
-/**
- * POST /api/lmstudio/analyze-task
- * Analyze a task for complexity and escalation needs
- */
-router.post('/analyze-task', asyncHandler(async (req, res) => {
-  const { description, id, metadata } = validateRequest(lmStudioAnalyzeTaskSchema, req.body)
-
-  const analysis = await localThinking.analyzeTask({
-    id,
-    description,
-    metadata
-  })
-
-  res.json(analysis)
-}))
-
-/**
- * POST /api/lmstudio/classify-memory
- * Classify memory content
- */
-router.post('/classify-memory', asyncHandler(async (req, res) => {
-  const { content } = validateRequest(lmStudioClassifyMemorySchema, req.body)
-
-  const classification = await localThinking.classifyMemory(content)
-  res.json(classification)
-}))
-
-/**
- * POST /api/lmstudio/embeddings
- * Get embeddings for text
- */
-router.post('/embeddings', asyncHandler(async (req, res) => {
-  const { text, model } = validateRequest(lmStudioEmbeddingsSchema, req.body)
-
-  const result = await lmStudioManager.getEmbeddings(text, { model })
-  res.json(result)
-}))
-
-/**
- * PUT /api/lmstudio/config
- * Update LM Studio configuration
- */
-router.put('/config', asyncHandler(async (req, res) => {
-  const { baseUrl, timeout, defaultThinkingModel } = validateRequest(lmStudioConfigSchema, req.body)
-
-  const config = lmStudioManager.updateConfig({
-    baseUrl,
-    timeout,
-    defaultThinkingModel
-  })
-
-  res.json({ success: true, config })
 }))
 
 export default router

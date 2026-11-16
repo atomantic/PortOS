@@ -504,7 +504,7 @@ Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/m
 
 `server/services/executionLanes.js` bounds concurrent work: `critical` (1 slot, emergency fixes), `standard` (2, normal development) and `background` (3, self-improvement and documentation).
 
-`server/services/lmStudioManager.js` and `server/services/localThinking.js` provide LM Studio discovery, health and cost-free local completions, exposed as `GET /api/lmstudio/status`, `GET /api/lmstudio/models`, `POST /api/lmstudio/completion`, `POST /api/lmstudio/analyze-task` and `POST /api/lmstudio/classify-memory`.
+`server/services/lmStudioManager.js` provides LM Studio discovery, health and model management; the only REST route is `POST /api/lmstudio/unload`, and the rest goes through `/api/local-llm`.
 
 Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
 

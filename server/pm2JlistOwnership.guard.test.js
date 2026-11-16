@@ -10,7 +10,7 @@
  * absent-vs-empty distinction wrong, collapsing a transient PM2 outage into a
  * confident "nothing running." Before this issue, six call sites each ran and
  * parsed `pm2 jlist` independently (`cosHealthMonitor.js`, `streamingDetect.js`,
- * `routes/detect.js`, `browserService.js`, `autofixer/server.js`,
+ * `browserService.js`, `autofixer/server.js`,
  * `autofixer/ui.js`), and three prior issues (#968, #2991, #5732) each fixed
  * the contract in one owner without closing the door on a new copy appearing
  * elsewhere.
