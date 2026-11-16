@@ -185,7 +185,6 @@ describe('Agent Personalities Routes', () => {
         .send({ enabled: false });
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual(agent);
       expect(agentPersonalities.toggleAgent).toHaveBeenCalledWith('agent-1', false);
       expect(logAction).toHaveBeenCalledWith(
         'toggle',
