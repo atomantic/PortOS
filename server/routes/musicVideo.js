@@ -38,6 +38,7 @@ import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { getActivePublishKitBuild } from '../services/musicVideo/publishKit.js';
 import { planProject } from '../services/musicVideo/planner.js';
@@ -627,7 +628,7 @@ router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
 // A shot-by-shot render started here picks up again after a server restart.
 router.post('/:id/render', asyncHandler(async (req, res) => {
-  res.json(await renderMusicVideo(req.params.id, { resumable: true }));
+  res.json(await renderMusicVideo(req.params.id, { resumable: true, startedBy: DIRECTOR_STARTED }));
 }));
 
 // Read-only: the live final-render job for a project (null when none runs on
@@ -738,12 +739,12 @@ router.get('/:id/code/document', asyncHandler(async (req, res) => {
 
 router.post('/:id/code/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
-  res.json(await generateMusicVideoCode(req.params.id, body));
+  res.json(await generateMusicVideoCode(req.params.id, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
-  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.use('/', compositionRoutes);

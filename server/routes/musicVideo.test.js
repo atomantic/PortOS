@@ -124,6 +124,7 @@ import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideoLimits.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 
 describe('musicVideo routes', () => {
   let app;
@@ -1025,7 +1026,7 @@ describe('musicVideo routes', () => {
     it('POST /:id/render kicks off the render and returns the jobId', async () => {
       const r = await request(app).post('/api/music-video/mv-1/render').send({});
       expect(r.status).toBe(200);
-      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1', { resumable: true });
+      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1', { resumable: true, startedBy: DIRECTOR_STARTED });
       expect(r.body).toEqual({ jobId: 'job-1' });
     });
 

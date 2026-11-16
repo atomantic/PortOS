@@ -12,6 +12,7 @@ import { uploadSingle } from '../lib/multipart.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { DOCUMENT_ZIP_MAX_BYTES, detachDocument, discardGeneratedDocument, documentMimeType, documentNativePlayback, exportDocumentZip, importDocumentDirectory, importDocumentTemplate, importDocumentZip, upgradeDocumentEngine, readDocumentManifest, resolveDocumentFile } from '../services/musicVideo/compositionDocument.js';
 import { buildDocumentPreview } from '../services/musicVideo/documentPreview.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 import { acceptMixedMediaDocument, generateMixedMediaDocument, readMixedMediaCandidate, regenerateMixedMediaSection, reviseMixedMediaEvents } from '../services/musicVideo/documentGeneration.js';
 import { isZipUpload } from '../lib/zipStream.js';
 
@@ -79,7 +80,7 @@ router.post('/:id/composition/document/engine/upgrade', asyncHandler(async (req,
 
 router.post('/:id/composition/document/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
-  res.status(201).json(await generateMixedMediaDocument(req.params.id, body));
+  res.status(201).json(await generateMixedMediaDocument(req.params.id, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.get('/:id/composition/document/candidate', asyncHandler(async (req, res) => {
@@ -88,12 +89,12 @@ router.get('/:id/composition/document/candidate', asyncHandler(async (req, res) 
 
 router.post('/:id/composition/document/events/revise', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
-  res.status(201).json(await reviseMixedMediaEvents(req.params.id, body));
+  res.status(201).json(await reviseMixedMediaEvents(req.params.id, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.post('/:id/composition/document/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoMixedMediaRegenerateSchema, req.body || {});
-  res.status(201).json(await regenerateMixedMediaSection(req.params.id, req.params.sectionId, body));
+  res.status(201).json(await regenerateMixedMediaSection(req.params.id, req.params.sectionId, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.post('/:id/composition/document/accept', asyncHandler(async (req, res) => {
