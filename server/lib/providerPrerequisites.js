@@ -106,11 +106,18 @@ const codexLocalBackingFindings = (provider, codexOssSupport) => {
  *
  * @param {object} provider — raw or sanitized provider record
  * @param {object} [options]
- * @param {object|null} [options.runtime] — the provider's entry of the runtimes map; `null` = NOT PROBED.
- * @param {object|null} [options.codexAccount] — Codex ChatGPT readiness snapshot, `null` = NOT PROBED (presentation-only; see {@link codexAccountFinding}).
- * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway id, does the sibling API provider hold the key an OpenCode wrapper inherits at spawn?
- *   `false` covers "no key" and "sibling deleted"; `null`/absent is "cannot tell".
- * @param {object|null} [options.codexRouting] — the `~/.codex/config.toml` routing snapshot from `lib/codexUserConfig.js`, `null` = NOT DETERMINED; produces an ADVISORY only.
+ * @param {object|null} [options.runtime] — the provider's entry of the runtimes
+ *   map. `null` = NOT PROBED (see the sentinel note at the top of this file).
+ * @param {object|null} [options.codexAccount] — the Codex ChatGPT readiness
+ *   snapshot, or `null` for NOT PROBED (presentation-only; see
+ *   {@link codexAccountFinding}).
+ * @param {Record<string, boolean|null>|null} [options.gatewayKeySet] — per gateway
+ *   id, does the sibling API provider of that id hold the key an OpenCode
+ *   wrapper inherits at spawn time? `false` covers both "no key" and "sibling
+ *   deleted"; `null`/absent is "cannot tell".
+ * @param {object|null} [options.codexRouting] — the user's `~/.codex/config.toml`
+ *   routing snapshot from `lib/codexUserConfig.js`, or `null` for NOT
+ *   DETERMINED. Produces an ADVISORY only (see {@link codexRoutingAdvisory}).
  * @returns {{met: boolean, missing: {code: string, label: string}[], advisories: object[]}}
  */
 export const providerPrerequisites = (provider, {

@@ -91,7 +91,16 @@ export const PATHS = {
   slashdoResolved: join(INSTALL_ROOT, 'data/cos/slashdo-resolved')
 };
 
-/** Get a path under the data directory: `dataPath('cos', 'state.json')` → `<project>/data/cos/state.json`. */
+/**
+ * Get a path under the data directory: `dataPath('cos', 'state.json')` → `<project>/data/cos/state.json`.
+ *
+ * @param {...string} segments - Path segments to join
+ * @returns {string} Full path under data directory
+ *
+ * @example
+ * const filePath = dataPath('cos', 'state.json');
+ * // Returns: /path/to/project/data/cos/state.json
+ */
 export function dataPath(...segments) {
   return join(PATHS.data, ...segments);
 }

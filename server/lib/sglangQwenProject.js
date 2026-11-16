@@ -93,7 +93,9 @@ const isFile = (path) => stat(path).then((s) => s.isFile(), () => false);
  * and an earlier auto-detected directory must not outlive it.
  *
  * @param {NodeJS.ProcessEnv} [env]
- * @param {string} [envPath] - which `.env` holds the record (a parameter so a test's sandbox answers, not the developer's install)
+ * @param {string} [envPath] - which `.env` holds the record; a parameter for the
+ *   same reason `resolveHome` reads the passed env — so a test's sandbox answers
+ *   instead of whatever the developer's own install happens to have recorded.
  */
 export function resolveSglangProjectDir(env = process.env, envPath = PORTOS_ENV_PATH) {
   return resolveRecordedProjectDir(SGLANG_PROJECT_DIR_ENV, () => sglangDefaultProjectDir(env), env, envPath);

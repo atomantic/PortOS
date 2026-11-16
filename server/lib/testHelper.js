@@ -141,7 +141,7 @@ export function request(app) {
  * Mock a fetch `Response` whose JSON body is read via `.text()` (the path `readResponseJson` uses):
  *   fetchWithTimeout.mockResolvedValue(mockJsonResponse({ value: [] }));
  *
- * @param {*} body - serialized via JSON.stringify
+ * @param {*} body - serialized into the response body via JSON.stringify
  * @param {{ ok?: boolean, status?: number }} [opts]
  */
 export function mockJsonResponse(body, { ok = true, status = 200, contentType = 'application/json' } = {}) {
@@ -267,7 +267,7 @@ const pinProcessProperty = (name) => (value) => {
  * The restore reinstates the ORIGINAL descriptor (or deletes the pin when `process` had no own `platform` descriptor).
  *
  * @param {string} value - the platform to report, e.g. `'darwin'` / `'win32'`
- * @returns {() => void} restore, idempotent, safe to call from `afterEach`
+ * @returns {() => void} restore — idempotent, safe to call from `afterEach`
  */
 export const pinPlatform = pinProcessProperty('platform');
 

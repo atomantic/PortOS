@@ -81,7 +81,9 @@ function resolveWallClock(raw, { now, timezone }) {
  * Call it from the ADAPTER (`parseLimitLine`, `parseGrokUsage`, …), not a shared choke point: a new dialect belongs in its own adapter. Already-ISO input passes through (UTC-normalized), so it is idempotent.
  *
  * @param {string} value - e.g. `Aug 4 at 1:59pm`, `2pm`, `August 10, 06:07`
- * @param {{ now?: number, timezone?: string }} [opts] - `timezone` is the IANA zone the CLI rendered in (the server's own when absent); `now` anchors the year a year-less string omits.
+ * @param {{ now?: number, timezone?: string }} [opts] - `timezone` is the IANA
+ *   zone the CLI rendered in (the server's own when absent); `now` anchors the
+ *   year a year-less string omits.
  * @returns {string|null} ISO 8601 instant, or null when unparseable
  */
 export function parseHumanReset(value, { now = Date.now(), timezone } = {}) {

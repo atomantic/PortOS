@@ -123,7 +123,8 @@ export function isInsideRealDataRoot(target) {
  * Throw when a test is about to write into the real `data/` tree; no-op outside the test runner.
  *
  * @param {string} target - the path about to be written, created, or removed
- * @param {string} operation - what the caller was about to do (e.g. `'atomicWrite'`), named in the error
+ * @param {string} operation - what the caller was about to do, named in the
+ *   error (e.g. `'atomicWrite'`) so the failure text alone identifies it
  * @throws {Error} when the runner is active and `target` lands in the real root
  */
 export function assertNotRealDataWrite(target, operation) {

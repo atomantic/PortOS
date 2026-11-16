@@ -67,6 +67,8 @@ export const isSelfReviewMode = (mode) => mode === PR_REVIEW_MODES.SELF;
 /**
  * Resolve a task's PR completion policy without migrating stored data: new tasks persist `prCompletion`; legacy records resolve their `reviewLoop` bit to the behavior they always had.
  * `openPR` stays the separate decision of whether to create a PR at all.
+ *
+ * @param {Object|null|undefined} metadata
  */
 export function resolvePrCompletion(metadata = {}) {
   if (metadata?.prCompletion === PR_COMPLETIONS.DRAFT) return PR_COMPLETIONS.LEAVE_OPEN;
@@ -83,6 +85,8 @@ const PR_STAYS_OPEN_SET = new Set(PR_STAYS_OPEN_TASK_TYPES);
 
 /**
  * True when a task's PR must be left open for a human: an exempt task type, or any task carrying a JIRA ticket (the ticket status is the hand-off). Reviewers still run; this governs the *merge*.
+ *
+ * @param {Object|null} task - the CoS task (or its metadata holder).
  */
 export function leavesPrForHuman(task) {
   const metadata = task?.metadata || {};
@@ -91,6 +95,8 @@ export function leavesPrForHuman(task) {
 
 /**
  * True when the PR stays open for either reason: a human lands it (`leavesPrForHuman`) or the resolved policy is leave-open (draft included).
+ *
+ * @param {Object|null} task - the CoS task (or its metadata holder).
  */
 export function prStaysOpen(task) {
   return resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task);
@@ -100,6 +106,8 @@ export function prStaysOpen(task) {
  * True when an operator hold keeps every automated path (merge, handoff, recovery,
  * cleanup review) off this task's PR: `prStaysOpen`, a read-only task, or a review
  * loop told to leave the PR open. Add a new hold signal here, never at a guard.
+ *
+ * @param {Object|null} task - the CoS task (or its metadata holder).
  */
 export function prHeldForOperator(task) {
   return prStaysOpen(task) || isTruthyMeta(task?.metadata?.readOnly) || isTruthyMeta(task?.metadata?.reviewLoopLeaveOpen);
@@ -138,8 +146,10 @@ export const PR_CREATION = Object.freeze({
  * @param {Object} opts
  * @param {boolean} opts.taskOpenPR - the task asked for a PR at all
  * @param {boolean} opts.agentOpensOwnPr - the prompt told the agent to open it
- * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` (`prExpected` was true), so cleanup must not ask again
- * @param {boolean} [opts.branchProvenEmpty] - finalize verified an opted-in audit left no commits and no change request, so cleanup must not create an empty PR
+ * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` for this
+ *   run (i.e. `prExpected` was true), so cleanup must not ask a second time
+ * @param {boolean} [opts.branchProvenEmpty] - finalize verified an opted-in audit
+ *   left no commits and no change request, so cleanup must not create an empty PR
  * @returns {string} a `PR_CREATION` value
  */
 export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty = false }) {
