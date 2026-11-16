@@ -75,6 +75,19 @@ describe('taskContextBlock', () => {
     expect(taskContextBlock(task)).toBe('a note');
   });
 
+  it('does not repeat the prompt when description is the prompt plus an appended slashdo section', () => {
+    const task = {
+      description: `${AGENT_BODY}\n\n## Slashdo section`,
+      metadata: { [TASK_PROMPT_KEY]: AGENT_BODY },
+    };
+    expect(taskContextBlock(task)).toBeNull();
+  });
+
+  it('renders both when the description is unrelated to the prompt', () => {
+    const task = { description: 'Something else', metadata: { [TASK_PROMPT_KEY]: AGENT_BODY } };
+    expect(taskContextBlock(task)).toBe(AGENT_BODY);
+  });
+
   it('returns null when the task carries neither', () => {
     expect(taskContextBlock({ metadata: {} })).toBeNull();
     expect(taskContextBlock({ metadata: { [TASK_PROMPT_KEY]: '   ' } })).toBeNull();

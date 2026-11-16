@@ -3866,6 +3866,19 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
     expect(prompt).toContain('/do:plan-task');
   });
 
+  it('renders a release task body once when its description already carries the prompt', async () => {
+    vi.mocked(loadSlashdoFile).mockResolvedValueOnce('# Release\n\nCanonical release procedure.');
+    const body = '# Release candidate check\n\n## Step 0\n\nVerify the candidate.';
+    const prompt = await buildAgentPrompt(
+      makeTask({ description: body, metadata: { prompt: body, slashdoCommand: 'release' } }),
+      {}, '/r', null,
+      { providerType: 'cli', providerId: 'codex' });
+
+    expect(prompt).toContain('Canonical release procedure.');
+    expect(prompt.match(/## Step 0/g)).toHaveLength(1);
+    expect(prompt.match(/# Release candidate check/g)).toHaveLength(1);
+  });
+
   it('pins the bundled release workflow to PortOS Code Review Defaults', async () => {
     vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['codex'] });
     vi.mocked(loadSlashdoFile).mockResolvedValueOnce('# Release\n\nCanonical release procedure.');

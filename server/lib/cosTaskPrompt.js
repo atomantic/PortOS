@@ -85,7 +85,9 @@ export function getTaskContextNote(task) {
  */
 export function taskContextBlock(task) {
   const prompt = getTaskPrompt(task);
-  const promptIsAlreadyDescription = typeof prompt === 'string' && task?.description === prompt;
+  // startsWith, not ===: applySlashdoInvocation appends a section to the description after the prompt was folded in.
+  const promptIsAlreadyDescription = typeof prompt === 'string' && prompt.trim() !== ''
+    && typeof task?.description === 'string' && task.description.startsWith(prompt);
   const parts = [promptIsAlreadyDescription ? null : prompt, getTaskContextNote(task)]
     .filter(v => typeof v === 'string' && v.trim() !== '');
   return parts.length ? parts.join('\n\n') : null;
