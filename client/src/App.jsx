@@ -338,7 +338,9 @@ export default function App() {
             <Route path="ai/services" element={<AIProviders />} />
             <Route path="ai/services/new" element={<AIProviders />} />
             <Route path="ai/services/:serviceSlug" element={<AIProviders />} />
+            {/* /prompts and legacy ?tab= links redirect onto /prompts/:tab inside the page. */}
             <Route path="prompts" element={<PromptManager />} />
+            <Route path="prompts/:tab" element={<PromptManager />} />
             <Route path="cos/:tab/:agentId" element={<ChiefOfStaff />} />
             <Route path="cos/:tab" element={<ChiefOfStaff />} />
             <Route path="calendar/:tab" element={<CalendarPage />} />

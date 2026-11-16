@@ -117,6 +117,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/pipeline/SeriesLlmPicker.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/stages/NounsStage.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/stages/VisualGenSettings.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/prompts/StageModelField.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/quotaBurn/StepSettings.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/AiAssignmentsTab.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/settings/OrchestrationTab.jsx` | Shared structured options or saved provider reference |
@@ -135,7 +136,6 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/pages/Loops.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/PipelineEditorialChecks.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/PipelineManuscriptEditor.jsx` | Shared structured options or saved provider reference |
-| `client/src/pages/PromptManager.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/RunnerPage.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/StoryBuilder.jsx` | Shared structured options or saved provider reference |
 | `client/src/pages/ThreejsModelDetail.jsx` | Shared structured options or saved provider reference |

@@ -27,10 +27,12 @@ const SCENARIOS = [
   [1440, 900, NAV_EXPANDED], [1280, 800, NAV_EXPANDED], [1024, 768, NAV_EXPANDED],
   [1024, 768, NAV_COLLAPSED], [768, 1024, NAV_COLLAPSED], [390, 844, 0], [320, 812, 0],
 ];
+// Entries are appended to `/prompts`; the job-skills row keeps a pre-route `?tab=`
+// link so the redirect is exercised in a real browser too.
 const TABS = [
-  ['stages', 'stage=family-3-stage-1', 'Save'],
-  ['variables', 'tab=variables&var=var-6', 'Save'],
-  ['job-skills', 'tab=job-skills&skill=skill-5', 'Save'],
+  ['stages', '/stages?stage=family-3-stage-1', 'Save'],
+  ['variables', '/variables?var=var-6', 'Save'],
+  ['job-skills', '?tab=job-skills&skill=skill-5', 'Save'],
 ];
 
 describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11142)', () => {
@@ -46,7 +48,7 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
         configFile: false,
         cacheDir: join(temp, 'vite-cache'),
         optimizeDeps: {
-          entries: ['src/pages/PromptManager.jsx'],
+          entries: ['src/pages/PromptManager.jsx', 'src/components/prompts/*.jsx'],
           include: ['react-dom/client', 'react-router', 'lucide-react'],
         },
         root: fileURLToPath(new URL('../..', import.meta.url)),
@@ -55,10 +57,11 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
           enforce: 'pre',
           resolveId(id, importer) {
             if (id === '/prompt-fixture.jsx') return '\0prompt-fixture.jsx';
-            if (importer?.endsWith('/PromptManager.jsx')) {
-              if (id === '../services/apiPrompts') return '\0prompt-api';
-              if (id === '../services/apiProviders') return '\0prompt-providers';
-              if (id === '../components/settings/SettingsTabsHeader') return '\0prompt-tabs-header';
+            if (importer?.endsWith('/PromptManager.jsx') && id === '../components/settings/SettingsTabsHeader') return '\0prompt-tabs-header';
+            // The editors under components/prompts/ own the API reads.
+            if (importer?.includes('/components/prompts/')) {
+              if (id === '../../services/apiPrompts') return '\0prompt-api';
+              if (id === '../../services/apiProviders') return '\0prompt-providers';
             }
           },
           load(id) {
@@ -88,14 +91,17 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
             return `
               import React from 'react';
               import { createRoot } from 'react-dom/client';
-              import { MemoryRouter } from 'react-router';
+              import { MemoryRouter, Route, Routes } from 'react-router';
               import PromptManager from '/src/pages/PromptManager.jsx';
               import '/src/index.css';
               const q = new URLSearchParams(location.search);
-              const entry = '/prompts?' + (q.get('entry') || '');
+              const entry = '/prompts' + (q.get('entry') || '');
               createRoot(document.getElementById('root')).render(
                 React.createElement('div', { style: { width: q.get('w') + 'px', height: '100vh', marginLeft: 'auto' } },
-                  React.createElement(MemoryRouter, { initialEntries: [entry] }, React.createElement(PromptManager)))
+                  React.createElement(MemoryRouter, { initialEntries: [entry] },
+                    React.createElement(Routes, null,
+                      React.createElement(Route, { path: '/prompts', element: React.createElement(PromptManager) }),
+                      React.createElement(Route, { path: '/prompts/:tab', element: React.createElement(PromptManager) }))))
               );
             `;
           },
@@ -111,7 +117,7 @@ describe.skipIf(!chrome)('Prompt Manager selection-first workspace geometry (#11
       }),
       launchOptions: { executablePath: chrome },
       warmup: async (page, url) => {
-        await page.goto(`${url}prompt-test?w=1000&entry=stage%3Dfamily-1-stage-1`, { timeout: 20000 });
+        await page.goto(`${url}prompt-test?w=1000&entry=%2Fstages%3Fstage%3Dfamily-1-stage-1`, { timeout: 20000 });
         await page.getByRole('button', { name: /^Save$/ }).waitFor({ timeout: 10000 });
       },
     });

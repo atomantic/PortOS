@@ -58,7 +58,7 @@ const EXEMPT = Object.freeze({
   // `canDelete: true` on a failed usage read lets the server's own
   // SYSTEM_STAGE_PROTECTED guard answer. The empty `usedBy`/`referencedBy` feed
   // a delete-confirm prompt, not a library listing, so no "you have none" copy.
-  'src/pages/PromptManager.jsx': 1,
+  'src/components/prompts/StagesEditor.jsx': 1,
   // Canon-entity linkify lookup: a failed universe read just shows no entity chips
   // on findings (the findings themselves render, and nothing says "no canon exists");
   // nothing writes from it.
