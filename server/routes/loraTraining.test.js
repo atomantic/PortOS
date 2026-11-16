@@ -13,7 +13,6 @@ vi.mock('../services/loraTraining/index.js', () => ({
   getRunRequired: vi.fn(async (id) => ({ id, status: 'completed' })),
   listCheckpoints: vi.fn(),
   listRuns: vi.fn(),
-  listSamples: vi.fn(),
   promoteCheckpoint: vi.fn(),
   runDir: vi.fn(),
   runSamplesDir: () => svc.samplesDir,
@@ -74,8 +73,9 @@ it('retires launch, resume and legacy deletion while retaining history controls'
     expect(response.status).toBe(410);
     expect(response.body.code).toBe('LORA_TRAINING_RETIRED');
   }
-  const status = await request(app).get('/api/lora-training/status');
-  expect(status.body).toMatchObject({ retired: true, runtimes: { mflux: { ready: false }, flux2: { ready: false } } });
+  for (const path of ['/status', '/runs/example/events', '/runs/example/samples']) {
+    expect((await request(app).get(`/api/lora-training${path}`)).status, path).toBe(404);
+  }
 });
 
 it('can explicitly cancel an observed orphan when the queue record is missing', async () => {

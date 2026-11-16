@@ -33,7 +33,6 @@ vi.mock('../services/gmailApi.js', () => ({ createGmailApi: () => ({ getMessage:
 vi.mock('../services/messagePlaywrightSync.js', () => ({ getSelectors: vi.fn(), updateSelectors: vi.fn(), testSelectors: vi.fn(), launchProvider: vi.fn() }));
 vi.mock('../services/messageEvaluator.js', () => ({ evaluateMessages: vi.fn(), generateReplyBody: vi.fn() }));
 vi.mock('../services/messageActions.js', () => ({ executeAction: vi.fn() }));
-vi.mock('../services/messageTriageRules.js', () => ({ listRules: vi.fn(), deleteRule: vi.fn() }));
 vi.mock('../services/messageTokenExtractor.js', () => ({ getToken: vi.fn(), getTokenStatus: vi.fn(), testApi: vi.fn(), clearTokenCache: vi.fn() }));
 
 import messagesRoutes from './messages.js';

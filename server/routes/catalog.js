@@ -530,21 +530,8 @@ router.delete('/ingredients/:id/link', asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-router.get('/ingredients/:id/refs', asyncHandler(async (req, res) => {
-  res.json(await catalogDB.listRefsForIngredient(req.params.id));
-}));
-
 router.get('/refs/:refKind/:refId/ingredients', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listIngredientsForRef(req.params.refKind, req.params.refId));
-}));
-
-// Resolver (#1018): does this (refKind, refId) target a LIVE app-native record?
-// Pairs with the ingredients list above so a caller rendering "everything
-// related to this universe/series/issue/work" can also tell whether the target
-// itself still exists. Read-only, local — no FK, by design (D3 of #999).
-router.get('/refs/:refKind/:refId/resolve', asyncHandler(async (req, res) => {
-  const [resolved] = await resolveRefs([{ refKind: req.params.refKind, refId: req.params.refId }]);
-  res.json(resolved);
 }));
 
 // --- Ingredient↔ingredient relations -----------------------------------

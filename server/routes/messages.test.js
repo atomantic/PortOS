@@ -27,7 +27,6 @@ vi.mock('../services/messageAccounts.js', () => ({
 
 vi.mock('../services/messageSync.js', () => ({
   syncAccount: vi.fn(),
-  getSyncStatus: vi.fn(),
   getMessages: vi.fn(),
   updateMessageEvaluations: vi.fn(),
   getMessage: vi.fn(),
@@ -47,8 +46,6 @@ vi.mock('../services/messageDrafts.js', () => ({
   deleteDraftsByAccountId: vi.fn()
 }));
 
-vi.mock('../services/messageTriageRules.js', () => ({ listRules: vi.fn(), deleteRule: vi.fn() }));
-import { listRules, deleteRule } from '../services/messageTriageRules.js';
 
 vi.mock('../services/messageSender.js', () => ({
   sendDraft: vi.fn()
@@ -149,15 +146,6 @@ describe('Messages Routes', () => {
       }
     });
 
-    it('returns the shared non-success envelope for triage reads and deletion', async () => {
-      const error = new ServerError('Message triage rules storage is unavailable or invalid; original data preserved', { status: 503, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
-      listRules.mockRejectedValueOnce(error);
-      deleteRule.mockRejectedValueOnce(error);
-      for (const response of [await request(app).get('/api/messages/triage-rules'), await request(app).delete('/api/messages/triage-rules/0')]) {
-        expect(response.status).toBe(503);
-        expect(response.body).toMatchObject({ error: error.message, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
-      }
-    });
   });
 
   // === Account Routes ===
@@ -311,26 +299,6 @@ describe('Messages Routes', () => {
 
       expect(response.status).toBe(404);
       expect(response.body.error).toBe('Account not found');
-    });
-  });
-
-  describe('GET /api/messages/sync/:accountId/status', () => {
-    it('should return sync status', async () => {
-      const status = { accountId: VALID_UUID, lastSyncAt: '2026-01-01T00:00:00Z', lastSyncStatus: 'success' };
-      messageSync.getSyncStatus.mockResolvedValue(status);
-
-      const response = await request(app).get(`/api/messages/sync/${VALID_UUID}/status`);
-
-      expect(response.status).toBe(200);
-      expect(messageSync.getSyncStatus.mock.calls[0][0]).toBe(VALID_UUID);
-    });
-
-    it('should return 404 if account not found', async () => {
-      messageSync.getSyncStatus.mockResolvedValue(null);
-
-      const response = await request(app).get(`/api/messages/sync/${VALID_UUID}/status`);
-
-      expect(response.status).toBe(404);
     });
   });
 

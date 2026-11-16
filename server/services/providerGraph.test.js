@@ -20,9 +20,7 @@ const store = {
   applyReconciliation: vi.fn().mockResolvedValue(undefined),
   commitPendingProjection: vi.fn().mockResolvedValue(undefined),
   acknowledgeProjection: vi.fn().mockResolvedValue(undefined),
-  relinkBinding: vi.fn().mockResolvedValue(undefined),
   deleteConnection: vi.fn(),
-  detachBindingToConnection: vi.fn().mockResolvedValue(undefined),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
 };
@@ -115,11 +113,6 @@ describe('before the database phase enables the graph', () => {
     await expect(graph.getManagementGraph()).rejects.toMatchObject({ code: 'PROVIDER_GRAPH_UNAVAILABLE' });
   });
 
-  it('a link is refused rather than silently queued', async () => {
-    await expect(graph.linkBinding({ bindingId: BINDING, targetConnectionId: CONN_B }))
-      .rejects.toMatchObject({ code: 'PROVIDER_GRAPH_UNAVAILABLE' });
-    expect(store.relinkBinding).not.toHaveBeenCalled();
-  });
 });
 
 describe('reconciliation', () => {
@@ -256,107 +249,6 @@ describe('connection settings keep the preset-conversion cache live (#8159)', ()
   });
 });
 
-describe('linking', () => {
-  beforeEach(() => graph.initProviderGraph());
-
-  it('previews the difference without writing anything', async () => {
-    const preview = await graph.previewBindingLink({ bindingId: BINDING, targetConnectionId: CONN_B });
-
-    expect(preview.affectedRouteIds).toEqual(['claude-ollama']);
-    expect(preview.revisions).toEqual({ binding: 1, sourceConnection: 1, targetConnection: 1 });
-    expect(preview.requiresConfirmation).toBe(true);
-    // Secrets never reach a preview; the browser learns only THAT they differ.
-    expect(JSON.stringify(preview)).not.toContain('token-for-');
-    expect(store.relinkBinding).not.toHaveBeenCalled();
-  });
-
-  it('stages the projection, writes the file, and acknowledges only then', async () => {
-    const order = [];
-    store.commitPendingProjection.mockImplementation(async () => { order.push('stage'); });
-    providers.applyProviderPatches.mockImplementation(async (patches) => { order.push('write'); return Object.keys(patches); });
-    store.acknowledgeProjection.mockImplementation(async () => { order.push('acknowledge'); });
-
-    const result = await graph.linkBinding({
-      bindingId: BINDING, targetConnectionId: CONN_B,
-      expectedRevisions: { binding: 1, sourceConnection: 1, targetConnection: 1 },
-    });
-
-    expect(order.slice(0, 3)).toEqual(['stage', 'write', 'acknowledge']);
-    expect(result).toEqual({ bindingId: BINDING, connectionId: CONN_B, affectedRouteIds: ['claude-ollama'] });
-    // The route keeps its executable id; only the backend it reaches moves.
-    expect(providers.applyProviderPatches.mock.calls[0][0]['claude-ollama'].envVars).toEqual({
-      ANTHROPIC_BASE_URL: 'http://127.0.0.1:12345',
-      ANTHROPIC_AUTH_TOKEN: 'token-for-22222222-2222-4222-8222-222222222222',
-    });
-    // The derived preset on the moved binding is re-derived from the instance it landed on (#7565).
-    expect(providers.applyProviderPatches.mock.calls[1][0]['claude-ollama']).toMatchObject({ serviceId: 'ollama-2' });
-  });
-
-  it.each([
-    ['binding', { binding: 9, sourceConnection: 1, targetConnection: 1 }],
-    ['source connection', { binding: 1, sourceConnection: 9, targetConnection: 1 }],
-    ['target connection', { binding: 1, sourceConnection: 1, targetConnection: 9 }],
-  ])('refuses a stale %s revision before any row is touched', async (_label, expectedRevisions) => {
-    await expect(graph.linkBinding({ bindingId: BINDING, targetConnectionId: CONN_B, expectedRevisions }))
-      .rejects.toMatchObject({ status: 409, code: 'PROVIDER_GRAPH_STALE_REVISION' });
-    expect(store.relinkBinding).not.toHaveBeenCalled();
-  });
-
-  it('refuses a binding whose projection is still unsettled', async () => {
-    const fixture = graphFixture();
-    fixture.routes[0].pending = { fields: {}, envVars: {}, hasEnvVars: true };
-    store.readGraph.mockResolvedValue(fixture);
-
-    await expect(graph.linkBinding({ bindingId: BINDING, targetConnectionId: CONN_B }))
-      .rejects.toMatchObject({ code: 'PROVIDER_GRAPH_BINDING_BLOCKED' });
-  });
-
-  it('allocates a distinct variant when the target already has this harness on default', async () => {
-    const fixture = graphFixture();
-    fixture.bindings.push({
-      id: '44444444-4444-4444-8444-444444444444', revision: 1, connectionId: CONN_B,
-      harnessId: 'claude', variantKey: 'default', label: 'Other Claude', enabled: true, selectedModels: [],
-    });
-    store.readGraph.mockResolvedValue(fixture);
-
-    const preview = await graph.previewBindingLink({ bindingId: BINDING, targetConnectionId: CONN_B });
-    expect(preview.variantKey).toBe(`variant:${BINDING}`);
-  });
-
-  it('refuses a link a binding already has', async () => {
-    await expect(graph.linkBinding({ bindingId: BINDING, targetConnectionId: CONN_A }))
-      .rejects.toMatchObject({ code: 'PROVIDER_GRAPH_ALREADY_LINKED' });
-  });
-});
-
-describe('unlinking', () => {
-  beforeEach(() => graph.initProviderGraph());
-
-  it('clones the shared connection under a new id and rewrites no route', async () => {
-    const result = await graph.unlinkBinding({ bindingId: BINDING, expectedRevisions: { binding: 1 } });
-
-    expect(result.bindingId).toBe(BINDING);
-    expect(result.connectionId).not.toBe(CONN_A);
-    const [{ connection: clone }] = store.detachBindingToConnection.mock.calls[0];
-    expect(clone.transports).toEqual({ anthropic: { baseUrl: 'http://127.0.0.1:11434' } });
-    expect(clone.credentials).toEqual({ ANTHROPIC_AUTH_TOKEN: `token-for-${CONN_A}` });
-    // Nothing about execution changes: the one write re-derives the preset from
-    // the clone (#7565), which re-addresses it and moves no executable value.
-    expect(providers.applyProviderPatches).toHaveBeenCalledTimes(1);
-    const [patches] = providers.applyProviderPatches.mock.calls[0];
-    expect(patches['claude-ollama']).toMatchObject({ serviceId: clone.slug });
-    // The env and program are the same on the clone; only empty normalizations ride along.
-    for (const key of ['envVars', 'command', 'models']) expect(patches['claude-ollama']).not.toHaveProperty(key);
-    expect(patches['claude-ollama'].apiKey ?? '').toBe('');
-    expect(patches['claude-ollama'].endpoint ?? null).toBeNull();
-    expect(clone.slug).toBe('ollama-3');
-  });
-
-  it('refuses an unknown binding', async () => {
-    await expect(graph.unlinkBinding({ bindingId: CONN_B })).rejects.toMatchObject({ code: 'BINDING_NOT_FOUND' });
-  });
-});
-
 describe('deleting an emptied connection', () => {
   beforeEach(() => graph.initProviderGraph());
 
@@ -373,20 +265,6 @@ describe('deleting an emptied connection', () => {
 });
 
 describe('service-instance naming (#7563)', () => {
-  it('gives an unlinked clone the next free slug rather than copying the source\'s', async () => {
-    const fixture = graphFixture();
-    fixture.connections[0].slug = 'ollama';
-    fixture.connections[0].definitionId = 'ollama';
-    fixture.connections[1].slug = 'ollama-2';
-    store.readGraph.mockResolvedValue(fixture);
-    await graph.initProviderGraph();
-    await graph.unlinkBinding({ bindingId: BINDING });
-    const [[{ connection }]] = store.detachBindingToConnection.mock.calls;
-    expect(connection.slug).toBe('ollama-3');
-    expect(connection.id).not.toBe(CONN_A);
-    expect(connection.definitionId).toBe('ollama');
-  });
-
   it('names a boot-imported fragment before it is written, and backfills unnamed rows after', async () => {
     const fixture = graphFixture();
     // CONN_A predates the columns; CONN_B is already named.

@@ -120,8 +120,8 @@ const upsertBinding = (client, binding) => client.query(
 // `model_alias_overrides` is set on INSERT and deliberately absent from the
 // conflict update: an import, a reconciliation re-import and a binding split
 // all carry no overrides, so updating the column from EXCLUDED would delete a
-// human's hand-authored aliases as a side effect of an unrelated repair. Only
-// `saveRouteModelAliases` writes it.
+// human's hand-authored aliases as a side effect of an unrelated repair. No code
+// writes it now; values saved while the alias editor existed are preserved.
 const upsertRoute = (client, route) => client.query(
   `INSERT INTO ai_route_bindings
      (provider_id, binding_id, mode, model_map, model_alias_overrides, projected, pending, pending_revision, updated_at)
@@ -247,28 +247,7 @@ export async function acknowledgeProjection(providerIds) {
 }
 
 /** Repoint one binding at another connection. Revision-checked by the caller. */
-export async function relinkBinding({ bindingId, connectionId }) {
-  await withTransaction(async (client) => {
-    await client.query(
-      'UPDATE ai_harness_bindings SET connection_id = $1, revision = revision + 1, updated_at = NOW() WHERE id = $2',
-      [connectionId, bindingId],
-    );
-    await client.query('UPDATE ai_connections SET revision = revision + 1, updated_at = NOW() WHERE id = $1',
-      [connectionId]);
-  });
-}
-
 /** Attach a binding to a freshly cloned connection (the unlink half). */
-export async function detachBindingToConnection({ bindingId, connection }) {
-  await withTransaction(async (client) => {
-    await upsertConnection(client, connection);
-    await client.query(
-      'UPDATE ai_harness_bindings SET connection_id = $1, revision = revision + 1, updated_at = NOW() WHERE id = $2',
-      [connection.id, bindingId],
-    );
-  });
-}
-
 /**
  * Fold duplicate service instances into one (`planServiceInstanceMerges`):
  * write the survivor, move every binding off the folded rows onto it (each on
@@ -312,7 +291,7 @@ export async function deleteConnection(connectionId) {
  * Write a connection's user-editable settings and bump its revision.
  *
  * `catalog` is written here too because a refresh is a connection-level edit,
- * not a per-route one — see `refreshConnectionCatalog`.
+ * not a per-route one — see `refreshServiceCatalog`.
  *
  * @returns {Promise<number|null>} the new revision, or `null` if the row is gone
  */
@@ -372,22 +351,3 @@ export async function saveBindingSettings({ id, label, selectedModels }) {
 }
 
 /** Record the canonical→executable model aliases a refresh observed on a route. */
-export async function saveRouteModelMap(providerId, modelMap) {
-  await query('UPDATE ai_route_bindings SET model_map = $2, updated_at = NOW() WHERE provider_id = $1',
-    [providerId, toPgJson(modelMap || {})]);
-}
-
-/**
- * Write one route's hand-authored alias overrides. Revision-checked and
- * serialized by the caller, like every other mutation in this block.
- *
- * Separate from {@link saveRouteModelMap} on purpose: that column records what
- * a refresh OBSERVED and is rewritten by the next one, so keeping the two apart
- * is what lets a correction survive a refresh (#6369).
- */
-export async function saveRouteModelAliases(providerId, overrides) {
-  await query(
-    'UPDATE ai_route_bindings SET model_alias_overrides = $2, updated_at = NOW() WHERE provider_id = $1',
-    [providerId, toPgJson(overrides || {})],
-  );
-}

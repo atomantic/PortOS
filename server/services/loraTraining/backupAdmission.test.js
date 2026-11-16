@@ -33,7 +33,6 @@ vi.mock('./db.js', () => ({
 }));
 vi.mock('./checkpoints.js', () => ({
   listRunCheckpoints: () => [{ step: 100, loss: 0.1, previewUrl: '/preview.png' }],
-  listRunSamples: () => [],
   resolveCheckpointAdapterBuffer: async () => Buffer.from('promoted adapter'),
   resolveLatestCheckpointArtifact: () => null,
   selectDeployableCheckpoint: vi.fn(),

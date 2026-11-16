@@ -15,7 +15,6 @@ import * as messageSender from '../services/messageSender.js';
 import { getSelectors, updateSelectors, testSelectors, launchProvider } from '../services/messagePlaywrightSync.js';
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { executeAction } from '../services/messageActions.js';
-import { listRules, deleteRule } from '../services/messageTriageRules.js';
 import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
 
 const router = express.Router();
@@ -155,31 +154,8 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid account ID format', { status: 400 });
-  }
-  const status = await messageSync.getSyncStatus(req.params.accountId);
-  if (!status) throw new ServerError('Account not found', { status: 404 });
-  res.json(status);
-}));
-
 // === Inbox Routes ===
 router.get('/inbox', messageInboxRead);
-
-// === Triage Rules Routes ===
-router.get('/triage-rules', asyncHandler(async (req, res) => {
-  const rules = await listRules();
-  res.json({ rules });
-}));
-
-router.delete('/triage-rules/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
-  if (Number.isNaN(index) || index < 0) throw new ServerError('Invalid rule index', { status: 400 });
-  const deleted = await deleteRule(index);
-  if (!deleted) throw new ServerError('Rule not found', { status: 404 });
-  res.status(204).send();
-}));
 
 // === Evaluate Route ===
 router.post('/evaluate', asyncHandler(async (req, res) => {

@@ -7,7 +7,6 @@ vi.mock('../../lib/processEnv.js', () => ({
 import { spawn } from '../../lib/childProcess.js';
 import {
   SUPPORTED_QWEN3_MODELS,
-  downloadQwen3Model,
   getQwen3RuntimeStatus,
 } from './qwen3TtsRuntime.js';
 
@@ -54,21 +53,4 @@ describe('qwen3TtsRuntime', () => {
     expect(await getQwen3RuntimeStatus()).toMatchObject({ ok: true, trainingAdapter: null });
   });
 
-  it('downloads explicitly, coalesces duplicate requests, and requires verified results', async () => {
-    const modelId = SUPPORTED_QWEN3_MODELS[0].id;
-    const result = { ok: true, modelId, revision: 'a'.repeat(40) };
-    runnerResponse(result);
-    expect(await Promise.all([downloadQwen3Model(modelId), downloadQwen3Model(modelId)])).toEqual([result, result]);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn.mock.calls[0][1]).toContain('--download');
-    expect(spawn.mock.calls[0][2].timeout).toBe(30 * 60 * 1000);
-
-    runnerResponse({ ok: true, modelId });
-    await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ code: 'QWEN3_DOWNLOAD_INVALID_RESULT' });
-    runnerResponse({ code: 'QWEN3_DOWNLOAD_FAILED', error: 'checksum mismatch' }, 1);
-    await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ status: 502, code: 'QWEN3_DOWNLOAD_FAILED' });
-    runnerResponse({ code: 'QWEN3_DOWNLOAD_UNAVAILABLE', error: 'No module named huggingface_hub' }, 1);
-    await expect(downloadQwen3Model(modelId)).rejects.toMatchObject({ status: 503, code: 'QWEN3_DOWNLOAD_UNAVAILABLE' });
-    await expect(downloadQwen3Model('unknown/invalid-model')).rejects.toMatchObject({ code: 'UNKNOWN_QWEN3_MODEL' });
-  });
 });

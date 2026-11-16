@@ -225,7 +225,7 @@ export function createDefaultCharacter() {
 }
 
 // ONE singleton mutation queue for character.json (#9817). Every read-modify-write — local
-// edits, XP/damage/rest/events, JIRA/task imports, reset, first-run initialization — and the
+// edits, XP/damage/rest/events, JIRA/task imports, first-run initialization — and the
 // federation merge (applyRemoteSnapshot) enter it BEFORE reading, so two overlapping writers
 // can't each build on the same stale snapshot and have the later full-document replace erase the
 // earlier one. Only the persist step is inside the queue: slow discovery (JIRA/task lookups)
@@ -358,15 +358,10 @@ export async function getWireCharacter() {
 // Replace the whole document with `data`. Queued, but a caller that read the record EARLIER and
 // saves it here still commits that stale snapshot — read-modify-write callers must use the
 // mutators in this module (they re-read inside the queue). Kept for whole-document replacement
-// (resetCharacter) and for tests.
+// and for tests.
 export async function saveCharacter(data) {
   const persisted = await withCharacterLock(() => persistRaw(data));
   return enrichCharacter(persisted);
-}
-
-// Fresh-start reset, queued with every other writer.
-export async function resetCharacter() {
-  return saveCharacter(createDefaultCharacter());
 }
 
 // Union events by id (LWW by timestamp on a shared id); returns { merged, changed }.

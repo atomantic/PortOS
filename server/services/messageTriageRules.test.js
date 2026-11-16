@@ -14,7 +14,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   }
 }));
 
-const { recordCorrection, deleteRule, listRules } = await import('./messageTriageRules.js');
+const { recordCorrection, getTriageRules: listRules } = await import('./messageTriageRules.js');
 
 const corr = (from, extra = {}) => ({ from, subject: 's', triaged: 'archive', corrected: 'delete', ...extra });
 
@@ -55,18 +55,6 @@ describe('messageTriageRules write serialization', () => {
     expect(rules[0].count).toBe(3);
   });
 
-  it('keeps unrelated rules and does not resurrect a deleted rule when delete overlaps a correction', async () => {
-    await recordCorrection(corr('a@example.com'));
-    await recordCorrection(corr('b@example.com'));
-    let release;
-    fs.gate = new Promise(r => { release = r; });
-    const del = deleteRule(0);
-    const add = recordCorrection(corr('c@example.com'));
-    release();
-    expect(await del).toBe(true);
-    await add;
-    expect((await listRules()).map(r => r.senderPattern)).toEqual(['b@example.com', 'c@example.com']);
-  });
 
   it('a rejected mutation does not poison later queued operations', async () => {
     fs.failNextWrite = true;
