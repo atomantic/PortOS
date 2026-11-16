@@ -1,14 +1,11 @@
 /**
  * Is a provider READY to run on this install, and why not.
  *
- * Browser MIRROR of `server/lib/providerPrerequisites.js` (the same
- * computation `getFallbackProvider` routes on — where the server has published
- * `missingPrerequisites` it WINS) and of the normalization in
+ * Browser MIRROR of `server/lib/providerPrerequisites.js` (where the server has
+ * published `missingPrerequisites` it WINS) and of the normalization in
  * `server/cos-runner/allowedCommands.js` (pinned by
  * `server/cos-runner/allowedCommands.parity.test.js`). Unknown lookup values
  * mean "not probed", never "missing".
- *
- * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
 import { isCredentialEnvVarName, isNonCredentialEnvVarName } from '../../../server/lib/credentialEnvVars.js';
@@ -17,17 +14,14 @@ import { gatewayForProvider, isGatewayBackedProvider } from './providerGateways.
 import { isApiProvider, isCodexSubscriptionProvider, isProcessProvider } from './providerTypes.js';
 
 /**
- * The 'your own ~/.codex/config.toml is re-pointing this provider' advisory the
- * server publishes on `GET /api/providers`, or `null`.
+ * The advisory the server publishes on `GET /api/providers` when the user's own
+ * ~/.codex/config.toml re-points this provider, or `null`.
  *
  * Deliberately NOT part of `missingPrerequisites`: pointing Codex at a local
- * bridge is a legitimate choice, so it must never bucket a card as NEEDS SETUP.
- * What it fixes is PortOS reporting a ChatGPT account's readiness and quota for
- * work that account never served. `advisory.baseUrl` is machine-local — render
- * it here and nowhere else.
- *
- * SERVER-ONLY, with no client fallback: the browser cannot read the user's
- * config file, so an older server publishing nothing correctly yields `null`.
+ * bridge is legitimate, so it must never bucket a card as NEEDS SETUP.
+ * `advisory.baseUrl` is machine-local — render it here and nowhere else.
+ * SERVER-ONLY: the browser cannot read the config file, so an older server
+ * yields `null`.
  * @returns {{code:string,label:string,keys:string[],baseUrl:string|null}|null}
  */
 export const codexRoutingAdvisory = (provider) => (
@@ -37,20 +31,10 @@ export const codexRoutingAdvisory = (provider) => (
 );
 
 /**
- * Whether the AI Providers page should offer a "Refresh Models" button for this
- * provider — i.e. whether the server has a model fetcher that can answer for it.
- *
- * Reads the server's own answer off the payload. `canRefreshModels` is derived
- * on read from the per-vendor fetcher table
- * (`server/lib/aiToolkit/internal/modelFetchers.js`) and decorated onto every
- * provider-shaped response in `routes/providers.js`, so there is exactly one
- * definition of "refreshable" and it lives next to the dispatch that has to
- * honor it.
- *
- * This used to be a ~40-line hand-written mirror of both server dispatch arms,
- * kept in lockstep by a comment. It drifted in both directions: too generous
- * showed a button that 404'd, too stingy hid the feature with no error at all.
- * Strict `=== true` so a legacy payload from an older server (no such field)
+ * Whether the AI Providers page should offer a "Refresh Models" button: reads
+ * the server's `canRefreshModels`, derived from the per-vendor fetcher table
+ * (`server/lib/aiToolkit/internal/modelFetchers.js`) so "refreshable" has one
+ * definition. Strict `=== true` so a payload from an older server (no field)
  * hides the button rather than offering one that 404s.
  * @param {{canRefreshModels?:boolean}|null|undefined} provider
  * @returns {boolean}
@@ -103,20 +87,6 @@ export const isRunnerAllowedCommand = (command, allowedCommands) => {
 };
 
 /**
- * The key a CLI/TUI provider's runtime is published under in the `runtimes` map
- * from `GET /api/providers/runtimes` — the binary it spawns, basename-normalized
- * so a provider pinned to an absolute path still matches.
- *
- * Deliberately NOT a client-side copy of the runtime table: the server owns
- * which runtimes exist and how they install, and a key with no entry in the
- * fetched map simply renders no install widget. That's the right default for a
- * custom command PortOS has no installer for.
- *
- * API providers have no runtime here — the two fronted by a local app resolve
- * through `localBackendForProvider` (which also matches a renamed provider by
- * its endpoint) and get their install state from the local-LLM status.
- */
-/**
  * Does this provider resolve its binary somewhere PortOS's runtime probe never
  * looked — an explicit path in `command`, or a `PATH` of its own in
  * `envVars`?
@@ -134,6 +104,13 @@ export const resolvesOutsidePortosPath = (provider) => {
   return Object.keys(provider?.envVars || {}).some((key) => key.toUpperCase() === 'PATH');
 };
 
+/**
+ * The key a CLI/TUI provider's runtime is published under in the `runtimes` map
+ * from `GET /api/providers/runtimes` (binary basename, so an absolute-path
+ * command still matches). The server owns which runtimes exist; a key with no
+ * entry renders no install widget. API providers have no runtime here; local-app
+ * ones resolve through `localBackendForProvider`.
+ */
 export const providerRuntimeKey = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const command = provider?.command;
@@ -142,8 +119,7 @@ export const providerRuntimeKey = (provider) => {
 };
 
 // The name classifier lives in server/lib (it also drives response masking).
-// The explicit secretEnvVars list can still name a custom credential that does
-// not follow the convention (for example MY_LLM_KEY).
+// An explicit secretEnvVars entry can still name a custom credential (MY_LLM_KEY).
 
 const providerHasStoredKey = (provider) =>
   provider?.hasApiKey === true || Boolean(provider?.apiKey);
@@ -170,26 +146,23 @@ const credentialEnvVars = (provider) => {
  * @returns {{kind:'stored'|'inherited'|'env'|'subscription'|'none',ref:string|null}}
  */
 export const credentialSource = (provider) => {
-  // Codex CLI/TUI providers can use the ChatGPT subscription that Codex owns
-  // outside PortOS. It is neither a stored API key nor an environment
-  // credential, so the regular credential UI must not tell the user to paste a
-  // key. `providerCardState` receives the separate, bounded account verdict.
+  // Codex CLI/TUI providers can use the ChatGPT subscription Codex owns outside
+  // PortOS: neither a stored key nor an env credential, so never tell the user
+  // to paste a key. `providerCardState` receives the separate account verdict.
   if (isCodexSubscriptionProvider(provider)) {
     return { kind: 'subscription', ref: 'codex' };
   }
-  // Local API endpoints need no credential, even if an old record happens to
-  // retain one from before the endpoint was changed.
+  // Local API endpoints need no credential, even if a stale one is retained.
   if (isApiProvider(provider) && isPrivateNetworkEndpoint(provider?.endpoint)) {
     return { kind: 'none', ref: null };
   }
-  // API providers are the only ordinary providers whose stored key is read by
-  // PortOS itself. A legacy apiKey on a CLI/TUI record is not passed to the
-  // process and must not hide an empty process credential.
+  // Only API providers have their stored key read by PortOS itself; a legacy
+  // apiKey on a CLI/TUI record is not passed to the process.
   if (isApiProvider(provider)) {
     return { kind: 'stored', ref: provider?.id || null };
   }
-  // A gateway wrapper with its own key is the one process-backed exception:
-  // withGatewayApiKey leaves it untouched, so that key really is used.
+  // A gateway wrapper with its own key is the one process-backed exception
+  // (withGatewayApiKey leaves it untouched).
   if (isGatewayBackedProvider(provider) && providerHasStoredKey(provider)) {
     return { kind: 'stored', ref: provider?.id || null };
   }
@@ -286,11 +259,7 @@ const credentialMissing = (provider, { keySetFor = null, envVarSet = null } = {}
     : null;
 };
 
-/**
- * The four states a provider card can be in on the AI Providers page, ordered
- * the way the page groups them: usable now, temporarily benched, missing a
- * prerequisite, or simply switched off.
- */
+/** The states a provider card can be in on the AI Providers page, in page-group order. */
 export const PROVIDER_CARD_STATE = Object.freeze({
   READY: 'ready',
   BENCHED: 'benched',
@@ -300,54 +269,35 @@ export const PROVIDER_CARD_STATE = Object.freeze({
 });
 
 /**
- * Which prerequisites a provider is missing, and the card state that follows
- * from them — one place, so a card's border, its badge and the section the page
- * files it under can never disagree with each other.
+ * Which prerequisites a provider is missing, and the card state that follows —
+ * one place, so a card's border, badge and page section cannot disagree.
  *
- * NOT the same thing as `ProviderReadiness` /
- * `GET /api/providers/readiness`, which probes whether the local DAEMON a
- * provider points at (llama.cpp, Ollama, LM Studio, MTPLX, vLLM) is up and serving
- * the right model. This decides the card's bucket from its toggle, its
- * credentials and the server's bench status; the two render side by side.
+ * NOT `ProviderReadiness` / `GET /api/providers/readiness`, which probes whether
+ * the local DAEMON a provider points at is up; this buckets the card from its
+ * toggle, credentials and the server's bench status, and the two render side by side.
  *
- * The prerequisite half is the SERVER's answer now (#4611): `GET
- * /api/providers` publishes `missingPrerequisites` per provider from
- * server/lib/providerPrerequisites.js, and `getFallbackProvider` skips a
- * provider whose CLI that same computation found missing — so a card blocked on
- * an uninstalled binary is no longer a routing candidate that dies at spawn
- * time on a raw ENOENT. (Routing acts only on that finding; stored, inherited,
- * and env-var credential findings stay presentation-only, and the browser now
- * derives known env-var gaps without over-reporting redacted values.)
+ * The prerequisite half is the SERVER's answer: `GET /api/providers` publishes
+ * `missingPrerequisites` (server/lib/providerPrerequisites.js) and
+ * `getFallbackProvider` routes on the same computation. Routing acts only on
+ * that finding; credential findings are presentation-only. This function adds
+ * what the browser alone can see (local-app runtime shape, sanitized env
+ * credential state) and, with an older server publishing nothing, derives the
+ * credential checks itself.
  *
- * This function consumes the published list and adds what the browser alone
- * can see (the local-app runtime shape and sanitized env-credential state
- * below). With an older server publishing nothing, it falls back to deriving
- * the credential checks itself.
+ * Inputs are passed in so this stays pure:
+ *   runtime   — the provider's entry of the `runtimes` map or the local-app shape
+ *               derived from local-LLM status. `null` = NOT PROBED, never "missing".
+ *   status    — entry from `GET /api/providers/status`; `available === false`
+ *               means benched after a failure.
+ *   keySetFor — tri-state lookup for a stored or inherited key: `true`/`false`
+ *               when known, `null` or another non-boolean when unknown.
+ *   envVarSet — tri-state lookup for an env credential. An explicitly empty
+ *               configured value is `false`; missing or redacted is unknown.
  *
- * Inputs are passed in rather than read from globals so this stays pure:
- *   runtime          — the provider's entry of the `runtimes` map (CLI binary)
- *                      or the local-app shape the page derives from the
- *                      local-LLM status. `null` = NOT PROBED, which must never
- *                      read as "missing" (an older server, or a card drawn
- *                      before the probe lands, would otherwise accuse every
- *                      perfectly-installed CLI).
- *   status           — the runtime-availability entry from
- *                      `GET /api/providers/status`; `available === false`
- *                      means the provider is benched after a failure.
- *   keySetFor        — tri-state lookup for a stored or inherited key. It must
- *                      return `true`/`false` when known and `null` or another
- *                      non-boolean when unknown.
- *   envVarSet        — tri-state lookup for an environment credential. An
- *                      explicitly empty configured value is `false`; a missing
- *                      or redacted value is unknown and must not be reported.
- *
- * `disabled` outranks `blocked`: a provider the user switched off is not a gap
- * in this install. PortOS ships dozens of provider records the user may never
- * want, and calling every switched-off one "needs setup" makes an install with
- * a perfectly good provider read as degraded or half-configured. What such a
- * provider is missing is still returned in `missing` — a note for the user IF
- * they decide to turn it on, not an outstanding task. `benched` only applies to
- * an enabled provider that otherwise meets its prerequisites.
+ * `disabled` outranks `blocked`: PortOS ships dozens of provider records the user
+ * may never want, and calling each switched-off one "needs setup" would make a
+ * healthy install read as degraded. Its gaps are still returned in `missing`.
+ * `benched` only applies to an enabled provider that meets its prerequisites.
  *
  * @returns {{state: string, missing: {code: string, label: string}[]}}
  */
@@ -356,20 +306,13 @@ export const providerCardState = (provider, {
   status = null,
   keySetFor = null,
   envVarSet = null,
-  // `undefined` means an older server did not provide the account feature at
-  // all; `null` means this page tried to fetch it but could not determine a
-  // verdict. They must not collapse into "signed out" or "ready".
+  // `undefined` = older server without the account feature; `null` = fetch
+  // failed with no verdict. Neither may collapse into "signed out" or "ready".
   codexAccount = undefined,
 } = {}) => {
-  // The server publishes its own verdict on `GET /api/providers`
-  // (`missingPrerequisites`, from server/lib/providerPrerequisites.js) and
-  // routes the fallback chain on exactly that computation. Where it has an
-  // answer it WINS, so the card and the router cannot drift.
-  //
-  // An ARRAY is the sentinel for "published" — including the empty array, which
-  // is a real answer ("nothing missing"). Anything else (an older server, a
-  // payload fetched before the field existed) means not published, and the
-  // local derivation below stands in.
+  // The server's published verdict WINS so the card and the router cannot
+  // drift. An ARRAY (even empty, meaning "nothing missing") is the sentinel for
+  // "published"; anything else means the local derivation below stands in.
   const published = Array.isArray(provider?.missingPrerequisites)
     ? provider.missingPrerequisites.filter((entry) => entry?.code !== 'codexQuota')
     : null;
@@ -380,28 +323,20 @@ export const providerCardState = (provider, {
     }
   };
 
-  // Kept client-side even when the server has published: `runtime` here may be
-  // the LOCAL-APP shape the page derives from the local-LLM status (an LM Studio
-  // / Ollama app installed with no CLI shim on PATH), which the server's runtime
-  // table does not cover. For a plain CLI provider this is the same row the
-  // server probed, and `addMissing` de-dupes it by code.
-  //
-  // Except when the provider resolves its binary somewhere else. The runtime row
-  // answers "does the bare binary resolve on PortOS's PATH?", which says nothing
-  // about a provider configured as `/opt/tools/codex` or one that overrides
-  // `PATH` in its own env — the runner spawns those against their own
-  // resolution. Badging them NEEDS SETUP accuses a working provider, and the
-  // server (which owns the routing decision) already declines to. The install
-  // widget still renders from the same row: "PortOS can install this for you"
-  // remains true and useful either way.
+  // Kept client-side even when published: `runtime` may be the LOCAL-APP shape
+  // (LM Studio / Ollama installed with no CLI shim) the server's table does not
+  // cover; for a plain CLI it is the row the server probed and `addMissing`
+  // de-dupes by code. Skipped when the provider resolves its binary elsewhere
+  // (absolute path, own `PATH`): the runtime row only says whether the bare
+  // binary resolves on PortOS's PATH, so badging it NEEDS SETUP would accuse a
+  // working provider.
   if (runtime && runtime.installed === false && !resolvesOutsidePortosPath(provider)) {
     addMissing('runtime', `${runtime.label || 'Runtime'} is not installed`);
   }
-  // The server's published findings remain authoritative for stored/inherited
-  // credentials. Env credentials are also derived here because their values
-  // are intentionally redacted in the payload; the tri-state lookup lets an
-  // explicitly empty value be reported without treating a redacted/absent
-  // value as missing.
+  // Stored/inherited credential findings stay the server's. Env credentials are
+  // also derived here because their values are redacted in the payload; the
+  // tri-state lookup reports an explicitly empty value without treating a
+  // redacted/absent one as missing.
   const source = credentialSource(provider);
   if (!published || source.kind === 'env') {
     const missingCredential = credentialMissing(provider, { keySetFor, envVarSet });
@@ -420,8 +355,8 @@ export const providerCardState = (provider, {
     addMissing('codexAccount', 'ChatGPT sign-in has expired');
   }
 
-  // Switched off wins over every finding — see the precedence note above. The
-  // findings ride along so the card can still say what enabling it would take.
+  // Switched off wins over every finding; they ride along so the card can say
+  // what enabling it would take.
   if (!provider?.enabled) return { state: PROVIDER_CARD_STATE.DISABLED, missing };
   if (codexSubscription && codexAccount === null) return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
   if (codexSubscription && accountStatus === 'unknown') return { state: PROVIDER_CARD_STATE.UNKNOWN, missing };
