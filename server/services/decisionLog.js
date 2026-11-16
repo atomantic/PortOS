@@ -28,7 +28,6 @@ export const DECISION_TYPES = {
   QUEUE_FULL: 'queue_full',                 // Too many tasks in queue
   CAPACITY_FULL: 'capacity_full',           // Max concurrent agents reached (global or per-project)
   TASK_SELECTED: 'task_selected',           // Task was selected to run
-  REHABILITATION: 'rehabilitation',         // Skipped task type retried
   IDLE: 'idle'                              // No work available after full evaluation
 };
 
@@ -179,7 +178,6 @@ export async function getDecisionSummary() {
     DECISION_TYPES.TASK_SKIPPED,
     DECISION_TYPES.TASK_SWITCHED,
     DECISION_TYPES.INTERVAL_ADJUSTED,
-    DECISION_TYPES.REHABILITATION,
     DECISION_TYPES.CAPACITY_FULL,
     DECISION_TYPES.COOLDOWN_ACTIVE
   ];

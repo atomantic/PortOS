@@ -142,7 +142,6 @@ export const DEFAULT_CONFIG = {
   // and maxMinutesPerDay; `null` = unlimited, which is the default for every
   // domain — so an install with no stored value enforces nothing (no migration).
   domainBudgets: normalizeDomainBudgets({}),
-  rehabilitationGracePeriodDays: 7,
   completedAgentRetentionMs: 86400000,
   embeddingProviderId: 'lmstudio',
   embeddingModel: '',
@@ -244,6 +243,9 @@ function mergeStoredConfig(storedConfig) {
   delete persistedConfig.comprehensiveAppImprovement;
   delete persistedConfig.immediateExecution;
   delete persistedConfig.proactiveMode;
+  // Auto-rehabilitation of skipped task types was removed (#16406); the grace
+  // period it read is inert, so purge it from upgraded files on the next save.
+  delete persistedConfig.rehabilitationGracePeriodDays;
 
   return {
     ...DEFAULT_CONFIG,

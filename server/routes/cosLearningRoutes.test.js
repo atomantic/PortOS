@@ -9,7 +9,6 @@ vi.mock('../services/taskLearning.js', () => ({
   backfillFromHistory: vi.fn(),
   getSkippedTaskTypes: vi.fn(),
   resetTaskTypeLearning: vi.fn(),
-  getAdaptiveCooldownMultiplier: vi.fn(),
   getRoutingAccuracy: vi.fn(),
   getPerformanceSummary: vi.fn(),
   getLearningSummary: vi.fn(),
@@ -103,18 +102,6 @@ describe('CoS Learning Routes', () => {
       const response = await request(app).post('/api/cos/learning/reset/unknown');
 
       expect(response.status).toBe(404);
-    });
-  });
-
-  describe('GET /api/cos/learning/cooldown/:taskType', () => {
-    it('should return cooldown info', async () => {
-      taskLearning.getAdaptiveCooldownMultiplier.mockResolvedValue({ multiplier: 1.5, reason: 'low success' });
-
-      const response = await request(app).get('/api/cos/learning/cooldown/deploy');
-
-      expect(response.status).toBe(200);
-      expect(response.body.taskType).toBe('deploy');
-      expect(response.body.multiplier).toBe(1.5);
     });
   });
 

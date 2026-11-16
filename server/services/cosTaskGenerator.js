@@ -1051,10 +1051,6 @@ export async function evaluateTasks(options) {
       availableSlots
     });
 
-    // Note: Performance summaries, learning insights, and rehabilitation checks
-    // are now handled by dedicated maintenance intervals (cos-performance-summary,
-    // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
-
     // Spawn all ready tasks (up to available slots)
     for (const task of tasksToSpawn) {
       emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {

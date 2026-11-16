@@ -97,7 +97,7 @@ export const cosConfigSchema = z.object({
       ).strict().optional()
     ]))
   ).strict().optional(),
-  rehabilitationGracePeriodDays: z.number().int().min(1).optional(),
+  rehabilitationGracePeriodDays: z.number().int().min(1).optional(), // retired; discarded below
   completedAgentRetentionMs: z.number().int().min(0).optional(),
   embeddingProviderId: z.string().optional(),
   embeddingModel: z.string().optional(),
@@ -118,6 +118,7 @@ export const cosConfigSchema = z.object({
   delete supportedConfig.comprehensiveAppImprovement;
   delete supportedConfig.immediateExecution;
   delete supportedConfig.proactiveMode;
+  delete supportedConfig.rehabilitationGracePeriodDays;
   return supportedConfig;
 });
 
