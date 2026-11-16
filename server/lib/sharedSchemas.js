@@ -91,8 +91,10 @@ const isAnchoredOrWildcardLed = (pattern) => pattern.startsWith('/') || pattern.
 /**
  * Normalize ONE user-entered pattern to what rsync is handed: the single declaration of a legal pattern (`isSafeExcludePattern` is defined in terms of it, so the settings
  * boundary can never accept what the read-time normalizer would drop).
+ *
  * @param {unknown} pattern
- * @returns {string|null} the anchored pattern, or null when blank, non-string or unsafe (caller drops it).
+ * @returns {string|null} the anchored pattern, or null when it is blank,
+ *   non-string, or unsafe (caller drops it).
  */
 export function anchorUserExclude(pattern) {
   if (typeof pattern !== 'string') return null;
@@ -110,7 +112,11 @@ export function anchorUserExclude(pattern) {
  */
 export const isSafeExcludePattern = (pattern) => anchorUserExclude(pattern) !== null;
 
-/** Normalize a whole user list, dropping blank/unsafe entries and duplicates that differ only by anchoring or whitespace. */
+/**
+ * Normalize a whole user list, dropping blank/unsafe entries and duplicates that differ only by anchoring or whitespace.
+ *
+ * @param {unknown} patterns
+ */
 export function anchorUserExcludes(patterns) {
   const list = Array.isArray(patterns) ? patterns : [];
   return [...new Set(list.map(anchorUserExclude).filter(Boolean))];

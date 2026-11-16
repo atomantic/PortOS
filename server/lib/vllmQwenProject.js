@@ -127,7 +127,10 @@ async function rootHoldsQwenWeights(root, entries) {
  * Inspect the operator's vLLM project without touching docker.
  *
  * @param {NodeJS.ProcessEnv} [env]
- * @param {string} [envPath] - which `.env` holds the recorded directory (a parameter so a test's sandbox, not the developer's install, answers)
+ * @param {string} [envPath] - which `.env` holds the recorded directory; a
+ *   parameter for the same reason `resolveHome` reads the passed env — every
+ *   path this module derives has to be answerable by a test's sandbox rather
+ *   than by whatever the developer's own install happens to have recorded.
  * @returns {Promise<{dir:string, hasProject:boolean, composeFile:string|null,
  *   hasWeights:boolean|null, weightsRoot:string|null}>}
  */
@@ -164,7 +167,11 @@ export async function inspectVllmQwenProject(env = process.env, envPath = PORTOS
   };
 }
 
-/** Why the start button must not run compose, or `null` when it may. Prose rendered verbatim by the checklist; each case names the one command that fixes it. */
+/**
+ * Why the start button must not run compose, or `null` when it may. Prose rendered verbatim by the checklist; each case names the one command that fixes it.
+ *
+ * @param {{dir:string, hasProject:boolean, composeFile:string|null, hasWeights:boolean|null}} project
+ */
 export function vllmStartBlockedReason(project) {
   if (!project?.hasProject) {
     return `the compose project was not found at ${project?.dir}. Use the checklist's “Clone, build & prepare” button — it does the whole ~30 GB sequence for you, and a plain Start never downloads an image or a weight.`;

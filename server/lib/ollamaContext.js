@@ -35,6 +35,8 @@ export function resolveOllamaContextLength(provider, env = process.env) {
 
 /**
  * The base URL of the Ollama daemon THIS install manages: `OLLAMA_URL`, then the `OLLAMA_HOST` (`host:port`) convention, then the stock local daemon. Half of the `isSameOllamaDaemon` comparison.
+ *
+ * @param {Record<string, string|undefined>} [env]
  */
 export function managedOllamaBaseUrl(env = process.env) {
   const raw = String(env?.OLLAMA_URL || env?.OLLAMA_HOST || '').trim()
@@ -43,6 +45,8 @@ export function managedOllamaBaseUrl(env = process.env) {
 
 /**
  * Normalize an Ollama base URL to a scheme, no trailing slash and no `/v1` (`OLLAMA_HOST` is conventionally a bare `host:port`).
+ *
+ * @param {string} raw
  */
 export function normalizeOllamaBaseUrl(raw) {
   let url = String(raw || '').trim().replace(/\/+$/, '').replace(/\/v1$/, '')
@@ -68,6 +72,9 @@ export function managedOllamaContextLength(provider, env = process.env) {
 /**
  * `provider` with that window stamped on, for the prompt budgeter (`services/stageRunner.js#effectiveContextWindow`) and pre-dispatch gate (`services/promptRunner.js#assertRequestFitsContext`).
  * How the env rung reaches the vendored toolkit (which may not import this module): data on an in-memory projection, never persisted (`aiToolkit/internal/ollamaBacked.js#withRuntimeContextWindow`).
+ *
+ * @param {object|null|undefined} provider
+ * @param {Record<string, string|undefined>} [env]
  */
 export function withOllamaRuntimeContextWindow(provider, env = process.env) {
   return withRuntimeContextWindow(provider, managedOllamaContextLength(provider, env))

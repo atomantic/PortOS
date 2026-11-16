@@ -44,7 +44,9 @@ export async function resolvePgBackend({ requirement, migrate, loadDb, makePg })
  * @param {object} opts
  * @param {() => object|Promise<object>} opts.makeFile  Build the file backend.
  * @param {() => Promise<object>} opts.makePg           Build the PG backend.
- * @param {() => boolean} [opts.isFile]  Escape-hatch predicate (default `isFileBackend`); overridden only by stores using a stronger test-mode signal (`createRecordStoreBackendSelector`'s `isTestMode`).
+ * @param {() => boolean} [opts.isFile]  Escape-hatch predicate (default `isFileBackend`).
+ *   Overridden only by stores that use a stronger test-mode signal (see
+ *   `createRecordStoreBackendSelector`'s `isTestMode`).
  * @returns {{ getBackend: () => Promise<object>, getBackendName: () => (string|null), reset: () => void }}
  */
 export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend }) {
