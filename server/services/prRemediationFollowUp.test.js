@@ -104,6 +104,16 @@ describe('spawnPrRemediationFollowUp', () => {
     expect(context).toContain('UNTRUSTED DATA');
   });
 
+  it.each([
+    ['sets a threshold', { ...APP, mergeHandoffMinQueuedRuns: 3 }, true],
+    ['sets no threshold', APP, false],
+  ])('includes the pending-merge handoff text only when the app %s', async (_label, app, expected) => {
+    await spawn({ app });
+    const context = addTaskMock.mock.calls[0][0].context;
+    expect(context.includes('mergeHandoffMinQueuedRuns')).toBe(expected);
+    expect(context).toContain('Wait for CI to finish');
+  });
+
   // A same-repo head has no contributor who "left the branch writable", so the
   // prompt must not tell the agent one did — it names a real person.
   it('describes push access from the head repository, not from a fork claim', async () => {
