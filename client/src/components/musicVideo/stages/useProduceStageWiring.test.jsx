@@ -656,16 +656,17 @@ describe('MusicVideo typography composition (#8984)', () => {
       { id: 'lc-1', text: 'first line', startSec: 1, endSec: 3 },
       { id: 'lc-2', text: 'untimed line', startSec: null, endSec: null },
     ];
-    updateMusicVideoProject.mockResolvedValue({});
+    let saves = 0;
+    updateMusicVideoProject.mockImplementation(async (_id, patch) => ({ edit: editResult([], [], { updatedAt: `2026-01-01T00:00:0${++saves}.000Z`, project: patch }) }));
     await openProject({ ...PROJECT_ANALYZED, lyricCues }, 'compose');
 
-    fireEvent.click(screen.getByRole('button', { name: /Copy timed lyrics \(1\)/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /Copy timed lyrics \(1\)/ }));
     const text = await screen.findByLabelText('Text cue 1 text');
     expect(text).toHaveValue('first line');
     expect(screen.queryByLabelText('Text cue 2 text')).toBeNull();
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenLastCalledWith('mv-3', {
       composition: expect.objectContaining({ mode: 'concat', textCues: [expect.objectContaining({ text: 'first line', startSec: 1, endSec: 3, template: 'fade' })] }),
-    }, { silent: true }));
+    }, { silent: true, edit: true }));
 
     expect(document.getElementById('mv-typo-mode')).toBeNull(); // render style is chosen in Setup only
     fireEvent.change(screen.getByLabelText('Text cue 1 motion'), { target: { value: 'typewriter' } });
@@ -676,7 +677,7 @@ describe('MusicVideo typography composition (#8984)', () => {
         mode: 'concat',
         textCues: [expect.objectContaining({ text: 'first line, typed', template: 'typewriter' })],
       }),
-    }, { silent: true }));
+    }, { silent: true, edit: true }));
   });
 });
 
@@ -1138,12 +1139,12 @@ it('waits for a grade save before rendering and keeps the saved look when a late
   const project = { ...PROJECT_WITH_CLIP, composition: { mode: 'composed', textCues: [], style: { color: '#ffffff', font: 'sans' } } };
   let finishSave;
   updateMusicVideoProject.mockImplementationOnce((_id, patch) => new Promise((resolve) => {
-    finishSave = () => resolve({ ...project, ...patch });
+    finishSave = () => resolve({ edit: editResult(project.scenes || [], [], { updatedAt: '2026-01-01T00:00:01.000Z', project: patch }) });
   }));
   await openProject(project, 'compose');
   fireEvent.change(screen.getByLabelText('Default section look'), { target: { value: 'teal-night' } });
   await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id,
-    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true }));
+    { composition: expect.objectContaining({ grade: expect.objectContaining({ preset: 'teal-night' }) }) }, { silent: true, edit: true }));
   expect(screen.getByLabelText('Default section look')).toBeDisabled();
   expect(screen.getByLabelText('Default section look').value).toBe('neutral');
   await openStage('review');
@@ -1420,6 +1421,26 @@ describe('shot edits apply their reply without a project read', () => {
     await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Done', exact: true })).toBeChecked());
     await settle();
     expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a project-field save that applies the whole project reply, or reloads on its own broadcast.
+  it('saves a project field from its edit result alone', async () => {
+    await asThisTab();
+    updateMusicVideoProject.mockResolvedValue({ edit: editResult([first, second], ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z', project: { pacing: { minShotSec: 2 } } }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    const field = await screen.findByLabelText('Shortest shot (s)');
+    fireEvent.change(field, { target: { value: '2' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith('mv-2', { pacing: { minShotSec: 2 } }, { ...ownOrigin, edit: true }));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+    updateMusicVideoProject.mockResolvedValue({ id: 'mv-2' });
+    const again = await screen.findByLabelText('Shortest shot (s)');
+    fireEvent.change(again, { target: { value: '3' } });
+    fireEvent.blur(again);
+    await waitFor(() => expect(reads()).toBeGreaterThan(loaded));
   });
 
   // Uniquely catches an added shot that is appended unpresented and then reloaded by its own broadcast.

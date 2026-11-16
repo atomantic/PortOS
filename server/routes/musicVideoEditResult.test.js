@@ -111,6 +111,26 @@ describe('board edit replies carry what a reload would show', () => {
     expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(await read());
   });
 
+  // Uniquely catches a project-level save that answers with the whole project when the tab asked for the edit result.
+  it('a project field save asking for the edit result folds into the reloaded board; without asking it answers the project', async () => {
+    const before = await read();
+    const reply = await request(app).patch(`${base()}?edit=1`).send({ name: 'Renamed example', lyricOverlayEnabled: true });
+    expect(reply.status).toBe(200);
+    expect(reply.body).not.toHaveProperty('scenes');
+    expect(reply.body.edit.project).toMatchObject({ name: 'Renamed example', lyricOverlayEnabled: true });
+    expect(applyMusicVideoEdit(before, reply.body.edit)).toEqual(await read());
+    const plain = await request(app).patch(base()).send({ name: 'Renamed again' });
+    expect(plain.body).toMatchObject({ id: project.id, name: 'Renamed again' });
+    expect(plain.body).not.toHaveProperty('edit');
+  });
+
+  it('a project save that changes the cast answers the project even when the edit result was asked for', async () => {
+    const reply = await request(app).patch(`${base()}?edit=1`).send({ concept: { subjects: [{ id: 'subject-a', kind: 'character', name: 'Alice', description: 'Example' }] } });
+    expect(reply.status).toBe(200);
+    expect(reply.body).toMatchObject({ id: project.id });
+    expect(reply.body).not.toHaveProperty('edit');
+  });
+
   it('split, merge, delete and reorder each fold into the reloaded board', async () => {
     const split = await expectReloadParity(() => request(app).post(`${base()}/scenes/a/split`).send({ atSec: 2.5 }));
     expect(split.reply.scenes).toHaveLength(2);

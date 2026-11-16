@@ -44,7 +44,7 @@ import usePlanStageWiring from './stages/usePlanStageWiring.js';
 import useProduceStageWiring from './stages/useProduceStageWiring.js';
 import useReviewStageWiring from './stages/useReviewStageWiring.js';
 import usePublishStageWiring, { publishProgress } from './stages/usePublishStageWiring.js';
-import { wordAnchoredShots } from './useMusicVideoJobSlots.js';
+import { ownWrite } from '../../services/socketWriteOrigin.js';
 import { videoPosterForJob } from '../../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
@@ -164,15 +164,22 @@ export default function ProjectWorkspace({
     return updateMusicVideoProject(projectId, { filmLook }, { silent: true })
       .then((saved) => patchProject(projectId, { filmLook: saved.filmLook ?? null }));
   };
-  const saveProjectFields = (patch, { applyComposition = false } = {}) => {
+  // Sent with its origin and asking for the edit result: a reply with one patches the board and its
+  // own change broadcast is skipped. Any other reply (a cast or reference change), or a take decision
+  // that started meanwhile, reloads instead.
+  const saveProjectFields = (patch) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
-      .then(() => updateMusicVideoProject(projectId, patch, { silent: true }))
-      .then((saved) => {
-        if (applyComposition) patchProject(projectId, { composition: saved.composition });
-        // The server moves markers with their cues when lines are removed or merged.
-        if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
+      .then(() => {
+        const mark = takesRef.current?.writeMark();
+        return updateMusicVideoProject(projectId, patch, ownWrite({ edit: true })).then((saved) => {
+          if (saved?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, saved.edit);
+          else void reloadOpenProject(projectId);
+        }, (err) => {
+          if (err?.status === 409) void reloadOpenProject(projectId);
+          throw err;
+        });
       })
       .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));

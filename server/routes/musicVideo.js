@@ -195,8 +195,9 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       }
     }
   }
-  const updated = await updateProject(req.params.id, data);
-  res.json(updated);
+  // `?edit=1`: a tab that applies board edits answers `{ edit }` where the patch allows it.
+  const answerEdit = req.query.edit === '1';
+  res.json(await (answerEdit ? updateProject(req.params.id, data, { edit: true }) : updateProject(req.params.id, data)));
 }));
 
 // Names references saved before catalog naming existed; answers only the labels it filled.
