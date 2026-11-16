@@ -8,19 +8,6 @@
  * body so teardown can `await drain()` before removing a fixture root — a body left running by
  * Vitest's fail-fast cancellation otherwise recreates the removed root (`test temp leak:`).
  *
- * Eight (and growing) test files duplicated the same Proxy-over-fileUtils
- * mock to redirect `PATHS.data` at a per-test temp directory:
- *
- *     vi.mock('../../lib/fileUtils.js', async () => {
- *       const actual = await vi.importActual('../../lib/fileUtils.js');
- *       return new Proxy(actual, {
- *         get(target, prop) {
- *           if (prop === 'PATHS') return { ...actual.PATHS, data: tempRoot };
- *           return target[prop];
- *         },
- *       });
- *     });
- *
  * This module gives the same behavior via a single helper. The relative path
  * to `fileUtils.js` stays at each call site because `vi.mock` is hoisted to
  * module top before any test code runs — Vitest must see a string literal to
@@ -28,9 +15,6 @@
  * and exposes a Proxy factory; the caller still writes the one-liner
  * `vi.mock(...)` so Vitest's hoister can find it. See `mockPathsDataRoot()`
  * below for the canonical usage example.
- *
- * To keep the call site short and avoid forcing every test to write the Proxy
- * block, this module exports:
  *
  *   - `makePathsProxy(actual, { dataRoot, extraOverrides? })` — used inside
  *     the test's own `vi.mock` factory. Returns the Proxy.
@@ -71,9 +55,6 @@ export function createTempDataRoot(prefix = 'portos-test-') {
  * Sidecar the run-wide leak guard (`scripts/vitestTempRootSetup.js`) reads so a
  * leaked `<prefix>XXXXXX` directory is reported with the test file that minted
  * it. A random-suffixed name alone cannot identify its creator (#10404).
- * Best-effort and basename-only: diagnostics must never fail a fixture or put a
- * checkout path in a log. Optional versioned observations are prevalidated by
- * the owned-browser observer; retain legacy two-column attribution unchanged.
  * The 8 MiB budget admits at most one small concurrent append per worker.
  */
 const TEMP_ROOT_OWNERS_FILE = '.leak-owners';
@@ -150,23 +131,12 @@ export function cleanupTempDataRoots() {
  * Belt-and-suspenders for a suite whose real (unmocked) child work — ffmpeg,
  * a headless browser over CDP — can still be settling when `afterAll` runs:
  * remove every real `os.tmpdir()` entry matching `prefix`, not just the one
- * root `cleanupTempDataRoots()` tracked in memory (#9032). A lingering
- * renderer/ffprobe handle on a file inside a `lazyTempDataRoot` root can make
- * that function's own `rmSync` throw before the tree is fully gone, or an
- * un-awaited background job can call `lazyTempDataRoot(prefix)` again AFTER
- * `cleanupTempDataRoots()` already cleared it, minting a brand new root
  * nothing else ever cleans. Call this LAST in the suite's `afterAll`, after
  * `cleanupTempDataRoots()`, to narrow (not eliminate — a genuinely still-
  * running background job can still recreate the prefix afterward) that race.
  * `server/services/musicVideo/compositionRender.test.js` and
  * `server/routes/musicVideoVocalStem.test.js` are the worked examples.
  *
- * Runs the sweep twice, ~300ms apart: a single pass right after
- * `cleanupTempDataRoots()` can still race a background job that has not
- * started writing yet (observed on CI's slower/more contended runners, not
- * reproduced in ~10 local runs) — the second pass catches what the first
- * one was too early for. `await` this call as the LAST statement of the
- * suite's `afterAll`.
  */
 export async function sweepStrayTempRoots(prefix) {
   const sweepOnce = () => {
@@ -193,15 +163,11 @@ export async function sweepStrayTempRoots(prefix) {
  * worker) settles a running test's wrapper while its async body keeps going. A
  * suite whose `afterAll`/`afterEach` removes a temp data root then deletes the
  * directory underneath that body, and the body's next store write recreates it
- * — the run-level guard reports it as `test temp leak:` (#9497, #9622, #9635).
- *
  * Pass vitest's `it`; use the returned `it` for every test that writes into the
  * fixture, and `await drain()` in teardown BEFORE removing it. A body that
  * failed after cancellation (vitest is no longer listening) is rethrown from
  * `drain()` rather than dropped; a failure vitest already reported is not.
  * A test TIMEOUT leaves its body running the same way, so a suite whose cases
- * share external state also awaits `drain()` in `beforeEach` (#10272,
- * `services/backup.db.test.js`).
  *
  *     const owned = ownTestBodies(vitestIt);
  *     const it = owned.it;
