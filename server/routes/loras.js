@@ -8,10 +8,11 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination, paginationQuerySchema } from '../lib/validation.js';
+import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,

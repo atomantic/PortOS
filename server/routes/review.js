@@ -1,5 +1,5 @@
 import express from 'express';
-import { reviewItemsQuerySchema } from '../lib/routeQueryValidation.js';
+import { reviewItemsQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { reviewQueueQuerySchema, validateRequest } from '../lib/validation.js';

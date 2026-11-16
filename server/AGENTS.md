@@ -6,7 +6,7 @@ These apply to Express/service/model code; the root `AGENTS.md` rules always app
 
 - **Schema parity when adding fields.** A field added to a sanitizer, `createXxx` or payload shape gets its Zod schema entry in the same change ([detail](../docs/INSTRUCTION_RULE_DETAIL.md#server-conventions-moved-from-serveragentsmd)).
 - **A POST/PUT/PATCH handler reading `req.body` validates it with a schema** (`validateRequest(schema, req.body ?? {})`, schema in `server/lib/validation.js` or the domain `*Validation.js`), not a hand-rolled check. *Enforced:* `server/routeValidationConventions.test.js` over `server/routes/`, `lib/aiToolkit/routes/` (schemas in `lib/aiToolkit/validation.js`) and `cos-runner/index.js` (`requestSchemas.js`). Its `ALLOWED_UNVALIDATED` list (raw-binary and multipart bodies) may only shrink; never add a JSON-body handler (#9950).
-- **A handler reading `req.query` validates the whole query object** on any method (`validateRequest(schema, req.query)` or `validate` / `parseBody` / `safeParse` / `Schema.parse` on it or a name assigned from it; one field or `req.params` doesn't count, nor does `parsePagination`). `UNVALIDATED_QUERY_BASELINE` in the same test only shrinks (#10024).
+- **A handler reading `req.query` validates the whole query object** on any method (`validateRequest(schema, req.query)` or `validate` / `parseBody` / `safeParse` / `Schema.parse` on it or a name assigned from it; one field or `req.params` doesn't count, nor does `parsePagination`). Shared lenient shapes (pagination, flags) live in `lib/queryValidation.js`; the same test has no allowlist for query reads (#10024, #16428).
 
 ## Offering models vs running them
 

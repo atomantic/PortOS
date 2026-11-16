@@ -1,5 +1,5 @@
 import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
-import { runtimeQuerySchema } from '../lib/routeQueryValidation.js';
+import { runtimeQuerySchema } from '../lib/queryValidation.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.

@@ -40,7 +40,7 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';

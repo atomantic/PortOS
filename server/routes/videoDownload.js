@@ -13,7 +13,7 @@
  */
 
 import { Router } from 'express';
-import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest, videoDownloadSchema, isPaginationRequested, paginateArray,

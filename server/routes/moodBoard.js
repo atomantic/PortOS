@@ -8,24 +8,10 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  moodBoardCreateSchema,
-  moodBoardUpdateSchema,
-  moodBoardItemCreateSchema,
-  moodBoardItemUpdateSchema,
-  moodBoardPinterestLinkSchema,
-  moodBoardXPostImportSchema,
-  moodBoardCollageSchema,
-  moodBoardExtractFramesSchema,
-  moodBoardItemRenderSchema,
-  moodBoardGenerateSchema,
-  isPaginationRequested,
-  paginateArray,
-  paginationQuerySchema,
-} from '../lib/validation.js';
+import { validateRequest, moodBoardCreateSchema, moodBoardUpdateSchema, moodBoardItemCreateSchema, moodBoardItemUpdateSchema, moodBoardPinterestLinkSchema, moodBoardXPostImportSchema, moodBoardCollageSchema, moodBoardExtractFramesSchema, moodBoardItemRenderSchema, moodBoardGenerateSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { moodBoardCombineSchema } from '../lib/moodBoardValidation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';

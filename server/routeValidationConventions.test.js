@@ -1,6 +1,6 @@
 /**
  * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
- * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED` / `UNVALIDATED_QUERY_BASELINE`.
+ * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
@@ -123,51 +123,6 @@ const scanWith = (finder) => trackedRouteSources().flatMap((file) => (
 const scanTree = () => scanWith(findUnvalidatedBodyHandlers);
 const scanQueries = () => scanWith(findUnvalidatedQueryHandlers);
 
-// Handlers that already read `req.query` without a schema call on the query
-// object. Shrink-only: delete a line when it validates or disappears; never add
-// one. Keyed by file + verb + path so an unrelated edit above the handler does
-// not churn the list (#10024).
-const UNVALIDATED_QUERY_BASELINE = [
-  'lib/aiToolkit/routes/runs.js DELETE /',
-  'lib/aiToolkit/routes/runs.js GET /',
-  'routes/apps/taskTypes.js GET /:id/work-items',
-  'routes/apps/viteTls.js GET /:id/vite-host-check',
-  'routes/openclaw.js GET /sessions/:id/messages',
-  'routes/peerSync.js GET /cos-agent-archive',
-  'routes/peerSync.js GET /integrity',
-  'routes/peerSync.js GET /manifest',
-  'routes/peerSync.js GET /record',
-  'routes/peerSync.js GET /subscriptions',
-  'routes/pipeline/series.js GET /series',
-  'routes/platformAccounts.js GET /',
-  'routes/prompts.js DELETE /:stage',
-  'routes/providers.js GET /codex/account',
-  'routes/providers.js GET /codex/models',
-  'routes/providers.js GET /fleet-host',
-  'routes/providers.js GET /readiness',
-  'routes/providers.js POST /readiness/serve-model',
-  'routes/providers.js POST /readiness/setup',
-  'routes/providers.js POST /runtimes/install',
-  'routes/quotaBurn.js GET /',
-  'routes/review.js GET /items',
-  'routes/sharing.js GET /subscriptions',
-  'routes/spotify.js GET /oauth/callback',
-  'routes/sprites.js GET /',
-  'routes/storyBuilder.js GET /',
-  'routes/tracks.js GET /',
-  'routes/tribe.js GET /care',
-  'routes/tribe.js GET /outreach',
-  'routes/tribe.js GET /people/:id/touchpoints',
-  'routes/uploads.js DELETE /',
-  'routes/usage.js GET /claude-code',
-  'routes/videoDownload.js GET /downloads',
-  'routes/videoGen.js POST /setup/runtime-install',
-  'routes/videoTimeline.js GET /projects',
-  'routes/voice.js GET /voices',
-  'routes/voicePublic.js GET /voices',
-  'routes/writersRoom.js GET /exercises',
-];
-
 describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
     // A broken `git ls-files` would otherwise let the assertions below pass by scanning nothing.
@@ -271,27 +226,15 @@ describe('the unvalidated-body recognizer', () => {
 });
 
 describe('route handlers validate req.query (#10024)', () => {
-  it('has no unvalidated req.query read outside the burn-down baseline', () => {
-    const baseline = new Set(UNVALIDATED_QUERY_BASELINE);
-    const offenders = scanQueries().filter((key) => !baseline.has(key));
+  it('has no unvalidated req.query read', () => {
+    const offenders = scanQueries();
     expect(
       offenders,
       'These handlers read `req.query` with no schema on the query object. Add a Zod schema '
-      + 'and call `validateRequest(schema, req.query)` (toolkit routes: `lib/aiToolkit/validation.js`). '
-      + 'Do NOT add a line to UNVALIDATED_QUERY_BASELINE — that list only shrinks.\n'
+      + 'and call `validateRequest(schema, req.query)` (shared shapes: `lib/queryValidation.js`; toolkit routes: `lib/aiToolkit/validation.js`). '
+      + 'There is no allowlist for query reads.\n'
       + `Offenders:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);
-  });
-
-  it('only baselines handlers that still exist and are still unvalidated', () => {
-    const live = new Set(scanQueries());
-    const stale = UNVALIDATED_QUERY_BASELINE.filter((key) => !live.has(key));
-    expect(
-      stale,
-      `These baseline entries are compliant or gone — delete them from UNVALIDATED_QUERY_BASELINE:\n  ${stale.join('\n  ')}`,
-    ).toEqual([]);
-    expect(new Set(UNVALIDATED_QUERY_BASELINE).size).toBe(UNVALIDATED_QUERY_BASELINE.length);
-    expect([...UNVALIDATED_QUERY_BASELINE].sort()).toEqual(UNVALIDATED_QUERY_BASELINE);
   });
 });
 

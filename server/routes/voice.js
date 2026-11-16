@@ -1,5 +1,5 @@
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
-import { voiceEngineQuerySchema } from '../lib/routeQueryValidation.js';
+import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
 /**
  * Voice Routes
  *

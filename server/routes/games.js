@@ -3,23 +3,9 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  gameCreateSchema,
-  gameArtworkBindingSchema,
-  gameArtworkBindingUpdateSchema,
-  gameArtworkPublishSchema,
-  gameFeedbackSchema,
-  gameMusicBindingSchema,
-  gameMusicBindingUpdateSchema,
-  gameMusicPublishSchema,
-  gameSpriteBindingSchema,
-  gameUpdateSchema,
-  isPaginationRequested,
-  paginateArray,
-  paginationQuerySchema,
-  validateRequest,
-} from '../lib/validation.js';
+import { gameCreateSchema, gameArtworkBindingSchema, gameArtworkBindingUpdateSchema, gameArtworkPublishSchema, gameFeedbackSchema, gameMusicBindingSchema, gameMusicBindingUpdateSchema, gameMusicPublishSchema, gameSpriteBindingSchema, gameUpdateSchema, isPaginationRequested, paginateArray, validateRequest } from '../lib/validation.js';
 import {
   bindMusic,
   bindArtwork,

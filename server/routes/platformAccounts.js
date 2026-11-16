@@ -5,7 +5,7 @@
  */
 
 import { Router } from 'express';
-import { platformAccountsQuerySchema } from '../lib/routeQueryValidation.js';
+import { platformAccountsQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, platformAccountSchema, accountRegistrationSchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';

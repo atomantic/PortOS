@@ -1,8 +1,8 @@
 import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
+import { freshQuerySchema, runtimeQuerySchema, providerReadinessQuerySchema, providerReadinessSetupQuerySchema, providerServeModelQuerySchema } from '../lib/queryValidation.js';
 import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
 import { harnessForProvider } from '../lib/providerHarnesses.js';
 import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
-import { freshQuerySchema, runtimeQuerySchema, providerReadinessQuerySchema, providerReadinessSetupQuerySchema, providerServeModelQuerySchema } from '../lib/routeQueryValidation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
 import { tuiModeAddition } from '../lib/providerModePairing.js';

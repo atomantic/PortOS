@@ -16,8 +16,8 @@
  */
 
 import { Router } from 'express';
+import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { voiceEngineQuerySchema } from '../lib/routeQueryValidation.js';
 import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { voiceSynthesizeBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
