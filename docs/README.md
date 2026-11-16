@@ -88,7 +88,6 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
-| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers (Nov 11 and Nov 14 reviews) |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |

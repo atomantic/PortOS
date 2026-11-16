@@ -3,7 +3,10 @@ name: Runtime image security
 # SBOM + vulnerability inventories for the pinned runtime container images
 # (#15656). Deliberately NOT part of ci.yml / CI Gate: a new upstream advisory
 # must never block an unrelated PR. It runs weekly, on demand, and on PRs that
-# change a scanned recipe. Contract and coverage gaps: docs/GITHUB_ACTIONS.md
+# change a scanned recipe. Every finding is listed in the job summary; the run
+# fails only on scanner errors, an empty SBOM, or a High/Critical finding that
+# the newest digest of the pinned tag already fixes (#16425). Digest bumps arrive
+# as Dependabot docker updates. Contract and coverage gaps: docs/GITHUB_ACTIONS.md
 # ("Runtime image security").
 
 on:
@@ -132,13 +135,35 @@ jobs:
           # but any scanner error does (set -e), and verify rejects malformed output.
           GRYPE_DB_AUTO_UPDATE=false grype "sbom:$EVIDENCE_DIR/sbom.syft.json" -o "json=$EVIDENCE_DIR/vulnerabilities.grype.json"
 
+      # A finding only counts as actionable when the newest digest of the pinned
+      # tag no longer carries it, so scan that digest too (skipped when the pin
+      # already is the newest). Runs after the pinned image is inventoried.
+      - name: Scan the newest digest of the pinned tag
+        if: matrix.target == 'pgvector'
+        run: |
+          docker pull "$TARGET_LATEST_IMAGE_REF"
+          latest_digests=$(docker image inspect --format '{{join .RepoDigests ","}}' "$TARGET_LATEST_IMAGE_REF")
+          test -n "$latest_digests"
+          echo "LATEST_REPO_DIGESTS=$latest_digests" >> "$GITHUB_ENV"
+          if [[ ",$latest_digests," == *"@${TARGET_IMAGE_REF##*@},"* ]]; then
+            echo "The pin is already the newest digest of $TARGET_LATEST_IMAGE_REF; nothing to compare."
+          else
+            syft scan "docker:$TARGET_LATEST_IMAGE_REF" -o "syft-json=$EVIDENCE_DIR/sbom.latest.syft.json"
+            GRYPE_DB_AUTO_UPDATE=false grype "sbom:$EVIDENCE_DIR/sbom.latest.syft.json" -o "json=$EVIDENCE_DIR/vulnerabilities.latest.grype.json"
+            echo "LATEST_SCANNED=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Validate evidence and record provenance
         run: |
           args=(verify --target "$TARGET" --arch "$ARCH" --sbom "$EVIDENCE_DIR/sbom.syft.json" --scan "$EVIDENCE_DIR/vulnerabilities.grype.json" --db-status "$EVIDENCE_DIR/grype-db-status.json" --out "$EVIDENCE_DIR")
           [ -n "${IMAGE_ID:-}" ] && args+=(--image-id "$IMAGE_ID" --repo-digests "${REPO_DIGESTS:-}")
-          # Scheduled and dispatched runs fail on findings with no reviewed
-          # disposition in docker/runtime-image-security.reviews.json; PR runs
-          # report them without turning an upstream advisory into a PR failure.
+          if [ -n "${LATEST_REPO_DIGESTS:-}" ]; then
+            args+=(--latest-digests "$LATEST_REPO_DIGESTS")
+            [ "${LATEST_SCANNED:-}" = true ] && args+=(--latest-sbom "$EVIDENCE_DIR/sbom.latest.syft.json" --latest-scan "$EVIDENCE_DIR/vulnerabilities.latest.grype.json")
+          fi
+          # Scheduled and dispatched runs fail on an actionable finding (High or
+          # Critical, fixed in the newest digest); PR runs report it without
+          # turning an upstream advisory into a PR failure.
           [ "$GITHUB_EVENT_NAME" != pull_request ] && args+=(--strict)
           node scripts/runtime-image-security.js "${args[@]}"
 
