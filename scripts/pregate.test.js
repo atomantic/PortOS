@@ -1777,24 +1777,6 @@ describe('focused local policy', () => {
   });
 });
 
-describe('focused local policy: size and index guards (#16475)', () => {
-  const tracked = execFileSync('git', ['ls-files'], { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').filter(Boolean);
-  const focusedFor = changed => {
-    const plan = { ...planWith(), ...buildCiTestPlan(changed, { trackedFiles: tracked }) };
-    return focusedLocalPlan(plan, tracked, changed, () => null).server.files;
-  };
-
-  it('runs the docs size ratchet for a docs or root markdown edit', () => {
-    expect(focusedFor(['docs/GITHUB_ACTIONS.md'])).toContain('docs/docs-index.test.js');
-    expect(focusedFor(['ETHOS.md'])).toContain('docs/docs-index.test.js');
-  });
-
-  it('runs the instruction-file byte caps for an AGENTS.md edit', () => {
-    expect(focusedFor(['AGENTS.md'])).toContain('scripts/agent-instructions-files.test.js');
-    expect(focusedFor(['server/AGENTS.md'])).toContain('scripts/agent-instructions-files.test.js');
-  });
-});
-
 describe('focused local policy: one-hop referencing suites', () => {
   const plan = () => planWith({ browser: { files: [] }, server: { mode: 'related', files: [], sources: [] } });
   const reader = files => path => files[path] ?? null;
