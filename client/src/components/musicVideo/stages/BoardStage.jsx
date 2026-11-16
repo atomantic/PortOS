@@ -363,6 +363,7 @@ export default function BoardStage({ board }) {
               onRepairPerformance={['code', 'document', 'blender'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
               repairBusy={board.repairBusy || videoSettings.saving}
               onEditLocal={board.editSceneLocal}
+              onApplySaved={board.applySavedScene}
               onSave={board.saveScene}
               onGenerateFrame={sceneMedia.generateFrame}
               castMedia={sceneMedia.castMedia} onReloadCastMedia={sceneMedia.reloadCastMedia} greyboxPlaces={sceneMedia.greyboxPlaces}

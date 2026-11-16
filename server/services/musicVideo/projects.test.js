@@ -348,6 +348,41 @@ describe('take decisions', () => {
     expect(states((await projects.getProject(p.id)).scenes[0])).toEqual(['current', 'current']);
     withCatalogCheckin.mockImplementation(actual);
   });
+
+  // Uniquely catches a board take decision's edit result presenting takes without the catalog check-in:
+  // a frame whose stamp only the check-in recognises would read stale until the next reload (#16270).
+  it('answers board take decisions on a catalog project with the take states the next read shows', async () => {
+    const { captureImageFrameDependencies } = await import('../../lib/musicVideoDependencies.js');
+    const { musicVideoSceneCastIds } = await import('../../lib/musicVideoConditioning.js');
+    const { canonicalSnapshotChecksum } = await import('../../lib/snapshotChecksum.js');
+    const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' }, { id: 'subj-b', kind: 'character', name: 'Ben', ingredientId: 'cat-chr-b' }];
+    const checkin = { items: subjects.map(({ id, kind, name, ingredientId }) => ({ subjectId: id, kind, name, ingredientId, images: [] })), problems: [] };
+    const actual = withCatalogCheckin.getMockImplementation();
+    withCatalogCheckin.mockImplementation(async (project) => ({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: checkin } }));
+    for (const name of ['frame-a.png', 'frame-b.png', 'frame-c.png']) seededImages.add(name);
+    const p = await projects.createProject({ name: 'Catalog take decisions' });
+    const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const shot = { sceneId, framePrompt: 'A rider at dusk', referenceImageId: 'frame-a.png', frameReferenceIds: ['mvr-linked-0000000000000001'], shotSheet: { characters: ['Ada'] } };
+    const presented = { concept: { subjects }, castAndSets: { source: 'catalog', catalogCheckin: checkin }, scenes: [shot] };
+    // A pre-#16274 cast stamp, narrowed by the check-in: current only when presented with it.
+    const deps = captureImageFrameDependencies(presented, shot);
+    deps.references = deps.references.map((ref) => (ref.role === 'frameCast' ? { ...ref, revision: canonicalSnapshotChecksum({ names: ['Ada'], ids: musicVideoSceneCastIds(presented, shot).slice().sort() }) } : ref));
+    const frame = (takeId, assetId) => ({ takeId, kind: 'image', assetId, status: 'candidate', source: 'generated', frameDependencies: deps });
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: { ...current, concept: { subjects }, castAndSets: { ...current.castAndSets, source: 'catalog' },
+      scenes: current.scenes.map((scene) => ({ ...scene, ...shot, takes: [frame('t-a', 'frame-a.png'), frame('t-b', 'frame-b.png'), frame('t-c', 'frame-c.png')] })) } }), { sceneOnly: true });
+    const states = (scene) => scene.takes.map((take) => `${take.takeId}:${take.status}:${take.dependencyState?.status}`);
+    const sceneOf = (edit) => edit.scenes.find((scene) => scene.sceneId === sceneId);
+    const board = { edit: true };
+
+    const reviewed = await projects.reviewSceneTake(p.id, sceneId, 't-b', { status: 'rejected' }, board);
+    expect(states(sceneOf(reviewed.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
+    expect(states(sceneOf(reviewed.edit))[0]).toBe('t-a:candidate:current');
+    const unused = await projects.rejectUnusedSceneTakes(p.id, sceneId, board);
+    expect(states(sceneOf(unused.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
+    const selected = await projects.selectSceneTake(p.id, sceneId, 't-c', {}, board);
+    expect(states(sceneOf(selected.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
+    withCatalogCheckin.mockImplementation(actual);
+  });
 });
 
 // Hold a public mutation immediately before the real backend acquires its write

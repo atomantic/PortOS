@@ -125,6 +125,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   cancelMusicVideoMidiTranscription: vi.fn(async () => ({ ok: true })),
   addMusicVideoSceneTake: vi.fn(),
   selectMusicVideoSceneTake: vi.fn(),
+  rejectUnusedMusicVideoSceneTakes: vi.fn(),
+  measureMusicVideoColorMatch: vi.fn(),
   approveMusicVideoFinal: vi.fn(),
   upgradeMusicVideoShots: vi.fn(async () => ({ dryRun: true, method: 'upscale', shots: [], totalCostUsd: 0 })),
   reviewMusicVideoSceneTake: vi.fn(),
