@@ -1,8 +1,9 @@
 /**
- * Which MODEL and EFFORT a run resolves to, and what a picker may list: CLI-default
- * sentinels, effort ladders and clamp, the Antigravity base-model/effort-suffix
- * split, account-aware Codex options, model-list merges, and which generation
- * controls a provider forwards.
+ * Which MODEL and EFFORT a run resolves to, and what a picker may list.
+ *
+ * Covers CLI-default sentinels, effort ladders and clamp, the Antigravity
+ * base-model/effort-suffix split, account-aware Codex options, model-list merges,
+ * and which generation controls a provider forwards.
  *
  * Sentinels, ladders and the Antigravity split re-export `server/lib/providerModels.js`;
  * pin membership is the server's `modelPinIsOffered` (`server/lib/modelPinMembership.js`),
