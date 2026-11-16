@@ -351,6 +351,17 @@ describe('updateAnimationTrack', () => {
   });
 });
 
+describe('Object.prototype track ids', () => {
+  // "constructor" satisfies the route id regex; it must read as an unknown track,
+  // never as the inherited Object function.
+  it('404s update and delete of an inherited member name and still allows creating the id', async () => {
+    await expect(updateAnimationTrack('constructor', { label: 'x' })).rejects.toMatchObject({ status: 404, code: 'UNKNOWN_ANIMATION_TRACK' });
+    await expect(deleteAnimationTrack('constructor')).rejects.toMatchObject({ status: 404, code: 'UNKNOWN_ANIMATION_TRACK' });
+    const created = await createAnimationTrack(authored({ id: 'constructor' }));
+    expect(created.tracks.map((row) => row.id)).toContain('constructor');
+  });
+});
+
 describe('deleteAnimationTrack', () => {
   it('removes the row and re-reads the table', async () => {
     await seedStore([storedTrackRow(), storedTrackRow({

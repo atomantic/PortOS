@@ -17,7 +17,7 @@
  */
 
 import { buildWalkVideoPrompt, applyCorrection, keyColorPhrase } from './prompts.js';
-import { WALK_TRACK } from './animationTracks.js';
+import { WALK_TRACK, isAnimationTrack } from './animationTracks.js';
 import { getEffectiveAnimationTracks } from './animationTrackStore.js';
 
 // Compiled builders (`walk` alone since #3152). Each takes the same superset
@@ -58,7 +58,7 @@ export function renderPromptTemplate(template, args) {
 /** The image-to-video instruction for one track's render. Throws on an unknown track. */
 export function buildTrackVideoPrompt(trackId, args) {
   const tracks = getEffectiveAnimationTracks();
-  const row = tracks[trackId];
+  const row = isAnimationTrack(trackId, tracks) ? tracks[trackId] : undefined;
   if (!row) {
     throw new Error(
       `No image-to-video prompt is registered for animation track '${String(trackId)}' `
@@ -89,6 +89,6 @@ export function buildTrackVideoPrompt(trackId, args) {
  * `assetPrompt.js`. Any other failure (bad template, builder mismatch) still throws.
  */
 export function tryBuildTrackVideoPrompt(trackId, args) {
-  if (!getEffectiveAnimationTracks()[trackId]) return null;
+  if (!isAnimationTrack(trackId, getEffectiveAnimationTracks())) return null;
   return buildTrackVideoPrompt(trackId, args);
 }

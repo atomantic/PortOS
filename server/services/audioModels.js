@@ -24,7 +24,7 @@
 import { join } from 'path';
 import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { getEngine, ENGINES } from './pipeline/musicGen.js';
+import { getEngine, findEngine, ENGINES } from './pipeline/musicGen.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 
 const REGISTRY_FILE = join(PATHS.data, 'audio-models.json');
@@ -72,7 +72,7 @@ async function saveRegistry(registry) {
 /** User-added models for one engine (sanitized). */
 export async function listUserModels(engineId) {
   const reg = await loadRegistry();
-  return reg[engineId] || [];
+  return Object.hasOwn(reg, engineId) ? reg[engineId] : [];
 }
 
 /**
@@ -103,7 +103,7 @@ export async function listEngineModels(engineId) {
  * engine or an invalid repo id. Returns the sanitized entry.
  */
 export async function addAudioModel({ engine: engineId, repo, name }) {
-  if (!ENGINES[engineId]) {
+  if (!findEngine(engineId)) {
     throw Object.assign(new Error(`Unknown audio engine: ${engineId}`), { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
   }
   const entry = sanitizeUserModel({ repo, name, id: repo });
@@ -128,7 +128,8 @@ export async function addAudioModel({ engine: engineId, repo, name }) {
  */
 export async function removeAudioModel({ engine: engineId, id }) {
   const reg = await loadRegistry();
-  const list = reg[engineId] || [];
+  if (!Object.hasOwn(reg, engineId)) return false;
+  const list = reg[engineId];
   const next = list.filter((m) => m.id !== id);
   if (next.length === list.length) return false;
   reg[engineId] = next;

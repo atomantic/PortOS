@@ -151,6 +151,14 @@ describe('deliverPeerSyncEvent', () => {
     expect(inboundOnly.frames).toEqual([]);
   });
 
+  it('delivers nothing for an Object.prototype category name', async () => {
+    for (const category of ['constructor', 'toString', '__proto__']) {
+      const inRoom = vi.fn(async () => ({ fetchSockets: async () => [] }));
+      expect(await deliverPeerSyncEvent({ in: inRoom }, { ...FRAME, category })).toBe(0);
+      expect(inRoom).not.toHaveBeenCalled();
+    }
+  });
+
   it('delivers nothing for a category with no receiver gate', async () => {
     expect(await deliverPeerSyncEvent({ in: () => { throw new Error('not reached'); } }, { ...FRAME, category: 'brain' })).toBe(0);
   });
