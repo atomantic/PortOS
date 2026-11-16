@@ -1,24 +1,15 @@
 /**
  * CoS run reconciliation service — the I/O half of `lib/agentRunReconcile.js`.
+ * Reads the run-event ledger back against the durable run records in
+ * `data/runs/{id}/metadata.json`.
  *
- * Completes the loop #4540 opened: slices 1 and 2 made every lifecycle boundary
- * append to the ledger, and this reads that stream back against the durable run
- * records in `data/runs/{id}/metadata.json`.
- *
- * Two operations, deliberately separated:
- *
- * - `getRunReconciliation()` is a pure read. It is what the diagnostic view and
- *   the GET route call, and it can never change anything.
+ * - `getRunReconciliation()` is a pure read (diagnostic view and GET route).
  * - `repairRunRecords()` closes the records the ledger proves are finished. It
- *   only ever runs from an explicit POST — never from boot, never from a timer.
- *   A repair rewrites a user-visible run record, and the situation that calls
- *   for one (a record left open by a crash) is also the situation where a
- *   background sweep is most likely to race whatever recovery is already in
- *   flight.
+ *   only runs from an explicit POST — never from boot or a timer, because a
+ *   background sweep is most likely to race whatever recovery is already in flight.
  *
- * The record load is bounded by the ledger, not by the filesystem: only run ids
- * the projections actually name are read, so this never becomes a scan of a
- * `data/runs` directory holding thousands of historical runs.
+ * Only run ids the projections name are read, so this never scans a `data/runs`
+ * directory of thousands of historical runs.
  */
 
 import { join } from 'path';
@@ -28,23 +19,19 @@ import { reconcileRunRecords, planRunRecordRepair, isAgentFallbackKey } from '..
 import { getRunProjections, appendRunEvent } from './agentRunEventLog.js';
 
 /**
- * A run id is about to become a filesystem path, and it arrives from a file on
- * disk rather than from this process. The ledger's envelope schema bounds ids
- * by LENGTH only, so a hand-edited or truncated-and-recovered line could carry
- * `../` and point the read — or the repair write — at a `metadata.json`
- * outside `data/runs`. Every id the server itself mints is a uuid, so
- * demanding a single plain path segment costs nothing and closes that.
+ * A run id becomes a filesystem path but arrives from a file on disk. The
+ * ledger's schema bounds ids by LENGTH only, so a hand-edited line could carry
+ * `../` and aim the read or repair write outside `data/runs`. Server-minted ids
+ * are uuids, so requiring a single plain path segment costs nothing.
  */
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const metadataPath = (runId) =>
   (SAFE_RUN_ID.test(runId) && runId !== '.' && runId !== '..' ? join(PATHS.runs, runId, 'metadata.json') : null);
 
 /**
- * A parsed `metadata.json`, or null if the file held something that is not a
- * run record. `readJSONFile` returns whatever the file parsed to, and a
- * truncated or hand-edited file can parse to `[]` or `"…"` — both truthy, both
- * with no `endTime`, so an unguarded read would call a corrupt file an open run
- * and then spread an array into the repaired record.
+ * A parsed `metadata.json`, or null if it is not a run record. A corrupt file can
+ * parse to `[]` or `"…"` — truthy with no `endTime` — which would read as an open
+ * run and spread an array into the repaired record.
  */
 const asRecord = (value) =>
   (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
@@ -57,13 +44,9 @@ const readRecord = async (runId) => {
 };
 
 /**
- * Load the run records the given projections name.
- *
- * Absent records are stored as an explicit `null` rather than left out of the
- * map, so the diff can tell "no record on disk" from "not looked at" — the
- * sentinel-over-truthiness rule that runs through this whole feature. An
- * unusable id or a corrupt file lands on that same `null`, and so is reported
- * as `record-missing` — which is what it is from here: no readable run record.
+ * Load the run records the given projections name. Absent records are an explicit
+ * `null` (not omitted) so the diff can tell "no record on disk" from "not looked
+ * at"; an unusable id or corrupt file lands on the same `null`.
  */
 async function loadRecordsFor(projections) {
   const runIds = projections.map((p) => p.id).filter((id) => id && !isAgentFallbackKey(id));
@@ -72,14 +55,11 @@ async function loadRecordsFor(projections) {
 }
 
 /**
- * The idempotency key for one repair: this run, closed at this instant.
- *
- * Hashed rather than spelled out because `buildRunEvent` truncates `eventId` at
- * 128 characters, and a readable `reconcile:<runId>:<endTime>` key puts the
- * run id FIRST — so two ids sharing a long prefix would truncate to the same
- * key and the second repair would be silently suppressed as a duplicate of the
- * first. A fixed-width digest cannot be truncated into a collision. The
- * `reconcile:` prefix stays so the key is still recognizable in the ledger.
+ * The idempotency key for one repair: this run, closed at this instant. Hashed
+ * because `buildRunEvent` truncates `eventId` at 128 characters and a readable
+ * key puts the run id first, so ids sharing a long prefix would collide and the
+ * second repair would be suppressed as a duplicate. The `reconcile:` prefix keeps
+ * it recognizable in the ledger.
  */
 const repairEventId = (runId, endTime) => `reconcile:${sha256Text(`${runId}\u0000${endTime}`).slice(0, 32)}`;
 
@@ -102,24 +82,19 @@ export async function getRunReconciliation({ runId, limit } = {}) {
   return { checkedAt: new Date().toISOString(), ...reconcileRunRecords({ projections, records }) };
 }
 
-// Re-entrancy guard: one repair pass at a time. Not a concurrency defense (see
-// the trust model) — a second pass launched while the first is mid-write would
-// read records the first has not closed yet and plan the same repairs twice,
-// producing a duplicate-looking result for work already done.
+// Re-entrancy guard: a second pass launched mid-write would read records the first
+// has not closed yet and plan the same repairs twice.
 let inFlight = null;
 
 /**
  * Close every run record the ledger proves is finished.
  *
- * Each repair is a read-modify-write against the record itself, and the record
- * is **re-read immediately before the write**: a run that finalized normally in
- * the window between the report and the repair must be left exactly as its own
- * completion path wrote it. `planRunRecordRepair` is re-run against that fresh
- * copy, so a record that closed itself in the meantime plans to nothing.
+ * Each repair is re-read immediately before the write and re-planned against that
+ * fresh copy, so a run that finalized normally in the meantime is left as its own
+ * completion path wrote it.
  *
- * The returned `findings`/`summary` describe the state the pass STARTED from,
- * not what is left afterwards — they are the evidence for `repaired`, and a
- * caller wanting the post-repair picture calls `getRunReconciliation()` again.
+ * The returned `findings`/`summary` describe the state the pass STARTED from; call
+ * `getRunReconciliation()` again for the post-repair picture.
  *
  * @param {object} [options]
  * @param {string} [options.runId] - restrict to one run
@@ -145,8 +120,7 @@ async function repairNow({ runId, limit } = {}) {
     if (!item.repairable) continue;
     const projection = byId.get(item.runId);
     const path = metadataPath(item.runId);
-    // Fresh read — the report above may be a few disk reads old, and the run's
-    // own completion path is the one writer allowed to win that race.
+    // The run's own completion path is the one writer allowed to win the race.
     const record = await readRecord(item.runId);
     const patch = planRunRecordRepair(projection, record, new Date().toISOString());
     if (!patch) {
@@ -154,18 +128,12 @@ async function repairNow({ runId, limit } = {}) {
       continue;
     }
 
-    // The ledger entry goes FIRST, and a failed append aborts the repair.
-    //
-    // Order decides which half of a half-finished repair survives a crash, and
-    // only one order is recoverable. Event-then-record: the next pass reads the
-    // run as terminal, the record as still open, plans the same repair, and the
-    // event's natural key dedupes the second append — self-healing. The reverse
-    // leaves a record closed by an event nothing recorded, which for an orphan
-    // repair reads as a permanent `ledger-open` finding no later pass can
-    // resolve, because the record it would have to fix is already closed.
-    //
-    // `appendRunEvent` never rejects; it REPORTS failure, so the result has to
-    // be read rather than awaited and ignored.
+    // The ledger entry goes FIRST, and a failed append aborts the repair. Only
+    // event-then-record is recoverable after a crash: the next pass plans the same
+    // repair and the event's natural key dedupes the append. The reverse leaves a
+    // record closed by an unrecorded event — a permanent `ledger-open` finding no
+    // pass can resolve. `appendRunEvent` REPORTS failure rather than rejecting,
+    // so the result must be read.
     const appended = await appendRunEvent({
       kind: 'run.reconciled',
       eventId: repairEventId(item.runId, patch.endTime),
@@ -186,19 +154,12 @@ async function repairNow({ runId, limit } = {}) {
       continue;
     }
 
-    // The append did disk I/O of its own, so the record read before it is a
-    // read old again. The LAST read before the write is the one that has to be
-    // current — otherwise a run whose own completion path landed during the
-    // append gets overwritten with a verdict this pass computed before it. A
-    // re-plan that comes back null means the record closed itself; the already
-    // appended event is harmless (a real `run.finalized` outranks it in the
-    // fold, and its key dedupes a later retry).
+    // The append did disk I/O, so re-read: the LAST read before the write must be
+    // current or a run whose completion landed during the append gets overwritten.
+    // A null re-plan means the record closed itself; the appended event is harmless
+    // (a real `run.finalized` outranks it, and its key dedupes a retry).
     const fresh = await readRecord(item.runId);
-    // Re-planned against the fresh record and the SAME instant, so the plan's
-    // `endTime` — and therefore the event key already in the ledger — is
-    // unchanged, while any field the plan reads off the record (a partial error
-    // the run managed to write) comes from the current copy rather than the
-    // stale one.
+    // Same instant, so `endTime` and the ledger event key are unchanged.
     const finalPatch = planRunRecordRepair(projection, fresh, patch.reconciledAt);
     if (!finalPatch) {
       skipped += 1;
