@@ -15,13 +15,7 @@ import { sleep } from './sleep.js';
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 350;
 
-// Retry a dynamic import a few times before treating the failure as terminal.
-// On flaky mobile/cellular links a chunk fetch can fail on a transient blip
-// ("Importing a module script failed" on Safari, "Failed to fetch dynamically
-// imported module" on Chrome) even though the chunk still exists — a page
-// reload wouldn't fix a network hiccup, so a short retry recovers silently
-// without the jarring full-page reload. A genuinely stale chunk (renamed by a
-// rebuild) just 404s on each quick retry and falls through to the reload path.
+// Retry a dynamic import a few times before treating the failure as terminal: on flaky mobile links a chunk fetch can fail on a transient blip ("Importing a module script failed" on Safari, "Failed to fetch dynamically imported module" on Chrome) though the chunk exists, and a reload wouldn't fix it. A genuinely stale chunk (renamed by a rebuild) 404s on each retry and falls through to the reload path.
 export const importWithRetry = (importFn, retriesLeft = MAX_RETRIES) =>
   importFn().catch(async (err) => {
     if (retriesLeft > 0) {

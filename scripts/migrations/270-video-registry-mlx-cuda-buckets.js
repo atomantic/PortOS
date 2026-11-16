@@ -1,23 +1,8 @@
 /**
- * Rename the video registry's two buckets from `macos` / `windows` to `mlx` /
- * `cuda` (issue #4142), along with `defaultMacos` / `defaultWindows` and the
- * `_shippedDefaults.video` snapshot arrays.
+ * Rename the video registry's two buckets from `macos` / `windows` to `mlx` / `cuda` (issue #4142), along with `defaultMacos` / `defaultWindows` and the `_shippedDefaults.video` snapshot arrays.
  *
- * The OS names were never the real axis. What separates the two lists is the
- * runtime family each entry needs — Apple MLX vs plain torch+CUDA — and reading
- * the OS off the key meant a Linux install was served the MLX list, none of
- * which runs there, while the two CUDA entries that would run sat in an
- * unreachable `windows` list.
- *
- * This is a pure rename: every value moves untouched, nothing is added, dropped,
- * or re-ordered within a bucket. It exists only so a registry a user hand-edits
- * ends up with a single spelling per bucket. It is NOT the compatibility
- * mechanism — `server/lib/mediaModelBuckets.js` resolves either spelling on
- * every read, so an install that never runs this migration (or a peer still on
- * an older release writing the file back) keeps working.
- *
- * `data.reference/media-models.json` ships the canonical keys, so a fresh
- * install has nothing to do here.
+ * The OS names were never the real axis (the runtime family each entry needs, Apple MLX vs torch+CUDA, is): keying on the OS served a Linux install the MLX list, none of which runs there, while the two CUDA entries that would run sat in an unreachable `windows` list.
+ * A pure rename (every value moves untouched), only so a hand-edited registry ends up with one spelling per bucket. NOT the compatibility mechanism: `server/lib/mediaModelBuckets.js` resolves either spelling on every read, so an install that never runs this (or a peer on an older release writing the file back) keeps working. `data.reference/media-models.json` ships the canonical keys, so a fresh install has nothing to do.
  */
 
 import { canonicalizeVideoBuckets } from '../../server/lib/mediaModelBuckets.js';

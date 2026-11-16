@@ -3,14 +3,7 @@
  * `GET /api/apps/:id/repository-sources` returns
  * (`server/services/managedAppRepositories.js`).
  *
- * Two surfaces read this payload — the app's Git tab and the Eidoverse page's
- * out-of-date advisory — and both must agree on which drift an update can
- * actually clear, because that is a correctness rule, not a formatting one:
- * asking the server to sync a fork it may not move produces a failure, and
- * announcing one as an available update produces an advisory nothing clears.
- * The server owns that rule (`isForkSyncable`) since the same rule decides
- * `updateAvailable`, and publishes it per source as `forkSyncable`; the readers
- * here phrase its answer rather than re-deriving it.
+ * The Git tab and the Eidoverse out-of-date advisory must agree on which drift an update can actually clear (syncing a fork it may not move fails; announcing it as an update is an advisory nothing clears). The server owns the rule (`isForkSyncable`, which also decides `updateAvailable`) and publishes it per source as `forkSyncable`; the readers phrase its answer rather than re-derive it.
  */
 
 /** The application checkout itself, as opposed to its companion checkouts. */

@@ -1,18 +1,8 @@
 /**
- * Which of a provider's advertised catalog this install is entitled to run —
- * the browser half of the model-access policy.
+ * Which of a provider's advertised catalog this install is entitled to run: the browser half of the model-access policy.
  *
- * Every rule comes from the server module that declares it
- * (`server/lib/aiToolkit/internal/modelAccess.js`), reached at the toolkit's
- * dependency-free `internal/` leaf exactly as `providerContextWindows.js`
- * reaches `ollamaBacked.js`. Nothing here restates a pattern rule: the editor's
- * live "N of M models" preview and the server's own scoping have to agree, or
- * the user tunes a policy against a count the API never produces.
- *
- * Only what the browser actually consumes is re-exported. `applyModelAccess`
- * in particular is deliberately NOT: a client payload has already been scoped,
- * and scoping it again would overwrite `modelCatalog` with the narrowed list —
- * the one mistake that turns this feature into data loss on the next save.
+ * Every rule comes from `server/lib/aiToolkit/internal/modelAccess.js`, reached at the toolkit's dependency-free `internal/` leaf as `providerContextWindows.js` does; nothing here restates a pattern rule, or the editor's live "N of M models" preview would disagree with the server's scoping.
+ * Only what the browser consumes is re-exported. `applyModelAccess` is deliberately NOT: a client payload is already scoped, and scoping it again would overwrite `modelCatalog` with the narrowed list (data loss on the next save).
  */
 
 import {
@@ -60,12 +50,7 @@ export const providerModelCatalog = (provider) =>
     : Array.isArray(provider?.models) ? provider.models : []);
 
 /**
- * What a policy WOULD do to a catalog, for the editor's live preview.
- *
- * Takes the catalog and the configured model ids explicitly rather than reading
- * them off a provider record, so the caller can memoize on values that actually
- * change — the editor previews an UNSAVED policy against the full list, and a
- * provider object rebuilt every render would defeat any memo keyed on it.
+ * What a policy WOULD do to a catalog, for the editor's live preview. Takes the catalog and configured model ids explicitly so the caller can memoize on values that change (an UNSAVED policy against the full list; a provider object rebuilt each render would defeat a memo).
  */
 export function previewModelAccess(catalog, policy, configuredModels = []) {
   const models = (catalog || []).filter(model => typeof model === 'string' && model);
@@ -75,10 +60,7 @@ export function previewModelAccess(catalog, policy, configuredModels = []) {
     total: models.length,
     visibleCount: visible.length,
     hidden: models.length - visible.length,
-    // The distinction the sentinel discipline exists for: a mode is SELECTED
-    // but constrains nothing yet (no patterns typed). The editor says so rather
-    // than showing a reassuring "all 82 of 82 models", which reads as a saved
-    // policy that works.
+    // A mode is SELECTED but constrains nothing yet (no patterns typed): the editor says so rather than show a reassuring "all 82 of 82 models" that reads as a working saved policy.
     inert: Boolean(normalized) && normalized.mode !== 'all' && !modelAccessConstrains(normalized),
   };
 }

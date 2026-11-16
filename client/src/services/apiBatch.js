@@ -6,10 +6,7 @@
 import { request } from './apiCore.js';
 
 /**
- * The id list `fetchByIds` will actually request: trimmed, non-strings and
- * blanks dropped, de-duplicated, in first-seen order. Exported so a caller that
- * re-orders the response into its request order (apiCatalog) indexes against the
- * exact same normalized list rather than its own raw input.
+ * The id list `fetchByIds` will actually request: trimmed, non-strings and blanks dropped, de-duplicated, first-seen order. Exported so a caller that re-orders the response (apiCatalog) indexes against the same normalized list.
  */
 export const normalizeIds = (ids) => [...new Set(
   (Array.isArray(ids) ? ids : [])
@@ -18,22 +15,8 @@ export const normalizeIds = (ids) => [...new Set(
 )];
 
 /**
- * Batch-fetch records by id through a list route's `?ids=a,b,c` filter (#4148) —
- * the client half of the server's shared `csvIdsParam` query param.
- *
- * Normalizes the ids (see above), then unwraps a paginated `{ items }` envelope
- * to a plain array. Ids the server omits (missing or soft-deleted) are simply
- * absent from the result, so callers index it by `id` rather than assuming
- * positional parity with the request.
- *
- * The trim and the empty-list short-circuit are load-bearing, not
- * micro-optimizations: a present-but-blank `?ids=` (which is what a
- * whitespace-only id serializes to) reads as ABSENT server-side, so issuing the
- * request anyway would return the whole unfiltered list — the exact over-fetch
- * these batch helpers exist to remove.
- *
- * Lives in its own module rather than inside `apiCore.js` so the suites that
- * mock `./apiCore.js` wholesale still intercept the `request` this makes.
+ * Batch-fetch records by id through a list route's `?ids=a,b,c` filter (#4148), the client half of the server's `csvIdsParam`. Normalizes the ids, then unwraps a paginated `{ items }` envelope; ids the server omits (missing or soft-deleted) are absent, so index by `id` rather than assuming positional parity.
+ * The trim and empty-list short-circuit are load-bearing: a present-but-blank `?ids=` reads as ABSENT server-side and would return the whole unfiltered list. Its own module (not `apiCore.js`) so suites that mock `./apiCore.js` wholesale still intercept the `request` this makes.
  */
 export async function fetchByIds(path, ids = [], options) {
   const list = normalizeIds(ids);

@@ -1,27 +1,14 @@
 // Shared canvas helpers for the two piano-roll renderers (`<PianoRoll>` falling-note +
 // `<MidiPianoRoll>` DAW-style, #2477).
 //
-// `layerColor(index)` — the per-layer/track palette (8 hues, wraps both directions) used by note bars,
-// keyboards, and legends; `roundRect(ctx, x, y, w, h, r)` — rounded-rect path with `ctx.roundRect`
-// feature-detect and arcTo fallback; `rollPalette()` — resolves the theme-following `{ bg, accent,
-// accentRgb }` from `--port-accent` via `getComputedStyle` (canvas can't read CSS vars); `ROLL_BG` —
-// the shared near-black bg literal. Pure canvas math/palette, no React.
-//
-// Shared canvas helpers for the two piano-roll renderers — the Synthesia
-// falling-note <PianoRoll> (score playback) and the DAW-style <MidiPianoRoll>
-// (transcribed .mid inspection, #2477). Pure canvas math/palette, no React.
+// `layerColor(index)` is the per-layer/track palette (8 hues, wraps both directions) for note bars, keyboards and legends; `roundRect(ctx, x, y, w, h, r)` a rounded-rect path with `ctx.roundRect` feature-detect and arcTo fallback; `rollPalette()` resolves the theme-following `{ bg, accent, accentRgb }` from `--port-accent` via `getComputedStyle` (canvas can't read CSS vars); `ROLL_BG` is the shared near-black bg literal. Pure canvas math/palette, no React.
 
 // Per-layer/track colors, assigned by index so keyboards, note bars, and
 // legends all agree. Bright, distinct hues that read on the near-black canvas.
 const LAYER_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ec4899', '#a855f7', '#06b6d4', '#ef4444', '#14b8a6'];
 export const layerColor = (index) => LAYER_COLORS[((index % LAYER_COLORS.length) + LAYER_COLORS.length) % LAYER_COLORS.length];
 
-// Roll canvas background — a near-black intentionally darker than `--port-bg`
-// (#0f0f0f) so the note bars pop, and deliberately NOT theme-following: the
-// layer palette above is tuned for a near-black roll, so a day theme would wash
-// the bars out. Single source for the literal — the canvases paint it via
-// fillStyle and set the same value as their CSS background (which shows before
-// the first paint), so it must never be re-typed as a Tailwind arbitrary value.
+// Roll canvas background: a near-black deliberately darker than `--port-bg` (#0f0f0f) so note bars pop, and NOT theme-following (the layer palette is tuned for a near-black roll; a day theme would wash it out). Single source for the literal: canvases paint it via fillStyle and set it as their CSS background (shown before first paint), so never re-type it as a Tailwind arbitrary value.
 export const ROLL_BG = '#0c0c0e';
 const ACCENT_FALLBACK_RGB = '59 130 246'; // Classic Midnight --port-accent
 

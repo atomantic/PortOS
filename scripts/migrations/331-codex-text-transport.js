@@ -1,25 +1,9 @@
 /**
- * Advertise the ChatGPT-subscription text transport on every installed Codex
- * harness record (#5590).
+ * Advertise the ChatGPT-subscription text transport on every installed Codex harness record (#5590).
  *
- * Phase 1 (#5589) taught PortOS to read the Codex account; this is the record
- * flag that lets the same `codex` record ALSO serve plain text through the
- * app-server, so a signed-in subscriber can point Brain / JIRA / Identity at
- * their subscription instead of buying an OpenAI API key.
- *
- * Two things this migration deliberately does NOT do:
- *
- *   - **It never sets `textTransportEnabled`.** Advertising the capability is
- *     not permission to bill a subscription; the user turns it on themselves.
- *     A migration that enabled it would make an install start routing existing
- *     background features through ChatGPT the moment it updated.
- *   - **It never touches a record the user has already pointed somewhere else.**
- *     A `codex` entry whose `command` is no longer the `codex` binary, or that
- *     already carries a `textTransport`, is left exactly as it is.
- *
- * Kept in lockstep with data.reference/providers.json and
- * server/lib/aiToolkit/defaults/providers.sample.json. Later default changes
- * require a new migration.
+ * Phase 1 (#5589) taught PortOS to read the Codex account; this record flag lets the same `codex` record ALSO serve plain text through the app-server, so a signed-in subscriber can point Brain / JIRA / Identity at their subscription instead of an OpenAI API key.
+ * Deliberately NOT done: it never sets `textTransportEnabled` (advertising the capability is not permission to bill a subscription, and enabling it would start routing background features through ChatGPT on update); it never touches a record the user pointed elsewhere (a `codex` entry whose `command` is no longer the `codex` binary, or that already carries a `textTransport`).
+ * Kept in lockstep with data.reference/providers.json and server/lib/aiToolkit/defaults/providers.sample.json; later default changes require a new migration.
  */
 
 import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
@@ -27,8 +11,7 @@ import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
 const TRANSPORT = 'codex-app-server';
 const CODEX_COMMAND = 'codex';
 
-// Logged relative, never as `doc.path` — that is an absolute path carrying the
-// operator's home directory, and a boot line is the wrong place to print it.
+// Logged relative, never as `doc.path`: that is an absolute path carrying the operator's home directory.
 const PROVIDERS_REL_PATH = 'data/providers.json';
 
 // `readProvidersDoc` is deliberately silent so each caller can say what ITS skip
@@ -52,11 +35,7 @@ const isCodexHarness = (provider) => {
   if (provider.textTransport) return false;
   const command = typeof provider.command === 'string' ? provider.command.trim() : '';
   if (command === '') return false;
-  // Byte-for-byte the rule `lib/providerModels.commandBasename` applies (inlined
-  // because a migration is a frozen snapshot and must not drift when that helper
-  // changes). Case-INSENSITIVE, and only `.exe` is stripped: a record this
-  // stamps but the runtime gate then rejects would advertise a capability that
-  // can never be switched on, and one it skips never gets the flag at all.
+  // Byte-for-byte `lib/providerModels.commandBasename` (inlined: a migration is a frozen snapshot): case-INSENSITIVE, only `.exe` stripped, so a record this stamps but the runtime gate rejects can't advertise a capability that can never be switched on.
   return command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '') === CODEX_COMMAND;
 };
 

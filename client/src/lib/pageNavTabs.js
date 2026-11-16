@@ -1,22 +1,10 @@
-// The one way a page builds its own tab bar from the nav manifest.
+// The one way a tabbed page or section builds its tab bar from the nav manifest.
 //
-// `buildPageNavTabs(manifestTabs, presentation, pageName)` — merges `getPageNavTabs(group)`
-// (nav-manifest, owns id/label/order) with a page-owned presentation map (icon, layout flags),
-// throwing at import time when a manifest tab has no entry. `buildSectionNavTabs(sectionTabs,
-// presentation, section)` does the same for `getSectionNavTabs(section)`, resolving icons by path out
-// of `NAV_PRESENTATION`. The one way a tabbed page or section builds its tab bar.
+// `buildPageNavTabs(manifestTabs, presentation, pageName)` merges `getPageNavTabs(group)` (nav-manifest owns id/label/order) with a page-owned presentation map (icon, layout flags such as `fullBleed`) and throws at import time when a manifest tab has no entry;
+// `buildSectionNavTabs(sectionTabs, presentation, section)` does the same for `getSectionNavTabs(section)`, resolving icons by path out of `NAV_PRESENTATION`.
 //
-// `server/lib/navManifest.js` is the single registry of navigable destinations,
-// so a tabbed page must not restate its tab ids, labels or order in a local
-// array — that second list drifts, and a tab that exists only there is
-// unreachable from ⌘K and voice `ui_navigate`. Instead the page declares
-// `tabGroup: '<group>'` on each manifest entry and pairs `getPageNavTabs(group)`
-// with a PRESENTATION map holding only what the manifest has no business
-// knowing: the icon, and any page-only layout flag (`fullBleed`, …).
-//
-// A manifest tab with no presentation entry throws HERE, at module load, rather
-// than rendering an iconless tab or silently dropping it — a page that can't
-// render its own nav is a build error, not a runtime degradation.
+// `server/lib/navManifest.js` is the single registry of navigable destinations, so a page must not restate tab ids/labels/order locally: that second list drifts, and a tab that exists only there is unreachable from ⌘K and voice `ui_navigate`.
+// A missing presentation entry throws at module load rather than rendering an iconless tab: a page that can't render its own nav is a build error.
 
 /**
  * @param {Array<{id: string}>} manifestTabs from `getPageNavTabs(group)`
@@ -32,15 +20,8 @@ export const buildPageNavTabs = (manifestTabs, presentation, pageName) => (
 );
 
 /**
- * The same merge for the SECTION axis (`getSectionNavTabs(section)`), whose tabs
- * are sidebar destinations. Their icons therefore come from the sidebar's own
- * registry rather than a page-owned map — one registry, so a section's sub-nav
- * and its sidebar row can never disagree about what a destination looks like.
- *
- * Missing icon throws, for the reason `buildPageNavTabs` throws: on a phone the
- * bar collapses to icons, and ONE tab without one silently demotes the whole
- * section to the `<select>` the product rejected (see TabPills' `mobileCompact`).
- *
+ * The same merge for the SECTION axis (`getSectionNavTabs(section)`), whose tabs are sidebar destinations, so icons come from the sidebar's own registry and a section's sub-nav can never disagree with its sidebar row.
+ * Missing icon throws: on a phone the bar collapses to icons, and ONE tab without one silently demotes the whole section to the `<select>` the product rejected (see TabPills' `mobileCompact`).
  * @param {Array<{id: string, to: string}>} sectionTabs from `getSectionNavTabs(section)`
  * @param {Record<string, {icon?: Function}>} presentation path-keyed, i.e. NAV_PRESENTATION
  * @param {string} section used in the drift error, e.g. Settings

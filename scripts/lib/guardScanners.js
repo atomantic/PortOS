@@ -55,14 +55,7 @@ const crossRootNamedFile = (ownRoot) => new RegExp(
 );
 
 /**
- * True when `source` (the test at `relPath`) reads a file from the *other*
- * runner's tree with `readFileSync` but never spells that file's name out as
- * a single literal anywhere in its own source — the shape `pathContractTests`
- * (ci-test-plan.js, #6363) cannot reach by `git grep`-ing for a basename that
- * is never written down. A test that instead names the target directly
- * (`join(here, '../../client/src/lib/x.js')`, one literal carrying both the
- * cross-root prefix and the extension) passes, because that literal is
- * exactly what the basename lookup matches.
+ * True when `source` (the test at `relPath`) reads a file from the *other* runner's tree with `readFileSync` but never spells that file's name out as a single literal, the shape `pathContractTests` (ci-test-plan.js, #6363) can't reach by `git grep`-ing for a basename never written down. A test that names the target directly (`join(here, '../../client/src/lib/x.js')`: one literal with both the cross-root prefix and the extension) passes, since that literal is what the basename lookup matches.
  */
 export const readsUnnamedCrossRootFile = (source, relPath) => {
   if (!/readFileSync\s*\(/.test(source)) return false;

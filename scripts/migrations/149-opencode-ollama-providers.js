@@ -1,30 +1,11 @@
 /**
- * Ship the "OpenCode Ollama" CLI provider to existing installs.
+ * Ship the "OpenCode Ollama" CLI provider to existing installs (issue-1802).
  *
- * Background: issue-1802. Anthropic-format tool-calling (what the `claude` CLI
- * expects) is a poor fit for Ollama models trained against the OpenAI tool
- * schema — they emit JSON tool-call text that the harness never executes, so a
- * Claude-Ollama agent "runs" but silently fails to edit files. OpenCode speaks
- * the OpenAI-compatible protocol natively, so the SAME local models reliably
- * apply file changes. This provider runs `opencode run` against a local Ollama
- * daemon (declared inline via OPENCODE_CONFIG_CONTENT) so api-only / local-model
- * users get working headless tool execution.
+ * Anthropic-format tool-calling (what the `claude` CLI expects) is a poor fit for Ollama models trained on the OpenAI tool schema (they emit JSON tool-call text the harness never executes, so a Claude-Ollama agent silently fails to edit files); OpenCode speaks the OpenAI-compatible protocol natively, so this provider runs `opencode run` against a local Ollama daemon (declared inline via OPENCODE_CONFIG_CONTENT).
+ * Only the headless CLI variant ships: the interactive TUI path drives the slashdo `/do:pr` / `/do:push` handoff OpenCode can't execute (deferred to a follow-up).
  *
- * Only the headless CLI variant ships: the interactive TUI completion path drives
- * the slashdo `/do:pr` / `/do:push` handoff that OpenCode can't execute, so a TUI
- * variant is deferred to its own follow-up.
- *
- * `setup-data.js` merges *missing* provider entries from data.reference, but only
- * when an install actually re-runs setup. This migration delivers the provider on
- * a plain server restart too, and is the canonical path for deployed installs to
- * pick it up. Purely additive: a brand-new id, so there's no rename or pinned-id
- * rewrite to do (contrast migration 146, which renamed clawed-ollama). Adds the
- * provider only when missing — idempotent; an existing key is left untouched.
- *
- * Kept in lockstep with data.reference/providers.json and
- * server/lib/aiToolkit/defaults/providers.sample.json. Frozen here as the
- * historical record this migration installs; later default changes ride their
- * own migrations rather than mutating this one.
+ * `setup-data.js` merges missing providers only when an install re-runs setup; this delivers the provider on a plain server restart too. Purely additive (a brand-new id, no rename like migration 146), idempotent, an existing key is left untouched.
+ * Kept in lockstep with data.reference/providers.json and server/lib/aiToolkit/defaults/providers.sample.json; frozen here as the historical record, later default changes ride their own migrations.
  */
 
 import { makeProviderSeedMigration } from './_lib.js';

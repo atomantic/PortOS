@@ -4,19 +4,8 @@
  */
 
 /**
- * Merge a partial quota-burn config patch over a base, mirroring exactly what
- * `saveQuotaBurnConfig` does on the server: top-level and per-family keys merge,
- * and a family's `jobs` array REPLACES (it is an ordered list — a positional
- * merge would make reordering and deletion inexpressible).
- *
- * Used twice on the page, both for the same reason: the config form must reflect
- * a keystroke immediately while the PUT is debounced.
- *   1. Optimistic local state — apply the patch to the rendered config now.
- *   2. Pending-patch accumulation — fold successive edits into ONE body so the
- *      trailing PUT carries every change, not just the last field touched.
- *
- * Keeping it here (pure, shared) is what keeps the client's optimistic view from
- * drifting from what the server will actually persist.
+ * Merge a partial quota-burn config patch over a base, mirroring `saveQuotaBurnConfig` on the server: top-level and per-family keys merge and a family's `jobs` array REPLACES (an ordered list; a positional merge would make
+ * reordering and deletion inexpressible). Used for optimistic local state and for folding successive edits into ONE pending body, so the client's view can't drift from what the server persists.
  */
 export function mergeQuotaBurnPatch(base, patch) {
   const families = { ...(base?.families || {}) };
@@ -24,28 +13,15 @@ export function mergeQuotaBurnPatch(base, patch) {
     families[id] = { ...(families[id] || {}), ...familyPatch };
   }
   const merged = { ...(base || {}), ...(patch || {}) };
-  // Omit an empty `families` rather than sending `families: {}` — a
-  // top-level-only edit (the master switch, the interval) should PUT exactly the
-  // key it changed, so the request reads as what the user did.
+  // Omit an empty `families` rather than `families: {}`: a top-level-only edit should PUT exactly the key it changed.
   if (Object.keys(families).length) merged.families = families;
   else delete merged.families;
   return merged;
 }
 
 /**
- * Whether a step has already had its one dispatch — the client's mirror of the
- * server's `jobIsSpent`, taking the row's `ranAt` from the status feed instead
- * of the whole keyed ledger.
- *
- * Gated on the step's OWN `runOnce`, not on `ranAt` alone, and read from the
- * page's optimistic config rather than the server's copy: a completion is kept
- * even after the checkbox is cleared, so ticking "run once" on a step that
- * already ran must SHOW that it is spent (with Re-arm right there) instead of
- * silently dropping it out of the rotation until the next status read.
- *
- * One definition because two components need it — the row renders the badge and
- * the family card counts them — and a rule split across both drifts the first
- * time either changes.
+ * Whether a step has already had its one dispatch: the client's mirror of the server's `jobIsSpent`, taking `ranAt` from the status feed. Gated on the step's OWN `runOnce` and read from the page's optimistic config: a completion
+ * is kept after the checkbox is cleared, so ticking "run once" on a step that already ran must SHOW it as spent (with Re-arm) rather than drop it from the rotation. One definition because the row badge and the family card count both need it.
  */
 export const quotaBurnJobIsSpent = (job, ranAt) => Boolean(job?.runOnce && ranAt);
 
@@ -55,13 +31,8 @@ export { isUnlimitedDispatchCap };
 export const UNLIMITED_DISPATCHES = QUOTA_BURN_UNLIMITED_DISPATCHES;
 
 /**
- * What to PUT for a dispatch cap the user just typed.
- *
- * Anything below the real minimum of 1 collapses to the sentinel rather than
- * being sent as-is: 0 is not a value the PUT schema accepts (it would read as
- * "never burn", which the family switch already expresses), so stepping the
- * spinner down past 1 would otherwise 400 — taking every edit coalesced into
- * that body with it. -1 is the natural continuation of "fewer restrictions".
+ * What to PUT for a dispatch cap the user just typed. Anything below the minimum of 1 collapses to the sentinel: 0 isn't accepted by the PUT schema (the family switch already expresses "never burn"),
+ * so stepping the spinner below 1 would 400 and take every coalesced edit with it.
  */
 export const dispatchCapInput = (value) => (value < 1 ? UNLIMITED_DISPATCHES : value);
 

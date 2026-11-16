@@ -2,16 +2,7 @@
  * The Length Profile picker's client-side helpers, over the issue-length
  * vocabulary in `server/lib/issueLength.js`.
  *
- * The Length Profile picker's helpers. `LENGTH_PROFILES`, `DEFAULT_LENGTH_PROFILE` and the `CUSTOM_*`
- * bounds are re-exported from `server/lib/issueLength.js` (the same profiles the server computes
- * targets from); `clampInt` and `summarizeLengthProfile` are client-only form/display helpers.
- *
- * The profile table and the custom-override bounds are re-exported from the
- * server leaf rather than copied: the same profile drives the picker chip and
- * the server-side target computation, so a bound changed on one side cannot
- * leave the form offering a value the server clamps. `clampInt` and
- * `summarizeLengthProfile` are client-only form/display helpers with no server
- * twin (the server's private clamp has a different empty-input contract).
+ * `LENGTH_PROFILES`, `DEFAULT_LENGTH_PROFILE` and the `CUSTOM_*` bounds are re-exported from the server leaf rather than copied (the same profile drives the picker chip and the server's target computation, so a changed bound can't leave the form offering a value the server clamps); `clampInt` and `summarizeLengthProfile` are client-only form/display helpers (the server's private clamp has a different empty-input contract).
  */
 import { DEFAULT_LENGTH_PROFILE, LENGTH_PROFILES } from '../../../server/lib/issueLength.js';
 

@@ -1,23 +1,8 @@
 /**
- * Pin `voice.llm.provider: 'lmstudio'` for installs that were relying on it
- * being the default.
+ * Pin `voice.llm.provider: 'lmstudio'` for installs that were relying on it being the default.
  *
- * `VOICE_DEFAULTS.llm.provider` changes from 'lmstudio' to 'ollama' in this
- * release. Voice config is stored as a sparse patch merged over the defaults
- * (`getVoiceConfig` → `deepMerge(VOICE_DEFAULTS, settings.voice)`), so an
- * install that configured voice without ever touching the provider field would
- * silently switch backends on upgrade — pointing at an Ollama daemon that may
- * not be running, and re-provisioning models it already has in LM Studio.
- *
- * Only an install that has ALREADY configured voice is pinned. A `settings.json`
- * with no `voice` key has expressed no preference and is exactly who the new
- * default is for, so it is deliberately left alone rather than pinned to the
- * outgoing backend.
- *
- * Gates on the presence of its INPUT (a stored `voice` object without an
- * explicit `llm.provider`), never on the absence of its output — per the
- * migration rule in AGENTS.md. Re-running is a no-op because the first run
- * writes the very field the gate checks for.
+ * `VOICE_DEFAULTS.llm.provider` changes from 'lmstudio' to 'ollama' in this release, and voice config is a sparse patch merged over the defaults (`getVoiceConfig` → `deepMerge(VOICE_DEFAULTS, settings.voice)`), so an install that configured voice without touching the provider would silently switch to an Ollama daemon that may not be running and re-provision models it already has in LM Studio.
+ * Only an install that has ALREADY configured voice is pinned; a `settings.json` with no `voice` key expressed no preference and is who the new default is for. Gates on the presence of its INPUT (a stored `voice` object without an explicit `llm.provider`), never the absence of its output (AGENTS.md); re-running is a no-op because the first run writes the field the gate checks.
  */
 
 import { readFile } from 'node:fs/promises';

@@ -1,37 +1,16 @@
 /**
  * `{ hoveredNode, tooltipPos, handleHover, handlePointerMove }` for a canvas hover tooltip.
  *
- * `handlePointerMove` drops any move that cannot paint a tooltip (nothing hovered, or a touch pointer,
- * where the tooltip is `pointer-coarse:hidden`), so idle cursor motion stops re-rendering the page.
- * The gate reads a ref, not the hovered state — r3f raycasts on the Canvas' inner div while React
- * delegates the container's move handler, so the enter event's own move still sees the pre-flush
- * `null`. Use when: Any 3D graph/canvas view with a cursor-following hover tooltip (BrainGraph) — pass
- * `{ x: e.clientX, y: e.clientY }` to `handleHover` from the mesh's `onPointerOver` so the first frame
- * is placed.
+ * `handlePointerMove` drops any move that cannot paint a tooltip (nothing hovered, or a touch pointer, where it is `pointer-coarse:hidden`). Use for any 3D graph/canvas view with a cursor-following tooltip (BrainGraph): pass `{ x: e.clientX, y: e.clientY }` to `handleHover` from the mesh's `onPointerOver` so the first frame is placed.
  */
 
 import { useCallback, useRef, useState } from 'react';
 
 /**
- * Hover-tooltip bookkeeping for a 3D graph canvas: which node is hovered, and
- * where its floating tooltip should sit.
+ * Hover-tooltip bookkeeping for a 3D graph canvas: which node is hovered and where its floating tooltip sits. The point is the *gate*: a bare `onPointerMove={(e) => setTooltipPos(...)}` re-renders the owner on every pixel of movement though no tooltip shows for most moves (and on a coarse pointer it is `pointer-coarse:hidden`), so `handlePointerMove` drops any move that cannot paint.
  *
- * The point of the hook is the *gate*. A canvas container that tracks the
- * cursor with a bare `onPointerMove={(e) => setTooltipPos(...)}` re-renders its
- * owner on every pixel of movement, even though no tooltip is showing for the
- * overwhelming majority of those moves — and on a coarse pointer the tooltip is
- * hidden outright (`pointer-coarse:hidden`), so the work is 100% waste on the
- * weakest hardware. `handlePointerMove` drops any move that cannot paint.
- *
- * The gate reads a REF, not the `hoveredNode` state, and that is load-bearing:
- * react-three-fiber raycasts on the Canvas' own inner div while React delegates
- * the container's `onPointerMove` at the app root, so on the very event where
- * the pointer enters a node the move handler's closure still sees the PREVIOUS
- * render's state (`null`) and would skip the position update the tooltip needs
- * on its first frame — stranding it wherever it last painted. `handleHover`
- * writes the ref synchronously, so the same event that enters a node also opens
- * the gate. It also seeds `tooltipPos` from the enter event's own coordinates,
- * so the first frame is correctly placed even if no move follows.
+ * The gate reads a REF, not the `hoveredNode` state, which is load-bearing: r3f raycasts on the Canvas' inner div while React delegates `onPointerMove` at the app root, so on the event where the pointer enters a node the closure still sees the PREVIOUS state (`null`) and would skip the position update, stranding the tooltip where it last painted.
+ * `handleHover` writes the ref synchronously and seeds `tooltipPos` from the enter event's coordinates, so the first frame is placed even if no move follows.
  */
 export default function useHoverTooltip() {
   const [hoveredNode, setHoveredNode] = useState(null);

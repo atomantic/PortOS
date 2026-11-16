@@ -12,13 +12,7 @@
 import { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX } from '../../../server/lib/roundsBounds.js';
 export { TEMPO_MIN, TEMPO_MAX, PARTNERS_MAX, SCORE_PARTS_MAX };
 
-// In-session-only id for a freshly-added section/layer, used purely as a React
-// key until the row is saved. Counter-based (not Math.random, which is
-// unavailable in some harnesses and unnecessary here) — uniqueness only needs
-// to hold within the editing session. These TEMP ids are stripped on save (see
-// stripTempId) so the server assigns a stable `sec-<uuid>`/`layer-<uuid>`; if
-// they were persisted, a reload (localSeq → 0) could re-mint `sec-new-0` and
-// collide with a saved row, breaking per-id update/remove.
+// In-session-only id for a freshly-added section/layer, used purely as a React key until saved. Counter-based (Math.random is unavailable in some harnesses); uniqueness only needs to hold within the session. TEMP ids are stripped on save (see stripTempId) so the server assigns a stable `sec-<uuid>`/`layer-<uuid>`: if persisted, a reload (localSeq → 0) could re-mint `sec-new-0` and collide with a saved row.
 export const TEMP_ID_RE = /-new-\d+$/;
 let localSeq = 0;
 export const localId = (prefix) => `${prefix}-new-${localSeq++}`;
@@ -46,7 +40,6 @@ export const clampTempo = (n) => {
 /**
  * The PUT body for a round draft: every editable field, with in-session temp
  * ids blanked so the server assigns stable uuids (see stripTempId).
- *
  * @param {object} song The in-memory draft.
  * @returns {object} The patch to send to `updateRound`.
  */

@@ -14,26 +14,11 @@ const FLASH_CLASS = 'manuscript-anchor-flash';
 const FLASH_MS = 1200;
 
 /**
- * Reveal a freshly-opened editorial finding's anchored text: scroll it into
- * view (centered) and flash a brief tint over it so the eye lands on the exact
- * passage instead of hunting through a long scene (#1601).
- *
- *   useAnchorReveal(getTarget, key, { reveal? })
- *
- * - `getTarget()` returns the DOM element to reveal (the located highlight /
- *   underline mark), or `null` when the anchor isn't present in the current
- *   draft — in which case this is a no-op and the caller's own fallback (e.g.
- *   scrolling the note card) handles it gracefully.
- * - `key` re-fires the reveal whenever it changes (the open comment id), so
- *   stepping prev/next through a triage pass re-reveals each note. Falsy `key`
- *   (nothing open, or anchor not located) is a no-op — that's how callers
- *   disable the reveal (pass `null`).
- * - `reveal(el)` optionally overrides the default `scrollIntoView` — used by the
- *   Live editor, whose anchor lives inside an internally-scrolling textarea.
- *
- * `getTarget`/`reveal` are intentionally excluded from the effect deps: the
- * reveal should fire on open/step (the `key`), not on every render that hands a
- * fresh closure.
+ * Reveal a freshly-opened editorial finding's anchored text: scroll it into view (centered) and flash a brief tint so the eye lands on the exact passage (#1601). `useAnchorReveal(getTarget, key, { reveal? })`:
+ * - `getTarget()` returns the DOM element to reveal, or `null` when the anchor isn't in the current draft (then this is a no-op and the caller's own fallback, e.g. scrolling the note card, applies).
+ * - `key` re-fires the reveal whenever it changes (the open comment id), so stepping prev/next re-reveals each note; a falsy `key` is a no-op (how callers disable it).
+ * - `reveal(el)` optionally overrides `scrollIntoView`, for the Live editor whose anchor lives inside an internally-scrolling textarea.
+ * `getTarget`/`reveal` are excluded from the effect deps on purpose: fire on open/step (the `key`), not on every render that hands a fresh closure.
  */
 export default function useAnchorReveal(getTarget, key, { reveal } = {}) {
   useEffect(() => {
@@ -50,7 +35,5 @@ export default function useAnchorReveal(getTarget, key, { reveal } = {}) {
       window.clearTimeout(timer);
       target.classList?.remove(FLASH_CLASS);
     };
-    // `getTarget`/`reveal` excluded by design — fire on open/step (`key`), not
-    // on every render that hands a fresh closure.
   }, [key]);
 }

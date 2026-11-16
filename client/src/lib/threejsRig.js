@@ -1,37 +1,14 @@
 /**
- * Client mirror of `server/lib/threejsModelRig.js`'s readiness rule, plus the
- * joint lookup the preview needs to label a picked part.
+ * Client mirror of `server/lib/threejsModelRig.js`'s readiness rule (keep the thresholds in step), plus the joint lookup the preview needs to label a picked part.
  *
- * `summarizeThreejsArticulation(spec)` → `{ articulationReady, jointCount, socketCount,
- * attachmentCount, anchoredAttachmentCount, unanchoredAttachmentCount, jointsByPartId }` — client
- * mirror of the readiness rule in `server/lib/threejsModelRig.js`, used by the Three.js Models
- * preview, which is handed a bare spec rather than the record's stored report (and gets none at all
- * for a model generated before rig readiness shipped). A spec with no `articulation` key reads as a
- * static assembly; a graph is ready only when it carries more than a lone root, every child joint
- * names a pivot socket, and every declared attachment names what it hangs from (the anchored
- * `attachments` list and the older anchor-less `attachmentPartIds` are merged into one count).
- * `jointsByPartId` is null-prototype so a provider-authored part id cannot resolve to an inherited
- * function.
- *
- * The server writes an authoritative report onto the record at generation time.
- * The preview is handed a bare `spec` (and a record generated before the report
- * shipped has none at all), so it derives the same verdict from the spec rather
- * than inventing a second, looser one — a preview that says "articulation-ready"
- * while the detail panel says "static" is worse than either answer alone.
- *
- * Keep the thresholds here and in the server module in step.
+ * `summarizeThreejsArticulation(spec)` → `{ articulationReady, jointCount, socketCount, attachmentCount, anchoredAttachmentCount, unanchoredAttachmentCount, jointsByPartId }`, used by the Three.js Models preview, which is handed a bare spec rather than the record's stored report (and none at all for a model generated before rig readiness shipped), so it derives the same verdict rather than a second, looser one.
+ * A spec with no `articulation` key is a static assembly; a graph is ready only when it carries more than a lone root, every child joint names a pivot socket, and every declared attachment names what it hangs from (the anchored `attachments` and the older anchor-less `attachmentPartIds` merge into one count). `jointsByPartId` is null-prototype so a provider-authored part id can't resolve to an inherited function.
  */
 
 const MIN_USEFUL_JOINTS = 2;
 
 /**
- * Client mirror of `resolveThreejsAttachments` in `server/lib/threejsModel.js`.
- *
- * A spec declares carried parts in two forms — the original anchor-less
- * `attachmentPartIds` and the anchored `attachments` — and both mean the same
- * thing, so the counts are derived from one merged list. An anchored entry wins
- * over a bare id for the same part.
- *
+ * Client mirror of `resolveThreejsAttachments` in `server/lib/threejsModel.js`. A spec declares carried parts as the anchor-less `attachmentPartIds` or the anchored `attachments` (same meaning), so counts come from one merged list in which an anchored entry wins over a bare id for the same part.
  * @param {object|null} articulation a spec's `articulation` object, or null
  * @returns {Array<{partId: string, anchored: boolean}>}
  */

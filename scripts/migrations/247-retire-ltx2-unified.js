@@ -1,37 +1,11 @@
 /**
  * Retire the LTX-2 Unified video model from existing registries.
  *
- * `ltx2_unified` (notapalindrome/ltx2-mlx-av, ~42 GB) shipped `deprecated: true`
- * once LTX-2.3 landed and is now removed outright: LTX-2.3 Unified Beta is the
- * bf16 quality ceiling for the same `mlx_video` runtime, and LTX-2.3 Distilled
- * Q4 is both smaller (~22 GB) and better than LTX-2 was. Keeping a strictly
- * worse 42 GB download in the picker only costs users disk and render time.
- *
- * `data/media-models.json` is gitignored runtime state and is not a
- * JSON_MERGE_TARGET, so a fresh install gets the shorter list from
- * data.reference/media-models.json while existing installs need this patch.
- * Removing the entry from `DEFAULT_REGISTRY` alone is NOT enough — the user's
- * persisted list is the source of truth for the picker, and
- * `appendNewlyShippedEntries` never deletes from it.
- *
- * This is the on-disk half of the retirement; `RETIRED_VIDEO_MODELS` in
- * `server/lib/mediaModels.js` is the load-time half, and it is the one that
- * actually governs what the pickers show — the registry is cached at import
- * time, before the runner reaches this migration. The two share the same
- * constants (asserted in this migration's test) and the same preservation rule:
- * an entry a user re-pointed at a different `repo` is their model, not the
- * retired built-in, and survives untouched.
- *
- * The MLX bucket's default (`video.defaultMlx`, or the pre-#4142
- * `defaultMacos`) is repointed at `ltx23_distilled_q4` only when the
- * removal actually happened and that replacement is present; otherwise
- * `getDefaultVideoModelId()`'s "unknown default → first available" fallback
- * would silently land on the 48 GB Unified Beta.
- *
- * `_shippedDefaults.video.mlx` intentionally keeps the id: it records what has
- * ever been delivered to this install, nothing re-adds a model that is no longer
- * in `DEFAULT_REGISTRY`, and `warnDrift` ignores ids that aren't current
- * built-ins, so no boot warning results.
+ * `ltx2_unified` (notapalindrome/ltx2-mlx-av, ~42 GB) shipped `deprecated: true` once LTX-2.3 landed and is now removed: LTX-2.3 Unified Beta is the bf16 quality ceiling for the same `mlx_video` runtime and LTX-2.3 Distilled Q4 is smaller (~22 GB) and better, so keeping the 42 GB download only costs disk and render time.
+ * `data/media-models.json` is gitignored runtime state and not a JSON_MERGE_TARGET: fresh installs get the shorter list from data.reference/media-models.json, existing ones need this patch (removing it from `DEFAULT_REGISTRY` alone isn't enough; `appendNewlyShippedEntries` never deletes).
+ * This is the on-disk half; `RETIRED_VIDEO_MODELS` in `server/lib/mediaModels.js` is the load-time half that actually governs the pickers (the registry is cached at import, before this runs). They share constants (asserted in this migration's test) and the preservation rule: an entry re-pointed at a different `repo` is the user's model and survives.
+ * The MLX bucket's default (`video.defaultMlx`, or pre-#4142 `defaultMacos`) is repointed at `ltx23_distilled_q4` only when the removal happened and that replacement is present (else `getDefaultVideoModelId()`'s fallback would land on the 48 GB Unified Beta).
+ * `_shippedDefaults.video.mlx` keeps the id: it records what was ever delivered, nothing re-adds a model absent from `DEFAULT_REGISTRY`, and `warnDrift` ignores non-current ids.
  */
 
 import { VIDEO_BUCKET_MLX, resolveVideoDefaultKey } from '../../server/lib/mediaModelBuckets.js';

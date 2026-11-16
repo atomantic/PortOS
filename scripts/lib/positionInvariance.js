@@ -1,31 +1,13 @@
 /**
- * Position invariance — the property every checked-in generated manifest owes
- * the people who rebase onto it.
+ * Position invariance: the property every checked-in generated manifest owes the people who rebase onto it.
  *
- * A `*.generated.json` is kept honest by a drift test that regenerates and
- * compares, which only works if the file changes when the thing it describes
- * changes — and *only* then. The "only" is the half that rots. A manifest
- * recording `foo.js:412` is rewritten by any edit that inserts a line above
- * 412: a comment, a rename, an unrelated handler. The drift test then fires on
- * commits that change nothing it describes, every parallel branch regenerates
- * it differently, and every rebase conflicts on it.
- *
- * The direct way to prove a generator is clean is to test the property rather
- * than guess at the vocabulary that violates it. Shift every position in the
- * inputs — without touching anything a manifest is supposed to describe — and
- * demand byte-identical output. That catches a `line`, and equally an `at`, a
- * `span`, a `row`, a `loc: [412, 8]` tuple, or a `foo.js#L412` anchor: every
- * spelling of a position, including the ones nobody thought to deny-list.
- *
- * `server/lib/generatedManifests.test.js` is the cheap tree-wide net that
- * catches a manifest whose generator never adopted this; this module is how a
- * generator proves it directly. Use both.
+ * A `*.generated.json` is kept honest by a drift test that regenerates and compares, which only works if the file changes when what it describes changes and *only* then. A manifest recording `foo.js:412` is rewritten by any edit above line 412, so the drift test fires on unrelated commits and every parallel branch conflicts.
+ * Prove a generator is clean by testing the property: shift every position in the inputs without touching anything described and demand byte-identical output. That catches a `line`, `at`, `span`, `row`, `loc: [412, 8]` tuple or `foo.js#L412` anchor, including spellings nobody thought to deny-list.
+ * `server/lib/generatedManifests.test.js` is the cheap tree-wide net for a manifest whose generator never adopted this; this module is how a generator proves it directly. Use both.
  */
 
 /**
- * Two comment lines. Prepending them shifts every line number, byte offset,
- * and character index in the file below without altering one token of the
- * code a manifest actually describes.
+ * Two comment lines: prepending them shifts every line number, byte offset and character index without altering a token of the code a manifest describes.
  */
 const SHIFT_HEADER = '// position-invariance probe: shifts every line and offset below it.\n'
   + '// Nothing a generated manifest describes lives in these two lines.\n';

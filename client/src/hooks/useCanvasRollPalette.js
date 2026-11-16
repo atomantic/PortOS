@@ -1,28 +1,14 @@
 /**
  * Hook resolving a canvas palette into a ref and re-resolving it on theme switch so canvases repaint.
  *
- * Resolves a canvas palette into a ref — `rollPalette` by default, or any resolver passed as the
- * second argument (the Core Assembly avatar reads `--port-accent-2`), re-resolving on theme switch
- * (`data-port-theme` MutationObserver) and repainting through a `drawRef`. Hands back a ref, not
- * state, so a theme swap redraws the imperative canvas without a React re-render. Use when: Both
- * piano-roll canvases need theme-aware accent/bg colors that canvas `fillStyle` can't read from CSS
- * vars.
+ * Resolves a canvas palette into a ref (`rollPalette` by default, or a resolver passed as the second argument, e.g. the Core Assembly avatar's `--port-accent-2`), re-resolving on theme switch (`data-port-theme` MutationObserver) and repainting through a `drawRef`. A ref, not state, so a theme swap redraws the imperative canvas without a React re-render. Both piano-roll canvases need it because canvas `fillStyle` can't read CSS vars.
  */
 
 import { useEffect, useRef } from 'react';
 import { rollPalette } from '../lib/canvasRoll.js';
 
-// Resolves the piano-roll canvas palette (theme-following accent + roll bg)
-// once, then re-resolves on theme switch and triggers a redraw. Canvas
-// `fillStyle` can't read CSS custom properties, so the imperative roll draws
-// read the resolved strings from the returned ref inside draw() instead of
-// hardcoding hex. Mirrors `useChartColors`'s `data-port-theme` MutationObserver
-// (set by `useTheme` on <html>), but hands back a ref — not React state — so a
-// theme switch repaints the canvas without forcing a component re-render.
-//
-// `resolve` is the token reader — `rollPalette` for the piano rolls; any other
-// imperative canvas (the Core Assembly avatar) passes its own so the theme
-// observer lifecycle lives in one place.
+// Resolves the piano-roll canvas palette (theme-following accent + roll bg) once, then re-resolves on theme switch and redraws: canvas `fillStyle` can't read CSS custom properties, so imperative draws read resolved strings from the returned ref. Mirrors `useChartColors`'s `data-port-theme` MutationObserver (set by `useTheme`) but hands back a ref, not state.
+// `resolve` is the token reader (`rollPalette` for the piano rolls; the Core Assembly avatar passes its own) so the observer lifecycle lives in one place.
 export default function useCanvasRollPalette(drawRef, resolve = rollPalette) {
   // Lazy one-time init — `useRef(rollPalette())` would re-run the getComputedStyle
   // read on every render (hover repaints re-render this component), defeating the
