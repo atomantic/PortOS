@@ -49,22 +49,22 @@ describe('trusted CI test-memo cache reuse', () => {
 
   // Related selection narrows a test only through its own memo record
   // (#16424), and a full-run shard records only its slice, so the server
-  // jobs must restore and merge every full-run shard lineage.
-  it('merges every full-run server shard lineage into the restored memo', () => {
-    const job = jobs.server;
+  // and client jobs must restore and merge every full-run shard lineage.
+  it.each(['server', 'client'])('merges every full-run %s shard lineage into the restored memo', (family) => {
+    const job = jobs[family];
     const ciYml = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
-    expect(ciYml).toMatch(new RegExp(`suite: server\\n\\s+partition: server-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${FULL_SUITE_SHARDS.server}\\n`));
+    expect(ciYml).toMatch(new RegExp(`suite: ${family}\\n\\s+partition: ${family}-[^\\n]+\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-shards: ${FULL_SUITE_SHARDS[family]}\\n`));
     const context = { 'runner.os': 'Linux', 'runner.arch': 'X64', 'github.run_id': 123 };
     const restoreKey = step(job, 'Restore from the trusted memo cache').match(/^ +key: (.+)$/m)[1];
-    for (let shard = 1; shard <= FULL_SUITE_SHARDS.server; shard += 1) {
+    for (let shard = 1; shard <= FULL_SUITE_SHARDS[family]; shard += 1) {
       const restore = step(job, `Restore full-run shard ${shard} of the memo`);
       expect(restore).toContain(`if: fromJSON(inputs.merge-shards) >= ${shard}`);
       expect(restore).toContain(`path: ${'${{ runner.temp }}'}/portos-test-memo-shards/${shard}`);
       // The prefix finds exactly the key that full-run shard saves, and no other shard's.
-      const saved = (index) => expand(restoreKey, { ...context, 'matrix.shard': index, 'strategy.job-total': FULL_SUITE_SHARDS.server });
+      const saved = (index) => expand(restoreKey, { ...context, 'matrix.shard': index, 'strategy.job-total': FULL_SUITE_SHARDS[family] });
       const prefix = expand(restore.match(/^ +key: (.+)$/m)[1], context);
       expect(saved(shard).startsWith(prefix)).toBe(true);
-      for (let other = 1; other <= FULL_SUITE_SHARDS.server; other += 1) if (other !== shard) expect(saved(other).startsWith(prefix)).toBe(false);
+      for (let other = 1; other <= FULL_SUITE_SHARDS[family]; other += 1) if (other !== shard) expect(saved(other).startsWith(prefix)).toBe(false);
     }
     expect(step(job, 'Merge the full-run shard lineages')).toContain('node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*');
   });

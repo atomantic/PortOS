@@ -178,9 +178,9 @@ full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
 would leave those jobs permanently cold. A fallback contains only one shard's
 entries: matching content keys may skip those tests; all other selected tests
 still run. Partitioning happens before memo lookup, so changing the memo's
-source shard cannot omit or duplicate a selected test. The server jobs also
+source shard cannot omit or duplicate a selected test. The server and client jobs also
 restore every full-run shard lineage (`merge-shards`, equal to
-`FULL_SUITE_SHARDS.server` and pinned by `scripts/ci-test-memo-cache.test.js`)
+`FULL_SUITE_SHARDS` for the family and pinned by `scripts/ci-test-memo-cache.test.js`)
 and fold them in with `scripts/merge-test-memo.js`, keeping the newer record
 per test and every live entry: a shard records only its slice, and related
 selection narrows a test only through its own record. Each shard saves as soon
