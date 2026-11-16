@@ -790,7 +790,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     const releaseSnapshotCut = await acquireBackupSnapshotCut();
     // The snapshot records how far that guarantee reaches: `global` only once
     // no durable asset owner remains outside admission.
-    const assetConsistency = backupAssetConsistency();
+    const assetConsistency = { ...backupAssetConsistency(), reclaimedLeases: releaseSnapshotCut.reclaimedLeases ?? 0 };
     let pgResult;
     let restoreWarning = null;
     try {
@@ -2467,7 +2467,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return {
       status: 'failed',
       reason: 'backup_snapshot_busy',
-      error: 'A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes.',
+      error: `A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes. ${err.message}`,
     };
   }
   try {

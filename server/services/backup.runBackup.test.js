@@ -333,7 +333,8 @@ describe('runBackup lifecycle', () => {
     // The snapshot never claims global file-and-row consistency while the
     // owner inventory still lists owners outside admission (#9982).
     const { backupAssetConsistency } = await import('../lib/backupAssetOwners.js');
-    const claimed = backupAssetConsistency();
+    // The count of dead-owner leases retired at this cut rides along (#16388).
+    const claimed = { ...backupAssetConsistency(), reclaimedLeases: 0 };
     expect(claimed.scope).toBe('global');
     expect(manifest.assetConsistency).toEqual(claimed);
     expect(result.assetConsistency).toEqual(claimed);
