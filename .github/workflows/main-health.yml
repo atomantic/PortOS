@@ -1,0 +1,59 @@
+# Keeps one open "main is red" issue in step with the CI runs on `main` (#16422).
+#
+# A red push or scheduled run creates the issue (or updates it); the next green
+# run closes it; a cancelled run (a newer push superseded it) changes nothing.
+#
+# This is a `workflow_run` consumer rather than a job in ci.yml because release.yml
+# calls ci.yml, and a called workflow's jobs cannot hold a permission the calling
+# job lacks: `issues: write` inside ci.yml would fail every release run at startup.
+#
+# SECURITY: `workflow_run` runs this workflow's default-branch copy with a writable
+# token, so it never builds or executes the run under test. Its only inputs from
+# that run are metadata passed as environment variables, validated in
+# scripts/ci-nightly-report.js as a branch name, an event name, a conclusion, a
+# numeric run id and a hex SHA.
+name: Main health
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Reports apply in completion order; never cancel one mid-write.
+concurrency:
+  group: main-health
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Update the main-is-red issue
+    if: >-
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'schedule')
+      && (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # `issues: write` creates, updates and closes the one issue; `actions: read`
+    # lists the failed run's jobs. Nothing here writes code, checks or releases.
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Report the main CI verdict
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          CI_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          CI_RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          CI_RUN_EVENT: ${{ github.event.workflow_run.event }}
+          CI_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: node scripts/ci-nightly-report.js
