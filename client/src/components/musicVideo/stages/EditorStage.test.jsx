@@ -36,17 +36,19 @@ describe('MusicVideo editor page', () => {
     const timeline = await screen.findByRole('region', { name: 'Timeline' });
     const clips = within(within(timeline).getByRole('group', { name: 'Shots' })).getAllByRole('button');
     expect(clips.map((clip) => clip.getAttribute('data-scene-id'))).toEqual(['s1', 's2']);
-    expect(within(screen.getByRole('region', { name: 'Shot' })).getByText('Tap a shot on the timeline to edit it.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     await act(async () => { fireEvent.click(clips[1]); });
     expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-1/editor/scene/s2');
-    const shot = screen.getByRole('region', { name: 'Shot' });
+    // The shot opens in the slide-in drawer over the editor; the timeline keeps the page.
+    const shot = screen.getByRole('dialog', { name: 'Shot 2' });
     await waitFor(() => expect(within(shot).getByRole('button', { name: 'Close shot' })).toBeInTheDocument());
     expect(within(screen.getByRole('region', { name: 'Timeline' })).getByRole('button', { name: /^Open Shot 2/ })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('heading', { level: 3, name: 'Editor' })).toBeInTheDocument();
 
     await act(async () => { fireEvent.click(within(shot).getByRole('button', { name: 'Close shot' })); });
     expect(screen.getByTestId('loc')).toHaveTextContent(/\/music-video\/mv-1\/editor$/);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Timeline' })).toBeInTheDocument();
   });
 });

@@ -1,30 +1,47 @@
 /**
- * Pure layout of a shot's effects on the Music Video editor timeline: its cut effects, in-shot effect markers with their repeats, and where a dragged marker lands.
+ * Pure layout of a shot's effects on the Music Video editor timeline, one row per kind: transitions, cut effects, image effects and in-shot effect markers.
  *
- * Read through `shotEffects`, the same summary the Shots board badges from, so the timeline and the
- * board never disagree about what a shot plays. Markers come from the shot's saved `glitches` list and
- * keep its indexes, so a moved marker is saved back as that list with one `atSec` changed.
+ * Read through the render's own helpers (`sceneTransitions` with the camera's cut defaults,
+ * `sceneCutEffect`, `sceneImageEffect`), the same ones the Shots board's effect badges use, so the
+ * timeline and the board never disagree about what a shot plays. Markers come from the shot's saved
+ * `glitches` list and keep its indexes, so a moved marker is saved back as that list with one `atSec` changed.
  */
+import { sceneCutEffect } from './musicVideoCutEffects.js';
 import { sceneImageEffect } from './musicVideoImageEffects.js';
-import { shotEffectLabel, shotEffects } from './musicVideoShotEffects.js';
-import { MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_TRANSITIONS } from './musicVideoTransitions.js';
+import { shotEffectLabel } from './musicVideoShotEffects.js';
+import { MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_TRANSITIONS, applyCameraCutDefaults, sceneTransitions } from './musicVideoTransitions.js';
 
 const FPS = 24;
 const round3 = (n) => Math.round(n * 1000) / 1000;
 
 /**
- * One timeline shot's effects: `{ start, end, image, markers }`. `start` and
- * `end` are the labels of the effects over its cuts, `image` the label of a
- * still's image effect (it plays through the whole shot) or null, and
- * `markers` its in-shot effects, `{ id, index, atSec, t, lengthSec, repeats,
- * label, off }`: `index` into `scene.glitches`, `atSec` from the shot's start,
- * `t` and `repeats` on the song's clock, `off` when its strength is zero.
- * `options` are `shotEffects`' own.
+ * One timeline shot's effects, one entry per kind so each draws on its own row:
+ * - `transitions`: the effects over its cuts, `[{ side: 'in' | 'out', label, lengthSec }]`
+ *   (a glitch over the cut has no length of its own, `lengthSec` null; a wipe has its length);
+ * - `cut`: how it hands over to the next shot (a beat toggle or dissolve before the cut, a fade
+ *   across it), `{ label, startSec, endSec }` on the song's clock, or null;
+ * - `image`: a still's image effect over the whole shot, `{ label, startSec, endSec }`, or null;
+ * - `markers`: its in-shot effects, `{ id, index, atSec, t, lengthSec, repeats, label, off }`:
+ *   `index` into `scene.glitches`, `atSec` from the shot's start, `t` and `repeats` on the song's
+ *   clock, `off` when its strength is zero.
+ * `options` are `shotEffects`' own (`{ layered, planned, cameras }`).
  */
 export function timelineShotEffects(shot, options = {}) {
   const { scene } = shot;
-  const effects = shotEffects(scene, options);
-  const image = sceneImageEffect(scene, { layered: !!options.layered });
+  const { transitionIn, transitionOut, wipeIn, wipeOut } = sceneTransitions(applyCameraCutDefaults(scene, options.cameras));
+  const transitions = [['in', transitionIn, wipeIn], ['out', transitionOut, wipeOut]].flatMap(([side, glitch, wipe]) => {
+    if (glitch) return [{ side, label: shotEffectLabel(glitch), lengthSec: null }];
+    return wipe ? [{ side, label: shotEffectLabel(wipe.style), lengthSec: wipe.lengthSec }] : [];
+  });
+  const handover = sceneCutEffect(scene, options.planned?.get(scene.sceneId) ?? null);
+  const fade = handover?.style === 'fade-black';
+  const cut = handover?.enabled ? {
+    label: shotEffectLabel(handover.style),
+    startSec: Math.max(shot.startSec, shot.endSec - (fade ? handover.overlapSec / 2 : handover.overlapSec)),
+    endSec: shot.endSec + (fade ? handover.overlapSec / 2 : 0),
+  } : null;
+  const still = sceneImageEffect(scene, { layered: !!options.layered });
+  const image = still ? { label: shotEffectLabel(still.effect), startSec: shot.startSec, endSec: shot.endSec } : null;
   const span = shot.endSec - shot.startSec;
   const markers = [];
   (Array.isArray(scene.glitches) ? scene.glitches : []).forEach((glitch, index) => {
@@ -40,7 +57,7 @@ export function timelineShotEffects(shot, options = {}) {
       repeats, label: shotEffectLabel(glitch.style), off: glitch.strength === 0,
     });
   });
-  return { start: effects.start.map(shotEffectLabel), end: effects.end.map(shotEffectLabel), image: image ? shotEffectLabel(image.effect) : null, markers };
+  return { transitions, cut, image, markers };
 }
 
 /**
