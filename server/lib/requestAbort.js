@@ -8,7 +8,8 @@
  * Combine the supplied live signals into one that aborts when any input does: native `AbortSignal.any`, or a one-shot fan-in fallback (listeners remove themselves on first abort) for early Node 18.
  *
  * @param {(AbortSignal | null | undefined)[]} signals Signals to combine.
- * @returns {AbortSignal | undefined} The sole signal unchanged, a combined signal, or `undefined` when none was supplied.
+ * @returns {AbortSignal | undefined} The sole signal unchanged, a combined signal,
+ * or `undefined` when no signal was supplied.
  */
 export function anyAbortSignal(signals) {
   const live = signals.filter(Boolean);

@@ -7,9 +7,13 @@
 /**
  * Build the render-timing spread for a completed render.
  *
- * @param {number|null|undefined} startedAtMs - Epoch ms captured when the render began (typically `job.renderStartedAtMs`); coerced, so a missing or junk value reports "unknown" rather than throwing.
+ * @param {number|null|undefined} startedAtMs - Epoch ms captured when the
+ *   render began, typically `job.renderStartedAtMs`. Coerced, so a missing or
+ *   junk value reports "unknown" rather than throwing.
  * @param {number} [nowMs=Date.now()] - Completion instant; injectable for tests.
- * @returns {{renderMs?: number, renderStartedAt?: string, renderCompletedAt?: string}} The fields to spread, or `{}` when the start instant is missing/unusable (including a clock that moved backwards).
+ * @returns {{renderMs?: number, renderStartedAt?: string, renderCompletedAt?: string}}
+ *   The fields to spread into the persisted record, or `{}` when the start
+ *   instant is missing/unusable (including a clock that moved backwards).
  */
 export function renderTimingFields(startedAtMs, nowMs = Date.now()) {
   const startMs = Number(startedAtMs);
@@ -24,7 +28,12 @@ export function renderTimingFields(startedAtMs, nowMs = Date.now()) {
   };
 }
 
-/** Strip the render-timing fields off a record. A DERIVED record (an image variant, any post-process spreading its source) would inherit the source's timing and claim a duration it never took; this lives beside `renderTimingFields` so the field names have one owner (hand-copying them means a new field silently leaks into derived records). */
+/**
+ * Strip the render-timing fields off a record. A DERIVED record (an image variant, any post-process spreading its source) would inherit the source's timing and claim a duration it never took; this lives beside `renderTimingFields` so the field names have one owner (hand-copying them means a new field silently leaks into derived records).
+ *
+ * @param {object} record
+ * @returns {object} A copy without `renderMs`/`renderStartedAt`/`renderCompletedAt`.
+ */
 export function omitRenderTiming(record) {
   const { renderMs, renderStartedAt, renderCompletedAt, ...rest } = record;
   return rest;

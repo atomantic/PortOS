@@ -21,7 +21,9 @@ const probeCache = new Map();
 /**
  * TTL-cached `GET {endpoint}/models`.
  *
- * @returns {Promise<{reachable:boolean, models:string[]|null, contextWindows:Record<string,number>|null, error:string|null}>} `models: null` means reachable but unreadable; distinct from `[]` (up, nothing loaded).
+ * @returns {Promise<{reachable:boolean, models:string[]|null, contextWindows:Record<string,number>|null, error:string|null}>}
+ *   `models: null` means reachable but the listing could not be read — distinct
+ *   from `[]`, a server that is up with nothing loaded.
  */
 export function probeOpenAiModelsCached(endpoint, apiKey = '') {
   const now = Date.now();

@@ -12,7 +12,9 @@ import { modeSiblingId, providerModeGroups } from './aiToolkit/internal/provider
  *
  * @param {object|null|undefined} provider - the record to derive from
  * @param {object[]} providers - every stored provider, for the pairing and id checks
- * @param {{id:string,type:string}[]|null} [executionModes] - this record's mode group when the caller already computed it (the provider list does, per record); derived here otherwise
+ * @param {{id:string,type:string}[]|null} [executionModes] - this record's mode
+ *   group when the caller already computed it (the provider list does, per
+ *   record); derived here otherwise
  * @returns {{ok:true, args:string[]}|{ok:false, status:number, code:string, message:string}}
  */
 export function tuiModeAddition(provider, providers = [], executionModes = null) {

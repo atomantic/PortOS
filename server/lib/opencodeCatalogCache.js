@@ -43,8 +43,12 @@ const isCatalogPayload = async (text) => {
   return Object.values(parsed).some((entry) => entry && typeof entry === 'object' && typeof entry.models === 'object');
 };
 
-/** Fetch OpenCode's model catalog and write it where `opencode models` reads it, unless already fresh or a refusal case. Never throws: every outcome is a reason string, since probing the harness is still worth doing when priming was skipped or failed.
+/**
  *
+ * @param {object} [deps]
+ * @param {Record<string,string|undefined>} [deps.env]
+ * @param {typeof fetch} [deps.fetchImpl]
+ * @returns {Promise<{primed: boolean, reason: string, path?: string}>}
  */
 export async function primeOpencodeCatalogCache({ env = process.env, fetchImpl = fetch } = {}) {
   const path = catalogCachePath(env);

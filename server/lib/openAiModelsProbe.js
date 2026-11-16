@@ -23,10 +23,18 @@ function shortFailureReason(err) {
 }
 
 /**
+ *
  * @param {string} baseUrl - an OpenAI-compatible base (…/v1); trailing slashes tolerated
- * @param {{timeoutMs?: number, apiKey?: string, headers?: Record<string,string>}} [opts] — `headers` is for a listing authenticating other than by bearer (the Anthropic API's `x-api-key` + `anthropic-version`, #7563), merged over the bearer header.
+ * @param {{timeoutMs?: number, apiKey?: string, headers?: Record<string,string>}} [opts] —
+ *   `headers` is for a listing that authenticates some other way than a bearer
+ *   token (the Anthropic API's `x-api-key` + `anthropic-version` pair, #7563);
+ *   it is merged over the bearer header when both are given.
  * @returns {Promise<{reachable:boolean, models:string[]|null, contextWindows:Record<string,number>|null, error:string|null}>}
- *   `contextWindows` has an entry only for a model whose window the listing declared (`{}` means none did, not "no window"); `null` exactly when `models` is. Per-row parsing is `catalogContextWindow`'s rule, shared with model refresh.
+ *   `contextWindows` carries an entry only for a model whose window the listing
+ *   actually declared, so `{}` means "nothing declared one" — never "these
+ *   models have no window". It is `null` exactly when `models` is. Per-row
+ *   parsing (which key, and smallest-wins when a row declares several) is
+ *   `catalogContextWindow`'s rule, shared with model refresh.
  */
 export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '', headers = {} } = {}) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/models`;

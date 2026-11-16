@@ -13,6 +13,12 @@ const PARSE_FAILED = Symbol('parse-failed');
  * (e.g. `{ error: rawText }`). `emptyValue` defaults to `fallback` when that is a plain value (an array caller passes `{ fallback: [] }`), else `{}`.
  * Object-shaped callers (`{ data }`, `{ models }`, `{ choices }`) need no options (`data.foo || []` defaults take over instead of `null.foo` throwing); array callers pass `{ fallback: [] }`; a caller with a downstream truthiness contract (a route that 503s on falsy)
  * passes `{ fallback: null, emptyValue: null }` so a malformed body stays falsy. Only object/array JSON bodies are recognized (a bare primitive is a parse failure, inheriting `safeJSONParse`'s structural validation).
+ *
+ * @param {Response} response - a resolved fetch Response (body not yet consumed)
+ * @param {Object} [opts]
+ * @param {*|function(string):*} [opts.fallback={}] - value (or text→value fn) for a non-JSON body
+ * @param {*} [opts.emptyValue] - value for a blank body (defaults to `fallback`, or `{}` when `fallback` is a function)
+ * @returns {Promise<*>} parsed JSON, or the fallback/empty value
  */
 export async function readResponseJson(response, { fallback = {}, emptyValue } = {}) {
   const resolvedEmpty = emptyValue !== undefined

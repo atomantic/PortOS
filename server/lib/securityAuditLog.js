@@ -15,8 +15,10 @@ const formatValue = (value) => {
 };
 
 /**
+ *
  * @param {string} event - Dotted event name, e.g. `login.failed`
- * @param {{ refused?: boolean } & Record<string, unknown>} [fields] - `refused: true` logs through `console.warn`; null/undefined fields are omitted.
+ * @param {{ refused?: boolean } & Record<string, unknown>} [fields] - `refused: true`
+ *   logs through `console.warn`; null/undefined fields are omitted.
  * @returns {string} the emitted line (handy for assertions)
  */
 export function logSecurityEvent(event, { refused = false, ...fields } = {}) {
