@@ -13,16 +13,7 @@
  */
 import { coverFontSpec, tagTextFor, titleLinesFor } from '../../../server/lib/musicVideoCoverOverlay.js';
 
-export {
-  COVER_ART_SIZE,
-  COVER_DESIGN_OPTIONS,
-  YOUTUBE_THUMBNAIL_SIZE,
-  DEFAULT_COVER_DESIGN,
-  coverOverlaySvg,
-  coverTypefaceChoices,
-  customTypeface,
-  normalizeCoverDesign,
-} from '../../../server/lib/musicVideoCoverOverlay.js';
+export { COVER_ART_SIZE, COVER_DESIGN_OPTIONS, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, coverTypefaceChoices, normalizeCoverDesign } from '../../../server/lib/musicVideoCoverOverlay.js';
 
 const PROBE_PX = 100;
 

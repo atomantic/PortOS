@@ -14,8 +14,6 @@ import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sc
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
 import { sceneHasPendingDecision, sceneTakeList } from './musicVideoTakes.js';
 
-export { COVERAGE_TOLERANCE_SEC } from './musicVideoLayers.js';
-
 export const SCENE_ATTENTION_LABELS = Object.freeze({
   'beat-needs-review': 'Needs its own beat',
   'missing-frame': 'No frame',

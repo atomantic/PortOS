@@ -14,29 +14,4 @@ export function grokSceneRequestDuration(scene, settings, target = null, scenes 
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 }
 
-export {
-  MUSIC_VIDEO_SHOT_MODES,
-  SOURCE_AUDIO_LIPSYNC,
-  SOURCE_AUDIO_MUSIC,
-  CLIP_LENGTH_SEC_RANGE,
-  approximateMotionCues,
-  clipLengthChoices,
-  sceneClipLengthSec,
-  shotRequestSpanSec,
-  clipAudioOffsetSec,
-  falSceneTake,
-  falTakeRequestFields,
-  grokCoverage,
-  isPerformanceScene,
-  meteredModelLabel,
-  meteredSceneTake,
-  performanceBlockedReason,
-  performanceCapability,
-  planPerformanceWindow,
-  planPerformanceRepair,
-  runwaySceneTake,
-  runwayTakeRequestFields,
-  sceneRenderShot,
-  selectedPerformanceInstruction,
-  shotSplitLimit,
-} from '../../../server/lib/musicVideoShotTiming.js';
+export { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, CLIP_LENGTH_SEC_RANGE, clipLengthChoices, shotRequestSpanSec, clipAudioOffsetSec, falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, meteredModelLabel, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, planPerformanceRepair, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot, selectedPerformanceInstruction, shotSplitLimit } from '../../../server/lib/musicVideoShotTiming.js';
