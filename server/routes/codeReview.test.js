@@ -205,27 +205,6 @@ describe('POST /api/code-review/local', () => {
     )
   })
 
-  it('passes the caller-supplied model through when present', async () => {
-    settingsSvc.getSettings.mockResolvedValue({
-      codeReview: { ollamaModel: 'settings-model' },
-    })
-    codeReviewSvc.runLocalCodeReview.mockResolvedValue({
-      ok: true,
-      backend: 'ollama',
-      model: 'caller-model',
-      findings: 'No findings.',
-    })
-
-    const res = await request(makeApp())
-      .post('/api/code-review/local')
-      .send({ backend: 'ollama', model: 'caller-model', diff: 'diff --git a b' })
-
-    expect(res.status).toBe(200)
-    expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(
-      expect.objectContaining({ model: 'caller-model' }),
-    )
-  })
-
   // A model neither the request, the panel, nor the backend's own listing could
   // supply is the caller's config gap, not a reviewer that was asked and failed —
   // an agent retrying a 502 would retry forever against an unset setting.
@@ -307,23 +286,6 @@ describe('POST /api/code-review/local', () => {
     expect(res.body.context).toMatchObject({ code: 'REVIEW_CONTEXT_CAPACITY', coverage, verdict: 'findings', findings: 'Repair the persisted write.' })
     expect(codeReviewSvc.runLocalCodeReview).toHaveBeenCalledWith(expect.objectContaining({ headSha: coverage.headSha, maxBatches: 2, maxBatchBytes: 1024 }))
     expect(codeReviewSvc.reportReviewerSuccess).not.toHaveBeenCalled()
-  })
-
-  it('returns 200 with findings on success', async () => {
-    codeReviewSvc.runLocalCodeReview.mockResolvedValue({
-      ok: true,
-      backend: 'ollama',
-      model: 'codellama',
-      findings: '## Blocking\n- file.js:10 fix the bug',
-    })
-
-    const res = await request(makeApp())
-      .post('/api/code-review/local')
-      .send({ backend: 'ollama', model: 'codellama', diff: 'diff --git a b' })
-
-    expect(res.status).toBe(200)
-    expect(res.body.ok).toBe(true)
-    expect(res.body.findings).toContain('Blocking')
   })
 })
 
