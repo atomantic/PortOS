@@ -73,7 +73,9 @@ export async function loadSlashdoLib(libName, { teams = false } = {}) {
 }
 
 /**
- * Stage a resolved body and optional supporting files. Content-addressed paths
+ * Stage a resolved body and optional supporting files: Markdown procedures plus
+ * the shell helpers slashdo's procedures run as `bash lib/<name>.sh` (the
+ * local CLI runner). Content-addressed paths
  * keep an already-dispatched run stable across submodule updates and different
  * reviewer selections. Publish the entrypoint only after every reference exists.
  */
@@ -81,7 +83,7 @@ export async function writeResolvedSlashdoBody(commandName, body, { files = {} }
   if (!body || !isBareName(commandName)) return null;
   const entries = Object.entries(files).sort(([a], [b]) => a.localeCompare(b));
   for (const [name, content] of entries) {
-    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.md$/.test(name) || typeof content !== 'string') {
+    if (!/^[a-zA-Z0-9_-][a-zA-Z0-9._-]*\.(?:md|sh)$/.test(name) || typeof content !== 'string') {
       throw new Error('Invalid slashdo supporting file');
     }
   }

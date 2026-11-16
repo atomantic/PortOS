@@ -77,11 +77,14 @@ describe.skipIf(!hasSubmodule)('slashdo rendering adapter', () => {
     const bundle = await loadSlashdoBundle('release', { stripFrontmatter: true });
     const staged = await writeResolvedSlashdoBody('release', bundle.body, { files: bundle.files });
     const body = readFileSync(staged, 'utf8');
+    // The review loop runs `bash lib/local-cli-runner.sh`, so the script must be staged beside its procedures.
+    expect(readFileSync(join(dirname(staged), 'lib/local-cli-runner.sh'), 'utf8'))
+      .toBe(readFileSync(join(root, 'lib/local-cli-runner.sh'), 'utf8'));
     expect(body.indexOf('## Select the Project Release Procedure')).toBeGreaterThanOrEqual(0);
     expect(body.indexOf('## Select the Project Release Procedure')).toBeLessThan(body.indexOf('## Detect Release Workflow'));
     expect(body).toContain('temporary `release/vX.Y.Z` branch into `main`');
-    expect(body).toContain('automation owns tag creation for this project');
-    expect(body).toContain('never pre-create it here');
+    expect(body).toContain('The project\'s pipeline creates the tag. Creating it here can make that pipeline skip publication.');
+    expect(body).toContain('it did not appear within five minutes; it was not created here.');
     expect(body).toContain('wins over the generic promotion recipe below');
     expect(body).toContain('`~opt` exclusion');
     expect(body).toContain('`capped` vs `guardrail`');
@@ -141,6 +144,7 @@ describe('immutable slashdo staging', () => {
     expect(await writeResolvedSlashdoBody('../outside', 'Body')).toBeNull();
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { '../outside.md': 'Outside' } })).rejects.toThrow('Invalid slashdo supporting file');
     await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'invalid.md': null } })).rejects.toThrow('Invalid slashdo supporting file');
+    await expect(writeResolvedSlashdoBody('review', 'Body', { files: { 'runner.js': 'x' } })).rejects.toThrow('Invalid slashdo supporting file');
     expect(existsSync(join(fixtureRoot, 'outside.md'))).toBe(false);
   });
 });
