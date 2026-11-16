@@ -5,57 +5,24 @@
  * edge built for) it (#7455, #7461, epic #7453).
  *
  * `server/lib/eidoverseFoundations.js` owns the ownership model and the
- * packaging/validation gate; this module is the persistence, clock, and
- * assay-execution shell around it. Everything AUTHORED here lands at the
- * `vernacular` layer, so an artifact is local until somebody promotes it on
- * purpose. The one other way a record enters this ledger is as a local copy
- * of a foundation a PEER promoted — `recordEidoverseFoundationInheritance()` —
- * which lands directly at `baseline` and carries an `inherited-from` edge
- * rather than this install's own authorship.
+ * packaging gate; this module is the persistence, clock, and assay shell.
+ * Authored records land at `vernacular`; a local copy of a peer's promoted
+ * foundation lands at `baseline` with an `inherited-from` edge. A record built
+ * on an inherited copy (#7631) carries a `derived-from` edge, and
+ * `recordEidoverseFoundation()` refuses an inherited body that names none.
  *
- * Between the two sits DERIVATION (#7631): a record this install authored by
- * building on an inherited copy. It is local work — it packages and promotes
- * like any other — but it carries, and publishes, a `derived-from` edge back to
- * the origin. `recordEidoverseFoundation()` refuses a body that matches an
- * inherited one and names no such edge, which is what closed the path from
- * 'load a peer's foundation into the authoring form' to 're-share it as this
- * install's own work'.
+ * The promote gate runs the agent-free assay and never accepts a caller verdict:
+ * the sandbox is derived from the foundation's own body (#7625), so "what was
+ * evaluated" and "what gets promoted" are the same object.
  *
- * **The promote gate runs the agent-free assay; it never accepts a verdict.**
- * `packageEidoverseFoundationCandidate()` DERIVES the sandbox from the
- * foundation's own body (`lib/eidoverseFoundationSandbox.js`, #7625), replays it
- * through `runResilienceAssay()` (#7460), and packages against the verdict it
- * just produced. Deriving rather than resolving a caller-supplied
- * `contributionId` is what makes 'what was evaluated' and 'what gets promoted'
- * the same object: the id used to be free text, so a local build could name a
- * shipped demo fixture and promote on evidence about the fixture.
+ * Storage is `data/eidoverse/foundations.json` — file-primary, MACHINE LOCAL and
+ * never federated (`docs/STORAGE.md`). Only a promoted packaged candidate leaves
+ * the install (`listPromotedFoundationCandidates()`). No `data.reference/` seed:
+ * an absent file is an empty ledger.
  *
- * A caller — a route, a mind tool — therefore cannot assert that
- * its build survived its author's absence; it can only ask for the check. That
- * is the same proposal-versus-consequence separation #7454 gave the
- * construction tools, applied to promotion.
- *
- * Storage is `data/eidoverse/foundations.json` — `file-primary` and MACHINE
- * LOCAL, the same class as `portos-world.json` beside it (`docs/STORAGE.md`).
- * PortOS never federates this file: the only thing authorized to leave the
- * install is a packaged candidate envelope, and even that leaves only once
- * somebody promotes the foundation — `listPromotedFoundationCandidates()`
- * below is the whole of what a peer can ever read
- * (`services/sharing/peerEidoverseFoundationSync.js`). There is no `data.reference/` seed — an absent file is
- * an empty ledger, which is the correct state for every install that has never
- * authored or inherited a foundation, so no migration is owed.
- *
- * **Withdrawal is a first-class act, and it propagates (#7632).** Promotion used
- * to be one-way: a peer that pulled a foundation kept that copy forever, because
- * the offering only ever ADDED and the sweep converged upward toward the
- * sender's list. Re-authoring already de-promoted a record locally, which
- * silently dropped it from the offering and left every receiver holding a
- * `baseline` copy of bytes the author had retracted. `withdrawEidoverseFoundation()`
- * below makes that retraction explicit and records a TOMBSTONE — keyed on the
- * candidate's content-addressed fingerprint, the one identifier that means the
- * same thing on every install — which rides the offering beside the candidates
- * so a receiver DROPS the copy instead of merely ceasing to re-pull it.
- * `applyEidoverseFoundationTombstones()` is that receiving half.
+ * Withdrawal (#7632) records a TOMBSTONE keyed on the candidate's
+ * content-addressed fingerprint; it rides the offering so a receiver DROPS its
+ * copy (`applyEidoverseFoundationTombstones()`).
  */
 
 import { join } from 'node:path';
@@ -89,64 +56,40 @@ import { foundationSandbox } from '../lib/eidoverseFoundationSandbox.js';
 import { findControllerDefinitionById } from './eidoverseControllerRegistry.js';
 
 /**
- * Storage-layout version stamped on `data/eidoverse/foundations.json`.
- *
- * Still 1 with the `tombstones` list added (#7632): the key is ADDITIVE and
- * compatible in both directions — a PortOS that predates it ignores the key,
- * and this one reads a file without it as an empty tombstone list, which is
- * exactly right for an install that has never withdrawn anything. Bumping
- * would advertise an incompatibility that does not exist. The one asymmetry
- * worth naming: an older PortOS that WRITES this file back drops the
- * tombstones, so a downgrade-then-upgrade loses pending retractions that had
- * not yet reached a peer. That is a lost withdrawal, not a corrupted ledger,
- * and re-withdrawing the record records it again.
+ * Storage-layout version. The `tombstones` key is additive in both directions,
+ * so no bump; an older PortOS rewriting the file drops pending tombstones
+ * (re-withdrawing records them again).
  */
 const LEDGER_SCHEMA_VERSION = 1;
 
 /**
- * Tombstones are keyed on the promote candidate's `fingerprint`, NOT on the
- * foundation id. The id is local and two installs can legitimately carry the
- * same one; the fingerprint is a sha256 over the canonicalized envelope, so it
- * names one specific published body and means the same thing everywhere. It is
- * also exactly what the receiver already stores on its inherited copy
- * (`inheritance.fingerprint`), so a match needs no extra index.
+ * Tombstones key on the candidate's `fingerprint` (sha256 of the canonical
+ * envelope, same on every install, matches `inheritance.fingerprint`), not the
+ * local foundation id.
  */
 const TOMBSTONE_KEY_FIELD = 'fingerprint';
 
-/**
- * Capped independently of `OFFERING_ENTRY_CAP` in the transport, and far above
- * any realistic withdrawal history. A retraction must never be displaced to
- * make room for a publication — the whole point is that it outranks one.
- */
+/** Capped apart from the transport's offering cap: a retraction must never be displaced by a publication. */
 const TOMBSTONE_LIMIT = 200;
 
 const tombstoneOptions = { keyField: TOMBSTONE_KEY_FIELD, limit: TOMBSTONE_LIMIT };
 
-// Read through `PATHS` per call, NOT `dataPath()`: a suite redirects the data
-// root by proxying this module's `fileUtils` import, and `dataPath()` resolves
-// against `paths.js`'s own `PATHS` binding, which that proxy never sees — so
-// the helper would send every test at the live install's ledger. Per call
-// rather than captured at module load for the same reason.
+// Read `PATHS` per call, not `dataPath()`: suites redirect the data root by
+// proxying this module's `fileUtils` import, which `dataPath()` never sees.
 const ledgerFile = () => join(PATHS.data, 'eidoverse', 'foundations.json');
 
 const withLedgerLock = createMutex();
 
 /**
- * Strict read: a `foundations.json` this process cannot parse must NOT read as
- * "no foundations yet", because the very next write would then replace the
- * user's ledger with an empty one. `strict: true` throws on unreadable bytes,
- * while a genuinely ABSENT file still reads as the empty ledger it is.
+ * Strict read: an unparseable `foundations.json` must not read as "no
+ * foundations", or the next write would replace the ledger with an empty one.
  */
 async function readLedger() {
   const raw = await readJSONFile(ledgerFile(), null, { allowArray: false, strict: true });
   const stored = raw && typeof raw === 'object' ? raw : {};
   return {
     foundations: stored.foundations && typeof stored.foundations === 'object' ? { ...stored.foundations } : {},
-    // Normalized on READ as well as write: this list is the one part of the
-    // ledger a peer's offering also writes, and `foundations.json` is a file a
-    // human can edit. An entry without a usable key or stamp could never win a
-    // comparison anyway, so dropping it here keeps every downstream reader from
-    // having to re-check the shape.
+    // Normalized on read too: a peer's offering also writes this list and humans can edit the file.
     tombstones: normalizeTombstones(stored.tombstones, TOMBSTONE_KEY_FIELD),
   };
 }
@@ -154,10 +97,7 @@ async function readLedger() {
 /** The foundations map alone, for the read-only paths that never write back. */
 const readFoundations = async () => (await readLedger()).foundations;
 
-// Both halves always written together: a `writeFoundations(foundations)` that
-// defaulted the tombstones would erase every pending retraction on the next
-// ordinary authoring write, which is precisely the silent-loss shape #7632
-// exists to close.
+// Both halves are always written together; defaulting tombstones would erase pending retractions.
 async function writeLedger({ foundations, tombstones }) {
   await atomicWrite(ledgerFile(), {
     schemaVersion: LEDGER_SCHEMA_VERSION,
@@ -168,10 +108,7 @@ async function writeLedger({ foundations, tombstones }) {
 
 /**
  * Every foundation this install knows about, most recently updated first —
- * both what this install authored and any local copy it holds of a peer's
- * promoted foundation (#7461). Each entry carries its derived `lineage`
- * (proposal → commit → promote/inherit), computed fresh on every read rather
- * than stored, per `foundationLineage()`'s own header.
+ * authored and inherited. `lineage` is derived on every read, not stored.
  */
 export async function listEidoverseFoundations() {
   const foundations = Object.values(await readFoundations())
@@ -180,8 +117,7 @@ export async function listEidoverseFoundations() {
     vernacular: totals.vernacular + (entry.layer === 'vernacular' ? 1 : 0),
     baseline: totals.baseline + (entry.layer === 'baseline' ? 1 : 0),
     candidates: totals.candidates + (entry.candidate ? 1 : 0),
-    // A subset of `baseline`: this install pulled the copy from a peer rather
-    // than promoting its own work into it.
+    // A subset of `baseline`: pulled from a peer rather than promoted locally.
     inherited: totals.inherited + (entry.inheritance ? 1 : 0),
   }), { vernacular: 0, baseline: 0, candidates: 0, inherited: 0 });
   return {
@@ -192,30 +128,17 @@ export async function listEidoverseFoundations() {
 }
 
 /**
- * The promote envelopes this install OFFERS to its federated peers (#7455) —
- * the read behind `GET /api/peer-sync/eidoverse-foundations`.
+ * The promote envelopes this install OFFERS to federated peers (#7455), behind
+ * `GET /api/peer-sync/eidoverse-foundations`. Three filters:
  *
- * Three filters, each load-bearing:
+ *  - `layer === 'baseline'`: a packaged `vernacular` candidate is a dry run,
+ *    not a publication.
+ *  - `!inheritance`: never re-share another install's work (matches
+ *    `packageEidoverseFoundationCandidate`).
+ *  - the candidate still VERIFIES: the file is hand-editable, and refuse-never-redact
+ *    applies outbound too, so a failing candidate is dropped and logged.
  *
- *  - `layer === 'baseline'` — only what somebody deliberately promoted. A
- *    `vernacular` record may carry a packaged candidate (packaging is the step
- *    BEFORE promoting); packaging is "show me whether this would pass", not
- *    "publish this", and serving those would turn a dry run into a broadcast.
- *  - `!inheritance` — `baseline` covers BOTH what this install promoted and a
- *    local copy of a peer's, so offering every `baseline` record would re-share
- *    another install's work. That matches `packageEidoverseFoundationCandidate`,
- *    which already refuses an inherited record ("promotion re-shares only
- *    foundations this install authored"): a peer that wants a third install's
- *    foundation pulls it from the install that authored it.
- *  - the candidate still VERIFIES — the envelope was gated when it was
- *    promoted, but `foundations.json` is a file a human can edit and a partial
- *    hand-edit is exactly how a machine name or a local path would end up
- *    inside a body that was clean when it was packaged. Refuse-never-redact
- *    applies outbound as well as inbound, so a candidate that no longer passes
- *    is dropped from the offering (and logged) rather than served.
- *
- * Returns the envelopes only — never the ledger records, which carry the
- * `style` layer that is not authorized to leave this install.
+ * Returns envelopes only, never ledger records (their `style` layer must not leave).
  */
 export async function listPromotedFoundationCandidates() {
   const { foundations, tombstones } = await readLedger();
@@ -223,12 +146,8 @@ export async function listPromotedFoundationCandidates() {
     .filter((entry) => entry?.layer === 'baseline' && !entry.inheritance && entry.candidate);
   const candidates = [];
   for (const entry of offerable) {
-    // A fourth filter (#7632), and a backstop rather than a live path: promoting
-    // clears the fingerprint's tombstone, so the two lists cannot normally
-    // disagree. A hand-edited ledger can make them disagree, and an offering
-    // that both published and retracted one fingerprint would resolve
-    // differently on every receiver depending on which list it applied first.
-    // The retraction wins, because refuse-never-redact runs outbound too.
+    // Backstop: promoting clears the tombstone, but a hand-edited ledger could carry both,
+    // which receivers would resolve differently. The retraction wins.
     if (tombstoneTimestamp(tombstones, entry.candidate.fingerprint, TOMBSTONE_KEY_FIELD) !== null) {
       console.warn(`⚠️ Eidoverse foundation "${entry.id}" is promoted but its candidate is withdrawn — withholding it from the peer offering`);
       continue;
@@ -251,50 +170,27 @@ export async function getEidoverseFoundation(id) {
 }
 
 /**
- * One foundation by REFERENCE — `{ id, originInstanceId }` — which is the only
- * way an inherited copy of a peer's foundation is addressable (#7626).
- *
- * `getEidoverseFoundation(id)` above reaches exactly the records this install
- * AUTHORED, because a plain id is the ledger key for those and only those. A
- * local copy of a peer's foundation lives under
- * `inheritedFoundationStorageKey()`'s disjoint `peer:` namespace, so until
- * this existed every read-one caller — the HTTP route, and therefore every
- * mind surface built on it — could reach a local record and nothing else. The
- * list endpoint returned whole records, so a HUMAN could read an inherited
- * body in the panel while a Mind on the same install could not obtain it at
- * all.
- *
- * Deliberately NOT a widening of the id: `originInstanceId` is its own field,
- * and `null` means "the record authored here", never "whichever matches".
+ * One foundation by REFERENCE — `{ id, originInstanceId }` — the only way an
+ * inherited copy is addressable (#7626): those live under
+ * `inheritedFoundationStorageKey()`'s disjoint `peer:` namespace, which a plain
+ * id never reaches. `originInstanceId: null` means "authored here", never
+ * "whichever matches".
  */
 export async function getEidoverseFoundationByRef(ref) {
   return getEidoverseFoundation(foundationLedgerKey(ref));
 }
 
 /**
- * ADOPT a foundation this install inherited from a peer — stand its `body` up
- * as something that actually runs here, carrying a `derived-from` edge back to
- * the origin (#7626).
+ * ADOPT a foundation inherited from a peer — stand its `body` up as something
+ * that runs here, carrying a `derived-from` edge back to the origin (#7626).
  *
- * This is the verb epic #7453's success signal ("a mind uses what another mind
- * left") always needed and never had. Inheriting stored a row: no runtime on
- * either install read a foundation's `body`, so the only way to use a peer's
- * contribution was a human reading raw JSON out of the Foundations panel and
- * retyping it — which is precisely the "go read the author's transcript" path
- * the epic set out to replace, and which keeps no attribution at all.
+ * What adoption does is decided per KIND by `planFoundationAdoption()`; a kind
+ * with no interpreter is REFUSED BY NAME. Only `controller` is adoptable, and the
+ * peer names which SHIPPED controller to run, never code: `definitionId` resolves
+ * against this install's fixed registry, so adopting never executes a peer's
+ * bytes. The install lands DISARMED with `deliverEffects: false`.
  *
- * What adoption does is decided per KIND by `planFoundationAdoption()`, and a
- * kind with no interpreter here is REFUSED BY NAME rather than silently
- * "adopted" into nothing. Only `controller` is adoptable today, and even then
- * the peer names WHICH SHIPPED CONTROLLER to run, never code: `definitionId` is
- * resolved against this install's own fixed registry by
- * `installEidoverseController()`, so adopting can never execute a peer's
- * bytes. The install lands DISARMED with `deliverEffects: false` — arming a
- * peer's controller and letting it speak in the world stay separate, local
- * decisions.
- *
- * A refusal is a RESULT with its reasons, the shape every other gate in this
- * module uses.
+ * A refusal is a RESULT with its reasons.
  *
  * @returns {Promise<{ outcome: 'adopted'|'refused'|'unknown-foundation', install: object|null, reasons: string[] }>}
  */
@@ -308,12 +204,8 @@ export async function adoptEidoverseFoundation(ref, { installedBy = 'user' } = {
 
   const { getEidoverseControllerInstall, installEidoverseController } = await import('./eidoverseControllerRuntime.js');
 
-  // The install id is the foundation's own id, so re-adopting the same
-  // foundation updates one install instead of accumulating copies. That makes
-  // it possible for the id to name a controller this install already stood up
-  // for some OTHER reason, and installing over it would silently retarget a
-  // running controller at a peer's config. Refuse that by name; only an
-  // install already derived from this same foundation is re-adoptable.
+  // The install id is the foundation's id, so re-adoption updates one install. Refuse when
+  // it names a controller not derived from this foundation rather than retarget it at a peer's config.
   const occupant = await getEidoverseControllerInstall(planned.plan.install.id);
   const sameSource = occupant?.derivedFrom
     && occupant.derivedFrom.originInstanceId === planned.plan.derivedFrom.originInstanceId
@@ -333,18 +225,11 @@ export async function adoptEidoverseFoundation(ref, { installedBy = 'user' } = {
 }
 
 /**
- * A `district-template` foundation's `body.placement` is DERIVED, never
- * trusted verbatim from the caller (#7627): `generateDistrictTemplatePlacement()`
- * is deterministic and seeded, so replaying `{layoutId, anchor, seed}` here —
- * the same replay a peer runs on inherit — is what makes the module's "same
- * inputs reproduce the same geometry" claim actually hold on the install that
- * authored it. A caller-supplied `placement` that disagrees with the
- * derivation is REPLACED wholesale, not merged: a stale or hand-edited value
- * must never ride along looking like the derivation's own output.
- *
- * A body missing `layoutId` or `anchor` (an older shape, or a foundation kind
- * this doesn't apply to) is returned unchanged — this only expands the one
- * documented generative shape, never invents one.
+ * A `district-template` body's `placement` is DERIVED, never trusted from the
+ * caller (#7627): the deterministic seeded generator replays
+ * `{layoutId, anchor, seed}` as a peer does on inherit, and a disagreeing
+ * caller value is REPLACED wholesale. A body missing `layoutId` or `anchor`
+ * is returned unchanged.
  */
 function deriveDistrictTemplateBody(authored) {
   if (authored.kind !== 'district-template') return authored.body;
@@ -357,43 +242,24 @@ function deriveDistrictTemplateBody(authored) {
 /**
  * Record (or re-author) a local vernacular foundation.
  *
- * `originInstanceId` is supplied by the caller rather than read here so this
- * module stays a single-purpose store; `getInstanceId()` from
- * `services/instanceIdentity.js` is what every caller passes.
+ * `originInstanceId` is caller-supplied (`getInstanceId()`) to keep this a
+ * single-purpose store.
  *
- * Re-authoring an existing id keeps its original `createdAt` and origin — an
- * artifact's provenance is part of its identity — and CLEARS the packaged
- * candidate and the recorded assay, because both described the previous body.
- * Carrying a passing verdict across an edit is exactly the "it worked when I
- * narrated it" claim the agent-free harness exists to refuse.
- *
- * For the same reason a re-authored `baseline` foundation drops back to
- * `vernacular` with `promotedAt` cleared: the body that was promoted no longer
- * exists on this install, so a record still claiming to be part of the shared
- * baseline would be describing bytes nobody has. It is local work again until
- * somebody promotes the new body. (Keeping the `baseline` stamp instead would
- * also be a dead end — `layerPromoteRefusal` refuses to package a `baseline`
- * foundation, so the edit could never be published.)
+ * Re-authoring keeps the original `createdAt` and origin and CLEARS the
+ * packaged candidate and assay, which described the previous body. A
+ * re-authored `baseline` foundation drops back to `vernacular` with
+ * `promotedAt` cleared: the promoted bytes no longer exist here, and
+ * `layerPromoteRefusal` would refuse to package a `baseline` record anyway.
  */
 export async function recordEidoverseFoundation(input, { originInstanceId, now = new Date().toISOString() } = {}) {
   const authored = eidoverseFoundationInputSchema.parse(input);
   return withLedgerLock(async () => {
     const { foundations, tombstones } = await readLedger();
     const existing = foundations[authored.id] || null;
-    // The republish guard (#7631). `inheritance` below is a field THIS path
-    // clears, so it could never have stopped a peer's foundation being saved
-    // back through the authoring surface and promoted as local work; the body
-    // itself is what gets checked, against every inherited copy this install
-    // holds. A refusal is thrown rather than returned because both callers —
-    // the route and the mind tool — treat this function's return value as the
-    // recorded foundation, and a verdict shape would make "refused" look like
-    // a saved record to anything that did not read the new field.
-    // Digest the body as it will be STORED, not as it arrived (#7627 + #7631).
-    // A district-template's `placement` is derived here rather than supplied, so
-    // a caller who re-submits only the `{layoutId, anchor, seed}` recipe of an
-    // inherited template — which is exactly what `eidoverse.draft-foundation`
-    // hands back — would otherwise digest a body the inherited copy never had,
-    // slip past the republish guard, and then be stored byte-identical to it.
+    // Republish guard (#7631): check the body as it will be STORED (a district-template's
+    // `placement` is derived, so a re-submitted recipe would otherwise digest differently
+    // and slip past) against every inherited copy. Thrown, not returned, because callers
+    // treat the return value as the saved record.
     const body = deriveDistrictTemplateBody(authored);
     const derivation = resolveFoundationDerivation({
       claim: authored.derivedFrom,
@@ -409,11 +275,8 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       kind: authored.kind,
       title: authored.title,
       summary: authored.summary,
-      // DERIVED, never authored (#7625): the assay replays this foundation's
-      // own body, so the label that binds evidence to it is computed from that
-      // body — the STORED one derived just above, which is what the sandbox
-      // will actually replay. A caller that could name the label could point
-      // the gate at a shipped demo fixture and inherit its passing verdict.
+      // DERIVED (#7625) from the stored body the sandbox will replay; a caller-named label
+      // could point the gate at a shipped demo fixture.
       contributionId: derivedContributionId({ kind: authored.kind, id: authored.id, body }),
       body,
       style: authored.style,
@@ -422,33 +285,22 @@ export async function recordEidoverseFoundation(input, { originInstanceId, now =
       assay: null,
       candidate: null,
       promotedAt: null,
-      // Always `null` here: this path authors LOCAL work. A ledger key this
-      // function writes is always the plain id, never
-      // `inheritedFoundationStorageKey()`'s namespace, so it can never
-      // overwrite (or be confused with) a copy pulled from a peer.
+      // Always `null`: this path authors LOCAL work under the plain id, never the peer namespace.
       inheritance: null,
       derivedFrom: derivation.edge,
       updatedAt: now,
     };
     foundations[authored.id] = record;
-    // Re-authoring a PROMOTED foundation is a retraction of the published body,
-    // and it is the one the issue that prompted #7632 opens with: the record
-    // silently dropped back to `vernacular`, left the offering, and every peer
-    // that had pulled it kept a `baseline` copy of bytes this install no longer
-    // has. The candidate being replaced is what those peers hold, so tombstone
-    // its fingerprint — the new body publishes under a new one when (and if)
-    // somebody promotes it.
+    // Re-authoring a PROMOTED foundation retracts the published body: tombstone the
+    // replaced candidate's fingerprint (the new body publishes under a new one).
     await writeLedger({ foundations, tombstones: tombstoneForReplacedCandidate(tombstones, existing, now) });
     return record;
   });
 }
 
 /**
- * Tombstone the candidate a write is about to replace, but ONLY when that
- * candidate was actually published. A merely PACKAGED candidate on a
- * `vernacular` record never left the install — `listPromotedFoundationCandidates()`
- * refuses to serve one — so tombstoning it would broadcast a retraction for a
- * fingerprint no peer could ever hold, burning a tombstone slot for nothing.
+ * Tombstone a candidate a write replaces, but only if it was actually published:
+ * a merely PACKAGED `vernacular` candidate never left the install.
  */
 const wasPublished = (entry) => entry?.layer === 'baseline' && !entry.inheritance && typeof entry.candidate?.fingerprint === 'string';
 
@@ -461,45 +313,30 @@ const verdict = (outcome, reasons) => ({ outcome, candidate: null, assay: null, 
 const unknownFoundation = (id) => verdict('unknown-foundation', [`no foundation is recorded under "${id}"`]);
 
 /**
- * Run the agent-free assay against a recorded foundation and, if it and every
- * other gate pass, package the promote candidate onto its record.
+ * Run the agent-free assay against a recorded foundation and, if every gate
+ * passes, package the promote candidate onto its record.
  *
- * A refusal is a RESULT, not an exception: "this build is not ready to leave
- * the install" is ordinary, expected output the caller shows the author with
- * its reasons. The assay verdict is persisted either way — a failing verdict is
- * the diagnostic that says what to fix — while a refusal clears any candidate
- * packaged earlier, since the verdict that vouched for it no longer holds.
+ * A refusal is a RESULT, not an exception. The assay verdict is persisted either
+ * way, while a refusal clears any earlier candidate since its verdict no longer holds.
  *
  * @returns {Promise<{ outcome: 'packaged'|'refused'|'unknown-foundation', candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
  */
 export async function packageEidoverseFoundationCandidate(id, { now = new Date().toISOString() } = {}) {
   const existing = await getEidoverseFoundation(id);
   if (!existing) return unknownFoundation(id);
-  // Refused before resolving or replaying ANYTHING: `packageFoundationCandidate`
-  // (the pure lib) refuses an inherited record too, but only after running the
-  // assay against the body it carries. That body came from a PEER — replaying
-  // it here would be exactly the "run arbitrary code pulled from a peer" this
-  // install's own assay harness exists to keep off every OTHER install, even
-  // though the derivation only ever executes code PortOS itself ships.
+  // Refused before replaying anything: the pure lib also refuses inherited records, but only
+  // after running the assay on a body that came from a peer.
   if (existing.inheritance) {
     return verdict('refused', [`inherited from another install (${existing.inheritance.originInstanceId}) — promotion re-shares only foundations this install authored`]);
   }
 
-  // Outside the ledger lock: replaying a contribution is the slow part, and it
-  // reads nothing from the ledger. The lock below re-reads the record and
-  // re-checks that the body has not been re-authored underneath the verdict.
-  //
-  // The sandbox is derived from THIS FOUNDATION'S OWN BODY (#7625). It used to
-  // be resolved by the id the author typed, so the gate replayed whatever
-  // module was named and the verdict described that module rather than this
-  // build. A body with no derivable sandbox is refused with the reason, which
-  // is the honest answer: nothing can replay it without its author.
+  // Outside the ledger lock (replay is slow and reads no ledger); the lock below re-checks
+  // the body was not re-authored. The sandbox derives from the foundation's own body (#7625);
+  // a body with no derivable sandbox is refused.
   const { contribution, refusal } = await foundationSandbox(existing, { findControllerDefinition: findControllerDefinitionById });
   if (refusal) return verdict('refused', [refusal]);
   const assay = assayEvidenceFromVerdict(runResilienceAssay(contribution), { ranAt: now });
-  // Read after the early returns: `getPortosVersion()` re-reads and re-parses
-  // package.json on every call, and a request naming an id this install never
-  // authored should not pay for it.
+  // After the early returns: `getPortosVersion()` re-parses package.json on every call.
   const portosVersion = await getPortosVersion();
 
   return withLedgerLock(async () => {
@@ -510,21 +347,15 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
       return verdict('refused', ['the foundation was re-authored while the assay was running — package it again']);
     }
 
-    // `contributionId` is re-derived here rather than read off the record, so a
-    // record written before #7625 (or restored from a backup that predates it)
-    // heals on its next package attempt instead of failing the pure gate's
-    // binding backstop forever.
+    // `contributionId` is re-derived so a pre-#7625 or restored record heals on the next package.
     const result = packageFoundationCandidate({
       record: { ...current, contributionId: contribution.id, assay, candidate: null },
       requiredDisturbances: RESILIENCE_DISTURBANCES,
       portosVersion,
       now,
     });
-    // `updatedAt` tracks the BODY's authorship, not assay runs: bumping it here
-    // would reorder the list on a refusal and make the optimistic check above
-    // report a re-authoring that never happened. A refusal also clears any
-    // previously packaged candidate — the verdict that vouched for it no
-    // longer holds, even though the bytes are unchanged.
+    // `updatedAt` tracks the BODY's authorship, not assay runs; bumping it would trip the
+    // optimistic check above. A refusal also clears the previous candidate.
     foundations[id] = { ...current, contributionId: contribution.id, assay, candidate: result.candidate };
     await writeLedger({ foundations, tombstones });
     return { ...result, assay };
@@ -532,20 +363,15 @@ export async function packageEidoverseFoundationCandidate(id, { now = new Date()
 }
 
 /**
- * Promote a packaged foundation into this install's shared baseline population.
+ * Promote a packaged foundation into this install's shared baseline.
  *
- * Promotion re-packages first and publishes the candidate it just produced, so
- * it can never rest on a stored verdict: every gate — ownership, the agent-free
- * assay, the style-leak scan, federation safety, the content-addressed
- * fingerprint — is re-run against the body as it stands right now. A refusal is
- * a RESULT with its reasons, exactly as packaging is; nothing moves layer.
+ * Re-packages first and publishes the candidate it just produced, so every gate
+ * is re-run against the body as it stands now. A refusal is a RESULT; nothing
+ * moves layer.
  *
- * `baseline` means "this install offers this foundation to the shared
- * population", and it is literally the set served from:
- * `listPromotedFoundationCandidates()` reads it for the peer-facing offering
- * at `GET /api/peer-sync/eidoverse-foundations`. The promoted record keeps its
- * `style` locally — only the candidate envelope, which has no style layer at
- * all, is authorized to cross, per the federated Eidoverse foundations ADR
+ * `baseline` is exactly what `listPromotedFoundationCandidates()` serves at
+ * `GET /api/peer-sync/eidoverse-foundations`. The record keeps its `style`
+ * locally; only the candidate envelope crosses
  * (docs/decisions/2026-09-18-federated-eidoverse-foundations.md).
  *
  * @returns {Promise<{ outcome: 'promoted'|'refused'|'unknown-foundation', promoted: boolean, foundation: object|null, candidate: object|null, assay: object|null, reasons: string[], findings: Array }>}
@@ -558,9 +384,7 @@ export async function promoteEidoverseFoundation(id, { now = new Date().toISOStr
     const { foundations, tombstones } = await readLedger();
     const current = foundations[id];
     if (!current) return { ...unknownFoundation(id), promoted: false, foundation: null };
-    // Packaging released the ledger lock before this one was taken, so an
-    // author (or a mind) could have re-authored the body in the gap — which
-    // clears the candidate. Publishing then would ship bytes nobody gated.
+    // Packaging released the lock; a re-author in the gap clears the candidate, and publishing would ship ungated bytes.
     if (current.candidate?.fingerprint !== packaged.candidate.fingerprint) {
       return {
         outcome: 'refused',
@@ -574,44 +398,26 @@ export async function promoteEidoverseFoundation(id, { now = new Date().toISOStr
     }
     const foundation = { ...current, layer: 'baseline', promotedAt: now };
     foundations[id] = foundation;
-    // Re-publishing a body that was withdrawn earlier clears its tombstone, or
-    // the offering would carry a retraction and the republication of the very
-    // same fingerprint at once and every receiver would reap what it just
-    // inherited, forever. This is `tombstones.js`'s re-create case: the
-    // fingerprint is content-addressed, so an identical body promoted again IS
-    // the same key, and only an explicit clear can distinguish "I changed my
-    // mind" from "I never withdrew it".
+    // Re-publishing a withdrawn body clears its tombstone: the fingerprint is content-addressed,
+    // so only an explicit clear distinguishes "changed my mind" from "never withdrew".
     await writeLedger({ foundations, tombstones: clearTombstone(tombstones, packaged.candidate.fingerprint, TOMBSTONE_KEY_FIELD) });
     return { ...packaged, outcome: 'promoted', promoted: true, foundation };
   });
 }
 
 /**
- * Accept a promote candidate this install pulled from a peer and store it as
- * a local baseline copy, carrying an `inherited-from` edge back to its origin
- * (#7461).
+ * Accept a promote candidate pulled from a peer and store it as a local
+ * baseline copy with an `inherited-from` edge (#7461).
  *
- * The caller is the pull/inherit transport in
- * `services/sharing/peerEidoverseFoundationSync.js` (#7455), which has fetched
- * the envelope from a full-sync peer and can vouch for `sourceInstanceId` —
- * the peer it pulled FROM, which differs from the candidate's own
- * `originInstanceId` on a foundation re-shared through more than one hop (see
- * `foundationFromInheritedCandidate()`).
+ * The caller is the transport in `services/sharing/peerEidoverseFoundationSync.js`;
+ * `sourceInstanceId` is the peer pulled FROM, which differs from the candidate's
+ * `originInstanceId` on a multi-hop re-share. `localInstanceId` is caller-supplied.
  *
- * `localInstanceId` is supplied by the caller rather than read here, matching
- * `recordEidoverseFoundation()`'s own convention: this module stays a
- * single-purpose store, and the future transport already has to resolve its
- * own instance id to make the pull in the first place.
- *
- * Every gate `promoteEidoverseFoundation()` runs on the SENDING side —
- * schema, content-addressed fingerprint, the assay evidence already recorded
- * in the envelope, and federation safety (PII, credentials, machine identity)
- * — runs again here on the RECEIVING side: a payload handed over by a peer is
- * exactly the untrusted input `verifyFoundationCandidate()` exists for. A
- * candidate that fails is refused outright and nothing is written — never
- * stored redacted, and never allowed to shadow (or read as) a local
- * vernacular foundation of the same id, because it is stored under
- * `inheritedFoundationStorageKey()`'s disjoint namespace instead.
+ * Every sending-side gate (schema, fingerprint, assay evidence, federation
+ * safety) runs again here: a peer payload is untrusted input. A failing
+ * candidate is refused and nothing is written, never redacted. It is stored
+ * under the disjoint `inheritedFoundationStorageKey()` namespace so it cannot
+ * shadow a local foundation of the same id.
  *
  * @returns {Promise<{ outcome: 'inherited'|'refused', foundation: object|null, reasons: string[], findings: Array }>}
  */
@@ -625,18 +431,11 @@ export async function recordEidoverseFoundationInheritance(candidate, { sourceIn
     const { foundations, tombstones } = await readLedger();
     const originInstanceId = built.foundation.provenance.originInstanceId;
     const key = inheritedFoundationStorageKey(originInstanceId, built.foundation.id);
-    // The storage key is chosen by `provenance.originInstanceId` — a field the
-    // SENDER wrote and hashed into its own fingerprint, so re-fingerprinting an
-    // altered origin costs a forger nothing and `verifyFoundationCandidate()`
-    // (which only checks self-consistency) cannot see it. Without this check a
-    // peer offering an envelope that claims ANOTHER install's origin silently
-    // replaced this install's genuine copy of that install's foundation (#7631).
-    //
-    // Divergence is the whole signal: `listPromotedFoundationCandidates()`
-    // filters out inherited records, so no shipped install re-shares a
-    // foundation it did not author, and a genuine record under this key can
-    // therefore only ever have come from the origin itself. Re-offering from
-    // the SAME peer stays an ordinary update.
+    // The key derives from `provenance.originInstanceId`, a SENDER-written field a forger can
+    // re-fingerprint for free, which `verifyFoundationCandidate()` cannot see (#7631). Refuse a
+    // copy from a different peer than the one already holding that key; no shipped install
+    // re-shares inherited records, so a genuine record there came from the origin itself.
+    // Re-offering from the same peer stays an ordinary update.
     const held = foundations[key];
     if (held?.inheritance && held.inheritance.sourceInstanceId !== sourceInstanceId) {
       console.warn(`⚠️ Eidoverse foundation "${built.foundation.id}" attributed to origin ${originInstanceId} is already held from peer ${held.inheritance.sourceInstanceId} — refusing the copy offered by peer ${sourceInstanceId} rather than overwriting it`);
@@ -657,28 +456,13 @@ export async function recordEidoverseFoundationInheritance(candidate, { sourceIn
  * Withdraw a foundation this install PROMOTED, retracting it from the shared
  * population (#7632).
  *
- * Two things happen, and the second is the one that makes this different from
- * every de-promotion that came before it:
- *
  *  1. The record drops back to `vernacular` with `promotedAt` and `candidate`
- *     cleared — the same transition re-authoring performs. It leaves the
- *     offering immediately, because `listPromotedFoundationCandidates()` serves
- *     `baseline` records only.
- *  2. The withdrawn candidate's fingerprint is TOMBSTONED, and the tombstone
- *     rides the offering. Without it, a peer that already pulled the foundation
- *     keeps its `baseline` copy indefinitely: the sweep converges upward toward
- *     whatever the sender currently lists and has no way to express "and drop
- *     what I no longer list", because a foundation legitimately absent from one
- *     offering is indistinguishable from one the sender never had.
+ *     cleared, leaving the offering immediately.
+ *  2. The candidate's fingerprint is TOMBSTONED and rides the offering: the sweep
+ *     only converges upward, so without it peers keep their `baseline` copy.
  *
- * The body is KEPT. Withdrawal un-publishes; deleting the local work is
- * `deleteEidoverseFoundation()` and a separate decision.
- *
- * A peer running a version that predates the tombstone key keeps its copy and
- * says so in its log. That is unavoidable by construction — it is why the
- * retraction is documented as best-effort rather than a guarantee — and it is
- * the correct failure mode: it degrades to today's behavior rather than
- * mis-reading a key it does not know.
+ * The body is KEPT; deleting local work is `deleteEidoverseFoundation()`.
+ * A peer predating the tombstone key keeps its copy (best-effort retraction).
  *
  * @returns {Promise<{ outcome: 'withdrawn'|'not-promoted'|'refused'|'unknown-foundation', foundation: object|null, reasons: string[] }>}
  */
@@ -697,8 +481,7 @@ export async function withdrawEidoverseFoundation(id, { now = new Date().toISOSt
     if (current.layer !== 'baseline') {
       return { outcome: 'not-promoted', foundation: { ...current, lineage: foundationLineage(current) }, reasons: [`"${id}" is not promoted, so there is nothing to retract`] };
     }
-    // `updatedAt` is untouched: it tracks the BODY's authorship, and a
-    // withdrawal changes what this install publishes, not what it wrote.
+    // `updatedAt` tracks the body's authorship; withdrawal changes what is published, not what was written.
     const foundation = { ...current, layer: 'vernacular', candidate: null, promotedAt: null };
     foundations[id] = foundation;
     await writeLedger({ foundations, tombstones: tombstoneForReplacedCandidate(tombstones, current, now) });
@@ -708,38 +491,25 @@ export async function withdrawEidoverseFoundation(id, { now = new Date().toISOSt
 }
 
 /**
- * The retractions this install advertises beside its offering — read by
- * `buildEidoverseFoundationOffering()` in the peer transport.
- *
- * Deliberately the WHOLE capped list, not a delta: a receiver that was offline
- * across several withdrawals has no cursor, and a tombstone for a fingerprint
- * nobody holds is a silent no-op on the receiving side, so re-sending one costs
- * nothing but bytes.
+ * The retractions advertised beside the offering (`buildEidoverseFoundationOffering()`).
+ * The WHOLE capped list, not a delta: receivers have no cursor, and a tombstone
+ * for an unheld fingerprint is a no-op.
  */
 export async function listWithdrawnFoundationTombstones() {
   return (await readLedger()).tombstones;
 }
 
 /**
- * Apply a peer's retractions: drop every local copy this install inherited FROM
- * that peer whose fingerprint the peer has tombstoned (#7632). The receiving
- * half of `withdrawEidoverseFoundation()`.
+ * Apply a peer's retractions: drop every local copy inherited FROM that peer
+ * whose fingerprint it tombstoned (#7632); the receiving half of
+ * `withdrawEidoverseFoundation()`.
  *
- * **Scoped to the peer that sent them.** A tombstone authorizes dropping only a
- * record this install pulled from that same peer (`inheritance.sourceInstanceId`).
- * Otherwise any registered peer could retract a third install's foundation by
- * naming its fingerprint — a fingerprint is public inside the federation the
- * moment it is offered, so it is an identifier, never a credential.
+ * **Scoped to the sending peer** (`inheritance.sourceInstanceId`): fingerprints
+ * are public in the federation, so they are identifiers, not credentials. A
+ * tombstone for an unheld fingerprint is a no-op.
  *
- * A tombstone for a fingerprint this install does not hold is a no-op, not an
- * error: a receiver that never pulled the foundation (or already dropped it) is
- * already in the state the retraction asks for.
- *
- * The peer's tombstones are NOT persisted here. This install never re-offers an
- * inherited record, so it can never relay one; and the sender keeps advertising
- * the tombstone while its candidate stays absent, so there is no window in
- * which a dropped copy could be re-inherited. Storing them would only let a
- * peer grow this install's capped list and push out its own retractions.
+ * The peer's tombstones are NOT persisted: this install never re-offers an
+ * inherited record, and storing them would let a peer push out this install's own.
  *
  * @returns {Promise<{ removed: number }>}
  */
@@ -762,17 +532,12 @@ export async function applyEidoverseFoundationTombstones(peerTombstones, { sourc
 }
 
 /**
- * Delete a foundation record outright — local work or an inherited copy.
+ * Delete a foundation record outright — local work or an inherited copy, the
+ * latter addressed as `{ id, originInstanceId }` so the `peer:` key grammar
+ * stays private to this module.
  *
- * An inherited copy is addressed as `{ id, originInstanceId }` rather than by
- * its raw `peer:<origin>:<id>` storage key, so the ledger's key grammar stays
- * an implementation detail of this module instead of something a caller has to
- * assemble (and could assemble wrong).
- *
- * **Deleting a PROMOTED local record withdraws it first.** Dropping the row
- * without a tombstone would orphan every peer's copy permanently, which is the
- * exact failure withdrawal exists to prevent — and it would be reached by the
- * most natural gesture a regretful author makes ("remove this").
+ * **Deleting a PROMOTED local record withdraws it first**, or peers' copies
+ * would be orphaned permanently.
  *
  * @returns {Promise<{ outcome: 'deleted'|'unknown-foundation', foundation: object|null, withdrawn: boolean }>}
  */

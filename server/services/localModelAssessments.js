@@ -1,18 +1,9 @@
 /**
  * Measured local-model assessments — the run + durable store.
- *
- * PortOS's existing "does it fit" answer is a size estimate: weight bytes × 1.2
- * against total RAM minus a reserve (`huggingFaceCatalog.js#classifyFit`). It
- * never runs the model, so it cannot distinguish a model that loads and streams
- * comfortably from one that loads, thrashes, and crawls — and it says nothing
- * about how either behaves once the prompt is long.
- *
- * This service closes that gap by actually running the model: one bounded
- * generation per context length, through the SAME provider seam the Local LLM
- * playground uses (`localLlmPlayground.runLocalLlmTest`), recording throughput,
- * time-to-first-token, resident footprint, and the environment the measurement
- * was taken in. `lib/localModelAssessment.js` turns that evidence into a verdict
- * and an intent-specific ranking.
+ * One bounded generation per context length through the SAME provider seam the Local LLM
+ * playground uses (`localLlmPlayground.runLocalLlmTest`), recording throughput, time-to-first-token,
+ * resident footprint and environment. This is evidence where `huggingFaceCatalog.js#classifyFit`
+ * only estimates; `lib/localModelAssessment.js` turns it into a verdict and ranking.
  *
  * ## AI Provider Usage Policy (root AGENTS.md) — read before editing
  *
@@ -27,21 +18,14 @@
  *     user action whose UI names the backend, the model, and the number of runs
  *     before it fires.
  *
- * There is NO scheduler and NO boot hook. Do not add one: a fresh install must be
- * silent on the LLM front until the user asks.
+ * There is NO scheduler and NO boot hook. Do not add one.
  *
- * `localModelAssessmentSweep.js` measures every installed model in one pass, and
- * is not an exception to that — it runs only from a button press behind a consent
- * gate that names the model and generation count, which is the user asking. What
- * stays forbidden is anything that starts it WITHOUT that press.
+ * `localModelAssessmentSweep.js` is not an exception: it runs only from a button press behind a
+ * consent gate naming the model and generation count.
  *
- * ## Where the pieces live
- *
- * The durable store, the environment capture, and the privacy/storage contract
- * moved to `localModelAssessmentStore.js` — that module has no path to a
- * provider, so read-only consumers (the catalog fit badge, `localLlm.getStatus`)
- * can import it without importing this one, and without an import cycle through
- * `localLlm.js`.
+ * The durable store, environment capture and privacy/storage contract live in
+ * `localModelAssessmentStore.js`, which has no path to a provider, so read-only consumers can
+ * import it without an import cycle through `localLlm.js`.
  */
 
 import {
@@ -105,41 +89,29 @@ import {
 } from './ollamaManager.js';
 import { loadModelWithArgs as loadLmStudioModelWithArgs } from './lmStudioManager.js';
 
-// Re-exported so the store split stays an implementation detail for callers that
-// only ever wanted "the assessments feature".
+// Re-exported so the store split stays invisible to callers.
 export { captureEnvironment, deleteAssessment, loadAssessments };
 
 const GB = 2 ** 30;
 
-// Nominal context sizes to sample, in approximate tokens. Three points is the
-// minimum that shows a TREND rather than a single data point, and the top of
-// the range is where a local model typically starts paging. Users can override
-// per run; the route caps the list so one request can't turn into a 20-run job.
+// Nominal context sizes, in approximate tokens. Three points is the minimum that shows a trend.
+// The route caps per-run overrides.
 export const DEFAULT_CONTEXT_TOKENS = [512, 4096, 16384];
 
-// Conventional English chars-per-token ratio, used ONLY to size the filler
-// prompt for a requested nominal context. PortOS has no tokenizer, so nothing
-// downstream reports a token *measurement* — see the throughput unit note in
-// lib/localModelAssessment.js.
+// Chars-per-token ratio used ONLY to size filler. No tokenizer exists, so nothing reports a token
+// measurement (see lib/localModelAssessment.js).
 const CHARS_PER_TOKEN = 4;
 
-// Each sample generates a short answer: the point is measuring prefill + decode
-// at a given context, not producing text. Small and fixed so throughput is
-// comparable across models and across context lengths.
+// Short fixed answer: the point is prefill + decode at a context, comparable across models.
 const SAMPLE_MAX_TOKENS = 96;
 
-// Per-sample ceiling. A model that cannot answer a trivial question within two
-// minutes at this context has, for assessment purposes, failed at it — the
-// timeout is recorded as a resource failure and the run moves on to the next
-// context rather than hanging the request.
+// Per-sample ceiling; a timeout is recorded as a resource failure and the run moves on.
 const SAMPLE_TIMEOUT_MS = 120000;
 
 const SAMPLE_SYSTEM_PROMPT =
   'You are being benchmarked. Answer the final question in one short sentence. Do not summarize the reference text.';
 
-// Deterministic filler, generated rather than stored, so a long context costs no
-// repository bytes. Distinct numbered lines (not one repeated line) keep a
-// backend's prefix cache from making a long prompt look artificially cheap.
+// Generated filler. Distinct numbered lines keep a prefix cache from making a long prompt look cheap.
 function buildFillerPrompt(contextTokens) {
   const targetChars = Math.max(0, Math.round(contextTokens * CHARS_PER_TOKEN));
   const lines = [];
@@ -161,17 +133,11 @@ export function buildSamplePrompt(contextTokens) {
 // ---- runtimes ---------------------------------------------------------------
 
 /**
- * Where this runtime's OpenAI-compatible API actually is right now.
- *
- * The two PM2-managed daemons are the ones that move: PortOS starts llama.cpp
- * and MTPLX, and a user who picked a different port on the LLMs page is serving
- * somewhere the shipped default no longer names. Ask the manager rather than
- * re-deriving the port here — probing the stale default would report a working
- * server as unreachable.
+ * Where this runtime's OpenAI-compatible API actually is right now. PM2-managed daemons can move
+ * off the shipped default port, so ask the manager rather than probing a stale default.
  */
 export async function runtimeEndpoint(runtime) {
-  // The endpoint-only accessors, NOT the `get*Status` calls — those pay for a
-  // network probe and an `execPm2 logs` subprocess, and this path runs on every
+  // Endpoint-only accessors: the `get*Status` calls pay for a network probe and a pm2 logs subprocess.
   // Performance page load only to learn a port number.
   const resolver = { llama: getLlamaServerEndpoint, mtplx: getMtplxServerEndpoint, slotstream: getSlotstreamServerEndpoint }[runtime];
   if (resolver) {
@@ -183,20 +149,12 @@ export async function runtimeEndpoint(runtime) {
 
 /**
  * The API key a bare endpoint runtime is served behind, or `''` for the usual
- * unauthenticated loopback daemon.
- *
- * A vLLM container started from the shipped compose stack sets `VLLM_API_KEY`
- * and answers 401 to an unauthenticated request — which `probeOpenAiModels`
- * correctly reports as "reachable, listing unreadable" and a measurement would
- * hit on every sample. `providerReadiness.js` already solves this by reading the
- * key off the matching provider record; this resolves it the same way, keyed on
- * the same `localRuntimeKind` classifier so the two can't disagree about which
- * provider backs which runtime.
+ * The API key a bare endpoint runtime is served behind, or `''` for an unauthenticated loopback
+ * daemon (a key-gated vLLM answers 401 otherwise). Resolved like `providerReadiness.js`, keyed on the
+ * same `localRuntimeKind` classifier.
  */
 export async function runtimeApiKey(runtime) {
-  // `listProviders`, not `getAllProviders`: the latter resolves an ENVELOPE
-  // (`{ activeProvider, providers }`), so the `Array.isArray` guard this used to
-  // carry was never true and every runtime silently resolved to no key — a vLLM
+  // `listProviders`: `getAllProviders` resolves an envelope, not an array.
   // behind VLLM_API_KEY then 401'd on every sample.
   const match = (await listProviders())
     .find((p) => localRuntimeKind(p) === runtime && typeof p?.apiKey === 'string' && p.apiKey !== '');
@@ -204,38 +162,22 @@ export async function runtimeApiKey(runtime) {
 }
 
 /**
- * Models this runtime can be measured against, plus why the list failed when it
- * did.
+ * Models this runtime can be measured against, plus why the list failed when it did.
  *
- * The two paths differ in what "installed" even means. A managed backend has a
- * durable catalog on disk (`listManagedBackendModels`), so its list survives the daemon being
- * down. An endpoint runtime has no catalog at all — its models are whatever the
- * running process reports from `GET /v1/models`, so a stopped daemon means "no
- * models listable", which is an ERROR, never an empty catalog. Collapsing those
- * would silently hide every model behind a daemon the user just needs to start.
- *
+ * A managed backend has a durable catalog on disk, so its list survives the daemon being down. An
+ * endpoint runtime only knows what `GET /v1/models` reports, so a stopped daemon is an ERROR, never
+ * an empty catalog.
  * @returns {Promise<{models: Array<object>|null, error: string|null}>}
  *   `models: null` means the list could not be read; `[]` means it was read and
  *   is genuinely empty.
  */
 /**
- * What PortOS knows is installed for a runtime WITHOUT asking the daemon.
- *
- * An endpoint runtime that is not running reports nothing over HTTP, but the
- * weights are still on disk and PortOS already lists them elsewhere (Models →
- * LLMs). Showing "could not list models" and an empty table hides installed
- * models behind a daemon the user just needs to start.
- *
- * Only consulted when the live probe FAILED, so a healthy install never pays
- * for it. Every other runtime returns `[]` — vLLM and SGLang are containers the
- * user runs themselves, and PortOS holds no catalog for them, which is a real
- * answer rather than a gap to paper over.
+ * What PortOS knows is installed for a runtime WITHOUT asking the daemon. Only consulted when the
+ * live probe FAILED. Runtimes PortOS holds no catalog for (vLLM, SGLang) return `[]`.
  */
 export async function durableRuntimeModels(runtime) {
   if (runtime === 'llama') {
-    // A preset whose target GGUF is on disk is a model llama.cpp can serve, and
-    // the preset id IS the alias PortOS starts it under — so this is the same
-    // id a running server would report from /v1/models.
+    // The preset id IS the alias PortOS starts it under, so it matches /v1/models.
     const presets = await getSpecDecodePresetStatus().catch(() => []);
     return presets
       .filter((preset) => preset?.model?.exists)
@@ -249,19 +191,14 @@ export async function durableRuntimeModels(runtime) {
 }
 
 export async function listRuntimeModels(runtime) {
-  // `listManagedBackendModels` carries the "empty vs unreadable" sentinel for
-  // these two backends (both managers cache `[]` on a failed read), so this
-  // path and every other consumer of that distinction agree.
+  // `listManagedBackendModels` carries the "empty vs unreadable" sentinel for these backends.
   if (MANAGED_ASSESSMENT_BACKENDS.includes(runtime)) return listManagedBackendModels(runtime);
 
   const endpoint = await runtimeEndpoint(runtime);
   if (!endpoint) return { models: null, error: 'no endpoint is configured for this runtime', offline: true };
 
-  // A daemon that is down is the common case here, and it is FIXABLE — so fall
-  // back to what is on disk and mark the listing `offline`, rather than
-  // reporting a bare failure that hides installed models. `offline` is what
-  // tells a consumer these came from disk: they are installed, but nothing can
-  // be run against them until the runtime is started.
+  // Daemon down is common and fixable: fall back to disk and mark `offline` so consumers know
+  // nothing can run until the runtime starts.
   const offlineListing = async (error) => {
     const models = await durableRuntimeModels(runtime).catch(() => []);
     return { models: models.length ? models : null, error, offline: true };
@@ -270,21 +207,16 @@ export async function listRuntimeModels(runtime) {
   const probe = await probeOpenAiModels(endpoint, { timeoutMs: 2500, apiKey: await runtimeApiKey(runtime) });
   if (!probe.reachable) return offlineListing(`not reachable at ${endpoint} (${probe.error})`);
   if (!probe.models) return offlineListing(probe.error || 'model listing was not readable');
-  // An endpoint runtime reports ids only — no params, no quantization. `null`
-  // there is honest: the capability axis simply goes unscored rather than being
-  // guessed from the id.
+  // Endpoint runtimes report ids only; `null` params leave the capability axis unscored.
   return { models: probe.models.map((id) => ({ id, params: null, quantization: null })), error: null };
 }
 
 // ---- measurement ------------------------------------------------------------
 
 /**
- * Turn one `runLocalLlmTest` result into a recorded sample.
- *
- * The distinction that matters: a run that produced no text is a FAILURE even
- * when `runLocalLlmTest` resolved without an `error` (it resolves rather than
- * throws on timeout). Recording it as a success with `charsPerSecond: 0` would
- * feed a fabricated zero into the speed average.
+ * Turn one `runLocalLlmTest` result into a recorded sample. A run that produced no text is a
+ * FAILURE even when it resolved without an `error` (timeouts resolve), else a fabricated zero
+ * enters the speed average.
  */
 export function toSample(contextTokens, result) {
   const timings = result?.timings || {};
@@ -298,10 +230,7 @@ export function toSample(contextTokens, result) {
     ttftMs: measured(timings.ttftMs),
     totalMs: Number.isFinite(timings.totalMs) ? timings.totalMs : null,
     chars: Number.isFinite(timings.chars) ? timings.chars : null,
-    // Token-denominated throughput, when the daemon reported token counts (see
-    // `summarizeTimings`). `null` = the daemon reported none — NOT zero, and not
-    // a chars/s figure divided by a guessed chars-per-token ratio, which would
-    // dress arithmetic up as a measurement.
+    // Token throughput when the daemon reported counts; `null` = none reported, never zero.
     completionTokens: measured(timings.completionTokens),
     promptTokens: measured(timings.promptTokens),
     tokensPerSecond: measured(timings.tokensPerSecond),
@@ -318,10 +247,7 @@ export function toSample(contextTokens, result) {
 
 /** Resident bytes for a model, from Ollama's `/api/ps`. `null` when unknown. */
 async function residentGbFor(backend, modelId) {
-  // Only Ollama reports a resident size (`/api/ps` → `size`). LM Studio's
-  // loaded-model listing carries no footprint, so the honest answer there is
-  // `null` — not a size copied from the weight file, which would silently
-  // re-introduce the estimate this feature exists to replace.
+  // Only Ollama reports a resident size; `null` elsewhere rather than a weight-file estimate.
   if (backend !== 'ollama') return null;
   const loaded = await getLoadedOllamaModels().catch(() => []);
   const match = loaded.find((m) => m?.id === modelId || m?.name === modelId);
@@ -329,9 +255,7 @@ async function residentGbFor(backend, modelId) {
   return Number.isFinite(bytes) && bytes > 0 ? Number((bytes / GB).toFixed(2)) : null;
 }
 
-// Human-readable reason behind a non-`fits` verdict, or `null` for `fits`.
-// Quotes the backend's own error where there is one — a verbatim OOM message is
-// far more actionable than a paraphrase.
+// Human-readable reason behind a non-`fits` verdict; quotes the backend's own error.
 function describeVerdict(verdict, samples) {
   if (verdict === 'fits') return null;
   const backendError = samples.find((s) => s?.error)?.error || null;
@@ -341,43 +265,28 @@ function describeVerdict(verdict, samples) {
 }
 
 /**
- * Run one model's assessment. **The only LLM-calling entry point in this
- * module** — see the AI Provider Usage Policy note at the top.
+ * Run one model's assessment. **The only LLM-calling entry point in this module.**
  *
- * Samples run sequentially, smallest context first, so a model that dies at the
- * largest size has already recorded its working sizes. A resource failure stops
- * the remaining (larger) contexts: they cannot succeed once a smaller one has
- * exhausted memory, and running them would only burn minutes. An `incompatible`
- * failure stops immediately for the same reason.
+ * Samples run smallest context first. A resource or `incompatible` failure stops the larger ones,
+ * which cannot succeed after a smaller one exhausted memory.
  *
  * @param {object} options
  * @param {'ollama'|'lmstudio'|'llama'|'mtplx'|'vllm'} options.backend
  * @param {string} options.modelId
  * @param {number[]} [options.contextTokens] nominal context sizes to sample
- * @param {object} [options.tuning] launch/runtime knobs (`lib/localModelTuning.js`).
- *   Launch knobs are applied where PortOS starts the daemon (llama.cpp); the
- *   rest are recorded so two readings of one model stay comparable. The tuning
- *   is part of the record's identity, so a second tuning of the same model is a
- *   NEW record rather than an overwrite.
- * @param {number} [options.claimTimeoutMs] how long to WAIT for the machine-wide
- *   accelerator claim before giving up. 0 (the default) refuses immediately,
- *   which is right for an interactive click; the sweep waits, so one image
- *   render slipping in between two models does not kill an overnight queue.
+ * @param {object} [options.tuning] launch/runtime knobs (`lib/localModelTuning.js`). Launch knobs apply
+ *   where PortOS starts the daemon (llama.cpp); the rest are recorded. The tuning is part of the
+ *   record's identity: a second tuning is a NEW record.
+ * @param {number} [options.claimTimeoutMs] how long to WAIT for the machine-wide accelerator claim.
+ *   0 refuses immediately (interactive click); the sweep waits.
  * @param {AbortSignal} [options.signal] client disconnect
  * @param {(frame: object) => void} [options.onProgress] per-sample progress.
- *   A run is minutes long on a large model, so the caller (the route) forwards
- *   these to the `localLlm:progress` socket event the pull/migrate paths already
- *   use. Frames carry `backend` + `modelId` so a listener can tell a frame from
- *   THIS run apart from an unrelated model install streaming on the same event.
+ *   Frames carry `backend` + `modelId` to tell this run from unrelated installs on the same event.
  * @returns {Promise<object>} the persisted assessment record
  */
 export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_CONTEXT_TOKENS, tuning, resetTuning = false, signal, onProgress, claimTimeoutMs = 0 } = {}) {
-  // Refused BEFORE the heavy-job claim and before any provider call: every
-  // sample of an embedding-only model comes back `400 "<model>" does not
-  // support chat`, and each one raises an AI-provider investigation task for a
-  // failure that is fully determined by the model id. `selectSweepTargets`
-  // already keeps these out of a sweep; this covers the direct
-  // `POST /api/local-llm/assessments/run` route, which never goes through it.
+  // Refused before the heavy-job claim: an embedding-only model answers every sample with a 400
+  // and each one raises an investigation task. Covers the direct run route.
   if (isEmbeddingModel(modelId)) {
     throw new ServerError(
       `${modelId} is an embedding model — it has no chat/generation to measure`,
@@ -385,49 +294,30 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
     );
   }
   const contexts = [...new Set(contextTokens)].filter((n) => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
-  // The listener runs outside the request lifecycle's error path in some callers
-  // (a socket emit can throw on a closed io), and a broken progress consumer must
-  // never abort a measurement the user is paying minutes for.
+  // A broken progress consumer must never abort a measurement.
   const emit = (frame) => {
     if (typeof onProgress !== 'function') return;
     try { onProgress({ scope: 'assessment', backend, modelId, ...frame }); }
     catch (err) { console.error(`❌ Local LLM: assessment progress listener failed: ${err.message}`); }
   };
-  // Refuse an embedding-only model before anything is claimed or spawned. The
-  // report already keeps them out of `unassessed`, so reaching here means a
-  // direct API call (or a stale page) — and every path below would spend the
-  // accelerator claim on a sample the backend answers with
-  // `400 "<model>" does not support chat`. Failing fast with a reason beats
-  // recording that as a verdict about the machine.
   if (isEmbeddingModel(modelId)) {
     throw new ServerError(
       `${modelId} is an embedding-only model — it has no chat endpoint to benchmark. Measure a generation model instead.`,
       { status: 400, code: 'MODEL_NOT_ASSESSABLE', context: { backend, modelId } },
     );
   }
-  // A measurement is only valid if it had the machine to itself. This is the
-  // SAME machine-wide claim local image/video/3D rendering and LoRA training
-  // take (`lib/heavyJobClaim.js`), for a stronger reason than theirs: a
-  // contending job does not merely slow this run down, it silently changes the
-  // number being recorded. It also makes the "one at a time" rule real for every
-  // caller — a second browser tab, ⌘K, or curl — rather than resting on a
-  // disabled button. Refusing is far better than recording a corrupt reading.
+  // Same machine-wide claim as image/video/3D rendering: a contending job silently changes the
+  // number being recorded, so refuse rather than record a corrupt reading.
   const claim = await claimHeavyLocalJob({ kind: 'local-model assessment', id: `${backend}/${modelId}`, timeoutMs: claimTimeoutMs });
   if (!claim.ok) {
     throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: claim.holder } });
   }
   try {
-    // The claim wait is bounded but can be minutes long, and it does not observe
-    // the abort signal. A cancel that landed while we waited must not turn into a
-    // measurement now that the machine is free — that would relaunch llama-server
-    // under the cancelled run's tuning and hold the claim against the sweep that
-    // replaced it. Nothing was measured, so nothing is recorded.
+    // The claim wait ignores the abort signal; a cancel during it must not become a measurement.
     if (signal?.aborted) {
       console.log(`📏 Local LLM: ${backend}/${modelId} cancelled while waiting for the accelerator — not measured`);
       emit({ event: 'complete', cancelled: true, message: `${modelId}: cancelled before it started — nothing recorded` });
-      // Same record SHAPE as the mid-run cancel below, so a consumer reads one
-      // contract either way — just with nothing in it, because nothing ran.
-      // `unknown` is the verdict for "no evidence", which is exactly the case.
+      // Same record shape as the mid-run cancel; `unknown` = no evidence.
       return {
         backend, modelId, cancelled: true, verdict: 'unknown', samples: [],
         performance: summarizePerformance([]),
@@ -439,15 +329,8 @@ export async function runAssessment({ backend, modelId, contextTokens = DEFAULT_
   }
 }
 
-// Every applier reports the same three things — did it take effect, why not,
-// and what the daemon is running now — out of a manager result that spells
-// success differently (`applied` vs `success`). Normalizing here keeps each
-// entry below to the one line that is actually runtime-specific.
-//
-// `null` is the third state and means "nothing needed to change": the daemon
-// already serves the requested configuration. That is NOT a refusal, so it
-// carries no reason — recording one would put a "tuning not applied" warning on
-// a reading that is perfectly accurate.
+// Normalizes manager results (`applied` vs `success`) to {took effect, reason, running now}.
+// `null` = nothing needed to change, which is not a refusal and carries no reason.
 const toApplication = (ok, error, fallbackReason) => ({
   applied: ok === null ? null : ok === true,
   reason: ok === true || ok === null ? null : (error || fallbackReason),
