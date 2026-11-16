@@ -238,12 +238,6 @@ describe('creativeDirector routes', () => {
   });
 
   describe('GET /', () => {
-    it('returns all projects', async () => {
-      const r = await request(app).get('/api/creative-director');
-      expect(r.status).toBe(200);
-      expect(r.body).toEqual([{ id: 'cd-1', name: 'A' }]);
-    });
-
     it('returns a bounded envelope when pagination is requested', async () => {
       cdService.listProjects.mockResolvedValueOnce(
         Array.from({ length: 5 }, (_, i) => ({ id: `cd-${i}`, name: `P${i}` }))

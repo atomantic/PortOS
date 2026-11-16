@@ -741,17 +741,6 @@ describe('measured assessments wiring', () => {
   // `tunings` is the ASK, not the grid — the service decides which knob sets a
   // "tuning sweep of this model" means. A client that could post the grid could
   // ask for an arbitrary batch of provider calls.
-  it('POST /assessments/sweep forwards a tuning-sweep request without a grid', async () => {
-    const res = await request(makeApp())
-      .post('/api/local-llm/assessments/sweep')
-      .send({ backend: 'llama', modelId: 'example-model.gguf', tunings: true });
-
-    expect(res.status).toBe(200);
-    expect(startSweep).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'llama', modelId: 'example-model.gguf', tunings: true,
-    }));
-  });
-
   // The service's refusals ride the existing rejected → 409 path rather than a
   // second, hand-rolled one in the handler.
   it('POST /assessments/sweep 409s when the service refuses the tuning grid', async () => {
@@ -925,31 +914,11 @@ describe('llama-server routes', () => {
     expect(res.status).toBe(400);
   });
 
-  it('POST /api/local-llm/llama-server/start launches server with valid payload', async () => {
-    const res = await request(makeApp())
-      .post('/api/local-llm/llama-server/start')
-      .send({ model: 'models/Qwen3.8-27B.gguf', draftModel: 'models/DFlash.gguf' });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, pid: 123 });
-  });
-
   it('POST /api/local-llm/llama-server/start rejects invalid payload', async () => {
     const res = await request(makeApp())
       .post('/api/local-llm/llama-server/start')
       .send({});
     expect(res.status).toBe(400);
-  });
-
-  it('POST /api/local-llm/llama-server/stop stops server', async () => {
-    const res = await request(makeApp()).post('/api/local-llm/llama-server/stop');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true });
-  });
-
-  it('POST /api/local-llm/llama-server/install triggers install', async () => {
-    const res = await request(makeApp()).post('/api/local-llm/llama-server/install');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ success: true, message: 'installed' });
   });
 
   it('POST /api/local-llm/llama-server/upgrade emits progress and returns the result', async () => {

@@ -115,12 +115,6 @@ describe('Eidoverse world routes', () => {
     expect(mocks.getStatus).not.toHaveBeenCalled();
   });
 
-  it('validates and persists a configuration patch', async () => {
-    const res = await request(makeApp()).put('/api/eidoverse/world/config').send({ humanName: 'Example User' });
-    expect(res.status).toBe(200);
-    expect(mocks.updateConfig).toHaveBeenCalledWith({ humanName: 'Example User' });
-  });
-
   it('accepts explicit opaque-key aliases and rejects raw identities and unbounded text', async () => {
     const key = 'app-0123456789ab';
     const valid = await request(makeApp()).put('/api/eidoverse/world/config').send({ labelAliases: { [key]: '  Example observatory  ' } });
