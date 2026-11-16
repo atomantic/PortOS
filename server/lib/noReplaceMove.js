@@ -23,7 +23,14 @@ const fail = (code, message, cause) => {
   return error;
 };
 
-/** Link `from` to `to`, then unlink `from`; never replaces an existing `to` (`from`: typically a file staged in a temp dir; `to`: its parent directory must exist; `io`: injectable fs seam for tests) → the destination path. */
+/**
+ * Link `from` to `to`, then unlink `from`; never replaces an existing `to` (`from`: typically a file staged in a temp dir; `to`: its parent directory must exist; `io`: injectable fs seam for tests) → the destination path.
+ *
+ * @param {string} from Source path (typically a file staged in a temp dir).
+ * @param {string} to Destination path. Its parent directory must already exist.
+ * @param {{linkImpl?: Function, unlinkImpl?: Function}} [io] Injectable fs seam for tests.
+ * @returns {Promise<string>} The destination path.
+ */
 export async function moveWithoutReplace(from, to, { linkImpl = link, unlinkImpl = unlink } = {}) {
   await linkImpl(from, to).catch((error) => {
     if (error?.code === 'EEXIST') {

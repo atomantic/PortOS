@@ -6,13 +6,24 @@
 
 export const PORTOS_ROOT_TOKEN = '__PORTOS_ROOT__';
 
-/** Replace every `__PORTOS_ROOT__` in a string with `root` (absolute install/checkout path); non-strings and token-free strings are returned unchanged. */
+/**
+ * Replace every `__PORTOS_ROOT__` in a string with `root` (absolute install/checkout path); non-strings and token-free strings are returned unchanged.
+ *
+ * @param {unknown} value
+ * @param {string} root Absolute install/checkout path
+ */
 export function expandPortosRootToken(value, root) {
   if (typeof value !== 'string' || !value.includes(PORTOS_ROOT_TOKEN)) return value;
   return value.split(PORTOS_ROOT_TOKEN).join(root);
 }
 
-/** Expand `__PORTOS_ROOT__` in every top-level string field of an app record → `{ app, changed }` (`root`: absolute install/checkout path). */
+/**
+ * Expand `__PORTOS_ROOT__` in every top-level string field of an app record → `{ app, changed }` (`root`: absolute install/checkout path).
+ *
+ * @param {Record<string, unknown>|null|undefined} app
+ * @param {string} root Absolute install/checkout path
+ * @returns {{ app: Record<string, unknown>|null|undefined, changed: boolean }}
+ */
 export function expandPortosRootInApp(app, root) {
   if (!app || typeof app !== 'object' || Array.isArray(app)) {
     return { app, changed: false };
@@ -29,7 +40,11 @@ export function expandPortosRootInApp(app, root) {
   return { app: next, changed };
 }
 
-/** True when `text` still carries the unresolved install-root token. */
+/**
+ * True when `text` still carries the unresolved install-root token.
+ *
+ * @param {unknown} text
+ */
 export function containsPortosRootToken(text) {
   return typeof text === 'string' && text.includes(PORTOS_ROOT_TOKEN);
 }

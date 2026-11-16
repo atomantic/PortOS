@@ -6,23 +6,46 @@
  */
 import { PORTOS_ENV_PATH, readPortosEnvValue, upsertPortosEnvLine } from './portosEnv.js';
 
-/** The project directory PortOS recorded under `envVar`, or `''`.
-/** The project directory PortOS recorded under `envVar`, or `''`. */
+/**
+ * The project directory PortOS recorded under `envVar`, or `''`.
+ *
+ * @param {string} envVar
+ * @param {string} [envPath]
+ */
 export function readRecordedProjectDir(envVar, envPath = PORTOS_ENV_PATH) {
   return readPortosEnvValue(envVar, envPath) || '';
 }
 
-/** Remember where a project was found so nothing detects it twice. `upsertPortosEnvLine`, not an append (one line per detection makes meaning depend on whether a reader takes the first or last mention) and atomic, since `.env` also carries the database password and a half-written truncate is readable by a concurrent boot. */
+/**
+ * Remember where a project was found so nothing detects it twice. `upsertPortosEnvLine`, not an append (one line per detection makes meaning depend on whether a reader takes the first or last mention) and atomic, since `.env` also carries the database password and a half-written truncate is readable by a concurrent boot.
+ *
+ * @param {string} envVar
+ * @param {string} dir
+ * @param {string} [envPath]
+ */
 export async function recordProjectDir(envVar, dir, envPath = PORTOS_ENV_PATH) {
   await upsertPortosEnvLine(envVar, dir, envPath);
 }
 
-/** Whether anything already answers "where does this project live", so a caller knows if detecting it is worth a subprocess; the placement service asks THIS module so a precedence change can't land in one place only. */
+/**
+ * Whether anything already answers "where does this project live", so a caller knows if detecting it is worth a subprocess; the placement service asks THIS module so a precedence change can't land in one place only.
+ *
+ * @param {string} envVar
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath]
+ */
 export function projectDirIsSettled(envVar, env = process.env, envPath = PORTOS_ENV_PATH) {
   return Boolean(String(env?.[envVar] || '').trim() || readRecordedProjectDir(envVar, envPath));
 }
 
-/** The configured directory, what PortOS recorded, or the stack's documented default, in that order (the one place it is written down). */
+/**
+ * The configured directory, what PortOS recorded, or the stack's documented default, in that order (the one place it is written down).
+ *
+ * @param {string} envVar
+ * @param {() => string} defaultDir - evaluated only when neither source answers
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {string} [envPath]
+ */
 export function resolveRecordedProjectDir(envVar, defaultDir, env = process.env, envPath = PORTOS_ENV_PATH) {
   const configured = String(env?.[envVar] || '').trim();
   if (configured) return configured;

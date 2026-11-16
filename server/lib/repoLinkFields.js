@@ -9,7 +9,6 @@
 
 import { parseRepoUrl } from './repoUrl.js';
 
-/** The one host the legacy GitHub-only mirror can describe. */
 const GITHUB_HOST = 'github.com';
 
 /**
@@ -53,10 +52,18 @@ export function normalizeRepoLinkFields(link) {
   };
 }
 
-/** True when a link record (either shape) names a cloneable repository. */
+/**
+ * True when a link record (either shape) names a cloneable repository.
+ *
+ * @param {object|null|undefined} link
+ */
 export const linkIsRepo = (link) => Boolean(link?.isRepo ?? link?.isGitHubRepo);
 
-/** `owner/repo` for a link record, else its display title; reads only the new shape (every link reaches a caller via a `brainStorage` read that already ran `normalizeRepoLinkFields`). */
+/**
+ * `owner/repo` for a link record, else its display title; reads only the new shape (every link reaches a caller via a `brainStorage` read that already ran `normalizeRepoLinkFields`).
+ *
+ * @param {object|null|undefined} link
+ */
 export function repoLinkLabel(link) {
   return link?.repoOwner && link?.repoName
     ? `${link.repoOwner}/${link.repoName}`

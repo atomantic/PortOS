@@ -51,11 +51,17 @@ export function resolvePullRequestWriteAccess(pullRequest) {
  * Whose turn is it?
  *
  * @param {object} input
- * @param {string|null} input.reviewOutcome - A `PR_REVIEW_OUTCOME` value, or null when the review cleared the content.
- * @param {boolean} input.notMergeReady - Reviewed but can't land as it stands: failing CI, a conflict, or a rebase the forge wouldn't apply.
- * @param {boolean} input.downgraded - One or more findings couldn't be anchored to the diff; the posted review asks the contributor to restate them, so there is no reliable work order.
+ * @param {string|null} input.reviewOutcome - A `PR_REVIEW_OUTCOME` value, or
+ *   null when the review cleared the content.
+ * @param {boolean} input.notMergeReady - The PR is reviewed but cannot land as
+ *   it stands: failing CI, a conflict, or a rebase the forge would not apply.
+ * @param {boolean} input.downgraded - The coordinator could not anchor one or
+ *   more reported findings to the diff. The posted review says so and asks the
+ *   contributor to restate them; there is no reliable work order in it.
  * @param {boolean} input.canEdit - `resolvePullRequestWriteAccess().canEdit`.
- * @param {boolean} input.remediationExhausted - Remediation already ran its attempt budget; retrying would spend another agent on the same wall, so hand it to the opener.
+ * @param {boolean} input.remediationExhausted - Remediation already ran its
+ *   attempt budget on this PR without landing it. Retrying would spend another
+ *   agent on the same wall; hand it to the opener instead.
  */
 export function resolveHandbackDisposition({
   reviewOutcome = null,
