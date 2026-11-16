@@ -45,9 +45,11 @@ export const MUSIC_VIDEO_STAGES = [
 
 /**
  * Pages beside the steps: listed under them, unnumbered, and never a step the
- * project is "at". Assets is every still and clip made for the video.
+ * project is "at". The editor is the shots on a timeline under the player;
+ * Assets is every still and clip made for the video.
  */
 export const MUSIC_VIDEO_PAGES = [
+  { id: 'editor', label: 'Editor', title: 'Editor' },
   { id: 'assets', label: 'Assets', title: 'Assets' },
   { id: 'cleanup', label: 'Cleanup', title: 'Cleanup' },
 ];

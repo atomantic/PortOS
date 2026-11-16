@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildBeatGridPoints, computeDragSpan, computeSceneSpans, shouldMarkBeatAligned } from '../../lib/beatGrid.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
+import { lyricSpans } from '../../lib/musicVideoTimeline.js';
 
 // Beat-quantized timeline arranger for a music-video project's scene board
 // (#1854). Renders a beat-grid overlay (section bands, beat/downbeat ticks)
@@ -20,20 +21,7 @@ const PX_PER_SEC = 80;
 const SNAP_TOLERANCE_SEC = 0.15;
 
 // Timed lyric lines (#8964) render as a read-only strip under the scene
-// blocks, so the director can see which words each cut spans. A cue with no
-// explicit end runs to the next cue (capped) — the same reading the planner uses.
-const OPEN_CUE_MAX_SEC = 8;
-function lyricSpans(cues) {
-  const timed = (Array.isArray(cues) ? cues : [])
-    .filter((c) => typeof c?.startSec === 'number' && c.text)
-    .slice()
-    .sort((a, b) => a.startSec - b.startSec);
-  return timed.map((c, i) => {
-    const next = timed[i + 1];
-    const openEnd = Math.min(c.startSec + OPEN_CUE_MAX_SEC, next ? next.startSec : Infinity);
-    return { id: c.id || `cue-${i}`, text: c.text, startSec: c.startSec, endSec: typeof c.endSec === 'number' && c.endSec > c.startSec ? c.endSec : openEnd };
-  });
-}
+// blocks, so the director can see which words each cut spans.
 
 export default function BeatTimeline({ audioAnalysis, scenes, lyricCues, narrativeEvents = [], onCommit }) {
   const narrative = useMemo(() => resolveNarrativeEvents({ audioAnalysis, lyricCues, composition: { narrativeEvents } }, []), [audioAnalysis, lyricCues, narrativeEvents]);

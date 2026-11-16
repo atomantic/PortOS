@@ -1133,6 +1133,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         src={audioUrl}
         controls
         preload="metadata"
+        data-song-clock="0"
         aria-label={songLabel}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => { outro.stop(); setTouched(true); setTime(e.currentTarget.currentTime); }}

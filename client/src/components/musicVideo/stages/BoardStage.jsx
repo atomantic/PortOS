@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Plus, Image as ImageIcon, Film, Code2, Type, FlagTriangleRight, CheckCircle2, X } from 'lucide-react';
 import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
-import SceneCard from '../SceneCard.jsx';
+import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from '../ShotCardHost.jsx';
 import CatalogShotReferenceProblems from '../CatalogShotReferenceProblems.jsx';
 import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
 import useShotSheetMapFilter from '../../../hooks/useShotSheetMapFilter.js';
@@ -12,25 +12,18 @@ import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../.
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
-import { blenderShotThumbPath } from '../../../lib/musicVideoBlender.js';
-import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
 import SequenceTakePanel from '../SequenceTakePanel.jsx';
 import FinalUpgradePanel from '../FinalUpgradePanel.jsx';
 import { sceneClipIsFinal, sceneFinalApproved } from '../../../../../server/lib/musicVideoFinalApproval.js';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
-import { shotNumbers } from '../ShotStepper.jsx';
-import { previousShot, shotHandoffSource } from '../../../../../server/lib/musicVideoHandoffFrame.js';
-import { coldOpenScenes } from '../../../../../server/lib/musicVideoColdOpen.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
-import { musicVideoAspect } from '../../../lib/musicVideoAspect.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { SHOT_EFFECT_OPTIONS, shotEffectCounts, shotEffectLabel, shotEffects, shotUsesEffect } from '../../../lib/musicVideoShotEffects.js';
-import { FOOTAGE_OPTIONAL_MODES, sceneShotName } from '../../../lib/musicVideoStages.js';
+import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
 import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, SCENE_ATTENTION_LABELS, SCENE_MEDIA_LABELS } from '../../../lib/musicVideoSceneAttention.js';
 import { formatTimecode } from '../../../utils/formatters.js';
-import { getStoryboard } from '../../../services/api';
 import { storyboardShotPanel } from '../../../../../server/lib/storyboardFit.js';
 
 const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage'], ['stale-frame', 'Frame out of date'], ['older-character', 'Older character reference'], ['bad-take', 'Selected take marked bad']];
@@ -56,19 +49,6 @@ function SceneMediaBadges({ scene, layered, scenes }) {
 
 const PANEL_NOTICES = { changed: 'Storyboard changed', missing: 'Storyboard panel deleted' };
 
-/** The video's linked storyboard, read when Shots opens (null when none is linked or it is gone). */
-function useLinkedStoryboard(storyboardId) {
-  const [board, setBoard] = useState(null);
-  useEffect(() => {
-    setBoard(null);
-    if (!storyboardId) return undefined;
-    let active = true;
-    getStoryboard(storyboardId, { silent: true }).then((next) => { if (active) setBoard(next); }).catch(() => {});
-    return () => { active = false; };
-  }, [storyboardId]);
-  return [board, setBoard];
-}
-
 /**
  * The scene board on Shots: a thumbnail per shot with its media marks
  * — two columns on a phone, three and four as the column widens (a container
@@ -77,17 +57,9 @@ function useLinkedStoryboard(storyboardId) {
  * its still and clip are made, so the board stays where it was.
  */
 export default function BoardStage({ board }) {
-  const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
+  const { project, locked, sceneMedia, videoSettings, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
-  const blenderPosters = new Map();
-  if (project.composition?.mode === 'blender') {
-    const state = board.blender?.state;
-    for (const shot of state?.manifest?.shots || []) {
-      const sceneId = project.blender?.sceneMap?.[shot.id] || shot.sceneId;
-      const path = blenderShotThumbPath(state, shot);
-      if (sceneId && path) blenderPosters.set(sceneId, musicVideoBlenderMediaUrl(project.id, path));
-    }
-  }
+  const blenderPosters = blenderShotPosters(project, board.blender);
   const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin, board.applyShotReferenceRepair);
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
@@ -127,9 +99,7 @@ export default function BoardStage({ board }) {
     assetMarks: project.assetMarks || {},
   };
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
-  const numbers = shotNumbers(scenes);
-  const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
-  const shotName = (scene) => sceneShotName(scene, { number: numbers.get(scene.sceneId), coldOpen: coldNumbers.get(scene.sceneId) });
+  const { shotName } = shotNamer(project);
   const counts = { all: scenes.length, attention: 0, missing: 0, 'stale-frame': 0, 'older-character': 0, 'bad-take': 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
@@ -168,19 +138,13 @@ export default function BoardStage({ board }) {
       : inspectorRef.current?.querySelector('[data-shot-heading]');
     if (target) { target.focus({ preventScroll: true }); focusAfterNavigation.current = null; }
   }, [activeSceneId]);
-  // The open card's Previous / Next shot buttons walk every shot in play order (the cold open
-  // first, then the song), filter or not.
-  const playOrder = (scene) => (coldNumbers.has(scene.sceneId) ? coldNumbers.get(scene.sceneId) - coldNumbers.size
-    : numbers.get(scene.sceneId) ?? Infinity);
-  const songOrder = [...scenes].sort((a, b) => playOrder(a) - playOrder(b));
-  const openShot = (scene) => scene && (() => {
+  // The open card's Previous / Next shot buttons walk every shot in play order, filter or not.
+  const openShot = (scene) => {
     focusAfterNavigation.current = { target: 'inspector' };
     board.seekToScene?.(scene);
     onToggleSceneExpand?.(scene.sceneId, true);
-  });
+  };
   const activeScene = scenes.find((scene) => scene.sceneId === activeSceneId) || null;
-  const activeAt = songOrder.findIndex((scene) => scene.sceneId === activeSceneId);
-  const stepShot = activeAt === -1 ? null : { prev: openShot(songOrder[activeAt - 1]), next: openShot(songOrder[activeAt + 1]) };
   // j / k step through the listed scenes (opening one, which also routes to it).
   useEffect(() => {
     const ids = visibleIds ? visibleIds.split('\n') : [];
@@ -197,19 +161,6 @@ export default function BoardStage({ board }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [visibleIds, activeSceneId, onToggleSceneExpand]);
-  const performanceReviews = new Map();
-  const attempts = (project.autoReviews || []).flatMap((run) => run.attempts || []).slice().reverse();
-  for (const attempt of attempts) {
-    const temporal = attempt.review?.evidence?.temporal;
-    for (const shot of temporal?.shots || []) {
-      const key = `${shot.sceneId}:${shot.takeId}`;
-      if (!performanceReviews.has(key)) performanceReviews.set(key, {
-        shot: { ...shot, status: attempt.review.dependencyState?.status === 'current' ? temporal.status : 'unverified', lipSync: attempt.review.checks?.lipSync, analyzer: temporal.analyzer },
-        excerptStartSec: attempt.review.evidence.excerptStartSec,
-        excerptId: attempt.excerptId,
-      });
-    }
-  }
   return (
     <fieldset disabled={locked} className="min-w-0 space-y-3">
       <div id="mv-scene-board" className="flex flex-wrap items-center justify-between gap-2">
@@ -315,91 +266,10 @@ export default function BoardStage({ board }) {
               )}
             </fieldset>
           )}
-          {scenes.map((scene, idx) => scene.sceneId !== activeSceneId ? null : (
-            <SceneCard
-              posterSrc={blenderPosters.get(activeSceneId)}
-              key={scene.sceneId}
-              scene={scene}
-              project={project}
-              storyboardId={project.storyboardId || null}
-              storyboardShot={panelOf(scene)}
-              onStoryboardBoard={setStoryboard}
-              onApplyCameos={board.applyCameos}
-              onVaryWipes={board.varyWipes}
-              locked={locked}
-              onClose={() => toggleInspector(scene.sceneId, false)}
-              stepShot={stepShot}
-              performanceReview={performanceReviews.get(`${scene.sceneId}:${scene.videoHistoryId}`)}
-              index={idx}
-              shotName={shotName(scene)}
-              isLast={idx === scenes.length - 1}
-              generatingFrame={sceneMedia.genScenes[scene.sceneId]}
-              generatingVideo={sceneMedia.genVideoScenes[scene.sceneId]}
-              frameProgress={sceneMedia.sceneProgress?.[scene.sceneId]}
-              videoProgress={sceneMedia.videoSceneProgress?.[scene.sceneId]}
-              videoJobs={sceneMedia.videoSceneJobs?.[scene.sceneId] || []}
-              settingsSaving={videoSettings.saving}
-              videoBlockedReason={videoSettings.videoBlockedReason}
-              videoBlockedReasonFor={videoSettings.blockedReasonFor}
-              lipSyncBackend={lipSyncBackend}
-              songDurationSec={songDurationSec}
-              footageOptional={attentionCtx.footageOptional}
-              failedScenes={sceneMedia.failedScenes}
-              songReview={attentionCtx.songReview}
-              falVideoSettings={videoSettings.settings}
-              videoModels={videoSettings.models}
-              defaultVideoModel={videoSettings.defaultModel}
-              canContinueShot={board.canContinueShot}
-              onSetDone={board.setSceneDone}
-              onApproveFinal={board.approveFinal}
-              onMove={board.moveScene}
-              onDelete={board.onDeleteScene}
-              onSplit={board.onSplitScene}
-              onMergeNext={board.onMergeNextScene}
-              onMergePrevious={board.onMergePreviousScene}
-              prevStartSec={scenes[idx - 1]?.startSec ?? null}
-              onMoveStart={board.onMoveSceneStart}
-              onMoveEnd={board.onMoveSceneEnd}
-              nextEndSec={scenes[idx + 1]?.endSec ?? null}
-              onRepairPerformance={['code', 'document', 'blender'].includes(project.composition?.mode) ? null : board.onRepairPerformance}
-              repairBusy={board.repairBusy || videoSettings.saving}
-              onEditLocal={board.editSceneLocal}
-              onApplySaved={board.applySavedScene}
-              onSave={board.saveScene}
-              onGenerateFrame={sceneMedia.generateFrame}
-              castMedia={sceneMedia.castMedia} onReloadCastMedia={sceneMedia.reloadCastMedia} greyboxPlaces={sceneMedia.greyboxPlaces}
-              onGenerateEndFrame={sceneMedia.generateEndFrame}
-              generatingEndFrame={sceneMedia.genEndFrameScenes?.[scene.sceneId]}
-              onGenerateVideo={sceneMedia.generateSceneVideo}
-              onContinueVideo={sceneMedia.continueSceneVideo}
-              onOpenPreview={board.openPreview}
-              takeBusy={takes.busy}
-              pendingTakes={takes.pending}
-              onSelectTake={takes.selectTake}
-              onReviewTake={takes.reviewTake}
-              onRejectUnusedTakes={takes.rejectUnusedTakes}
-              onSwapFrames={takes.swapFrames}
-              onMarkTake={takes.markTake}
-              onCheckTake={takes.checkTake} checkingTakes={takes.checking}
-              onPoolMarked={takes.applyPoolMarks}
-              onContinueFromPrevious={takes.continueFromPrevious}
-              // The server's own neighbor rule: the shot before this one by start time.
-              previousHasClip={Boolean(shotHandoffSource(project, previousShot(project, scene.sceneId)))}
-              onImportTake={(target) => board.setPickerTarget({ type: 'take', sceneId: target.sceneId })}
-              onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
-              onPlacePoolItem={takes.placePoolItem}
-              onTrimClip={takes.trimClipTake}
-              onHandheldClip={takes.handheldClipTake}
-              projectId={project.id}
-              aspect={musicVideoAspect(project)}
-              shotNumbers={numbers}
-              layered={layered}
-              documentComposition={project.composition?.mode === 'document'}
-              // A Blender film's shots are mirrored from its scripts by the sync, so their order is the film's.
-              manifestOwnsShots={project.composition?.mode === 'blender' || (project.composition?.mode === 'document' && project.productionReview?.draft?.storyboardSource === 'document')}
-              shotOrderOwner={project.composition?.mode === 'blender' ? 'the Blender film scripts' : 'the composition document'}
-            />
-          ))}
+          {activeScene && (
+            <ShotCardHost board={board} sceneId={activeScene.sceneId} storyboard={storyboard} onStoryboard={setStoryboard}
+              onClose={() => toggleInspector(activeScene.sceneId, false)} onOpenShot={openShot} />
+          )}
         </div>
       </Drawer>
     </fieldset>

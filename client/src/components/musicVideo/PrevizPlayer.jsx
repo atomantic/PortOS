@@ -100,6 +100,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
         src={audioUrl}
         controls
         preload="metadata"
+        data-song-clock="0"
         aria-label="Song for the greybox previz"
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
