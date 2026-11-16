@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
-import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './guardBudget.js';
+import { GUARD_BUDGET_MS, CALIBRATION_REFERENCE_MS, MAX_BUDGET_SCALE, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './guardBudget.js';
 
 describe('guard budget', () => {
   it('names each guard over budget, slowest first', () => {
@@ -13,6 +13,30 @@ describe('guard budget', () => {
       'server/slow-scanner.test.js': GUARD_BUDGET_MS + 500,
     });
     expect(over.map(({ file }) => file)).toEqual(['server/slow-scanner.test.js', 'scripts/new-scanner.test.js']);
+  });
+
+  it('scales the budget on a 2x slower machine yet still fails a guard 2x slower than its base', () => {
+    const base = 2000; // a guard comfortably inside the reference budget
+    for (const slowdown of [1, 2]) {
+      const scale = calibrateBudgetScale({ measure: () => CALIBRATION_REFERENCE_MS * slowdown });
+      const budgetMs = GUARD_BUDGET_MS * scale;
+      // Unrelated guard at its normal cost on this machine passes.
+      expect(overBudgetGuards({ 'ok.test.js': base * slowdown }, budgetMs)).toEqual([]);
+      // The same guard made 2x slower than its base fails on fast and slow machines.
+      expect(overBudgetGuards({ 'regressed.test.js': base * slowdown * 2 }, budgetMs).map(({ file }) => file)).toEqual(['regressed.test.js']);
+    }
+    // 4.2s is over the fixed budget but within the budget scaled for a 2x slower machine.
+    expect(overBudgetGuards({ 'g.test.js': 4200 })).toHaveLength(1);
+    expect(overBudgetGuards({ 'g.test.js': 4200 }, GUARD_BUDGET_MS * 2)).toEqual([]);
+  });
+
+  it('never scales below 1, above the cap, or off a bad reading', () => {
+    expect(calibrateBudgetScale({ measure: () => CALIBRATION_REFERENCE_MS / 4 })).toBe(1);
+    expect(calibrateBudgetScale({ measure: () => CALIBRATION_REFERENCE_MS * 100 })).toBe(MAX_BUDGET_SCALE);
+    expect(calibrateBudgetScale({ measure: () => Number.NaN })).toBe(1);
+    // Fastest of the runs wins, so one hiccup does not inflate the scale.
+    const readings = [CALIBRATION_REFERENCE_MS * 5, CALIBRATION_REFERENCE_MS, CALIBRATION_REFERENCE_MS * 3];
+    expect(calibrateBudgetScale({ measure: () => readings.shift() })).toBe(1);
   });
 
   it('keeps ensure-deps out of the always-run list', () => {

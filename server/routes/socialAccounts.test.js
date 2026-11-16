@@ -1,22 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-vi.mock('../services/socialAccounts.js', () => ({
-  getAllAccounts: vi.fn(),
-  getAccountsByPlatform: vi.fn(),
-  getAccountsByCategory: vi.fn(),
-  getAccountById: vi.fn(),
-  createAccount: vi.fn(),
-  updateAccount: vi.fn(),
-  deleteAccount: vi.fn(),
-  getSupportedPlatforms: vi.fn(),
-  getAccountStats: vi.fn(),
-}));
+// Real social-accounts service (cached JSON store) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-social-accounts-routes-') }));
+afterAll(cleanupTempDataRoots);
 
-import * as socialAccounts from '../services/socialAccounts.js';
-import socialAccountsRoutes from './socialAccounts.js';
+const { default: socialAccountsRoutes } = await import('./socialAccounts.js');
 
 const app = express();
 app.use(express.json());
@@ -24,60 +17,69 @@ app.use('/api/digital-twin/social-accounts', socialAccountsRoutes);
 app.use(errorMiddleware);
 const BASE = '/api/digital-twin/social-accounts';
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  socialAccounts.createAccount.mockImplementation(async (data) => ({ id: 'acct-1', ...data }));
-});
-
 describe('/api/digital-twin/social-accounts', () => {
-  it('creates a valid account with schema defaults and refuses an unknown platform', async () => {
+  it('creates a valid account with schema defaults that reads back, and refuses an unknown platform', async () => {
     const ok = await request(app).post(BASE).send({ platform: 'github', username: 'example-user' });
     expect(ok.status).toBe(201);
-    expect(socialAccounts.createAccount).toHaveBeenCalledWith(expect.objectContaining({
-      platform: 'github', username: 'example-user', bio: '', contentTypes: [], ingestionEnabled: false,
-    }));
+    expect(ok.body).toMatchObject({
+      platform: 'github', username: 'example-user', bio: '', ingestionEnabled: false,
+      url: 'https://github.com/example-user',
+    });
+    const read = await request(app).get(`${BASE}/${ok.body.id}`);
+    expect(read.status).toBe(200);
+    expect(read.body).toMatchObject({ id: ok.body.id, platform: 'github', contentTypes: [] });
 
-    socialAccounts.createAccount.mockClear();
+    const before = (await request(app).get(BASE)).body.accounts.length;
     const bad = await request(app).post(BASE).send({ platform: 'myspace', username: 'example-user' });
     expect(bad.status).toBe(400);
     expect(bad.body.code).toBe('VALIDATION_ERROR');
-    expect(socialAccounts.createAccount).not.toHaveBeenCalled();
+    expect((await request(app).get(BASE)).body.accounts).toHaveLength(before);
   });
 
-  it('creates the valid rows of a bulk import and reports the invalid ones', async () => {
+  it('persists the valid rows of a bulk import and reports the invalid ones', async () => {
+    const before = (await request(app).get(`${BASE}?platform=x`)).body.accounts.length;
     const res = await request(app).post(`${BASE}/bulk`).send({ accounts: [
-      { platform: 'x', username: 'example-user' },
+      { platform: 'x', username: 'bulk-user' },
       { platform: 'x' },
     ] });
     expect(res.status).toBe(201);
     expect(res.body.summary).toEqual({ created: 1, failed: 1 });
     expect(res.body.results[1]).toMatchObject({ success: false, input: { platform: 'x' } });
-    expect(socialAccounts.createAccount).toHaveBeenCalledTimes(1);
+    const after = (await request(app).get(`${BASE}?platform=x`)).body.accounts;
+    expect(after).toHaveLength(before + 1);
+    expect(after.map((a) => a.username)).toContain('bulk-user');
   });
 
   it('filters the list by platform or category from the query string', async () => {
-    socialAccounts.getAccountsByPlatform.mockResolvedValue([{ id: 'a' }]);
-    const res = await request(app).get(`${BASE}?platform=github`);
-    expect(res.body).toEqual({ accounts: [{ id: 'a' }] });
-    expect(socialAccounts.getAccountsByPlatform).toHaveBeenCalledWith('github');
+    await request(app).post(BASE).send({ platform: 'linkedin', username: 'pro-user' });
+    const byPlatform = await request(app).get(`${BASE}?platform=linkedin`);
+    expect(byPlatform.body.accounts.length).toBeGreaterThan(0);
+    expect(byPlatform.body.accounts.every((a) => a.platform === 'linkedin')).toBe(true);
 
-    socialAccounts.getAccountsByCategory.mockResolvedValue([]);
-    await request(app).get(`${BASE}?category=professional`);
-    expect(socialAccounts.getAccountsByCategory).toHaveBeenCalledWith('professional');
+    const byCategory = await request(app).get(`${BASE}?category=professional`);
+    expect(byCategory.body.accounts.map((a) => a.username)).toContain('pro-user');
+    expect(byCategory.body.accounts.every((a) => a.platform === 'linkedin')).toBe(true);
 
     const repeated = await request(app).get(`${BASE}?platform=x&platform=github`);
     expect(repeated.status).toBe(400);
   });
 
-  it('answers 404 for a missing account on read, update and delete, and 204 on a real delete', async () => {
-    socialAccounts.getAccountById.mockResolvedValue(null);
-    socialAccounts.updateAccount.mockResolvedValue(null);
-    socialAccounts.deleteAccount.mockResolvedValue(false);
+  it('updates an account, then deletes it so it is gone from reads and stats', async () => {
+    const { body: created } = await request(app).post(BASE).send({ platform: 'reddit', username: 'to-delete' });
+    const updated = await request(app).put(`${BASE}/${created.id}`).send({ bio: 'new bio' });
+    expect(updated.status).toBe(200);
+    expect((await request(app).get(`${BASE}/${created.id}`)).body.bio).toBe('new bio');
+
+    const statsBefore = (await request(app).get(`${BASE}/stats`)).body;
+    expect((await request(app).delete(`${BASE}/${created.id}`)).status).toBe(204);
+    expect((await request(app).get(`${BASE}/${created.id}`)).status).toBe(404);
+    const statsAfter = (await request(app).get(`${BASE}/stats`)).body;
+    expect(statsAfter.total).toBe(statsBefore.total - 1);
+  });
+
+  it('answers 404 for a missing account on read, update and delete', async () => {
     expect((await request(app).get(`${BASE}/missing`)).status).toBe(404);
     expect((await request(app).put(`${BASE}/missing`).send({ bio: 'x' })).status).toBe(404);
     expect((await request(app).delete(`${BASE}/missing`)).status).toBe(404);
-
-    socialAccounts.deleteAccount.mockResolvedValue(true);
-    expect((await request(app).delete(`${BASE}/acct-1`)).status).toBe(204);
   });
 });
