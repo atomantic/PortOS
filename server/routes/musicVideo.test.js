@@ -30,7 +30,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   deleteProject: vi.fn(async () => ({ ok: true })),
   setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
   setProjectSections: vi.fn(async (id, sections) => ({ id, audioAnalysis: { sections } })),
-  addProjectScene: vi.fn(async (_id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
+  addProjectScene: vi.fn(async (_id, s) => ({ scene: { sceneId: 'mvs-1', order: 0, ...s }, edit: { updatedAt: 't1', sceneIds: ['mvs-1'], scenes: [], project: {}, removed: [] } })),
   updateScene: vi.fn(async (_id, sceneId, p) => ({ scene: { sceneId, ...p }, edit: { updatedAt: 't1', sceneIds: [sceneId], scenes: [{ sceneId, ...p }], project: {}, removed: [] } })),
   deleteScene: vi.fn(async (id) => ({ project: { id, scenes: [] }, edit: { updatedAt: 't1', sceneIds: [], scenes: [], project: {}, removed: [] } })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ project: { id }, edit: { updatedAt: 't1', sceneIds: ids, scenes: ids.map((sceneId, order) => ({ sceneId, order })), project: {}, removed: [] } })),

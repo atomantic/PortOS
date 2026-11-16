@@ -374,13 +374,17 @@ export async function setProjectMidiTranscription(id, midi) {
 }
 
 /** Add a director's shot at its time; shots locked before stay locked. */
-export async function addProjectScene(id, sceneInput) {
+export async function addProjectScene(id, sceneInput, { edit: answerEdit = false } = {}) {
   const [{ addScene }, { carryShotLocks }] = await Promise.all([import('./projectsLogic.js'), import('./productionReview.js')]);
-  const { scene } = await mutateProjectRecord(id, (current) => {
+  const transform = (current) => {
     const outcome = addScene(current, sceneInput);
     return { ...outcome, project: carryShotLocks(current, outcome.project) };
-  });
-  return scene;
+  };
+  if (!answerEdit) return (await mutateProjectRecord(id, transform)).scene;
+  // `{ edit: true }` answers `{ scene, edit }`: the new shot and the edit result (editResult.js).
+  const { outcome, edit } = await editWrite(id, transform);
+  const { edit: result } = await withEditResult({}, edit);
+  return { scene: outcome.scene, edit: result };
 }
 
 /**
