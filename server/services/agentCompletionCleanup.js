@@ -34,7 +34,7 @@ import { declaresNoCommitCriterion, resolveTaskHookType } from './taskTypeHooks.
 import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
-import { updateAgent } from './cosAgentLifecycle.js';
+import { updateAgent, getAgent, getAgentRecord, recordCompletionCleanup, retryCompletionCheckoutCapture } from './cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskStore.js';
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -51,6 +51,7 @@ import { cleanupAgentWorktree, spawnMergeRecoveryTask, releaseRetryHold } from '
 import { PR_CREATION, resolvePrCompletion, resolvePrCreation } from '../lib/prDisposition.js';
 import { resolvePrOpenedBy, PR_OPENED_BY } from '../lib/slashdoInvocation.js';
 import { isPublicReviewRestrictedProfile, publicReviewPostureForProfile } from '../lib/agentExecutionProfiles.js';
+import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -315,8 +316,7 @@ async function runAgentCompletionCleanupInOwnContext({ agentId, task, agent, eff
   // Fetch agent state once for JIRA, plan-question, and the resume pointer. Its
   // worktree fields are stamped once at registerAgent and never mutated, so passing
   // it to the release spares a re-read that would re-split the whole output.txt.
-  const { getAgent: getAgentState } = await import('./cosAgentLifecycle.js');
-  const agentState = await getAgentState(agentId).catch(() => null);
+  const agentState = await getAgent(agentId).catch(() => null);
 
   try {
     // Inside the `try`: a throw here must still reach the retry-hold release.
@@ -354,8 +354,7 @@ async function runCompletionCleanupInOwnContext(context, { onStepError }) {
       if (context.agentState?.status === 'completed') {
         // A delayed duplicate can arrive after the first replay left the
         // single-flight map. Re-read its durable stages inside this turn.
-        const lifecycle = await import('./cosAgentLifecycle.js');
-        const current = await lifecycle.getAgentRecord(context.agentId);
+        const current = await getAgentRecord(context.agentId);
         if (!current || current.startedAt !== context.agentState.startedAt) return;
         context = { ...context, agentState: current };
       }
@@ -387,7 +386,6 @@ async function performCompletionCleanupSteps(context, onStepError) {
   const durable = state?.status === 'completed' && typeof state.startedAt === 'string';
   if (durable && ['completed', 'failed', 'abandoned'].includes(state.metadata?.completionCleanup?.status)) return;
   const stages = { ...state?.metadata?.completionCleanup?.stages };
-  const { recordCompletionCleanup } = durable ? await import('./cosAgentLifecycle.js') : {};
   const persist = async patch => {
     if (durable && !await recordCompletionCleanup(context.agentId, state.startedAt, patch)) throw new Error('completion-cleanup-write-unverified');
   };
@@ -507,7 +505,6 @@ async function performCompletionCleanupSteps(context, onStepError) {
 export async function replayAgentCompletionCleanup(agentState) {
   const receipt = agentState?.metadata?.completionCleanup;
   if (agentState?.status !== 'completed' || receipt?.version !== 1 || receipt.status !== 'pending') return;
-  const { recordCompletionCleanup } = await import('./cosAgentLifecycle.js');
   let saved;
   try { saved = receipt.replay ? await readCompletionData(agentState, receipt.replay) : receipt.context; }
   catch {
@@ -519,9 +516,8 @@ export async function replayAgentCompletionCleanup(agentState) {
     return;
   }
   if (agentState.metadata.checkoutCapture?.status === 'pending') {
-    const lifecycle = await import('./cosAgentLifecycle.js');
-    if (await lifecycle.retryCompletionCheckoutCapture(agentState.id).catch(() => false)) {
-      agentState = await lifecycle.getAgentRecord(agentState.id);
+    if (await retryCompletionCheckoutCapture(agentState.id).catch(() => false)) {
+      agentState = await getAgentRecord(agentState.id);
     }
   }
   return runCompletionCleanupSteps({ ...saved,
@@ -647,7 +643,6 @@ async function notifyPlanQuestionIfNeeded({ agentId, task, agentState }) {
       const title = titleMatch?.[1]?.trim() || 'PLAN.md item needs your input';
       const appId = task.metadata?.app;
 
-      const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
       await addNotification({
         type: NOTIFICATION_TYPES.PLAN_QUESTION,
         title,
@@ -728,8 +723,7 @@ async function completeWorktreeCleanup({ agentId, task, effectiveSuccess, prOwne
 
 async function reportWorktreeCleanupWarnings({ agentId, task, cleanupWarnings }) {
   if (cleanupWarnings?.length > 0) {
-    const { getAgent: getAgentForResult } = await import('./cosAgentLifecycle.js');
-    const currentAgent = await getAgentForResult(agentId).catch(() => null);
+    const currentAgent = await getAgent(agentId).catch(() => null);
     await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
     // The original task already owns a bounded retry, cleanup proof, or human
     // decision. Another recovery task would race it or bypass its safety stop.
@@ -764,7 +758,6 @@ export async function runSpawnerCompletionCleanup(input) {
 async function runSpawnerCompletionCleanupInOwnContext({ agentId, task, success: effectiveSuccess, prOwnership, prClaimVerified = false, branchProvenEmpty = false, outputBuffer }) {
   let agentState = null;
   try {
-    const { getAgent } = await import('./cosAgentLifecycle.js');
     agentState = await getAgent(agentId).catch(() => null);
     await runCompletionCleanupSteps({
       agentId, task, agentState, effectiveSuccess, prOwnership,

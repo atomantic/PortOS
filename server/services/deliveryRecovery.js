@@ -2,13 +2,15 @@ import { normalizeTaskOutcome } from '../lib/agentOutcome.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
+import { updateTask } from './cosTaskStore.js';
+import { readAllTasksFlat } from './investigationTaskProducer.js';
 
 /** Adopt old outcome blocks once, retaining the original task, budget and checkout.
  * Manual holds, provider safety refusals and live owners are never revived here.
  */
 export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
-  const readTasks = deps.readTasks || (await import('./investigationTaskProducer.js')).readAllTasksFlat;
-  const update = deps.update || (await import('./cosTaskStore.js')).updateTask;
+  const readTasks = deps.readTasks || readAllTasksFlat;
+  const update = deps.update || updateTask;
   const release = deps.release || (await import('./agentWorktreeCleanup.js')).releaseRetryHold;
   const tasks = await readTasks();
   let recovered = 0;

@@ -35,7 +35,7 @@ import * as cosTaskStore from './cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import { HEALTH_RESOLUTION_PREFIX } from './healthAlertResolutions.js';
 import { buildHealthAlertInvestigation } from './healthAlertAgentTask.js';
-import { generateNonProductAlerts } from './proactiveAlertSources.js';
+import { generateNonProductAlerts, resolveHealthAlert } from './proactiveAlertSources.js';
 import * as identity from './identity.js';
 import * as reviewService from './review.js';
 import * as notifications from './notifications.js';
@@ -51,6 +51,7 @@ import * as reviewQueueTriageStore from './reviewQueueTriageStore.js';
 import { anchorLocalMidnightUtc, todayInTimezone } from '../lib/timezone.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
+import { getSettings } from './settings.js';
 
 // Producers are read with a bounded upper limit. The queue reports a lower
 // bound, rather than pretending that a full count is known, when a producer
@@ -832,7 +833,6 @@ const PRODUCERS = [
     },
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT) {
       // Disabling backups makes a past failure moot.
-      const { getSettings } = await import('./settings.js');
       if (resolveBackupConfig((await getSettings())?.backup).enabled === false) return [];
       const { getState } = await import('./backup.js');
       // A backup needing acknowledgement is either a full failure (status
@@ -1248,7 +1248,6 @@ const SOURCE_ACTIONS = Object.freeze({
   }),
   health: Object.freeze({
     complete: async (id) => {
-      const { resolveHealthAlert } = await import('./proactiveAlertSources.js');
       const result = await resolveHealthAlert(id);
       if (result) __resetAlertsCache();
       return result;

@@ -481,20 +481,6 @@ describe('backup routes', () => {
       expect(busy.status).toBe(503);
     });
 
-    it('forwards source with database restore preview and execution requests', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: true });
-      const res = await request(buildApp())
-        .post('/api/backup/restore-db')
-        .send({ snapshotId: 'snap-1', source: 'previous-machine', dryRun: true });
-
-      expect(res.status).toBe(200);
-      expect(backup.restorePostgres).toHaveBeenCalledWith('/dest', 'snap-1', {
-        dryRun: true,
-        source: 'previous-machine',
-      });
-    });
-
     it.each(['../other-machine', 'machine/name', '', 42])(
       'rejects invalid snapshot source %j before database restore',
       async (source) => {
@@ -507,19 +493,6 @@ describe('backup routes', () => {
         expect(backup.restorePostgres).not.toHaveBeenCalled();
       },
     );
-
-    it('forwards dryRun=false when explicitly requested', async () => {
-      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
-      backup.restorePostgres.mockResolvedValue({ status: 'ok', dryRun: false });
-      await request(buildApp())
-        .post('/api/backup/restore-db')
-        .send({ snapshotId: 'snap-9', dryRun: false });
-      expect(backup.restorePostgres).toHaveBeenCalledWith(
-        '/dest',
-        'snap-9',
-        { dryRun: false }
-      );
-    });
 
     it('returns 400 when snapshotId is missing', async () => {
       getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });

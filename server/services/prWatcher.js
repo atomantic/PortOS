@@ -25,6 +25,8 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 import { isSelfManagedPrActive } from '../lib/selfManagedPrAuthors.js';
+import { listWorktrees } from './worktreeManager.js';
+import { getBranches } from './git.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -510,8 +512,8 @@ export async function nudgeLocalPendingMergePrs(appId, deps = {}) {
   if (blocked) return { ok: false, reason: blocked };
   const app = await getAppById(appId);
   if (!readPendingMergePrs(app).length) return { ok: true, checked: 0 };
-  const readBranches = deps.getBranches || (await import('./git.js')).getBranches;
-  const readWorktrees = deps.listWorktrees || (await import('./worktreeManager.js')).listWorktrees;
+  const readBranches = deps.getBranches || getBranches;
+  const readWorktrees = deps.listWorktrees || listWorktrees;
   const [branches, trees] = await Promise.all([readBranches(app.repoPath), readWorktrees(app.repoPath)]);
   const locked = new Set(trees.filter(tree => tree.locked).map(tree => tree.branch?.replace(/^refs\/heads\//, '')));
   const local = new Set(branches.map(branch => branch.name).filter(branch => !locked.has(branch)));

@@ -645,11 +645,9 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
 // those read every linked catalog record and stat its media, twice per click.
 const SCENE_ONLY = Object.freeze({ sceneOnly: true });
 
-// A take decision from the board (`{ edit: true }`) answers with the edit result as board edits do
-// (#16270): the presented shot, neighbours whose takes went stale, readiness, and the new revision, so
-// the tab's next board edit applies its own reply instead of reloading. That write reads the catalog
-// check-in once (the edit result needs it); other callers keep the cheaper scene-only write.
-async function takeDecisionWrite(id, transform, { edit: answerEdit = false } = {}) {
+// A take decision write. With `answerEdit` it answers with the edit result (editResult.js) too, so the
+// board shows the readiness and neighbour take staleness the decision changed without a project read.
+async function takeDecisionWrite(id, transform, answerEdit) {
   if (!answerEdit) return mutateProjectRecord(id, transform, SCENE_ONLY);
   const { outcome, edit } = await editWrite(id, transform);
   return withEditResult(outcome, edit);
@@ -659,14 +657,14 @@ async function takeDecisionWrite(id, transform, { edit: answerEdit = false } = {
  * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks,
  * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
  */
-export async function markMediaPoolAssets(id, keys, mark, options = {}, reply = {}) {
+export async function markMediaPoolAssets(id, keys, mark, options = {}, { edit: answerEdit = false } = {}) {
   const { markPoolAssets } = await import('./mediaPool.js');
   let resultChanges = [];
   const { project, scenes, edit } = await takeDecisionWrite(id, (current) => {
     const outcome = markPoolAssets(current, keys, mark, options);
     resultChanges = outcome.changes || [];
     return outcome;
-  }, reply);
+  }, answerEdit);
   return { assetMarks: project.assetMarks || {}, scenes, changes: resultChanges, ...(edit ? { edit } : {}) };
 }
 
@@ -706,11 +704,11 @@ export async function appendTakesAcrossScenes(id, items) {
   return result;
 }
 
-/** Explicitly select a take for its scene slot. Returns the updated scene; with `{ edit: true }` the edit result beside its fields. */
-export async function selectSceneTake(id, sceneId, takeId, options = {}, reply = {}) {
+/** Explicitly select a take for its scene slot. Returns the updated scene. */
+export async function selectSceneTake(id, sceneId, takeId, options = {}, { edit: answerEdit = false } = {}) {
   const { selectSceneTake: select } = await import('./takes.js');
-  const { scene, edit } = await takeDecisionWrite(id, (current) => select(current, sceneId, takeId, options), reply);
-  return edit ? { ...scene, edit } : scene;
+  const { scene, edit } = await takeDecisionWrite(id, (current) => select(current, sceneId, takeId, options), answerEdit);
+  return answerEdit ? { scene, edit } : scene;
 }
 
 /**
@@ -765,34 +763,32 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
   return { scene: placed.scene, edit: result };
 }
 
-/** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }` (and `edit` with `{ edit: true }`). */
-export async function rejectUnusedSceneTakes(id, sceneId, reply = {}) {
+/** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
+export async function rejectUnusedSceneTakes(id, sceneId, { edit: answerEdit = false } = {}) {
   const { rejectUnusedTakes } = await import('./takes.js');
-  const { scene, rejected, edit } = await takeDecisionWrite(id, (current) => rejectUnusedTakes(current, sceneId), reply);
+  const { scene, rejected, edit } = await takeDecisionWrite(id, (current) => rejectUnusedTakes(current, sceneId), answerEdit);
   return { scene, rejected, ...(edit ? { edit } : {}) };
 }
 
-/** Swap a shot's start and end frames (and their prompts). Returns the scene; with `{ edit: true }` the edit result beside its fields. */
-export async function swapProjectSceneFrames(id, sceneId, reply = {}) {
+/** Swap a shot's start and end frames (and their prompts). Returns the scene. */
+export async function swapProjectSceneFrames(id, sceneId, { edit: answerEdit = false } = {}) {
   const { swapSceneFrames } = await import('./takes.js');
-  const { scene, edit } = await takeDecisionWrite(id, (current) => swapSceneFrames(current, sceneId), reply);
-  return edit ? { ...scene, edit } : scene;
+  const { scene, edit } = await takeDecisionWrite(id, (current) => swapSceneFrames(current, sceneId), answerEdit);
+  return answerEdit ? { scene, edit } : scene;
 }
 
-/** Reject/restore a take and/or set its note. Returns the updated scene; with `{ edit: true }` the edit result beside its fields. */
-export async function reviewSceneTake(id, sceneId, takeId, review, reply = {}) {
+/** Reject/restore a take and/or set its note. Returns the updated scene. */
+export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answerEdit = false } = {}) {
   const { reviewSceneTake: reviewTake } = await import('./takes.js');
-  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), reply);
-  const withEdit = (answer) => (edit ? { ...answer, edit } : answer);
+  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit);
+  // The edit result's copy of the shot is presented as GET presents it (catalog check-in included).
+  if (answerEdit) return { scene: edit.scenes.find((entry) => entry.sceneId === sceneId) || scene, edit };
   // A scene-only write presents takes against the stored record. A confirmation's reply is what the
   // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
-  if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return withEdit(scene);
-  // The edit result already presents the confirmed shot that way.
-  const fromEdit = edit?.scenes.find((entry) => entry.sceneId === sceneId);
-  if (fromEdit) return withEdit(fromEdit);
+  if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
   const { withCatalogCheckin } = await import('./catalogCheckin.js');
   const presented = presentMusicVideoDependencies(await withCatalogCheckin(project));
-  return withEdit(presented.scenes.find((entry) => entry.sceneId === sceneId) || scene);
+  return presented.scenes.find((entry) => entry.sceneId === sceneId) || scene;
 }
 
 /**

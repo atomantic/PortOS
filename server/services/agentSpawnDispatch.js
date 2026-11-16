@@ -41,6 +41,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
+import { updateClaimOwnership } from './cosClaimOwnership.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -333,7 +334,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       // The run now exists to own the checkout PortOS cut for it. Binding it is
       // what the agent-cut flow does after `git worktree add`: it settles the
       // pinned selection and records the checkout's physical generation.
-      const { updateClaimOwnership } = await import('./cosClaimOwnership.js');
       const bound = await updateClaimOwnership({ agentId, action: 'bind', branch: claimCheckout.branchName })
         .catch(error => ({ bound: false, reason: error.message }));
       if (bound?.bound !== true) {

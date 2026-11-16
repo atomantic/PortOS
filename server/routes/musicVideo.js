@@ -817,7 +817,6 @@ router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
   const { items, mark, ...options } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  // With the edit result, so the board keeps the shots and readiness a mark changed (#16270).
   res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options, { edit: true }));
 }));
 

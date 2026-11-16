@@ -52,6 +52,7 @@ import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
 import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
 import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
 import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
+import { packTakePrompts, unpackTakePrompts } from './takePromptPool.js';
 import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows, slimProjectReview } from './productionReview.js';
 import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
@@ -682,14 +683,16 @@ function sceneListInTimeOrder(scenes) {
 }
 
 /**
- * Load-time repair for a project whose scenes drifted out of time order
- * (#16117). Reorders only; labels, times and selections are untouched, and
- * every review binding that held before still holds: the bases hash `scenes`
+ * Load-time read of a stored record: take prompts unpacked from the record's
+ * line pool (#16210, `takePromptPool.js`), then the repair for a project whose
+ * scenes drifted out of time order (#16117). The repair reorders only; labels,
+ * times and selections are untouched, and every review binding that held before still holds: the bases hash `scenes`
  * by position, and the repair moves no shot in the cut, so it must not stale
  * an approval, the rendered proof or the treatment. Pure and idempotent, with
  * `updatedAt` left alone, so the stores run it on every load.
  */
-export function afterLoad(project) {
+export function afterLoad(stored) {
+  const project = unpackTakePrompts(stored);
   const scenes = sceneListInTimeOrder(project?.scenes);
   if (scenes === project?.scenes) return project;
   return carryReviewThroughSceneOrder(project, carryTreatmentThroughSceneOrder(project, { ...project, scenes }));
@@ -704,6 +707,15 @@ export function afterLoad(project) {
  */
 export function beforeSave(project) {
   return slimProjectReview(project);
+}
+
+/**
+ * The bytes both stores write, from the `beforeSave` record (#16210): take
+ * prompts packed into the record's line pool. Only the write sees this shape;
+ * the stores return the unpacked record and `afterLoad` unpacks on every read.
+ */
+export function toStored(project) {
+  return packTakePrompts(project);
 }
 
 /** Where a new scene goes: before the first timed scene that starts after it; untimed scenes go last. */

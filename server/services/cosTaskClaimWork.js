@@ -42,6 +42,7 @@ import {
   resolveIssueMinAgeRuleBlock,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
+import { resolveAppWorkTracker, trackerToClaimTaskType, resolveAppForgeTarget, forgeCliForTracker, workTrackerLabel as trackerLabel } from '../lib/workTracker.js';
 
 // `normalizeClaimReviewers` moved to server/lib/reviewerConfig.js (#4770, #5702): the
 // prompt builder needs the same copilot guard when it re-resolves reviewers off
@@ -184,7 +185,6 @@ export async function buildClaimWorkTask(app, {
   preverified = false,
   nonEpic = false
 } = {}) {
-  const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
   const taskSchedule = await import('./taskSchedule.js');
 
@@ -382,9 +382,6 @@ export async function buildJiraTicketTask(app, ticketKey) {
  * @returns {Promise<{ tracker, prompt, taskMetadata, target }>}
  */
 export async function buildIssueReplanTask(app, { target, issueContext, overrideContext } = {}) {
-  const {
-    resolveAppForgeTarget, forgeCliForTracker, workTrackerLabel: trackerLabel, trackerToClaimTaskType,
-  } = await import('../lib/workTracker.js');
 
   const targetRef = normalizeWorkItemRef(target);
   if (!targetRef || !/^\d+$/.test(targetRef)) {
