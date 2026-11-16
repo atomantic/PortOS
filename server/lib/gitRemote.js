@@ -1,11 +1,8 @@
 /**
- * Reads and classifies git origin remotes: `getOriginInfo`, `classifyOriginRemote`,
- * `parseGitRemoteUrl`, and upstream-owner checks.
+ * Reads and classifies git origin remotes: `getOriginInfo`, `classifyOriginRemote`, `parseGitRemoteUrl`,
+ * `readRemoteUrl`, `isUpstreamOwner`, `isUpstreamFullName`, `UPSTREAM_OWNER`/`UPSTREAM_REPO`
  *
- * `getOriginInfo`, `classifyOriginRemote`, `parseGitRemoteUrl`, `readRemoteUrl`, `isUpstreamOwner`,
- * `isUpstreamFullName`, `UPSTREAM_OWNER`/`UPSTREAM_REPO` — safely reads and classifies checkout
- * remotes against PortOS or a caller-supplied canonical upstream. Used by self-update and managed
- * integrations to detect forks.
+ * Used by self-update and managed integrations to detect forks.
  */
 
 import { execGit } from './execGit.js';
@@ -29,10 +26,8 @@ export function isUpstreamFullName(fullName) {
 }
 
 /**
- * Strip any `://user:token@` credentials from a URL so a PAT embedded in an
- * https remote can't leak into API responses, logs, or telemetry. SCP-style
- * remotes (`user@host:path`) carry only a username (no secret) so we leave
- * those alone — redacting them would corrupt the URL.
+ * Strip `://user:token@` credentials so a PAT in an https remote can't leak into responses or logs.
+ * SCP-style remotes carry only a username, so they are left alone (redacting would corrupt the URL).
  */
 export function redactRemoteUrlCredentials(url) {
   if (typeof url !== 'string') return url;
@@ -40,54 +35,31 @@ export function redactRemoteUrlCredentials(url) {
 }
 
 /**
- * Parse a git remote URL (SSH or HTTPS) into { host, owner, repo }.
- * Host-agnostic — accepts GitHub, GitLab, enterprise hosts, etc. Returns null
- * when the URL doesn't match an "owner/repo" shape (exactly two path segments
- * after the host). GitHub.com classification happens later in `getOriginInfo`.
+ * Parse a git remote URL (SSH or HTTPS, any host) into { host, owner, repo }, or null unless it has
+ * exactly two path segments after the host (`git@host:owner/repo/extra` would yield a `fullName` that
+ * breaks `gh repo sync` and fork classification). Accepts scp-style (with optional leading port, e.g.
+ * `git@ssh.github.com:443/owner/repo.git`), `ssh://` and `https://` forms.
  *
- * Handles:
- *   git@github.com:owner/repo.git
- *   git@ssh.github.com:443/owner/repo.git           (SCP variant with leading port)
- *   ssh://git@github.com/owner/repo.git
- *   ssh://git@github.com:443/owner/repo.git         (URL form with port)
- *   https://github.com/owner/repo.git
- *   https://github.com/owner/repo
- *   git@github.enterprise.com:org/repo.git
- *
- * The returned `host` is always normalized: no trailing `:port`, and a personal
- * SSH `Host` alias (`git@github-acme:acme/widget.git`, backed by a
- * `HostName github.com` block in `~/.ssh/config`) is resolved to the host it
- * actually connects to. Both normalizations exist for the same reason — callers
- * compare against e.g. `github.com` to decide which forge a repo lives on, and
- * neither a port nor an alias changes that answer. See lib/sshHostAlias.js.
- * Rejects URLs with extra path segments (e.g. `git@host:owner/repo/extra`)
- * since those would produce a `fullName` like `owner/repo/extra` that breaks
- * `gh repo sync` and fork classification.
+ * The returned `host` has no `:port` and a personal SSH `Host` alias (via `~/.ssh/config`, see
+ * lib/sshHostAlias.js) is resolved to the host it connects to, since callers compare against e.g.
+ * `github.com` to pick a forge.
  */
 export function parseGitRemoteUrl(url) {
   if (typeof url !== 'string' || !url.trim()) return null;
-  // Strip a single trailing slash so `…/owner/repo/` parses, but
-  // `…/owner/repo/extra` (extra path segment) still fails the regex.
+  // Strip one trailing slash so `…/owner/repo/` parses but `…/owner/repo/extra` still fails.
   const trimmed = url.trim().replace(/\/$/, '');
 
-  // Strip a trailing .git for both SSH and HTTPS variants
   const stripGit = (s) => s.replace(/\.git$/i, '');
-  // Normalize host — strip an optional `:port` suffix so `github.com:443`
-  // and `github.com` compare equal.
+  // Strip an optional `:port` so `github.com:443` and `github.com` compare equal.
   const stripPort = (h) => h.replace(/:\d+$/, '');
-  // Port first, then alias: an alias is written bare in ssh config, so
-  // `github-acme:22` must have its port removed before the lookup.
+  // Port first: an alias is written bare in ssh config, so `github-acme:22` needs its port removed before lookup.
   const normalizeHost = (h) => resolveSshHostAlias(stripPort(h));
-  // URL-scheme hosts never consult ssh config — only the SSH branches
-  // (scp-style and `ssh://`) resolve aliases. An `https://` remote colliding
-  // with an ssh alias must keep its literal host, or downstream `gh --repo` +
-  // token overlay target the wrong API host.
+  // Only SSH branches resolve aliases; an `https://` remote colliding with an alias keeps its literal
+  // host or `gh --repo` + token overlay target the wrong API host.
   const normalizeUrlHost = (scheme, h) => (scheme === 'ssh' ? normalizeHost(h) : stripPort(h));
 
-  // SCP-style SSH: git@host:[port/]owner/repo(.git). repo segment cannot
-  // contain '/'. The optional `(?:\d+\/)?` matches the GitHub-specific variant
-  // `git@ssh.github.com:443/OWNER/REPO.git` where `443/` is a path-prefix
-  // hop port.
+  // SCP-style SSH: git@host:[port/]owner/repo(.git); the optional `(?:\d+\/)?` is GitHub's
+  // `git@ssh.github.com:443/OWNER/REPO.git` port-prefix variant.
   const scpMatch = trimmed.match(/^[a-zA-Z0-9._-]+@([^:]+):(?:\d+\/)?([^/]+)\/([^/]+)$/);
   if (scpMatch) {
     return { host: normalizeHost(scpMatch[1]), owner: scpMatch[2], repo: stripGit(scpMatch[3]) };
@@ -103,10 +75,7 @@ export function parseGitRemoteUrl(url) {
   return null;
 }
 
-/**
- * Read the current repo's `origin` remote URL. Returns null when the directory
- * isn't a git repo or has no `origin` remote (rare, e.g. a tarball install).
- */
+/** Read the current repo's `origin` URL; null when not a git repo or no `origin` (e.g. tarball install). */
 export async function readOriginRemoteUrl(cwd = PATHS.root) {
   return readRemoteUrl('origin', cwd);
 }
@@ -121,29 +90,10 @@ export async function readRemoteUrl(remote, cwd = PATHS.root) {
 }
 
 /**
- * Inspect the local git origin remote and classify it relative to the
- * upstream atomantic/PortOS repo.
- *
- * Returned shape:
- *   {
- *     hasOrigin: boolean,
- *     originUrl: string | null,
- *     host: string | null,         // e.g. "github.com"
- *     owner: string | null,
- *     repo: string | null,
- *     fullName: string | null,     // "owner/repo"
- *     isUpstream: boolean,         // origin == atomantic/PortOS on github.com
- *     isGithub: boolean,
- *     isFork: boolean              // a GitHub `<other>/PortOS` repo — strict
- *                                  // fork candidate: same repo name (case-
- *                                  // insensitive), different owner. A repo
- *                                  // with a different name (e.g. someone
- *                                  // forked-and-renamed) is NOT classified
- *                                  // as a fork because `gh repo sync` would
- *                                  // fail and the fork-aware UI would lie.
- *   }
- *
- * Comparison is case-insensitive (GitHub treats owner/repo names as such).
+ * Inspect the local git origin remote and classify it against the upstream atomantic/PortOS repo.
+ * Returns `{ hasOrigin, originUrl, host, owner, repo, fullName, isUpstream, isGithub, isFork }`.
+ * `isFork` is any GitHub repo with a different owner than upstream (see below); comparison is
+ * case-insensitive.
  */
 export function classifyOriginRemote(originUrl, {
   upstreamOwner = UPSTREAM_OWNER,
@@ -163,8 +113,7 @@ export function classifyOriginRemote(originUrl, {
     };
   }
 
-  // The URL surfaces to the client via getUpdateStatus(); scrub any embedded
-  // PAT/basic-auth credentials so they don't leak into API responses or logs.
+  // The URL reaches the client via getUpdateStatus(); scrub embedded PAT/basic-auth credentials.
   const safeUrl = redactRemoteUrlCredentials(originUrl);
 
   const parsed = parseGitRemoteUrl(originUrl);
@@ -186,12 +135,9 @@ export function classifyOriginRemote(originUrl, {
   const ownerMatchesUpstream = parsed.owner.toLowerCase() === upstreamOwner.toLowerCase();
   const repoMatchesUpstream = parsed.repo.toLowerCase() === upstreamRepo.toLowerCase();
   const isUpstream = isGithub && ownerMatchesUpstream && repoMatchesUpstream;
-  // Fork: different owner than upstream, on GitHub — regardless of repo name.
-  // A renamed fork (`<owner>/PortOS` -> `<owner>/PortOS-Fork`) still IS the
-  // PortOS checkout; requiring the name to match `repoMatchesUpstream` made
-  // `isFork` silently go false on rename, taking the fork panel, the
-  // sync-fork route, and the divergence check with it while `git`/`gh repo
-  // sync` kept working fine through GitHub's slug redirect (#5931).
+  // Fork: different owner on GitHub, regardless of repo name. A renamed fork is still the PortOS
+  // checkout; requiring a name match made `isFork` go false on rename (breaking the fork panel,
+  // sync-fork route and divergence check) while `gh repo sync` kept working via GitHub's slug redirect.
   const isFork = isGithub && !ownerMatchesUpstream;
 
   return {
@@ -208,10 +154,8 @@ export function classifyOriginRemote(originUrl, {
 }
 
 /**
- * Read and classify one checkout's origin against a named canonical upstream.
- * The default remains atomantic/PortOS for the self-update callers; managed
- * integrations can supply their own owner/repo without reimplementing the
- * credential redaction and strict same-name fork rules.
+ * Read and classify one checkout's origin against a canonical upstream (default atomantic/PortOS;
+ * managed integrations may supply their own owner/repo).
  */
 export async function getOriginInfo(cwd = PATHS.root, upstream = {}) {
   const originUrl = await readOriginRemoteUrl(cwd);

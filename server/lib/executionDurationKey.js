@@ -1,31 +1,22 @@
 /**
  *  Shared persisted execution-duration key contract for the server and browser.
- *
- * Shared pure execution-duration key composers/parser, separator and absent-effort sentinel, and
- * minimum execution sample threshold; preserves persisted keys for server writers and browser lookups.
  */
 
-// Effort sentinel for a provider with no effort control. The repo's absent-vs-empty
-// rule: a run at no effort level must be its own bucket, never a key ending in a
-// bare separator that an `''` and an `undefined` would both produce.
+// Effort sentinel for a provider with no effort control: a no-effort run is its own
+// bucket, never a key ending in a bare separator.
 export const EXECUTION_EFFORT_NONE = 'default';
 
 export const EXECUTION_KEY_SEPARATOR = '|';
 
-// A key part must be a non-empty string that cannot itself contain the separator:
-// otherwise `a|p|m|x` is both "model m at effort x" and "model m|x at no effort",
-// and the provider+model rollup would sum two unrelated identities together.
+// A key part must be a non-empty string without the separator, else `a|p|m|x` is both
+// "model m at effort x" and "model m|x at no effort".
 export const nonEmptyKeyPart = (value) => {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return trimmed && !trimmed.includes(EXECUTION_KEY_SEPARATOR) ? trimmed : null;
 };
 
-/**
- * Compose the `taskType|providerId|model` prefix shared by every effort level of
- * one execution identity. Returns null when any part is missing — a partial key
- * would silently merge unlike runs. Pure.
- */
+/** The `taskType|providerId|model` prefix; null when any part is missing (a partial key would merge unlike runs). */
 export function executionKeyPrefix({ taskType, providerId, model } = {}) {
   const parts = [nonEmptyKeyPart(taskType), nonEmptyKeyPart(providerId), nonEmptyKeyPart(model)];
   if (parts.some((part) => part === null)) return null;
@@ -33,11 +24,9 @@ export function executionKeyPrefix({ taskType, providerId, model } = {}) {
 }
 
 /**
- * Compose the full `byTaskTypeExecution` key for one run. Returns null when the
- * task type, provider or model is missing, so the recorder can skip the write
- * instead of banking a run under a key that means nothing. A missing/blank
- * effort becomes the explicit `EXECUTION_EFFORT_NONE` sentinel. Pure — the ONE
- * place writer and reader compose this key, so they cannot drift.
+ * The full `byTaskTypeExecution` key for one run; null when task type, provider or model
+ * is missing so the recorder skips the write. A blank effort becomes
+ * `EXECUTION_EFFORT_NONE`. The ONE place writer and reader compose this key.
  */
 export function executionDurationKey({ taskType, providerId, model, effort } = {}) {
   const prefix = executionKeyPrefix({ taskType, providerId, model });
@@ -46,10 +35,8 @@ export function executionDurationKey({ taskType, providerId, model, effort } = {
 }
 
 /**
- * The `taskType|providerId|model` identity a stored execution key belongs to — the
- * parse counterpart of `executionKeyPrefix`, so composition and decomposition live
- * and change together. Null for anything that is not a well-formed key (a
- * hand-edited learning.json), which the reader drops rather than mis-grouping. Pure.
+ * The identity prefix of a stored key (parse counterpart of `executionKeyPrefix`); null
+ * for a malformed key (e.g. hand-edited learning.json), which the reader drops.
  */
 export function executionKeyPrefixOf(key) {
   if (typeof key !== 'string') return null;

@@ -3,8 +3,6 @@
  * settings that map onto the render-API params the LTX/mlx_video pipeline
  * actually consumes.
  *
- * Locked-at-creation aspect ratio + quality presets for the Creative Director.
- *
  * The contract: a project picks an aspectRatio + quality + modelId once;
  * every scene render uses these. Tweaking is intentionally not allowed
  * mid-project — segment-to-segment continuity needs identical resolution
@@ -22,23 +20,17 @@ export const ASPECT_PRESETS = Object.freeze({
 
 /**
  * Look up an aspectRatio's {width,height}, degrading gracefully when the ratio
- * is unrecognized (best-effort callers — prompt views, first-pass seed frames —
- * must not throw on a stale/unknown ratio the way the render path does).
+ * is unrecognized (best-effort callers must not throw on a stale/unknown ratio
+ * the way the render path does).
  *
- * The `fallback` is caller-owned because the two consumers want different
- * degraded shapes: prompt views want `{ width: 0, height: 0 }` (a printable
- * literal), while first-pass gen wants `{}` so `width`/`height` come through
- * `undefined` and the image worker applies its own default box instead. Pass
- * `presetToRenderParams` (which throws on an unknown ratio) when a hard failure
- * is the correct behavior. See #1938.
+ * `fallback` is caller-owned: prompt views want `{ width: 0, height: 0 }`, while
+ * first-pass gen wants `{}` so the image worker applies its own default box.
+ * Pass `presetToRenderParams` (throws) when a hard failure is correct.
  */
 export function resolveAspectDimensions(aspectRatio, fallback = { width: 0, height: 0 }) {
   return ASPECT_PRESETS[aspectRatio] || fallback;
 }
 
-// `steps` and `guidance` are mlx_video knobs. `fps` is the render frame
-// rate. Higher quality = more denoising steps + slightly higher guidance,
-// trading wall-clock time for fidelity.
 export const QUALITY_PRESETS = Object.freeze({
   draft:    { steps: 8,  guidance: 2.5, fps: 24 },
   standard: { steps: 20, guidance: 3.0, fps: 24 },
@@ -48,58 +40,41 @@ export const QUALITY_PRESETS = Object.freeze({
 export const ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 export const QUALITIES = Object.freeze(['draft', 'standard', 'high']);
 
-// Project lifecycle states. Single source of truth for both validation
-// (Zod enum) and runtime guards in the service layer.
 export const PROJECT_STATUSES = Object.freeze([
   'draft', 'planning', 'rendering', 'stitching', 'complete', 'paused', 'failed',
 ]);
 
-// Project states that are FINISHED — a stop, a re-pin, or any other "act on
-// work still in flight" sweep must skip them (and must never rewrite a
-// `complete` project's status). Derived vocabulary over PROJECT_STATUSES.
+// FINISHED project states — any "act on work still in flight" sweep must skip
+// them and never rewrite a `complete` project's status.
 export const PROJECT_TERMINAL_STATUSES = Object.freeze(new Set(['complete', 'failed']));
 
-// Agent-run states that are SETTLED. Anything else is in flight — which is what
-// every re-dispatch guard, the boot-recovery reaper, and the stop path all key
-// on, so they must agree on the vocabulary rather than each open-coding it.
+// SETTLED agent-run states; anything else is in flight. Re-dispatch guards, the
+// boot-recovery reaper and the stop path must share this vocabulary.
 export const RUN_TERMINAL_STATUSES = Object.freeze(new Set(['completed', 'failed']));
 
-// Per-scene lifecycle states. Used by the validation schemas + the
-// orchestrator's "next pending scene" logic.
 export const SCENE_STATUSES = Object.freeze([
   'pending', 'rendering', 'evaluating', 'accepted', 'failed',
 ]);
 
-// Production-plan step lifecycle states (CDO Phase 2, #2184). A plan step is
-// `pending` until its `dependsOn[]` are all terminal-success (done/skipped) and
-// the advance loop dispatches it; `running` while a synchronous tool executes or
-// a long-running job/run is in flight; `blocked` when an underlying run pauses
-// for human review (or the orchestrator gate rejects it — off/budget); `done`
-// on success; `failed` on an unrecoverable tool error; `skipped` when the plan
-// (re-planner) drops it. Mirrors SCENE_STATUSES' role for the legacy video flow.
+// Production-plan step states. A step is `pending` until its `dependsOn[]` are
+// all terminal-success; `blocked` when its run pauses for human review or the
+// orchestrator gate rejects it (off/budget); `skipped` when the re-planner drops it.
 export const PLAN_STEP_STATUSES = Object.freeze([
   'pending', 'running', 'blocked', 'done', 'failed', 'skipped',
 ]);
 
-// Terminal-SUCCESS plan-step states — a step in one of these is finished and its
-// dependents are unblocked. `failed` is terminal but NOT success (a dependent
-// can never run), so it is deliberately excluded.
+// `failed` is terminal but not success (dependents never run), so it is excluded.
 export const PLAN_STEP_TERMINAL_SUCCESS = Object.freeze(new Set(['done', 'skipped']));
 
-// Bounded re-planning: after a plan step fails, the planner may revise the
-// remaining steps at most this many times before the project pauses with
-// residuals for human review (autopilot's convergence-pause contract).
+// After a plan step fails the planner may revise the remaining steps at most this
+// many times before the project pauses for human review (convergence-pause contract).
 export const MAX_REPLAN_ROUNDS = 2;
 
 // Bounded re-dispatch of a COGNITIVE stage (plan / treatment) whose agent keeps
-// exiting cleanly without writing its deliverable (#4146). A non-tool-calling
-// local model narrates a done-message and PATCHes nothing; re-handing it the same
-// task is guaranteed to fail the same way, so after this many consecutive empty
-// completions the stage is surfaced to the user as a blocked/paused project
-// (naming the remedy: assign a tool-capable model) rather than re-dispatched.
-// 2 — one retry covers a genuine one-off (a truncated response, a transient
-// provider hiccup) without burning a third identical run on a model that has now
-// demonstrated twice that it cannot perform the PATCH.
+// exiting cleanly without writing its deliverable (a non-tool-calling local
+// model narrates and PATCHes nothing). One retry covers a one-off; after this many
+// consecutive empty completions the stage surfaces as blocked/paused, naming the
+// remedy (assign a tool-capable model).
 export const MAX_CONSECUTIVE_MISSED_DELIVERABLES = 2;
 
 /**
@@ -117,7 +92,6 @@ export function presetToRenderParams({ aspectRatio, quality, durationSeconds }) 
   const q = QUALITY_PRESETS[quality];
   if (!q) throw new Error(`Unknown quality '${quality}'`);
   const requested = Math.max(0.1, Number(durationSeconds) || 1) * q.fps;
-  // Round to nearest multiple of 8, with an 8-frame floor.
   const numFrames = Math.max(8, Math.round(requested / 8) * 8);
   return {
     width: aspect.width,
@@ -129,6 +103,5 @@ export function presetToRenderParams({ aspectRatio, quality, durationSeconds }) 
   };
 }
 
-// Shared by the Video draft form and wire defaults; saved policy is inert until
-// revision-specific dispatch support is available.
+// Saved policy is inert until revision-specific dispatch support is available.
 export const VIDEO_REVIEW_CHECKPOINTS = Object.freeze(['script-shot-plan', 'references', 'rough-cut', 'final-cut']);

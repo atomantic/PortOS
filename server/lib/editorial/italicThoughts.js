@@ -1,34 +1,23 @@
 /**
- * Italicized-internal-thought deterministic primitive (#1300) for the editorial
- * check registry. Pure and dependency-free (no side-effecting imports) so it
- * stays unit-testable in isolation — mirrors ./cliches.js and ./nameSimilarity.js.
+ * Italicized-internal-thought deterministic primitive for the editorial check registry
+ * (backs `prose.italic-thoughts`). Pure and dependency-free, like ./cliches.js.
  *
- * Backs the deterministic `prose.italic-thoughts` check in checkRegistry.js. The
- * editorial rule: everything on the page is already the POV character's
- * perspective, so setting internal thoughts in *italics* is a tell — a multi-word
- * italic clause is almost always a narrated thought that could simply be prose.
- *
- * High-precision by design (favors under-flagging, like the other deterministic
- * scanners): a SHORT italic span (a stressed word, a title, a foreign term) is
- * emphasis, not a thought, so only runs of `minWords`+ words are flagged. The LLM
- * siblings handle the judgment cases this can't.
+ * Everything on the page is already the POV character's perspective, so a multi-word
+ * italic clause is almost always a narrated thought. High-precision by design: a SHORT
+ * span (stressed word, title, foreign term) is emphasis, so only runs of `minWords`+
+ * words are flagged.
  */
 
 import { countWords } from '../textUtils.js';
 
-// Markdown italic delimiters. Asterisk italics are a single `*` NOT part of a
-// `**`/`***` bold run; underscore italics are a single `_` with non-word edges
-// (so `snake_case` and `__bold__` are never mistaken for emphasis). Each span is
-// single-line (`[^*\n]` / `[^_\n]`) — a thought run that spans a blank line is a
-// paragraph, not an inline italic clause.
+// Markdown italic delimiters: a single `*` not part of a `**`/`***` run, or a single `_`
+// with non-word edges (so `snake_case` and `__bold__` never match). Spans are single-line.
 const ASTERISK_ITALIC_RE = /(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g;
 const UNDERSCORE_ITALIC_RE = /(?<![\w_])_(?!_)([^_\n]+?)_(?![\w_])/g;
 
 /**
- * Find italicized runs in `text` that read as internal-thought narration —
- * multi-word italic spans (markdown `*…*` or `_…_`). Returns the FIRST occurrence
- * of each distinct run (deduped on the normalized inner text — the same thought
- * italicized twice is one tic to fix, not two), sorted by position.
+ * Find italicized runs that read as internal-thought narration. Returns the FIRST
+ * occurrence of each distinct run (deduped on normalized inner text), sorted by position.
  *
  * @param {string} text
  * @param {{ minWords?: number }} [opts]
@@ -40,10 +29,7 @@ const UNDERSCORE_ITALIC_RE = /(?<![\w_])_(?!_)([^_\n]+?)_(?![\w_])/g;
 export function findItalicThoughts(text, opts = {}) {
   if (typeof text !== 'string' || !text) return [];
   const minWords = Math.max(1, Number.isInteger(opts.minWords) ? opts.minWords : 4);
-  // Collect matches from BOTH delimiters first, then sort by position before
-  // deduping — so "FIRST occurrence" is the first in the TEXT, regardless of
-  // which delimiter the dedup-winner uses (an earlier `_…_` span must win over a
-  // later `*…*` span with identical text).
+  // Sort by position BEFORE deduping so "first" means first in the TEXT regardless of delimiter.
   const matches = [];
   const scan = (re) => {
     re.lastIndex = 0;

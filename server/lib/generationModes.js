@@ -1,16 +1,10 @@
 /**
- * Shared image/video render-backend alphabets.
+ * Shared immutable image/video render-backend alphabets and the media-queue lane and swim-lane rules.
  *
- * Shared immutable image/video render-backend alphabets (`IMAGE_GEN_MODE[S]`, `QUEUEABLE_IMAGE_MODES`,
- * `VIDEO_GEN_MODE[S]`, and cloud subsets) plus `mediaJobExecutionLane({ kind, mode, remote })` /
- * `MEDIA_JOB_EXECUTION_LANES` — THE media-queue lane rule — and `mediaJobSwimlane(...)`, the
- * per-provider / per-peer / local swim-lane key that owns slots and queue positions, the scheduler and
- * the public job projection share, kept below both validation and generation services so schemas never
- * import orchestration modules.
- *
- * These constants sit below both validation and the generation services so a
- * schema can enumerate a backend without importing service-layer orchestration.
- * The service mode modules re-export the same bindings for compatibility.
+ * Covers `IMAGE_GEN_MODE[S]`, `QUEUEABLE_IMAGE_MODES`,
+ * `VIDEO_GEN_MODE[S]`, cloud subsets, plus `mediaJobExecutionLane(...)` / `MEDIA_JOB_EXECUTION_LANES`
+ * (THE media-queue lane rule) and `mediaJobSwimlane(...)`, the per-provider / per-peer / local
+ * swim-lane key, kept below validation and generation services so schemas never import orchestration.
  */
 
 export const IMAGE_GEN_MODE = Object.freeze({
@@ -19,13 +13,10 @@ export const IMAGE_GEN_MODE = Object.freeze({
   CODEX: 'codex',
   GROK: 'grok',
   AGY: 'agy',
-  // fal.ai's metered queue REST API (services/imageGen/fal.js) — the same
-  // literal as VIDEO_GEN_MODE.FAL below: one provider, one key, one id.
+  // fal.ai's metered queue REST API; same literal as VIDEO_GEN_MODE.FAL (one provider, one key, one id).
   FAL: 'fal',
   RUNWAY: 'runway',
-  // Higgsfield's developer API (services/imageGen/higgsfield.js); the same id as VIDEO_GEN_MODE.HIGGSFIELD.
   HIGGSFIELD: 'higgsfield',
-  // Google Cloud Agent Platform (services/imageGen/google.js); the same id as VIDEO_GEN_MODE.GOOGLE.
   GOOGLE: 'google',
 });
 
@@ -59,13 +50,10 @@ export const VIDEO_GEN_MODE = Object.freeze({
   GROK: IMAGE_GEN_MODE.GROK,
   FAL: IMAGE_GEN_MODE.FAL,
   REACTOR: 'reactor',
-  // Runway's developer API (services/videoGen/runway.js).
   RUNWAY: IMAGE_GEN_MODE.RUNWAY,
-  // Gemini Omni through the Gemini web app in the PortOS Browser (services/videoGen/geminiWeb.js).
+  // Gemini Omni through the Gemini web app in the PortOS Browser.
   GEMINI: 'gemini',
-  // Higgsfield's developer API (services/videoGen/higgsfield.js).
   HIGGSFIELD: IMAGE_GEN_MODE.HIGGSFIELD,
-  // Google Cloud Agent Platform Veo (services/videoGen/google.js).
   GOOGLE: IMAGE_GEN_MODE.GOOGLE,
 });
 
@@ -75,18 +63,11 @@ export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
 ]);
 
 /**
- * THE media-queue execution-lane rule, shared by the scheduler and the public
- * job projection so the UI can never drift from how a job is actually run.
- *
- * `remote` wins outright — a federated job is executed by a peer whatever
- * backend it names. Otherwise the cloud alphabets above decide: a cloud-CLI
- * image or video backend shells out to an external provider and runs in the
- * parallel cloud lane, while everything else (local video's text/image/fflf
- * semantic modes included) serializes on the local accelerator.
- *
- * Kept here rather than in mediaJobQueue so a light consumer — sanitizeJob, a
- * route handler, the client's re-export — can classify a job
- * without importing the queue.
+ * THE media-queue execution-lane rule, shared by the scheduler and the public job projection so the UI
+ * can't drift from how a job runs. `remote` wins outright (a peer executes it whatever backend it
+ * names); otherwise the cloud alphabets decide, and everything else (local video's text/image/fflf
+ * modes included) serializes on the local accelerator. Lives here, not in mediaJobQueue, so light
+ * consumers can classify a job without importing the queue.
  */
 export const MEDIA_JOB_EXECUTION_LANES = Object.freeze(['gpu', 'cloud', 'remote']);
 
@@ -99,14 +80,10 @@ export const mediaJobExecutionLane = ({ kind, mode, remote } = {}) => {
 };
 
 /**
- * THE media-queue swim lane: the unit that owns its own slots and its own
- * queue positions, so one provider's backlog never holds another's work.
- *
- * Within the cloud lane every provider (codex, grok, fal, …) is its own swim
- * lane; each federated peer is its own swim lane; this machine's accelerator is
- * one swim lane because local image and video renders share the MLX runtime.
- * The execution lane still decides HOW a job runs; the swim lane decides WHO it
- * waits behind.
+ * THE media-queue swim lane: the unit owning its own slots and queue positions, so one provider's
+ * backlog never holds another's work. Each cloud provider and each federated peer is its own lane; this
+ * machine's accelerator is one lane (local image and video share the MLX runtime). The execution lane
+ * decides HOW a job runs, the swim lane WHO it waits behind.
  *
  * @returns {string} `<lane>:<owner>`, e.g. `cloud:grok`, `remote:<peerId>`, `gpu:local`
  */

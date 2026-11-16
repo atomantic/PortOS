@@ -1,26 +1,13 @@
 /**
  * Creative Commission generation spec — a pure, dependency-free leaf (#6816).
  *
- * `GENERATION_KEY_DEFS` / `ABILITY_GENERATION_SPEC` / `resolvedDefault` and the quality / aspect-ratio
- * / image-mode / video-mode enums — the generation-param spec `creativeCommissionValidation.js` builds
- * its Zod schema from and the ability adapters sanitize against. A pure leaf (like
- * `creativeBriefLimits.js`) so `client/src/components/creative-commission/commissionForm.js` derives
- * its fields/bounds/defaults from it directly instead of hand-copying them (#6816).
+ * The generation-param spec (`GENERATION_KEY_DEFS`, `ABILITY_GENERATION_SPEC`, `resolvedDefault` and the
+ * quality / aspect-ratio / image-mode / video-mode enums) that `creativeCommissionValidation.js` builds
+ * its Zod schema from, the ability adapters sanitize against, and the client commission form derives
+ * its fields/bounds/defaults from.
  *
- * The per-generation-key descriptors (type/bounds/values/default) and their
- * per-ability grouping used to live inside `creativeCommissionValidation.js`,
- * which pulls `zod` — so the browser form could only mirror them by hand.
- * That hand-copy already drifted three ways before this split: the
- * `durationMode` default (client `'auto'` vs server `'manual'`), the video
- * backend enum (client missing fal/reactor, #6213/#6214), and the image
- * backend enum (client missing agy, #4901). Splitting the DATA out from the
- * Zod SCHEMA BUILDER lets the server schema, the ability adapters, and the
- * client form all derive from this one object — the way `creativeBriefLimits.js`
- * already does for the brief field caps.
- *
- * Zod-free and Node-builtin-free by contract, like `creativeBriefLimits.js`:
- * `commissionForm.js` imports this module directly, so anything added here
- * must stay importable by the browser bundle.
+ * Zod-free and Node-builtin-free by contract (like `creativeBriefLimits.js`): the browser bundle
+ * imports this module directly, so anything added here must stay browser-importable.
  */
 
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
@@ -29,56 +16,40 @@ import { RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 export const CREATIVE_COMMISSION_QUALITIES = Object.freeze(['draft', 'standard', 'high']);
 export const CREATIVE_COMMISSION_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 
-// `AUTO` is the default and the no-op: it means "resolve at fire time the way
-// this install already would" (settings.imageGen.mode / the local video
-// default), so an existing commission that never sets the field behaves
-// exactly as before. Re-exported from the render-target leaf (#3231) so the
-// two "no pin" protocol values can never diverge.
+// `AUTO` is the default and the no-op: resolve at fire time the way this install
+// already would. Re-exported from the render-target leaf so the two "no pin"
+// protocol values can never diverge.
 export const COMMISSION_RENDER_BACKEND_AUTO = RENDER_TARGET_BACKEND_AUTO;
 
-// Image backends a commission may pin: the queueable image modes (local /
-// codex / grok / agy — `external` never queues) plus the auto sentinel.
-// Derived from QUEUEABLE_IMAGE_MODES so a new backend needs no edit here, but it
-// still needs a wire-version bump in every sync category that stores it
-// (creativeCommissions, fableLoom) — see schemaVersions.test.js.
+// Image backends a commission may pin: the queueable image modes (`external` never
+// queues) plus the auto sentinel. A new backend needs no edit here but does need a
+// wire-version bump in every sync category that stores it (creativeCommissions,
+// fableLoom) — see schemaVersions.test.js.
 export const CREATIVE_COMMISSION_IMAGE_MODES = Object.freeze([
   COMMISSION_RENDER_BACKEND_AUTO, ...QUEUEABLE_IMAGE_MODES,
 ]);
 
-// Video backends a commission may pin: local (MLX runtimes), grok, fal, or
-// reactor, plus auto. Derived from VIDEO_GEN_MODES so a new backend needs no
-// enum edit here (it does need a sync wire-version bump, see above) — this
-// enum is exactly what drifted client-side when fal (#6213) and reactor (#6214)
-// shipped with no matching form edit.
+// Video backends a commission may pin, plus auto (same wire-version bump rule).
 export const CREATIVE_COMMISSION_VIDEO_MODES = Object.freeze([
   COMMISSION_RENDER_BACKEND_AUTO, ...VIDEO_GEN_MODES,
 ]);
 
-// A model id is a free string (the media-models registry is user-editable, so
-// an enum here would reject a legitimately-installed model). Bounded like the
-// existing `generation.model`.
+// Free string: the media-models registry is user-editable, so an enum would reject installed models.
 export const COMMISSION_RENDER_MODEL_MAX = 64;
 
-// Per-KEY generation descriptor — the SINGLE SOURCE OF TRUTH for a generation
-// param's type, bounds, and default, consumed by the server's Zod schema
-// (`creativeCommissionValidation.js`), the ability adapters' data-driven
-// sanitizer (`services/creativeCommissions/abilityAdapters.js`), AND the
-// client form (`commissionForm.js`) — no more hand-copying any of it.
+// Per-KEY generation descriptor — the single source of truth for a param's type,
+// bounds and default, consumed by the server Zod schema, the ability adapters'
+// sanitizer and the client form.
 //
-// `default` seeds a BRAND-NEW commission/form (a product/UX choice). A
-// descriptor may additionally carry `legacyAbsent`: what an EXISTING stored
-// record with the key missing ENTIRELY means, when that differs from
-// `default`. `durationMode` is the one key where they diverge — the form
-// seeds a fresh commission to `'auto'` (#4494), but a record written before
-// this key existed always rendered a fixed length, so an absent key on a real
-// record must still resolve to `'manual'`. Use `resolvedDefault()` below
-// wherever an ABSENT OR INVALID stored value needs a fallback; reserve a bare
-// `.default` read for seeding a genuinely new/blank record.
+// `default` seeds a brand-new commission/form. `legacyAbsent` is what an EXISTING
+// stored record with the key missing entirely means, when that differs from
+// `default`: `durationMode` seeds to `'auto'` for new commissions, but a record
+// written before the key existed rendered a fixed length, so absent must resolve
+// to `'manual'`. Use `resolvedDefault()` for any absent/invalid stored value;
+// reserve a bare `.default` read for seeding a blank record.
 //
 // `type: 'id'` is a nullable free-string model id: absent/blank normalizes to
-// `null` (= "the install's default model"), which is why its `default` is
-// null rather than a string. Distinct from the `enum`/`int` numeric-or-member
-// kinds so the Zod builder and the adapter coercion both stay data-driven.
+// `null` (the install's default model).
 export const GENERATION_KEY_DEFS = Object.freeze({
   quality: { type: 'enum', values: CREATIVE_COMMISSION_QUALITIES, default: 'standard' },
   aspectRatio: { type: 'enum', values: CREATIVE_COMMISSION_ASPECT_RATIOS, default: '16:9' },
@@ -89,36 +60,24 @@ export const GENERATION_KEY_DEFS = Object.freeze({
   imageCount: { type: 'int', min: 1, max: 6, default: 1 },
   lengthSeconds: { type: 'int', min: 5, max: 600, default: 30 },
   episodeCount: { type: 'int', min: 1, max: 6, default: 1 },
-  // Render-backend pin (#3135) — `auto` = no pin (today's behavior).
   imageMode: { type: 'enum', values: CREATIVE_COMMISSION_IMAGE_MODES, default: COMMISSION_RENDER_BACKEND_AUTO },
   videoMode: { type: 'enum', values: CREATIVE_COMMISSION_VIDEO_MODES, default: COMMISSION_RENDER_BACKEND_AUTO },
-  // Optional model id, only meaningful when the matching mode is pinned to a
-  // backend that HAS a model knob (local diffusion / local video runtimes; the
-  // cloud CLIs pick their own model). null = the install default.
+  // Only meaningful for backends with a model knob (local runtimes; cloud CLIs pick their own).
   imageModelId: { type: 'id', max: COMMISSION_RENDER_MODEL_MAX, default: null },
   videoModelId: { type: 'id', max: COMMISSION_RENDER_MODEL_MAX, default: null },
 });
 
-// The fallback for an ABSENT or INVALID stored value: a descriptor's
-// `legacyAbsent` when it has one (a compatibility reading only `durationMode`
-// needs today), else its `default`. Every store-side coercion (the ability
-// adapters' sanitizer) and every client-side projection of a REAL record must
-// resolve an absent/invalid value through this — never `.default` directly —
-// so the two readings can't drift back apart. Seeding a brand-new blank form
-// is the one exception: it reads `.default` directly, because there is no
-// record yet for `legacyAbsent` to describe.
+// Fallback for an absent or invalid stored value: `legacyAbsent` when present, else
+// `default`. Store-side coercion and client projections of a REAL record must use
+// this, never `.default`, so the two readings can't drift apart.
 export function resolvedDefault(def) {
   return def.legacyAbsent ?? def.default;
 }
 
-// Which keys each output type carries (the universal `model` is added
-// separately by the schema — every type accepts an optional engine/model
-// override). The backend pins (#3135) are scoped to the abilities that
-// actually enqueue that kind of render: `imageMode` on `image`, `videoMode` on
-// `video`, and BOTH on `music-video` (its plan renders a video, and the
-// planner may render stills for it too). `music` and `series` carry neither —
-// a series' per-issue renders are pinned on the pipeline series/stage
-// records, not here.
+// Which keys each output type carries (the universal `model` is added separately
+// by the schema). Backend pins are scoped to abilities that enqueue that render
+// kind; `music-video` takes both, `music` and `series` neither (a series' renders
+// are pinned on the pipeline series/stage records).
 const ABILITY_GENERATION_KEYS = Object.freeze({
   video: ['quality', 'aspectRatio', 'targetDurationSeconds', 'durationMode', 'videoMode', 'videoModelId'],
   image: ['quality', 'aspectRatio', 'imageCount', 'imageMode', 'imageModelId'],
@@ -127,12 +86,7 @@ const ABILITY_GENERATION_KEYS = Object.freeze({
   series: ['episodeCount'],
 });
 
-// Derived per-ability { keys, defaults } view — the shape the store sanitizer,
-// the client form, and tests consume. `defaults` is the LEGACY-AWARE
-// resolution (`resolvedDefault`, not a bare `.default`): it's what an
-// ability's sanitizer resolves an absent/invalid raw generation object to,
-// and what the client projects a real (possibly pre-existing) record's
-// missing key as.
+// Per-ability { keys, defaults }; `defaults` use the legacy-aware `resolvedDefault`.
 export const ABILITY_GENERATION_SPEC = Object.freeze(
   Object.fromEntries(Object.entries(ABILITY_GENERATION_KEYS).map(([ability, keys]) => [ability, {
     keys,

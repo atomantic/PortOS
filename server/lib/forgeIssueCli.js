@@ -1,20 +1,10 @@
 /**
- * Pure argument shapes and output parsing for `gh` / `glab` issue filing.
- *
  * Pure `gh`/`glab` issue-filing argument shapes and output parsing — `forgeLabelCreateArgs`,
- * `forgeIssueCreateArgs`, `parseCreatedForgeIssue` — so the two CLIs' body-flag, label-attachment, and
- * label-create disagreements have one definition.
+ * `forgeIssueCreateArgs`, `parseCreatedForgeIssue` — so the two CLIs' disagreements have one definition.
  *
- * Two CLIs disagree about the same three things, and every filer that has
- * rediscovered that disagreement has re-encoded it: the body flag
- * (`--body` vs `--description`), how labels attach (repeated `--label` flags vs
- * one comma-joined value), and how a label is created (gh takes the name
- * positionally with a bare hex color; glab needs `--name` and a
- * `#`-prefixed color). Keeping those here means a new filer inherits the rules
- * instead of learning them from a failed 422.
- *
- * No child-process or network access — callers own the exec (`runCli` in the
- * Layered Intelligence loop, `execGh`/`execGlab` elsewhere).
+ * They differ on the body flag (`--body` vs `--description`), label attachment (repeated `--label` vs
+ * one comma-joined value) and label creation (gh: positional name, bare hex color; glab: `--name`,
+ * `#`-prefixed color). No child-process or network access; callers own the exec.
  */
 
 /** `label create` arguments for one `{ name, color, description }` spec. */
@@ -31,12 +21,9 @@ export const forgeIssueCreateArgs = (cli, { title, body, labels = [], repo = nul
     ...labels.flatMap((name) => ['--label', name])]);
 
 /**
- * The created issue's `{ url, number }` from a successful `issue create` stdout.
- *
- * Both CLIs print the web URL. `number` is null when the trailing path segment
- * is not a number, and `url` falls back to the raw trimmed stdout — the issue
- * exists either way, so an unparseable line must not turn a real creation into
- * a reported failure.
+ * The created issue's `{ url, number }` from `issue create` stdout. `number` is null when the trailing
+ * segment isn't numeric and `url` falls back to the raw stdout: the issue exists either way, so an
+ * unparseable line must not become a reported failure.
  */
 export const parseCreatedForgeIssue = (stdout) => {
   const text = String(stdout || '').trim();
