@@ -78,15 +78,9 @@ export const selectableModelsForProvider = (provider, models) =>
   isAntigravityProvider(provider) ? antigravityBaseModels(models) : (models || []);
 
 /**
- * Keeps a stored-but-no-longer-listed Antigravity id visible as its own option:
- * a record saved before the model/effort split holds e.g. `gemini-3.6-flash-high`,
- * which would render the select blank though the server still splits it and runs it.
- *
- * Deliberately narrow (only an id with an effort SUFFIX): a bare "not in the list"
- * test would re-surface the hidden default sentinel and typo'd pins. Not built on
- * `withUnlistedOption` (client/src/lib/): this list is flat id strings, gated by
- * the suffix, and appends rather than prepends. Same for `unlistedSelection` in
- * `resolveProviderModelOptions`. CLIENT-ONLY.
+ * Keeps a stored-but-no-longer-listed Antigravity id (saved before the model/effort split, e.g. `gemini-3.6-flash-high`) visible as its own option so the select isn't blank.
+ * Only an id with an effort SUFFIX: a bare "not in the list" test would re-surface the hidden default sentinel and typo'd pins.
+ * Not built on `withUnlistedOption`: this list is flat id strings and appends rather than prepends. CLIENT-ONLY.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {unknown[]} models - the already-filtered option list
  * @param {string|null|undefined} selectedModel
@@ -101,12 +95,8 @@ export const withStaleAntigravityPin = (provider, models, selectedModel) => {
 };
 
 /**
- * The model ids in a signed-in ChatGPT account's catalog, or `null` when the
- * catalog is not a SUCCESSFUL read. `codexModelCatalog` states are distinct:
- * `models: null` never fetched, set `error` last read failed (last-known-good
- * only), `[]` the account genuinely exposes none. Never-fetched/failed collapse
- * to `null` so an offline user keeps the shipped list, never an empty dropdown.
- * CLIENT-ONLY.
+ * The model ids in a signed-in ChatGPT account's catalog, or `null` when the catalog is not a SUCCESSFUL read: never-fetched and failed
+ * (last-known-good only) collapse to `null` so an offline user keeps the shipped list; `[]` means the account exposes none. CLIENT-ONLY.
  * @param {{codexModelCatalog?:{models?:unknown, error?:unknown}}|null|undefined} provider
  * @returns {string[]|null}
  */
@@ -120,12 +110,9 @@ export const codexCatalogModelIds = (provider) => {
 };
 
 /**
- * The RAW model list a picker should read, before sentinel/effort/hardware
- * filtering: the account catalog when fetched, else `models`, else `defaultModel`
- * when that list is empty (`[]` is truthy, so a bare `||` would leave it empty).
- * The single place the account catalog enters a picker (#6306). A successfully-read
- * EMPTY catalog stays `[]`: offering the default would restore an un-runnable option.
- * CLIENT-ONLY.
+ * The RAW model list a picker reads, before sentinel/effort/hardware filtering: the account catalog when fetched, else `models`, else
+ * `defaultModel` when empty (`[]` is truthy, so a bare `||` would not fall through). A successfully-read EMPTY catalog stays `[]`:
+ * offering the default would restore an un-runnable option. CLIENT-ONLY.
  * @param {{models?:unknown[], defaultModel?:string}|null|undefined} provider
  * @returns {unknown[]}
  */
@@ -146,16 +133,11 @@ export const MODEL_SOURCE = Object.freeze({
 });
 
 /**
- * The option list for a picker, plus WHERE it came from. For a Codex-subscription
- * provider with a fetched account catalog the options are the account's models;
- * otherwise the shipped list.
+ * The option list for a picker, plus WHERE it came from: the account's models for a Codex-subscription provider with a fetched catalog, else the shipped list.
  *
- * ADDITIVE in both branches: a stored `selectedModel` the list no longer offers
- * stays as its own option and is reported via `unlistedSelection`. The shipped
- * branch asks `modelPinIsOffered` (the spawner's rule: passes an empty catalog
- * and local-daemon providers, tolerates spelling variants). The ACCOUNT branch
- * keeps a bare membership test: an empty account catalog means the pin IS
- * unavailable, which `modelPinIsOffered` would pass. CLIENT-ONLY.
+ * ADDITIVE: a stored `selectedModel` the list no longer offers stays as its own option, reported via `unlistedSelection`. The shipped branch asks
+ * `modelPinIsOffered` (the spawner's rule); the ACCOUNT branch keeps a bare membership test because an empty account catalog means the pin IS
+ * unavailable. CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {{models: unknown[], source: string, unlistedSelection: boolean}}
@@ -168,9 +150,7 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
   );
   const catalog = codexCatalogModelIds(provider);
   if (!catalog) {
-    // SELECTABLE and FLAGGED are decided separately: anything stored and not
-    // already an option must become one (or the select renders blank); only the
-    // flag asks whether the pin is dead.
+    // SELECTABLE and FLAGGED differ: anything stored and not already an option must become one (or the select is blank); only the flag asks if the pin is dead.
     const stored = !!selectedModel && !isConfiguredDefaultModel(selectedModel);
     return {
       models: stored && !shipped.includes(selectedModel) ? [...shipped, selectedModel] : shipped,
@@ -190,10 +170,8 @@ export const resolveProviderModelOptions = (provider, selectedModel) => {
 };
 
 /**
- * The option list for a picker that renders an effort control but reads
- * `provider.models` directly: base models, sentinels stripped, plus any legacy
- * suffixed pin. Codex-subscription providers resolve via `resolveProviderModelOptions`.
- * CLIENT-ONLY.
+ * The option list for a picker with an effort control that reads `provider.models` directly: base models, sentinels stripped, plus any legacy
+ * suffixed pin. Codex-subscription providers use `resolveProviderModelOptions`. CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null|undefined} selectedModel
  * @returns {unknown[]}
@@ -211,9 +189,7 @@ export const effortAwareModelOptions = (provider, selectedModel) =>
 export const effectiveModelFor = (provider, model) => model || provider?.defaultModel || '';
 
 /**
- * Seeds a picker's model and effort controls from a record that may predate the
- * split (`gemini-3.6-flash-high` → model + `high`). A stored `effort` wins; a
- * non-Antigravity provider is left alone. CLIENT-ONLY.
+ * Seeds a picker's model and effort from a record that may predate the split (`gemini-3.6-flash-high` → model + `high`); a stored `effort` wins. CLIENT-ONLY.
  * @param {{id?:string, command?:string}|null|undefined} provider
  * @param {string|null|undefined} model
  * @param {string|null|undefined} effort
@@ -226,10 +202,8 @@ export const seedModelEffort = (provider, model, effort) => {
 };
 
 /**
- * The effort levels a provider's CLI accepts, or null when it has no effort
- * control. A sanitized provider inventory (no command/path/env) is answered from
- * the ladder the server published on it. `model` narrows the Antigravity ladder;
- * the server's null is FINAL there (the catalog names no tier for this model).
+ * The effort levels a provider's CLI accepts, or null when it has no effort control; a sanitized inventory is answered from the ladder the server
+ * published on it. `model` narrows the Antigravity ladder, where the server's null is FINAL.
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model]
  * @returns {readonly string[]|null}
@@ -245,10 +219,8 @@ export const effortLevelsForProvider = (provider, model = null) => {
 };
 
 /**
- * The effort a picker keeps after its MODEL changed: the current one, or `''` when
- * the new model has no effort control (an Antigravity model with no tiers hides the
- * select, leaving a stale effort that submit paths would still send). A merely
- * NARROWED ladder is left alone; `EffortSelect` shows the clamp. CLIENT-ONLY.
+ * The effort a picker keeps after its MODEL changed: the current one, or `''` when the new model has no effort control (a stale effort would
+ * still be sent). A merely NARROWED ladder is left alone; `EffortSelect` shows the clamp. CLIENT-ONLY.
  * @param {{id?:string, command?:string, models?:unknown[], defaultModel?:string}|null|undefined} provider
  * @param {string|null|undefined} model - the NEWLY selected model
  * @param {string|null|undefined} effort - the currently selected effort
@@ -258,9 +230,8 @@ export const effortSurvivingModel = (provider, model, effort) =>
   (effortLevelsForProvider(provider, effectiveModelFor(provider, model)) ? (effort || '') : '');
 
 /**
- * The level a stored effort will ACTUALLY run at, or null when no flag is emitted:
- * the server's clamp over the ladder resolved here. The server clamps rather than
- * drops an out-of-ladder effort, so the select needs this or it renders blank.
+ * The level a stored effort will ACTUALLY run at, or null when no flag is emitted: the server clamps (not drops) an out-of-ladder effort,
+ * so the select needs this or it renders blank.
  * @param {string|null|undefined} effort
  * @param {{id?:string, command?:string, models?:unknown[]}|null|undefined} provider
  * @param {string|null} [model] - narrows the Antigravity ladder (see effortLevelsForProvider)
@@ -286,11 +257,8 @@ export const mergeModelLists = (...lists) => {
 };
 
 /**
- * Merge a partial-update payload onto an existing provider record in place, so
- * repointing a provider doesn't clobber fields the payload didn't set (a raw PATCH
- * replaces named top-level keys wholesale, dropping env vars and model history).
- *
- *
+ * Merge a partial-update payload onto an existing provider record in place, so repointing doesn't clobber fields the payload didn't set
+ * (a raw PATCH replaces top-level keys wholesale, dropping env vars and model history).
  * @param {object|null|undefined} target - the existing provider being updated
  * @param {object} payload - field values about to be written; mutated in place
  * @returns {object} payload
@@ -306,38 +274,27 @@ export const mergeProviderUpdate = (target, payload) => {
 };
 
 /**
- * Which default generation controls the provider editor should offer, or null.
- * Only local OpenAI-compatible backends (Ollama, llama.cpp, MTPLX, vLLM, direct or
- * via an OpenCode wrapper) and hosted gateways (OrcaRouter, OpenRouter) qualify;
- * a hosted cloud provider is sent no sampling fields, so a control would do nothing.
- * Controls are reported separately because forwarding is uneven (gateways have no
- * thinking toggle; the Claude harness on Ollama takes ONLY a thinking signal).
- * MIRROR of `THINKING_STYLE` / `buildAgentGeneration` in server/lib/opencodeConfig.js
- * and `apiGenerationOptions` in server/lib/aiToolkit/internal/generationOptions.js;
- * keep in lockstep.
+ * Which default generation controls the provider editor should offer, or null: only local OpenAI-compatible backends (Ollama, llama.cpp, MTPLX,
+ * vLLM, direct or via OpenCode) and hosted gateways (OrcaRouter, OpenRouter) qualify. Controls are reported separately because forwarding is uneven
+ * (gateways have no thinking toggle; the Claude harness on Ollama takes ONLY a thinking signal). MIRROR of `THINKING_STYLE` / `buildAgentGeneration`
+ * in server/lib/opencodeConfig.js and `apiGenerationOptions` in server/lib/aiToolkit/internal/generationOptions.js; keep in lockstep.
  * @param {object|null|undefined} provider
  * @returns {{temperature:boolean, topP:boolean, thinking:boolean}|null}
  */
 export const generationControlsFor = (provider) => {
   const gateway = isGatewayBackedProvider(provider);
-  // LM Studio forwards temperature/top_p like any OpenAI-compatible endpoint,
-  // but reasoning there belongs to the LOADED model instance — see
-  // THINKING_STYLE.lmstudio on the server, which resolves to no toggle.
+  // LM Studio forwards temperature/top_p, but reasoning belongs to the LOADED model instance (THINKING_STYLE.lmstudio on the server: no toggle).
   const lmstudio = provider?.lmstudioBacked === true;
   const local = isOllamaBackedProvider(provider)
     || lmstudio
     || provider?.llamaBacked === true
     || provider?.mtplxBacked === true
     || provider?.vllmBacked === true
-    // SGLang takes the same `chat_template_kwargs.enable_thinking` as the other
-    // local OpenAI endpoints — see THINKING_STYLE.sglang on the server.
+    // SGLang takes `chat_template_kwargs.enable_thinking` like other local endpoints (THINKING_STYLE.sglang).
     || provider?.sglangBacked === true;
   if (!local && !gateway) return null;
   if (isClaudeCommandProvider(provider)) {
-    // A Claude harness owns its sampling; only a thinking signal is forwardable,
-    // and only on Ollama (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js).
-    // Other backends need `chat_template_kwargs.enable_thinking`, which the
-    // Anthropic wire cannot carry, so a toggle there would pin a value nothing reads.
+    // A Claude harness owns its sampling; only a thinking signal is forwardable, and only on Ollama (`MAX_THINKING_TOKENS=0` in server/lib/cliChildEnv.js).
     return isOllamaBackedProvider(provider)
       ? { temperature: false, topP: false, thinking: true }
       : null;

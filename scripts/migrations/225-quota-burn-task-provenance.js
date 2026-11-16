@@ -1,42 +1,15 @@
 /**
  * Migration 225 — stamp `quotaBurnFamily` onto burn tasks queued before it existed.
  *
- * Background:
- *   A quota-burn dispatch queues an ordinary CoS task (`quotaBurnJobs/agentPrompt.js`),
- *   and the spawn scheduler used to apply the per-app REVIEW COOLDOWN to it —
- *   a 30-minute throttle re-stamped by every task that completes on that app.
- *   On an app carrying any other recurring CoS work (a perpetual claim-issue
- *   drain, which is itself cooldown-exempt and therefore keeps completing) the
- *   cooldown never lapses, so the burn task sat in Pending until its window
- *   reset unspent — the exact outcome quota burn exists to prevent.
+ * A quota-burn dispatch queues an ordinary CoS task (`quotaBurnJobs/agentPrompt.js`) that the spawn scheduler used to subject to the per-app REVIEW COOLDOWN (30 minutes, re-stamped by every completing task on that app),
+ * which never lapses on an app with other recurring work, so the burn sat in Pending until its window reset unspent. Burn tasks are now exempt (`isCooldownExemptTask` in `server/services/cosTaskGenerator.js`) and
+ * `quotaBurnRunner.js` advances the family's plan on completion; both recognise a burn by `metadata.quotaBurnFamily`, stamped at queue time, but nothing rewrites tasks already on disk. An unstamped stranded burn also
+ * REJECTS its own re-dispatch (`addTask` dedupes on first-line description + app), making that plan job permanently unreachable.
  *
- *   Burn tasks are now exempt (`isCooldownExemptTask` in
- *   `server/services/cosTaskGenerator.js`), and the completion continuation in
- *   `quotaBurnRunner.js` advances the family's plan when one finishes. Both
- *   recognise a burn by `metadata.quotaBurnFamily`, which the dispatcher now
- *   stamps at queue time — but nothing rewrites a task already on disk, and
- *   every install that had the feature on has one or more sitting there.
+ * Writes `data/COS-TASKS.md`: one `  - quotaBurnFamily: <id>` metadata line directly under each `[Quota burn: <family>] …` task lacking it, in every section (the marker is provenance).
+ * A text-level insert rather than a parse/regenerate round-trip (as in migration 146): regenerating would reorder and re-escape every task, so a bug in an unrelated metadata value would be written over the user's live list.
  *
- *   Leaving them unstamped is not merely "they stay stuck". A stranded burn
- *   also REJECTS its own re-dispatch: `addTask` dedupes on first-line
- *   description + app, and a pending twin makes the runner report "an identical
- *   burn task is already pending" — so that job in the family's plan is
- *   permanently unreachable, not just late.
- *
- * What it writes:
- *   `data/COS-TASKS.md` — one `  - quotaBurnFamily: <id>` metadata line
- *   inserted directly under each `[Quota burn: <family>] …` task that lacks it.
- *   Every section is stamped, not just Pending: the marker is provenance and a
- *   completed task carrying it is correct, while tracking sections would mean
- *   parsing structure this rewrite deliberately does not need.
- *
- *   A text-level insert rather than a parse/regenerate round-trip (the same
- *   choice migration 146 made for this file): regenerating would reorder,
- *   re-escape and re-sort every task in the queue, so a bug in an unrelated
- *   metadata value would be written back over the user's live task list.
- *
- * Idempotent: a task that already carries the key is skipped, so a second run
- * changes nothing and the file is left untouched when there is nothing to do.
+ * Idempotent: a task that already carries the key is skipped; the file is untouched when there is nothing to do.
  */
 
 import { readFile, writeFile, rename } from 'fs/promises';
@@ -52,7 +25,6 @@ const METADATA_LINE = /^\s+-\s*(\w+):/;
 /**
  * Insert the missing `quotaBurnFamily` metadata line under every burn task.
  * Pure — exported for the test.
- *
  * @param {string} markdown raw COS-TASKS.md
  * @returns {{ markdown: string, stamped: string[] }} stamped task ids
  */

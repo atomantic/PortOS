@@ -1,53 +1,25 @@
 /**
  * USDZ (AR Quick Look) export helpers for the 3D viewer (#5756).
  *
- * AR Quick Look (USDZ) export for the 3D viewer (#5756): `exportSceneToUsdz(scene, { maxTextureSize
- * })` lazy-loads three's `USDZExporter` and serializes the already-decoded scene to bytes,
- * `countSceneTriangles(object3d)` measures an object graph against `AR_TRIANGLE_BUDGET`, and
- * `supportsArQuickLook()` feature-detects the `<a rel="ar">` handoff (Safari on iOS/iPadOS only —
- * never sniff the user agent) so a desktop is offered a download instead of a button that does
- * nothing. `AR_MAX_TEXTURE_SIZE` bounds the file: USDZ stores every texel raw, with no Draco/meshopt
- * equivalent.
- *
- * The conversion runs in the BROWSER: by the time the user can ask for it, the
- * viewer has already parsed the GLB and decoded every texture, so three's
- * `USDZExporter` only has to re-serialize what is in memory. PortOS ships no USD
- * toolchain, and a server-side converter would have to redo all of that decode
- * work in Node to produce a file the page already holds.
- *
- * Pure and React-free on purpose — the panel that calls this owns the UI state.
+ * `exportSceneToUsdz(scene, { maxTextureSize })` lazy-loads three's `USDZExporter` and serializes the
+ * already-decoded scene, `countSceneTriangles(object3d)` measures a graph against `AR_TRIANGLE_BUDGET`, and `supportsArQuickLook()` feature-detects the `<a rel="ar">` handoff
+ * (Safari on iOS/iPadOS only, never sniff the user agent). `AR_MAX_TEXTURE_SIZE` bounds the file: USDZ stores every texel raw.
+ * The conversion runs in the BROWSER (the viewer already decoded the GLB; PortOS ships no USD toolchain). Pure and React-free: the calling panel owns the UI state.
  */
 
 /**
- * Triangles above which an AR export is worth warning about.
- *
- * Not a hard refusal: AR Quick Look has no published limit, it degrades (long
- * load, then a blank room) rather than erroring, and the threshold depends on the
- * device. The viewer-grade GLB the exporter reads is already the DECIMATED mesh —
- * the million-face `model.obj` sidecar is never loaded here — so a record over
- * this budget is one whose Quality tier was pushed high, and the honest remedy is
- * to say so and name the count rather than to silently ship a file the user's
- * phone will choke on.
+ * Triangles above which an AR export is worth warning about. Not a hard refusal: AR Quick Look has no published limit, it degrades (long load, blank room) and the threshold depends on the device.
+ * The GLB the exporter reads is already the DECIMATED mesh, so a record over budget had its Quality tier pushed high; say so and name the count rather than ship a file the phone chokes on.
  */
 export const AR_TRIANGLE_BUDGET = 500_000;
 
 /**
- * Texture edge the exporter downsamples to.
- *
- * USDZ has no Draco/meshopt equivalent — every vertex and every texel is stored
- * raw — so textures, not geometry, are what make an export unopenable on a phone.
- * 1024 is three's own default and keeps a typical export in single-digit
- * megabytes.
+ * Texture edge the exporter downsamples to. USDZ has no Draco/meshopt equivalent (every vertex and texel is stored raw), so textures make an export unopenable on a phone;
+ * 1024 is three's default and keeps a typical export in single-digit MB.
  */
 export const AR_MAX_TEXTURE_SIZE = 1024;
 
-/**
- * Count the triangles a three.js object graph would render.
- *
- * Indexed and non-indexed geometry differ in where the count lives (`index` vs
- * the position attribute), and a `Points`/`Line` child has neither — so this reads
- * the geometry rather than assuming a `Mesh`-only tree.
- */
+/** Count the triangles a three.js object graph would render, reading the geometry (`index` vs position attribute) rather than assuming a `Mesh`-only tree. */
 export function countSceneTriangles(object3d) {
   let triangles = 0;
   object3d?.traverse?.((child) => {
@@ -60,19 +32,10 @@ export function countSceneTriangles(object3d) {
 }
 
 /**
- * Whether THIS browser can hand a `.usdz` to AR Quick Look.
- *
- * Feature-detected via `relList.supports('ar')` rather than sniffed from the user
- * agent: only Safari on iOS/iPadOS/visionOS implements the `rel="ar"` handoff, and
- * every other browser — including Chrome on the very same iPhone — must be offered
- * a plain download instead. Labelling a desktop button "View in AR" when nothing
- * will happen is the failure mode this exists to prevent.
- *
- * The try/catch is load-bearing, not defensive habit: `DOMTokenList.supports()` is
- * SPECIFIED to throw `TypeError` when the attribute has no supported-tokens list,
- * which is what every engine without AR Quick Look does for `rel`. Callers run this
- * during render, so an uncaught throw here unmounts the whole route rather than
- * hiding one button.
+ * Whether THIS browser can hand a `.usdz` to AR Quick Look: feature-detected via `relList.supports('ar')`, not the user agent. Only Safari on iOS/iPadOS/visionOS implements the `rel="ar"` handoff;
+ * every other browser (including Chrome on the same iPhone) must be offered a plain download.
+ * The try/catch is load-bearing: `DOMTokenList.supports()` is SPECIFIED to throw `TypeError` for an attribute with no supported-tokens list (every engine without AR Quick Look, for `rel`),
+ * and callers run this during render, so an uncaught throw would unmount the whole route.
  */
 export function supportsArQuickLook() {
   if (typeof document === 'undefined') return false;
@@ -85,17 +48,8 @@ export function supportsArQuickLook() {
 }
 
 /**
- * Serialize a loaded scene to USDZ bytes.
- *
- * The exporter module is imported lazily: it is ~35 KB plus its zip library, and
- * nothing outside this one action needs it. `vite.chunkGroups.js` folds all of
- * `three` into the `vendor-three` chunk, which the 3D page already loads for the
- * viewer — so the deferral keeps this off every other route rather than splitting
- * it out of that chunk. Note the scene handed in is the drei cache's own object
- * graph — it is read, never mutated or disposed.
- *
- * @param {import('three').Object3D} scene
- * @param {{ maxTextureSize?: number }} [options]
+ * Serialize a loaded scene to USDZ bytes. The exporter module is imported lazily (~35 KB plus a zip library, needed by this one action); `vite.chunkGroups.js` folds `three` into `vendor-three`,
+ * so the deferral keeps it off other routes. The scene is the drei cache's own object graph: read, never mutated or disposed.
  * @returns {Promise<ArrayBuffer>}
  */
 export async function exportSceneToUsdz(scene, { maxTextureSize = AR_MAX_TEXTURE_SIZE } = {}) {
@@ -104,8 +58,7 @@ export async function exportSceneToUsdz(scene, { maxTextureSize = AR_MAX_TEXTURE
   const exporter = new USDZExporter();
   return exporter.parseAsync(scene, {
     maxTextureSize,
-    // Horizontal plane anchoring: these models are objects, so AR Quick Look
-    // should drop them on the floor/table rather than a wall.
+    // Horizontal plane anchoring: these are objects, so AR Quick Look drops them on the floor/table, not a wall.
     ar: { anchoring: { type: 'plane' }, planeAnchoring: { alignment: 'horizontal' } },
   });
 }

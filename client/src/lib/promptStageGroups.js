@@ -1,15 +1,8 @@
 /**
  * Prompt-stage search + grouping for the Prompt Manager's Stages pane (#3284).
  *
- * The stage list is 120+ entries deep and the taxonomy is already encoded in the
- * display names — `Pipeline — Prose Draft`, `Writers Room — Live Continuation`,
- * `CoS Agent Briefing`. These helpers turn that convention into navigable
- * structure: an AND-token filter over title + description + key, then ordered
- * groups keyed on the name's prefix.
- *
- * Token semantics are shared with the media browser (`mediaSearch.js`) rather
- * than re-rolled — same "every whitespace term must match somewhere" contract
- * users already learned there.
+ * The stage list is 120+ entries and the taxonomy is encoded in display names (`Pipeline — Prose Draft`, `CoS Agent Briefing`). An AND-token filter over title + description + key (token semantics
+ * shared with `mediaSearch.js`), then ordered groups keyed on the name's prefix.
  *
  * Pure — no React, no I/O. The page owns the disclosure state and icons.
  */

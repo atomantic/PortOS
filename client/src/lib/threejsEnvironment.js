@@ -1,17 +1,11 @@
 /**
- * Image-based lighting for the validated procedural sculpt spec
- * (`server/lib/threejsModel.js`).
+ * Image-based lighting for the validated procedural sculpt spec (`server/lib/threejsModel.js`).
  *
- * `spec.lights` are punctual: they light a surface but give it nothing to
- * REFLECT. Every reflective PBR channel the material schema accepts —
- * `metalness`, `transmission`, `clearcoat`, `iridescence` — reads off an
- * environment map or reads off nothing at all, so a physically plausible
- * conductor renders near-black in a scene with none.
+ * `spec.lights` are punctual: they light a surface but give it nothing to REFLECT. Every reflective PBR channel (`metalness`, `transmission`, `clearcoat`, `iridescence`)
+ * reads off an environment map, so a conductor renders near-black in a scene with none.
  *
- * Both presets are built here from three's own primitives and prefiltered
- * through `PMREMGenerator`. Deliberately NOT drei's `<Environment preset=…>`:
- * that fetches an HDR from a CDN, and rendering a local model must never make an
- * outbound request.
+ * Both presets are built from three's own primitives and prefiltered through `PMREMGenerator`, NOT drei's `<Environment preset=…>`, which fetches an HDR from a CDN
+ * (rendering a local model must never make an outbound request).
  */
 
 import * as THREE from 'three';
@@ -62,13 +56,8 @@ export function resolveSculptEnvironment(spec) {
   };
 }
 
-// A three-panel softbox rig in a dark shell: a bright key, a broad soft fill
-// opposite it, and a rim behind the subject. Emissive panels rather than lights
-// because PMREM prefilters what the scene RENDERS — a punctual light in the
-// source scene contributes almost nothing to the resulting radiance map, while a
-// panel becomes a reflection with a readable shape. The dark shell is the point
-// of the preset: it gives a conductor high-contrast highlights and real dark
-// regions, which is what makes `metalness` and `clearcoat` legible at all.
+// A three-panel softbox rig in a dark shell: a bright key, a broad soft fill opposite and a rim behind. Emissive panels rather than lights because PMREM prefilters what the scene
+// RENDERS (a punctual light contributes almost nothing to the radiance map). The dark shell gives a conductor high-contrast highlights, which makes `metalness`/`clearcoat` legible.
 const STUDIO_PANELS = [
   { size: [7, 7], position: [5, 4, 5], intensity: 6 },
   { size: [9, 6], position: [-6, 2, 3], intensity: 1.8 },
@@ -130,15 +119,9 @@ export function disposeSculptEnvironmentScene(scene) {
 }
 
 /**
- * PMREM-prefilter a preset into the render target whose `.texture` is what
- * `scene.environment` wants, or null for `none`. The source scene and the
- * generator are both released here; the CALLER owns the returned target and must
- * `dispose()` it.
- *
- * The TARGET is returned rather than the texture because the framebuffer and
- * depth attachment behind it are only freed by `WebGLRenderTarget.dispose()` —
- * disposing the texture alone leaks them on every preset swap. Same ownership
- * shape as `OpenWorldGalaxySky`'s PMREM effect.
+ * PMREM-prefilter a preset into the render target whose `.texture` is what `scene.environment` wants, or null for `none`. The source scene and generator are released here;
+ * the CALLER owns the returned target and must `dispose()` it. The TARGET is returned, not the texture, because the framebuffer/depth attachment is only freed by
+ * `WebGLRenderTarget.dispose()` (disposing the texture alone leaks them on every preset swap).
  *
  * @param {THREE.WebGLRenderer} renderer the live renderer (PMREM needs a GL context)
  * @param {string} preset one of `THREEJS_ENVIRONMENT_PRESETS`

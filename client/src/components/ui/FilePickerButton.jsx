@@ -7,32 +7,17 @@ const FOCUS_RING = 'peer-focus-visible:outline-none peer-focus-visible:ring-2 pe
  * A control that opens the OS file picker — styled as a button, or as a whole
  * drop zone when you pass drag handlers through.
  *
- * Why this exists instead of a button that reaches into a ref and clicks a
- * hidden input: a *programmatic* click on an `<input type="file">` is a synthetic,
- * untrusted event, and several browsers refuse to open the picker for it —
- * most notably Safari/WebKit when PortOS is running as an installed
- * (`display: standalone`) PWA, which is exactly how it tends to get opened from
- * a remote machine over the tailnet. Activating a `<label for>` is a *native*
- * label activation instead: the browser opens the picker itself, with no
- * reliance on user-activation heuristics, in every engine.
+ * Why not a button clicking a hidden input: a *programmatic* click on `<input type="file">` is synthetic and untrusted, and several browsers (notably Safari/WebKit in an installed standalone PWA, how PortOS is often opened over the tailnet)
+ * refuse to open the picker. Activating a `<label for>` is native, so every engine opens it.
  *
- * The input is visually hidden but stays focusable and exposed to the
- * accessibility tree (it is the labelled control) — do NOT hide a file input
- * with `className="hidden"` (`display: none` drops it from the tab order and
- * the a11y tree) or with `aria-hidden`/`tabIndex={-1}`. The visible label
- * carries the focus ring via `peer-focus-visible:`. `a11y/fileInputsToasts.conventions.test.js`
- * enforces this repo-wide.
+ * The input is visually hidden but stays focusable and in the a11y tree (it is the labelled control): do NOT use `className="hidden"` (`display: none`), `aria-hidden` or `tabIndex={-1}`. The label carries the focus ring via
+ * `peer-focus-visible:`; `a11y/fileInputsToasts.conventions.test.js` enforces this.
  *
- * The input's value is cleared after every change — deferred until an async
- * `onChange` settles, since clearing `value` also empties `input.files` — so
- * re-picking the SAME file fires `change` again (otherwise a failed upload
- * can't be retried by re-selecting the same file). Call sites must NOT clear
- * `e.target.value` themselves.
+ * The input's value is cleared after every change (deferred until an async `onChange` settles, since clearing `value` empties `input.files`) so re-picking the SAME file fires `change` again; call sites must NOT clear `e.target.value`.
  *
  * Extra props are spread onto the visible `<label>`, and the forwarded ref
  * points at it — that is what lets a drop zone pass `onDrop`/`onDragOver` and
  * still get native picker activation from a click.
- *
  * @param {Object} props
  * @param {(e: React.ChangeEvent<HTMLInputElement>) => void} props.onChange - change handler; `e.target.files` holds the picked files
  * @param {React.ReactNode} props.children - label content (icon + text)
@@ -76,13 +61,8 @@ const FilePickerButton = forwardRef(function FilePickerButton({
   };
 
   return (
-    // `display: contents` wrapper, NOT a fragment: Tailwind compiles `peer-*` to
-    // the GENERAL sibling combinator (`.peer:focus-visible ~ *`), so with a bare
-    // fragment two pickers in one row (see TaskAddForm's Screenshot + Attach)
-    // would light up BOTH labels when either input is focused — the first
-    // input's `~ *` reaches the second label. Scoping each input/label pair to
-    // its own DOM parent cuts that reach, and `contents` generates no box, so
-    // the label is still a direct flex/grid item of the caller's container.
+    // `display: contents` wrapper, NOT a fragment: Tailwind compiles `peer-*` to the GENERAL sibling combinator, so with a bare fragment two pickers in one row (TaskAddForm's Screenshot + Attach)
+    // would light up BOTH labels. A per-pair parent cuts that reach, and `contents` generates no box so the label is still a direct flex/grid item.
     <span className="contents">
       <input
         id={inputId}

@@ -1,70 +1,28 @@
 /**
  * Ship disabled Claude-Code-against-SGLang provider presets to existing installs.
  *
- * SGLang serves an Anthropic-compatible `/v1/messages` endpoint on every server
- * with no extra flag, so the Claude Code harness can drive the local
- * Qwen3.8-27B container directly — the same trick Claude Ollama plays with the
- * Ollama daemon (migration 146). vLLM cannot do this (OpenAI-only), which is why
- * the Ampere/3090 stack stays OpenCode-only. These presets are ADDITIONAL to the
- * OpenCode SGLang wrappers of migration 290, not a replacement: OpenCode and
- * Claude Code are two harnesses over one daemon, and an operator picks per task.
+ * SGLang serves an Anthropic-compatible `/v1/messages` endpoint with no extra flag, so the Claude Code harness can drive the local Qwen3.8-27B container, as Claude Ollama does with
+ * the Ollama daemon (migration 146). These presets are ADDITIONAL to the OpenCode SGLang wrappers of migration 290: two harnesses over one daemon, picked per task.
  *
- * The env set carries three things that are easy to get wrong, and all three are
- * load-bearing:
+ * The env set carries three load-bearing, easy-to-get-wrong things:
+ *   1. `CLAUDE_CODE_ATTRIBUTION_HEADER=0`: otherwise Claude Code prepends a per-request hash to the system prompt, the FIRST token to differ between turns, so SGLang's radix
+ *      prefix cache misses and re-prefills the whole conversation (24x TTFT on the 3090 bring-up). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` does NOT remove it; both are set.
+ *   2. `ANTHROPIC_BASE_URL` is the server ROOT, NOT `…/v1`: the SDK appends `/v1/messages` itself and `/v1` 404s as "model not found". The `/v1` form lives on the record's
+ *      `endpoint` (the OpenAI-compatible listing the readiness probe hits), so the two URLs differ deliberately.
+ *   3. `ANTHROPIC_AUTH_TOKEN` must be non-empty (the SDK rejects an empty one before a request leaves the box; SGLang accepts any value unless started with `--api-key`).
+ *      It ships in `secretEnvVars` as migration 284 did for Claude Ollama: a blank field is indistinguishable from an ambient override.
  *
- *   1. `CLAUDE_CODE_ATTRIBUTION_HEADER=0` — without it Claude Code prepends a
- *      per-request hash to the system prompt. That hash is the FIRST token to
- *      differ between turns, so SGLang's radix prefix cache misses and re-prefills
- *      the entire conversation every turn. The 3090 bring-up measured a 24× TTFT
- *      difference between a prefix-cache hit and a miss. Note that
- *      `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` does NOT remove the attribution
- *      block — it is a separate flag and both are set here.
- *   2. `ANTHROPIC_BASE_URL` is the server ROOT (`http://127.0.0.1:18021`), NOT
- *      `…/v1`. The Anthropic SDK appends `/v1/messages` itself; pointing it at
- *      `/v1` 404s in a way that reads as "model not found". The `/v1` form lives
- *      on the record's `endpoint` field instead, which is the OpenAI-compatible
- *      listing the readiness probe hits — the two URLs are deliberately different.
- *   3. `ANTHROPIC_AUTH_TOKEN` must be non-empty. SGLang accepts any value unless
- *      the operator started it with `--api-key`, but an empty token is rejected
- *      by the SDK before a request leaves the box. It ships in `secretEnvVars`
- *      for the same reason migration 284 put Claude Ollama's there: a blank field
- *      would otherwise be indistinguishable from an ambient override.
+ * Tool calls need SGLang's tool-call-parser flag on the serve line (`parserFlagsFor('sglang')` in server/lib/qwenAgentParsers.js, docs/features/sglang-qwen38.md); without it calls come back as raw text.
+ * The model name carries NO `[1m]` suffix: native context is 262,144 and claiming the 1M beta without raising `--context-length` would mis-cap the window.
  *
- * Tool calls additionally need SGLang's tool-call-parser flag on the serve line,
- * which the runtime owns — the one place that spelling lives is
- * `parserFlagsFor('sglang')` in server/lib/qwenAgentParsers.js (see
- * docs/features/sglang-qwen38.md). Without it the schemas are accepted but calls
- * come back as raw text and Claude Code executes nothing.
+ * Two deliberate divergences from the Claude Ollama pair:
+ *   - **No thinking control.** The only per-request off switch is `chat_template_kwargs.enable_thinking`, which the Anthropic wire cannot carry (`MAX_THINKING_TOKENS=0` works on Ollama, not here),
+ *     so the card offers no toggle (`generationControlsFor` in client/src/utils/providers.js); use the OpenCode wrappers or the serve line to turn thinking off.
+ *   - **Non-lean.** These stay out of lean mode (`--bare --strict-mcp-config`): with 262,144 native context the environment is what lets a CoS agent type `/do:pr`, and a large prefix is free once the attribution header stops changing it.
  *
- * The model name carries NO `[1m]` suffix: native context is 262,144, and
- * claiming the 1M beta while the serve line does not raise `--context-length`
- * would cap the window incorrectly in the other direction.
+ * Both presets are DISABLED and this migration installs nothing (no image pull, weights, container or request). `sglangBacked: true` puts them under the same readiness probe and GPU-exclusivity rules as the OpenCode pair.
  *
- * Two deliberate divergences from the Claude Ollama pair they mirror:
- *
- *   - **No thinking control.** Qwen3.8-27B thinks by default and the only
- *     per-request off switch is `chat_template_kwargs.enable_thinking`, which the
- *     Anthropic wire cannot carry. `MAX_THINKING_TOKENS=0` works on Ollama (its
- *     endpoint maps an omitted `thinking` field to non-thinking mode) but not
- *     here, so the provider card offers no toggle for these records — see
- *     `generationControlsFor` in client/src/utils/providers.js. Use the OpenCode
- *     wrappers, or the serve line, when a run needs thinking off.
- *   - **Non-lean.** `isOllamaClaudeProvider` puts Claude Ollama in lean mode
- *     (`--bare --strict-mcp-config`) because a 7B model drowns in the full
- *     personal environment. These presets stay non-lean on purpose: 262,144
- *     native context, the environment is what lets a CoS agent type `/do:pr`,
- *     and a large prefix is free once the attribution header stops changing it
- *     between turns.
- *
- * Both presets are DISABLED and this migration installs nothing — no image pull,
- * no weights, no container, no request to the endpoint. `sglangBacked: true`
- * puts them under the same readiness probe and GPU-exclusivity rules as the
- * OpenCode pair, so both harnesses are understood as one daemon.
- *
- * Kept in lockstep with data.reference/providers.json and
- * server/lib/aiToolkit/defaults/providers.sample.json. These frozen literals are
- * the historical upgrade payload; later default changes require a new migration
- * rather than rewriting this record.
+ * Kept in lockstep with data.reference/providers.json and server/lib/aiToolkit/defaults/providers.sample.json. These frozen literals are the historical upgrade payload; later default changes need a new migration.
  */
 
 import { makeProviderSeedMigration } from './_lib.js';

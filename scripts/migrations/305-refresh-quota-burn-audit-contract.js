@@ -26,27 +26,14 @@ import { upgradeStoredAuditPrompt } from '../../server/lib/quotaBurnPresets.js';
 const QUOTA_BURN_PATH = join('data', 'cos', 'quota-burn.json');
 
 /**
- * Where the pre-refresh plan is copied before anything is rewritten.
- *
- * The two gates in `upgradeStoredAuditPrompt` recognize a user's own procedure
- * by structure, and structure can only ever be a heuristic: a user who kept
- * every shipped anchor and heading but added an unbolded sentence of their own
- * inside the contract would still have it replaced. `data/` is gitignored
- * runtime state, so there would be nothing to recover it from. One copy taken
- * before the first rewrite makes the whole question moot — the refresh stops
- * being irreversible, which is worth more than tightening a heuristic that
- * cannot be made exact without reintroducing migration 294's failure.
+ * Where the pre-refresh plan is copied before anything is rewritten. The two gates in `upgradeStoredAuditPrompt` recognize a user's own procedure by structure, which is only a heuristic (an unbolded sentence the user added
+ * inside the contract would still be replaced), and `data/` is gitignored runtime state. One copy before the first rewrite makes the refresh reversible, worth more than tightening a heuristic that can't be made exact.
  */
 const BACKUP_PATH = join('data', 'cos', 'quota-burn.pre-305.json');
 
 /**
- * Absent → `null` (nothing to migrate). Unparseable → THROW.
- *
- * Swallowing a parse error would return the same `null` as "this install has no
- * burn plan", the migration would report 0 updates, and the runner would record
- * 305 as applied — so once the user repaired their JSON, the refresh that is the
- * whole point of this migration would never run again. Failing loudly on a
- * corrupt file is the only outcome that stays recoverable.
+ * Absent → `null` (nothing to migrate). Unparseable → THROW: swallowing it would return the same `null` as "no burn plan", the migration would report 0 updates and the runner record 305 as applied,
+ * so the refresh would never run after the user repaired their JSON.
  */
 async function readPlan(path) {
   const raw = await readFile(path, 'utf-8').catch((err) => {

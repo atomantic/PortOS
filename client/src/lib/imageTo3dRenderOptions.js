@@ -1,41 +1,21 @@
 /**
- * Pure helpers for the image-to-3D per-run render options (steps / seed /
- * background keying / subject framing) — the client mirror of the server's accepted
- * bounds.
+ * Pure helpers for the image-to-3D per-run render options (steps / seed / background keying / subject framing), the client mirror of the server's accepted bounds.
  *
- * Image-to-3D per-run render options — the client mirror of the server bounds (`SEED_MAX`), the
- * `STEPS_PRESETS` / `DETAIL_PRESETS` / `ALPHA_MODE_PRESETS` select options, `renderOptionsBody`
- * (fields → API body), `fieldsFromRun` (carry-over from the last run), and `runWantsTransparency`
- * (mirrors the server's alpha gating — the viewer's force-opaque pass must agree with it). Pinned by
- * `renderOptions.parity.test.js`.
+ * Covers `SEED_MAX`, the `STEPS_PRESETS` / `DETAIL_PRESETS` / `ALPHA_MODE_PRESETS` select options, `renderOptionsBody` (fields → API body), `fieldsFromRun`
+ * (carry-over from the last run) and `runWantsTransparency` (mirrors the server's alpha gating). Pinned by `renderOptions.parity.test.js`.
  *
- * `SEED_MAX` is a hand-maintained mirror of the server's `RENDER_SEED_MAX`
- * (`server/services/imageTo3d/renderOptions.js`) pinned by
- * `server/services/imageTo3d/renderOptions.parity.test.js` — same mechanism as
- * `imageTo3dReasons.js`. It is deliberately narrower than the image/video-gen
- * `MAX_SEED` in `genUtils.js`: TRELLIS.2 hands seeds to torch generators, which
- * reject values above int32.
+ * `SEED_MAX` mirrors the server's `RENDER_SEED_MAX` (`server/services/imageTo3d/renderOptions.js`, pinned by its parity test) and is narrower than
+ * `MAX_SEED` in `genUtils.js`: TRELLIS.2 hands seeds to torch generators, which reject values above int32.
  *
- * Kept free of React so the server-side parity suite (node runner, no JSX) can
- * import it directly.
+ * Kept free of React so the server-side parity suite (node runner, no JSX) can import it.
  */
 
 export const SEED_MAX = 2147483647;
 
 /**
- * Subject framing — the client mirror of the server's `subjectScale` bounds, pinned
- * by the same parity suite.
- *
- * `SUBJECT_SCALE_DEFAULT` is the identity: the source goes to the decoder at its own
- * framing, which is what every render did before this control existed. Below it, the
- * server centres the source on a square canvas at that fraction, leaving margin for
- * the extremities that otherwise reach the decoder flush with the edge and come back
- * clipped.
- *
- * The slider FLOOR is deliberately tighter than the server's open-at-zero bound: the
- * server accepts anything in (0, 1] because an API caller may have a reason to, but a
- * subject shrunk below a third of the frame is throwing away resolution the decoder
- * needs more than it needs margin, so the UI doesn't offer it.
+ * Subject framing, the client mirror of the server's `subjectScale` bounds (same parity suite). `SUBJECT_SCALE_DEFAULT` is the identity (source framed as-is);
+ * below it the server centres the source on a square canvas at that fraction, leaving margin for extremities that would otherwise come back clipped.
+ * The slider FLOOR is tighter than the server's open-at-zero (0, 1] bound: a subject below a third of the frame loses more resolution than it gains margin.
  */
 export const SUBJECT_SCALE_DEFAULT = 1;
 export const SUBJECT_SCALE_SLIDER_MIN = 0.35;
@@ -50,13 +30,8 @@ export const STEPS_PRESETS = [
 ];
 
 /**
- * Detail tiers, mirroring the server's `DETAIL_TIERS`. The labels name the concrete
- * TRELLIS.2 pipeline each tier maps to, because "fast/balanced/max" alone gives no
- * sense of the time cost — and the cost is large (upstream benchmarks ~3m20s of
- * generate+bake for 512, against 13-20 minutes measured for 1024_cascade).
- *
- * `auto` stays first and default: it derives the tier from unified memory, which is
- * what every render did before the control existed.
+ * Detail tiers, mirroring the server's `DETAIL_TIERS`. Labels name the concrete TRELLIS.2 pipeline because the time cost is large (~3m20s for 512 vs 13-20 minutes for 1024_cascade).
+ * `auto` stays first and default: it derives the tier from unified memory.
  */
 export const DETAIL_PRESETS = [
   { value: 'auto', label: 'Auto (match this machine)' },
@@ -66,13 +41,8 @@ export const DETAIL_PRESETS = [
 ];
 
 /**
- * Transparency options, mirroring the server's `ALPHA_MODES` plus the unset case.
- *
- * `''` (unset) is NOT the same as `OPAQUE`: unset leaves PortOS's force-opaque
- * normalization in place, which is the historical default and what keeps ordinary
- * objects from developing holes where the model predicted stray low alpha. Choosing
- * a mode explicitly turns that normalization off, which is the only way a genuinely
- * transparent subject (glass, liquid) can render as anything but solid.
+ * Transparency options, mirroring the server's `ALPHA_MODES` plus the unset case. `''` is NOT `OPAQUE`: unset keeps PortOS's force-opaque normalization
+ * (so stray low alpha doesn't punch holes), while choosing a mode turns it off, the only way a transparent subject (glass, liquid) renders as anything but solid.
  */
 export const ALPHA_MODE_PRESETS = [
   { value: '', label: 'Solid (recommended)' },
@@ -83,10 +53,8 @@ export const ALPHA_MODE_PRESETS = [
 ];
 
 /**
- * Convert the option fields' string state into the API's per-run body. Unset
- * fields are OMITTED (not null): absent steps → the pipeline default, absent
- * seed → the server rolls a fresh random one for that run. Range/int validation
- * is the server's job — the route 400s with a readable message.
+ * Convert the option fields' string state into the API's per-run body. Unset fields are OMITTED (absent steps → pipeline default, absent seed → a fresh
+ * random one); range/int validation is the server's job.
  */
 export function renderOptionsBody({
   steps, seed, keyBackground, detail, alphaMode, normalMap, subjectScale,
@@ -95,19 +63,12 @@ export function renderOptionsBody({
     ...(steps !== '' && { steps: Number(steps) }),
     ...(seed !== '' && { seed: Number(seed) }),
     keyBackground,
-    // 'auto' is the server default, so omitting it keeps the body minimal and makes
-    // "the user didn't choose" and "the user chose auto" the same request — which
-    // they are, unlike alphaMode below.
+    // 'auto' is the server default; omitting it makes "didn't choose" and "chose auto" the same request, unlike alphaMode below.
     ...(detail && detail !== 'auto' && { detail }),
     ...(alphaMode !== '' && alphaMode != null && { alphaMode }),
-    // Sent always rather than omitted-when-default. The server default is `false`, so
-    // omitting it would happen to work today — but the whole point of this mapping is
-    // that the wire body states what the run asked for, and a future default flip
-    // must not silently change what an existing client means.
+    // Sent always: the wire body states what the run asked for, so a future server default flip can't change what an existing client means.
     normalMap,
-    // Sent always, for the same reason as `normalMap`. Guarded rather than trusted:
-    // the server's range is open at zero, so a NaN or 0 out of a mis-parsed slider
-    // would 400 the render instead of quietly meaning "don't reframe".
+    // Sent always. Guarded: the server's range is open at zero, so a NaN or 0 from a mis-parsed slider would 400 instead of meaning "don't reframe".
     subjectScale: typeof subjectScale === 'number' && subjectScale > 0 && subjectScale <= 1
       ? subjectScale
       : SUBJECT_SCALE_DEFAULT,
@@ -115,30 +76,21 @@ export function renderOptionsBody({
 }
 
 /**
- * Derive the option fields' initial state from a record's latest run entry.
- * `steps` and `keyBackground` carry over (they're safe to inherit); `seed` is
- * ALWAYS blank — seeding the field from the run's concrete (randomly rolled)
- * seed would silently pin it, reintroducing the deterministic-re-render trap
- * this feature exists to fix. A user pins a seed by typing one deliberately
- * (the run's seed is displayed in the meta line to copy from).
+ * Derive the option fields' initial state from a record's latest run entry. `steps` and `keyBackground` carry over; `seed` is ALWAYS blank, since the run's
+ * randomly rolled seed would silently pin it (reintroducing the deterministic-re-render trap). A user pins one by typing it.
  */
 export function fieldsFromRun(run) {
   return {
     steps: Number.isInteger(run?.steps) ? String(run.steps) : '',
     seed: '',
-    // A run predating the field has none; default to OFF, matching the server. Such a
-    // run DID key (the default was on then), but this seeds a NEW render's form, which
-    // should agree with the server default it will actually get.
+    // A run predating the field has none; default to OFF, matching the server default a NEW render will get.
     keyBackground: typeof run?.keyBackground === 'boolean' ? run.keyBackground : false,
-    // Both carry over like `steps` does — they are deliberate quality choices, not
-    // per-run randomness. A run predating these fields has neither, so fall back to
-    // the same defaults a fresh form starts at.
+    // Deliberate quality choices, so they carry over like `steps`; runs predating them fall back to a fresh form's defaults.
     detail: DETAIL_PRESETS.some((p) => p.value === run?.detail) ? run.detail : 'auto',
     alphaMode: typeof run?.alphaMode === 'string' ? run.alphaMode : '',
     // A run predating the field has none; default to OFF, matching the server.
     normalMap: typeof run?.normalMap === 'boolean' ? run.normalMap : false,
-    // Carries over like `steps` — a deliberate framing choice, not per-run randomness.
-    // A run predating the field falls back to the identity, matching the server.
+    // Carries over like `steps`; a run predating the field falls back to the identity, matching the server.
     subjectScale: typeof run?.subjectScale === 'number'
       && run.subjectScale > 0 && run.subjectScale <= 1
       ? run.subjectScale
@@ -147,13 +99,8 @@ export function fieldsFromRun(run) {
 }
 
 /**
- * Whether a run asked the exporter for a transparent material.
- *
- * The viewer's own force-opaque pass has to agree with the server's: with three
- * layers able to flatten alpha (the exporter's `alpha_mode`, PortOS's GLB rewrite,
- * and the viewer's `forceOpaque` prop), a run that requested BLEND would still
- * render solid if the viewer kept flattening it — a silent no-op that reads as a
- * broken exporter. `null`/absent (the historical default) stays opaque.
+ * Whether a run asked the exporter for a transparent material. The viewer's force-opaque pass must agree with the server's: with three layers able to
+ * flatten alpha (exporter `alpha_mode`, PortOS's GLB rewrite, viewer `forceOpaque`), a BLEND run would still render solid. `null`/absent stays opaque.
  */
 export function runWantsTransparency(run) {
   return typeof run?.alphaMode === 'string'

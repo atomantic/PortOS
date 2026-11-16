@@ -69,15 +69,9 @@ export const assignmentProviderOptions = (entry, providers) => {
 };
 
 /**
- * Model-id options for an assignment entry: its pre-baked `modelOptions`, else the
- * provider's own list. With `modelFilter === 'vision'`, LOCAL backends are
- * reduced to vision-capable models (`visionLocalModelFilter`; pass
- * `visionIdsByProvider` for the backend's own metadata); cloud lists are intact.
- *
- * For a vision entry on an ENUMERATED local provider the server's installed-VLM
- * list is UNIONED INTO the candidates: stored `models` goes stale when the user
- * pulls a model, so filtering alone hides an installed VLM. An unenumerated
- * provider gets no union, or it would be offered a host's models it doesn't serve.
+ * Model-id options for an assignment entry: its pre-baked `modelOptions`, else the provider's own list. With `modelFilter === 'vision'`, LOCAL backends are reduced to vision-capable models
+ * (`visionLocalModelFilter`; pass `visionIdsByProvider` for the backend's own metadata); cloud lists are intact. For an ENUMERATED local provider the server's installed-VLM list is UNIONED IN (stored `models`
+ * goes stale when the user pulls a model); an unenumerated provider gets no union, or it would be offered models it doesn't serve.
  */
 export const assignmentModelOptions = (entry, providers, providerId, visionIdsByProvider = null) => {
   const provider = providers.find((p) => p.id === providerId);

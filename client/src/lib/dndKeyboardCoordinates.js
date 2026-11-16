@@ -1,40 +1,18 @@
 /**
  * Keyboard coordinate getters for `@dnd-kit/core`'s `KeyboardSensor`.
  *
- * `@dnd-kit/sortable` ships `sortableKeyboardCoordinates` for a
- * `SortableContext`, and a board with its own geometry writes a bespoke getter
- * (`KanbanBoard.jsx`'s `kanbanKeyboardCoordinates`). What has no shipped answer
- * is the shape in between: a `DndContext` whose drop targets are FREE
- * `useDroppable` zones — a folder list a work is filed into, a goal tree a goal
- * is reparented onto — with no sort order to interpolate against.
+ * `@dnd-kit/sortable` ships `sortableKeyboardCoordinates` for a `SortableContext`, and a board with its own geometry writes a bespoke getter (`KanbanBoard.jsx`'s `kanbanKeyboardCoordinates`). What has no shipped answer
+ * is a `DndContext` whose drop targets are FREE `useDroppable` zones (a folder list, a goal tree) with no sort order to interpolate against. dnd-kit's default getter nudges 25px per arrow press, so crossing a tall
+ * zone takes a dozen presses and a zone shorter than the step can be skipped; this getter JUMPS to the adjacent drop zone in visual order, as a pointer user gets and the announcements describe.
  *
- * dnd-kit's default getter only nudges the drag by 25px per arrow press, so a
- * user crossing a tall zone presses the key a dozen times and a zone shorter
- * than the step can be skipped entirely. This getter instead JUMPS to the
- * adjacent drop zone in visual order, which is the interaction a pointer user
- * gets and the one the announcements describe.
- *
- * `keyboardAwareCollisionDetection` is the other half: the jump lands the drag
- * on a zone's centre, which `closestCenter` resolves and dnd-kit's default
- * `rectIntersection` may not.
+ * `keyboardAwareCollisionDetection` is the other half: the jump lands on a zone's centre, which `closestCenter` resolves and `rectIntersection` may not.
  */
 
 import { closestCenter, rectIntersection } from '@dnd-kit/core';
 
 /**
- * dnd-kit's default collision detection for pointer drags, `closestCenter` for
- * keyboard ones.
- *
- * A keyboard drag needs `closestCenter`: the coordinate getters above move the
- * drag to a zone's centre, and with `rectIntersection` a destination smaller
- * than the dragged item (a collapsed folder row under a tall work row) still
- * resolves to no target at all, so the drop silently does nothing. Applying
- * `closestCenter` to POINTER drags as well is the tempting one-line version and
- * a behavior change: it always finds a nearest target, so a mouse drop released
- * over empty space would file the item into whichever zone happened to be
- * closest instead of leaving it alone.
- *
- * @param {object} args dnd-kit collision-detection arguments
+ * dnd-kit's default collision detection for pointer drags, `closestCenter` for keyboard ones. A keyboard drag needs `closestCenter` (the getters move the drag to a zone's centre; with `rectIntersection` a destination smaller
+ * than the dragged item still resolves to no target). Applying it to POINTER drags too is the tempting version but a behavior change: it always finds a nearest target, so a drop over empty space would file into the closest zone.
  */
 export function keyboardAwareCollisionDetection(args) {
   return args.pointerCoordinates ? rectIntersection(args) : closestCenter(args);
@@ -53,7 +31,6 @@ const DIRECTIONS = {
 /**
  * Build a `coordinateGetter` that steps a keyboard drag between the enabled
  * droppables of a `DndContext`, ordered top-to-bottom then left-to-right.
- *
  * @param {object} [options]
  * @param {(entry: { id: string|number, data: object, active: object|null }) => boolean} [options.isSkipped]
  *   Return true for a zone the drag must step OVER rather than land on — a

@@ -18,7 +18,6 @@ import { useCallback, useRef, useState } from 'react';
  * the surface built, including its settings) plus the human-readable `error`,
  * separate from whatever the composer holds now. Nothing in here ever re-sends:
  * the host's Retry action does that, once, on explicit activation.
- *
  * @returns {{
  *   failures: Array<{ id: string, payload: object, error: string, retrying: boolean }>,
  *   fail: (payload: object, error: string, id?: string) => string,

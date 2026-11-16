@@ -2,10 +2,7 @@
  * Queue-one-image-render hook: builds options, POSTs generation, tracks the jobId and runs a
  * once-per-key completion guard before `onComplete`.
  *
- * Queue-one-render / wait-for-completion jobId lifecycle: builds opts from `imageCfg`, calls
- * `buildPrompt`, POSTs `generateImage`, tracks the `jobId` head, and runs a once-per-`(key, filename)`
- * completion guard before `onComplete`. Use when: Single-image render slots driven by
- * `EntryThumbSlot`/`MediaJobThumb` (style probe, characters step). Completion SSE stays in the thumb.
+ * Drives the queue-one-render / wait-for-completion jobId lifecycle for single-image render slots (`EntryThumbSlot`/`MediaJobThumb`: style probe, characters step). Completion SSE stays in the thumb.
  */
 
 import { useState, useRef, useCallback } from 'react';
@@ -17,41 +14,20 @@ import { pipelineImageCfgToRenderOpts } from '../lib/pipelineImageDefaults';
 const SINGLE_KEY = '__single__';
 
 /**
- * Drive the queue-one-render / wait-for-completion lifecycle shared by the
- * single-image render slots (the Story Builder characters step, the universe
- * base-style probe). It owns the small, error-prone boilerplate both sites
- * re-implement:
+ * Drive the queue-one-render / wait-for-completion lifecycle shared by the single-image render slots (Story Builder characters step, universe base-style probe): build render opts from the resolved
+ * `imageCfg`, call `buildPrompt()` for `{ prompt, negativePrompt }` (or `null` to abort; the caller already toasted why), POST `generateImage` surfacing the queued `jobId`, and on completion run a
+ * once-per-`(key, filename)` guard (the thumb's onFilename effect can fire more than once under StrictMode) before handing the filename to `onComplete`. The completion subscription lives in the thumb;
+ * this hook never opens its own SSE.
  *
- *   1. build render opts from the resolved `imageCfg`,
- *   2. call `buildPrompt()` to get `{ prompt, negativePrompt }` (or `null` to
- *      abort without rendering — the caller already toasted why),
- *   3. POST `generateImage`, surfacing the queued `jobId` so an `EntryThumbSlot`
- *      / `MediaJobThumb` can show the diffusion spinner,
- *   4. on completion, run a once-per-`(key, filename)` multi-fire guard (the
- *      thumb's onFilename effect can fire more than once under StrictMode) and
- *      hand the filename to `onComplete` for persistence.
- *
- * Completion subscription itself lives in the thumb component, so this hook only
- * tracks the `jobId` head and the dedupe set — it never opens its own SSE.
- *
- * `onComplete(filename, key)` is invoked exactly once per completed filename; it
- * owns persisting the ref (and may be async). `buildPrompt(key)` receives the
- * same key passed to `render`, so multi-target callers (one render per
- * character) can compose a subject-specific prompt.
- *
+ * `onComplete(filename, key)` runs exactly once per completed filename and owns persisting the ref (may be async). `buildPrompt(key)` gets the key passed to `render`, so multi-target callers can compose per-subject prompts.
  * @param {Object}   opts
  * @param {Function} opts.buildPrompt — `(key) => ({ prompt, negativePrompt }) | null`
  * @param {Function} opts.onComplete  — `(filename, key) => void | Promise<void>`
  * @param {Function} [opts.onError]   — `(err) => void` for a failed queue POST.
  *   Defaults to a no-op; the POST is sent `{ silent: true }` so the caller owns UI.
  * @param {string}   [opts.scopeId]   — namespaces the single-target key per scope.
- *   Single-target callers that show one of several entities in the same mounted
- *   hook (the universe base-style probe, one universe at a time) pass the entity
- *   id here so the default `jobId`/completion are read relative to the displayed
- *   entity as `<scopeId>:__single__` — switching scope and back resumes a still
- *   in-flight (or already-finished) job instead of abandoning it on a remount.
- *   Omit it for a truly single render. Multi-target callers (explicit keys) are
- *   unaffected.
+ *   Single-target callers showing one of several entities in the same mounted hook (the universe base-style probe) pass the entity id so `jobId`/completion are read as `<scopeId>:__single__`:
+ *   switching scope and back resumes an in-flight (or finished) job. Omit for a truly single render; explicit-key callers are unaffected.
  * @returns {{ jobId, renderingJobs, render, handleComplete }}
  *   - `jobId` — the single in-flight job's id (or null). Convenience for
  *     single-target callers; multi-target callers read `renderingJobs[key]`.
@@ -69,11 +45,8 @@ export default function useSingleImageRender({ buildPrompt, onComplete, onError,
   // effect can re-fire under StrictMode + unstable per-render onComplete arrows.
   const processedRef = useRef(new Set());
 
-  // The default key for single-target callers. With `scopeId` it is namespaced
-  // per scope so a single mounted hook can track one in-flight render per
-  // displayed entity (no remount to reset state). Recomputed each render so
-  // `jobId` re-reads the displayed scope; held in a ref so the `render` /
-  // `handleComplete` callbacks stay identity-stable.
+  // The default key for single-target callers, namespaced by `scopeId` so one mounted hook tracks one in-flight render per displayed entity. Recomputed each render so `jobId` re-reads the scope;
+  // held in a ref so `render`/`handleComplete` stay identity-stable.
   const effectiveSingleKey = scopeId == null || scopeId === '' ? SINGLE_KEY : `${scopeId}:${SINGLE_KEY}`;
   const singleKeyRef = useRef(effectiveSingleKey);
   singleKeyRef.current = effectiveSingleKey;
@@ -89,10 +62,7 @@ export default function useSingleImageRender({ buildPrompt, onComplete, onError,
     const built = buildPromptRef.current?.(key);
     if (!built) return null; // caller aborted (already toasted why)
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg, extraParams);
-    // `extraParams` lets a caller attach extra fields to the generate payload
-    // (e.g. the base-style probe's `universeRun` collection target) so the
-    // server can route the finished render — the front-end does no
-    // post-generation bookkeeping of its own.
+    // `extraParams` attaches extra fields to the generate payload (e.g. `universeRun`) so the server routes the finished render; the front-end does no post-generation bookkeeping.
     const queued = await generateImage(
       { ...baseOpts, prompt: built.prompt, negativePrompt: built.negativePrompt || undefined, ...(extraParams || {}) },
       { silent: true },

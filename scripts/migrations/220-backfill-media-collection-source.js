@@ -1,81 +1,35 @@
 /**
- * Migration 220 — backfill `source: 'auto'` on media collections that a machine
- * flow created before the field existed (#3311).
+ * Migration 220 — backfill `source: 'auto'` on media collections that a machine flow created before the field existed (#3311).
  *
- * Background:
- *   Every Creative Director project, Writers Room work, and universe/series
- *   render bucket auto-files itself as a media collection. Until #3311 nothing
- *   recorded that fact, so the grid reverse-engineered it on the CLIENT from
- *   four independent markers — a name prefix, an `Auto-…` description, a
- *   `uc-`/`sc-` id, or a universe/series link. Every new auto-creator silently
- *   regressed the ordering until someone remembered to extend that list.
+ * Creative Director projects, Writers Room works and universe/series render buckets auto-file as media collections. The grid used to infer that on the
+ * CLIENT from four markers (name prefix, an `Auto-…` description, a `uc-`/`sc-` id, a universe/series link); `server/services/mediaCollections.js` now stamps
+ * `source` at mint time and this migration classifies records already on disk with the SAME markers.
  *
- *   `server/services/mediaCollections.js` now stamps `source` at mint time.
- *   This migration performs the one-time classification of records already on
- *   disk, using the SAME four markers, so the client heuristic stops being
- *   load-bearing for anything this install already had.
+ * Writes `source: 'auto'` on each live record matching a non-forgeable marker with no `source` yet (a bare name prefix is NOT enough: the create route lets a user
+ * pick one). `updatedAt` is deliberately NOT bumped: this is a derived classification, not a user edit, and advancing the LWW clock would make every collection
+ * look freshly edited to peers and out-race real remote edits.
  *
- * What it writes:
- *   `source: 'auto'` on each live record matching a non-forgeable marker and
- *   carrying no `source` yet (see the marker note below — a bare name prefix is
- *   deliberately NOT enough, since the create route lets a user pick one).
- *   Nothing else — in particular `updatedAt` is deliberately NOT
- *   bumped: this is a derived classification, not a user edit, and advancing
- *   the LWW clock would make every collection look freshly edited to peers and
- *   out-race real remote edits. `source` is not part of the conflict journal's
- *   scalar projection either, so no base hashes churn.
+ * Deliberately NOT written: `source: 'user'` on non-matching records (an ABSENT stamp falls back to the marker heuristic, which already classifies them; stamping would
+ * freeze an answer the heuristic re-evaluates, e.g. a name-only match stays auto until renamed), and tombstones (`deleted: true`; nothing renders them).
  *
- * Deliberately NOT written:
- *   - `source: 'user'` on non-matching records. The client treats an ABSENT
- *     stamp as "fall back to the marker heuristic" — which is exactly the
- *     classification those records get today — so stamping them would add
- *     writes without changing behavior, while freezing an answer the heuristic
- *     would otherwise re-evaluate (a name-only match is the case that matters:
- *     it stays auto until the user renames the collection, and then correctly
- *     stops being auto).
- *   - Tombstones (`deleted: true`). `deleteCollection` clears the owner links
- *     and items; nothing renders a tombstone, and rewriting one only adds sync
- *     noise.
+ * Cross-install: `source` is LOCAL-ONLY (`sanitizeRecordForWire` strips it), so no `schemaVersions` bump is needed; each peer runs this over ITS OWN copy and the
+ * deterministic markers classify identically. The legacy monolithic `data/media-collections.json` is not read (migration 059 split it and runs first).
  *
- * Cross-install: `source` is LOCAL-ONLY — `sanitizeRecordForWire` strips it, so
- * no `schemaVersions` bump is needed and no peer's checksum moves. Each peer
- * upgrades and runs this independently over ITS OWN copy of the shared
- * collections; because the markers are deterministic, they classify the same
- * record identically.
- *
- * The legacy monolithic `data/media-collections.json` is not read — migration
- * 059 split it into `data/media-collections/<id>/index.json` and runs first.
- *
- * Idempotent: a record that already carries a `source` is skipped, so a second
- * pass writes nothing.
+ * Idempotent: a record that already carries a `source` is skipped.
  */
 
 import { readdir, readFile, writeFile, rename } from 'fs/promises';
 import { join } from 'path';
 
-// Frozen snapshot of the markers as of #3311. Kept INLINE rather than imported
-// from `client/src/lib/mediaCollectionList.js` / `services/mediaCollections.js`
-// on purpose: a migration is a point-in-time transform and must not shift if
-// those lists later evolve.
+// Frozen snapshot of the markers as of #3311, kept INLINE (not imported from `client/src/lib/mediaCollectionList.js` / `services/mediaCollections.js`):
+// a migration is a point-in-time transform and must not shift if those lists evolve.
 //
-// The client heuristic has a FOURTH marker this migration deliberately does not
-// use: the `Creative Director: ` / `Writers Room: ` / `Universe: ` / `Series: `
-// NAME prefix. Nothing reserves those prefixes — the create route takes a free
-// name — so a user-made collection called `Universe: Notes` matches it, and a
-// stamped record is skipped on every later pass rather than re-evaluated.
-// Leaving name-only matches unstamped keeps them on the client fallback, which
-// classifies them exactly as it does today and still re-evaluates if the user
-// renames them. Nothing is lost: every real auto-creator also carries one of
-// the markers below — Creative Director and Writers Room stamp an `Auto-…`
-// description, and universe/series buckets carry the deterministic id and/or
-// the owner link.
+// The client heuristic's FOURTH marker, the `Creative Director: ` / `Writers Room: ` / `Universe: ` / `Series: ` NAME prefix, is deliberately unused: nothing
+// reserves those prefixes (a user can name a collection `Universe: Notes`), and a stamped record is never re-evaluated. Name-only matches stay on the client
+// fallback, and every real auto-creator also carries a marker below.
 //
-// The description prefixes are far weaker evidence than the id/link markers
-// (the POST/PATCH routes do accept a free description), but they are the ONLY
-// markers a legacy Creative Director / Writers Room bucket carries — those get
-// a random uuid and no owner link. `PATCH /api/media/collections/:id` accepts
-// `source`, so the rare user collection described as `Auto-created for project
-// …` can be corrected rather than being stuck.
+// The description prefixes are weak evidence (the POST/PATCH routes accept a free description) but are the ONLY markers a legacy Creative Director / Writers Room
+// bucket carries (random uuid, no owner link). `PATCH /api/media/collections/:id` accepts `source`, so a user collection described `Auto-created for project …` can be corrected.
 const AUTO_DESCRIPTION_PREFIXES = ['Auto-created for project ', 'Auto-generated images for '];
 const AUTO_ID_PREFIXES = ['uc-', 'sc-'];
 

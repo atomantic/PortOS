@@ -1,33 +1,15 @@
 /**
- * Pure pose evaluator for the declarative clip contract in
- * `server/lib/threejsModel.js`, used by the Three.js Models preview.
+ * Pure pose evaluator for the declarative clip contract in `server/lib/threejsModel.js`, used by the Three.js Models preview.
  *
- * A clip is data, never code: named sequences carry one part between two
- * authored endpoints inside a bounded window, and the easing is a NAME resolved
- * against a fixed curve map. So the pose at time T is a pure function
- * of (clip, T) — the same input gives the same pose whether it arrived from a
- * play loop, a scrub, or a test — and nothing here touches Three.js, the DOM, or
- * a clock.
- *
- * Semantics, chosen so the function stays total and deterministic:
- * - Before a sequence starts, its channel holds `from`; after it ends, `to`.
- *   Between two sequences on the same channel, the earlier one's `to` holds, so
- *   a part never snaps back to its authored pose in a gap.
- * - `visible` is a STEP: `from` for the whole window, `to` the instant the
- *   sequence completes. A boolean has no midpoint, and inventing a fade here
- *   would make playback disagree with the exported factory's data.
- * - A part with no sequence in the clip is absent from the pose entirely, which
- *   every consumer reads as "render exactly what the spec authored".
- *
- * The schema guarantees the invariants this relies on (windows inside the clip,
- * no two sequences on one part+channel at once, every `partId` real), so there
- * is no conflict resolution here to get wrong.
- *
- * The pose itself comes from `server/lib/threejsModelClipPose.js`, the same
- * evaluator the server's physical audit measures, so the audit and the preview
- * cannot disagree. Its semantics are MIRRORED by the player PortOS emits into an
- * exported factory (`server/lib/threejsModelPlayerSource.js`), pinned by
- * `threejsModelClipPose.test.js`. Change one and change the other.
+ * A clip is data, never code: named sequences carry one part between two authored endpoints inside a bounded window, with the easing a NAME resolved against a fixed curve map. The pose at time T is a pure
+ * function of (clip, T), the same from a play loop, a scrub or a test, and nothing here touches Three.js, the DOM or a clock.
+ * Semantics (total and deterministic):
+ * - Before a sequence starts its channel holds `from`; after it ends, `to`. Between two sequences on one channel the earlier `to` holds, so a part never snaps back in a gap.
+ * - `visible` is a STEP (`from` for the whole window, `to` once the sequence completes): a boolean has no midpoint and a fade would make playback disagree with the exported factory's data.
+ * - A part with no sequence in the clip is absent from the pose, which consumers read as "render what the spec authored".
+ * The schema guarantees the invariants (windows inside the clip, no two sequences on one part+channel at once, every `partId` real), so there is no conflict resolution here.
+ * The pose comes from `server/lib/threejsModelClipPose.js`, the evaluator the server's physical audit measures, so audit and preview cannot disagree. Its semantics are MIRRORED by the player emitted into an exported
+ * factory (`server/lib/threejsModelPlayerSource.js`), pinned by `threejsModelClipPose.test.js`: change one and change the other.
  */
 
 import { evaluateThreejsModelClipPose } from '../../../server/lib/threejsModelClipPose.js';
@@ -57,7 +39,6 @@ export const getThreejsClipDuration = (clip) => (Number.isFinite(clip?.durationS
 
 /**
  * Pose for every part a clip drives at an absolute time.
- *
  * @param {object|null} clip a validated clip, or null
  * @param {number} timeSeconds absolute seconds from the clip's start
  * @returns {{timeSeconds: number, pose: object, activeSequenceIds: string[], activePartIds: string[]}}
@@ -77,14 +58,8 @@ export function evaluateThreejsClipPose(clip, timeSeconds) {
 }
 
 /**
- * Cues whose sequence starts inside the half-open interval `[fromSeconds,
- * toSeconds)` — what a play loop crossed since its last frame.
- *
- * Half-open on purpose: consecutive frames tile the timeline with no cue fired
- * twice and none skipped, and a cue at 0 fires on the first frame of playback.
- * A scrub calls this never — silence while dragging is the whole reason a cue
- * is an identifier the host maps to its own sound rather than embedded audio.
- *
+ * Cues whose sequence starts inside the half-open interval `[fromSeconds, toSeconds)`, i.e. what a play loop crossed since its last frame: consecutive frames tile the timeline with no cue fired twice or skipped,
+ * and a cue at 0 fires on the first frame. A scrub never calls this: silence while dragging is why a cue is an identifier the host maps to its own sound.
  * @returns {Array<{cueId: string, sequenceId: string, partId: string, atSeconds: number}>}
  */
 export function collectThreejsCues(clip, fromSeconds, toSeconds) {

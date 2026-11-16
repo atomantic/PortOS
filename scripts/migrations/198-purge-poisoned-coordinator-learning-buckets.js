@@ -1,53 +1,19 @@
 /**
- * Purge the gh/git COORDINATOR learning buckets poisoned by the commit-criterion
- * bug (#2696) — the branch-reconcile / issue-reconcile analogue of migration 197.
+ * Purge the gh/git COORDINATOR learning buckets poisoned by the commit-criterion bug (#2696), the branch-reconcile / issue-reconcile analogue of migration 197.
  *
- * Background:
- *   branch-reconcile and issue-reconcile are COORDINATOR tasks: their coordinator agent
- *   runs in the app's LIVE checkout (useWorktree/openPR locked off — see taskSchedule.js
- *   MANAGED_AGENT_OPTIONS) and delivers its work through git+gh side effects (a merged PR,
- *   a resolved conflict, healed issue state), NEVER a `[task-<id>]` commit. But
- *   `evaluateSuccessCriteria` only knew one machine-checkable criterion — a `[task-<id>]`
- *   commit — and, because these tasks DO have a workspacePath (the live checkout), fell
- *   through to it. Since a declared verdict OVERRIDES the runner's exit code in
- *   task-learning (`outcomeSuccess` in taskLearning/metrics.js), every correctly executed
- *   coordinator run was recorded as a FAILURE, dragging both buckets to ~0% (the exact
- *   symptom #2696 reports for `self-improve:branch-reconcile`).
+ * Those coordinator tasks run in the app's LIVE checkout (useWorktree/openPR off, taskSchedule.js MANAGED_AGENT_OPTIONS) and deliver through git+gh side effects, NEVER a `[task-<id>]` commit; but
+ * `evaluateSuccessCriteria` only knew that criterion and, since they have a workspacePath, applied it. A declared verdict OVERRIDES the runner's exit code (`outcomeSuccess` in taskLearning/metrics.js),
+ * so every correct run was recorded as a FAILURE (~0% for `self-improve:branch-reconcile`). `agentLifecycle.js` now exempts them (NON_COMMITTING_COORDINATOR_TASK_TYPES), but that is PROSPECTIVE: existing
+ * installs carry fabricated failures that feed the CoS Learning card, routing, duration estimates and the #2760 scope-awareness classifier.
  *
- *   `agentLifecycle.js` now exempts these coordinator task types from the commit criterion
- *   (NON_COMMITTING_COORDINATOR_TASK_TYPES), the same way pipeline/media jobs and the
- *   programmatic-I/O reasoning run already were. But that fix is PROSPECTIVE: an install
- *   that has already run branch-reconcile / issue-reconcile carries buckets whose
- *   `succeeded`/`successRate`/`recentOutcomes` are fabricated failures.
+ * DELETE each bucket rather than repair it (`validationPassed:false` overwrote the real verdict). `removeTaskTypeFromLearningData` unwinds every aggregate the failures touched (totals, byModelTier,
+ * routingAccuracy, errorPatterns, failureSignatures, correlationWindow), not just `byTaskType`; environmental failures (rate-limit/auth/network) are PRESERVED, as they never landed in `byTaskType`.
  *
- *   That stale data is not inert — it feeds the CoS Learning card, routing, duration
- *   estimates, and the #2760 scope-awareness classifier, which would keep steering the
- *   loop away from these scopes on evidence that was never true.
+ * Scoped to the two gh/git coordinator types, kept in lockstep with NON_COMMITTING_COORDINATOR_TASK_TYPES in agentLifecycle.js. NOT accessibility: its prompt ends "Test and commit changes", so its commit
+ * criterion is real. No-op on installs that never ran these types.
  *
- * Approach:
- *   DELETE each bucket rather than repair it — the recorded outcomes cannot be
- *   reconstructed (`validationPassed:false` overwrote the runner's real verdict), so the
- *   truth of each historical run is not on disk. Deleting resets each type to an honest
- *   "no runs recorded yet". Reuses `removeTaskTypeFromLearningData` so the fabricated
- *   failures are unwound from every aggregate they touched (totals, byModelTier,
- *   routingAccuracy, errorPatterns, failureSignatures, correlationWindow), not just
- *   `byTaskType`. Environmental failures (rate-limit/auth/network) are PRESERVED — they
- *   never landed in `byTaskType` and are true regardless of this bug.
- *
- *   Scoped to the two gh/git coordinator types. NOT accessibility: accessibility's prompt
- *   ends "Test and commit changes" — it is a fixing task that genuinely commits, so its
- *   commit criterion is real and its bucket was never poisoned by this bug. Kept in lockstep
- *   with NON_COMMITTING_COORDINATOR_TASK_TYPES in agentLifecycle.js.
- *
- *   No-op by construction on installs that never ran these types — the file is only
- *   rewritten when at least one bucket is actually present.
- *
- *   Destructive-rerun guard (#2770): this purge identifies its target by bucket PRESENCE, so a
- *   rerun after data/migrations.applied.json is lost/corrupt (the runner rebuilds the ledger from
- *   [] and reruns every migration) would drop legitimate post-fix coordinator history. It therefore
- *   opts into the runner's PURGE class (`purge: true`): run-migrations.js records a purge migration
- *   as applied WITHOUT executing it whenever the applied-list started empty/rebuilt. The guard lives
- *   in the runner and is shared with migration 197 — one mechanism, no per-migration marker to drift.
+ * Destructive-rerun guard (#2770): the target is identified by bucket PRESENCE, so a rerun after data/migrations.applied.json is lost (the runner rebuilds the ledger from [] and reruns everything) would drop
+ * post-fix history. It opts into the runner's PURGE class (`purge: true`): run-migrations.js records a purge migration as applied WITHOUT executing it whenever the applied-list started empty/rebuilt; shared with 197.
  */
 
 import { readFile } from 'fs/promises';

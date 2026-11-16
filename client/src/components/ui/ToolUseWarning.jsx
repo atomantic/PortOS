@@ -12,7 +12,6 @@ import { AlertTriangle } from 'lucide-react';
  * reports, so a tool-capable family neither knows yet lands here too. That is
  * also why this is a warning and never a filter — hiding those options would
  * make a newer tool-capable model unselectable.
- *
  * @param {object} props
  * @param {string} props.model - the EFFECTIVE model being warned about
  * @param {boolean} [props.isProviderDefault] - true when `model` came from the

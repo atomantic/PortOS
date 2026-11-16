@@ -1,67 +1,24 @@
 /**
- * Purge the Layered Intelligence learning bucket poisoned by the commit-criterion
- * bug (#2700).
+ * Purge the Layered Intelligence learning bucket poisoned by the commit-criterion bug (#2700).
  *
- * Background:
- *   An LI run is a REASONING run: its prompt explicitly forbids committing or
- *   opening a PR (the worktree is discarded), and it returns its result through the
- *   `.agent-done` sentinel for an output hook to file. But `evaluateSuccessCriteria`
- *   only knew one machine-checkable criterion — a `[task-<id>]` commit — and fell
- *   through to it for LI. Since a declared verdict OVERRIDES the runner's exit code
- *   in task-learning (`outcomeSuccess` in taskLearning/metrics.js), every correctly
- *   executed LI run was recorded as a FAILURE.
+ * An LI run is a REASONING run (its prompt forbids committing or opening a PR; the result returns via the `.agent-done` sentinel), but `evaluateSuccessCriteria` only knew a
+ * `[task-<id>]` commit criterion and applied it to LI. A declared verdict OVERRIDES the runner's exit code in task-learning (`outcomeSuccess` in taskLearning/metrics.js), so every
+ * correctly executed LI run was recorded as a FAILURE. `agentLifecycle.js` now exempts programmatic-I/O task types, but that fix is PROSPECTIVE: installs that already ran LI carry a bucket
+ * whose `succeeded`/`successRate`/`recentOutcomes` are fabricated failures, which the `selfEval` LI source (default-ON) would read as ~0% success ("execution DEGRADED"), and which also
+ * feed routing, the CoS Learning card and duration estimates.
  *
- *   `agentLifecycle.js` now exempts programmatic-I/O task types from that criterion,
- *   the same way pipeline/media jobs already were. But that fix is PROSPECTIVE: an
- *   install that has already run the agent-backed LI task carries a bucket whose
- *   `succeeded`/`successRate`/`recentOutcomes` are fabricated failures.
+ * DELETE the bucket rather than repair it: `validationPassed:false` overwrote the runner's real verdict, so the truth of each run is not on disk. Deleting resets LI to an honest "no runs
+ * recorded yet" (`readLiTaskMetrics` returns `{ read: true, metrics: null }` for an absent bucket); inventing a success rate would be the same sin in reverse.
  *
- *   That stale data is not inert. The new `selfEval` LI source (#2700, default-ON
- *   for the PortOS install) reads this exact bucket to judge whether the loop's own
- *   execution is healthy, and would read the poisoned history as a ~0% success rate
- *   — permanently reporting "your execution is DEGRADED" and steering the reasoner
- *   away from filing, on evidence that was never true. The same numbers also feed
- *   routing, the CoS Learning card, and duration estimates.
+ * Reuses `removeTaskTypeFromLearningData`: the fabricated failures were also folded into `totals`, `byModelTier`, `routingAccuracy`, `errorPatterns`, `failureSignatures` and
+ * `correlationWindow`, and a second hand-written unwind would drift from the runtime's as aggregates are added.
  *
- * Approach:
- *   DELETE the bucket rather than trying to repair it. The recorded outcomes cannot
- *   be reconstructed: `validationPassed:false` overwrote the runner's real verdict,
- *   so the truth of each historical run is simply not on disk. Deleting resets LI to
- *   an honest "no runs recorded yet" — which the readers already model correctly
- *   (`readLiTaskMetrics` returns `{ read: true, metrics: null }` for an absent
- *   bucket, and selfEval renders "no LI runs recorded yet" and withholds the
- *   execution-health signal from its confidence math). Inventing a success rate to
- *   replace it would be the same sin in the opposite direction.
+ * Environmental failures are deliberately PRESERVED: `shouldDivertToEnvironmental` routes rate-limit/auth/network events to their own ledger, never `byTaskType`, so they are true
+ * regardless of this bug (unlike `resetTaskTypeLearning`, which purges them because a user reset means "forget this type"). Scoped to `self-improve:layered-intelligence`, the ONLY registered
+ * programmatic-I/O task type (taskTypeHooks.js `HOOK_MODULES`). No-op on installs that never ran LI.
  *
- *   Reuses `removeTaskTypeFromLearningData` rather than hand-rolling the removal.
- *   The bucket is not the only place the fabricated failures landed — they were also
- *   folded into `totals`, `byModelTier`, `routingAccuracy`, `errorPatterns`,
- *   `failureSignatures`, and `correlationWindow`. Deleting only `byTaskType` would
- *   leave the global success rate (the CoS Learning card) and routing still skewed
- *   while reporting success, and a second hand-written unwind here would drift from
- *   the runtime's as aggregates are added.
- *
- *   Environmental failures are deliberately PRESERVED. `shouldDivertToEnvironmental`
- *   routes rate-limit/auth/network events to their own ledger and never into
- *   `byTaskType`, so they are recorded from real errors and are true regardless of
- *   this bug — unlike `resetTaskTypeLearning`, which purges them because a
- *   user-initiated reset means "forget this type entirely". This migration repairs
- *   mis-recorded data; it must not destroy a genuine outage history.
- *
- *   Scoped to `self-improve:layered-intelligence` — the ONLY registered
- *   programmatic-I/O task type (taskTypeHooks.js `HOOK_MODULES`), so no other bucket
- *   was affected by the bug and none are touched here.
- *
- *   No-op by construction on installs that never ran LI (the common case) — the
- *   file is only rewritten when the bucket is actually present.
- *
- *   This purge identifies its target by bucket PRESENCE, so a rerun after
- *   data/migrations.applied.json is lost/corrupt would drop legitimately-earned
- *   post-fix history. It therefore opts into the runner's PURGE class
- *   (`purge: true`): run-migrations.js records a purge migration as applied
- *   WITHOUT executing it whenever the applied-list started empty/rebuilt (#2770).
- *   The guard lives in the runner and is shared with migration 198 — no
- *   per-migration marker to drift.
+ * The target is identified by bucket PRESENCE, so a rerun after data/migrations.applied.json is lost would drop legitimately-earned post-fix history; it opts into the runner's PURGE class
+ * (`purge: true`): run-migrations.js records a purge migration as applied WITHOUT executing it whenever the applied-list started empty/rebuilt (#2770), shared with migration 198.
  */
 
 import { readFile } from 'fs/promises';
@@ -72,10 +29,7 @@ import { removeTaskTypeFromLearningData } from '../../server/services/taskLearni
 
 const LEARNING_REL = 'data/cos/learning.json';
 
-// The key LI's runs are recorded under. A scheduled LI task carries
-// `metadata.analysisType = 'layered-intelligence'`, and extractTaskType's first
-// branch prefixes any such task into `self-improve:<type>` — so this, not the bare
-// schedule name, is the poisoned bucket.
+// The key LI's runs are recorded under: extractTaskType prefixes a task with `metadata.analysisType = 'layered-intelligence'` into `self-improve:<type>`, so this, not the bare schedule name, is the poisoned bucket.
 const LI_BUCKET = 'self-improve:layered-intelligence';
 
 export default {
