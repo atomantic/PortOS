@@ -34,6 +34,7 @@ import {
 } from './peerSyncAssets.js';
 import { findPeerById, FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
+import { admitPeerImageTombstones } from '../imageGen/imageRecords.js';
 
 
 // --- Standalone media-library federation (#1566) ------------------------
@@ -355,7 +356,6 @@ export async function syncMediaLibraryFromPeer(peer) {
     // Deletes first, before anything is written: an authorized tombstone retires
     // the copy here, and the diff skips every image tombstoned on this machine.
     if (manifest.tombstones?.length > 0) {
-      const { admitPeerImageTombstones } = await import('../imageGen/imageRecords.js');
       const { removed, refused } = await admitPeerImageTombstones(peer, manifest.tombstones, { via: 'snapshot' });
       if (removed > 0) console.log(`🗑️ peerSync: ${peer.name || peer.instanceId} library deletes removed ${removed} image(s) here`);
       if (refused > 0) console.log(`⏭️ peerSync: ${peer.name || peer.instanceId} library manifest: ignored ${refused} image tombstone(s)`);

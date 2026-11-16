@@ -139,6 +139,9 @@ import {
   registerPersistentMindTurnAdapter,
   unregisterPersistentMindTurnAdapter,
 } from './persistentMindSupervisor.js';
+import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from './preflightTaskCard.js';
+import { cleanupZombieAgents } from './cosAgentLifecycle.js';
+import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from './persistentMindThinkingRequests.js';
 // `./persistentMindAdapter.js` is imported lazily where the daemon registers the
 // adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
 // voice tool surface, ask service and image-gen backends — a graph the daemon only
@@ -248,7 +251,6 @@ export async function updateConfig(updates) {
       );
     }
     if (updates.persistentMindCapabilities?.thinkingPresetAllowlist !== undefined) {
-      const { approvePersistentMindThinkingPresets } = await import('./persistentMindThinkingRequests.js');
       next.persistentMindCapabilities.thinkingPresetGrants = await approvePersistentMindThinkingPresets(
         next, next.persistentMindCapabilities.thinkingPresetAllowlist,
       );
@@ -268,7 +270,6 @@ export async function updateConfig(updates) {
     return saveConfig(next);
   });
   if (updates.persistentMindCapabilities !== undefined || updates.persistentMindThinkingPresets !== undefined) {
-    const { cancelPersistentMindThinkingRequest } = await import('./persistentMindThinkingRequests.js');
     await cancelPersistentMindThinkingRequest({ ifRevoked: true });
   }
   const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
@@ -781,7 +782,6 @@ export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) 
   // admit only if the shared ownership gate now agrees.
   let ownerAgents = state.agents;
   if (holder) {
-    const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
     await cleanupZombieAgents();
     ownerAgents = (await loadState()).agents;
     running = Object.values(ownerAgents).filter(a => a.status === 'running');
@@ -910,7 +910,6 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
   // one still inside its grace window is left alone: a pr-reviewer security
   // scan is minutes of real work, and reaping a live preflight would make the
   // card lie in the one direction that matters.
-  const { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } = await import('./preflightTaskCard.js');
 
   const processOrphanedTasks = async (tasks) => {
     for (const task of tasks) {

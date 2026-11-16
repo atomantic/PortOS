@@ -23,7 +23,7 @@ import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
 import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
-import { hasClaimCheckoutBindings, hasReleaseCandidateBinding } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, readCompletedCheckoutIdentity, readMergedClaimEvidence, captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
 import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
@@ -678,7 +678,6 @@ async function resolveMergedCompletionSnapshot(agentId) {
   const review = meta.prCompletionPolicy === 'review-then-merge' && meta.reviewLoopMergeTarget?.branch === branch
     && await matchesPath(meta.workspacePath);
   if (!claim && !inline && !review) return null;
-  const { readCompletedCheckoutIdentity, readMergedClaimEvidence } = await import('./completedCheckoutEvidence.js');
   const current = await readCompletedCheckoutIdentity({ repoPath, branch, path, head: holders[0].head }).catch(() => null);
   if (!current) return null;
   const proof = await readMergedClaimEvidence(current).catch(() => null);
@@ -704,7 +703,6 @@ async function hasCompetingGenerationOnBranch(history, agentId, startedAt, targe
 
 /** A pre-terminal capture snapshot must lie inside the run and still match the physical checkout. */
 async function capturedSnapshotIsCurrent(agent, target, { late = false } = {}) {
-  const { readCompletedCheckoutIdentity } = await import('./completedCheckoutEvidence.js');
   if (!Number.isFinite(Date.parse(target.capturedAt)) || Date.parse(target.capturedAt) < Date.parse(agent.startedAt)
     || (!late && Date.parse(target.capturedAt) > Date.parse(agent.completedAt))) return false;
   const current = await readCompletedCheckoutIdentity(target).catch(() => null);
@@ -828,7 +826,6 @@ export async function completeAgent(agentId, result = {}) {
       completedCheckouts = [];
       // Identity capture describes the owned physical checkout, not a passing
       // execution verdict. Failed/orphaned runs may already have delivered code.
-      const { captureCompletedCheckouts } = await import('./completedCheckoutEvidence.js');
       try { completedCheckouts = await captureCompletedCheckouts(agent, { success: true, strict: true }); }
       catch (error) {
         // Ingestion remains terminal. Retry only an originally captured exact

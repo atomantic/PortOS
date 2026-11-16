@@ -61,8 +61,12 @@ import {
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
 import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
-import { getAllProviders } from './providers.js'
+import { getAllProviders, listProviders, getProviderById } from './providers.js'
 import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
+import { safeJSONLParse } from '../lib/jsonIo.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PATHS } from '../lib/paths.js';
+import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
 const QUOTA_FAILURE = /quota|rate.?limit|usage.?limit|too many requests|\b(?:HTTP(?:\/[\d.]+)?|status[_ ]?code|status|code|error)\W{0,3}(?:429|402)\b|payment required|limit for the day|daily.?limit|session.?limit|plan.?limit|free.?limit|free.?tier|FreeTierError|err_free_used|allowance is used up|is used up|top up your balance|wallet billing|out of credits|credit balance (?:is )?too low|insufficient.?(?:credits|funds|balance)|exceeded (?:your )?(?:daily |current )?(?:quota|limit|allowance)|upgrade (?:your )?subscription|Upgrade to Pro/i
@@ -613,7 +617,6 @@ export async function getProviderReviewUnsupported() {
  * review here — what `withoutResolvedUnsupportedFaults` clears stale faults by.
  */
 export async function getProviderReviewCapability() {
-  const { listProviders } = await import('./providers.js')
   const providers = await listProviders().catch(() => [])
   const resolved = await Promise.all(providers.map(async (provider) => [
     `provider:${provider.id}`,
@@ -929,15 +932,12 @@ function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {
 }
 
 async function loadReviewProvider(backend) {
-  const { getProviderById } = await import('./providers.js')
-  const { getAIToolkitInstance } = await import('../lib/aiToolkitState.js')
   const providerId = backend.slice('provider:'.length)
   // The auth-independent claim bridge has no server bootstrap. Use the same
   // provider-store reader there without starting a server or creating runners.
   return getAIToolkitInstance()
     ? await getProviderById(providerId)
     : await import('../lib/aiToolkit/providers.js').then(async ({ createProviderService }) => {
-      const { PATHS } = await import('../lib/paths.js')
       return createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)
     })
 }
@@ -975,7 +975,6 @@ async function runCliReviewCall({ provider, model, prompt, transport, workspace,
   if (!transport.transport) return { outcome: { ok: false, code: transport.code, error: transport.error } }
   const preparationStartedAt = Date.now()
   const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js')
-  const { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } = await import('../lib/agentExecutionProfiles.js')
   const { mkdtemp, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const { join } = await import('node:path')
@@ -1039,7 +1038,6 @@ function partialCliReplyFailure(result) {
 // event fails the reply unless that result event exists and succeeded.
 async function settleStreamJsonReply(result) {
   if (result.error || result.streamFormat !== 'stream-json') return result
-  const { safeJSONLParse } = await import('../lib/jsonIo.js')
   const events = safeJSONLParse(result.text)
   const errorEvent = events.findLast(event => event.type === 'error' || event.is_error)
   const final = events.findLast(event => event.type === 'result')

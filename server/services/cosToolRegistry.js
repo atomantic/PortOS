@@ -68,6 +68,10 @@ import {
   recipeManagementTools,
   resolveRecipeInvocation,
 } from './mindToolRecipeRuntime.js';
+import { ensureInstanceId } from './instanceIdentity.js';
+import { choosePersistentMindName, reviewPersistentMindMemory, protectPersistentMindMemory } from './persistentMindContext.js';
+import { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } from './persistentMindThinkingRequests.js';
+import { loadState, saveState, withStateLock } from './cosState.js';
 
 const MAX_CALL_RESULTS = 500;
 const MAX_IDEMPOTENCY_TOMBSTONES = 10_000;
@@ -889,7 +893,6 @@ Semantic tool access is OFF. Return an empty toolCalls array. Never invent a too
     return renderToolPrompt(granted.map(fullSchemaShape));
   }
 
-  const { loadState, saveState, withStateLock } = await import('./cosState.js');
   const readCurrentLeases = async () => normalizePersistentMindToolActivation((await loadState()).persistentMind?.toolActivation);
   let activation = await readCurrentLeases();
   if (isUserTurn && turnId && activation.lastAgedTurnId !== turnId) {
@@ -1049,7 +1052,6 @@ const resolveTargetFamilies = async (targeted, args, authority) => {
 
 // tools.activate and tools.deactivate share one lease write, parameterised by kind.
 const toggleToolFamilies = async (tool, args, context, authority) => {
-  const { loadState, saveState, withStateLock } = await import('./cosState.js');
   const activate = tool.adapter.kind === 'tools-activate';
   const grants = normalizePersistentMindCapabilities(authority?.capabilities);
   const targeted = activate && args.toolNames ? [...new Set(args.toolNames)] : [];
@@ -1071,7 +1073,6 @@ const toggleToolFamilies = async (tool, args, context, authority) => {
 };
 
 const runThinkingTool = async (tool, args, context) => {
-  const { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } = await import('./persistentMindThinkingRequests.js');
   return tool.adapter.kind === 'thinking-catalog'
     ? getPersistentMindThinkingRequestCatalog()
     : requestPersistentMindThinkingPreset(args, context);
@@ -1100,17 +1101,14 @@ const runMindIssueTool = async (tool, args) => {
 };
 
 const chooseMindName = async (tool, args) => {
-  const { choosePersistentMindName } = await import('./persistentMindContext.js');
   return choosePersistentMindName(args);
 };
 
 const reviewMindMemory = async (tool, args, context) => {
-  const { reviewPersistentMindMemory } = await import('./persistentMindContext.js');
   return reviewPersistentMindMemory(args, context);
 };
 
 const protectMindMemory = async (tool, args) => {
-  const { protectPersistentMindMemory } = await import('./persistentMindContext.js');
   return protectPersistentMindMemory(args);
 };
 
@@ -1202,7 +1200,6 @@ const EIDOVERSE_FOUNDATION_OPERATIONS = {
     return { ...result, install: result.install ? summarizeControllerInstall(result.install) : null };
   },
   record: async (ledger, args) => {
-    const { ensureInstanceId } = await import('./instanceIdentity.js');
     // `authorKind` is stamped 'mind' server-side rather than trusted from
     // the call, the same reason `layer` is never caller-supplied: a mind's
     // own authoring tool must not be able to claim a human's byline.
@@ -1396,7 +1393,6 @@ const renewToolActivationLeaseOnUse = async (tool, authority, succeeded) => {
   if (!family || family === 'core') return;
   const grants = normalizePersistentMindCapabilities(authority.capabilities);
   if (grants.toolExposureAllSchemas || !(grants.toolExposureRetentionTurns > 0)) return;
-  const { loadState, saveState, withStateLock } = await import('./cosState.js');
   await withStateLock(async () => {
     const root = await loadState();
     const current = normalizePersistentMindToolActivation(root.persistentMind.toolActivation);

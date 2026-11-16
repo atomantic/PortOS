@@ -112,7 +112,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
-import { onProvidersSaved as onProvidersSavedForGraph } from './providerGraph.js';
+import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './providerGraph.js';
 import { reportRetiredModelPins } from './modelPinAuditNotifier.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
@@ -137,7 +137,7 @@ import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckGeneratingStages } from './pipeline/textStages.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
-import { recoverInFlightProjects } from './creativeDirector/recovery.js';
+import { recoverInFlightProjects, markRecoveryDone } from './creativeDirector/recovery.js';
 import { recoverStuckMusicVideoRenders } from './musicVideo/render.js';
 import { recoverStuckMusicVideoExcerpts } from './musicVideo/excerptRender.js';
 import { recoverInterruptedModels as recoverInterruptedThreejsModels } from './threejsModels/index.js';
@@ -198,6 +198,10 @@ import { initFallbackChain } from './providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
+import { listProjects } from './creativeDirector/local.js';
+import { isFileBackend } from '../lib/pgFileFacade.js';
+import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { initializeMessageDrafts } from './messageDrafts.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -290,7 +294,6 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
     applyDataMigrations: async () => {
       await runMigrations({ rootDir: resolveInstallRoot(join(serverDir, '..')) });
       // Local recovery only: no mail, browser, or LLM provider calls.
-      const { initializeMessageDrafts } = await import('./messageDrafts.js');
       await initializeMessageDrafts();
     },
 
@@ -827,8 +830,6 @@ const initMediaJobDependentHooks = () => {
  */
 const runDatabaseBootPhase = () => runDatabasePhase({
   gate: async () => {
-    const { checkHealth, ensureSchema } = await import('../lib/db.js');
-    const { isFileBackend } = await import('../lib/pgFileFacade.js');
     const { dbReady } = await gateOnDatabase({
       checkHealth,
       ensureSchema,
@@ -899,7 +900,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // earlier step, so it can still be in flight here. listProjects() forces
     // selectBackend() → the (idempotent, marker-gated) import to completion,
     // which the prune below depends on.
-    warmCreativeDirector: async () => (await import('./creativeDirector/local.js')).listProjects(),
+    warmCreativeDirector: async () => listProjects(),
     // Legacy artifact prune: removes the `.imported` / `.bak-NNN` recovery
     // copies the migrators parked aside, but ONLY when the live row count
     // matches the marker's recorded import (a wiped/restored DB keeps the
@@ -911,7 +912,7 @@ const runDatabaseBootPhase = () => runDatabasePhase({
   // into ai_connections / ai_harness_bindings / ai_route_bindings; later runs
   // reconcile against providers.json. Reads and writes local state only.
   reconcileProviderGraph: async () => {
-    await (await import('./providerGraph.js')).initProviderGraph();
+    await initProviderGraph();
     // Per-harness enablement (#7564): normalize the settings slice and prime
     // the composite cache's revision. Settings-only — no provider is contacted.
     await (await import('./harnessEnablement.js')).reconcileHarnessEnablement();
@@ -1047,7 +1048,6 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
     // timeout fallback for nothing.
     recoverCreativeDirectorProjects: () => recoverInFlightProjects().catch(async (e) => {
       logBootstrapFailure('⚠️ CD boot recovery failed', e, console.log);
-      const { markRecoveryDone } = await import('./creativeDirector/recovery.js');
       markRecoveryDone();
     }),
 
@@ -1399,7 +1399,6 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await scheduledEventsDrained;
     await catalogFilingFlushed;
     timing.mark('dbPool');
-    const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would

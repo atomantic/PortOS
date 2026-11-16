@@ -30,7 +30,7 @@ import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/validation.js';
 import { emitLog } from './cosEvents.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
-import { getActiveApps } from './apps.js';
+import { getActiveApps, getAppById } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
 import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
@@ -44,6 +44,8 @@ import {
   buildLocalReviewerInstructions,
   buildTargetWorkItemBlock,
 } from './cosTaskPrompts.js';
+import { resolveAppWorkTracker, githubApiHost } from '../lib/workTracker.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
 // must carry the host parsed from this checkout's origin for GitHub Enterprise.
@@ -454,7 +456,6 @@ async function readPendingMergeBranches(app, metadata) {
   const nudged = metadata.autoMerge !== false
     ? await nudgeLocalPendingMergePrs(app.id).catch(() => ({ ok: false, reason: 'pending-merge-nudge-unavailable' }))
     : { ok: true };
-  const { getAppById } = await import('./apps.js');
   const current = await getAppById(app.id).catch(() => null);
   if (!nudged?.ok) emitLog('warn', `branch-reconcile pending merge held for ${app.name}: ${nudged?.reason || 'unavailable'}`, { appId: app.id });
   return current ? new Set(readPendingMergePrs(current).map(entry => entry.prBranch)) : null;
@@ -747,7 +748,6 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
     branchAttempts
   });
   if (!dispatch) return { skip: true };
-  const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   metadata.reconcileAssignment = buildReconcileAssignment(app, origin, actionable, actions);
   metadata.perpetual = true;
@@ -867,7 +867,6 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   const autoClose = metadata.autoClose !== false;
   // Routing mirrors resolveAppWorkTracker: JIRA is NEVER auto-selected from the
   // git host — it needs explicit per-app config.
-  const { resolveAppWorkTracker } = await import('../lib/workTracker.js');
   const wt = await resolveAppWorkTracker(app).catch(() => null);
   const jira = (wt?.resolved === 'jira' && app.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
     ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
@@ -1041,8 +1040,6 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
 
   let screeningError = null;
   if (!check.firstRun && check.newPrs.length) {
-    const { getOriginInfo } = await import('../lib/gitRemote.js');
-    const { githubApiHost } = await import('../lib/workTracker.js');
     const origin = await getOriginInfo(app.repoPath);
     const { screenForgeMaintenance } = await import('./forgeMaintenanceEvidence.js');
     const { execGh } = await import('./github.js');

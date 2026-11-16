@@ -8,6 +8,10 @@ import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 import { MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 import { USER_DECISION_BLOCKED_CATEGORIES, PAUSED_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
+import { emitLog } from './cosEvents.js';
+import { getActiveAgentIds } from './agentState.js';
+import { getAllTasks, updateTask } from './cosTaskStore.js';
+import { execGit } from '../lib/execGit.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
 export const investigationDependencyRequestSchema = z.object({ mode: z.literal('dependency-wait'),
@@ -65,24 +69,23 @@ async function delivered(owner, task, wait) {
   if (!executionDelivered && !verifiedAfterExecution) return null;
   const proof = await readMergedPrDelivery(wait.repoPath, capture.branch, wait.prUrl, { exactDeliveredHead: capture.head });
   if (proof.prHead !== capture.head || proof.scopeProof !== 'exact-delivered-head') return null;
-  const { execGit } = await import('../lib/execGit.js');
   const included = await execGit(['merge-base', '--is-ancestor', proof.mergeCommit, proof.targetHead ?? proof.defaultHead],
     wait.repoPath, { ignoreExitCode: true, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0' } });
   return included.exitCode === 0 ? { head: capture.head, mergeCommit: proof.mergeCommit } : null;
 }
 
 export function _createInvestigationDependencyWait(deps = {}) {
-  const read = deps.read || (async () => (await import('./cosTaskStore.js')).getAllTasks());
+  const read = deps.read || (async () => getAllTasks());
   const agent = deps.agent || (async key => (await import('./cosAgentLifecycle.js')).getAgentRecord(key));
   const instance = deps.instance || (async () => (await import('./instanceIdentity.js')).getInstanceId());
   const sameRepo = deps.sameRepo || sameRepository;
   const verifyDelivery = deps.delivered || delivered;
   const records = deps.records || (async () => (await import('./branchCompletionPolicy.js')).readBranchCompletionPolicies({ repairIndex: false }));
   const now = deps.now || Date.now;
-  const update = deps.update || (async (task, patch) => (await import('./cosTaskStore.js')).updateTask(task.id, patch,
+  const update = deps.update || (async (task, patch) => updateTask(task.id, patch,
     task.taskType, { preserveRetryBudget: true, recoveryOwner: { id: task.metadata?.investigationDependencyWait?.sourceAgentId,
       startedAt: task.metadata?.investigationDependencyWait?.sourceStartedAt }, expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata } }));
-  const released = deps.released || (async owner => !(await import('./agentState.js')).getActiveAgentIds().includes(owner.id));
+  const released = deps.released || (async owner => !getActiveAgentIds().includes(owner.id));
   const pointer = deps.pointer || (async owner => {
     const m = owner.metadata;
     const { resolveResumePointer } = await import('./agentWorktreeCleanup.js');
@@ -255,7 +258,6 @@ export function _createInvestigationDependencyWait(deps = {}) {
     const wake = data => {
       if (data?.suppressCompletionWake || data?.task?.status !== 'completed') return;
       return reconcile().catch(async error => {
-        const { emitLog } = await import('./cosEvents.js');
         emitLog('warn', `Investigation dependency verification deferred: ${error.message}`);
       });
     };
