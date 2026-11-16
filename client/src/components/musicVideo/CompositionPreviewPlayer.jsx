@@ -464,7 +464,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         />
       )}
       {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" data-song-clock="0" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
     </div>
   );
 }

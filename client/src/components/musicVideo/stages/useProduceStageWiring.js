@@ -36,7 +36,7 @@ import { formatTimecode } from '../../../utils/formatters.js';
 export default function useProduceStageWiring({
   selected, videoSettings, renderJob, productionReview, excerpts, unsavedSceneFields, takesRef, mergeFetchedProject,
   applyEdit, reloadOpenProject,
-  replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
+  replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate, sceneStage = 'produce',
 }) {
   const sceneMedia = useMusicVideoSceneMedia({
     project: selected,
@@ -74,7 +74,8 @@ export default function useProduceStageWiring({
 
   const handleToggleSceneExpand = (sceneId, isExpanded) => {
     if (!selected) return;
-    const stage = 'produce';
+    // The stage showing the shot: Shots, or the editor when the shot was opened there.
+    const stage = sceneStage;
     if (isExpanded) {
       navigate(`/music-video/${selected.id}/${stage}/scene/${sceneId}`, { replace: true });
     } else if (routeSceneId === sceneId) {

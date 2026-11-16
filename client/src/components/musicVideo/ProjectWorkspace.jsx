@@ -63,16 +63,19 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
   ? (proofReviewInUse(project, readiness, { proofActive }) ? 'proof' : null)
   : APPROVAL_STAGE_BY_TAB[tab] || null);
 // Steps reviewed by watching: the player leads them, with the approval beside it.
-const PLAYER_FIRST_STAGES = new Set(['produce', 'review']);
+const PLAYER_FIRST_STAGES = new Set(['produce', 'review', 'editor']);
 // Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
 const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
 const ProduceStage = lazy(() => import('./stages/ProduceStage.jsx'));
 // Loaded when the optional Previz step first opens.
 const PrevizStage = lazy(() => import('./stages/PrevizStage.jsx'));
+const EditorStage = lazy(() => import('./stages/EditorStage.jsx'));
+// The editor lays the player out itself, beside the open shot and over the timeline.
+const OWN_DOCK_STAGES = new Set(['editor']);
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, previz: PrevizStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
-  assets: AssetsStage, cleanup: CleanupStage,
+  assets: AssetsStage, cleanup: CleanupStage, editor: EditorStage,
 };
 
 /**
@@ -134,8 +137,9 @@ export default function ProjectWorkspace({
     openedStageRef.current = latestMusicVideoReviewDraft(selected) && !selected.renderHistoryId ? 'review' : progress.current;
   }
   const pinnedStage = openedStageRef.current;
-  // A shot's card lives on Shots, including links made when it lived on the Storyboard.
-  const activeStage = routeSceneId ? 'produce' : (resolveStageParam(routeStage) || pinnedStage || progress.current);
+  // A shot's card lives on Shots, including links made when it lived on the Storyboard; the editor opens it in place.
+  const sceneStage = resolveStageParam(routeStage) === 'editor' ? 'editor' : 'produce';
+  const activeStage = routeSceneId ? sceneStage : (resolveStageParam(routeStage) || pinnedStage || progress.current);
   const storyVisited = useRef(false);
   if (activeStage === 'story') storyVisited.current = true;
 
@@ -145,6 +149,8 @@ export default function ProjectWorkspace({
   const [seekRequest, setSeekRequest] = useState(null);
   const [dockCollapsed, setDockCollapsed] = useState(null);
   const [dockExpanded, setDockExpanded] = useState(false);
+  // The preview's reading of the song's clock (`PreviewDock` fills it), which the editor's playhead follows.
+  const songClockRef = useRef(null);
   // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
   const seekToScene = (scene, { play = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
@@ -195,7 +201,7 @@ export default function ProjectWorkspace({
   });
   const produce = useProduceStageWiring({
     selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
-    replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
+    replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate, sceneStage,
   });
   const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview, saveOwnEdit });
   const { castSets, devArtifacts, creativeSetupPending, styleReferencesPending } = castSetsStage;
@@ -340,11 +346,11 @@ export default function ProjectWorkspace({
     if (unfoldToAnchor(el)) requestAnimationFrame(land);
     else land();
   }, [activeStage, location.key, selectedId, !!selected]);
-  // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel.
+  // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel; in the editor, in its inspector.
   const editShot = (sceneId) => {
     if (!selected) return;
     const search = searchParams.toString();
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/produce/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === 'produce' });
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${sceneStage}/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === sceneStage });
   };
   const goToStage = (stage, anchor = null, params = null) => {
     // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).
@@ -537,7 +543,25 @@ export default function ProjectWorkspace({
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
-  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+
+  const dock = !selected || NO_DOCK_STAGES.has(activeStage) ? null : (
+    <PreviewDock
+      project={selected}
+      sources={previewSources}
+      audioUrl={setup.audioUrl}
+      seekRequest={seekRequest}
+      collapsed={dockCollapsed ?? !playerFirst}
+      onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
+      expanded={dockExpanded}
+      onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
+      onEditShot={editShot}
+      onProject={replaceProject}
+      blender={blenderMode ? blender : null}
+      clockRef={songClockRef}
+    />
+  );
+  const ownDock = OWN_DOCK_STAGES.has(activeStage);
 
   return (
     <>
@@ -666,26 +690,12 @@ export default function ProjectWorkspace({
               />
               </>
             )}
-            dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
-              <PreviewDock
-                project={selected}
-                sources={previewSources}
-                audioUrl={setup.audioUrl}
-                seekRequest={seekRequest}
-                collapsed={dockCollapsed ?? !playerFirst}
-                onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
-                expanded={dockExpanded}
-                onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
-                onEditShot={editShot}
-                onProject={replaceProject}
-                blender={blenderMode ? blender : null}
-              />,
-            )}
+            dock={dock && !ownDock ? withTitleCard(dock) : null}
           >
             {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
             {activeStage !== 'story' && (
               <Suspense fallback={<PageSkeleton header="none" label="Loading shots" cards={3} sidebar={false} />}>
-                <StageView board={board} />
+                <StageView board={ownDock ? { ...board, previewDock: dock, songClock: () => songClockRef.current?.() ?? null } : board} />
               </Suspense>
             )}
           </MusicVideoLayout>

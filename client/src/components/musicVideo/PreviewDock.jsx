@@ -58,6 +58,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         controls
         playsInline
         preload="metadata"
+        data-song-clock={startSec}
         onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
@@ -130,8 +131,9 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * playable. `seekRequest` (`{ t, n }`) is the scene-card seek. `blender` is a
  * Blender film's `useMusicVideoBlender` reading: its live composite plays the
  * shots' renders from that state, so a render that lands shows without a reload.
+ * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const playable = sources.filter((entry) => !entry.disabled);
@@ -158,6 +160,16 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
     for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
   });
   const sounding = (handler) => (event) => { if (!event.target.muted) handler(); };
+  // Each player marks the media element that keeps the song's time (`data-song-clock`, its offset on
+  // the song), so a reader outside the dock follows whichever source is playing without a re-render.
+  useEffect(() => {
+    if (!clockRef) return undefined;
+    clockRef.current = () => {
+      const media = dockRef.current?.querySelector('[data-song-clock]');
+      return media ? { t: media.currentTime + (Number(media.dataset.songClock) || 0), playing: !media.paused && !media.ended } : null;
+    };
+    return () => { clockRef.current = null; };
+  }, [clockRef]);
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.
