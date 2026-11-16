@@ -18,7 +18,12 @@ export const CLAUDE_BRIDGE_FILENAME = 'CLAUDE.md';
 
 /** Entire body of the bridge file. */
 export const AGENT_INSTRUCTIONS_IMPORT = '@AGENTS.md\n';
-/** Write a repo's instructions to `AGENTS.md` and the Claude Code bridge beside it (a repo with only one name is unreadable to some CLIs). */
+/**
+ * Write a repo's instructions to `AGENTS.md` and the Claude Code bridge beside it (a repo with only one name is unreadable to some CLIs).
+ *
+ * @param {string} repoPath
+ * @param {string} content full `AGENTS.md` body
+ */
 export async function writeAgentInstructions(repoPath, content) {
   await Promise.all([
     writeFile(join(repoPath, AGENT_INSTRUCTIONS_FILENAME), content),

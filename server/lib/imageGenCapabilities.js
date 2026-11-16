@@ -4,18 +4,8 @@
  */
 
 import { getRunwayImageModel } from './runwayImageModels.js';
-/**
- * Per-backend image-gen capability literals.
- *
- * A dependency-free leaf beside `generationModes.js`: FACTS about each render
- * backend (what its image tool accepts, shipped default model/effort) that both
- * the server services and the browser bundle need. The service modules
- * (`services/imageGen/{modes,cloudProviderConfig,grok}.js`) re-export them.
- *
- * Nothing here may import beyond the dependency-free model catalogs: reaching
- * a service module (which pulls `lib/errorHandler.js` and Node's `events`)
- * would make the client unable to import this file.
- */
+// Shared by server and browser: import only dependency-free catalogs (a service module pulls
+// `lib/errorHandler.js` and Node's `events`, which the client cannot load).
 
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
 import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
@@ -25,129 +15,61 @@ import { GOOGLE_IMAGE_MAX_INPUT_IMAGES, googleImageFamily } from './googleImageM
 // Defined in the dependency-free leaf so schema-only callers skip this module.
 export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 
-// Backends that cannot take an input image at all (#3243). Every *queueable*
-// backend can (local, codex, grok, agy — see `maxInputImages` below for the
-// per-backend limits); only the external SD-API backend has no input-image
-// wiring. This is the SINGLE source for the fact.
+// Backends that cannot take an input image at all (#3243); the SINGLE source for the fact.
 export const EDIT_INCAPABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.EXTERNAL]);
 
 /** Can `mode` accept an input image (i2i / edit / reference)? */
 export const isEditCapableMode = (mode) => !EDIT_INCAPABLE_IMAGE_MODES.includes(mode);
 
-// The complement of the list above: what the i2i-only pickers filter their
-// backend options through and what `pickI2iMode` walks in order (best backend
-// first — local, then the cloud CLIs — which is `IMAGE_GEN_MODES` order).
+// Complement of the list above, in `IMAGE_GEN_MODES` order (best backend first), as walked by `pickI2iMode`.
 export const I2I_CAPABLE_MODES = Object.freeze(IMAGE_GEN_MODES.filter(isEditCapableMode));
 
-// Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
-// tool otherwise runs whatever model its logged-in session defaults to — often
-// the heaviest tier. Pin the cheap `gpt-6-luna` at `low` effort. A code-level
-// default (not a settings migration) so it reaches every install and peer; an explicit `imageGen.codex.model` / `.effort` in
-// Settings still wins. Effort is one of providerModels' CODEX_EFFORT_LEVELS.
+// Shipped Codex imagegen defaults (image_gen otherwise runs the session's often-heaviest model); a
+// code-level default so it reaches every install and peer; explicit settings still win.
 export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-6-luna';
 export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 
-// The Agy mirror of the Codex pin above (#3231). Unpinned, agy would run on
-// whatever its own config selects — potentially a reasoning-heavy tier just to
-// relay one generate_image call — so the shipped default is the cheapest flash
-// tier that reliably issues the tool call. Agy bakes the effort ladder into the
-// model id, so there is no separate effort pin. Code-level default as for Codex; an explicit `imageGen.agy.model` in Settings still wins. If this
-// tier ever proves flaky at issuing generate_image, escalate exactly one rung
+// The Agy mirror of the Codex pin (#3231): the cheapest flash tier that reliably issues the
+// generate_image tool call. Agy bakes effort into the model id, so there is no effort pin; an
+// explicit `imageGen.agy.model` still wins. If this tier proves flaky, escalate one rung
 // (gemini-3.8-flash-medium) and record why here.
 //
-// THE INCIDENT BOTH PINS BELOW ARE GUARDED AGAINST — the canonical telling; the
-// helpers and tests that defend it point back here rather than restating it.
-// Vendors retire model ids between builds, and no migration carries a
-// code-level default along. Migration 335 dropped the whole gemini-3.5 tier
-// from the shipped Antigravity catalog while this constant still read
-// `gemini-3.5-flash-low`, so every unpinned agy render failed with `--effort is
-// not supported for model "gemini-3.5-flash"` — silently, until someone tried
-// to generate an image. Two defenses, layered:
-//
-//  - `imageGenCapabilities.test.js` pins BOTH constants to the ids
-//    `data.reference/providers.json` still seeds, so a catalog migration that
-//    forgets its pin fails in CI instead of on a user's render;
-//  - agy additionally self-heals at render time
-//    (`imageGen/agy.js#resolveAgyDriverModel`), because an install can outrun
-//    its PortOS version: the catalog refreshes from the live CLI on its own
-//    schedule. That covers only this PortOS-chosen pin — a model the user typed
-//    is theirs. Codex similarly checks its local model cache at render time
-//    and uses a known listed lightweight fallback only for the shipped default.
-//    Missing cache evidence leaves the default unchanged; explicit pins win.
-//
-// So this constant is a shipped STARTING POINT — but keep it current: it is
-// what the Settings/ImageGen pickers display as "the default", and what an
-// install with no catalog falls back to.
+// BOTH pins guard against vendors retiring model ids (migration 335 dropped gemini-3.5 from the
+// Antigravity catalog while this still named it, so every unpinned agy render failed on `--effort`):
+//  - `imageGenCapabilities.test.js` pins both to ids `data.reference/providers.json` still seeds;
+//  - agy self-heals at render time (`imageGen/agy.js#resolveAgyDriverModel`) for the PortOS-chosen pin
+//    only; Codex checks its local model cache likewise, for the shipped default only.
 export const AGY_IMAGEGEN_DEFAULT_MODEL = 'gemini-3.8-flash-low';
 
-// The local runner's fallback model id when neither the request nor
-// settings.imageGen.local.modelId names one (local.js's parameter default).
-// Lives here rather than in `services/imageGen/modes.js` because the Settings
-// Local tab labels its "install default" option with whichever model a blank
-// pin actually resolves to — the same reason the Codex/Agy pins moved down.
+// Local runner's fallback model id when neither the request nor settings.imageGen.local.modelId
+// names one; here (not services/imageGen/modes.js) because the Settings Local tab labels its
+// "install default" option with it.
 export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'qwen-image-2.1';
 
-// The image model behind agy's generate_image tool — fixed server-side by
-// Antigravity and NOT selectable by PortOS. Re-probed 2026-07-30 against agy
-// 1.1.8 and still closed; the decisive evidence is now the tool's own schema,
-// dumped from a live session:
-//
-//   { Prompt, ImageName, AspectRatio, ImagePaths, toolAction, toolSummary }
-//
-// There is no model parameter, so the driving agent has nothing to route a
-// model choice through. `agy --model imagen-3-fast` selects the AGENT/session
-// model and rejects image-model ids ("invalid model selection"). A prompt
-// directive naming a model is worse than a no-op: three runs directing
-// imagen-3-fast / gemini-3.5-flash / gemini-2.0-flash all produced identical
-// 1376×768 output from the same backend, and the directive text got
-// concatenated into the tool's `Prompt` ("…spider web (macro lens) using the
-// imagen-3-fast model"), polluting the image prompt itself.
-//
-// Beware: agy CONFIDENTLY names whichever model you asked for when questioned
-// afterward — it reported "gemini-2.0-flash" for a render that came out at
-// Imagen's 16:9 geometry. Do not re-probe on its word; probe the pixels.
-// Exported so sidecars can record the image model that actually rendered
-// (distinct from the agent/session model above) without a second copy, and so
-// Settings can surface it read-only next to the agent-model field.
+// The image model behind agy's generate_image is fixed server-side and NOT selectable (re-probed
+// 2026-07-30, agy 1.1.8): the tool schema has no model parameter, `agy --model` selects the AGENT
+// model, and a prompt directive naming one gets concatenated into the image `Prompt`. agy
+// CONFIDENTLY names whichever model you asked for; probe the pixels, not its word.
 export const AGY_IMAGEGEN_IMAGE_MODEL = 'imagen-3.0-generate-002';
 
-// Aspect ratios agy's generate_image tool accepts via its `AspectRatio`
-// parameter — verbatim from the tool schema above. This IS a real knob: a run
-// that names no ratio renders at the tool's documented '1:1' default (measured
-// 1024×1024) no matter what pixel dimensions the prompt asks for, so a PortOS
-// render requesting a wide comic page silently came back square before the
-// prompt builders started naming a ratio.
+// Aspect ratios agy's generate_image accepts via `AspectRatio`, verbatim from the tool schema. A real
+// knob: a run naming no ratio renders at the tool's '1:1' default regardless of requested pixels.
 export const AGY_ASPECT_RATIOS = Object.freeze(['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9']);
 
-// Aspect ratios grok's image_gen/image_edit tools accept. Width/height from
-// PortOS callers are mapped to the closest of these; a configured default
-// (`imageGen.grok.aspectRatio`) applies when the caller sent no dimensions, and
-// Settings → Image Gen → Grok offers this list as the default-ratio picker.
+// Aspect ratios grok's image_gen/image_edit tools accept; PortOS width/height map to the closest, and
+// `imageGen.grok.aspectRatio` applies when the caller sent no dimensions.
 export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
 
 /**
- * The pure per-provider capability flags, keyed by `IMAGE_GEN_MODE`. Spread
- * into `CLOUD_PROVIDER_SPECS` (services/imageGen/cloudProviderConfig.js), which
- * adds the impure half — labels, error codes, and the settings-reading
- * `modelId`/`params` resolvers.
+ * Pure per-provider capability flags, keyed by `IMAGE_GEN_MODE`; spread into `CLOUD_PROVIDER_SPECS`
+ * (services/imageGen/cloudProviderConfig.js).
  *
- *  - `supportsModelOverride` — whether a per-render `cloudModel` may replace the
- *      saved default for one queue item. Grok is `false`: its `image_gen` tool
- *      runs on a fixed xAI backend with no model knob at all, so accepting an
- *      override there would be a lie.
- *  - `maxInputImages` — how many input images (init image + reference images,
- *      combined) the provider's image tool accepts, or `null` when its schema
- *      declares no maximum (PortOS's own form ceiling — MAX_REFERENCE_IMAGES in
- *      routes/imageGen.js — is then the only bound, expressed once where it is
- *      defined rather than restated here as a fake capability). Probed from the
- *      live tool schemas on 2026-08-09 — do NOT raise one on a provider's word,
- *      re-probe the schema. Applied server-side in exactly one place,
- *      `resolveInputImages` (inputImages.js), and predicted client-side by
- *      `referenceSlotsFor` so the form never offers a slot the backend drops.
- *  - `promptRequiredWithInputImage` — whether the provider still needs a text
- *      prompt when the render already carries an input image. `false` for the
- *      tools where the attached image is the whole instruction; `true` where the
- *      tool schema lists the prompt as required.
+ *  - `supportsModelOverride` — a per-render `cloudModel` may replace the saved default (Grok: `false`,
+ *      fixed xAI backend).
+ *  - `maxInputImages` — input images (init + reference) the tool accepts, or `null` when its schema
+ *      declares no maximum. Probed from live tool schemas 2026-08-09; re-probe, never raise on a
+ *      provider's word. Applied in `resolveInputImages`, predicted client-side by `referenceSlotsFor`.
+ *  - `promptRequiredWithInputImage` — a text prompt is still required with an input image.
  */
 export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
   [IMAGE_GEN_MODE.CODEX]: Object.freeze({
@@ -168,8 +90,7 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     supportsModelOverride: true,
     // `generate_image.ImagePaths`: "you cannot pass in more than 3 images".
     maxInputImages: 3,
-    // …and `Prompt` is in that tool's `required` list, so an image-only agy
-    // render has nothing to send.
+    // …and `Prompt` is in that tool's `required` list.
     promptRequiredWithInputImage: true,
   }),
   [IMAGE_GEN_MODE.RUNWAY]: Object.freeze({
@@ -177,34 +98,28 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     multiCharacterPreservation: true, promptRequiredWithInputImage: true,
   }),
   [IMAGE_GEN_MODE.FAL]: Object.freeze({
-    // The model IS the product here — each catalog family is a different
-    // price and look (lib/falImageModels.js), and a per-render override is
-    // validated against that catalog.
+    // The model IS the product (each family differs in price and look); overrides are validated against the catalog.
     supportsModelOverride: true,
-    // The cap is per MODEL (14 / 10 / 9); `maxInputImages(mode, modelId)`
-    // below reads it from the catalog. This mode-level value is the smallest
-    // of them, for a caller that does not know which fal model will render.
+    // Cap is per MODEL (14 / 10 / 9), read via `maxInputImages(mode, modelId)`; this is the smallest.
     maxInputImages: FAL_IMAGE_MIN_INPUT_IMAGES,
-    // Every catalog edit endpoint lists `prompt` as required.
+    // Every catalog edit endpoint requires `prompt`.
     promptRequiredWithInputImage: true,
   }),
   [IMAGE_GEN_MODE.HIGGSFIELD]: Object.freeze({
     supportsModelOverride: true,
-    // Per model (0 for the text-only families); `maxInputImages(mode, modelId)` reads the catalog.
+    // Per model (0 for text-only families); read via `maxInputImages(mode, modelId)`.
     maxInputImages: HIGGSFIELD_IMAGE_MAX_INPUT_IMAGES,
     promptRequiredWithInputImage: true,
   }),
   [IMAGE_GEN_MODE.GOOGLE]: Object.freeze({
     supportsModelOverride: true,
-    // Per model (0 for Imagen); `maxInputImages(mode, modelId)` reads the catalog.
+    // Per model (0 for Imagen); read via `maxInputImages(mode, modelId)`.
     maxInputImages: GOOGLE_IMAGE_MAX_INPUT_IMAGES,
     promptRequiredWithInputImage: true,
   }),
 });
 
-// Cloud CLIs that accept a per-render `cloudModel` override. Kept as data so a
-// new backend is one capability entry rather than a hand-rolled
-// `mode === CODEX || mode === AGY` disjunction at every call site.
+// Kept as data so a new backend is one capability entry, not a `mode === CODEX || ...` disjunction per call site.
 export const MODEL_OVERRIDE_CAPABLE_MODES = Object.freeze(
   CLOUD_IMAGE_GEN_MODES.filter((mode) => IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.supportsModelOverride === true),
 );
@@ -213,13 +128,10 @@ export const MODEL_OVERRIDE_CAPABLE_MODES = Object.freeze(
 export const supportsCloudModelOverride = (mode) => MODEL_OVERRIDE_CAPABLE_MODES.includes(mode);
 
 /**
- * How many input images (init image + reference images, combined) `mode`'s
- * image tool accepts. `null` for a non-cloud mode: the local runner's ceiling
- * is the form's own slot count, and external takes none at all (it never
- * reaches the resolver — `isEditCapableMode` rejects it first).
- *
- * `modelId` refines the answer for a backend whose cap depends on the model
- * (fal.ai); an unknown or absent model falls back to the mode-level value.
+ * How many input images (init + reference, combined) `mode`'s image tool accepts; `null` for a
+ * non-cloud mode (local is bounded by the form's slot count, external is rejected earlier by
+ * `isEditCapableMode`). `modelId` refines the answer for backends whose cap is per model; an
+ * unknown or absent model falls back to the mode-level value.
  */
 export const maxInputImages = (mode, modelId = null) => {
   if (mode === IMAGE_GEN_MODE.RUNWAY) return getRunwayImageModel(modelId)?.maxReferences ?? 3;
@@ -239,12 +151,9 @@ export const maxInputImages = (mode, modelId = null) => {
 };
 
 /**
- * Does a cloud-CLI render need a text prompt, given whether it carries an input
- * image? Text-to-image always does; with an input image it depends on whether
- * the provider's tool lists the prompt as required
- * (`promptRequiredWithInputImage`). Non-cloud modes return `false` — local and
- * external both accept an empty prompt. Rejecting up front keeps the failure a
- * 400 instead of a queued job that dies asynchronously.
+ * Does a cloud-CLI render need a text prompt, given whether it carries an input image? Text-to-image
+ * always does; with one it depends on `promptRequiredWithInputImage`. Non-cloud modes return `false`.
+ * Rejecting up front keeps the failure a 400 instead of an async queued-job death.
  */
 export const cloudPromptRequired = (mode, hasInputImage) => {
   const caps = IMAGE_GEN_PROVIDER_CAPABILITIES[mode];

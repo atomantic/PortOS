@@ -1,21 +1,15 @@
 /**
  * Read-only `grok models` catalog for Grok Build speed.
  *
- * Read-only `grok models` probe for Grok Build speed — `probeGrokModelCatalog` (bounded
- * `commandOutput`, null when the command does not run; a successful listing keeps bullet ids plus the
- * `Default model:` line). Kept out of `grok.js` so the autofixer import does not spawn a process.
- *
- * The spawn lives here, not in `grok.js`, so the autofixer can keep importing
- * the argv helpers without pulling a child process. The probe never sends a
- * prompt and never writes Grok config.
+ * The spawn lives here, not in `grok.js`, so the autofixer can keep importing the argv helpers
+ * without pulling a child process. The probe never sends a prompt or writes Grok config.
  */
 
 import { commandOutput } from './commandExists.js';
 import { parseHarnessModels } from './harnessOutput.js';
 
 /**
- * Model ids plus the `Default model:` line from `grok models` stdout.
- * Ids reuse the harness bullet parser, which drops the sign-in banner.
+ * Model ids (via the harness bullet parser) plus the `Default model:` line from `grok models` stdout.
  * @param {string|null|undefined} stdout
  * @returns {{ ids: string[], defaultModel: string|null }}
  */
@@ -27,8 +21,7 @@ function parseGrokModelCatalog(stdout) {
 }
 
 /**
- * Run `grok models` and parse it. Null when the command cannot run — distinct
- * from a listing that ran and advertised nothing.
+ * Null when the command cannot run, distinct from a listing that ran and advertised nothing.
  * @param {{ command?: string, envVars?: Record<string, string|undefined> }|null|undefined} provider
  * @param {{ cwd?: string, timeoutMs?: number }} [options]
  * @returns {Promise<{ ids: string[], defaultModel: string|null }|null>}

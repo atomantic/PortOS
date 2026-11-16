@@ -39,7 +39,10 @@ const MODEL_ID_CHARS = '[A-Za-z0-9][A-Za-z0-9._:/-]*';
 const ANTIGRAVITY_MODEL_ID = new RegExp(`^${MODEL_ID_CHARS}$`);
 const ANTIGRAVITY_MODEL_LINE = new RegExp(`^(${MODEL_ID_CHARS})(?:\\t.*)?$`);
 
-/** Defense-in-depth id check for spawn sites whose `--model` value the route schema didn't bound. */
+/**
+ * Defense-in-depth id check for spawn sites whose `--model` value the route schema didn't bound.
+ * @param {unknown} id
+ */
 export function isAntigravityModelId(id) {
   return typeof id === 'string' && ANTIGRAVITY_MODEL_ID.test(id);
 }

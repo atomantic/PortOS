@@ -28,6 +28,10 @@ export function ollamaBaseFromProvider(provider) {
  * with no ceiling `planned` passes through, `null` included. Rungs as in
  * `ollamaContext.js#resolveOllamaContextLength`: `numCtx`, then host-stamped
  * `runtimeContextWindow`, each validated independently. Only Ollama is sent `numCtx`.
+ *
+ * @param {object|null|undefined} provider
+ * @param {number|null|undefined} planned — whatever the caller's ladder resolved
+ * @returns {number|null}
  */
 export function clampToRuntimeContextWindow(provider, planned) {
   const ceiling = isOllamaBackedProvider(provider)
@@ -44,6 +48,10 @@ export function clampToRuntimeContextWindow(provider, planned) {
  * ambient `OLLAMA_CONTEXT_LENGTH` cannot be resolved here, so the HOST passes it
  * in as data. In-memory ONLY: never persist to `providers.json`. Returns the
  * SAME object when there is nothing to add.
+ *
+ * @param {object|null|undefined} provider
+ * @param {number|null|undefined} ceiling — the window the daemon is held at
+ * @returns {object|null|undefined}
  */
 export function withRuntimeContextWindow(provider, ceiling) {
   const runtime = positiveTokens(ceiling);

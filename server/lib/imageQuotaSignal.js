@@ -3,28 +3,16 @@
  * render queue can wait for that instant instead of burning every queued job
  * against the same wall.
  *
- * `parseQuotaDeferral(text, { now })` — read a provider quota exhaustion that states its own reset out
- * of a failed render's error text, returning `{ resumeAt, resetsInMs }` or `null`. Requires BOTH an
- * exhaustion marker and a parseable Go-style duration (`2h26m1s`), because the text embeds the agent's
- * own prose about the page being rendered. Plus `formatDeferral` and `MAX_QUOTA_DEFERRAL_MS`. Consumed
- * by `services/mediaJobQueue` to hold queued renders for a cooling backend instead of burning them
- * against the same wall.
+ * `parseQuotaDeferral(text, { now })` returns `{ resumeAt, resetsInMs }` or `null`;
+ * `formatDeferral` and `MAX_QUOTA_DEFERRAL_MS` are also exported. Consumed by
+ * `services/mediaJobQueue`.
  *
- * The signal this reads is narration, not a structured field. Antigravity
- * relays `generate_image`'s failure through whatever prose the driving agent
- * chose that turn, so the same outage was recorded three different ways in one
- * afternoon ("The `generate_image` tool failed due to a rate-limit / quota
- * exhaustion error: - **Error:** `429 RESOURCE_EXHAUSTED: …`", a `>` blockquote
- * form, and a bare fenced form). Only two things were stable across all of
- * them: an exhaustion marker, and Google's Go-style duration
- * (`Your quota will reset after 2h26m1s.`).
- *
- * So the contract is deliberately conservative — BOTH an exhaustion marker and
- * a parseable duration must be present. A render prompt is attacker-adjacent
- * input here: the failure text embeds the agent's own words about a comic page,
- * and a page of dialogue could easily contain "quota" or "429" on its own.
- * Requiring the pair, and bounding the result, keeps a story about a rationing
- * office from parking the queue for a day.
+ * The signal is narration, not a structured field: Antigravity relays
+ * `generate_image` failures through whatever prose the driving agent chose, so
+ * the only stable parts are an exhaustion marker and Google's Go-style duration
+ * (`Your quota will reset after 2h26m1s.`). BOTH must be present, and the result
+ * is bounded: the failure text embeds the agent's words about the page being
+ * rendered, which could contain "quota" or "429" on its own.
  */
 
 /** Longest deferral worth honoring; past this, failing is more honest. */

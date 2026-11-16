@@ -6,32 +6,21 @@
  * problem: file the finding on the project's own tracker so it outlives the run
  * record, and/or queue an agent to go fix it.
  *
- * Both are off by default and independent of each other. A user who wants a
- * durable backlog entry but no unattended follow-up run gets one; a user who
- * wants the fix attempted immediately without cluttering the tracker gets the
- * other; turning both on files the issue first so the queued task can name it.
+ * Both are off by default and independent; turning both on files the issue first so the queued
+ * task can name it.
  *
- * The dedup identity lives here rather than in the filer because THREE parties
- * have to agree on it — the issue body that carries the marker, the tracker
- * listing that reads it back to decide "already filed", and the CoS task
- * fingerprint that stops a second follow-up run for the same finding. A
- * scheduled task regenerates with a fresh id every cadence, so keying on the
- * task id alone would re-file the same finding forever; the key is instead
- * `taskType` + app + a slug of the objective's first line, which is stable
- * across those regenerations and distinct between genuinely different work.
+ * The dedup identity lives here because THREE parties must agree on it: the issue body carrying
+ * the marker, the tracker listing that reads it back, and the CoS task fingerprint. A scheduled
+ * task regenerates with a fresh id every cadence, so the key is `taskType` + app + a slug of the
+ * objective's first line, stable across regenerations and distinct between different work.
  *
- * Pure and I/O-free: the settings resolver, the filer, the queue producer, and
- * the tests share one definition of what a follow-up IS.
+ * Pure and I/O-free.
  *
- * CLOSURE-FREE by design. `cosValidation.js` imports this for the settings enum
- * and is reached by most of the server suite, so every edge here is multiplied
- * by ~80 suites. `textUtils.js` is free — a zero-import leaf already in all four
- * consumers' closures — but `investigationTasks.js`, which declares the
- * `investigationFingerprint` formatter, would have added five modules for one
- * three-segment template string. So that ONE format is inlined, and
- * `goalFidelityFollowUp.test.js` pins it against the real function so the two
- * cannot drift: the test pays the import, production does not. See
- * server/AGENTS.md "Import scoping".
+ * CLOSURE-FREE by design: `cosValidation.js` imports this for the settings enum and is reached by
+ * most of the server suite, so every edge is multiplied. `investigationTasks.js` would add five
+ * modules for one three-segment template string, so that format is inlined and
+ * `goalFidelityFollowUp.test.js` pins it against the real function. See server/AGENTS.md
+ * "Import scoping".
  */
 
 import { createHash } from 'node:crypto';
@@ -42,15 +31,11 @@ import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from './promptFencing.js';
 /**
  * Which verdicts trigger a follow-up.
  *
- * - `rethink`     — only the verdict that already holds the run. The default:
- *                   it is the one the gate itself treats as "this built the
- *                   wrong thing", so filing on it can't bury a tracker.
- * - `any-finding` — `rethink` OR `fix-first`. `fix-first` deliberately does NOT
- *                   downgrade a run (see `goalFidelityHoldsRun`), so on an
- *                   install that wants those recorded, an issue is the only
- *                   thing that carries them past the run record.
+ * - `rethink`     — only the verdict that already holds the run (default; can't bury a tracker).
+ * - `any-finding` — `rethink` OR `fix-first`; `fix-first` does not downgrade a run (see
+ *                   `goalFidelityHoldsRun`), so an issue is the only thing carrying it past the run record.
  *
- * `ship` never triggers a follow-up under either setting — there is no finding.
+ * `ship` never triggers a follow-up.
  */
 export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-finding']);
 
@@ -58,11 +43,8 @@ export const GOAL_FIDELITY_FOLLOW_UP_TRIGGERS = Object.freeze(['rethink', 'any-f
 export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
 
 /**
- * One stored trigger, validated. Shared by `resolveGoalFidelityFollowUp` and by
- * the settings projection the Code Reviewers tab reads back
- * (`pickCodeReviewDefaults`) — they have to agree, and a silent divergence
- * between "what the form shows" and "what runs" is invisible until a finding
- * fires on the wrong verdict.
+ * One stored trigger, validated. Shared by `resolveGoalFidelityFollowUp` and the settings
+ * projection (`pickCodeReviewDefaults`) so "what the form shows" and "what runs" cannot diverge.
  */
 export const normalizeGoalFidelityFollowUpTrigger = (value) => (
   GOAL_FIDELITY_FOLLOW_UP_TRIGGERS.includes(value) ? value : DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER
@@ -100,25 +82,17 @@ export const GOAL_FIDELITY_ISSUE_LIMITS = Object.freeze({
 /**
  * Resolve the follow-up half of the `goalFidelity` settings block.
  *
- * Reads the RAW block rather than the gate's resolved config, because the two
- * answer different questions: the gate's resolve returns `null` when no local
- * backend is callable, and a caller only reaches this code when a review
- * already produced a verdict. Threading the follow-up through that resolve
- * would make "which backend judged it" a precondition for "what do we do about
- * the answer", which it is not.
+ * Reads the RAW block rather than the gate's resolved config: that resolve returns `null` when no
+ * local backend is callable, which must not gate what to do with an existing verdict.
  *
- * Returns `null` when neither action is on — the caller's cheap "nothing to do"
- * check, distinct from an object with both flags false, which would read as
- * configured-and-inert.
+ * Returns `null` when neither action is on, distinct from an object with both flags false.
  *
  * @param {Object|null} codeReview - the raw `settings.codeReview` block.
  * @returns {{ fileIssue: boolean, queueTask: boolean, trigger: string }|null}
  */
 export function resolveGoalFidelityFollowUp(codeReview) {
   const raw = codeReview && typeof codeReview === 'object' ? codeReview.goalFidelity : null;
-  // The gate being off takes every follow-up with it: no verdict is produced,
-  // so a stored `fileIssue: true` under it describes an action nothing can
-  // trigger. Resolving it to `null` keeps the UI and the runtime agreeing.
+  // The gate being off takes every follow-up with it: no verdict is produced.
   if (!raw || typeof raw !== 'object' || raw.enabled === false) return null;
   const fileIssue = raw.fileIssue === true;
   const queueTask = raw.queueTask === true;
@@ -138,22 +112,18 @@ const subjectSlug = (text) => truncateOnBoundary(kebabCase(String(text ?? '')), 
 /**
  * The durable dedup key for one goal-fidelity finding.
  *
- * Same three-segment `category:kind:scope` shape every other investigation key
- * uses, built by the same function, so the CoS task side participates in the
- * existing fingerprint dedup and loop policy for free.
+ * Same `category:kind:scope` shape as every other investigation key so the CoS task side joins the
+ * existing fingerprint dedup and loop policy.
  *
- * `scope` folds the app AND the objective slug, because one app runs many
- * different tasks and a per-app key would collapse every finding on that app
- * into one issue. The verdict is deliberately NOT in the key: a finding that
- * degrades from `rethink` to `fix-first` between runs is the same unfinished
- * work, and keying on it would file a second issue for it.
+ * `scope` folds the app AND the objective slug (a per-app key would collapse every finding on that
+ * app). The verdict is deliberately NOT in the key: `rethink` degrading to `fix-first` is the same
+ * unfinished work.
  */
 export function goalFidelityFingerprint(task) {
   const app = subjectSlug(task?.metadata?.app);
   const subject = subjectSlug(firstLine(task?.description));
   const scope = app ? `${app}/${subject}` : subject;
-  // The `category:kind:scope` shape of `investigationFingerprint`, inlined
-  // rather than imported (see the module header) and pinned against it by test.
+  // Inlined `investigationFingerprint` shape (see module header).
   return `${GOAL_FIDELITY_FINGERPRINT_CATEGORY}:${task?.taskType || 'task'}:${scope || 'none'}`;
 }
 
@@ -167,13 +137,10 @@ export function isGoalFidelityInvestigation(task) {
  * The overturn stamp on the finding a goal-fidelity investigation is about, or
  * `null` while that finding stands.
  *
- * Such a task's description embeds the investigated task's objective. Once the
- * finding is disproved (`goalFidelity.overturned`, stamped on the investigated
- * runs by the calibration report), the investigation's deliverable is that
- * verdict and any diff it also shipped is incidental. Grading that diff against
- * the embedded objective re-raises the disproved finding and re-dispatches the
- * investigation. Only the LATEST judged run counts, so a newer, unoverturned
- * finding on the same task keeps its investigation judged.
+ * Once the finding is disproved (`goalFidelity.overturned`, stamped by the calibration report), the
+ * investigation's deliverable is that verdict; grading any incidental diff against the embedded
+ * objective would re-raise it. Only the LATEST judged run counts, so a newer unoverturned finding
+ * keeps its investigation judged.
  *
  * @param {{ task: object, agents: object[] }} args
  * @returns {{ gap: string, calibrationTaskId: string, at: string }|null}
@@ -192,16 +159,11 @@ export function overturnedInvestigatedFinding({ task, agents }) {
 /**
  * The exact string the dedup looks for in an existing issue's body.
  *
- * The CANDIDATES come from a label filter, not a text search — every issue this
- * feature files carries `GOAL_FIDELITY_ISSUE_LABEL`, so the filer lists that
- * label across every state and reads the marker back from the rows. A
- * full-text search would have been index-backed (minutes of lag on GitHub and
- * JIRA), which is exactly the window in which a scheduled task re-runs; a label
- * is a direct field filter with no such lag.
+ * Candidates come from a label filter (`GOAL_FIDELITY_ISSUE_LABEL` across every state), not a text
+ * search: search indexes lag by minutes on GitHub and JIRA, exactly when a scheduled task re-runs.
  *
- * Hash the local fingerprint so task text (including private names or dates)
- * cannot leak through its punctuation-stripped form or be rewritten by public
- * text redaction. Forty hex characters preserve 160 bits while avoiding the
+ * The local fingerprint is hashed so task text cannot leak through its punctuation-stripped form or
+ * be rewritten by public text redaction. Forty hex characters keep 160 bits while avoiding the
  * shared scrubber's 48+-character credential-shaped hex rule.
  */
 export function goalFidelityIssueMarker(fingerprint) {
@@ -211,16 +173,13 @@ export function goalFidelityIssueMarker(fingerprint) {
 /**
  * Does this issue carry our marker for `fingerprint`?
  *
- * Takes the ONE normalized `{ title, body }` shape every candidate source in
- * `services/goalFidelityFollowUp.js` maps to — the trackers disagree about the
- * field names (`description` on glab and JIRA, `summary` for a JIRA title), and
- * accepting every spelling here would let a mapper quietly stop normalizing
- * without anything failing.
+ * Takes the ONE normalized `{ title, body }` shape that `services/goalFidelityFollowUp.js` maps
+ * every tracker to; accepting each tracker's field spellings here would let a mapper quietly stop
+ * normalizing.
  */
 export function issueMatchesGoalFidelityMarker(issue, fingerprint) {
   const text = `${issue?.title || ''}\n${issue?.body || ''}`;
-  // Existing installs and already-filed issues retain the original marker.
-  // Read both forms; never publish private task text in a new marker.
+  // Already-filed issues retain the original kebab marker; read both, publish only the hashed form.
   return [goalFidelityIssueMarker(fingerprint), `portosgf-${kebabCase(String(fingerprint ?? ''))}`]
     .some(marker => text.includes(marker));
 }
@@ -249,11 +208,8 @@ function reviewedChange(context) {
  * Why a finding must not be copied onto the project's tracker, or `null` when
  * the publication record matches that tracker and repository.
  *
- * A local task's objective is the operator's own prose. Filing it would publish
- * that prose. A fetched issue may return only to the tracker and repository it
- * was read from. The sentences name which of those gates closed, because
- * "no verified provenance" does not tell an operator whether the refusal was
- * the normal local-task case or a repository mismatch.
+ * A local task's objective is the operator's own prose, and a fetched issue may return only to the
+ * tracker and repository it was read from. The sentences name which gate closed.
  */
 export function explainGoalFidelityPublicationRefusal({ publication, tracker, target } = {}) {
   if (publication?.source !== 'tracker-issue') {
@@ -293,11 +249,8 @@ export function buildGoalFidelityIssue({ review, fingerprint, context = null }) 
   const objective = typeof context?.objective === 'string' ? context.objective : '';
   const change = reviewedChange(context);
   const title = truncateTitle(`Goal-fidelity ${review?.verdict || 'finding'}: ${subject}`, GOAL_FIDELITY_ISSUE_LIMITS.titleChars);
-  // The marker sits in the SECOND paragraph, not the last. The dedup reads it
-  // back out of a tracker listing, and a listing is free to cap the body it
-  // returns; a marker parked at the bottom would drop out of exactly the long
-  // issues most likely to be re-filed. It is also the first thing a human
-  // opening the issue needs, since it is what explains why the issue exists.
+  // The marker sits in the SECOND paragraph: a tracker listing may cap the body it returns, and a
+  // marker at the bottom would drop out of exactly the long issues most likely to be re-filed.
   const body = [
     `A goal-fidelity review returned **${review?.verdict}**. This is an unverified finding to investigate, not proof that the requested work is missing.`,
     `Filed automatically by the PortOS goal-fidelity review. Re-filing is suppressed while an issue carrying this key exists: \`${goalFidelityIssueMarker(fingerprint)}\``,
@@ -323,22 +276,13 @@ export function buildGoalFidelityIssue({ review, fingerprint, context = null }) 
 /**
  * The CoS task body for the queued follow-up run.
  *
- * Two different jobs depending on whether an issue was filed: with one, the
- * agent claims that issue through the project's normal claim flow, which is
- * where the tracker's own conventions (labels, PR linkage, closing keywords)
- * already live. Without one, it works the finding directly from this body —
- * which is why the finding is restated here in full rather than pointing at an
- * issue that may not exist.
+ * With a filed issue the agent claims it through the normal claim flow; without one it works the
+ * finding directly, so the finding is restated here in full.
  *
- * `falsePositiveBlock` is the THIRD job, and it comes first in the body because
- * it has to happen first: the finding may be wrong. A verdict is one local
- * model's reading of a diff it saw without the repository, and an agent told
- * only to "reconcile" will reconcile — inventing a change to satisfy a finding
- * that had nothing behind it. The block (built by
- * `lib/goalFidelityCalibration.js`, rendered by the service that knows this
- * install's API base) tells the investigator to check first and, when the
- * objective WAS delivered, to report the blind spot instead of shipping.
- * Optional so a caller with no API base to offer still produces a valid task.
+ * `falsePositiveBlock` (built by `lib/goalFidelityCalibration.js`, rendered by the service that
+ * knows the API base) tells the investigator to check first and report the blind spot when the
+ * objective WAS delivered; an agent told only to "reconcile" would invent a change to satisfy a
+ * baseless finding. Optional so a caller with no API base still produces a valid task.
  */
 export function buildGoalFidelityFollowUpTask({ task, review, fingerprint, context = null, issue = null, falsePositiveBlock = null }) {
   const subject = firstLine(task?.description) || 'a CoS agent task';
@@ -371,8 +315,7 @@ export function formatGoalFidelityFollowUpSummary(result) {
     result?.issue && !result.issue.duplicate ? `filed ${result.issue.number ? `#${result.issue.number}` : 'an issue'}` : null,
     result?.issueError ? `issue not filed (${result.issueError})` : null,
     result?.task?.duplicate ? 'follow-up task already queued' : null,
-    // A HELD task is not a queued one — the loop policy stops it for a human,
-    // and saying "queued" about it is the one wrong thing to report.
+    // A HELD task is not a queued one; never report it as "queued".
     result?.task && !result.task.duplicate
       ? `${result.task.approvalRequired ? 'follow-up task awaiting approval' : 'queued follow-up task'} ${result.task.id}`
       : null,

@@ -83,6 +83,9 @@ export const allowedModesFor = (policy) => resolveCallerModePolicy(policy).allow
  * Why this provider may not serve `policy`, or null. `modelCapabilities` is tri-state
  * evidence (`true` proven, `false` absent, missing/null unknown); only `true` satisfies.
  *
+ * @param {object} provider — a provider record (its `type` is the route mode)
+ * @param {string|readonly string[]|object} policy
+ * @param {{modelCapabilities?: object}} [options]
  * @returns {{code: string, reason: string}|null}
  */
 export function callerModeRejection(provider, policy, { modelCapabilities = null } = {}) {
