@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as checksums from './snapshotChecksum.js';
-import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies } from './musicVideoDependencies.js';
+import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies, restampLegacyFrameCasts } from './musicVideoDependencies.js';
 import { musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -225,4 +225,45 @@ it('accepts a frame stamped with either pre-#16274 cast form while nothing chang
     expect(frameState(presented, recast, frame)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
   }
   expect(frameState(presented, scene, stampedWith(['cat-chr-b']))).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+});
+
+// #16375: a legacy unnarrowed stamp hashed every linked subject id (characters, places and props), so
+// adding a place used to turn an accepted frame stale again. The write re-stamps it to the canonical value.
+const legacyStamped = (project, scene) => {
+  const frame = confirmedFrame(project, scene);
+  const revision = checksums.canonicalSnapshotChecksum({ names: ['Ada'], ids: musicVideoSceneCastIds(project, scene).slice().sort() });
+  return { ...frame, frameDependencies: { ...frame.frameDependencies, references: frame.frameDependencies.references
+    .map((ref) => (ref.role === 'frameCast' ? { ...ref, revision } : ref)) } };
+};
+const castRevision = (take) => take.frameDependencies.references.find((ref) => ref.role === 'frameCast').revision;
+const withSubject = (project, subject) => ({ ...project, concept: { subjects: [...project.concept.subjects, subject] } });
+
+it('re-stamps an accepted legacy cast stamp so adding or removing a place or prop no longer stales it', () => {
+  const { stored, scene } = castProject();
+  const legacy = legacyStamped(stored, scene);
+  const written = restampLegacyFrameCasts({ ...stored, scenes: [{ ...scene, takes: [legacy] }] });
+  const [take] = written.scenes[0].takes;
+  expect(castRevision(take)).toBe(castRevision(confirmedFrame(stored, scene)));
+  expect(castRevision(take)).not.toBe(castRevision(legacy));
+  // Idempotent and identity-preserving once canonical.
+  expect(restampLegacyFrameCasts(written)).toBe(written);
+
+  const prop = { id: 'subj-q', kind: 'object', name: 'Lantern', ingredientId: 'cat-prp' };
+  const grown = withSubject(stored, prop);
+  const shrunk = { ...stored, concept: { subjects: stored.concept.subjects.filter((entry) => entry.kind !== 'place') } };
+  for (const project of [grown, shrunk]) {
+    expect(frameState(project, scene, take)).toEqual({ status: 'current', reasons: [] });
+  }
+  // Without the write the legacy stamp is lost to the same change, which is what this guards against.
+  expect(frameState(grown, scene, legacy)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+  const recast = { ...scene, shotSheet: { ...scene.shotSheet, characters: ['Ada', 'Ben'] } };
+  expect(frameState(grown, recast, take)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+});
+
+it('leaves a stamp that does not read current as it was when re-stamping', () => {
+  const { stored, scene } = castProject();
+  const legacy = legacyStamped(stored, scene);
+  const recast = { ...scene, shotSheet: { ...scene.shotSheet, characters: ['Ada', 'Ben'] } };
+  const project = { ...stored, scenes: [{ ...recast, takes: [legacy] }] };
+  expect(restampLegacyFrameCasts(project)).toBe(project);
 });

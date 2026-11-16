@@ -18,7 +18,7 @@ import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/
  * already on the record, so federation was purely additive (no record migration).
  */
 
-import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'node:crypto';
 import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideoSections.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
@@ -702,10 +702,11 @@ export function afterLoad(stored) {
  * review record from before slim snapshots shrinks at its next write. Reads
  * never call it, so a pure read neither rewrites the record nor moves
  * `updatedAt`; readers tolerate both shapes. Idempotent, and it leaves every
- * approval as it was.
+ * approval as it was. It also re-stamps an accepted legacy frame cast fingerprint to the canonical
+ * value (#16375).
  */
 export function beforeSave(project) {
-  return slimProjectReview(project);
+  return restampLegacyFrameCasts(slimProjectReview(project));
 }
 
 /**
