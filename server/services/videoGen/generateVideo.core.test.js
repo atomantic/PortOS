@@ -286,7 +286,7 @@ describe('generateVideo — LTX-2.5 sibling runtime spawn', () => {
   describe('ltx25TextEncoderArgs', () => {
     let ltx25TextEncoderArgs;
     beforeEach(async () => {
-      ({ ltx25TextEncoderArgs } = await import('./local.js'));
+      ({ ltx25TextEncoderArgs } = await import('./renderArgs.js'));
     });
 
     it('emits nothing for the stock choice', () => {
@@ -480,7 +480,7 @@ describe('FFLF/ltx2 pixel-budget helpers', () => {
 
   beforeEach(async () => {
     ({ resolveFflfLtx2PixelBudget, computeFflfLtx2PixelBudget, computeFflfSafeFrames } =
-      await import('./local.js'));
+      await import('./renderArgs.js'));
     delete process.env.FFLF_LTX2_PIXEL_BUDGET;
   });
 
@@ -596,7 +596,7 @@ describe('resolveT2vTwoStageOverride — PORTOS_T2V_TWO_STAGE gate', () => {
   const plainT2V = { runtime: 'ltx2', mode: null, guidanceScale: null, steps: undefined };
 
   beforeEach(async () => {
-    ({ resolveT2vTwoStageOverride } = await import('./local.js'));
+    ({ resolveT2vTwoStageOverride } = await import('./renderArgs.js'));
   });
 
   it('returns the fast two-stage override for a plain T2V Standard render when the knob is on', () => {

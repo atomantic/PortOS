@@ -826,7 +826,7 @@ describe('generateVideo — IC-LoRA remix arg threading (#3100)', () => {
 
 describe('icLoraArgs — direct validation (#3100)', () => {
   let icLoraArgs;
-  beforeEach(async () => { ({ icLoraArgs } = await import('./local.js')); });
+  beforeEach(async () => { ({ icLoraArgs } = await import('./renderArgs.js')); });
 
   const base = {
     mode: 'ic-control',

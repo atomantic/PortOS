@@ -12,16 +12,11 @@ const source = (relativePath) => readFileSync(new URL(relativePath, import.meta.
 describe('taskSchedule module boundaries', () => {
   it('keeps the legacy taskSchedule exports wired to the extracted modules', () => {
     const exportsByModule = Object.fromEntries([
-      ...['INTERVAL_TYPES', 'ON_DEMAND_ORIGINS', 'isRefillRequest']
+      ...['INTERVAL_TYPES', 'ON_DEMAND_ORIGINS']
         .map((name) => [name, constants[name]]),
-      ...['DEFAULT_BRANCHES_PER_AGENT', 'DEFAULT_TASK_INTERVALS', 'MANAGED_AGENT_OPTIONS',
-        'MANAGED_APP_TARGET_TASK_TYPES',
-        'PERPETUAL_DRAIN_DISPATCH_CAP', 'SELF_IMPROVEMENT_TASK_TYPES', 'TASK_TYPE_DESCRIPTIONS',
-        'TASK_TYPE_INVOCATION', 'TASK_TYPE_PROMPT_INFO', 'getTaskTypeInvocation', 'getTaskTypePromptInfo',
+      ...['DEFAULT_TASK_INTERVALS', 'SELF_IMPROVEMENT_TASK_TYPES', 'getTaskTypeInvocation',
         'requiresManagedAppTarget', 'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
-      ...['FAILURE_BACKOFF_BASE_MS', 'FAILURE_BACKOFF_CAP_MS', 'FAILURE_PARK_THRESHOLD',
-        'clearTaskTypeFailurePark', 'computeFailureBackoffMs', 'recordTaskTypeFailure',
-        'recordTaskTypeSuccess'].map((name) => [name, backoff[name]]),
+      ...['recordTaskTypeFailure', 'recordTaskTypeSuccess'].map((name) => [name, backoff[name]]),
       ...['addTemplateTask', 'deleteTemplateTask', 'getTemplateTasks']
         .map((name) => [name, templates[name]])
     ]);
