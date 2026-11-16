@@ -15,6 +15,7 @@ export const SLASHDO_NAMESPACE = 'do';
 
 /**
  * How a slashdo workflow is SPELLED in PortOS UI (`/do:review`), the Claude Code slash-command form users know. UI string only: the shape sent to an agent is resolved per provider server-side (`resolveSlashdoInvocation`; a skill name for a codex/grok host).
+ * @param {string} command - bare command name (`plan-task`)
  */
 export function slashdoLabel(command) {
   return `/${SLASHDO_NAMESPACE}:${command}`;

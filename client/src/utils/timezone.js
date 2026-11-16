@@ -40,6 +40,7 @@ export function shiftDayKey(dayKey, deltaDays) {
 
 /**
  * True when `timezone` is a usable IANA zone, so callers can apply the SERVER's UTC fallback for an invalid value rather than drifting to the browser zone (#2681 r4).
+ * @param {string} timezone
  */
 export function isValidTimezone(timezone) {
   if (!timezone) return false;

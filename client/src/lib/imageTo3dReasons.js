@@ -20,6 +20,7 @@ export const UNAVAILABLE_REASONS = Object.freeze({
 /**
  * Is this target ready to render on this host? `installed` is TRI-STATE: `true` = local weights present, `false` = installable but not installed, `null` = no install concept (a hosted API lane), ready as soon as it is available.
  * Gating on plain `target.installed` truthiness silently reports a hosted target as not-ready. Shared so the `/3d` readiness summary and the Models → 3D badge can't disagree.
+ * @param {{available?: boolean, installed?: boolean|null}|null} [target]
  */
 export const isTargetReady = (target) => !!target && !!target.available && target.installed !== false;
 
@@ -27,6 +28,8 @@ export const UNAVAILABLE_REASON_FALLBACK = 'Unsupported on this host';
 
 /**
  * User-facing label for a reason code; own-property lookup only, so an Object.prototype key name cannot render as a function.
+ * @param {string|null} [reason]
+ * @param {string} [fallback] label for an unknown/absent code.
  */
 export function unavailableReasonLabel(reason, fallback = UNAVAILABLE_REASON_FALLBACK) {
   return Object.hasOwn(UNAVAILABLE_REASONS, reason ?? '') ? UNAVAILABLE_REASONS[reason] : fallback;
