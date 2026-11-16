@@ -1,11 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
-  DEFAULT_TASK_PROMPTS,
-  PROMPT_VERSIONS,
-  REFERENCE_WATCH_AUDITED_VERSION,
-  UNPERSISTED_PROMPT_KEYS,
-  promptMatchesShippedDefault,
-} from './taskPromptDefaults.js';
+import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION, promptMatchesShippedDefault } from './taskPromptDefaults.js';
+import { UNPERSISTED_PROMPT_KEYS } from './taskPromptDefaults/versions.js';
 import {
   buildPromptIntegritySnapshot,
   hashPromptBody,

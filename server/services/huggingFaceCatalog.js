@@ -1,6 +1,5 @@
 import { fetchModels, fetchRepoModel } from './huggingFaceMetadata.js'
 // Compatibility for existing catalog consumers; new metadata callers use its owner.
-export { fetchRepoPublishedDates } from './huggingFaceMetadata.js'
 import { ESTABLISHED_MODEL_PUBLISHERS, localModelSafety } from '../lib/localModelSafety.js'
 import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'

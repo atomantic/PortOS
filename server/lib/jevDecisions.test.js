@@ -10,7 +10,8 @@ import {
   jevMinMarginFor,
   jevValueForHypothesis,
 } from './jevDecisions.js';
-import { UNTRUSTED_CONTENT_SOURCES, untrustedContentPolicySchema } from './untrustedContent.js';
+import { untrustedContentPolicySchema } from './untrustedContent.js';
+import { UNTRUSTED_CONTENT_SOURCES } from './untrustedContentSources.js';
 
 // Keep the contract assertion from making the broad jev test suite eagerly
 // instantiate the Stacker News service subtree.

@@ -12,10 +12,8 @@ import { getSystemHealthSnapshot } from './systemHealthSnapshot.js';
 import { getCapabilitiesSnapshot } from './capabilitiesSnapshot.js';
 import { settingsEvents } from './settings.js';
 import { cosEvents } from './cosEvents.js';
-import {
-  armReadinessWatchers, registerReadinessSocket, __resetReadinessForTests,
-  READINESS_OBSERVE_MS, READINESS_COALESCE_MS,
-} from './readinessNotify.js';
+import { armReadinessWatchers, registerReadinessSocket, __resetReadinessForTests, READINESS_OBSERVE_MS } from './readinessNotify.js';
+import { READINESS_COALESCE_MS } from './readinessSignal.js';
 
 function connect() {
   const handlers = new Map();

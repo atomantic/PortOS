@@ -180,7 +180,6 @@ export function resolveEffortHint(stage, options = {}) {
 // the gate by its historical stageRunner path. `isLocalEndpoint` is shared from
 // the same module so the context-window heuristic below and the gate agree on
 // what "local" means.
-export { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } from './promptRunner.js';
 export { isLocalEndpoint };
 
 // CLI/TUI providers (Claude Code, Codex, Antigravity) are frontier models;

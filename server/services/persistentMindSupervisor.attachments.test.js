@@ -287,7 +287,7 @@ describe('persistent mind image attachment lifecycle', () => {
     const attachmentId = markerPath.split('.mind-pending-')[1];
     mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
     mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
-    await expect(supervisor.cleanupPersistentMindAttachments())
+    await expect(attachmentsService.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1 });
     expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
   });
@@ -306,7 +306,7 @@ describe('persistent mind image attachment lifecycle', () => {
     const attachmentId = markerPath.split('.mind-pending-')[1];
     mocks.readdir.mockResolvedValue([basename(markerPath), `mind-${attachmentId}-diagram.png`]);
     mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
-    await expect(supervisor.cleanupPersistentMindAttachments())
+    await expect(attachmentsService.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1 });
     expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
   });
@@ -332,7 +332,7 @@ describe('persistent mind image attachment lifecycle', () => {
     expect(mocks.unlink).not.toHaveBeenCalledWith(markerPath);
 
     mocks.stat.mockResolvedValue({ mtimeMs: Date.now() - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
-    await expect(supervisor.cleanupPersistentMindAttachments())
+    await expect(attachmentsService.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1 });
     expect(mocks.unlink).toHaveBeenCalledWith(markerPath);
   });
@@ -418,12 +418,12 @@ describe('persistent mind image attachment lifecycle', () => {
     mocks.root.persistentMind.pendingAttachments = [uploadRecord({ expiresAt: new Date(Date.now() - 1_000).toISOString() })];
     const release = await acquireBackupSnapshotCut();
     try {
-      await expect(supervisor.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 0, deferred: true });
+      await expect(attachmentsService.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 0, deferred: true });
     } finally {
       release();
     }
     expect(mocks.unlink).not.toHaveBeenCalled();
-    await expect(supervisor.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 1 });
+    await expect(attachmentsService.cleanupPersistentMindAttachments()).resolves.toMatchObject({ removed: 1 });
   });
 
   it('reaps an expired unindexed upload marker and its image without scanning durable assets', async () => {
@@ -435,7 +435,7 @@ describe('persistent mind image attachment lifecycle', () => {
     ]);
     mocks.stat.mockResolvedValue({ mtimeMs: now - PERSISTENT_MIND_LIMITS.PENDING_ATTACHMENT_TTL_MS - 1 });
 
-    await expect(supervisor.cleanupPersistentMindAttachments({ now }))
+    await expect(attachmentsService.cleanupPersistentMindAttachments({ now }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.unlink).toHaveBeenNthCalledWith(1, '/tmp/portos-mind-attachments/mind-orphan-diagram.png');
     expect(mocks.unlink).toHaveBeenNthCalledWith(2, join('/tmp/portos-mind-attachments', '.mind-pending-orphan'));
@@ -448,7 +448,7 @@ describe('persistent mind image attachment lifecycle', () => {
       uploadRecord({ attachmentId: 'claimed', filename: 'claimed.png', claimedBy: 'message-1', expiresAt: null }),
     ];
 
-    await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
+    await expect(attachmentsService.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.unlink).toHaveBeenCalledTimes(2);
     expect(mocks.root.persistentMind.pendingAttachments).toMatchObject([{ attachmentId: 'claimed', claimedBy: 'message-1' }]);
@@ -458,7 +458,7 @@ describe('persistent mind image attachment lifecycle', () => {
     mocks.root.persistentMind.pendingAttachments = [uploadRecord({ expiresAt: '2026-08-28T00:00:00.000Z' })];
     mocks.detectImageFormat.mockReturnValueOnce(null);
 
-    await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
+    await expect(attachmentsService.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.unlink).toHaveBeenCalledTimes(1);
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
@@ -471,7 +471,7 @@ describe('persistent mind image attachment lifecycle', () => {
     ];
     mocks.readFile.mockRejectedValue(Object.assign(new Error('storage unavailable'), { code }));
 
-    await expect(supervisor.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
+    await expect(attachmentsService.cleanupPersistentMindAttachments({ now: Date.parse('2026-08-27T00:00:00.000Z') }))
       .resolves.toMatchObject({ success: true, removed: 1, examined: 2 });
     expect(mocks.unlink).toHaveBeenCalledTimes(1);
     expect(mocks.unlink.mock.calls[0][0]).toContain('mind-expired.png');
@@ -496,7 +496,7 @@ describe('persistent mind image attachment lifecycle', () => {
   it('still removes a pending image whose file is definitively missing (ENOENT)', async () => {
     mocks.root.persistentMind.pendingAttachments = [uploadRecord()];
     mocks.readFile.mockRejectedValue(Object.assign(new Error('gone'), { code: 'ENOENT' }));
-    await expect(supervisor.cleanupPersistentMindAttachments())
+    await expect(attachmentsService.cleanupPersistentMindAttachments())
       .resolves.toMatchObject({ success: true, removed: 1, examined: 1 });
     expect(mocks.root.persistentMind.pendingAttachments).toEqual([]);
   });
@@ -525,6 +525,5 @@ describe('persistent mind image attachment lifecycle', () => {
   it('shares canonical implementations between persistentMindAttachments and supervisor compatibility exports', () => {
     expect(supervisor.createPersistentMindAttachment).toBe(attachmentsService.createPersistentMindAttachment);
     expect(supervisor.deletePersistentMindAttachment).toBe(attachmentsService.deletePersistentMindAttachment);
-    expect(supervisor.cleanupPersistentMindAttachments).toBe(attachmentsService.cleanupPersistentMindAttachments);
   });
 });

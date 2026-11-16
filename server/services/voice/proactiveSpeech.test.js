@@ -23,12 +23,12 @@ vi.mock('../userTimezone.js', async (importOriginal) => ({
 }));
 
 const {
-  parseHHMM,
   isWithinQuietHours,
   shouldSpeak,
   speakProactive,
   MAX_PROACTIVE_TEXT_LEN,
 } = await import('./proactiveSpeech.js');
+const { parseHHMM } = await import('../../lib/timezone.js');
 const { registerVoiceOutputCandidate, __resetVoiceOutput } = await import('./voiceOutput.js');
 
 describe('parseHHMM', () => {

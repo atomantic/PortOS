@@ -65,10 +65,8 @@ import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-v
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
 
-export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 // Re-exported for the PG backend's typed mirror columns (mirrors the CD store).
-export { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
 const STATUS_COLUMN_MAX = 32;
 

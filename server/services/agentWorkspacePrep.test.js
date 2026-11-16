@@ -90,7 +90,8 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, existsSync: vi.fn(actual.existsSync) };
 });
 
-import { prepareAgentWorkspace, resolveTaskExistingBranch } from './agentWorkspacePrep.js';
+import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/taskTargetBranch.js';
 import { claimContinuationWorkspace } from '../lib/claimContinuation.js';
 import { updateTask, addTask } from './cosTaskStore.js';
 import { getAgents } from './cosAgentLifecycle.js';

@@ -28,6 +28,6 @@
  */
 
 export { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults/prompts.js';
-export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION, UNPERSISTED_PROMPT_KEYS } from './taskPromptDefaults/versions.js';
+export { PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION } from './taskPromptDefaults/versions.js';
 export { promptMatchesShippedDefault } from './taskPromptDefaults/shippedPrompts.js';
 export { reconcileStoredPrompt, stampPromptWrite } from './taskPromptDefaults/storedPrompt.js';

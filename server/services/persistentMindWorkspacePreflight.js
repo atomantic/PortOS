@@ -24,7 +24,6 @@ import {
   isReviewer,
 } from '../lib/validation.js';
 import { compareVersions, satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
-export { satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
 import * as codeReview from './codeReview.js';
 
 const execFileAsync = promisify(execFile);

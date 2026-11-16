@@ -26,7 +26,7 @@ const DISMISSED_RECS_FILE = join(DATA_DIR, 'dismissed-recommendations.json');
 // Re-export the infra that sibling modules consume so they import from one
 // place. (ensureDir / readJSONFile / atomicWrite stay internal to this file.)
 export { cosEvents, emitLog, tryReadFile };
-export { EXECUTION_EFFORT_NONE, executionKeyPrefix, executionKeyPrefixOf, executionDurationKey } from '../../lib/executionDurationKey.js';
+export { executionKeyPrefix, executionKeyPrefixOf, executionDurationKey } from '../../lib/executionDurationKey.js';
 
 /**
  * Calculate ETA-oriented duration stats from success-only metrics with fallback.

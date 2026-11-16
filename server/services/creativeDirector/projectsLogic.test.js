@@ -5,26 +5,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  MAX_PERSISTED_RUNS,
-  trimRuns,
-  mirrorStatus,
-  mirrorTimestamp,
-  buildProjectRecord,
-  applyProjectPatch,
-  applyTreatment,
-  applyPlan,
-  applyPlanStepUpdate,
-  applySceneUpdate,
-  appendRun,
-  applyRunUpdate,
-  sanitizeProjectForSync,
-  mergeProjectRecord,
-  startingImageFilename,
-  normalizeModelOverrides,
-  normalizeRenderBackend,
-  resolveStagePin,
-} from './projectsLogic.js';
+import { MAX_PERSISTED_RUNS, trimRuns, mirrorStatus, mirrorTimestamp, buildProjectRecord, applyProjectPatch, applyTreatment, applyPlan, applyPlanStepUpdate, applySceneUpdate, appendRun, applyRunUpdate, mergeProjectRecord, startingImageFilename, normalizeModelOverrides, normalizeRenderBackend, resolveStagePin } from './projectsLogic.js';
+import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 const VALID_TREATMENT = {
   logline: 'A cat finds a hat.',

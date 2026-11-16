@@ -91,7 +91,6 @@ const WORKTREE_BUSY_MAX_ATTEMPTS = 5;
 
 // Compatibility export for callers that reached for the accessor from this
 // service before the shared task-target-branch contract existed.
-export { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../lib/taskTargetBranch.js';
 
 /**
  * Take over the worktree that already holds `branchName`, for a task whose whole

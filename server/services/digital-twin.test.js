@@ -98,56 +98,12 @@ import { buildPrompt } from './promptService.js';
 import { safeJSONParse, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 
-import {
-  digitalTwinEvents,
-  ENRICHMENT_CATEGORIES,
-  SCALE_QUESTIONS,
-  loadMeta,
-  saveMeta,
-  updateMeta,
-  updateSettings,
-  getDocuments,
-  getDocumentById,
-  createDocument,
-  updateDocument,
-  deleteDocument,
-  parseTestSuite,
-  getTestHistory,
-  parseValuesAlignmentSuite,
-  getValuesAlignmentHistory,
-  parseAdversarialSuite,
-  getAdversarialTestHistory,
-  parseMultiTurnSuite,
-  getMultiTurnTestHistory,
-  getPersonas,
-  createPersona,
-  updatePersona,
-  deletePersona,
-  setActivePersona,
-  getActivePersona,
-  getEnrichmentCategories,
-  generateEnrichmentQuestion,
-  processEnrichmentAnswer,
-  getEnrichmentProgress,
-  analyzeEnrichmentList,
-  saveEnrichmentListDocument,
-  getEnrichmentListItems,
-  getExportFormats,
-  exportDigitalTwin,
-  exportSoul,
-  getDigitalTwinForPrompt,
-  getSoulForPrompt,
-  getDigitalTwinStatus,
-  getSoulStatus,
-  validateCompleteness,
-  getTraits,
-  updateTraits,
-  getConfidence,
-  getGapRecommendations,
-  getImportSources,
-  analyzeImportedData,
-  saveImportAsDocument
-} from './digital-twin.js';
+import { digitalTwinEvents, loadMeta, updateSettings, getDocuments, getDocumentById, createDocument, updateDocument, deleteDocument, parseTestSuite, getTestHistory, parseValuesAlignmentSuite, getValuesAlignmentHistory, parseAdversarialSuite, getAdversarialTestHistory, parseMultiTurnSuite, getMultiTurnTestHistory, getPersonas, createPersona, updatePersona, deletePersona, setActivePersona, getActivePersona, getEnrichmentCategories, generateEnrichmentQuestion, processEnrichmentAnswer, getEnrichmentProgress, analyzeEnrichmentList, saveEnrichmentListDocument, getEnrichmentListItems, getExportFormats, exportDigitalTwin, getDigitalTwinForPrompt, getDigitalTwinStatus, validateCompleteness, getTraits, updateTraits, getConfidence, getGapRecommendations, getImportSources, analyzeImportedData, saveImportAsDocument } from './digital-twin.js';
+import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS } from './digital-twin-constants.js';
+import { saveMeta, updateMeta } from './digital-twin-meta.js';
+import { exportSoul } from './digital-twin-export.js';
+import { getSoulForPrompt } from './digital-twin-context.js';
+import { getSoulStatus } from './digital-twin-status.js';
 import { formatValuesHierarchy } from './digital-twin-values-testing.js';
 import { formatTranscript, clampTranscript } from './digital-twin-multi-turn-testing.js';
 import { parseScorerVerdict } from './digital-twin-helpers.js';

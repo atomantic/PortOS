@@ -48,7 +48,6 @@ import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } fr
 
 export { MTPLX_APP };
 // Compatibility export; provider cache discovery owns no daemon lifecycle state.
-export { mtplxCachedModelIds } from './localCachedModels.js';
 
 const PROBE_TIMEOUT_MS = 1500;
 /**

@@ -1306,8 +1306,6 @@ const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challeng
 // orphan producers so "how many investigations this hour" is ONE number rather
 // than one per producer. Re-exported here at the address the suites and callers
 // already use.
-export { INVESTIGATION_CIRCUIT_WINDOW_MS, INVESTIGATION_CIRCUIT_MAX_CREATIONS } from '../lib/investigationTasks.js';
-export { __resetInvestigationCircuit } from './investigationTaskProducer.js';
 
 // Find an existing investigation task (user or internal queue) still tracking
 // this fingerprint in a non-terminal status. Pure.
