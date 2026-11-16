@@ -2,15 +2,9 @@
 //
 // `parseGitRemote`, `parseGitHubOwnerFromRemote`, `pickGhAccountForOwner`, `detectForgeCli`,
 // `parsePullRequestUrl` — GitHub/GitLab remote + PR/MR URL parsers and forge/account selectors used by
-// `git.js`. Pure except that `parseGitRemote` canonicalizes an ssh `Host` alias through
-// `sshHostAlias.js`.
-//
-// No child-process or network access — these are string parsers and selectors. The one non-pure edge
-// is `parseGitRemote`, which canonicalizes a personal SSH `Host` alias through the user's
-// `~/.ssh/config` (a cached, guarded, synchronous read — see lib/sshHostAlias.js for why that has to
-// happen at parse time). The orchestration that shells out to `gh`/`glab` lives in
-// server/services/forgeAuth.js (account/token resolution) and server/services/git.js (PR operations);
-// both compose these helpers.
+// `git.js`. No child-process or network access; the one non-pure edge is `parseGitRemote`, which
+// canonicalizes a personal SSH `Host` alias via a cached synchronous `~/.ssh/config` read
+// (lib/sshHostAlias.js explains why that must happen at parse time).
 
 import { resolveSshHostAlias } from './sshHostAlias.js';
 
@@ -21,10 +15,9 @@ import { resolveSshHostAlias } from './sshHostAlias.js';
  *   https://gitlab.com/group/sub/proj.git  → { host: 'gitlab.com', owner: 'group' }
  *   git@gitlab.example.com:foo/bar.git     → { host: 'gitlab.example.com', owner: 'foo' }
  *
- * `host` is the host the remote actually connects to: a personal SSH alias
- * (`git@github-acme:acme/widget.git` with `HostName github.com` in the user's ssh
- * config) resolves to `github.com`, so every downstream forge/CLI/API decision
- * keyed on this value matches what `git` and `gh` do with the same remote.
+ * `host` is the host the remote actually connects to: an SSH alias (`git@github-acme:...` with
+ * `HostName github.com`) resolves to `github.com`, so downstream forge/CLI/API decisions match what
+ * `git` and `gh` do.
  */
 export function parseGitRemote(url) {
   if (!url) return null;
@@ -33,10 +26,8 @@ export function parseGitRemote(url) {
   const ssh = url.match(/^git@([^:]+):([^/]+)\/.+?(?:\.git)?$/);
   if (ssh) return { host: resolveSshHostAlias(ssh[1]), owner: ssh[2] };
   // HTTPS: https://HOST/OWNER/REPO[.git]
-  // No alias resolution here: ssh config applies to SSH connections only, so
-  // an `https://` remote colliding with an ssh alias must keep its literal
-  // host — resolving it would point downstream `gh --repo` + token overlay at
-  // the wrong API host.
+  // No alias resolution: ssh config applies to SSH only, and resolving an `https://` remote that
+  // collides with an alias would point `gh --repo` + token overlay at the wrong API host.
   const https = url.match(/^https?:\/\/([^/]+)\/([^/]+)\/.+?(?:\.git)?$/);
   if (https) return { host: https[1], owner: https[2] };
   return null;
@@ -84,33 +75,26 @@ export function parsePullRequestUrl(url) {
   if (!url || typeof url !== 'string') return null;
 
   let parsed;
-  // new URL throws on malformed input; we want a structured null instead so a try
-  // wrapper here is the right call (the project's "no try/catch" rule covers
-  // request handlers, not URL validation helpers).
+  // `new URL` throws on malformed input; a structured null is wanted (the no-try/catch rule covers
+  // request handlers, not validation helpers).
   try { parsed = new URL(url); } catch { return null; }
 
-  // Only forge web URLs are valid input — reject file://, ftp://, javascript:,
-  // etc., which can otherwise sneak through to downstream `gh api --hostname`
-  // or `glab` calls with a misleading or empty host.
+  // Only forge web URLs: reject file://, ftp://, javascript:, which could reach `gh api --hostname`
+  // or `glab` with a misleading or empty host.
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
 
-  // `new URL` accepts `https:///path` and `http://:8080/...` — both yield an
-  // empty hostname. Reject those: a host-less PR URL is meaningless.
+  // `new URL` accepts `https:///path` and `http://:8080/...` with an empty hostname; a host-less PR URL is meaningless.
   if (!parsed.hostname) return null;
 
-  // Reject explicit ports (`https://github.com:8443/...`). We use
-  // `parsed.hostname` below (not `host`), so a custom port would be silently
-  // dropped and route the request to the wrong server. Custom-port forges
-  // aren't supported until the port is plumbed through a separate field.
+  // Reject explicit ports: `parsed.hostname` is used below, so a custom port would be silently
+  // dropped and misroute the request (unsupported until a separate port field exists).
   if (parsed.port) return null;
 
   const host = parsed.hostname;
   const segments = parsed.pathname.split('/').filter(Boolean);
 
-  // GitHub: /<owner>/<repo>/pull/<number>[/<more>]
-  // GitHub PR URLs are STRICTLY two segments before `pull` — anything else
-  // (e.g. /owner/repo/extra/pull/1) is invalid and would silently mis-parse
-  // if we just took the last segment as `repo`. Require segments[2] === 'pull'.
+  // GitHub: /<owner>/<repo>/pull/<number>[/<more>]. STRICTLY two segments before `pull`, or
+  // /owner/repo/extra/pull/1 would mis-parse.
   if (segments.length >= 4 && segments[2] === 'pull') {
     const number = Number(segments[3]);
     if (Number.isInteger(number) && number > 0) {

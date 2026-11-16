@@ -1,38 +1,21 @@
 /**
- * Cron FIELD semantics (pure, dependency-free).
+ * Cron FIELD semantics (pure, browser-safe, import-free): `matchesCronField(value, expr, fieldMin)`,
+ * `expandCronField(expr, min, max)` and `cronWeekdayHours(expr)` → `{days, hours}`.
  *
- * Cron FIELD semantics (pure, browser-safe): `matchesCronField(value, expr, fieldMin)` — the matcher
- * `services/eventScheduler.js` walks minute by minute with — plus `expandCronField(expr, min, max)`
- * and `cronWeekdayHours(expr)` → `{days, hours}`, the weekday/hour OCCUPANCY view a scheduler planner
- * needs. Sibling of `cronValidation.js` (syntax/range only); one matcher so a planner reading an hour
- * as free and the walker firing in it cannot disagree. `cronWeekdayHours` over-approximates on purpose
- * — a `dayOfMonth`/`month` restriction lands on an unpredictable weekday, so it reports the whole
- * week.
- *
- * Sibling of `cronValidation.js`, which answers syntax and range only. This
- * module answers the two questions a reader of an already-valid expression
- * has: does THIS value match that field, and which values does that field
- * fire on?
- *
- * `matchesCronField` is the walker's own matcher (`services/eventScheduler.js`
- * stepped minute by minute using a private copy). It lives here because the
- * schedule PLANNER needs the same reading of `*\/4`, `1-5` and `0,12` — a
- * second implementation would let the planner think an hour is free while the
- * walker fires a task in it.
- *
- * Kept import-free so the browser can use it the way `cronValidation.js` is
- * already used by `client/src/utils/cronHelpers.js`.
+ * Sibling of `cronValidation.js` (syntax/range only). `matchesCronField` is the matcher
+ * `services/eventScheduler.js` walks minute by minute; the schedule planner must share it so it
+ * cannot read an hour as free while the walker fires a task in it.
  */
 
 import { CRON_FIELD_BOUNDS, CRON_FIELD_COUNT, isCronShaped } from './cronValidation.js';
 
 /**
- * Whether a value matches one cron field expression.
+ * Whether a value matches one cron field expression (`*`, `5`, `1-5`, `*\/15`, `0,12`).
+ * `fieldMin` is the implicit start of a bare `*\/n` step.
  *
  * @param {number} value - The concrete value (hour, day-of-week, …)
  * @param {string} expr - One cron field (`*`, `5`, `1-5`, `*\/15`, `0,12`)
- * @param {number} [fieldMin] - The field's minimum, used as the implicit start
- *   of a bare `*\/n` step
+ * @param {number} [fieldMin] - The field's minimum, used as the implicit start of a bare `*\/n` step
  * @returns {boolean}
  */
 export function matchesCronField(value, expr, fieldMin = 0) {
@@ -70,7 +53,7 @@ export function matchesCronField(value, expr, fieldMin = 0) {
 }
 
 /**
- * Every value in `[min, max]` a field fires on.
+ * Every value in `[min, max]` (inclusive) a field fires on, ascending.
  *
  * @param {string} expr - One cron field
  * @param {number} min - Inclusive lower bound of the field
@@ -86,18 +69,14 @@ export function expandCronField(expr, min, max) {
 }
 
 /**
- * The weekday/hour cells a 5-field expression can fire in — the occupancy view
- * a planner needs to keep a new task out of a running one's way.
+ * The weekday/hour cells a 5-field expression can fire in; null when not cron-shaped.
  *
- * Deliberately over-approximates rather than under: a `dayOfMonth`/`month`
- * restriction narrows WHICH dates match, but says nothing about weekday, so an
- * expression carrying one is reported as occupying every weekday at its hours.
- * A planner that guesses low would put work on top of a running job; guessing
- * high only costs it a candidate hour.
+ * Deliberately over-approximates: a `dayOfMonth`/`month` restriction says nothing about weekday,
+ * so it reports every weekday at its hours. Guessing low would put work on top of a running job;
+ * guessing high only costs a candidate hour.
  *
  * @param {unknown} cronExpr - A 5-field cron expression
- * @returns {{ days: number[], hours: number[] }|null} null when
- *   the value is not cron-shaped
+ * @returns {{ days: number[], hours: number[] }|null} null when the value is not cron-shaped
  */
 export function cronWeekdayHours(cronExpr) {
   if (!isCronShaped(cronExpr)) return null;
@@ -106,8 +85,6 @@ export function cronWeekdayHours(cronExpr) {
   const [, hourExpr, dayOfMonthExpr, monthExpr, dayOfWeekExpr] = fields;
 
   const hours = expandCronField(hourExpr, ...CRON_FIELD_BOUNDS[1]);
-  // A restricted date or month lands on an unpredictable weekday, so the whole
-  // week is occupied at those hours.
   const dateRestricted = dayOfMonthExpr !== '*' || monthExpr !== '*';
   const days = dateRestricted
     ? [0, 1, 2, 3, 4, 5, 6]

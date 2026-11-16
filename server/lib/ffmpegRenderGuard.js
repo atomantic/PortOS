@@ -1,54 +1,24 @@
 /**
- * `attachFfmpegRenderGuard(proc, opts)` tracks spawn state and enforces an exactly-once terminal
- * callback for SSE ffmpeg render runs.
+ * Shared spawn-state tracking and exactly-once terminal callback for the SSE ffmpeg render runners (`attachFfmpegRenderGuard`).
  *
- * `attachFfmpegRenderGuard(proc, {label, onSpawnError, onProcessError, onClose})` — shared spawn-state
- * tracking + exactly-once `terminal` guard + pre-vs-post-spawn dispatch for the SSE ffmpeg render
- * runners (musicVideo/render + videoTimeline/local). Owns the 'spawn'/'error'/'close' wiring (only the
- * pre-spawn 'error' or 'close' finalizes; a post-spawn 'error' records only) and takes the
- * service-specific finalize bodies as callbacks so each renderer keeps its own project-status/history
- * behavior.
- */
-
-/**
- * Shared ffmpeg render-process lifecycle guard (#2398).
+ * Callers (musicVideo/render, videoTimeline/local) supply their own finalize bodies as callbacks.
  *
- * The two SSE render runners — `server/services/musicVideo/render.js` and
- * `server/services/videoTimeline/local.js` — spawn ffmpeg and then wire an
- * identical spawn-state + exactly-once `terminal` guard around its 'spawn',
- * 'error', and 'close' events. That block is byte-for-byte parallel across the
- * two renderers; only the finalization *bodies* differ (music-video mutates the
- * project's render status; timeline does not). This helper owns the shared
- * mechanics and takes the service-specific finalize bodies as callbacks.
+ * ffmpeg's 'error' fires for BOTH a pre-spawn failure (ENOENT: no 'close' will follow) AND a later
+ * child error such as a failed kill (ffmpeg still live, 'close' still owes the terminal event);
+ * 'spawn' flips `spawned` to tell them apart. Pre-spawn errors finalize via `onSpawnError`; post-spawn
+ * errors only record via `onProcessError` and keep process + mutex ownership until 'close', otherwise
+ * a replacement render could overlap the live ffmpeg. Whichever of {pre-spawn 'error', 'close'} fires
+ * first sets `terminal` and finalizes; the other is a no-op.
  *
- * The mechanics it owns:
- * - **Spawn-state tracking.** ffmpeg's 'error' fires for BOTH a genuine
- *   pre-spawn failure (ENOENT — the child never started, so no 'close' will
- *   follow) AND a later child-process error such as a failed kill (the ffmpeg
- *   is still live and 'close' still owes a terminal event). The 'spawn' event
- *   flips `spawned` so the 'error' handler can tell the two apart.
- * - **Pre-vs-post-spawn dispatch.** Pre-spawn errors finalize immediately
- *   (via `onSpawnError`); post-spawn errors only *record* the reason (via
- *   `onProcessError`) and retain process + mutex ownership until 'close' runs
- *   the sole terminal finalization — otherwise a replacement render could
- *   spawn and overlap the still-live ffmpeg.
- * - **Exactly-once `terminal` guard.** Whichever of {pre-spawn 'error',
- *   'close'} fires first sets `terminal` and runs the sole finalization; the
- *   other is a no-op. A post-spawn 'error' deliberately does NOT set `terminal`
- *   (the pending 'close' still owes the terminal event).
- *
- * These listeners run OUTSIDE the Express request lifecycle, so an uncaught
- * throw from a callback would crash the Node process (there is no `next(err)`
- * to bubble to). Each listener is wrapped in a last-resort try/catch that logs
- * via the emoji-prefixed convention — callbacks that want richer recovery
- * (emit an SSE error frame, release the mutex) keep their own inner try/catch.
+ * These listeners run outside the Express lifecycle, so each is wrapped in a last-resort try/catch;
+ * callbacks wanting richer recovery keep their own inner try/catch.
  *
  * @param {import('child_process').ChildProcess} proc - the spawned ffmpeg child
  * @param {object} handlers
- * @param {string} handlers.label - log label for the crash-guard messages (e.g. "Music-video render")
- * @param {(err: Error) => void|Promise<void>} handlers.onSpawnError - pre-spawn failure: the child never started; finalize the job.
- * @param {(err: Error) => void|Promise<void>} handlers.onProcessError - post-spawn error: ffmpeg still live; record only, do NOT finalize.
- * @param {(code: number|null, signal: string|null) => void|Promise<void>} handlers.onClose - the sole terminal 'close' finalization.
+ * @param {string} handlers.label - log label for the crash-guard messages
+ * @param {(err: Error) => void|Promise<void>} handlers.onSpawnError - child never started; finalize the job.
+ * @param {(err: Error) => void|Promise<void>} handlers.onProcessError - ffmpeg still live; record only, do NOT finalize.
+ * @param {(code: number|null, signal: string|null) => void|Promise<void>} handlers.onClose - the sole terminal finalization.
  */
 export function attachFfmpegRenderGuard(proc, { label, onSpawnError, onProcessError, onClose }) {
   let spawned = false;
@@ -57,19 +27,14 @@ export function attachFfmpegRenderGuard(proc, { label, onSpawnError, onProcessEr
 
   proc.on('error', async (err) => {
     try {
-      // Already finalized (a pre-spawn error or 'close' won the race) — a late
-      // stray 'error' (e.g. ESRCH/EPERM from a kill on the now-dead pid) must
-      // not clobber a completed job.
+      // A late stray 'error' (e.g. ESRCH/EPERM from killing a dead pid) must not clobber a completed job.
       if (terminal) return;
       if (spawned) {
-        // Post-spawn error. ffmpeg is still live — do NOT set `terminal` or
-        // release ownership; the pending 'close' runs the sole finalization.
+      // Post-spawn: ffmpeg still live; the pending 'close' runs the sole finalization.
         await onProcessError(err);
         return;
       }
-      // Pre-spawn failure: the child never started, so 'close' won't follow —
-      // finalize here. Set `terminal` BEFORE the callback so a throw inside it
-      // can't let 'close' re-run the finalization.
+      // Pre-spawn: no 'close' will follow. Set `terminal` BEFORE the callback so a throw can't let 'close' re-finalize.
       terminal = true;
       await onSpawnError(err);
     } catch (e) {

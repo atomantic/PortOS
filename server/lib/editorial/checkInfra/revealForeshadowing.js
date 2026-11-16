@@ -1,73 +1,42 @@
 /**
- * Reveal-gating, foreshadowing and setup/payoff stages + prompt summaries
- * (#2842 split of checkInfra.js). Covers the information-economy family:
- * info-dumping, object motivation/backstory/weight, style conformance,
- * interiority, Chekhov, premature reveal, and the endings/cliffhanger stage.
+ * Reveal-gating, foreshadowing and setup/payoff stages + prompt summaries: the
+ * information-economy family (info-dumping, object motivation/backstory/weight, style
+ * conformance, interiority, Chekhov, premature reveal, endings/cliffhanger).
  */
 
 import { revealGatedCanonRows } from './externals.js';
 
-// Stage name for the info-dumping LLM check. The prompt ships in
-// data.reference/prompts/stages/ and its config in stage-config.json; both
-// propagate to existing installs via setup-data.js (missing-file copy +
-// JSON_MERGE_TARGETS stage merge), so no migration is needed for a NEW stage.
+// Info-dumping stage. A NEW stage reaches existing installs via setup-data.js
+// (missing-file copy + JSON_MERGE_TARGETS stage merge), so it needs no migration.
 export const INFO_DUMPING_STAGE = 'pipeline-editorial-info-dumping';
 
-// Stage names for the two object-attachment LLM checks (#1288). Like the
-// info-dumping stage, each prompt ships in data.reference/prompts/stages/ and
-// its config in stage-config.json; both propagate to fresh installs via
-// setup-data.js and to existing installs via migration 094 (boot runs
-// migrations but NOT setup-data, so the migration is required — see
-// scripts/migrations/094-object-attachment-check-stages.js).
+// Object-attachment checks. Prompts ship in data.reference/prompts/stages/ +
+// stage-config.json; existing installs get them via migration 094 (boot runs
+// migrations but NOT setup-data).
 export const OBJECT_MOTIVATION_STAGE = 'pipeline-editorial-object-motivation';
 export const OBJECT_BACKSTORY_STAGE = 'pipeline-editorial-object-backstory';
 
-// Stage name for the object weight-proportionality LLM check (#1624): judges
-// whether an object's narrative weight (established backstory + payoff depth)
-// matches its prominence in the prose — flagging a minor object given a heavy
-// backstory ("a one-line locket with a 3-issue origin") or a climactic object
-// with no lineage to earn it ("a heirloom that decides the finale, never set
-// up"). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
-// installs via setup-data.js) and migrates to existing installs via migration
-// 143 (boot runs migrations but NOT setup-data, so the migration is required).
-// Like the two object-attachment checks above it feeds the canon's per-object
-// significance/attachment summary as context and reads the stitched manuscript
-// to weigh prose prominence against that established weight.
+// Object weight-proportionality: does an object's established backstory and payoff
+// depth match its prose prominence (migration 143)? Feeds the canon's per-object
+// significance summary as context.
 export const OBJECT_WEIGHT_STAGE = 'pipeline-editorial-object-weight-proportionality';
 
-// Stage name for the style-guide conformance LLM check (#1303). Ships in
-// data.reference/prompts/stages/ + stage-config.json (fresh installs via
-// setup-data.js) and migrates to existing installs via migration 096 (boot runs
-// migrations but NOT setup-data, so the migration is required).
+// Style-guide conformance (migration 096; boot runs migrations but NOT setup-data).
 export const STYLE_CONFORMANCE_STAGE = 'pipeline-editorial-style-conformance';
 
-// Stage name for the protagonist-interiority LLM check (#1294). Ships in
-// data.reference/prompts/stages/ + stage-config.json (fresh installs via
-// setup-data.js) and migrates to existing installs via migration 099 (boot runs
-// migrations but NOT setup-data, so the migration is required).
+// Protagonist interiority (migration 099).
 export const INTERIORITY_STAGE = 'pipeline-editorial-interiority';
 
-// Stage name for the Chekhov's-guns setup/payoff LLM check (#1299). Ships in
-// data.reference/prompts/stages/ + stage-config.json (fresh installs via
-// setup-data.js) and migrates to existing installs via migration 100 (boot runs
-// migrations but NOT setup-data, so the migration is required).
+// Chekhov's-guns setup/payoff (migration 100).
 export const CHEKHOV_STAGE = 'pipeline-editorial-chekhov';
 
-// Stage name for the premature-reveal editorial LLM check (#2178 — CWQE Phase
-// 13). Ships in data.reference/prompts/stages/ + stage-config.json (fresh
-// installs via setup-data.js) and migrates to existing installs via migration
-// 168 (boot runs migrations but NOT setup-data, so the migration is required).
+// Premature-reveal check (migration 168).
 export const PREMATURE_REVEAL_STAGE = 'pipeline-editorial-premature-reveal';
 
-// Render the reveal-gated canon (#2178) into a compact text block the
-// premature-reveal check passes alongside the manuscript, so the model knows
-// which facts are SECRETS not yet due and when each is meant to surface. Each
-// row names the entry, its reveal issue (or hard spoiler), the spoiler-free
-// surface stand-in the reader IS allowed to see, and the underlying fact that
-// must NOT leak early. Pure + deterministic so it's unit-testable and its token
-// cost counts into the per-chunk overhead. Returns '' when no canon is
-// reveal-gated (the check gates on `canonHasRevealGated` so this won't be
-// called with an empty set, but the guard keeps it safe).
+// Render the reveal-gated canon into a compact block so the premature-reveal check
+// knows which facts are SECRETS not yet due: each row names the entry, its reveal
+// issue (or hard spoiler), the allowed surface stand-in, and the fact that must not
+// leak. Pure so its token cost counts into per-chunk overhead; '' when none gated.
 export function revealGatedCanonSummary(canon) {
   const rows = revealGatedCanonRows(canon);
   if (!rows.length) return '';
@@ -85,13 +54,9 @@ export function revealGatedCanonSummary(canon) {
     + 'learn from the prose before the fact is due):\n' + lines.join('\n');
 }
 
-// Render reveal-gated canon (#2178) as AUTHORED PAYOFFS for the Chekhov check —
-// a gated entry's `revealIssue` is effectively an authored payoff point (the
-// issue where the withheld fact is meant to fire). Folded into the Chekhov
-// `authoredSetups` block so the check can flag a reveal that arrives with zero
-// prior setup (an orphaned payoff). Only NUMERIC reveal gates render — a hard
-// `spoiler` has no scheduled payoff issue to reconcile against. Returns '' when
-// no numeric-gated entry exists (the block renders nothing). Pure.
+// Render reveal-gated canon as AUTHORED PAYOFFS for the Chekhov check (a gate's
+// `revealIssue` is the authored payoff point), so it can flag a reveal with no prior
+// setup. Only NUMERIC gates render; a hard `spoiler` has no payoff issue. '' when none.
 export function revealGatedPayoffsSummary(canon) {
   const rows = revealGatedCanonRows(canon).filter((r) => Number.isInteger(r.revealIssue));
   if (!rows.length) return '';
@@ -103,45 +68,30 @@ export function revealGatedPayoffsSummary(canon) {
     + 'flag a reveal that arrives with no prior setup):\n' + lines.join('\n');
 }
 
-// Stage name for the chapter-ending cliffhanger LLM check (#1298). Ships in
-// data.reference/prompts/stages/ + stage-config.json (fresh installs via
-// setup-data.js) and migrates to existing installs via migration 102 (boot runs
-// migrations but NOT setup-data, so the migration is required).
+// Chapter-ending cliffhanger check (migration 102).
 export const ENDINGS_CLIFFHANGER_STAGE = 'pipeline-editorial-endings-cliffhanger';
 
-// Render the authored reader-map hooks/payoffs (#1299) into a compact text block
-// the Chekhov check passes alongside the manuscript so the model reconciles its
-// DETECTED setups/payoffs against what the writer has already LOGGED — e.g. an
-// authored hook with no detected payoff, or a detected payoff the writer never
-// logged. Pure + deterministic so it's unit-testable and so its token cost can be
-// counted into the per-chunk overhead. Returns '' when nothing is authored (the
-// prompt's `{{#authoredSetups}}` section then renders nothing).
-// Shared preamble for the authored-entry renderers below: an entry's
-// `label — note` (or whichever is present), '' when neither is usable so
-// callers can `.filter(Boolean)`.
+// Shared preamble for the authored-entry renderers below: an entry's `label — note`
+// (or whichever is present), '' when neither is usable so callers can `.filter(Boolean)`.
 function entryLabelNoteText(e) {
   const label = typeof e?.label === 'string' ? e.label.trim() : '';
   const note = typeof e?.note === 'string' ? e.note.trim() : '';
   return label && note ? `${label} — ${note}` : (label || note);
 }
 
-// Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line.
-// Shared by authoredSetupPayoffSummary + authoredPayoffsSummary. Returns '' for an
-// entry with no usable label/note so callers can `.filter(Boolean)`.
+// Render one reader-map entry (hook or payoff) to a `- text (arc position N)` line;
+// '' when unusable.
 function renderReaderMapEntryLine(e) {
   const text = entryLabelNoteText(e);
   if (!text) return '';
-  // A coarse expected-location hint so the model can reason about WHERE an
-  // authored hook should have paid off (reconciliation signal, #1299).
+  // Coarse expected-location hint for reconciliation.
   const pos = Number.isFinite(e?.atArcPosition) ? ` (arc position ${e.atArcPosition})` : '';
   return `- ${text}${pos}`;
 }
 
-// Render one foreshadowing-ledger entry (#2172) to a `- text (plant issue N →
-// reinforced issue M → payoff issue P)` line so the Chekhov check reconciles
-// its detected plants/payoffs against the author-declared ledger instead of
-// inferring every seed from scratch. Returns '' for an entry with no usable
-// label/note so callers can `.filter(Boolean)`.
+// Render one foreshadowing-ledger entry to a `- text (plant issue N → reinforced issue
+// M → payoff issue P)` line so the Chekhov check reconciles against the author-declared
+// ledger; '' when unusable.
 function renderForeshadowingEntryLine(e) {
   const text = entryLabelNoteText(e);
   if (!text) return '';
@@ -154,9 +104,7 @@ function renderForeshadowingEntryLine(e) {
   return span.length ? `- ${text} (${span.join(' → ')})` : `- ${text}`;
 }
 
-// Build the authored-foreshadowing-ledger block (#2172). Exported for the
-// Chekhov check + unit tests; returns '' when nothing is authored so the
-// prompt's `{{#authoredSetups}}` section renders nothing.
+// Authored-foreshadowing-ledger block; '' when nothing is authored.
 export function authoredForeshadowingSummary(foreshadowing) {
   const entries = Array.isArray(foreshadowing) ? foreshadowing : [];
   const lines = entries.map(renderForeshadowingEntryLine).filter(Boolean);
@@ -164,11 +112,9 @@ export function authoredForeshadowingSummary(foreshadowing) {
   return `Authored foreshadowing ledger (planted seeds the writer logged — plant → reinforce → payoff):\n${lines.join('\n')}`;
 }
 
-// `foreshadowing` (#2172) is the author-declared plant→reinforce→payoff ledger
-// on `series.arc.foreshadowing`; it's folded into the SAME authored-setups
-// block the reader-map hooks/payoffs render into, so the Chekhov prompt
-// consumes it through its existing `{{#authoredSetups}}` section without a
-// template change.
+// Authored reader-map hooks/payoffs plus the foreshadowing ledger (`series.arc.foreshadowing`)
+// in one authored-setups block, so the Chekhov check can reconcile its DETECTED
+// setups/payoffs against what the writer LOGGED without a template change. '' when none.
 export function authoredSetupPayoffSummary(readerMap, foreshadowing) {
   const hooks = Array.isArray(readerMap?.hooks) ? readerMap.hooks : [];
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
@@ -183,16 +129,10 @@ export function authoredSetupPayoffSummary(readerMap, foreshadowing) {
   return parts.join('\n\n');
 }
 
-// Render ONLY the authored reader-map payoffs (#1583) — the resolutions the writer
-// LOGGED that the reader was promised. The climax / resolution-power check passes
-// this (NOT authoredSetupPayoffSummary, which also bundles hooks) so the prompt's
-// "payoffs the climax should deliver" framing stays accurate: a hook is a question
-// the writer planted, not a climax obligation, so feeding hooks here would risk the
-// model flagging an ordinary unanswered hook as a missing climax resolution. Pure +
-// deterministic so it's unit-testable and its token cost can be counted into the
-// per-chunk overhead. Returns '' when no payoff is authored (the prompt's
-// `{{#authoredPayoffs}}` section then renders nothing and the check reasons from the
-// prose + themes alone).
+// Render ONLY authored reader-map payoffs for the climax / resolution-power check.
+// Hooks are deliberately excluded (unlike authoredSetupPayoffSummary): an unanswered
+// hook is not a climax obligation and would be flagged as a missing resolution.
+// '' when no payoff is authored.
 export function authoredPayoffsSummary(readerMap) {
   const payoffs = Array.isArray(readerMap?.payoffs) ? readerMap.payoffs : [];
   const payoffLines = payoffs.map(renderReaderMapEntryLine).filter(Boolean);

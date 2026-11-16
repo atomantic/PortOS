@@ -5,25 +5,10 @@
 
 import { executionOptionsError } from './executionOptions.js';
 /**
- * Per-CLI conventions for OpenAI's Codex CLI (binary: `codex`).
- *
- * Extracted from `tuiHandshake.js` (where `ensureCodexTuiArgs` used to live as a
- * private helper) so codex has the same one-file-per-vendor shape as
- * antigravity.js / grok.js / kimi.js / cursor.js — the shape `providerVendors.js`
- * consumes as its `PROVIDER_VENDORS` registry rows (#3618).
- *
- * Dependency-light on purpose: imports only `providerModels.js` helpers,
- * mirroring the other vendor files so it stays importable from the standalone
- * autofixer.
- *
- * The RECORD-CLASSIFICATION half of the local-model backing
- * (`CODEX_OSS_LOCAL_PROVIDERS`, `codexOssLocalProvider`,
- * `codexUnsupportedLocalRuntime`) lives in `providerModels.js` beside the
- * `localRuntimeNamespace` it wraps, for the same reason `isCodexProvider` is
- * defined there rather than here: classifying a provider RECORD is that file's
- * job, and it lets a consumer that only needs the verdict —
- * `providerPrerequisites.js` — skip a vendor's argv module entirely. Argv
- * construction stays here.
+ * Dependency-light (only `providerModels.js` helpers) so it stays importable from
+ * the standalone autofixer. Provider-RECORD classification of the local-model
+ * backing (`codexOssLocalProvider` etc.) lives in `providerModels.js` so
+ * consumers needing only the verdict skip this argv module; argv construction stays here.
  */
 
 import {
@@ -41,18 +26,14 @@ export const isVisionCapableCodexTuiProvider = (provider) =>
   provider?.type === 'tui' && isCodexCommand(provider.command);
 
 /**
- * Match by normalized binary basename (like isGrokCommand/isKimiCommand) so a
- * path- or `.exe`-configured provider is still recognized.
+ * Matches by normalized binary basename so a path- or `.exe`-configured provider is recognized.
  * @param {string|null|undefined} command
- * @returns {boolean}
  */
 export function isCodexCommand(command) {
   return commandBasename(command) === CODEX_COMMAND;
 }
 
-// An approval/sandbox posture already pinned by the user (separated or
-// joined `flag=value` form, via the shared argvHasFlag scan) — codex has no
-// joined form for the two boolean flags, but checking for one is harmless.
+// Approval/sandbox flags a user may already have pinned.
 const APPROVAL_POLICY_FLAGS = [
   '--ask-for-approval', '-a',
   '--sandbox', '-s',
@@ -60,59 +41,38 @@ const APPROVAL_POLICY_FLAGS = [
   '--yolo',
 ];
 
-// True when the codex argv already declares an approval/sandbox posture, so
-// injecting `--dangerously-bypass-approvals-and-sandbox` would collide with it.
 function codexHasApprovalPolicy(args) {
   return argvHasFlag(args, APPROVAL_POLICY_FLAGS);
 }
 
-// Disable codex's startup update check (see buildCodexStartupArgs in
-// providerModels.js for the full "Update available!" modal failure mode) and
-// inject the full-yolo bypass. Both are prepended; the update-check disable is
-// independent of the approval posture (the modal is orthogonal to sandboxing),
-// so it rides even when a provider pins its own policy, while the bypass flag is
-// skipped when the argv already declares an approval/sandbox posture.
+// Prepends the startup update-check disable (see buildCodexStartupArgs) and the full-yolo bypass.
+// The update-check disable is independent of approval posture; the bypass is
+// skipped when the argv already declares one.
 export function ensureCodexTuiArgs(args, provider = null) {
   const prefix = [...buildCodexExecutionOptionArgs(provider, args)];
   if (!codexHasApprovalPolicy(args)) {
     prefix.push('--dangerously-bypass-approvals-and-sandbox');
   }
-  // Same pin the CLI arm applies: an interactive Codex session reads the user's
-  // `~/.codex/config.toml` too, so a provider the user pinned to PortOS's own
-  // account must not silently route through a bridge here either.
+  // An interactive session reads `~/.codex/config.toml` too, so honor the same pin as the CLI arm.
   if (provider?.ignoreUserConfig === true && !args.includes('--ignore-user-config')) {
     prefix.push('--ignore-user-config');
   }
   prefix.push(...buildCodexAuthModeArgs(provider, args));
   prefix.push(...buildCodexStartupArgs(args));
-  // The local backing, on the same posture-flag step both TUI spawn paths
-  // share — an interactive `codex-ollama` session without it silently reaches
-  // the OpenAI cloud instead of the daemon the record names.
+  // Without this, an interactive `codex-ollama` session silently reaches the OpenAI cloud.
   prefix.push(...buildCodexOssArgs(provider, args));
   return prefix.length ? [...prefix, ...args] : args;
 }
 
 
-/**
- * `['--oss', '--local-provider', '<ns>']` for a local-runtime-backed codex
- * record, or `[]`.
- *
- * Skipped when `existingArgs` already pins either flag, so a user who typed the
- * pair into their provider args keeps their own spelling instead of getting a
- * duplicate codex rejects.
- * @param {object|null|undefined} provider
- * @param {string[]} [existingArgs]
- * @returns {string[]}
- */
 export const CODEX_AUTH_MODES = Object.freeze(['chatgpt', 'api']);
 
 /**
  * `["-c", "forced_login_method=\"<mode>\""]` when the provider pins Codex to
  * one authentication method, else `[]` (Codex picks from its own login state).
  *
- * ChatGPT-subscription access and API-key access are separate auth and billing
- * modes, and some models are only available to one of them. Skipped when the
- * argv already sets the key, so a hand-typed `-c forced_login_method=…` wins.
+ * ChatGPT-subscription and API-key access are separate auth/billing modes and
+ * some models are only available to one. Skipped when the argv already sets the key.
  * @param {object|null|undefined} provider
  * @param {string[]} [existingArgs]
  * @returns {string[]}
@@ -124,7 +84,14 @@ export function buildCodexAuthModeArgs(provider, existingArgs = []) {
   return ['-c', `forced_login_method="${mode}"`];
 }
 
-// Selects the local model through argv flags only; the user's ~/.codex/config.toml is never rewritten.
+/**
+ * `['--oss', '--local-provider', '<ns>']` for a local-runtime-backed codex record, or `[]`
+ * (also when existingArgs pins either flag, to avoid a duplicate codex rejects).
+ * Argv flags only; the user's ~/.codex/config.toml is never rewritten.
+ * @param {object|null|undefined} provider
+ * @param {string[]} [existingArgs]
+ * @returns {string[]}
+ */
 export function buildCodexOssArgs(provider, existingArgs = []) {
   const localProvider = codexOssLocalProvider(provider);
   if (!localProvider) return [];
