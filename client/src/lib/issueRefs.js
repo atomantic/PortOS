@@ -13,8 +13,11 @@ const ISSUE_REF_RE = /(?<![\w#&/:=-])#([1-9]\d{0,4})(?!\w)/g;
 
 /**
  * Split plain text into literal strings and issue references. The caller must hand text already OUTSIDE code spans, links and image syntax (a `#7640` in a code span is literal; one inside `[…](…)` has a destination).
+ * @param {string} text
  * @param {string|null|undefined} issueUrlBase — `agent.metadata.repoIssueUrl`
- * @returns {Array<string | { ref: string, url: string }>} one element holding `text` unchanged when there is no tracker or nothing to link
+ * @returns {Array<string | { ref: string, url: string }>} a single-element
+ *   array holding `text` unchanged when there is no tracker to resolve
+ *   against, or nothing in the text to link.
  */
 export function splitIssueRefs(text, issueUrlBase) {
   // `indexOf` before the regex: most text runs contain no `#` and this runs per run on every streamed frame.
@@ -35,6 +38,7 @@ export function splitIssueRefs(text, issueUrlBase) {
 
 /**
  * The `linkifyText` resolver for one CoS run, or null when the run predates the `repoIssueUrl` stamp (its markdown renders as plain text). Lives here so every surface rendering a run's prose is one line.
+ * @param {{metadata?: {repoIssueUrl?: string|null}}|null} agent
  * @returns {((text: string) => Array<string | { ref: string, url: string }>) | null}
  */
 export function agentIssueLinkifier(agent) {
