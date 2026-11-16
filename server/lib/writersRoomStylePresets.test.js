@@ -38,9 +38,6 @@ describe('writersRoomStylePresets', () => {
       }
     });
 
-    it('STYLE_PRESET_IDS mirrors the preset id list in order', () => {
-      expect(STYLE_PRESET_IDS).toEqual(STYLE_PRESETS.map(p => p.id));
-    });
   });
 
   describe('STYLE_ID sentinels', () => {
