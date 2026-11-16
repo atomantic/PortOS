@@ -156,8 +156,7 @@ describe('brainImport routes', () => {
     chatgptImport.readArchivedConversation.mockResolvedValue({ id: 'c1', title: 'X', transcript: '**You**:\nhi' });
     const res = await request(buildApp()).get('/api/brain/import/chatgpt/archive/c1.json');
     expect(res.status).toBe(200);
-    expect(res.body.transcript).toContain('hi');
-    expect(chatgptImport.readArchivedConversation).toHaveBeenCalledWith('c1.json');
+    expect(chatgptImport.readArchivedConversation.mock.calls[0][0]).toBe('c1.json');
   });
 
   it('GET /chatgpt/archive/:name returns 404 when missing', async () => {

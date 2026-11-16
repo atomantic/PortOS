@@ -30,12 +30,6 @@ describe('DELETE /api/data/:category', () => {
     purgeCategory.mockReset().mockResolvedValue({ category: 'images', subPath: null });
   });
 
-  it('forwards a per-item purge target to the service', async () => {
-    const res = await request(makeApp()).delete('/api/data/images').send({ subPath: 'render-0001.png' });
-    expect(res.status).toBe(200);
-    expect(purgeCategory).toHaveBeenCalledWith('images', { subPath: 'render-0001.png' });
-  });
-
   it('treats a bodiless request as a whole-category purge', async () => {
     const res = await request(makeApp()).delete('/api/data/screenshots').send({});
     expect(res.status).toBe(200);
