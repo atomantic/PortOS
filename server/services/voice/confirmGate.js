@@ -1,57 +1,28 @@
 // Destructive-action confirmation gate.
 //
-// When the voice agent fires a `ui_click` whose resolved element label looks
-// destructive (delete / remove / discard / reset / clear) we don't blindly
-// click — instead the tool stashes a `pendingDestructive` record on the
-// session state and returns a result asking the LLM to prompt the user for
-// spoken confirmation. The user's NEXT spoken turn is intercepted by the
-// voice pipeline (before the LLM runs) and routed through resolvePending():
+// A `ui_click` whose resolved label looks destructive (delete / remove / discard /
+// reset / clear) stashes a `pendingDestructive` record on session state and asks
+// the LLM to prompt for spoken confirmation. The user's NEXT turn is intercepted
+// by the voice pipeline (before the LLM) and routed through resolvePending():
+// affirmative re-issues the click, negative drops it with a short acknowledgement,
+// anything else clears it and falls through to the normal LLM turn.
 //
-//   "confirm" / "yes do it" / "go ahead" → re-issue the click side-effect
-//   "no" / "cancel" / "stop"             → drop the pending click and send a
-//                                          short spoken acknowledgement
-//                                          ("Cancelled.") without running the
-//                                          LLM
-//   anything else (ambiguous)            → clear the pending state and fall
-//                                          through to the normal LLM turn so
-//                                          the user can do something else.
-//
-// Keeping this as a pure module (no I/O, no socket emits; the clock is
-// injectable via `createdAt` / `now` parameters and only defaults to
-// `Date.now()` for ergonomics at call sites) makes the state machine
-// trivially testable.
+// Pure module (no I/O, no socket emits; the clock is injectable via `createdAt` / `now`).
 
-// Conservative on purpose — false-negatives only mean the user clicks a Delete
-// button without an extra confirm prompt, which mirrors a normal mouse click.
-// False-positives ("Reset filters" → confirm gate) are mildly annoying but
-// safe. Anchored on word boundaries so labels like "Cleared" / "Resettable"
-// don't trip it.
+// Conservative on purpose: a false-negative is a normal click, a false-positive is
+// mildly annoying but safe. Word-boundary anchored ("Cleared" doesn't trip it).
 export const DESTRUCTIVE_LABEL_RE = /\b(delete|remove|discard|reset|clear)\b/i;
 
-// Both regex sets are anchored at start (^) AND end ($) so only short,
-// stand-alone yes/no utterances are treated as a confirmation or cancellation.
-// Sentences that *start* with a yes/no token but then keep going ("cancel the
-// meeting", "stop the music", "yes I want to go to lunch") fall through to
-// `passthrough` so the LLM can answer the new request — matching the
-// module's documented contract that ambiguous input means the user has
-// moved on. Trailing punctuation is stripped before matching.
-// Optional leading "ok/okay " filler is allowed in NEGATIVE_RE so that
-// "okay cancel" / "okay never mind" are correctly classified as cancellations
-// rather than being eaten by AFFIRM_RE's bare "ok/okay" branch. resolvePending
-// also checks negative BEFORE affirmative as belt-and-suspenders for any
-// future affirmative tokens that happen to share a prefix with a negative.
+// Both regex sets are anchored at start AND end so only short stand-alone yes/no
+// utterances count; "cancel the meeting" falls through to `passthrough`.
+// NEGATIVE_RE allows a leading "ok/okay" so "okay cancel" isn't eaten by AFFIRM_RE.
 const AFFIRM_RE = /^(?:confirm|yes(?:[, ]+(?:do it|please|delete|remove|clear|reset|discard))?|do it|go ahead|proceed|continue|affirmative|ok(?:ay)?)$/i;
 const NEGATIVE_RE = /^(?:(?:ok(?:ay)?[, ]+)?(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative))$/i;
 
-// Strip wrapping quotes AND trailing punctuation in either order:
-// `"confirm".` / `"confirm."` / `confirm.` / `yes,` / `cancel;` /
-// `yes:` should all normalize to the bare token. STT engines (Whisper
-// especially) frequently emit a trailing comma after a yes/no when the
-// user takes a beat ("yes, … delete it"), so commas/colons/semicolons
-// have to be stripped too — otherwise `yes,` falls through to
-// passthrough and the pending destructive action is silently discarded.
-// Running the pair twice handles cases where punctuation is outside the
-// closing quote AND where it's inside.
+// Strip wrapping quotes AND trailing punctuation in either order (twice, since
+// punctuation may sit inside or outside the quote). STT engines often emit
+// `yes,` after a beat; without stripping it would fall through to passthrough
+// and silently discard the pending action.
 const normalize = (text) => {
   let s = (text || '').trim();
   for (let i = 0; i < 2; i++) {
@@ -62,24 +33,17 @@ const normalize = (text) => {
 
 export const isDestructiveLabel = (label) => DESTRUCTIVE_LABEL_RE.test(label || '');
 
-// The label heuristic above is a backstop, not the only way a control can
-// require confirmation: `data-voice-guard="confirm"` (client/src/services/
-// domIndex.js) annotates a control whose outbound effect the label alone
-// doesn't name — "Send" on a drafts row, "BTW" pasting into a live agent
-// session — so it is gated regardless of what it's called and however it
-// gets relabeled later. `entry` is a UI index entry (buildIndex output),
-// carrying `guard` only when the client annotated the element.
+// The label heuristic is a backstop: `data-voice-guard="confirm"` (client/src/services/
+// domIndex.js) gates a control whose effect its label doesn't name, however it is
+// relabeled. `entry` is a UI index entry carrying `guard` only when annotated.
 export const requiresConfirmation = (entry) =>
   entry?.guard === 'confirm' || isDestructiveLabel(entry?.label);
 
 export const isAffirmative = (text) => AFFIRM_RE.test(normalize(text));
 export const isNegative = (text) => NEGATIVE_RE.test(normalize(text));
 
-// Build the pending record. Caller (tools.js / pipeline.js) is responsible
-// for placing it on `state.pendingDestructive` AND for supplying `createdAt`
-// (defaults to Date.now() for ergonomics, but tests inject a fixed clock to
-// keep the module deterministic). Keeping the shape canonical here means
-// the pipeline never has to know the internal fields.
+// Build the pending record. The caller places it on `state.pendingDestructive`
+// and may inject `createdAt` (tests use a fixed clock).
 export const buildPending = ({ tool, args, target, createdAt = Date.now() }) => ({
   tool,
   args,
@@ -87,31 +51,19 @@ export const buildPending = ({ tool, args, target, createdAt = Date.now() }) => 
   createdAt,
 });
 
-// Decide what to do with the user's next utterance given a pending record.
-// Returns one of:
-//   { action: 'execute', pending }   — affirmative: re-issue the side effect
-//   { action: 'cancel',  pending }   — negative: drop pending, send a short
-//                                      acknowledgement instead of LLM turn
-//   { action: 'passthrough' }        — no pending or ambiguous: clear pending
-//                                      and let the normal LLM turn run
-//
-// Ambiguous input is treated as cancellation OF THE PENDING (the user moved on),
-// but a passthrough rather than a cancel — the LLM should answer the new
-// utterance normally without speaking a "cancelled" confirmation.
+// Decide what to do with the next utterance given a pending record:
+//   { action: 'execute', pending }  — affirmative: re-issue the side effect
+//   { action: 'cancel',  pending }  — negative: drop pending, short acknowledgement
+//   { action: 'passthrough' }       — none or ambiguous: clear pending, normal LLM turn
 export const resolvePending = (pending, userText) => {
   if (!pending) return { action: 'passthrough' };
-  // Check negative BEFORE affirmative — `AFFIRM_RE` matches bare leading
-  // "ok"/"okay", so "okay cancel" / "okay never mind" would otherwise
-  // execute the destructive action. Safe-by-default: if the user uttered
-  // any cancel word in the sentence-leading position, take the cancel.
+  // Negative BEFORE affirmative: AFFIRM_RE matches bare leading "ok", so "okay cancel" must not execute.
   if (isNegative(userText)) return { action: 'cancel', pending };
   if (isAffirmative(userText)) return { action: 'execute', pending };
   return { action: 'passthrough' };
 };
 
-// Stale-pending GC: a confirmation that's been waiting more than this long
-// is treated as expired so a forgotten "yes" two minutes later can't re-fire
-// a destructive action the user has moved past.
+// A pending confirmation older than this is expired so a forgotten "yes" can't re-fire it.
 export const PENDING_TTL_MS = 60_000;
 
 export const isExpired = (pending, now = Date.now()) =>

@@ -46,19 +46,14 @@ export async function getQuotaBurnConfig() {
 }
 
 /**
- * Merge `patch` over the stored config and persist the normalized result.
- * Shallow at the top level and per family, so the page can PUT a single family
- * (or just `{ enabled }`) without restating the whole plan. A family's `jobs`
- * array is REPLACED wholesale when present — it is an ordered list, and
- * element-wise merging would make reordering and deletion inexpressible.
+ * Merge `patch` over the stored config and persist the normalized result. Shallow at the
+ * top level and per family; a family's `jobs` array is REPLACED wholesale (ordered list,
+ * so element-wise merging could not express reorder or delete).
  */
 export async function saveQuotaBurnConfig(patch) {
   return configWriteQueue(async () => {
     const current = normalizeQuotaBurnConfig(await readJSONFile(configFile(), null, { strict: true }));
-    // Written to match `client/src/lib/quotaBurnPatch.js#mergeQuotaBurnPatch`
-    // line for line — the client applies the same merge optimistically while the
-    // PUT is debounced, and the two only stay honest if the claim is checkable
-    // at a glance. `normalizeQuotaBurnConfig` below drops any unknown family id.
+    // Mirrors `client/src/lib/quotaBurnPatch.js#mergeQuotaBurnPatch` line for line (the client merges optimistically).
     const families = { ...current.families };
     for (const [id, familyPatch] of Object.entries(isPlainObject(patch?.families) ? patch.families : {})) {
       families[id] = { ...(families[id] || {}), ...familyPatch };
@@ -73,12 +68,8 @@ const inFlightFile = () => join(PATHS.cos, 'quota-burn-inflight.json');
 const inFlightWriteQueue = createFileWriteQueue();
 
 /**
- * How long an enqueued render keeps its entry out of the next cycle's pick.
- *
- * A cloud image render commonly takes minutes and `imageRefs` only fills in
- * when it COMPLETES, so without a cooldown every tick re-selects the same
- * entries. Long enough to outlast a queued render, short enough that a render
- * which silently failed is retried the same day rather than being stranded.
+ * How long an enqueued render keeps its entry out of the next pick: renders take minutes
+ * and `imageRefs` fills only on completion, but a silently failed one is retried the same day.
  */
 const IN_FLIGHT_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -109,14 +100,9 @@ const reservationFile = () => join(PATHS.cos, 'quota-burn-pending.json');
 const reservationWriteQueue = createFileWriteQueue();
 
 /**
- * How long a reservation survives without being settled.
- *
- * A reservation is released the moment the request it names is accepted or
- * refused, so the TTL only ever catches a burn whose request vanished while the
- * runner was not running (a crash between the request write and the next cycle,
- * or a schedule edited by hand). The same 6h the in-flight cooldown uses, and
- * for the same reason: long enough to outlast the slowest legitimate drain,
- * short enough that a stranded step is retried the same day.
+ * How long a reservation survives unsettled. It is released on accept or refuse, so the TTL
+ * only catches a burn whose request vanished (crash, hand-edited schedule). Same 6h as the
+ * in-flight cooldown.
  */
 const RESERVATION_TTL_MS = IN_FLIGHT_TTL_MS;
 
@@ -129,16 +115,10 @@ const liveReservations = (entries, now) => Object.fromEntries(Object.entries(ent
     && now - Number(record.at) < RESERVATION_TTL_MS));
 
 /**
- * Reservations still awaiting acceptance, or `null` when the file could not be
- * read.
- *
- * The `null` is load-bearing, the same way it is on the three sibling ledgers
- * (#4115): a reservation is what stops a second cycle queuing the step a first
- * cycle already asked for AND what holds the step's share of the window cap
- * before the charge lands. Reading a failed read back as "nothing pending" would
- * both re-enqueue the work and re-open the cap, and the next write would then
- * persist that empty file over the reservations that survived. Absent (nothing
- * ever reserved) is still a trustworthy `{}`.
+ * Reservations still awaiting acceptance, or `null` when the file could not be read
+ * (#4115, like the sibling ledgers). A reservation stops a second cycle re-queuing the
+ * step and holds its share of the window cap, so a failed read must not look like
+ * "nothing pending". Absent is a trustworthy `{}`.
  */
 export async function getQuotaBurnReservations({ now = Date.now() } = {}) {
   const { ok, value } = await readJSONFileStrict(reservationFile(), {}, { logError: false });
@@ -146,12 +126,7 @@ export async function getQuotaBurnReservations({ now = Date.now() } = {}) {
   return isPlainObject(value) ? liveReservations(value, now) : {};
 }
 
-/**
- * Read-modify-write inside the queue, expiring aged reservations on the way
- * through. `mutate` returns the next map, or `null` for "nothing to change".
- * Never overwrites a file it could not read — the guard that is the whole point
- * of the strict read above.
- */
+/** Read-modify-write inside the queue, expiring aged reservations; `mutate` returns the next map or `null` for no change. Never overwrites an unreadable file. */
 const writeReservations = (mutate, now) => reservationWriteQueue(async () => {
   const loaded = await getQuotaBurnReservations({ now });
   if (!loaded) return null;
@@ -162,10 +137,8 @@ const writeReservations = (mutate, now) => reservationWriteQueue(async () => {
 });
 
 /**
- * Hold a step's place while its request waits to be accepted. Returns null when
- * the file was unreadable (the caller must then treat the dispatch as
- * unreserved) or when the step is already reserved — a second reservation for
- * one step is exactly the double-enqueue this primitive exists to prevent.
+ * Hold a step's place while its request waits to be accepted. Returns null when the file
+ * was unreadable (treat as unreserved) or the step is already reserved (the double-enqueue this prevents).
  */
 export async function reserveQuotaBurnStep(record, { now = Date.now() } = {}) {
   const key = quotaBurnReservationKey(record?.familyId, record?.stepId);
@@ -175,20 +148,10 @@ export async function reserveQuotaBurnStep(record, { now = Date.now() } = {}) {
 }
 
 /**
- * Stamp the instant a reservation's cap charge was CLAIMED, before the ledger
- * write it authorizes.
- *
- * Claiming first is what makes settlement exactly-once across a crash: the
- * ledger write and the release are two separate files, so a process that dies
- * between them would otherwise charge the same accepted unit twice on the next
- * reconcile. With the claim persisted first, a re-reconcile sees `chargedAt` and
- * releases without charging again. The residual is the reverse and smaller
- * failure — a crash in the gap between the claim and the ledger write loses one
- * charge, which costs the user nothing but one extra burn later.
- *
- * Pass `null` to RELEASE a claim whose ledger write then failed: that is a
- * reported failure rather than a crash, so the retry next cycle should charge
- * rather than inherit a claim nothing ever honored.
+ * Stamp the instant a reservation's cap charge was CLAIMED, before the ledger write it
+ * authorizes. Claiming first makes settlement exactly-once across a crash (the ledger
+ * write and release are separate files); the residual is one lost charge, which costs
+ * one extra burn. Pass `null` to RELEASE a claim whose ledger write failed, so the retry charges.
  */
 export async function markQuotaBurnReservationCharged(key, chargedAt, { now = Date.now() } = {}) {
   return writeReservations((reservations) => (reservations[key]
@@ -210,11 +173,7 @@ export async function getQuotaBurnRuns() {
   return Array.isArray(loaded?.runs) ? loaded.runs : [];
 }
 
-/**
- * Append one run-log entry (newest first). Records SKIPS as well as dispatches:
- * "why did nothing burn last night" is the question the page exists to answer,
- * and a log that only shows successful dispatches cannot answer it.
- */
+/** Append one run-log entry (newest first). Records SKIPS too: "why did nothing burn last night" is the page's question. */
 export async function recordQuotaBurnRun(entry) {
   return runLogWriteQueue(async () => {
     const loaded = await readJSONFile(runLogFile(), null, { strict: true });
@@ -226,15 +185,9 @@ export async function recordQuotaBurnRun(entry) {
 }
 
 /**
- * Settle the run-log row a burn already wrote, in place.
- *
- * A reference burn is recorded when its request goes out and only ACCEPTED
- * later, so the row is written twice — once as `pending`, once with the task id
- * the request produced (or the reason it was refused). Patching the existing row
- * rather than appending a second one keeps one line per burn in a feed capped at
- * `RUN_LOG_LIMIT`, where a duplicate row per dispatch would halve the history
- * the page can show. A row that has already aged out is simply not found, which
- * is not an error — the burn still happened, the feed just moved on.
+ * Settle the run-log row a burn already wrote, in place (written once `pending`, then with
+ * the task id or refusal). Patching keeps one line per burn in the capped feed; a row that
+ * aged out is simply not found.
  */
 export async function settleQuotaBurnRun(requestId, patch) {
   if (!requestId) return null;

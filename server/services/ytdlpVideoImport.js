@@ -1,20 +1,15 @@
 /**
- * Shared yt-dlp FULL-VIDEO download core.
+ * Shared yt-dlp FULL-VIDEO download core, the mirror of ytdlpAudioImport.js.
  *
- * The mirror image of ytdlpAudioImport.js, extracted for the same reason: the
- * YouTube brain ingest (#3565) wants the exact video-download behavior the Dev
- * Tools downloader (#1946) already had — the format fallback chain, the merge/
- * remux flags, the `--progress-template` machine-readable markers, the
- * two-`--match-filters` duration bound, and the "find the produced file, because
- * the extension isn't knowable up front" logic — but as ONE step inside a larger
- * job rather than as its own SSE-owning service. The spawn/marker-parsing/exit
- * classification middle both importers share lives in ytdlpRun.js.
+ * The YouTube brain ingest (#3565) reuses the Dev Tools downloader's (#1946)
+ * behavior (format fallback chain, merge/remux flags, `--progress-template`
+ * markers, two-`--match-filters` duration bound, finding the produced file since
+ * the extension isn't knowable up front) as ONE step in a larger job. Spawn,
+ * marker parsing and exit classification live in ytdlpRun.js.
  *
- * Like the audio core, this is deliberately SSE-agnostic: it takes `onProgress`
- * and `registerProcess` callbacks and RETURNS an outcome. The caller owns the
- * job map, SSE broadcasting, terminal frames, and what happens to the produced
- * file. URL validation is the caller's job too, so the core never sees an
- * unvetted URL.
+ * SSE-agnostic: takes `onProgress` and `registerProcess` hooks and RETURNS an
+ * outcome. The caller owns the job map, SSE, terminal frames, the produced file
+ * and URL validation, so the core never sees an unvetted URL.
  */
 
 import { readdir, unlink } from 'fs/promises';
@@ -24,13 +19,10 @@ import { runYtDlp, ytdlpMarkerArgs, describeYtDlpFailure } from './ytdlpRun.js';
 
 /**
  * Locate the final produced file for a download prefix. yt-dlp writes
- * intermediate streams as `<prefix>.f<code>.<ext>` and a `.part`/`.ytdl` in
- * progress, then merges/remuxes to a single `<prefix>.<ext>` and deletes the
- * rest. We do NOT hardcode `.mp4`: the format fallback chain can land a
- * single-file webm/mkv (VP9/AV1) that `--merge-output-format`/`--remux-video
- * mp4` only converts on a best-effort basis, so assuming `.mp4` would miss a
- * perfectly-good download and then delete it as a "failure". Prefer an exact
- * `.mp4`, else the lone remaining non-intermediate file.
+ * intermediate `<prefix>.f<code>.<ext>` streams and `.part`/`.ytdl`, then merges
+ * to `<prefix>.<ext>`. Not hardcoded to `.mp4`: the fallback chain can land a
+ * single-file webm/mkv, and assuming `.mp4` would miss a good download and delete
+ * it as a failure. Prefers an exact `.mp4`, else the lone non-intermediate file.
  *
  * @returns {Promise<string|null>} basename, or null when nothing was produced.
  */
@@ -46,11 +38,7 @@ export async function findProducedFile(filePrefix, dir) {
   return candidates.find((n) => n === `${prefix}mp4`) || candidates[0] || null;
 }
 
-/**
- * A cancelled/failed run can leave yt-dlp's pre-merge fragment files behind
- * (`<prefix>.f137.mp4`, `.part`, etc.), so cleanup globs every file this
- * prefix touched rather than unlinking one assumed path.
- */
+/** Cleanup globs every file this prefix touched: a cancelled/failed run can leave pre-merge fragments (`<prefix>.f137.mp4`, `.part`). */
 export async function cleanupProducedFiles(filePrefix, dir) {
   const entries = await readdir(dir).catch(() => []);
   await Promise.all(
@@ -69,40 +57,34 @@ export async function cleanupProducedFiles(filePrefix, dir) {
  * @param {string}   opts.filePrefix      Unique per-job basename prefix (no extension).
  * @param {number}   opts.maxBytes        `--max-filesize` cap.
  * @param {number}   opts.maxDurationSec  `--match-filters duration<=` cap.
- * @param {function} opts.onProgress      ({ percent, stage }) => void — SSE-agnostic.
+ * @param {function} opts.onProgress      ({ percent, stage }) => void
  * @param {function} opts.registerProcess (proc|null) => void — lets the caller wire cancel.
  * @returns {Promise<{ outcome:'complete'|'canceled'|'failed', filename?:string, title?:string, reason?:string }>}
  *
- * Never throws for a yt-dlp runtime failure (returns `failed` + `reason`); the
- * caller decides how to surface it. Cleans partial files on `canceled`/`failed`;
- * on `complete` the caller owns the produced file.
+ * Never throws for a yt-dlp runtime failure (returns `failed` + `reason`). Cleans
+ * partial files on `canceled`/`failed`; on `complete` the caller owns the file.
  */
 export async function downloadVideoToDir({
   url, ytDlp, ffmpeg, outDir, filePrefix, maxBytes, maxDurationSec, onProgress, registerProcess,
 }) {
-  // On a fresh install the destination may not exist yet (setup-data.js doesn't
-  // create data/videos, and no prior render/import may have); without this
-  // yt-dlp points at a missing directory and fails before producing a file.
+  // The destination may not exist on a fresh install (setup-data.js doesn't create
+  // data/videos); yt-dlp would fail before producing a file.
   await ensureDir(outDir);
 
   const args = [
-    // Prefer an mp4 (h264/aac) video+audio pair that merges cleanly for broad
-    // browser playback; fall back to best single-file mp4, then best.
+    // Prefer an h264/aac mp4 pair that merges cleanly; then best single-file mp4, then best.
     '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
     '--merge-output-format', 'mp4',
-    // Best-effort remux a single-file/non-mp4 result into an mp4 container so
-    // browser playback is broad; when the codec can't be remuxed losslessly
-    // yt-dlp leaves the native container, which findProducedFile handles.
+    // Best-effort remux to mp4 for broad playback; otherwise yt-dlp leaves the
+    // native container, which findProducedFile handles.
     '--remux-video', 'mp4',
     '--no-playlist',
     '--ffmpeg-location', dirname(ffmpeg),
     ...ytdlpMarkerArgs('merging'),
     '--max-filesize', String(maxBytes),
-    // Two --match-filters are OR'd by yt-dlp: bound KNOWN-duration videos to the
-    // cap, but let a post whose duration can't be resolved pre-download (common
-    // on x.com/Twitter) through rather than silently rejecting it — the byte cap
-    // above still bounds it. A known video longer than the cap matches neither
-    // filter and is skipped.
+    // Two --match-filters are OR'd: bound KNOWN-duration videos to the cap, but let a
+    // post whose duration can't be resolved pre-download (common on x.com) through;
+    // the byte cap still bounds it.
     '--match-filters', `duration <= ${maxDurationSec}`,
     '--match-filters', '!duration',
     '-o', join(outDir, `${filePrefix}.%(ext)s`),
@@ -118,12 +100,10 @@ export async function downloadVideoToDir({
 
   const filename = await findProducedFile(filePrefix, outDir);
   if (exit.code !== 0 || !filename) {
-    // A --match-filters/--max-filesize rejection exits 0 with no output file
-    // (yt-dlp treats a filtered-out video as "nothing to do") — and --print
-    // suppresses the specific reason, so name the known bounds. x.com/Twitter
-    // downloads also fail here on login-walled/rate-limited content. Only the
-    // bounds are ours; describeYtDlpFailure owns the prose and appends whatever
-    // yt-dlp actually printed, which outranks the guess.
+    // A --match-filters/--max-filesize rejection exits 0 with no output file, and
+    // --print hides the reason, so name the known bounds (x.com/Twitter also fails
+    // here on login-walled content). describeYtDlpFailure owns the prose; what
+    // yt-dlp printed outranks the guess.
     const reason = exit.code === 0
       ? describeYtDlpFailure(exit.code, exit.output, {
         url,
