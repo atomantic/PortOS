@@ -108,7 +108,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
       { id: 'lc-1', text: 'first line', startSec: 1, endSec: 3 },
       { id: 'lc-2', text: 'second line', startSec: 3, endSec: null },
     ];
-    importMusicVideoLyrics.mockResolvedValue({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, imported: 2, format: 'lrc' });
+    importMusicVideoLyrics.mockResolvedValue({ edit: editResult([], [], { updatedAt: '2026-01-01T00:00:00.500Z', project: { lyricCues: cues, lyricMarkers: [] } }), imported: 2, format: 'lrc' });
     await openProject(PROJECT_ANALYZED, 'setup');
 
     fireEvent.change(screen.getByLabelText('Lyrics to import'), { target: { value: '[00:01.00]first line\n[00:03.00]second line' } });
@@ -116,7 +116,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
     await waitFor(() => expect(importMusicVideoLyrics).toHaveBeenCalledWith(
       'mv-3',
       { text: '[00:01.00]first line\n[00:03.00]second line', format: 'auto', mode: 'replace' },
-      { silent: true },
+      { silent: true, edit: true },
     ));
     const line = await screen.findByLabelText('Line 2 text');
     expect(line).toHaveValue('second line');
@@ -135,7 +135,7 @@ describe('MusicVideo lyrics and shot coverage (#8964)', () => {
 
   it('aligns imported lyrics on its own and follows the alignment it started', async () => {
     const cues = [{ id: 'lc-1', text: 'first line', startSec: null, endSec: null }];
-    importMusicVideoLyrics.mockResolvedValue({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, imported: 1, format: 'text' });
+    importMusicVideoLyrics.mockResolvedValue({ edit: editResult([], [], { project: { lyricCues: cues, lyricMarkers: [] } }), imported: 1, format: 'text' });
     prepareMusicVideoSong.mockResolvedValueOnce({ project: { ...PROJECT_ANALYZED, lyricCues: cues }, analyzed: false, alignJobId: 'align-auto' });
     await openProject(PROJECT_ANALYZED, 'setup');
     fireEvent.change(screen.getByLabelText('Lyrics to import'), { target: { value: 'first line' } });

@@ -12,6 +12,8 @@ import {
   openStage,
   openProject,
   LocationProbe,
+  savedProjectEdits,
+  editResult,
   installMusicVideoPageHooks,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
@@ -59,6 +61,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
       places: [{ id: 'p1', name: 'Harbor', imageRefs: ['harbor.png'] }], // already a reference
       objects: [],
     });
+    updateMusicVideoProject.mockImplementation(savedProjectEdits(UNIVERSE_PROJECT));
     await openProject(UNIVERSE_PROJECT, 'cast-sets');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
@@ -71,7 +74,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
         // stable one yet) so multiple additions never collide on `undefined`.
         { id: expect.any(String), imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
       ] } },
-      { silent: true },
+      { silent: true, edit: true },
     ));
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/Pulled 1 reference/)));
   });
@@ -90,6 +93,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
   it('applies the pull against the latest references, not a stale click-time snapshot (race guard)', async () => {
     let resolveUniverse;
     getUniverse.mockReturnValueOnce(new Promise((resolve) => { resolveUniverse = resolve; }));
+    updateMusicVideoProject.mockImplementation(savedProjectEdits(UNIVERSE_PROJECT));
     await openProject(UNIVERSE_PROJECT, 'cast-sets');
 
     fireEvent.click(await screen.findByRole('button', { name: /^Pull from universe$/ }));
@@ -99,7 +103,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
     // reference — a stale click-time snapshot would resurrect it below.
     fireEvent.click(screen.getByRole('button', { name: 'Remove reference' }));
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(
-      'mv-universe', { visualSpec: { references: [] } }, { silent: true },
+      'mv-universe', { visualSpec: { references: [] } }, { silent: true, edit: true },
     ));
 
     await act(async () => {
@@ -111,7 +115,7 @@ describe('MusicVideo pull references from universe (#8978)', () => {
       { visualSpec: { references: [
         { id: expect.any(String), imageId: 'nyra.png', role: 'character', label: 'Nyra', condition: false },
       ] } },
-      { silent: true },
+      { silent: true, edit: true },
     ));
   });
 
@@ -202,8 +206,8 @@ describe('queued look reference saves', () => {
   it('keeps a later reference edit when an earlier save resolves', async () => {
     const saves = [];
     updateMusicVideoProject.mockReset();
-    updateMusicVideoProject.mockImplementation((id, patch) => new Promise((resolve) => {
-      saves.push(() => resolve({ id, visualSpec: patch.visualSpec }));
+    updateMusicVideoProject.mockImplementation((_id, patch) => new Promise((resolve) => {
+      saves.push(() => resolve({ edit: editResult([], [], { project: { visualSpec: patch.visualSpec } }) }));
     }));
     const look = await openLook();
     fireEvent.click(look.getAllByLabelText('Condition frames')[0]);

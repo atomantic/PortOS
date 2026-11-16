@@ -20,13 +20,14 @@ export const MAX_LYRIC_CUES = 2000;
 
 /**
  * @param {string} projectId
- * @param {{ mode?: 'replace' | 'if-empty' }} [options]
- * @returns {Promise<{ project: object, imported: number, markers: number, skipped: string|null }>}
+ * With `edit: true` the reply carries the edit result (`edit`, null when nothing was written) instead of the project.
+ * @param {{ mode?: 'replace' | 'if-empty', edit?: boolean }} [options]
+ * @returns {Promise<{ project?: object, edit?: object|null, imported: number, markers: number, skipped: string|null }>}
  */
-export async function importTrackLyrics(projectId, { mode = 'replace' } = {}) {
+export async function importTrackLyrics(projectId, { mode = 'replace', edit: answerEdit = false } = {}) {
   const project = await requireProject(projectId);
   const ifEmpty = mode === 'if-empty';
-  const skip = (skipped) => ({ project, imported: 0, markers: 0, skipped });
+  const skip = (skipped) => ({ ...(answerEdit ? { edit: null } : { project }), imported: 0, markers: 0, skipped });
   if (ifEmpty && (project.lyricCues || []).length > 0) return skip('has-lyrics');
   if (!project.trackId) {
     if (ifEmpty) return skip('no-track');
@@ -42,7 +43,7 @@ export async function importTrackLyrics(projectId, { mode = 'replace' } = {}) {
   if (cues.length > MAX_LYRIC_CUES) {
     throw new ServerError(`A project holds at most ${MAX_LYRIC_CUES} lyric cues`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const updated = await updateProject(project.id, { lyricCues: cues, lyricMarkers: markers });
+  const updated = await updateProject(project.id, { lyricCues: cues, lyricMarkers: markers }, { edit: answerEdit });
   console.log(`🎼 Imported ${cues.length} track lyric lines (${markers.length} markers) into ${project.id}`);
-  return { project: updated, imported: cues.length, markers: markers.length, skipped: null };
+  return { ...(answerEdit ? updated : { project: updated }), imported: cues.length, markers: markers.length, skipped: null };
 }

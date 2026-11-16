@@ -13,7 +13,7 @@ const EMPTY_PRODUCTION_DRAFT = { cast: '', environments: '', visualLanguage: '',
  * the creative setup and style references (whose unsaved edits lock the
  * header), and the queued visual-spec saves.
  */
-export default function useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview }) {
+export default function useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview, saveOwnEdit }) {
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [styleReferencesPending, setStyleReferencesPending] = useState(false);
   // Cast & Sets check-in (before the plan) and the development files it saves.
@@ -34,8 +34,9 @@ export default function useCastSetsStageWiring({ selected, replaceProject, patch
     const entry = { patch };
     state.pending.push(entry);
     patchProject(projectId, (p) => ({ visualSpec: { ...(p.visualSpec || {}), ...patch } }));
-    const settle = (proj) => {
-      if (proj) state.base = proj.visualSpec || { ...state.base, ...patch };
+    // `edit.project.visualSpec` is the saved spec when the save changed it; absent, the saved spec is the one before.
+    const settle = (reply) => {
+      if (reply) state.base = reply.edit?.project?.visualSpec ?? state.base;
       state.pending = state.pending.filter((item) => item !== entry);
       const desired = state.pending.reduce((spec, item) => ({ ...spec, ...item.patch }), state.base);
       const fields = new Set([...Object.keys(patch), ...state.pending.flatMap((item) => Object.keys(item.patch))]);
@@ -48,10 +49,10 @@ export default function useCastSetsStageWiring({ selected, replaceProject, patch
         return { visualSpec };
       });
       if (!state.pending.length) visualSpecPending.current.delete(projectId);
-      return proj;
+      return reply;
     };
     visualSpecSaveChain.current = visualSpecSaveChain.current
-      .then(() => updateMusicVideoProject(projectId, { visualSpec: patch }, { silent: true }))
+      .then(() => saveOwnEdit(projectId, (options) => updateMusicVideoProject(projectId, { visualSpec: patch }, options)))
       .then(settle)
       .catch((err) => { toast.error(err?.message || 'Failed to save visual spec'); return settle(null); });
     return visualSpecSaveChain.current;
@@ -67,9 +68,7 @@ export default function useCastSetsStageWiring({ selected, replaceProject, patch
       castSets,
       devArtifacts,
       saveVisualSpec,
-      saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
-        patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
-      }),
+      saveCreativeSetup: (patch) => saveOwnEdit(selected.id, (options) => updateMusicVideoProject(selected.id, patch, options)),
       applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, (project) => ({
         castAndSets: { ...project.castAndSets, catalogCheckin },
       })),
@@ -79,9 +78,7 @@ export default function useCastSetsStageWiring({ selected, replaceProject, patch
         references: (p.visualSpec?.references || []).map((ref) => (labels[ref.id] && !ref.label?.trim() ? { ...ref, label: labels[ref.id] } : ref)) } })),
       setCreativeSetupPending,
       setStyleReferencesPending,
-      saveStyleReferences: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
-        patchProject(project.id, { styleReferences: project.styleReferences });
-      }),
+      saveStyleReferences: (patch) => saveOwnEdit(selected.id, (options) => updateMusicVideoProject(selected.id, patch, options)),
       // Choose a Development file as the art-direction visual guide (saved with the rest of the draft).
       useAsGuide: (artifactId) => productionReview.save({ ...EMPTY_PRODUCTION_DRAFT, ...(selected.productionReview?.draft || {}), guideArtifactId: artifactId }),
     },

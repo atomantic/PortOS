@@ -137,7 +137,8 @@ export const planMusicVideoProject = (id, body = {}, options = {}) => request(`/
 // Import timed lyric cues (#8964) from pasted LRC / SRT / WebVTT / plain lines.
 // Body: { text, format?: 'auto'|'lrc'|'srt'|'text', mode?: 'replace'|'append' }.
 // Resolves to { project, imported, format }.
-export const importMusicVideoLyrics = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import`, {
+// `edit: true` answers `{ edit, imported, … }` (the board edit result) instead of the project.
+export const importMusicVideoLyrics = (id, body, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import${edit ? '?edit=1' : ''}`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
@@ -145,7 +146,7 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
 // cues and its `[Chorus]`/`[Spoken, close]` tags become lyric markers.
 // Body `{ mode?: 'replace' | 'if-empty' }` — `if-empty` never replaces lines.
 // Resolves to { project, imported, markers, skipped }.
-export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track`, {
+export const importMusicVideoTrackLyrics = (id, body = {}, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track${edit ? '?edit=1' : ''}`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
