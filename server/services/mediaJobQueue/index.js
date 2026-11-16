@@ -75,6 +75,7 @@ import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDUL
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
+import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
 // import the queue can still recognize a refusal; re-exported where callers
@@ -2647,7 +2648,6 @@ async function assertMusicVideoJobPolicy(kind, params) {
   // video itself may contain) does not govern it.
   if (params?.musicVideo?.projectId && !params.musicVideo.coverArt && ['image', 'video'].includes(kind)) {
     const { getProject } = await import('../musicVideo/projects.js');
-    const { assertMusicVideoMedia } = await import('../../lib/musicVideoMediaPolicy.js');
     const project = await getProject(params.musicVideo.projectId);
     if (!project) throw new Error('Music Video project not found');
     assertMusicVideoMedia(project, kind, 'generation');

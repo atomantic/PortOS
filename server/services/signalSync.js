@@ -47,7 +47,7 @@ import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCu
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
-import { shortSummary, localDayKey } from './humanActivity.js';
+import { shortSummary, localDayKey, recordEvents } from './humanActivity.js';
 import { captureConsistentSnapshot } from './signalSnapshot.js';
 import { getSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -475,7 +475,6 @@ async function doRunSync() {
   }
 
   const timezone = await getUserTimezone();
-  const { recordEvents } = await import('./humanActivity.js');
   const tribe = await import('./tribe.js');
 
   const blocklist = await readBlocklist();

@@ -35,7 +35,7 @@ import { getSettings } from '../settings.js';
 import { getProviderById } from '../providers.js';
 import { listVisionModels } from '../localLlm.js';
 import { addItem } from '../mediaCollections.js';
-import { updateScene, recordRun, updateRun } from './local.js';
+import { updateScene, recordRun, updateRun, getProject } from './local.js';
 import { resolveStagePin } from './projectsLogic.js';
 import { enqueueEvaluateTask } from './agentBridge.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
@@ -359,7 +359,6 @@ export async function dispatchSceneEvaluation(project, scene) {
     if (project.workspace === 'video') {
       const { videoReviewAllowsDispatch } = await import('./videoReview.js');
       if (!await videoReviewAllowsDispatch(project.id, [])) return null;
-      const { getProject } = await import('./local.js');
       const { effectiveVideoProject, reserveVideoAttempt, settleVideoAttempt, assertVideoAttemptDispatch, pauseVideoExecution } = await import('./videoExecution.js');
       project = effectiveVideoProject(await getProject(project.id));
       const currentScene = project.treatment?.scenes?.find(value => value.sceneId === scene.sceneId);

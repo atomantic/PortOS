@@ -82,6 +82,8 @@ import {
   unsubscribePeer,
 } from './peerSubscriptions.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { listUniverses } from '../universeBuilder.js';
+import { listSeries } from '../pipeline/series.js';
 
 // Re-export the decomposed modules' surface that importers of this file use.
 // Names with no importer through here live only in their declaring module. (#1830)
@@ -181,13 +183,11 @@ const RECORD_KIND_LISTERS = {
   // Dynamic-imported to avoid a static cycle (peerSync already imports its
   // merge entry point).
   universe: async () => {
-    const { listUniverses } = await import('../universeBuilder.js');
     return listUniverses({ includeDeleted: false });
   },
   // Dynamic-imported to avoid a static cycle (peerSync already imports its
   // merge entry point).
   series: async () => {
-    const { listSeries } = await import('../pipeline/series.js');
     return listSeries({ includeDeleted: false });
   },
   mediaCollection: () => listCollections({ includeDeleted: false }),

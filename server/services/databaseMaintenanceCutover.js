@@ -11,7 +11,7 @@ import { isDisposableRoot } from '../lib/dataRoot.js';
 import { runDatabaseTransfer } from './databaseMaintenanceTransfer.js';
 import { readRecordedProducers } from './databaseMaintenanceProducers.js';
 import { restartMaintenanceProducer } from './pm2.js';
-import { snapshotProcesses } from '../lib/detachedSpawn.js';
+import { snapshotProcesses, spawnDatabaseMaintenanceWorker } from '../lib/detachedSpawn.js';
 
 const TRANSFER_STAGES = ['accepted', 'quiescing', 'exporting', 'importing'];
 const PROOF_TIMEOUT_MS = 180_000;
@@ -201,7 +201,6 @@ export async function runDatabaseCutover(id, token, options = {}) {
 }
 
 async function launchRecoveryWorker(journal, id, token) {
-  const { spawnDatabaseMaintenanceWorker } = await import('../lib/detachedSpawn.js');
   let worker;
   try {
     worker = await spawnDatabaseMaintenanceWorker(id, token);

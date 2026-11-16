@@ -29,13 +29,7 @@ import { parseLLMJSON } from '../lib/llmText.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { resolveScreenshot, sha256Text } from '../lib/fileUtils.js';
 import { loadState } from './cosState.js';
-import {
-  applyPersistentMindContinuationNote,
-  createPersistentMindMemoryFromCandidate,
-  readPersistentMindMemories,
-  readPersistentMindRecall,
-  readPersistentMindName,
-} from './persistentMindContext.js';
+import { applyPersistentMindContinuationNote, createPersistentMindMemoryFromCandidate, readPersistentMindMemories, readPersistentMindRecall, readPersistentMindName, revalidatePersistentMindReflection } from './persistentMindContext.js';
 import { persistentMindToolFreeRefusal } from '../lib/persistentMindProfile.js';
 import { fenceBlock, UNTRUSTED_CONTENT_NOTICE } from '../lib/promptFencing.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
@@ -586,7 +580,6 @@ export function createPersistentMindTurnAdapter() {
       const root = await loadState();
       const taskAccess = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
       if (context?.reflection?.block) {
-        const { revalidatePersistentMindReflection } = await import('./persistentMindContext.js');
         const state = await revalidatePersistentMindReflection(context.reflection, taskAccess.manageMind);
         if (state !== 'pending') {
           const text = context.text.replace(context.reflection.block, '');

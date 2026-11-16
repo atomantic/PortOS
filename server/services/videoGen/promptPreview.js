@@ -21,6 +21,7 @@ import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { localVideoSentPrompt } from './generateVideo.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -171,7 +172,6 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       const runtime = listVideoModels().find((model) => model.id === modelId)?.runtime ?? null;
       await resolveVideoLoras(loraFilenames.map((filename) => ({ filename })), { runtime });
     }
-    const { localVideoSentPrompt } = await import('./generateVideo.js');
     return { backend, ...(await localVideoSentPrompt({
       prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames, promptAdditions,
     })).record };

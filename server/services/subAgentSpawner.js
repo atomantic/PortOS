@@ -60,6 +60,7 @@ import { releaseAgentReservation } from './agentMaintenanceReservations.js';
 // implement them (#3450). It can: nothing the facade imports imports this module
 // back, so the edge stays one-directional.
 import { completeAgent, spawnAgentForTask, terminateAgent } from './agentOrchestrator.js';
+import { parseRunnerSecurityScanEvidence } from '../lib/securityScanEvidence.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -408,7 +409,6 @@ async function runInitSpawner() {
 
   onCosRunnerEvent('agent:security-scan', async ({ agentId, evidence }) => {
     const { persistAgentSecurityScan } = await import('./agentSecurityScan.js');
-    const { parseRunnerSecurityScanEvidence } = await import('../lib/securityScanEvidence.js');
     const observed = parseRunnerSecurityScanEvidence(evidence);
     const refusal = observed?.status === 'refused' ? activeAgents.get(agentId)?.refuseScanner?.() : null;
     await Promise.all([refusal, persistAgentSecurityScan(agentId, evidence)]);

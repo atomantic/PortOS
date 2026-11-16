@@ -10,6 +10,7 @@ import { createPeerExecutionGrants } from './peerExecutionGrants.js';
 import { createPeerExecutionReceiver } from './peerExecution.js';
 import { withInstanceIdentityLock, registerInstanceExecutionAuthorityGuard } from './instanceIdentity.js';
 import { peerAdminCaller, peerAdminIdentity } from './peerAdministration.js';
+import { createPeerExecutionAuthority } from '../lib/peerExecutionAuthority.js';
 
 let singleton;
 let io;
@@ -78,7 +79,6 @@ export function _getPeerExecutionWatcher() {
 }
 
 export async function withPeerExecutionIdentityRestore(fn) {
-  const { createPeerExecutionAuthority } = await import('../lib/peerExecutionAuthority.js');
   return withInstanceIdentityLock(async () => {
     createPeerExecutionAuthority(PATHS.data).invalidate();
     return fn();

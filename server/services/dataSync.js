@@ -63,6 +63,7 @@ import {
   applyUsageRemote,
   USAGE_CHECKSUM_PATHS,
 } from './peerUsage.js';
+import { editGoals } from './identity/store.js';
 
 // --- Category Definitions ---
 
@@ -550,7 +551,6 @@ function goalsDocumentClockMs(doc) {
 // goal copy the union covers is dropped here, children reparented. See
 // identity/goalTombstones.js for the restoration rule and resurrection horizon.
 async function applyGoalsRemote(remoteData) {
-  const { editGoals } = await import('./identity/store.js');
   return editGoals(local => {
     const localGoals = local.goals || [];
     const { merged: tombstones } = mergeTombstones(

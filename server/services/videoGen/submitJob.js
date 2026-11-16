@@ -35,6 +35,7 @@ import { cleanupMultipartTemp, prepareVideoGenParams } from './prepareParams.js'
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
+import { resolveGalleryImage } from '../../lib/pathSafety.js';
 
 const musicVideoProjectAspect = async (projectId) => {
   const [{ getProject }, { musicVideoAspect }] = await Promise.all([
@@ -126,7 +127,6 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       );
     }
 
-    const { resolveGalleryImage } = await import('../../lib/pathSafety.js');
     const request = buildFederatedMediaRequest({ kind: 'video', params: body });
     // Negotiate dimensions/frames before slicing audio. Audio is never padded,
     // truncated, or silently dropped to fit a different peer after submission.

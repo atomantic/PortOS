@@ -13,6 +13,7 @@ import { getUnifiedActivityStreak } from './postActivityStreak.js';
 import { getAllTrainingEntries } from './postTrainingLogStore.js';
 import { saveStoredTrainingRun } from './postRunStore.js';
 import { COGNITIVE_DRILL_TYPES, scoreCognitiveDrill } from './meatspacePostCognitive.js';
+import { syncReviewScheduleForSession } from './meatspacePost.js';
 
 export { getAllTrainingEntries };
 
@@ -113,7 +114,6 @@ export async function submitTrainingRun(input) {
   // a secondary schedule failure cannot turn a durable save into a false 500.
   if (saved.isNew) {
     try {
-      const { syncReviewScheduleForSession } = await import('./meatspacePost.js');
       await syncReviewScheduleForSession({
         tasks: saved.run.attempts.map((attempt) => ({
           ...(attempt.data || {}),

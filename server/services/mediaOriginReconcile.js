@@ -28,6 +28,7 @@ import { peerIsPaired } from './mediaTombstoneAuthorization.js';
 import { listHostedEntries, hostedKey } from './peerHostedMedia.js';
 import { mutateVideoHistory, loadHistory, HISTORY_UNCHANGED } from './videoGen/history.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 
 // A report older than this no longer proves what the peer holds; treated as unreported.
 const REPORT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -50,7 +51,6 @@ export async function recordPeerHoldings(peerId, kind, category, report) {
 const mtimeOf = (kind, filename) => stat(join(KINDS[kind](), filename)).then((s) => s.mtimeMs, () => null);
 
 async function resolveLocalId() {
-  const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const id = await getInstanceId().catch(() => null);
   return isNonBlankStr(id) && id !== UNKNOWN_INSTANCE_ID ? id : null;
 }

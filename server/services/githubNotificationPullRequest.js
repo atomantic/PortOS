@@ -7,7 +7,7 @@ import { agentRunPin, pullRequestAutomationFilter, pullRequestAutomationRule } f
 import { PULL_REQUEST_ACTIONS } from '../../lib/pullRequestActions.js';
 import { readGithubPullRequest } from './appPullRequests.js';
 import { mergeGithubPullRequest, pullRequestMergeReadiness } from './appPullRequestMerge.js';
-import { managedAppsByRepoKey } from './githubNotificationTriage.js';
+import { managedAppsByRepoKey, threadDiscussionVouched } from './githubNotificationTriage.js';
 import { applyNotificationAction, requireAccountEnv } from './githubNotifications.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { githubReviewAccountSelector } from './githubAccounts.js';
@@ -80,7 +80,6 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
         rulePin: rule, defaults: account.agentDefaults });
       if (action === 'do-review') {
         // Recheck discussion trust at the model boundary, including earlier comments.
-        const { threadDiscussionVouched } = await import('./githubNotificationTriage.js');
         if (!await threadDiscussionVouched(account, env, row)) throw refuse('This review requires trusted discussion participants; open GitHub to inspect the outside comments');
         const { spawnPrDoReviewTask } = await import('./prDoReviewTask.js');
         const url = `https://${account.host}/${target.repo}/pull/${target.number}`;

@@ -33,6 +33,7 @@ import {
   couldReleaseBlockedTasks,
   resolveInvestigationRetryTargets,
 } from '../lib/investigationTasks.js';
+import { readAgentsStateForSafetyCheck } from './cosState.js';
 
 // What a task's `blockedReason` becomes once the auto-retry loop gives up on it,
 // so the queue says "the loop stopped trying" rather than still showing whatever
@@ -77,7 +78,6 @@ export async function retryTasksResolvedByInvestigation(investigation, { now = D
       skipped.push({ taskId: task.id, reason: 'spawn-budget-reconciled-held' });
       continue;
     }
-    const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
     const state = await readAgentsStateForSafetyCheck().catch(() => null);
     const owner = state?.trusted ? state.agents?.[task.metadata?.spawnBudgetProof?.dispatch?.agentId] : null;
     const count = spawnBudgetCount(task.metadata?.totalSpawnCount);

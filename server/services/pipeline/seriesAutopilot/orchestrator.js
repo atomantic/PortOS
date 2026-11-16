@@ -12,7 +12,7 @@ import { mergeSeverityWeights, resolveBlockingSet } from '../../../lib/editorial
 import { loadState } from '../../cosState.js';
 import { getDomainBudgetStatus } from '../../domainUsage.js';
 import { getSettings } from '../../settings.js';
-import { getSeries, updateSeries } from '../series.js';
+import { getSeries, updateSeries, listSeries } from '../series.js';
 import { listIssues } from '../issues.js';
 import { buildEditorialCheckPlan } from '../editorial/checkRunner.js';
 import { runs, emptyProgress } from './state.js';
@@ -585,7 +585,6 @@ export async function startSeriesAutopilot(sId, options = {}) {
  * recoverStuckAutoRuns in autoRunner.js. Best-effort; never blocks boot.
  */
 export async function recoverStuckAutopilots() {
-  const { listSeries } = await import('../series.js');
   const all = await listSeries().catch(() => []);
   const stuck = all.filter((s) => s.autopilot?.status === 'running');
   if (stuck.length === 0) return 0;

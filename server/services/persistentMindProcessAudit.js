@@ -9,7 +9,7 @@ import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabi
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { PROCESS_AUDIT_LIMITS as LIMITS, processAuditFingerprint, processAuditSignals, processAuditMetrics, renderProcessAuditFinding,
   processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../lib/persistentMindProcessAudit.js';
-import { loadState } from './cosState.js';
+import { loadState, AGENTS_DIR } from './cosState.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { isUpstreamFullName } from '../lib/gitRemote.js';
 
@@ -85,7 +85,6 @@ function workflowOf(record) {
 async function transcript(record, offset = 0) {
   const date = (await loadAgentIndex()).get(record.id);
   if (!safeAgentId(record.id) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return { state: 'missing', excerpt: '', nextOffset: null };
-  const { AGENTS_DIR } = await import('./cosState.js');
   const path = join(AGENTS_DIR, date, record.id, 'output.txt');
   let file;
   try {
