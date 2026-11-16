@@ -922,7 +922,7 @@ describe('Review Hub all-clear Today tab (#13005)', () => {
     render(<Review />);
 
     expect(await screen.findByText('Nothing needs you today')).toBeInTheDocument();
-    expect(screen.getByText(/1 stored item still pending/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 stored item still pending/)).toBeInTheDocument();
     const item = (await screen.findAllByText(SHORT_ITEM.title))[0];
     const details = historyDisclosure();
     expect(details).not.toHaveAttribute('open');
