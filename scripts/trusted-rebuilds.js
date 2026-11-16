@@ -1,21 +1,15 @@
 /**
  * Single source of truth for the packages allowed to run install scripts.
  *
- * Every workspace pins `ignore-scripts=true` in its own .npmrc (npm reads the
- * project config from the local prefix and never walks upward, so each
- * workspace needs its own file — see client/.npmrc). That blocks the
- * preinstall/postinstall hook that supply-chain worms use as their execution
- * slot, at the cost of also skipping the handful of *legitimate* native builds.
- * Those are rebuilt explicitly here — an allowlist, so adding a dependency
- * never silently grants it an install-time code-execution slot.
+ * Every workspace pins `ignore-scripts=true` in its own .npmrc (npm reads project
+ * config from the local prefix and never walks upward; see client/.npmrc). That
+ * blocks the preinstall/postinstall hook supply-chain worms use, at the cost of
+ * skipping the few *legitimate* native builds, which are rebuilt explicitly here.
+ * An allowlist, so adding a dependency never silently grants it an install-time
+ * code-execution slot.
  *
- * Consumed by scripts/ensure-deps.js, the root `setup` script, setup.ps1,
- * update.sh, update.ps1, and CI. Keep the list here only — a second copy is how it
- * drifts, which is exactly how setup.ps1 ended up rebuilding a package that no
- * longer exists while missing two that do.
- *
- * Usage as a CLI (what CI and `npm run setup` call):
- *   node scripts/trusted-rebuilds.js server
+ * Consumed by scripts/ensure-deps.js, `setup`, setup.ps1, update.sh/ps1 and CI
+ * (`node scripts/trusted-rebuilds.js server`); a second copy of the list drifts.
  */
 import { execFileSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
@@ -29,15 +23,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 /**
  * Every directory npm can install into with that directory as the local prefix:
  * the repo root plus each top-level directory carrying its own package.json.
- * Discovered rather than hand-listed — a hardcoded roster is the same drift this
- * module exists to eliminate, one level up: add a 5th workspace, forget to add it
- * to the list, and its `ignore-scripts` guard is silently absent while CI stays
- * green. Nested manifests (`server/cos-runner`) and the vendored `lib/slashdo`
- * submodule are deliberately excluded — nobody installs with those as the prefix,
- * and the submodule is not ours to configure.
+ * Discovered, not hand-listed: a hardcoded roster is the same drift this module
+ * exists to eliminate (a forgotten 5th workspace silently lacks its
+ * `ignore-scripts` guard while CI stays green). Nested manifests
+ * (`server/cos-runner`) and the vendored `lib/slashdo` submodule are excluded:
+ * nobody installs with those as the prefix, and the submodule isn't ours.
  *
- * Returns labels; pair with `workspaceDir()` for the path. Root sorts first, the
- * rest alphabetically, so callers get a stable order.
+ * Returns labels (pair with `workspaceDir()`), root first, the rest sorted.
  */
 export function discoverWorkspaces() {
   const nested = readdirSync(ROOT, { withFileTypes: true })
@@ -54,40 +46,31 @@ export function workspaceDir(label) {
 }
 
 /**
- * `fatal: true` means a failed rebuild fails the install — the package is
- * required at runtime and a missing binding crashes the server. `fatal: false`
- * is best-effort: the dependency degrades rather than breaks.
+ * `fatal: true` means a failed rebuild fails the install: the package is required
+ * at runtime and a missing binding crashes the server. `fatal: false` is
+ * best-effort: the dependency degrades rather than breaks.
  *
- * client / autofixer are intentionally absent: nothing in either needs an
- * install script (vite 8 dropped the esbuild binary dependency that used to).
+ * client / autofixer are absent: neither needs an install script.
  */
 export const TRUSTED_REBUILDS = {
   server: [
-    // node-pty builds the native PTY addon and the shell/TUI features hard-require
-    // it. sharp rides along in the same call: it ships prebuilt bindings via
-    // optionalDependencies today so its rebuild is currently a no-op, but it is
-    // equally runtime-critical if it ever regains a lifecycle hook. Grouped
-    // because they share `fatal` — a group exists to give *different* failure
-    // semantics, not to hang a different comment on each package, and every extra
-    // group costs another npm spawn (~180ms) for no behavioral gain.
+    // node-pty builds the native PTY addon the shell/TUI features hard-require.
+    // sharp ships prebuilt bindings today (its rebuild is a no-op) but is equally
+    // runtime-critical. Grouped because they share `fatal`; every extra group
+    // costs another npm spawn (~180ms).
     { pkgs: ['node-pty', 'sharp'], fatal: true },
-    // Transitive, behind optional local-inference features. onnxruntime-node's
-    // postinstall fetches platform binaries; absent them the feature is
-    // unavailable, not fatal. protobufjs's postinstall only generates a minimal
-    // build.
+    // Transitive, behind optional local-inference features: onnxruntime-node's
+    // postinstall fetches platform binaries (absent = feature unavailable, not
+    // fatal); protobufjs's only generates a minimal build.
     { pkgs: ['onnxruntime-node', 'protobufjs'], fatal: false }
   ]
 };
 
 /**
- * Rebuild the trusted packages for one workspace.
- * Returns true when every fatal group succeeded.
- *
- * `spawn` is injectable so the fatal/non-fatal decision is testable without
- * actually invoking npm. That decision is the whole point of the module — if it
- * inverts, a failed node-pty build exits 0 and the missing binding resurfaces as
- * a confusing MODULE_NOT_FOUND at smoke-boot — so it needs real coverage rather
- * than only a shape assertion on TRUSTED_REBUILDS.
+ * Rebuild the trusted packages for one workspace; true when every fatal group
+ * succeeded. `spawn` is injectable so the fatal/non-fatal decision is testable
+ * without invoking npm: if it inverts, a failed node-pty build exits 0 and the
+ * missing binding resurfaces as a confusing MODULE_NOT_FOUND at smoke-boot.
  */
 export function rebuildTrusted(dir, label, { spawn = execFileSync } = {}) {
   const groups = TRUSTED_REBUILDS[label];
@@ -95,16 +78,13 @@ export function rebuildTrusted(dir, label, { spawn = execFileSync } = {}) {
   let ok = true;
   for (const { pkgs, fatal } of groups) {
     try {
-      // Through prepareCliSpawn: on Windows `npm` is a `.cmd` shim, and Node's
-      // CVE-2024-27980 patch REFUSES a `.cmd` target under `shell:false` with
-      // `spawnSync npm.cmd EINVAL`. Since the node-pty group is fatal, that
-      // throw exited this script 1, and `update.ps1` exits on a non-zero
-      // trusted-rebuilds — so every Windows update aborted before the client
-      // build and the pm2 restart, leaving the UI permanently reporting a stale
-      // client build. See server/lib/bufferedSpawn.js for why the fix is a
+      // Through prepareCliSpawn: on Windows `npm` is a `.cmd` shim, which Node's
+      // CVE-2024-27980 patch REFUSES under `shell:false` (`spawnSync npm.cmd
+      // EINVAL`); that throw aborted every Windows update before the client build
+      // and pm2 restart. See server/lib/bufferedSpawn.js for why the fix is a
       // `cmd.exe /c` wrap and not `shell:true` (which does not escape args).
-      // npm rebuild still honors ignore-scripts=true from the workspace .npmrc.
-      // Override it for these named packages only; ordinary installs stay blocked.
+      // `npm rebuild` still honors ignore-scripts=true from the workspace .npmrc;
+      // override it for these named packages only.
       const { command, args } = prepareCliSpawn('npm', ['rebuild', '--ignore-scripts=false', ...pkgs]);
       spawn(command, args, { cwd: dir, stdio: 'inherit', windowsHide: true });
     } catch (err) {
@@ -116,24 +96,17 @@ export function rebuildTrusted(dir, label, { spawn = execFileSync } = {}) {
 }
 
 /**
- * CLI body, returning an exit code instead of calling process.exit, so every
- * branch (usage, unknown label, rebuild-free workspace, rebuild failure) is
- * assertable. `node scripts/trusted-rebuilds.js <label> [dir]`
+ * CLI body, returning an exit code instead of calling process.exit so every
+ * branch is assertable. `node scripts/trusted-rebuilds.js <label> [dir]`
  */
 export function runCli(argv, { spawn = execFileSync } = {}) {
   const [label, dirOverride] = argv;
   if (!label) {
-    // List the real workspaces, not just the keys of TRUSTED_REBUILDS — the CLI
-    // accepts any workspace (a rebuild-free one is a documented no-op), so
-    // advertising only `server` misrepresents what is valid.
     console.error(`❌ usage: node scripts/trusted-rebuilds.js <${discoverWorkspaces().join('|')}>`);
     return 1;
   }
-  // Validate the label against the real workspace list BEFORE the "nothing to do"
-  // check below. Otherwise a typo (`sever`) falls through to a green "✅ no trusted
-  // rebuilds needed" and exit 0 — reproducing the exact failure this module exists
-  // to prevent (node-pty left unbuilt, surfacing much later as a confusing
-  // MODULE_NOT_FOUND at smoke-boot) behind a CI step that reported success.
+  // Validate against the real workspace list BEFORE the "nothing to do" check, or a
+  // typo (`sever`) falls through to a green exit 0 and leaves node-pty unbuilt.
   const workspaces = discoverWorkspaces();
   if (!workspaces.includes(label)) {
     console.error(`❌ unknown workspace '${label}'. Known workspaces: ${workspaces.join(', ')}`);
