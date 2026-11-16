@@ -419,7 +419,7 @@ export const catalogIngredientQuerySchema = z.object({
 
 // Tag-autocomplete query — `q` is an optional prefix/substring filter, absent
 // returns the most-recently-created tags. Drives the tag-picker autocomplete on
-// CatalogIngredient.jsx + the Quick Idea widget.
+// the catalog ingredient editor + the Quick Idea widget.
 export const catalogTagQuerySchema = z.object({
   q: z.string().trim().max(BIBLE_LIMITS.TAG_MAX).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
