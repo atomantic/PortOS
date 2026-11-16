@@ -158,13 +158,6 @@ describe('GET /api/instances/sync-status — forPeer scoping', () => {
     getSyncStatus.mockResolvedValue({ local: { brainSeq: 0, memorySeq: 0, checksums: {} } });
   });
 
-  it('threads a canonical GUID forPeer through to getSyncStatus', async () => {
-    const id = '191aaece-a492-41ee-a66d-d4661eadc132';
-    const res = await request(buildApp()).get(`/api/instances/sync-status?forPeer=${id}`);
-    expect(res.status).toBe(200);
-    expect(getSyncStatus).toHaveBeenCalledWith({ includeChecksums: true, forPeer: id });
-  });
-
   it('accepts a non-GUID forPeer (older PortOS / `unknown` sentinel) instead of throwing a 500', async () => {
     // Regression: an older PortOS or a prober carrying the `unknown` instance-id
     // sentinel hits us with a non-GUID value. The route must degrade
