@@ -117,6 +117,17 @@ it('shows mood-board images that will not fit after shot references', () => {
   expect(screen.getAllByText(/If this frame uses Codex/)[0].textContent).toContain('mood-board image style.png');
 });
 
+// Uniquely catches the shot editor not naming the character whose reference changed (#16473) or not offering Re-render for it.
+it('names the older character reference on the selected frame and offers Re-render', () => {
+  const onGenerateFrame = vi.fn();
+  const shot = { sceneId: 's1', referenceImageId: 'start.png', framePrompt: 'Door', takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png',
+    characterReferenceState: { code: 'character-reference-changed', reasons: ['Character reference changed after this render: Ada'], characters: [{ subjectId: 'a', name: 'Ada' }], revision: 'r1' } }] };
+  render(<SceneFrames project={{ id: 'mv-example' }} scene={shot} index={0} onGenerateFrame={onGenerateFrame} onGenerateEndFrame={vi.fn()} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+  expect(screen.getByText(/^Character reference changed after this render: Ada\. Re-render/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: 'Re-render start frame' }));
+  expect(onGenerateFrame.mock.calls[0][1]).toEqual({ referenceImageId: null, replaceSelection: true });
+});
+
 describe('older Casting look (#14154)', () => {
   const guide = (mediaKey, age) => ({ mediaKey, kind: 'reference', library: { variant: { age }, guide: true } });
   const project = { id: 'mv-example', concept: { subjects: [

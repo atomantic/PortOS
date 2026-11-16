@@ -147,7 +147,9 @@ export default function SceneFrames({
     };
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
-    const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
+    // The server's warning (#16473) covers every character reference the record knows; Casting guides are read here.
+    const olderCharacter = selected?.characterReferenceState || null;
+    const olderLook = Boolean(olderCharacter) || (selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false);
     const rerender = () => {
       if (sharedTake || greyboxBlocked || generating || needsPrompt) return;
       (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null, replaceSelection: true }));
@@ -216,7 +218,9 @@ export default function SceneFrames({
           )}
         </div>
         {olderLook && (
-          <p className="text-xs text-port-text-muted">Older look: Casting changed since this was rendered. Re-render to use the new look.</p>
+          <p className="text-xs text-port-text-muted">{olderCharacter
+            ? `${olderCharacter.reasons.join(' · ')}. Re-render to use the current reference, or keep it with Still matches on the take.`
+            : 'Older look: Casting changed since this was rendered. Re-render to use the new look.'}</p>
         )}
         {refineImageId && (<>
           <form onSubmit={refine} className="min-w-0 space-y-2 rounded border border-port-border p-2">

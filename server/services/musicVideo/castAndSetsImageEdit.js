@@ -126,7 +126,8 @@ export async function acceptCastSetsImageEdit(projectId, { key, requestId }, pro
     if (!editable(stage) || edit?.status !== 'done' || !resolveGalleryImage(edit.imageId)) throw editError('This edit or its source changed. Render and review a new edit.');
     const old = stage.images[key];
     const revision = stage.revision + 1;
-    const image = { ...old, edit: null, imageId: edit.imageId, jobId: edit.jobId, status: 'done', error: null,
+    // `updatedAt` is when this slot took its image: a frame rendered before it did not use it (#16473).
+    const image = { ...old, edit: null, imageId: edit.imageId, jobId: edit.jobId, status: 'done', error: null, updatedAt: new Date().toISOString(),
       inspection: null, inspectionAcknowledgement: null,
       history: [...(old.history || []).filter((id) => id !== old.imageId), old.imageId].slice(-CAST_SETS_MAX_IMAGE_HISTORY),
       submittedRevision: revision, submittedPrompt: edit.modelInput.sentPrompt, promptAdditions: edit.modelInput.promptAdditions || [], submittedPromptTruncated: false,

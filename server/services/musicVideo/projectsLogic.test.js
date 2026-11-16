@@ -1123,6 +1123,20 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(kept.next.scenes[0].takes[0].castInputs).toEqual(newer);
   });
 
+  // Uniquely catches a "Still matches" for an older character reference (#16473) lost when an older peer's take wins,
+  // or the new recorded inputs and acceptance not surviving a round trip from a peer that keeps them.
+  it('keeps a character reference acceptance an older peer omitted, and carries the new take fields from a current peer', () => {
+    const castInputs = { ingredientId: null, guides: [], sheets: [], characters: [{ id: 'mvr-cs-character', imageId: 'ada-v1.png' }] };
+    const characterReferenceAcceptance = { revision: 'rev-1', reviewer: { kind: 'local', label: 'Local operator' }, at: '2026-01-02T00:00:00Z' };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', castInputs, characterReferenceAcceptance }] }] };
+    const older = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', prompt: 'newer' }] }] });
+    expect(older.next.scenes[0].takes[0]).toMatchObject({ prompt: 'newer', castInputs, characterReferenceAcceptance });
+    const current = mergeProjectRecord({ id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', scenes: [] }, { ...local, updatedAt: '2026-01-05T00:00:00Z' });
+    expect(current.next.scenes[0].takes[0]).toMatchObject({ castInputs, characterReferenceAcceptance });
+  });
+
   it('a same-updatedAt re-push is a no-op (changed=false, no churn)', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same', deleted: false, deletedAt: null };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };

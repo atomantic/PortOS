@@ -224,7 +224,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(asyn
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
-  if (review.acknowledgeRenderQuality || review.confirmFrame) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
+  if (review.acknowledgeRenderQuality || review.confirmFrame || review.acceptCharacterReferences) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   const { scene, edit } = await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review, { edit: true });
   res.json({ ...scene, edit });
 }));

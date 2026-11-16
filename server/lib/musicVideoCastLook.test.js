@@ -11,11 +11,12 @@ const projectFor = (references = []) => ({
 
 describe('music video cast look (#14154)', () => {
   // Uniquely catches recording the whole available set, or a greybox/panel image, instead of the guides and sheets a frame was sent.
-  it('snapshots only the cast guides and Cast & Sets sheets among the references that were sent', () => {
+  it('snapshots the cast guides, Cast & Sets sheets and character references among the references that were sent', () => {
     const scene = sceneFor('cat-lead', 7);
     const references = [
-      { id: 'mvr-guide-child.png', imageId: 'child.png', castGuide: true },
-      { id: 'mvr-cs-character', imageId: 'sheet.png' },
+      { id: 'mvr-guide-child.png', imageId: 'child.png', castGuide: true, role: 'character' },
+      { id: 'mvr-cs-character', imageId: 'sheet.png', role: 'character' },
+      { id: 'mvr-catalog-ada', imageId: 'ada.png', role: 'character' },
       { id: 'mvr-cs-set-harbor', imageId: 'harbor.png' },
       { id: 'mvr-panel-art', imageId: 'panel.png', panelArt: true },
       { id: 'greybox', imageId: 'layout.png', greybox: true },
@@ -24,8 +25,10 @@ describe('music video cast look (#14154)', () => {
       ingredientId: 'cat-lead',
       guides: ['child.png'],
       sheets: [{ id: 'mvr-cs-character', imageId: 'sheet.png' }, { id: 'mvr-cs-set-harbor', imageId: 'harbor.png' }],
+      // #16473: every character reference, whatever its source; a set plate or panel is not one.
+      characters: [{ id: 'mvr-guide-child.png', imageId: 'child.png' }, { id: 'mvr-cs-character', imageId: 'sheet.png' }, { id: 'mvr-catalog-ada', imageId: 'ada.png' }],
     });
-    expect(castInputsFromReferences({ sceneId: 's1' }, [])).toEqual({ ingredientId: null, guides: [], sheets: [] });
+    expect(castInputsFromReferences({ sceneId: 's1' }, [])).toEqual({ ingredientId: null, guides: [], sheets: [], characters: [] });
   });
 
   it('accepts that snapshot on a take, including an empty one, and refuses a path', () => {

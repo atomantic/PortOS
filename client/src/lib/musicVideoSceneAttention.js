@@ -29,6 +29,8 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
   'frame-stale': 'Frame out of date',
+  // The server's code for a frame or clip rendered without a character's current reference (#16473): advice, not a gate.
+  'character-reference-changed': 'Older character reference',
   'bad-take': 'Selected take marked bad',
 });
 
@@ -38,7 +40,7 @@ const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-ne
 /** Codes that mean the shot still lacks material a render needs (the `missing` filter). */
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
 
-export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame', 'bad-take']);
+export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame', 'older-character', 'bad-take']);
 
 const slotDependencyState = (scene, kind, assetId) => (
   assetId ? (scene?.takes || []).find((take) => take?.kind === kind && take.assetId === assetId)?.dependencyState || null : null
@@ -115,6 +117,10 @@ export function sceneAttention(scene, ctx = {}) {
     && (layer === 'footage' || (layer === 'still' && isEndFrameImageEffect(shown.imageEffect)));
   if (!isSelfDrawnLayer(layer) && (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
     || (usesEnd && slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale'))) codes.push('frame-stale');
+  // The server presents the warning on the selected frame, end frame and clip it applies to.
+  const slotTake = (kind, assetId) => (assetId ? (shown.takes || []).find((take) => take?.kind === kind && take.assetId === assetId) : null);
+  if (!isSelfDrawnLayer(layer) && [slotTake('image', frameId), usesEnd ? slotTake('endImage', shown.endImageId) : null,
+    layer === 'footage' ? slotTake('video', playableClipId) : null].some((take) => take?.characterReferenceState)) codes.push('character-reference-changed');
   if (layer === 'footage' && !footageOptional && !playableClipId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
@@ -143,6 +149,7 @@ export function sceneMatchesFilter(codes, filter) {
   if (filter === 'attention') return codes.length > 0;
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
   if (filter === 'stale-frame') return codes.includes('frame-stale');
+  if (filter === 'older-character') return codes.includes('character-reference-changed');
   if (filter === 'bad-take') return codes.includes('bad-take');
   return true;
 }

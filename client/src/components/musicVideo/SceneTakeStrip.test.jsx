@@ -99,6 +99,21 @@ it('offers Still matches on the selected frame made for an earlier version of th
   expect(onReview).toHaveBeenCalledWith(shot.takes[0], { confirmFrame: true });
 });
 
+// Uniquely catches the older-character-reference warning (#16473) not reaching the selected clip, its Still matches
+// sending another revision than the warning showed, or an unselected take offering it.
+it('offers Still matches on a selected clip rendered from an older character reference, bound to its revision', () => {
+  const warning = { code: 'character-reference-changed', reasons: ['Started from a frame rendered with an older character reference: Ada'], characters: [{ subjectId: 'a', name: 'Ada' }], revision: 'rev-7', inherited: true };
+  const clip = (takeId, assetId) => ({ takeId, kind: 'video', assetId, status: 'candidate', source: 'generated', characterReferenceState: warning });
+  const shot = { ...scene, videoHistoryId: 'clip-1', takes: [clip('v1', 'clip-1'), clip('v2', 'clip-2')] };
+  const onReview = vi.fn();
+  render(<SceneTakeStrip scene={shot} kind="video" onReview={onReview} />);
+  expect(screen.getByText('Started from a frame rendered with an older character reference: Ada')).toBeInTheDocument();
+  const buttons = screen.getAllByRole('button', { name: 'Still matches' });
+  expect(buttons).toHaveLength(1);
+  fireEvent.click(buttons[0]);
+  expect(onReview).toHaveBeenCalledWith(shot.takes[0], { acceptCharacterReferences: { revision: 'rev-7' } });
+});
+
 // #16128: a take shared by a run of shots says where this shot's window starts.
 it('labels a sequence take with its place in the run and this shot\'s in-point', () => {
   const clip = { takeId: 'v1', kind: 'video', assetId: 'clip', status: 'candidate', source: 'generated',

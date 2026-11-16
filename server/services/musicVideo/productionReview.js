@@ -14,6 +14,7 @@ import { lyricCueSpan } from './timedText.js';
 import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { coldOpenScenes, songScenes } from '../../lib/musicVideoColdOpen.js';
+import { CHARACTER_REFERENCE_CHANGED, musicVideoSceneCharacterReferenceTakes } from '../../lib/musicVideoCharacterReferenceAge.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -608,6 +609,21 @@ const TECHNICAL_PROBLEM_CODES = new Set(['song-unanalyzed', 'lyrics-missing', 'i
   'document-shot-ids', 'shot-unbound', 'stale-rows', 'shot-duplicate-scene', 'no-shots', 'coverage', 'shot-timing', 'anchor-word-untimed']);
 const feedbackProblems = (review, stage) => unresolvedFeedback(review, stage).map(f => problem('feedback', `Resolve ${stage} feedback for ${f.target}: ${f.text}`));
 
+/**
+ * Advice on the board, shaped like a problem item but never among `problems`: it does not block an approval
+ * or a render. One item per shot whose selected frame, end frame or clip was rendered from an older
+ * character reference (#16473), read off the presented takes.
+ */
+function characterReferenceAdvice(project) {
+  return (project.scenes || []).flatMap((scene, index) => {
+    const flagged = musicVideoSceneCharacterReferenceTakes(scene);
+    if (!flagged.length) return [];
+    const names = [...new Set(flagged.flatMap(({ take }) => take.characterReferenceState.characters.map(c => c.name)))];
+    const what = [...new Set(flagged.map(({ kind }) => (kind === 'video' ? 'clip' : kind === 'endImage' ? 'end frame' : 'frame')))].join(' and ');
+    return [problem(CHARACTER_REFERENCE_CHANGED, `${scene.label || `Shot ${index + 1}`}: ${what} rendered from an older character reference (${names.join(', ')}).`, scene.sceneId)];
+  });
+}
+
 const ART_GUIDE_FIELDS = [['cast', 'Cast guide'], ['environments', 'Environment guide'],
   ['visualLanguage', 'Visual guide and mood board'], ['motionLanguage', 'Motion guide']];
 const GUIDE_MIME_TYPES = ['text/html', 'image/png', 'image/jpeg'];
@@ -798,6 +814,8 @@ export function productionReadiness(project) {
   return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(draft, alignmentVerified) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, ...problemFields(artProblems), stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
     storyboard: { approved: storyboardApproved, ...problemFields(boardProblems), ...technicalFields(boardProblems), camera, selectedTakeMarkedBad,
+      // Advice by code, like problemItems (#16399), that never blocks approval.
+      adviceItems: characterReferenceAdvice(project),
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
       shots: documentShots ? null : boardStoryboard(project), lyricAnchors: shots.lyricAnchors, staleRows, coverage, incompleteShots: shots.incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,

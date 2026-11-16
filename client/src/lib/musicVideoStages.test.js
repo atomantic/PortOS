@@ -163,6 +163,17 @@ describe('deriveStages / deriveNextAction', () => {
     expect(summarizeMusicVideoProject(stale, APPROVED).stage).toBe('review');
   });
 
+  // Uniquely catches the Shots step note missing the older-character-reference count, or counting by anything but its code (#16473).
+  it('counts shots rendered from an older character reference in the Shots note', () => {
+    const ready = { audioAnalysis: ANALYSIS, uploadedAudioFilename: 'a.mp3', scenes: [scene()], productionReadiness: APPROVED, renderHistoryId: 'rh-1' };
+    const readiness = { ...APPROVED, storyboard: { ...APPROVED.storyboard, adviceItems: [
+      { code: 'character-reference-changed', message: 'Shot 1: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+      { code: 'other-advice', message: 'Shot 1: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+    ] } };
+    expect(stepNotes(ready).produce).not.toMatch(/older character reference/);
+    expect(stepNotes(ready, readiness).produce).toMatch(/ · 1 from an older character reference$/);
+  });
+
   it('counts Publish per enabled platform, done only when each has a post (#10143)', () => {
     const ready = { audioAnalysis: ANALYSIS, uploadedAudioFilename: 'a.mp3', scenes: [scene()], productionReadiness: APPROVED, renderHistoryId: 'rh-1',
       publishKit: { builtAt: '2026-01-01T00:00:00.000Z', master: { renderHistoryId: 'rh-1' }, copyDraftedAt: '2026-01-02T00:00:00.000Z', posts: { youtube: { url: 'https://example.com/v' } } } };
