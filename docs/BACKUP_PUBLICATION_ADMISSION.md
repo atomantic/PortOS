@@ -28,13 +28,15 @@ but retains the durable owner with an uncertainty marker. Even a nested failure
 caught by its caller retains this blocker; ordinary errors after successful
 rollback release admission normally. The next snapshot refuses until recovery.
 
-Every owner has a random ID, process generation, PID, kind, and timestamp. Only
-the matching owner may release its directory. Neither elapsed time nor a missing
-PID permits automatic removal: a dead publication may have left an incomplete
-file/record pair, and a dead restore may have installed only part of its snapshot.
-A cut that cannot drain refuses with `BACKUP_SNAPSHOT_BUSY` and includes the
-blocking ownership records. The read-only `backupPublicationAdmissionStatus()`
-returns both cut and publication ownership, including unreadable records.
+Every owner records a random ID, generation, PID, OS process start, kind, and
+timestamp; only the matching owner may release its directory, and age never does.
+At cut time (#16388) a plain publication lease is retired when its PID is gone or
+was reused by a process with another start time (a lease without a recorded start
+needs a dead PID). `uncertain`, unreadable, live and cut/restore owners are never
+retired automatically. The cut logs one `⏭️` line and records `reclaimedLeases` in
+the manifest's `assetConsistency`. A cut that cannot drain refuses with
+`BACKUP_SNAPSHOT_BUSY`, naming each blocking path and the recovery section below;
+the Backup tab shows it. `backupPublicationAdmissionStatus()` reads all ownership.
 
 The control directory is machine-local authority. Backup excludes it
 unconditionally, and all full or selective restores preserve it. Upgrade and
@@ -45,21 +47,20 @@ external tools that write the data tree.
 
 ## Interrupted ownership recovery
 
-An interrupted owner is a recovery blocker, not evidence that its data is safe.
-Keep the recorded ID, PID, generation, timestamp, and directory path in the
-incident record. Stop both PortOS processes and any tool writing the affected
-data before examining it. Correlate the owner with logs, inspect the affected
+A blocking owner (`uncertain`, unreadable, running, or a cut/restore) is a
+recovery blocker, not evidence that its data is safe. Keep its ID, PID, generation,
+timestamp, and directory path in the incident record. Stop both PortOS processes
+and any tool writing the affected data, correlate the owner with logs, inspect the
 file/record pair, and finish or roll back that domain's interrupted publication.
 For a restore, also complete its cache/index and database recovery before
-reopening publication admission. A failed snapshot must remain failed.
+reopening admission. A failed snapshot stays failed.
 
-Only after the affected data has been verified may an operator explicitly retire
-that exact ownership directory while all writers remain stopped. Preserve its
-owner record with the recovery evidence; do not delete the entire control tree,
-clear ownership merely because its PID exited, or remove a record from a running
-process. Restart both processes after recovery. If the record is unreadable or
-the affected data cannot be established, retain the blocker and restore from a
-verified source with a deliberate recovery plan.
+Only after the data is verified may an operator retire that exact ownership
+directory while all writers remain stopped. Preserve its owner record with the
+recovery evidence; do not delete the control tree, clear an `uncertain` or
+cut/restore owner merely because its PID exited, or remove a record from a running
+process. Then restart both processes. If the record is unreadable or the data
+cannot be established, retain the blocker and restore from a verified source.
 
 ## Consistency while assets are changing
 

@@ -176,6 +176,16 @@ export function backupSnapshotCutPending() {
   return cutRequested || cutActive || backupSharedAdmission.cutPending();
 }
 
+const RECOVERY_DOC = 'docs/BACKUP_PUBLICATION_ADMISSION.md#interrupted-ownership-recovery';
+
+function blockedCutMessage(blockers) {
+  const named = blockers.map(blocker => {
+    const state = blocker.unreadable ? 'unreadable record' : blocker.uncertain ? 'uncertain, rollback failed' : `pid ${blocker.pid} still running`;
+    return `${blocker.path} (${state})`;
+  }).join('; ');
+  return `Timed out draining asset publications for backup. Blocking publication ownership: ${named}. Only owners whose process has exited are retired automatically; uncertain, unreadable and running owners must be reconciled by hand (see ${RECOVERY_DOC}).`;
+}
+
 /** Wait for already admitted workflows to settle, or reject when they do not. */
 async function awaitDrain(timeoutMs) {
   let timer;
@@ -225,11 +235,16 @@ export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEO
   const sharedCut = backupSharedAdmission.reserveCut();
   cutRequested = true;
   const deadline = Date.now() + timeoutMs;
+  let reclaimed = [];
   try {
     if (admitted > 0) await awaitDrain(timeoutMs);
+    // Retire leases left by exited processes before waiting on them. Live, uncertain and
+    // unreadable owners are untouched and keep blocking below.
+    reclaimed = backupSharedAdmission.reclaimDeadPublications();
+    if (reclaimed.length) console.log(`⏭️ Backup cut reclaimed ${reclaimed.length} publication lease(s) left by exited processes (pids ${reclaimed.map(lease => lease.pid).join(', ')})`);
     let blockers;
     while ((blockers = backupSharedAdmission.publications()).length > 0) {
-      if (Date.now() >= deadline) throw Object.assign(busyError('Timed out draining asset publications for backup. Reconcile interrupted publications before retrying; ownership records must not be removed by age or PID.'), { blockers });
+      if (Date.now() >= deadline) throw Object.assign(busyError(blockedCutMessage(blockers)), { blockers });
       await new Promise(resolve => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
     }
     assertDatabaseAdmission();
@@ -242,13 +257,16 @@ export async function acquireBackupSnapshotCut({ timeoutMs = DEFAULT_DRAIN_TIMEO
   cutActive = true;
   cutRequested = false;
   let released = false;
-  return () => {
+  const release = () => {
     if (released) return;
     sharedCut.release();
     released = true;
     cutActive = false;
     releasePublications();
   };
+  // Leases retired at this cut, for the backup manifest.
+  release.reclaimedLeases = reclaimed.length;
+  return release;
 }
 
 /**

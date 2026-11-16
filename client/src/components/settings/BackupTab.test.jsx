@@ -498,6 +498,22 @@ describe('BackupTab', () => {
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
 
+    // #16388: a blocked cut names the blocking ownership path and the recovery doc.
+    it('shows the blocking publication path from a refused restore', async () => {
+      withSnapshot();
+      restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'backup_snapshot_busy',
+        error: 'Timed out draining asset publications for backup. Blocking publication ownership: data/backup-admission/publications/abc (uncertain, rollback failed).' });
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+
+      const [message] = toast.error.mock.calls.at(-1);
+      expect(message).toContain('docs/BACKUP_PUBLICATION_ADMISSION.md');
+      expect(message).toContain('Details: Timed out draining asset publications for backup. Blocking publication ownership: data/backup-admission/publications/abc (uncertain');
+    });
+
     it('explains an unreadable integrity manifest and does not open confirmation', async () => {
       withSnapshot();
       restoreDatabase.mockResolvedValue({ status: 'failed', reason: 'manifest_unreadable' });
