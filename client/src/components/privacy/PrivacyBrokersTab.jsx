@@ -25,6 +25,7 @@ import useLatestRequest from '../../hooks/useLatestRequest';
 
 // Digest action icon by descriptor `icon` token (positive resolution vs dismiss).
 const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
+const BROKER_SOURCE_LABELS = { badbool: 'the BADBOOL people-search list', caRegistry: 'the CA Data Broker Registry' };
 
 // Stat chip for the exposure-map header.
 function StatChip({ label, count, tone }) {
@@ -161,7 +162,10 @@ export default function PrivacyBrokersTab({ subjectId, consentScopes, onManageCo
   const [refreshList, refreshing] = useAsyncAction(async () => {
     const r = await refreshPrivacyBrokers({ silent: true });
     loadInstallWide();
-    toast.success(`Broker list refreshed: ${r?.added || 0} new (${r?.fetched || 0} fetched)`);
+    const failed = Object.entries(r?.sources || {}).filter(([, s]) => s?.ok === false).map(([key]) => BROKER_SOURCE_LABELS[key] || key);
+    const summary = `${r?.added || 0} new (${r?.fetched || 0} fetched)`;
+    if (failed.length) toast.warning(`Broker list partly refreshed: ${summary}. Could not download ${failed.join(' or ')}.`);
+    else toast.success(`Broker list refreshed: ${summary}`);
     return r;
   }, { errorMessage: 'Broker refresh failed' });
 

@@ -147,6 +147,30 @@ describe.skipIf(!runDb)('privacy brokers DB round-trip', () => {
     expect(auto).toMatchObject({ name: 'Test Auto Alpha', source: 'badbool', confidence: 'auto' });
   });
 
+  it('upserts the healthy source and reports the failed one when a single download rejects', async () => {
+    const before = await svc.getBroker('spokeo');
+    const res = await svc.refreshBrokers({
+      fetchBadbool: async () => { throw new Error('HTTP 503'); },
+      fetchCaRegistry: async () => [{ id: 'ca-test-beta-inc', name: 'Beta Inc', urls: { home: 'https://beta.example' } }],
+    });
+    expect(res.sources.badbool).toEqual({ ok: false, count: 0, error: 'HTTP 503' });
+    expect(res.sources.caRegistry).toMatchObject({ ok: true, count: 1, error: null });
+    expect(await svc.getBroker('ca-test-beta-inc')).toMatchObject({ source: 'ca_registry' });
+    expect(await svc.getBroker('spokeo')).toEqual(before);
+  });
+
+  it('reports both sources failed and writes nothing when both downloads reject', async () => {
+    const before = await svc.listBrokers();
+    const res = await svc.refreshBrokers({
+      fetchBadbool: async () => { throw new Error('offline'); },
+      fetchCaRegistry: async () => { throw new Error('offline'); },
+    });
+    expect(res).toMatchObject({ fetched: 0, added: 0 });
+    expect(res.sources.badbool.ok).toBe(false);
+    expect(res.sources.caRegistry.ok).toBe(false);
+    expect(await svc.listBrokers()).toEqual(before);
+  });
+
   it('records a scan verdict, stamps next_recheck_at, and enforces the state machine', async () => {
     const now = new Date('2026-07-08T00:00:00.000Z');
     // Fresh verdict on a curated broker.
