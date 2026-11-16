@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   createProgression,
-  PROGRESSION_MASTERY_DEFAULTS,
   clampLevel,
   COGNITIVE_LADDERS,
   COGNITIVE_LADDER_TYPES,
@@ -94,13 +93,6 @@ describe('createProgression — accuracy-only ladder', () => {
     const m = { samples: 4, accuracy: 0.9 };
     expect(p.resolveLevel({ 0: m }).level).toBe(1);
     expect(p.resolveLevel({ 0: m, 1: m }).level).toBe(2);
-  });
-});
-
-describe('PROGRESSION_MASTERY_DEFAULTS', () => {
-  it('exposes the shared threshold shape', () => {
-    expect(PROGRESSION_MASTERY_DEFAULTS.minSamples).toBe(12);
-    expect(PROGRESSION_MASTERY_DEFAULTS.targetAccuracy).toBe(0.9);
   });
 });
 

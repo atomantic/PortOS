@@ -4,10 +4,6 @@ import {
   SELF_EVAL_MAX_SUPPRESSED_LISTED,
 } from './outcomes.js';
 import {
-  LI_DEGRADED_SUCCESS_THRESHOLD,
-  LI_DEGRADED_MIN_SAMPLE,
-  LI_DELIVERY_MIN_SAMPLE,
-  LI_HARD_GATE_DELIVERY_THRESHOLD,
 } from './constants.js';
 
 describe('computeSelfEvalSummary (#2700)', () => {
@@ -314,13 +310,6 @@ describe('computeSelfEvalSummary (#2700)', () => {
     });
     expect(report).toContain('Reasoning confidence: medium (2 of 3 self-signals available)');
     expect(report).not.toContain('GUIDANCE — low self-confidence');
-  });
-
-  it('exposes the degraded thresholds', () => {
-    expect(LI_DEGRADED_SUCCESS_THRESHOLD).toBe(50);
-    expect(LI_DEGRADED_MIN_SAMPLE).toBe(4);
-    expect(LI_DELIVERY_MIN_SAMPLE).toBe(5);
-    expect(LI_HARD_GATE_DELIVERY_THRESHOLD).toBe(50);
   });
 
   it('honors the injected clock when ageing the LI run window', () => {

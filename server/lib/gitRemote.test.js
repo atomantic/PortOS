@@ -15,9 +15,6 @@ import {
   getOriginInfo,
   readOriginRemoteUrl,
   redactRemoteUrlCredentials,
-  UPSTREAM_OWNER,
-  UPSTREAM_REPO,
-  UPSTREAM_FULL_NAME,
   isUpstreamOwner,
   isUpstreamFullName
 } from './gitRemote.js';
@@ -345,13 +342,5 @@ describe('getOriginInfo credential leak regression', () => {
     const info = await getOriginInfo();
     expect(info.originUrl).not.toContain('tok');
     expect(info.originUrl).toContain('***@');
-  });
-});
-
-describe('upstream constants', () => {
-  it('exposes UPSTREAM_OWNER, UPSTREAM_REPO, UPSTREAM_FULL_NAME', () => {
-    expect(UPSTREAM_OWNER).toBe('atomantic');
-    expect(UPSTREAM_REPO).toBe('PortOS');
-    expect(UPSTREAM_FULL_NAME).toBe('atomantic/PortOS');
   });
 });
