@@ -46,8 +46,6 @@ vi.mock('../services/voice/profileBenchmarks.js', () => ({
   completeProfileInteractiveBenchmark: vi.fn(),
 }));
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
-  getQwen3RuntimeStatus: vi.fn(),
-  downloadQwen3Model: vi.fn(),
   DEFAULT_DESIGN_MODEL: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
 }));
 vi.mock('../services/voice/fineTuning.js', () => ({
@@ -80,7 +78,6 @@ const bootstrap = await import('../services/voice/bootstrap.js');
 const tts = await import('../services/voice/tts.js');
 const voiceProfiles = await import('../services/voice/profiles.js');
 const profileBenchmarks = await import('../services/voice/profileBenchmarks.js');
-const qwen3TtsRuntime = await import('../services/voice/qwen3TtsRuntime.js');
 const fineTuning = await import('../services/voice/fineTuning.js');
 const { ServerError } = await import('../lib/errorHandler.js');
 const piperVoices = await import('../services/voice/piper-voices.js');
@@ -286,20 +283,6 @@ describe('Voice Routes', () => {
       expect(fineTuning.getFineTuningJobStatus).not.toHaveBeenCalled();
     });
 
-    it('probes Qwen3 runtime status and downloads model on demand', async () => {
-      qwen3TtsRuntime.getQwen3RuntimeStatus.mockResolvedValue({ ok: true, installed: true });
-      qwen3TtsRuntime.downloadQwen3Model.mockResolvedValue({ ok: true, modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign' });
-
-      const statusRes = await request(buildApp()).get('/api/voice/qwen3/status');
-      expect(statusRes.status).toBe(200);
-      expect(statusRes.body.ok).toBe(true);
-
-      const downloadRes = await request(buildApp()).post('/api/voice/qwen3/download-model').send({
-        modelId: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
-      });
-      expect(downloadRes.status).toBe(200);
-      expect(downloadRes.body.modelId).toBe('Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign');
-    });
   });
 
   describe('GET /api/voice/config', () => {

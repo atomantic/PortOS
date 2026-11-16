@@ -74,7 +74,8 @@ smoke. A successful command or non-silent WAV alone does not establish quality.
 ran successfully on macOS arm64 through the production runner at `4a8dafc3a`,
 with seed 42 and rate 1.0. No runtime code changes were needed. The reference
 was the generated design WAV, not a personal recording. Model acquisition used
-the runner's explicit `--download` operation for each model; all required files
+the runner's explicit `--download` operation for each model
+(`python scripts/qwen3_tts_runner.py --download --model-id <id> --models-dir <model-root>`); all required files
 passed upstream size/digest verification before inference loaded local snapshots
 with Hub/Transformers offline mode enabled.
 

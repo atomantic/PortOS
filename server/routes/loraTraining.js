@@ -5,19 +5,18 @@ import { z } from 'zod';
 import { asyncHandler, sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
-import { refuseRetiredTraining, TRAINING_RETIRED_MESSAGE } from '../lib/retiredLoraTraining.js';
-import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
-import { cancel as cancelTrainer, getRunRequired, listCheckpoints, listRuns, listSamples, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
+import { refuseRetiredTraining } from '../lib/retiredLoraTraining.js';
+import { cancelJob } from '../services/mediaJobQueue/index.js';
+import { cancel as cancelTrainer, getRunRequired, listCheckpoints, listRuns, promoteCheckpoint, runSamplesDir } from '../services/loraTraining/index.js';
 
 const router = Router();
 router.use((req, _res, next) => {
   if (req.method !== 'GET' && !(req.method === 'POST' && /^\/runs\/[^/]+\/(cancel|promote-checkpoint)$/.test(req.path))) refuseRetiredTraining();
   next();
 });
-// Explicit tombstones preserve legacy route authorization and return 410.
+// Explicit tombstone preserves legacy route authorization and returns 410. Any other write
+// (resume, delete) is refused with 410 by the guard above.
 router.post('/runs', refuseRetiredTraining);
-router.post('/runs/:id/resume', refuseRetiredTraining);
-router.get('/status', (_req, res) => res.json({ retired: true, message: TRAINING_RETIRED_MESSAGE, runtimes: { mflux: { ready: false }, flux2: { ready: false } } }));
 const listQuerySchema = z.object({
   status: z.enum(['queued', 'running', 'completed', 'failed', 'canceled']).optional(),
   characterId: z.string().max(128).optional(), datasetId: z.string().max(128).optional(),
@@ -25,10 +24,6 @@ const listQuerySchema = z.object({
 });
 router.get('/runs', asyncHandler(async (req, res) => res.json(await listRuns(validateRequest(listQuerySchema, req.query)))));
 router.get('/runs/:id', asyncHandler(async (req, res) => res.json(await getRunRequired(req.params.id))));
-router.get('/runs/:id/events', asyncHandler(async (req, res) => {
-  const run = await getRunRequired(req.params.id);
-  if (!run.jobId || !attachSseClient(run.jobId, res)) throw new ServerError('No live stream for this retained run', { status: 404, code: 'NOT_FOUND' });
-}));
 router.post('/runs/:id/cancel', asyncHandler(async (req, res) => {
   const run = await getRunRequired(req.params.id);
   const result = run.jobId ? await cancelJob(run.jobId) : { ok: false, code: 'NOT_FOUND', error: 'Run has no queue job' };
@@ -47,9 +42,6 @@ router.post('/runs/:id/promote-checkpoint', asyncHandler(async (req, res) => {
   await getRunRequired(req.params.id);
   const { step } = validateRequest(promoteSchema, req.body);
   res.json(await promoteCheckpoint(req.params.id, step));
-}));
-router.get('/runs/:id/samples', asyncHandler(async (req, res) => {
-  await getRunRequired(req.params.id); res.json(await listSamples(req.params.id));
 }));
 router.get('/runs/:id/samples/:filename', asyncHandler(async (req, res) => {
   const run = await getRunRequired(req.params.id);

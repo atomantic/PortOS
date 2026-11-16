@@ -77,24 +77,3 @@ async function applyCorrection({ from, subject, triaged, corrected }) {
   await saveRules(data);
   console.log(`📧 Triage rule recorded: ${triaged} -> ${corrected}`);
 }
-
-/**
- * Delete a specific rule by index.
- */
-export function deleteRule(index) {
-  return queueWrite(async () => {
-    const data = await loadRules();
-    if (index < 0 || index >= data.rules.length) return false;
-    data.rules.splice(index, 1);
-    await saveRules(data);
-    return true;
-  });
-}
-
-/**
- * Get all rules (for UI display).
- */
-export async function listRules() {
-  const { rules } = await loadRules();
-  return rules;
-}

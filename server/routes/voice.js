@@ -29,7 +29,7 @@ import {
   deleteVoiceProfile,
 } from '../services/voice/profiles.js';
 import { renderProfileBenchmark, benchmarkProfileInteractive, completeProfileInteractiveBenchmark } from '../services/voice/profileBenchmarks.js';
-import { getQwen3RuntimeStatus, downloadQwen3Model, DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
+import { DEFAULT_DESIGN_MODEL } from '../services/voice/qwen3TtsRuntime.js';
 import {
   startFineTuningJob,
   listFineTuningJobs,
@@ -281,10 +281,6 @@ const fineTunePromoteSchema = z.object({
   checkpointId: z.string().trim().min(1).max(160),
 }).strict();
 
-const downloadModelSchema = z.object({
-  modelId: z.string().trim().min(1).max(160),
-}).strict();
-
 const profileIdParamsSchema = z.object({
   id: z.string().trim().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
 }).strict();
@@ -479,17 +475,6 @@ router.post('/profiles/:id/fine-tune/:jobId/promote', asyncHandler(async (req, r
     checkpointId: body.checkpointId,
   });
   res.json({ profile });
-}));
-
-// Qwen3 runtime status and model management
-router.get('/qwen3/status', asyncHandler(async (_req, res) => {
-  res.json(await getQwen3RuntimeStatus());
-}));
-
-router.post('/qwen3/download-model', asyncHandler(async (req, res) => {
-  const body = validateRequest(downloadModelSchema, req.body || {});
-  const result = await downloadQwen3Model(body.modelId);
-  res.json(result);
 }));
 
 // POST /api/voice/piper/fetch

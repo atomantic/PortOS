@@ -39,9 +39,9 @@ describe('Messages strict storage boundaries', () => {
     }
   });
 
-  it.each(['', '{invalid', 'null', '[]', '{}', '{"rules":[null]}', '{"rules":[{"senderPattern":"Example","correctedAction":"archive","count":"2"}]}'])('preserves invalid rules bytes %j on correction and deletion', async content => {
+  it.each(['', '{invalid', 'null', '[]', '{}', '{"rules":[null]}', '{"rules":[{"senderPattern":"Example","correctedAction":"archive","count":"2"}]}'])('preserves invalid rules bytes %j on read and correction', async content => {
     await writeFile(rulesFile, content);
-    for (const operation of [() => rules.listRules(), () => rules.recordCorrection(correction), () => rules.deleteRule(0)]) {
+    for (const operation of [() => rules.getTriageRules(), () => rules.recordCorrection(correction)]) {
       await expect(operation()).rejects.toMatchObject({ status: 503, code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
       expect(await readFile(rulesFile, 'utf8')).toBe(content);
       expect(atomicWrite).not.toHaveBeenCalled();
@@ -54,7 +54,6 @@ describe('Messages strict storage boundaries', () => {
     await expect(drafts.createDraft({ accountId: 'account-1' })).rejects.toMatchObject({ code: 'MESSAGE_DRAFTS_UNAVAILABLE' });
     await expect(drafts.initializeMessageDrafts()).rejects.toMatchObject({ code: 'MESSAGE_DRAFTS_UNAVAILABLE' });
     await expect(rules.recordCorrection(correction)).rejects.toMatchObject({ code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
-    await expect(rules.deleteRule(0)).rejects.toMatchObject({ code: 'MESSAGE_TRIAGE_RULES_UNAVAILABLE' });
     expect(atomicWrite).not.toHaveBeenCalled();
     // A successful restoration retains uncertain delivery identity and history;
     // only the legacy abandoned send receives a recovery write.
@@ -73,11 +72,11 @@ describe('Messages strict storage boundaries', () => {
 
   it('creates first stores only on confirmed absence and preserves valid legacy records and root metadata', async () => {
     expect(await drafts.listDrafts()).toEqual([]);
-    expect(await rules.listRules()).toEqual([]);
+    expect(await rules.getTriageRules()).toEqual([]);
     await drafts.createDraft({ accountId: 'account-1' });
     await rules.recordCorrection(correction);
     expect(await drafts.listDrafts()).toHaveLength(1);
-    expect(await rules.listRules()).toHaveLength(1);
+    expect(await rules.getTriageRules()).toHaveLength(1);
     const oldRule = { senderPattern: 'Example sender', correctedAction: 'archive', extension: true };
     await atomicWrite(rulesFile, { rules: [oldRule], extension: true });
     await rules.recordCorrection(correction);
@@ -88,6 +87,6 @@ describe('Messages strict storage boundaries', () => {
     await atomicWrite(draftsFile, []);
     await atomicWrite(rulesFile, { rules: [] });
     expect(await drafts.listDrafts()).toEqual([]);
-    expect(await rules.listRules()).toEqual([]);
+    expect(await rules.getTriageRules()).toEqual([]);
   });
 });

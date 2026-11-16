@@ -54,8 +54,6 @@ vi.mock('../services/voice/profileBenchmarks.js', () => ({
   completeProfileInteractiveBenchmark: vi.fn(),
 }));
 vi.mock('../services/voice/qwen3TtsRuntime.js', () => ({
-  getQwen3RuntimeStatus: vi.fn(),
-  downloadQwen3Model: vi.fn(),
   DEFAULT_DESIGN_MODEL: 'example-model',
 }));
 vi.mock('../services/voice/fineTuning.js', () => ({

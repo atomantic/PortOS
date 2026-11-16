@@ -528,32 +528,6 @@ export async function getStatus() {
 }
 
 /**
- * Search the cached contacts (name / org / phone / email substring).
- */
-export async function searchContacts({ q, limit } = {}) {
-  const { contacts } = await readContactCache();
-  const needle = String(q || '').trim().toLowerCase();
-  const cap = Math.min(Math.max(Number(limit) || 50, 1), 500);
-  if (!needle) return contacts.slice(0, cap);
-  const out = [];
-  for (const c of contacts) {
-    const hay = [
-      c.displayName,
-      c.organization,
-      c.firstName,
-      c.lastName,
-      ...(c.phones || []),
-      ...(c.emails || []),
-    ].filter(Boolean).join(' ').toLowerCase();
-    if (hay.includes(needle)) {
-      out.push(c);
-      if (out.length >= cap) break;
-    }
-  }
-  return out;
-}
-
-/**
  * Load contacts + build index. Cached in-process for the duration of a request
  * batch via the returned object (caller holds it).
  */

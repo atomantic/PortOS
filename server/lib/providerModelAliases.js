@@ -12,9 +12,6 @@ import { isNonBlankStr } from './textUtils.js';
  * (as model pins and a binding's narrowed subset do: silently dropping a saved value makes a human's choice vanish unnoticed). Pure: no I/O, no clock, no provider call.
  */
 
-/** Bounds shared by the row sanitizer and the request schema. */
-export const MODEL_ALIAS_LIMITS = Object.freeze({ maxEntries: 200, maxLength: 512 });
-
 /** A stored alias map with unusable entries dropped. Read defensively since these maps outlive the build that wrote them (a hand-edited psql column or an older-release backup must not put a `null` executable into a DTO the schema then refuses to publish). */
 export const sanitizeModelAliases = (aliases) => Object.fromEntries(
   Object.entries(aliases && typeof aliases === 'object' ? aliases : {})
@@ -27,27 +24,6 @@ export const effectiveModelAliases = (observed, overrides) => ({
   ...sanitizeModelAliases(observed),
   ...sanitizeModelAliases(overrides),
 });
-
-/**
- * Apply one edit to a route's overrides: `null` DELETES a key, a string sets it, absent keys are preserved (a panel that read three aliases and changed one sends one; the three-valued shape matches connection credentials).
- *
- * @returns {{aliases: Record<string,string>, removed: string[]}}
- */
-export function applyModelAliasPatch(current, patch) {
-  const aliases = sanitizeModelAliases(current);
-  const removed = [];
-  for (const [rawCanonical, value] of Object.entries(patch || {})) {
-    const canonical = String(rawCanonical).trim();
-    if (canonical === '') continue;
-    if (value === null) {
-      if (Object.hasOwn(aliases, canonical)) removed.push(canonical);
-      delete aliases[canonical];
-      continue;
-    }
-    aliases[canonical] = String(value).trim();
-  }
-  return { aliases, removed };
-}
 
 /**
  * Overrides whose executable spelling this route no longer lists. An alias claims "this route spells canonical X as Y" and goes stale when Y leaves the record's model list (not when X leaves the catalog: X reaching it is the alias's purpose).
@@ -68,10 +44,3 @@ export function staleModelAliases(overrides, storedModels) {
 /** Stale-edit fingerprint of one route's overrides. `ai_route_bindings` has no revision column, so this reuses the hash `routeSettingsRevision` computes over a sorted entry list (as the mode overrides do): it catches every writer, where a row counter only notices those through the graph. */
 export const modelAliasRevision = (overrides) => routeSettingsRevision(sanitizeModelAliases(overrides));
 
-/**
- * The canonical model names a connection's routes resolve, across all of them. The shared catalog is exactly this union, which is why an alias write recomputes it (an override adding a canonical name corrects nothing until menus can offer it); derived from stored maps, it probes nothing.
- *
- * @param {{modelMap?: object, modelAliasOverrides?: object}[]} routes
- */
-export const connectionCatalogModels = (routes) => [...new Set((routes || [])
-  .flatMap((route) => Object.keys(effectiveModelAliases(route?.modelMap, route?.modelAliasOverrides))))];

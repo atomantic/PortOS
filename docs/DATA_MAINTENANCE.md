@@ -33,7 +33,10 @@ disabled. Existing cancellation controls remain available in **Active Queues**.
 A detached trainer whose queue record is missing is also observed through completion,
 and blocks maintenance until it exits. The retained run cancel endpoint
 (`POST /api/lora-training/runs/:id/cancel`) can cancel that observer-owned process;
-upgrade never kills it merely because the queue record is absent.
+upgrade never kills it merely because the queue record is absent. A retained run's
+checkpoint can still be made the deployed adapter with
+`POST /api/lora-training/runs/:id/promote-checkpoint` (`{ "step": <n> }`) once the
+run is no longer active.
 
 ## Explicit removal
 

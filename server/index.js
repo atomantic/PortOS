@@ -182,7 +182,6 @@ import importerRoutes from './routes/importer.js';
 import storyBuilderRoutes from './routes/storyBuilder.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
-import loraDatasetsRoutes from './routes/loraDatasets.js';
 import loraTrainingRoutes from './routes/loraTraining.js';
 import dataMaintenanceRoutes from './routes/dataMaintenance.js';
 import sdapiRoutes from './routes/sdapi.js';
@@ -509,7 +508,6 @@ app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 app.use('/api/data-maintenance', dataMaintenanceRoutes);
-app.use('/api/lora-datasets', loraDatasetsRoutes);
 app.use('/api/lora-training', loraTrainingRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.

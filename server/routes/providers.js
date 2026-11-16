@@ -10,16 +10,11 @@ import {
   createBinding,
   createConnection,
   getManagementGraph,
-  linkBinding,
   presetSkipReason,
-  previewBindingLink,
   providerGraphEnabled,
-  refreshConnectionCatalog,
   removeConnection,
-  unlinkBinding,
   updateBindingSettings,
   updateConnectionSettings,
-  updateRouteModelAliases,
   updateRouteSettings,
 } from '../services/providerGraph.js';
 import {
@@ -47,14 +42,11 @@ import {
   providerVisionTestSchema,
   providerVisionSuiteSchema,
   providerBindingCreateSchema,
-  providerBindingLinkSchema,
-  providerBindingUnlinkSchema,
   providerBindingUpdateSchema,
   providerConnectionCreateSchema,
   providerConnectionUpdateSchema,
   providerServiceCreateSchema,
   providerServiceUpdateSchema,
-  providerRouteModelAliasSchema,
   providerRouteSettingsUpdateSchema,
   providerPresetCreateSchema,
   credentialBootstrapsSettingsSchema,
@@ -511,31 +503,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     res.status(201).json(await createBinding(input));
   }));
 
-  /**
-   * What linking this binding into another connection WOULD change: which
-   * executable route ids move, how the two backends differ, and which variant
-   * key the binding would occupy. Read-only — POST because the body carries the
-   * revisions being reviewed, not because anything is written.
-   */
-  router.post('/bindings/:id/link/preview', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
-    res.json(await previewBindingLink({ bindingId: req.params.id, ...input }));
-  }));
-
-  // Apply a reviewed link. Every named revision is re-checked inside the graph
-  // transaction; a stale one is a 409 that requires a fresh preview.
-  router.post('/bindings/:id/link', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingLinkSchema, req.body ?? {});
-    res.json(await linkBinding({ bindingId: req.params.id, ...input }));
-  }));
-
-  // Give this binding its own copy of the connection it shares. Route ids,
-  // activeProvider, task pins and fallback references are all retained.
-  router.post('/bindings/:id/unlink', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerBindingUnlinkSchema, req.body ?? {});
-    res.json(await unlinkBinding({ bindingId: req.params.id, ...input }));
-  }));
-
   // Remove a connection no binding uses. Refused with a 409 while one still
   // does — the graph never silently orphans a binding to tidy a row away.
   router.delete('/connections/:id', asyncHandler(async (req, res) => {
@@ -554,17 +521,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   router.patch('/connections/:id', asyncHandler(async (req, res) => {
     const input = validateRequest(providerConnectionUpdateSchema, req.body ?? {});
     res.json(await updateConnectionSettings({ connectionId: req.params.id, ...input }));
-  }));
-
-  /**
-   * Refresh a connection's SHARED model catalog once for every harness on it.
-   *
-   * An explicit discovery request and nothing more: it lists models, it never
-   * generates, and a failed probe keeps the catalog the connection already had
-   * rather than reporting an empty backend.
-   */
-  router.post('/connections/:id/refresh-models', asyncHandler(async (req, res) => {
-    res.json(await refreshConnectionCatalog(req.params.id));
   }));
 
   /**
@@ -656,25 +612,6 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
   router.patch('/routes/:providerId', asyncHandler(async (req, res) => {
     const input = validateRequest(providerRouteSettingsUpdateSchema, req.body ?? {});
     res.json(await updateRouteSettings({ providerId: req.params.providerId, ...input }));
-  }));
-
-  /**
-   * Correct ONE route's canonical→executable model aliases by hand (#6369).
-   *
-   * A refresh records only the aliases it can VERIFY — a stored model string
-   * round-trips through the harness's own adapter or it stays an unresolved
-   * alias rather than being rewritten — so a spelling the adapter cannot
-   * reproduce reaches no shared catalog and no model menu. This is where a
-   * human supplies it.
-   *
-   * `null` for a key removes that override and is the ONLY thing that does: a
-   * refresh rewrites what it observed in a separate column, so a correction
-   * survives it and an alias for a model the route no longer lists is kept and
-   * reported stale rather than dropped.
-   */
-  router.patch('/routes/:providerId/model-aliases', asyncHandler(async (req, res) => {
-    const input = validateRequest(providerRouteModelAliasSchema, req.body ?? {});
-    res.json(await updateRouteModelAliases({ providerId: req.params.providerId, ...input }));
   }));
 
   router.get('/samples', asyncHandler(async (req, res) => {

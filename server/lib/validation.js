@@ -44,7 +44,6 @@ import {
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
-import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { parseProviderRef } from './providerRef.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
@@ -655,31 +654,6 @@ export const modelPinClearSchema = z.object({
   pinId: z.string().trim().min(1).max(300),
 });
 
-// POST /api/providers/bindings/:id/link  (and /link/preview).
-//
-// Every revision the caller reviewed is named explicitly. Omitting one is
-// allowed for a PREVIEW (there is nothing to be stale against yet), but the
-// service refuses to APPLY a link whose named revisions have moved -- a link is
-// a decision about a specific difference, so a changed row invalidates it.
-export const providerBindingLinkSchema = z.object({
-  targetConnectionId: z.string().uuid(),
-  expectedRevisions: z.object({
-    binding: z.number().int().positive().optional(),
-    sourceConnection: z.number().int().positive().optional(),
-    targetConnection: z.number().int().positive().optional(),
-  }).strict().optional().default({}),
-}).strict();
-
-// POST /api/providers/bindings/:id/unlink. No target: unlink clones the
-// connection this binding already uses, so only the binding and its source
-// participate.
-export const providerBindingUnlinkSchema = z.object({
-  expectedRevisions: z.object({
-    binding: z.number().int().positive().optional(),
-    sourceConnection: z.number().int().positive().optional(),
-  }).strict().optional().default({}),
-}).strict();
-
 // POST /api/providers/connections (#6369) — a NEW backend.
 //
 // This schema bounds the SHAPE only. Which backend kinds and transport
@@ -825,29 +799,6 @@ export const providerRouteSettingsUpdateSchema = z.object({
   }).strict().refine((value) => Object.keys(value).length > 0, {
     message: 'Name at least one setting to change',
   }),
-}).strict();
-
-// PATCH /api/providers/routes/:providerId/model-aliases (#6369) — ONE route's
-// HAND-AUTHORED canonical→executable model aliases.
-//
-// Three-valued like the connection credentials above, and for the same reason:
-// a panel that read three aliases and changed one must be able to send one. An
-// absent key is preserved, a string sets, and `null` DELETES — the only way an
-// override is ever removed, because a refresh must never delete a correction.
-//
-// The keys are model names, so the record is not enumerable and each key is
-// length-checked. `expectedRevision` is a FINGERPRINT of the current override
-// map (`ai_route_bindings` has no revision column), and an empty patch is
-// refused rather than written: it would rewrite a row to say nothing.
-export const providerRouteModelAliasSchema = z.object({
-  expectedRevision: z.string().trim().min(1).max(64),
-  aliases: z.record(
-    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength),
-    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength).nullable(),
-  ).refine((value) => Object.keys(value).length > 0, { message: 'Name at least one alias to change' })
-    .refine((value) => Object.keys(value).length <= MODEL_ALIAS_LIMITS.maxEntries, {
-      message: `At most ${MODEL_ALIAS_LIMITS.maxEntries} aliases at a time`,
-    }),
 }).strict();
 
 // POST /api/providers/:id/vision-suite.

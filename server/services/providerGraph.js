@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import {
-  compareBackendEndpoints,
   providerConnectionProfile,
   projectConnectionOwnedFields,
   withConnectionOwnedFields,
@@ -10,21 +9,12 @@ import {
   connectionOwnedSnapshot,
   isDerivedPreset,
   mergeConnectionCredentials,
-  nextConnectionCatalog,
   planGraphReconciliation,
   reconciliationIsNoop,
   routeBelongsOnConnection,
-  sanitizeCatalogError,
   toConnectionDto,
   toManagementGraphDto,
 } from '../lib/providerGraphRecords.js';
-import { resolveRouteModels } from '../lib/providerGraphPreview.js';
-import {
-  applyModelAliasPatch,
-  connectionCatalogModels,
-  effectiveModelAliases,
-  modelAliasRevision,
-} from '../lib/providerModelAliases.js';
 import { harnessById } from '../lib/providerHarnesses.js';
 import { modeSiblingName } from '../lib/aiToolkit/internal/providerModes.js';
 import {
@@ -47,7 +37,6 @@ import {
 } from '../lib/providerRouteSettings.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
-  allocateServiceSlug,
   instanceForConnection,
   planServiceColumnBackfill,
   serviceColumnsForConnection,
@@ -62,14 +51,10 @@ import {
   applyServiceColumnBackfill,
   commitPendingProjection,
   deleteConnection,
-  detachBindingToConnection,
   mergeServiceInstances,
   readGraph,
-  relinkBinding,
   saveBindingSettings,
   saveConnectionSettings,
-  saveRouteModelAliases,
-  saveRouteModelMap,
   writeGraph,
 } from './providerGraphStore.js';
 
@@ -374,14 +359,6 @@ async function refreshPresetSkipReasonsForConnection(graph, connection) {
 }
 
 /**
- * A binding moved between instances (link, unlink): the derived presets on its
- * routes now sit on `connection` and must say so. One re-derivation from the
- * row they landed on writes the new `serviceId` with everything else.
- */
-const repointDerivedPresets = (providerIds, connection) =>
-  (connection?.slug ? rematerializeDerivedPresets(connection, { providerIds }) : Promise.resolve([]));
-
-/**
  * Reconcile the graph against providers.json.
  *
  * `reconciling` is set for the WHOLE pass, not just its write: the retry path
@@ -474,79 +451,7 @@ const stale = (what) => new ServerError(
   `${what} changed since the preview was taken; take a new preview`,
   { status: 409, code: 'PROVIDER_GRAPH_STALE_REVISION' });
 
-/**
- * Resolve and revision-check every row a link touches.
- *
- * All three revisions are checked -- binding, source connection and target
- * connection -- because a link is a decision about a difference the human just
- * reviewed. Any of the three moving invalidates that review, so a stale one is
- * a 409 requiring a fresh preview rather than a last-writer merge.
- */
-async function resolveLink({ bindingId, targetConnectionId = null, expectedRevisions = {} }) {
-  requireProviderGraph();
-  const graph = await readGraph();
-  const binding = graph.bindings.find((candidate) => candidate.id === bindingId);
-  if (!binding) throw new ServerError('Binding not found', { status: 404, code: 'BINDING_NOT_FOUND' });
-  const source = graph.connections.find((candidate) => candidate.id === binding.connectionId) || null;
-  const target = targetConnectionId ? findConnectionByRef(graph, targetConnectionId) : null;
-  if (targetConnectionId && !target) throw new ServerError('Connection not found', { status: 404, code: 'CONNECTION_NOT_FOUND' });
-  if (target && target.id === binding.connectionId) {
-    throw new ServerError('That binding already uses this connection', { status: 409, code: 'PROVIDER_GRAPH_ALREADY_LINKED' });
-  }
-
-  // A route mid-projection is precisely the state where the graph and the file
-  // disagree, so a link decided against it would be decided against unknown
-  // values. Refuse until reconciliation settles it.
-  if (graph.routes.some((route) => route.bindingId === bindingId && route.pending)) {
-    throw new ServerError('This binding has an unresolved projection and cannot be changed yet',
-      { status: 409, code: 'PROVIDER_GRAPH_BINDING_BLOCKED' });
-  }
-
-  if (expectedRevisions.binding !== undefined && expectedRevisions.binding !== binding.revision) throw stale('The binding');
-  if (expectedRevisions.sourceConnection !== undefined && expectedRevisions.sourceConnection !== source?.revision) {
-    throw stale('The source connection');
-  }
-  if (target && expectedRevisions.targetConnection !== undefined && expectedRevisions.targetConnection !== target.revision) {
-    throw stale('The target connection');
-  }
-  return { graph, binding, source, target };
-}
-
 /** A connection row in the shape the endpoint comparator expects. */
-const asProfile = (connection) => ({
-  kind: connection.kind,
-  protocol: Object.keys(connection.transports)[0] || null,
-  transports: connection.transports,
-  credentials: connection.credentials,
-});
-
-/**
- * What linking this binding into `targetConnectionId` would change.
- *
- * Read-only and secret-free: the caller learns WHICH routes move, how the two
- * backends differ (protocol / credentials / catalog), and which variant key the
- * binding would land on -- never a credential, and never a comparison the
- * browser could make itself.
- */
-export async function previewBindingLink(input) {
-  const { graph, binding, source, target } = await resolveLink(input);
-  const routes = graph.routes.filter((route) => route.bindingId === binding.id);
-  const { differences } = compareBackendEndpoints(asProfile(source), asProfile(target));
-  const catalogDiffers = source.catalog.models.join('\u0000') !== target.catalog.models.join('\u0000');
-
-  return {
-    bindingId: binding.id,
-    revisions: { binding: binding.revision, sourceConnection: source.revision, targetConnection: target.revision },
-    affectedRouteIds: routes.map((route) => route.providerId),
-    variantKey: allocateVariantKey(graph, target.id, binding),
-    differences: catalogDiffers ? [...differences, 'catalog'] : differences,
-    // Union by canonical identity -- linking never drops a model either side saw.
-    unionModels: [...new Set([...source.catalog.models, ...target.catalog.models])],
-    // Applying is an explicit second call; a preview changes nothing.
-    requiresConfirmation: true,
-  };
-}
-
 /**
  * The variant key `binding` may occupy on `connectionId`.
  *
@@ -564,62 +469,13 @@ function allocateVariantKey(graph, connectionId, binding) {
 }
 
 /**
- * Repoint one binding at an existing connection, then project the target's
- * connection-owned values into that binding's executable routes.
- *
- * Route ids, `activeProvider`, task pins and fallback references are untouched
- * -- only the backend those routes reach changes, which is the whole point of a
- * link. The projection runs through the pending-snapshot protocol so an
- * interrupted file write is recoverable.
- */
-export function linkBinding(input) {
-  return serialize(async () => {
-    const { graph, binding, target } = await resolveLink(input);
-    const routes = graph.routes.filter((route) => route.bindingId === binding.id);
-    await relinkBinding({ bindingId: binding.id, connectionId: target.id });
-    const applied = await projectRoutes(routes.map((route) => route.providerId), target);
-    await repointDerivedPresets(routes.map((route) => route.providerId), target);
-    console.log(`🔗 Linked binding ${binding.id} to connection ${target.id} (${applied.length} routes projected)`);
-    return { bindingId: binding.id, connectionId: target.id, affectedRouteIds: applied };
-  });
-}
-
-/**
- * Give this binding its own copy of the connection it currently shares.
- *
- * The clone keeps the transports, credentials and catalog, so nothing about
- * execution changes and no route needs rewriting; only the graph edge moves.
- * Route ids and every mode setting are retained by construction.
- */
-export function unlinkBinding(input) {
-  return serialize(async () => {
-    const { graph, binding, source } = await resolveLink({ ...input, targetConnectionId: null });
-    // A clone is a second INSTANCE of the same service, so it takes the next
-    // free slug rather than the source's — `uq_ai_connections_slug` would
-    // refuse the copy, and two rows answering to one address is the bug.
-    const taken = takenServiceSlugs(graph.connections);
-    const connection = {
-      ...source,
-      id: randomUUID(),
-      revision: 1,
-      slug: allocateServiceSlug(source.slug ?? source.definitionId ?? source.kind, taken),
-    };
-    await detachBindingToConnection({ bindingId: binding.id, connection });
-    // A derived preset names its instance by slug, and the clone has a new one.
-    await repointDerivedPresets(graph.routes.filter((route) => route.bindingId === binding.id).map((route) => route.providerId), connection);
-    console.log(`🔗 Unlinked binding ${binding.id} onto its own connection ${connection.id}`);
-    return { bindingId: binding.id, connectionId: connection.id };
-  });
-}
-
-/**
  * Delete a connection nothing binds any more.
  *
  * Reconciliation deliberately KEEPS an emptied connection rather than
  * garbage-collecting it — a backend the user configured is not something to
  * remove because a route was temporarily deleted. This is the explicit cleanup
  * that keeps them from accumulating forever, and it is refused while a binding
- * still names the row: unlink first, so no binding is ever silently orphaned.
+ * still names the row, so no binding is ever silently orphaned.
  */
 export async function removeConnection(connectionRef) {
   requireProviderGraph();
@@ -627,7 +483,7 @@ export async function removeConnection(connectionRef) {
     const connectionId = requireConnection(await readGraph(), connectionRef).id;
     const result = await deleteConnection(connectionId);
     if (!result.deleted) {
-      throw new ServerError('Unlink the bindings that use this connection first',
+      throw new ServerError('This connection is still used by a harness binding',
         { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_IN_USE' });
     }
     console.log(`🔗 Deleted unused provider connection ${connectionId}`);
@@ -821,68 +677,6 @@ export function updateBindingSettings({ bindingId, expectedRevision, label, sele
 }
 
 /**
- * Refresh the shared model catalog — ONE probe per backend, not one per route.
- *
- * `refreshProviderModelsBatch` groups the connection's routes by daemon and
- * probe shape, so a connection carrying Claude CLI, Claude TUI and OpenCode
- * routes is asked once and written once. It never throws for a per-route
- * failure, which is what lets a partial answer stay a partial answer.
- *
- * The failure rule is the one this endpoint exists for: **a failed probe keeps
- * the models the connection already knew**, with a sanitized reason attached.
- * A successful probe that returns nothing writes `known` with an empty list —
- * a backend whose last model was deleted is a real answer, not "never asked".
- * No pin, default or `activeProvider` is repicked either way.
- */
-export function refreshConnectionCatalog(connectionRef) {
-  return serialize(async () => {
-    requireProviderGraph();
-    const graph = await readGraph();
-    const connection = requireConnection(graph, connectionRef);
-    const { routes } = connectionFanout(graph, connection.id);
-    if (routes.length === 0) {
-      throw new ServerError('This connection has no executable route to probe',
-        { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_UNROUTED' });
-    }
-
-    const groups = await providerService().refreshProviderModelsBatch(routes.map((route) => route.providerId));
-    const failures = groups.filter((group) => group.status === 'failed');
-    const refreshed = groups.some((group) => group.status === 'updated');
-
-    // Canonical names come from the records as they are AFTER the write, so the
-    // catalog and each route's alias map describe the same observation.
-    const { providers } = await providerService().getAllProviders();
-    const byId = new Map(providers.map((provider) => [provider.id, provider]));
-    const refreshedRoutes = [];
-    for (const route of routes) {
-      const provider = byId.get(route.providerId);
-      if (!provider) continue;
-      const { modelMap } = resolveRouteModels(provider);
-      // Only the OBSERVED half is written back. The user's overrides stay in
-      // their own column, which is what lets a hand-authored alias outlast this
-      // refresh — but they still count towards the shared catalog below,
-      // because a correction that no model menu offers has corrected nothing.
-      await saveRouteModelMap(route.providerId, modelMap);
-      refreshedRoutes.push({ ...route, modelMap });
-    }
-    const models = connectionCatalogModels(refreshedRoutes);
-
-    // A failure is reported whether or not another group succeeded: a partial
-    // answer is still a harness that cannot reach this backend.
-    const error = failures.length > 0
-      ? sanitizeCatalogError(failures[0].error, connection.credentials)
-      : null;
-    const catalog = nextConnectionCatalog(connection.catalog,
-      refreshed ? { refreshed: true, models, error } : { refreshed: false, error });
-    await saveConnectionSettings({ ...connection, catalog });
-
-    console.log(`🔗 Refreshed connection ${connection.id} catalog: ${catalog.state}, `
-      + `${catalog.models.length} models across ${groups.length} probe groups (${failures.length} failed)`);
-    return { connectionId: connection.id, catalog, probedGroups: groups.length, failedGroups: failures.length };
-  });
-}
-
-/**
  * Edit ONE route's mode overrides — its args, timeout, effort and model pins.
  *
  * The counterpart to `updateConnectionSettings`: that one changes a value every
@@ -955,73 +749,6 @@ export function updateRouteSettings({ providerId, expectedRevision, settings }) 
     // is a documented no-op.
     console.log(`🔗 Updated route ${providerId} overrides: ${Object.keys(settings).join(', ')}`);
     return { providerId, settings: next, settingsRevision: routeSettingsRevision(next) };
-  });
-}
-
-/**
- * Edit ONE route's hand-authored model aliases (#6369).
- *
- * The correction surface for `modelMap`. A refresh only ever records the
- * aliases it could VERIFY — a stored model string round-trips through the
- * harness's own adapter or it is reported unresolved rather than rewritten — so
- * a bare `example-model` on an OpenCode route that needs its `<namespace>/`
- * prefix resolves to nothing, reaches no catalog, and can be offered by no
- * model menu. Naming the pair by hand is the repair.
- *
- * The merge rule, which is the whole design decision behind this endpoint:
- *
- *   - Observed aliases and user overrides live in SEPARATE columns. A refresh
- *     rewrites the observed one wholesale and never touches the other, so an
- *     override survives every refresh and is removed only by the person who
- *     wrote it (`null` for its key).
- *   - The effective map is `{ ...observed, ...overrides }` — an override wins.
- *   - An override naming a spelling the record no longer lists is KEPT and
- *     reported stale, the same way a model pin outside the catalog is.
- *
- * The connection's catalog is re-derived here from the maps already stored,
- * because an alias that no model menu offers has fixed nothing. That is a pure
- * recompute: no backend is probed, `state` and `error` are preserved, and a
- * failed catalog keeps reading as failed.
- *
- * Stale-checked with a fingerprint of the overrides rather than a row revision,
- * for the reason `routeSettingsRevision` documents: `ai_route_bindings` has no
- * revision column, and a hash of the values catches every writer.
- */
-export function updateRouteModelAliases({ providerId, expectedRevision, aliases }) {
-  return serialize(async () => {
-    requireProviderGraph();
-    const graph = await readGraph();
-    const route = graph.routes.find((candidate) => candidate.providerId === providerId);
-    if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
-    requireSettledRoutes([route]);
-
-    if (modelAliasRevision(route.modelAliasOverrides) !== expectedRevision) {
-      throw stale("This route's model aliases");
-    }
-
-    const { aliases: overrides, removed } = applyModelAliasPatch(route.modelAliasOverrides, aliases);
-    await saveRouteModelAliases(providerId, overrides);
-
-    // Re-derive the shared catalog from every route on this backend, reading
-    // the row we just wrote rather than the stale one the graph read.
-    const bindingConnectionId = graph.bindings.find((binding) => binding.id === route.bindingId)?.connectionId;
-    const connection = graph.connections.find((candidate) => candidate.id === bindingConnectionId);
-    if (connection) {
-      const { routes } = connectionFanout(graph, connection.id);
-      const models = connectionCatalogModels(routes.map((entry) => (entry.providerId === providerId
-        ? { ...entry, modelAliasOverrides: overrides }
-        : entry)));
-      await saveConnectionSettings({ ...connection, catalog: { ...connection.catalog, models } });
-    }
-
-    console.log(`🔗 Updated route ${providerId} model aliases: `
-      + `${Object.keys(overrides).length} kept, ${removed.length} removed`);
-    return {
-      providerId,
-      modelMap: effectiveModelAliases(route.modelMap, overrides),
-      modelAliasOverrides: overrides,
-      modelAliasRevision: modelAliasRevision(overrides),
-    };
   });
 }
 
