@@ -1,7 +1,7 @@
 /**
-  * Where a native-Win32 PortOS should put Linux-side work, and what that directory is called from Windows.
-  *
-  * Docker Desktop's engine IS a WSL2 VM that reads Windows paths over a slow 9p share, so a multi-tens-of-GB model checkout on `C:\\` is slow in a way invisible until the download is spent; the documented layout is the distro's own filesystem, reached as `\\\\wsl.localhost\\<distro>\\home\\<user>` (Node can stat it, `CreateProcess` accepts it as a cwd). Every value of that template is answerable by the machine, so this module answers it rather than making the operator.
+ * Where a native-Win32 PortOS should put Linux-side work, and what that directory is called from Windows.
+ *
+ * Docker Desktop's engine IS a WSL2 VM that reads Windows paths over a slow 9p share, so a multi-tens-of-GB model checkout on `C:\\` is slow in a way invisible until the download is spent; the documented layout is the distro's own filesystem, reached as `\\\\wsl.localhost\\<distro>\\home\\<user>` (Node can stat it, `CreateProcess` accepts it as a cwd). Every value of that template is answerable by the machine, so this module answers it rather than making the operator.
  *
  * **The probe runs the distro's own shell, not `wsl --list`:** `wsl.exe`'s own UI output is UTF-16LE (mangled by UTF-8 readers) while the stdout of a program it EXECUTES passes through byte for byte, so
  * `wsl.exe -e sh -c 'echo …'` returns plain UTF-8 with `WSL_DISTRO_NAME` and `HOME`, the pair the UNC path needs. UTF-16 is read only on the failure path, to decorate an error.

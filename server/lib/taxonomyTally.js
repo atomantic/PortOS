@@ -1,7 +1,7 @@
 /**
-  * Generic taxonomy tally + top-N-line renderer (#2800).
-  *
-  * the engine shared by the Layered Intelligence leaf modules `services/layeredIntelligenceRejections.js` (proposal-REJECTION taxonomy, #2689) and `services/layeredIntelligenceExecutionFailures.js` (execution-FAILURE taxonomy, #2764 §1), which carried near-verbatim copies that would drift: a Map-counting `summarize*` (commonest-first, taxonomy-order tie-break) over the three-bucket `{entries, unknown, unclassified, diagnosed, total}` discipline, a `format*` top-N renderer, and a private `normalizeToken`. Each taxonomy keeps only its vocabulary, gloss map and classifier. A LEAF by design (imports nothing from the LI graph, so neither taxonomy cross-imports the other). Pure, no I/O, no LLM call.
+ * Generic taxonomy tally + top-N-line renderer (#2800).
+ *
+ * the engine shared by the Layered Intelligence leaf modules `services/layeredIntelligenceRejections.js` (proposal-REJECTION taxonomy, #2689) and `services/layeredIntelligenceExecutionFailures.js` (execution-FAILURE taxonomy, #2764 §1), which carried near-verbatim copies that would drift: a Map-counting `summarize*` (commonest-first, taxonomy-order tie-break) over the three-bucket `{entries, unknown, unclassified, diagnosed, total}` discipline, a `format*` top-N renderer, and a private `normalizeToken`. Each taxonomy keeps only its vocabulary, gloss map and classifier. A LEAF by design (imports nothing from the LI graph, so neither taxonomy cross-imports the other). Pure, no I/O, no LLM call.
  */
 
 /** Normalize a raw token (tracker label, stateReason, error category): lowercased with separators collapsed so `not_planned` / `not-planned` / `Not Planned` share a key; a non-string yields '' (never matches). */

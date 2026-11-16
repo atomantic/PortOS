@@ -1,7 +1,7 @@
 /**
-  * Is a universe bible entry actually described?
-  *
-  * The shared per-kind expand-field vocabulary (`BIBLE_EXPAND_FIELDS`, `BIBLE_CORE_FIELDS`) and the `core`/`full` completeness predicates that the describe automation, the character/canon expand services, the image jobs and the quota-burn describe job all measure against. A row with a name and nothing else renders a generic figure; the describe job closes that gap before image quota is spent. Two depths: `core` (minimum to render or be written at all) and `full` (everything the expand prompts can fill; for a character, the sheet a novelist and graphic novelist both need). Pure: shape and predicates only, so the burn job (which must not import the universe store) and the expand services agree on one list. The character lists are the SOURCE for `universeCharacterExpand.js`'s `STRING_FIELDS` / `LIST_FIELDS`: a field the expand prompt fills but this module doesn't know would be invisible to the scan, so they are one list, not two that agree today.
+ * Is a universe bible entry actually described?
+ *
+ * The shared per-kind expand-field vocabulary (`BIBLE_EXPAND_FIELDS`, `BIBLE_CORE_FIELDS`) and the `core`/`full` completeness predicates that the describe automation, the character/canon expand services, the image jobs and the quota-burn describe job all measure against. A row with a name and nothing else renders a generic figure; the describe job closes that gap before image quota is spent. Two depths: `core` (minimum to render or be written at all) and `full` (everything the expand prompts can fill; for a character, the sheet a novelist and graphic novelist both need). Pure: shape and predicates only, so the burn job (which must not import the universe store) and the expand services agree on one list. The character lists are the SOURCE for `universeCharacterExpand.js`'s `STRING_FIELDS` / `LIST_FIELDS`: a field the expand prompt fills but this module doesn't know would be invisible to the scan, so they are one list, not two that agree today.
  */
 
 import { BIBLE_KEYS, PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';

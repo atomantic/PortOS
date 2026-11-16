@@ -1,25 +1,7 @@
 /**
  * The reactor.inc `fast-h3` clip contract: what one enqueued clip may ask for.
  *
- * fast-h3 renders 24fps clips and its `enqueue` command accepts a CONTINUOUS
- * `seconds` value bounded to 5.167–14.375 (124–345 frames at 24fps — the same
- * bounds `scripts/reactor-render.py` re-checks before it opens a session). The
- * prompt is capped at 800 characters; a longer one is rejected by the API, not
- * truncated, so PortOS has to stop it at the form.
- *
- * Its own dependency-free module rather than living inside
- * `services/videoGen/reactor.js` for the `grokVideoClip.js` reason: the route
- * schema, the FableLoom prompt compiler and the VideoGen picker all need these
- * numbers, and hand-copied literals in a schema are how a schema and its
- * service drift apart — `routes/videoGen.js` already accepted 1–60 seconds for
- * a backend that rejects everything outside 5.167–14.375.
- *
- * `REACTOR_CLIP_LENGTHS` is a PICKER list, not an API constraint: because the
- * accepted range is continuous but does not start or end on a round number, a
- * free-text seconds box mostly offers the user a way to type a value the API
- * refuses. The list is the two exact endpoints plus every whole second between
- * them — whole seconds are frame-aligned at 24fps, so each entry is a real
- * frame count.
+ * fast-h3 renders 24fps clips and `enqueue` accepts a CONTINUOUS `seconds` bounded to 5.167–14.375 (124–345 frames; `scripts/reactor-render.py` re-checks them), with the prompt capped at 800 characters (rejected by the API, not truncated, so the form must stop it). Its own dependency-free module (the `grokVideoClip.js` reason) because the route schema, the FableLoom prompt compiler and the VideoGen picker all need these numbers (`routes/videoGen.js` once accepted 1–60 seconds for a backend rejecting everything outside the range). `REACTOR_CLIP_LENGTHS` is a PICKER list, not an API constraint: a free-text seconds box mostly invites values the API refuses, so it is the two exact endpoints plus every whole second between (frame-aligned at 24fps, each a real frame count).
  */
 
 /** Longest prompt fast-h3 accepts, in characters. */
@@ -53,16 +35,8 @@ export const reactorClipLengthLabel = (seconds) => (
 );
 
 /**
- * The canvases fast-h3 renders, in `set_canvas`'s own `aspect` vocabulary.
- *
- * Every one holds a 768px SHORT edge — the model's native resolution — so the
- * aspect string is the whole choice and the pixel size falls out of it. PortOS
- * pinned `16:9` for every render before #6336, which is why a portrait starting
- * frame came back as a clip with audio and no usable picture: reactor fits the
- * starting frame to the SESSION canvas, so a 9:16 photo squeezed into a 1344×768
- * session had almost nothing left to animate.
- *
- * Ordered widest-first so a picker reads landscape → square → portrait.
+ * The canvases fast-h3 renders, in `set_canvas`'s `aspect` vocabulary, each with a 768px SHORT edge (the model's native resolution), so the aspect string is the whole choice. PortOS pinned `16:9` before #6336, so a portrait starting frame came back as a clip with audio and no usable picture
+ * (reactor fits the frame to the SESSION canvas; a 9:16 photo squeezed into 1344×768 left almost nothing to animate). Ordered widest-first so a picker reads landscape → square → portrait.
  */
 export const REACTOR_CANVASES = Object.freeze([
   Object.freeze({ aspect: '16:9', width: 1344, height: 768, label: 'Landscape 16:9 · 1344×768' }),
@@ -83,13 +57,7 @@ export const reactorCanvas = (aspect) => (
   || REACTOR_CANVASES.find((c) => c.aspect === REACTOR_DEFAULT_ASPECT)
 );
 
-/**
- * The fast-h3 canvas closest to a starting frame's own shape, compared in log
- * space so "twice as wide as the canvas" and "half as wide" score the same
- * distance. Ties keep the earlier (wider) canvas. Anything unmeasurable —
- * a missing dimension, a zero, a NaN — answers the default rather than
- * pretending to have derived one.
- */
+/** The fast-h3 canvas closest to a starting frame's shape, compared in log space ("twice as wide" and "half as wide" score alike); ties keep the earlier (wider) canvas; anything unmeasurable (missing dimension, zero, NaN) answers the default. */
 export const nearestReactorAspect = (width, height) => {
   const w = Number(width);
   const h = Number(height);

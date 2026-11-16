@@ -1,18 +1,7 @@
 /**
- * `isSymlinkFreeRepoPath(realRepoRoot, absPath, { leaf: 'dir' | 'file' })` — symlink-aware containment
- * for publishing generated files into a managed app's repo.
+ * `isSymlinkFreeRepoPath(realRepoRoot, absPath, { leaf: 'dir' | 'file' })`.
  *
- * `lstat`-walks every existing component below the real root and refuses any symlink (dangling or
- * contained), a wrong-kind leaf, or a realpath outside the root; a missing tail is allowed below a
- * verified ancestor. The lexical `isPathInsideDir` cannot see a redirecting directory link (#10894,
- * after #9668). Shared by the chiptune and sprite publishers.
- *
- * Symlink-aware containment for writing generated files into a managed app's
- * repository. The lexical `isPathInsideDir` guard cannot see that
- * `<repo>/linked-assets` is a symlink to a directory elsewhere, so a publish
- * that only checks the string path can be redirected out of the repo (#10894,
- * after the Sprite equivalent #9668). Shared by the chiptune and sprite
- * publishers.
+ * symlink-aware containment for publishing generated files into a managed app's repo, shared by the chiptune and sprite publishers. `lstat`-walks every existing component below the real root and refuses any symlink (dangling or contained), a wrong-kind leaf, or a realpath outside the root; a missing tail is allowed below a verified ancestor. The lexical `isPathInsideDir` can't see that `<repo>/linked-assets` is a symlink to a directory elsewhere, so a string-checked publish can be redirected out of the repo (#10894, after the Sprite equivalent #9668).
  */
 
 import { lstat, realpath } from 'fs/promises';
@@ -20,20 +9,8 @@ import { join, relative, resolve, sep } from 'path';
 import { isPathAtOrInsideDir } from './pathContainment.js';
 
 /**
- * True when `absPath` can be written below `repoRoot` without crossing a
- * symlink. Walks every EXISTING component from the root with `lstat`, so
- * dangling and still-contained symlinks are refused rather than mistaken for a
- * missing destination or silently followed. A missing tail is fine — the first
- * absent component ends the walk and everything below it will be created under
- * the verified ancestor.
- *
- * `leaf` says what the final component may be when it already exists:
- * `'dir'` for a directory a publish will populate, `'file'` for a destination
- * file (a directory or link there would redirect or block the write). Every
- * intermediate component must be a plain directory.
- *
- * Pass the REAL repo root (`realpath`); a root that is itself a symlink is
- * refused.
+ * True when `absPath` can be written below `repoRoot` without crossing a symlink: walks every EXISTING component from the root with `lstat` (dangling and still-contained symlinks are refused, not mistaken for a missing destination or followed); the first absent component ends the walk and the tail is created under the verified ancestor.
+ * `leaf` is what an existing final component may be: `'dir'` for a directory a publish populates, `'file'` for a destination file (a directory or link there would redirect or block the write); intermediates must be plain directories. Pass the REAL repo root (`realpath`); a root that is itself a symlink is refused.
  */
 export async function isSymlinkFreeRepoPath(repoRoot, absPath, { leaf }) {
   const root = resolve(repoRoot);

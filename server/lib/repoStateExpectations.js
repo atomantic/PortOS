@@ -1,7 +1,7 @@
 /**
-  * Post-completion repo-state expectations for CoS worktree agents, the pure half: "what should the repo look like now" and "which observed facts contradict that".
-  *
-  * Cleanup (`services/agentWorktreeCleanup.js`) reports only steps it TRIED and failed, so an agent owning its own PR workflow (cleanup stands down: `skipMerge`, `PR_CREATION.NEVER`) can leave debris with zero warnings. No I/O (probing and remediation: `services/agentRepoStateVerification.js`). Deliberately narrow: ONE agent's branch right after it completed; the periodic whole-repo sweep is `services/branchReconcile.js`.
+ * Post-completion repo-state expectations for CoS worktree agents, the pure half: "what should the repo look like now" and "which observed facts contradict that".
+ *
+ * Cleanup (`services/agentWorktreeCleanup.js`) reports only steps it TRIED and failed, so an agent owning its own PR workflow (cleanup stands down: `skipMerge`, `PR_CREATION.NEVER`) can leave debris with zero warnings. No I/O (probing and remediation: `services/agentRepoStateVerification.js`). Deliberately narrow: ONE agent's branch right after it completed; the periodic whole-repo sweep is `services/branchReconcile.js`.
  */
 
 import { PR_COMPLETIONS } from './prDisposition.js';

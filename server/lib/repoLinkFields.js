@@ -1,27 +1,10 @@
 /**
- * The repository metadata a Brain link carries, and the compatibility shim that
- * keeps it readable across PortOS versions.
+ * The repository metadata a Brain link carries, plus the compatibility shim keeping it readable across PortOS versions.
  *
- * `deriveRepoLinkFields(url)` / `normalizeRepoLinkFields(link)` / `linkIsRepo(link)` /
- * `repoLinkLabel(link)` — the repository metadata a Brain link carries, plus the
- * dual-write/tolerant-read shim that keeps the pre-multi-host `isGitHubRepo` field names readable
- * across federated peers.
+ * The repository metadata a Brain link carries (`deriveRepoLinkFields(url)` / `normalizeRepoLinkFields(link)` / `linkIsRepo(link)` / `repoLinkLabel(link)`) plus the dual-write/tolerant-read shim keeping the pre-multi-host `isGitHubRepo` names readable across federated peers.
  *
- * The fields used to be GitHub-only (`isGitHubRepo` / `gitHubOwner` /
- * `gitHubRepo`). They are now host-generic (`isRepo` / `repoHost` / `repoOwner`
- * / `repoName`) so gitlab.com repos are first-class, and migration 330 rewrites
- * every stored link.
- *
- * PortOS is DISTRIBUTED and brain links FEDERATE verbatim between peers, so a
- * rename alone would break a mixed-version tailnet in both directions. Hence:
- *
- *   - `deriveRepoLinkFields` writes BOTH shapes, so a peer still on the old code
- *     keeps recognising a captured GitHub repo. A gitlab.com repo is written
- *     with `isGitHubRepo: false` on purpose — an old peer must file it as a
- *     plain bookmark rather than hand a GitLab URL to a GitHub-only cloner.
- *   - `normalizeRepoLinkFields` fills the new shape from the legacy one on READ,
- *     so a record arriving from an old peer (or written before the migration
- *     ran) still reads as a repo.
+ * The fields were GitHub-only (`isGitHubRepo` / `gitHubOwner` / `gitHubRepo`) and are now host-generic (`isRepo` / `repoHost` / `repoOwner` / `repoName`) so gitlab.com repos are first-class; migration 330 rewrites stored links. Brain links FEDERATE verbatim, so a rename alone would break a mixed-version tailnet both ways:
+ * `deriveRepoLinkFields` writes BOTH shapes (a gitlab.com repo gets `isGitHubRepo: false` on purpose, so an old peer files it as a bookmark rather than handing a GitLab URL to a GitHub-only cloner); `normalizeRepoLinkFields` fills the new shape from the legacy one on READ (a record from an old peer or pre-migration still reads as a repo).
  */
 
 import { parseRepoUrl } from './repoUrl.js';
@@ -30,7 +13,7 @@ import { parseRepoUrl } from './repoUrl.js';
 const GITHUB_HOST = 'github.com';
 
 /**
- * The repo fields for a captured URL — new shape plus the legacy mirror.
+ * The repo fields for a captured URL, new shape plus the legacy mirror.
  *
  * @param {string} url
  * @returns {{ isRepo: boolean, repoHost: string|null, repoOwner: string|null,
@@ -52,9 +35,7 @@ export function deriveRepoLinkFields(url) {
 }
 
 /**
- * Read a link's repo fields, falling back to the legacy GitHub-only shape.
- * Returns the record unchanged when it already carries `isRepo`, so the common
- * (post-migration) path allocates nothing.
+ * Read a link's repo fields, falling back to the legacy GitHub-only shape; returns the record unchanged when it already carries `isRepo` (the post-migration path allocates nothing).
  *
  * @template {object|null|undefined} T
  * @param {T} link
@@ -72,22 +53,10 @@ export function normalizeRepoLinkFields(link) {
   };
 }
 
-/**
- * True when a link record (either shape) names a cloneable repository.
- *
- * @param {object|null|undefined} link
- * @returns {boolean}
- */
+/** True when a link record (either shape) names a cloneable repository. */
 export const linkIsRepo = (link) => Boolean(link?.isRepo ?? link?.isGitHubRepo);
 
-/**
- * `owner/repo` for a link record, else its display title. Reads only the new
- * shape: every link reaches a caller through a `brainStorage` read, which has
- * already run `normalizeRepoLinkFields`.
- *
- * @param {object|null|undefined} link
- * @returns {string}
- */
+/** `owner/repo` for a link record, else its display title; reads only the new shape (every link reaches a caller via a `brainStorage` read that already ran `normalizeRepoLinkFields`). */
 export function repoLinkLabel(link) {
   return link?.repoOwner && link?.repoName
     ? `${link.repoOwner}/${link.repoName}`

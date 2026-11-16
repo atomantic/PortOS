@@ -1,7 +1,7 @@
 /**
-  * pg_dump binary resolution and libpq env helpers: `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup and isolates libpq settings from inherited PG variables.
-  *
-  * `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`) plus `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. `pg_dump` REFUSES to dump a newer server ("server version mismatch") but a newer one dumps an older server, and on machines with several Postgres installs (an old Homebrew `postgresql@NN` keg shadowing a newer server in PATH) the bare binary is often wrong, so the closest installed major >= the server's is picked. Shared by the backup snapshot path (`server/services/backup.js`) and the native↔Docker export path (`server/services/dbAdmin.js`). Self-contained: no imports out to other PortOS services.
+ * pg_dump binary resolution and libpq env helpers: `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup and isolates libpq settings from inherited PG variables.
+ *
+ * `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`) plus `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. `pg_dump` REFUSES to dump a newer server ("server version mismatch") but a newer one dumps an older server, and on machines with several Postgres installs (an old Homebrew `postgresql@NN` keg shadowing a newer server in PATH) the bare binary is often wrong, so the closest installed major >= the server's is picked. Shared by the backup snapshot path (`server/services/backup.js`) and the native↔Docker export path (`server/services/dbAdmin.js`). Self-contained: no imports out to other PortOS services.
  */
 
 import { randomUUID } from 'node:crypto';

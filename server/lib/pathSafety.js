@@ -8,14 +8,14 @@ import { escapeRegExp } from './textUtils.js';
 
 /**
  /**
-  * Throws a 400 VALIDATION_ERROR unless `filename` is a safe basename with an allowed extension: refuses traversal, null bytes, separators (both `/` and `\\`,
-  * on every platform) and exact `.`/`..`; substring `..` is allowed (`foo..bar.png`).
-  *
-  * @param {string} filename
-  * @param {{ extensions: string[], subject?: string, requiredMessage?: string }} opts
-  *   - `extensions`: case-insensitive, each a non-empty string starting with `.` (a bare `png` would also match `not-an-imagepng`, so that is a programmer error and throws).
-  *   - `subject`: noun for the error message ("LoRA filename"); defaults to "filename".
-  *   - `requiredMessage`: exact message for a missing/empty filename; derived from `subject` when omitted.
+ * Throws a 400 VALIDATION_ERROR unless `filename` is a safe basename with an allowed extension: refuses traversal, null bytes, separators (both `/` and `\\`,
+ * on every platform) and exact `.`/`..`; substring `..` is allowed (`foo..bar.png`).
+ *
+ * @param {string} filename
+ * @param {{ extensions: string[], subject?: string, requiredMessage?: string }} opts
+ *   - `extensions`: case-insensitive, each a non-empty string starting with `.` (a bare `png` would also match `not-an-imagepng`, so that is a programmer error and throws).
+ *   - `subject`: noun for the error message ("LoRA filename"); defaults to "filename".
+ *   - `requiredMessage`: exact message for a missing/empty filename; derived from `subject` when omitted.
   */
 export function assertSafeFilename(filename, { extensions, subject = 'filename', requiredMessage } = {}) {
   if (!Array.isArray(extensions) || extensions.length === 0) {

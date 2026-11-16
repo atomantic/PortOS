@@ -1,7 +1,7 @@
 /**
-  * Subscription-vs-API savings math for the usage page.
-  *
-  * `resolveSavingsWindow` (clamps an open-ended report range to today / first activity day), `prorateMonthlyCost` (monthly plan price → this window's share via `DAYS_PER_MONTH`, capped by `MAX_MONTHLY_COST`), `savingsPercent` / `costMultiplier` (null, never 0, when undefined), `attributeReportCostToFamilies` (groups report rows by stamped `family`), `roundCents` (the one money rounder), and `buildSubscriptionSavings({ entries, range, unmatchedApiCost })` → per-family rows + totals. Pure, so it unit-tests without a settings file or provider config.
+ * Subscription-vs-API savings math for the usage page.
+ *
+ * `resolveSavingsWindow` (clamps an open-ended report range to today / first activity day), `prorateMonthlyCost` (monthly plan price → this window's share via `DAYS_PER_MONTH`, capped by `MAX_MONTHLY_COST`), `savingsPercent` / `costMultiplier` (null, never 0, when undefined), `attributeReportCostToFamilies` (groups report rows by stamped `family`), `roundCents` (the one money rounder), and `buildSubscriptionSavings({ entries, range, unmatchedApiCost })` → per-family rows + totals. Pure, so it unit-tests without a settings file or provider config.
  */
 
 import { ymdToUTC } from './postStreak.js';

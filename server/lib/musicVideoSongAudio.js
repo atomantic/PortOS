@@ -1,22 +1,7 @@
 /**
- * Whether a project's song-derived state (beat grid and sections, lyric and
- * phrase timings) still belongs to the audio its linked track plays today.
+ * Whether a project's song-derived state (beat grid and sections, lyric and phrase timings) still belongs to the audio its linked track plays today.
  *
- * `songAudioChange(project, currentMasterFilename)` says whether a project's beat grid
- * (`audioAnalysis.masterFilename`) or lyric timing (`lyricTimingMasterFilename`) was derived from an
- * older audio file than its linked track plays now (a take replaced in place, #14793);
- * `songAudioChangeMessage` is the render refusal text and `keepSongTimingPatch` adopts the current
- * master as the kept timing's basis. A record with no recorded filename is unknown, not stale.
- * `audioRevisionOf(projectOrRevision)` reads the audio-source revision a final render settles against
- * (absent = 0, #15154).
- *
- * Replacing a track's audio in place (a new take of the same song) changes
- * `track.audioFilename` but not the project's `trackId`, so the link-change
- * invalidation in `applyProjectPatch` never fires. Each derived state records
- * the master filename it was computed from — `audioAnalysis.masterFilename`
- * and the project's `lyricTimingMasterFilename` — and this compares them with
- * the current master. A record that never stamped a filename (analyzed before
- * this existed) is "unknown", not stale: nothing can be said about it.
+ * `songAudioChange(project, currentMasterFilename)` says whether the beat grid (`audioAnalysis.masterFilename`) or lyric timing (`lyricTimingMasterFilename`) derived from an older file than the track plays now (a take replaced in place, #14793); `songAudioChangeMessage` is the render refusal text; `keepSongTimingPatch` adopts the current master as the kept timing's basis; `audioRevisionOf(projectOrRevision)` reads the audio-source revision a final render settles against (absent = 0, #15154). Replacing a track's audio in place changes `track.audioFilename` but not `trackId`, so `applyProjectPatch`'s link-change invalidation never fires; each derived state records its master filename and this compares. A record with no recorded filename (analyzed before this existed) is "unknown", not stale.
  */
 import { ServerError } from './errorHandler.js';
 
@@ -48,11 +33,7 @@ export function assertSongAudioCurrent(project, masterFilename) {
   if (change) throw new ServerError(songAudioChangeMessage(change), { status: 409, code: 'SONG_AUDIO_CHANGED', context: change });
 }
 
-/**
- * The project's audio revision (#15154): bumped by every change of its audio
- * source, so a final render started against an older song can tell. A record
- * written before the field existed is revision 0; so is any malformed value.
- */
+/** The project's audio revision (#15154), bumped by every audio-source change so a final render started against an older song can tell; a record predating the field, or a malformed value, is revision 0. */
 export const audioRevisionOf = (value) => {
   const revision = value !== null && typeof value === 'object' ? value.audioRevision : value;
   return Number.isInteger(revision) && revision > 0 ? revision : 0;

@@ -1,7 +1,7 @@
 /**
-  * Draft VIDEO DECODE for local video runtimes: a separately downloaded, resource-light replacement for a model's video VAE decoder, used to make previews cheaper.
-  *
-  * This module is the single source of truth for which decoders ship and for the four gates a draft decode must clear before touching a render:
+ * Draft VIDEO DECODE for local video runtimes: a separately downloaded, resource-light replacement for a model's video VAE decoder, used to make previews cheaper.
+ *
+ * This module is the single source of truth for which decoders ship and for the four gates a draft decode must clear before touching a render:
  *
  *   1. Declaration: the model entry must carry a `draftDecoder` this module attached; nothing is inferred from a runtime or repo name.
  *   2. Runtime capability: only a runtime whose arg builder emits the draft-decode flags may declare one, and the INSTALLED runner checkout must be the revision

@@ -1,7 +1,7 @@
 /**
-  * The one definition of the external pull-request content PortOS screens.
-  *
-  * `screenedPullRequestContent(pr, diff, commits?)` builds the contributor-authored surface (title, description, commit log, unified diff) and `screenedPullRequestFingerprint(pr, diff, commits?)` hashes it to a stable identity for one head commit, returning null when the commit log is missing rather than matching by omission. Pure.
+ * The one definition of the external pull-request content PortOS screens.
+ *
+ * `screenedPullRequestContent(pr, diff, commits?)` builds the contributor-authored surface (title, description, commit log, unified diff) and `screenedPullRequestFingerprint(pr, diff, commits?)` hashes it to a stable identity for one head commit, returning null when the commit log is missing rather than matching by omission. Pure.
  *
  * Two places must agree byte-for-byte: the pr-reviewer security preflight STAMPS a fingerprint and the deterministic coordinator RECOMPUTES it from a fresh forge read before it reviews, rebases or merges
  * (its only defence against content changing after screening). The check fails closed, so a divergence looks like a pipeline that completes every stage then does nothing: when commit-message screening was added (#7323)

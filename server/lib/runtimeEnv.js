@@ -1,60 +1,16 @@
 /**
- * Which runtime is this process? Dependency-free on purpose.
+ * Which runtime is this process? Dependency-free test, Vitest and smoke-boot detectors.
  *
- * `isTestRunner()` — NODE_ENV=test **or** the VITEST env var, so a run that dropped NODE_ENV is still
- * armed. `isVitestRunner()` narrows to a real Vitest worker; `isSmokeBoot()` (`SMOKE_BOOT_ENV`) marks
- * the server boot smoke, whose boot skips schedulers, agent recovery, and external integrations
- * (#8343). Dependency-free and deliberately apart from `db.js`, which used to own it: the lowest-level
- * file primitives need the same answer and must not pull in `pg`, and the many suites spelling
- * `vi.mock('../lib/db.js', () => ({ query }))` used to strip it out of the graph for every other
- * consumer.
- *
- * Kept apart from every module that has an opinion about storage, paths, or
- * the database, because the lowest-level file primitives (`fileCore.js`) and
- * the highest-level backend selectors both need this answer. `db.js` used to
- * own `isTestRunner`, which forced anything asking the question to pull in
- * `pg` — and, worse, meant the many suites that write
- * `vi.mock('../lib/db.js', () => ({ query }))` silently stripped it out of the
- * module graph for every other consumer in that suite.
+ * Dependency-free `isTestRunner()` (NODE_ENV=test **or** VITEST, so a run that dropped NODE_ENV is still armed), `isVitestRunner()` (a real Vitest worker) and `isSmokeBoot()` (`SMOKE_BOOT_ENV`).
+ * Kept apart from `db.js` (which once owned it, forcing every asker to pull in `pg`, and letting suites that `vi.mock('../lib/db.js', ...)` strip it from the graph) because `fileCore.js` and the backend selectors both need it.
  */
 
-/**
- * Are we executing under a test runner?
- *
- * `NODE_ENV === 'test'` alone is not reliable: a suite run from a CoS-agent
- * worktree (or any wrapper that sets NODE_ENV=development / leaves it unset)
- * still executes test code, and every guard and backend selector keyed on
- * NODE_ENV then quietly chooses the production path. Vitest always sets
- * `process.env.VITEST` in every worker process, so OR-ing it in arms them
- * regardless of how NODE_ENV was (mis)configured. This is the signal that
- * actually closed the 2026-06-14 fixture leak into the real Postgres.
- *
- * Read on every call rather than captured at module load, so a test can pin
- * either variable and observe the change.
- *
- * @returns {boolean}
- */
+/** Under a test runner? `NODE_ENV === 'test'` alone is unreliable (a CoS-agent worktree or wrapper setting NODE_ENV=development still executes test code, and guards keyed on it choose the production path); OR-ing `process.env.VITEST` (set in every Vitest worker) is the signal that closed the 2026-06-14 fixture leak into the real Postgres. Read per call so tests can pin either variable. */
 export function isTestRunner() {
   return process.env.NODE_ENV === 'test' || process.env.VITEST != null;
 }
 
-/**
- * Are we executing inside an actual Vitest worker — narrower than
- * `isTestRunner()`.
- *
- * `NODE_ENV=test` alone is not "running under Vitest": it is also the
- * documented signal a plain `node` process uses to select the file-backend
- * escape hatch (see AGENTS.md "Storage backend policy"), and `scripts/
- * smoke-boot.js` sets it on the real `server/index.js` boot specifically so
- * CI can smoke-test the server without Postgres. That smoke-booted server
- * legitimately writes its own runtime files into its (disposable, #8343)
- * `data/` tree — the exact thing `lib/testDataIsolation.js`'s write guard exists to catch a
- * *test suite* doing. Only `process.env.VITEST` (set by every Vitest worker,
- * never by a bare `node` invocation) tells the two apart, so the write guard
- * gates on this, not `isTestRunner()`.
- *
- * @returns {boolean}
- */
+/** Inside an actual Vitest worker, narrower than `isTestRunner()`: `NODE_ENV=test` is also how a plain `node` process selects the file-backend hatch, and `scripts/smoke-boot.js` sets it on the real `server/index.js` boot (writing its own files in its disposable `data/`, #8343), so `lib/testDataIsolation.js`'s write guard gates on `process.env.VITEST` instead. */
 export function isVitestRunner() {
   return process.env.VITEST != null;
 }
@@ -62,18 +18,7 @@ export function isVitestRunner() {
 /** Env var `scripts/smoke-boot.js` sets on the server it boots (#8343). */
 export const SMOKE_BOOT_ENV = 'PORTOS_SMOKE_BOOT';
 
-/**
- * Is this process the server boot smoke?
- *
- * The smoke proves `server/index.js` boots and stays up; it must not DO
- * anything while up. Boot consults this to skip the autonomous work a real
- * install arms at startup — schedulers, CoS agent spawning/recovery, crash
- * recovery passes, peer polling/sync, share watchers, local-LLM backend
- * startup, the fleet model host. `NODE_ENV=test` cannot carry that meaning:
- * it only selects the file storage backend.
- *
- * @returns {boolean}
- */
+/** Is this process the server boot smoke? It proves `server/index.js` boots and stays up and must not DO anything: boot skips autonomous startup work (schedulers, CoS agent spawning/recovery, crash recovery, peer polling/sync, share watchers, local-LLM startup, the fleet model host). `NODE_ENV=test` can't carry this (it only selects file storage). */
 export function isSmokeBoot() {
   return process.env[SMOKE_BOOT_ENV] === '1';
 }

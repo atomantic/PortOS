@@ -10,19 +10,8 @@
 import { shuffle } from './arrayUtils.js';
 
 /**
- * Deterministic day-based rotation for POST practice selection (issue #5319).
- *
- * Every POST "what should I practice?" surface used to resolve equivalent
- * candidates by input order, so the same drill won the top slot every day —
- * Elements from the memory tier, digit-span from the heuristic tiers. These
- * helpers replace that fixed order with a rotation keyed by the local day, so
- * the choice varies across days while staying repeatable for the same day and
- * the same inputs. The daily mix uses seeded randomness to stay reproducible.
- *
- * Pure and dependency-free: `client/src/lib/postRotation.js` re-exports it, so
- * the server's recommendation tiers and the client's Quick-session domain picks
- * rotate identically because they run the same code. Import no Node built-in
- * here, and nothing outside `server/lib`.
+ * Deterministic day-based rotation for POST practice selection (#5319): every "what should I practice?" surface resolved equivalent candidates by input order, so the same drill won the top slot daily (Elements from the memory tier, digit-span from the heuristic tiers); a rotation keyed by local day varies across days
+ * yet stays repeatable for the same day and inputs (seeded randomness). Pure and dependency-free: `client/src/lib/postRotation.js` re-exports it so the server's recommendation tiers and the client's Quick-session picks rotate identically. Import no Node built-in and nothing outside `server/lib`.
  */
 
 /**
@@ -52,16 +41,8 @@ export function dayRotationIndex(dayKey, length) {
 }
 
 /**
- * Order a priority-ranked candidate list so that:
- *   1. candidates NOT practiced inside the recency window come first,
- *   2. within that, lower `rank` (higher priority) comes first,
- *   3. and genuinely equivalent candidates — same recency bucket, same rank —
- *      rotate by local day instead of resolving to input order.
- *
- * Nothing is dropped, so a caller that wants the whole tier keeps every entry
- * and a caller that wants one pick reads `[0]`. With a single candidate (or no
- * day key) the input order is returned unchanged, which is what makes "fall
- * back to the only available option" free.
+ * Order a priority-ranked candidate list: (1) candidates NOT practiced inside the recency window first, (2) then lower `rank` (higher priority), (3) equivalent candidates (same recency bucket and rank) rotate by local day instead of input order.
+ * Nothing is dropped (a caller wanting the whole tier keeps every entry, one pick reads `[0]`); with a single candidate or no day key the input order is returned, making "fall back to the only option" free.
  *
  * @param {Array} candidates
  * @param {object} [options]

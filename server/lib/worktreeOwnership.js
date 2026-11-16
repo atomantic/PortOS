@@ -1,7 +1,7 @@
 /**
-  * Worktree ownership: the one policy for whether PortOS may move or remove a worktree.
-  *
-  * Adoption moves a directory and reapers remove one, so callers share this pure gate (managed root, agent id, lock, liveness, claim) instead of slightly different copies; the ORDER is policy (see `worktreeOwnershipReason`). Callers opt into intentional differences: a reaper may include `.claude/worktrees/`, stale claims are reclaimed only by branch reconciliation, and a live claim reads as unowned only for branch-reconcile's dispatch side and a non-committing coordinator follow-up (review-loop, PR-remediation) adopting the exact branch it exists to land (all three name the branch, not merely the directory).
+ * Worktree ownership: the one policy for whether PortOS may move or remove a worktree.
+ *
+ * Adoption moves a directory and reapers remove one, so callers share this pure gate (managed root, agent id, lock, liveness, claim) instead of slightly different copies; the ORDER is policy (see `worktreeOwnershipReason`). Callers opt into intentional differences: a reaper may include `.claude/worktrees/`, stale claims are reclaimed only by branch reconciliation, and a live claim reads as unowned only for branch-reconcile's dispatch side and a non-committing coordinator follow-up (review-loop, PR-remediation) adopting the exact branch it exists to land (all three name the branch, not merely the directory).
  */
 
 import { win32 } from 'path';

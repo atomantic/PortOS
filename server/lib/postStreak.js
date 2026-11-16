@@ -1,7 +1,7 @@
 /**
-  * Pure DST-safe POST practice-streak math: the single `computePostStreaks` shared by scored sessions and the training log (extracted from meatspacePost.js.
-  *
-  * the training log once rolled its own raw-`Date` streak with no grace window), plus `computeUnifiedStreak` (a day is active with EITHER a session or a practice entry), `normalizeYmd`, and `recordDayKey` / `withDerivedDayKeys` (re-derive a record's day key from its `startedAt`/`completedAt`/`timestamp` instant, so readers ignore a `date` frozen in a previously-configured timezone). In `server/lib/` so meatspacePostTraining.js can import it without a cycle back into meatspacePost.js.
+ * Pure DST-safe POST practice-streak math shared by scored sessions and the training log.
+ *
+ * the training log once rolled its own raw-`Date` streak with no grace window), plus `computeUnifiedStreak` (a day is active with EITHER a session or a practice entry), `normalizeYmd`, and `recordDayKey` / `withDerivedDayKeys` (re-derive a record's day key from its `startedAt`/`completedAt`/`timestamp` instant, so readers ignore a `date` frozen in a previously-configured timezone). In `server/lib/` so meatspacePostTraining.js can import it without a cycle back into meatspacePost.js.
  */
 
 import { toUserDayKey } from './activeDays.js';

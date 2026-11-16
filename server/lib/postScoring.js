@@ -4,12 +4,7 @@
  * `components/meatspace/post/constants.js`).
  */
 
-// Balanced (signal-detection) accuracy for n-back questions, derived from only
-// `answered` + `correct` — fields both legacy stored sessions and pre-save
-// client results carry. Works because `correct` was always computed as
-// "(pressed ? match : no-match) === expected", so `isTarget = pressed === correct`
-// is an identity across old and new scorers. A missing signal class counts as
-// chance (0.5), matching scoreNBack.
+// Balanced (signal-detection) accuracy for n-back questions from only `answered` + `correct`, which legacy stored sessions and pre-save client results both carry: `correct` was always "(pressed ? match : no-match) === expected", so `isTarget = pressed === correct` is an identity across old and new scorers. A missing signal class counts as chance (0.5), matching scoreNBack.
 export function nBackBalancedAccuracy(questions) {
   let hits = 0, misses = 0, falseAlarms = 0, correctRejections = 0;
   for (const q of Array.isArray(questions) ? questions : []) {
@@ -24,22 +19,10 @@ export function nBackBalancedAccuracy(questions) {
   return hitRate == null && crRate == null ? null : ((hitRate ?? 0.5) + (crRate ?? 0.5)) / 2;
 }
 
-// The estimation band every surface has to agree on. Four copies of this `10`
-// existed — server grading, the client's optimistic check, the shipped drill
-// config, and the adaptive baseline — and the drill UI now states the band on
-// screen, so the number it claims and the number that decides ✓/✗ must be one
-// object.
+// The estimation band every surface must agree on: four copies of this `10` existed (server grading, the client's optimistic check, the shipped drill config, the adaptive baseline), and the drill UI states the band on screen, so the claimed number and the ✓/✗ number must be one object.
 export const DEFAULT_ESTIMATION_TOLERANCE_PCT = 10;
 
-/**
- * Resolve a drill's stored tolerance to the percentage grading will use.
- *
- * `0` is a meaningful band — it means grade exact-match — so this is neither a
- * `|| DEFAULT` fallback (which would read 0 as unset and silently widen the
- * band to 10%) nor a bare `Number()` coercion: `Number(null)` and `Number('')`
- * are both 0, so an absent tolerance would come back out as exact-match. Absent
- * is rejected first, then the value is validated.
- */
+/** Resolve a drill's stored tolerance to the percentage grading uses. `0` is a meaningful band (grade exact-match), so this is neither `|| DEFAULT` (reads 0 as unset, widening to 10%) nor bare `Number()` (`Number(null)`/`Number('')` are 0, turning an absent tolerance into exact-match): absent is rejected first, then the value validated. */
 export function resolveEstimationTolerancePct(tolerancePct) {
   if (tolerancePct === null || tolerancePct === undefined || tolerancePct === '') {
     return DEFAULT_ESTIMATION_TOLERANCE_PCT;
