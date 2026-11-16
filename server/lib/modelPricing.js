@@ -33,11 +33,9 @@
  * Verified 2026-11-11 against the OpenAI pricing page and the Grok 4.7 Fast
  * card. The UI discloses the approximation.
  *
- * Cache tiers are NOT a rounding detail: for agentic CLI use, cache reads are
- * >90% of input volume, so pricing them at the standard input rate (or, as
- * PortOS did before #3124, not counting the tokens at all) is the single largest
- * source of error in the estimate. Verified against the official pricing pages
- * on PRICING_AS_OF, with newer model-specific verification noted below:
+ * Cache tiers matter: for agentic CLI use cache reads are >90% of input volume,
+ * so mispricing them is the largest source of estimate error. Verified against
+ * the official pricing pages on PRICING_AS_OF, newer models noted below:
  *   - https://platform.claude.com/docs/en/about-claude/pricing
  *   - https://developers.openai.com/api/docs/pricing
  *   - https://docs.x.ai/docs/pricing
@@ -55,8 +53,6 @@ import { isLoopbackEndpoint } from './localEndpoint.js';
 
 export const PRICING_AS_OF = '2026-09-01';
 
-// Newer model launch rates are tracked separately so the baseline date above
-// does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
   'claude-fable-5-2': '2026-11-03',
   'claude-haiku-5-5': '2026-10-07',
@@ -226,12 +222,9 @@ export const pricingAsOfForModel = (model) =>
   MODEL_RATE_AS_OF[String(model || '').trim().toLowerCase()] || PRICING_AS_OF;
 
 /**
- * Every shipped Claude Opus generation bills at the same published rate, so the
- * tier owns one [input, output] pair rather than a hand-copied literal per row.
- * `OPUS_MODEL_IDS` is ordered NEWEST FIRST: its head is the id the `/opus/i`
- * family rule reports for opus ids the table doesn't list, so an opus bump is a
- * single prepend here — the family rule no longer has to be re-pointed by hand
- * (it was, at every bump through migration 206, for zero behavioral effect).
+ * Every shipped Opus generation bills at one published [input, output] pair.
+ * `OPUS_MODEL_IDS` is NEWEST FIRST: its head is what the `/opus/i` family rule
+ * reports for unlisted opus ids, so a bump is a single prepend.
  */
 const OPUS_TIER_RATES = [5.0, 25.0];
 const OPUS_MODEL_IDS = [
@@ -243,12 +236,9 @@ const OPUS_MODEL_IDS = [
 ];
 
 /**
- * Fable 5.1 (2026-09-01) keeps Fable 5's input/output rates — only its cache
- * tiers changed (see CACHE_MULTIPLIER_RULES) — but it's its own EXACT_RATES row
- * rather than folded into OPUS-style array sharing, since `claude-fable-5`
- * stays a distinct historical entry rather than being renamed. Ordered NEWEST
- * FIRST, same convention as OPUS_MODEL_IDS: its head is what the `/fable/i`
- * family rule reports for a fable id the table doesn't list.
+ * Fable 5.1 keeps Fable 5's input/output rates (only cache tiers changed), but
+ * `claude-fable-5` stays a distinct entry. NEWEST FIRST: the head is what the
+ * `/fable/i` family rule reports for unlisted fable ids.
  */
 const FABLE_MODEL_IDS = ['claude-fable-5-2', 'claude-fable-5-1', 'claude-fable-5'];
 
@@ -263,12 +253,7 @@ const EXACT_RATES = {
   'claude-opus-5-5': [4.0, 20.0],
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
-  // Cloned per row so each key owns its pair exactly as the hand-written rows
-  // above and below do — sharing one array across five keys would make any
-  // future edit to one opus row silently rewrite the whole tier.
   ...Object.fromEntries(OPUS_MODEL_IDS.map((id) => [id, [...OPUS_TIER_RATES]])),
-  // The scheduled 2026-09-01 bump to $3/$15 was cancelled — Anthropic confirmed
-  // 2026-08-10 that the $2/$10 intro rate is now the permanent standard rate.
   'claude-sonnet-5-5': [2.0, 10.0],
   'claude-sonnet-5': [2.0, 10.0],
   'claude-sonnet-4-6': [3.0, 15.0],
@@ -314,24 +299,14 @@ const EXACT_RATES = {
   'gemini-2.5-pro': [1.25, 10.0],
   'gemini-2.5-flash': [0.3, 2.5],
   'gemini-2.5-flash-lite': [0.1, 0.4],
-  // Open-weights rate anchor, not a matchable id — reached only via the
-  // `/gpt-oss/i` family rule and the `cerebras` provider default below, so it
-  // always reports as approximate. `gpt-oss-*` is open-weights: unlike the
-  // vendor-locked ids above, the model id does NOT identify the host, and rates
-  // differ per host — so no bare `gpt-oss` id may claim `matched: 'exact'` (that
-  // suppresses the UI's `~` marker). Cerebras's published rate is the anchor
-  // because Cerebras is the only gpt-oss host PortOS ships; it is a far better
-  // estimate for any host than the `/gpt/i` rule's $2.50/$15.00 GPT-5.4 rates,
-  // which is where these ids landed before (~10-20x too high).
+  // Rate anchor, not a matchable id (reached via the `/gpt-oss/i` rule and the
+  // `cerebras` default, so always approximate). Open-weights ids do not identify
+  // the host, so none may claim `matched: 'exact'`; Cerebras is the only host shipped.
   'gpt-oss-120b (cerebras)': [0.35, 0.75],
 };
 
-// Exact keys sorted longest-first for the substring pass in
-// resolveModelRates — a suffixed/prefixed variant of a known id
-// (`gpt-5.6-terra-2026-06-01`, `global.anthropic.claude-opus-5`) resolves to
-// its base rates without needing a hand-written regex per model, and
-// longest-first makes `gpt-5.5-pro` win over `gpt-5.5`. (Keys are all
-// lowercase, so matching against a lowercased id needs no re-mapping.)
+// Exact keys longest-first for the substring pass in resolveModelRates, so
+// suffixed/prefixed variants resolve to base rates and `gpt-5.5-pro` beats `gpt-5.5`.
 const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - a.length);
 
 /**
@@ -342,18 +317,14 @@ const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - 
  */
 const FAMILY_RULES = [
   { test: /fable|mythos/i, rateModel: FABLE_MODEL_IDS[0] },
-  // Reports the newest listed opus id (see OPUS_MODEL_IDS) — the whole tier
-  // shares one rate pair, so the pointer only supplies the label, and deriving
-  // it means an opus bump never has to edit this line.
+  // Newest listed opus id; the tier shares one rate pair, so this only supplies the label.
   { test: /opus/i, rateModel: OPUS_MODEL_IDS[0] },
   { test: /sonnet[-.]?5/i, rateModel: 'claude-sonnet-5' },
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
   { test: /haiku-5/i, rateModel: 'claude-haiku-5-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
   { test: /codex/i, rateModel: 'gpt-5.3-codex' },
-  // `gpt-oss-*` is open-weights and hosted cheaply everywhere — it must win over
-  // the proprietary `/gpt/i` rule below, which would bill it at ~10-20x. Every
-  // size/host lands here (never `exact`) since the id alone can't price it.
+  // Open-weights: must win over the proprietary `/gpt/i` rule (~10-20x too high); never `exact`.
   { test: /gpt-oss/i, rateModel: 'gpt-oss-120b (cerebras)' },
   { test: /astra/i, rateModel: 'gpt-6-astra' },
   { test: /gpt/i, rateModel: 'gpt-5.4' },
@@ -369,14 +340,11 @@ const PROVIDER_DEFAULT_RULES = [
   { test: /codex|openai/i, rateModel: 'gpt-5.3-codex' },
   { test: /grok|xai/i, rateModel: 'grok-4.7' },
   { test: /antigravity|agy|gemini|google/i, rateModel: 'gemini-3.1-pro-preview' },
-  // Cerebras hosts a small, uniformly cheap catalog; its flagship's rates are a
-  // far better estimate for an unrecognized id (e.g. a preview model picked up
-  // by "Refresh models") than the generic $3/$15 fallback.
+  // Cerebras hosts a small, uniformly cheap catalog; its flagship beats the generic fallback.
   { test: /cerebras/i, rateModel: 'gpt-oss-120b (cerebras)' },
 ];
 
-// Legacy blended estimate (the old flat usage.js rate) — the last resort for a
-// provider/model pair nothing above recognizes.
+// Legacy blended estimate: last resort when nothing above recognizes the pair.
 const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
 
 /**
@@ -402,17 +370,12 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  *   - Google: 0.1x cached input, plus an hourly storage fee we do not model
  *     (PortOS records no cache duration to price it against).
  *
- * The default matches Anthropic/OpenAI (0.1x / 1.25x), which covers every
- * provider that actually reports cache tokens to PortOS today — Claude Code and
- * Codex are the only CLIs that write per-message cache counts to disk (see
- * `lib/providerTranscriptUsage.js`), so any other family's multiplier applies to
- * a token count that is currently always 0.
+ * The default matches Anthropic/OpenAI; Claude Code and Codex are the only CLIs
+ * that write per-message cache counts (`lib/providerTranscriptUsage.js`), so other
+ * families' multipliers apply to counts that are currently 0.
  *
- * Fable 5.1 is a one-off exception to that default: its cache-read rate dropped
- * 75% ($1.00 -> $0.25 per 1M, i.e. 0.1x -> 0.025x its $10 input rate) while
- * cache-write stayed at the standard 1.25x — Fable 5's own cache tiers are
- * unchanged, so the override is scoped to the `-5-1` id rather than the whole
- * `/fable/i` family.
+ * Fable 5.1 cut cache reads to 0.025x while write stayed 1.25x; the override is
+ * scoped to its id, not the `/fable/i` family.
  */
 const DEFAULT_CACHE_MULTIPLIERS = { read: 0.1, write: 1.25 };
 const CACHE_MULTIPLIER_RULES = [
@@ -479,9 +442,7 @@ const toRates = (rateModel) => withCacheRates({
  */
 export function resolveModelRates(providerId, model) {
   const id = typeof model === 'string' ? model.trim() : '';
-  // Before the `/grok/i` family rule, which would otherwise price an Imagine
-  // id as grok-4.7 text. Imagine dollars are estimateGrokImagineCost; these
-  // token rates stay zero so a media row is not also billed as chat.
+  // Before `/grok/i`, which would price an Imagine id as grok-4.7 text; media rows keep zero token rates.
   const imagine = grokImagineRate(id);
   if (imagine) {
     return {
@@ -513,8 +474,6 @@ export function resolveModelRates(providerId, model) {
     const lower = id.toLowerCase();
     const embedded = EXACT_KEYS_BY_LENGTH.find((key) => lower.includes(key));
     if (embedded) {
-      // The id contains a published model, so that model's schedule applies.
-      // A regex family fallback below does not: it only prices the base.
       return { ...toRates(embedded), matched: 'family', pricedBy: 'published' };
     }
     for (const rule of FAMILY_RULES) {
@@ -534,50 +493,24 @@ export function resolveModelRates(providerId, model) {
 
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
-// A record derived from a service instance (#7563) carries the plan the user
-// DECLARED — `free` / `paid` / `subscription` / `local` — which beats every
-// inference below: NVIDIA's free and paid tiers answer on the same endpoint
-// with the same model ids, so nothing about the record could tell them apart.
-// The string form and legacy records keep the id/endpoint rules.
+// A record from a service instance carries the DECLARED plan, which beats every
+// inference below (free and paid tiers share endpoint and model ids).
 const FREE_SERVICE_PLANS = new Set(['free', 'local']);
 
-// OpenCode Zen is a free-tier quota, not API billing: the seeded `opencode-zen`
-// providers (API + CLI/TUI wrappers, see scripts/migrations/336-*) spend a
-// weekly/monthly allowance, so their rows resolve to $0 on the cost report and
-// surface on the Usage page's free-tier section instead. Narrow on purpose — a
-// bare `zen` substring would also match an unrelated paid id, so only the
-// harness's own provider id and endpoint shapes count.
+// OpenCode Zen is a free-tier quota, not API billing, so its rows resolve to $0.
+// Narrow on purpose: a bare `zen` substring would match unrelated paid ids.
 const ZEN_PROVIDER_ID = /opencode-zen/i;
 const ZEN_ENDPOINT = /opencode\.ai\/zen/i;
 
-// Ollama/LM Studio name their models `family:tag` — `qwen3.6:35b`,
-// `llama3.1:8b-instruct-q8_0` — or `org/repo` for a pulled GGUF.
-//
-// A bare `:` test is NOT safe: Bedrock model ids carry a `:0` version suffix
-// (`us.anthropic.claude-opus-4-5-20251101-v1:0`), so matching any colon would
-// price real, paid Bedrock usage at $0. The distinguishing feature is what
-// follows the colon — an Ollama tag is a size/quantization label
-// (`qwen3.6:35b`, `llama3.1:8b-instruct-q8_0`), never a bare integer version
-// the way a Bedrock `-v1:0` suffix is. Requiring at least one letter after the
-// colon separates the two. (Ollama family names may contain dots — `qwen3.6` —
-// so the prefix must allow them.)
+// Ollama/LM Studio name models `family:tag` (`qwen3.6:35b`). A bare `:` test is
+// NOT safe: Bedrock ids carry a `:0` version suffix and would be priced at $0.
+// An Ollama tag is a size/quantization label, so require a letter after the colon.
 const LOCAL_TAGGED_MODEL = /^[\w.-]+:[\w.-]*[a-z][\w.-]*$/i;
 
-// The `org/repo` GGUF form is NOT a local marker on its own: paid hosted
-// catalogs use the same shape (`cohere/command-r`, OpenRouter's
-// `provider/model`), and pricing an unknown one at $0 under-bills real usage.
-// Only the tagged form above is self-evidently an Ollama/LM Studio id, so a
-// slash-form id needs corroborating evidence from the PROVIDER — which is what
-// `isFreeProvider` already supplies — rather than being inferred from syntax.
-// The `opencode/` namespace is the one exception: it is the harness's own
-// built-in provider (the Zen free tier), not a generic hosted catalog shape.
-
-// The harness's own `opencode/*` namespace (exactly what `opencode models`
-// prints — `opencode/big-pickle`, `opencode/mimo-v2.5-free`) is the Zen free
-// tier, and a bare `-free` suffix is an explicit free-tier marker
-// (`deepseek-v4-flash-free`). Both are provider-side labels, so they win over
-// the family-guess rules below — unlike the slash form, which stays paid
-// without corroboration (see the `org/repo` note above).
+// `org/repo` is not a local marker on its own (paid catalogs share the shape), so
+// slash ids need provider corroboration via `isFreeProvider`. Exceptions: the
+// harness's own `opencode/*` namespace (Zen free tier) and an explicit `-free`
+// suffix are provider-side labels that win over the family-guess rules.
 const FREE_TIER_MODEL = /^opencode\/.+|[^/]*-free$/i;
 
 /**
@@ -595,14 +528,10 @@ const FREE_TIER_MODEL = /^opencode\/.+|[^/]*-free$/i;
 export function isFreeModelId(model) {
   const id = typeof model === 'string' ? model.trim() : '';
   if (!id) return false;
-  // A hosted id we have a real rate for is never local, whatever its shape.
   if (EXACT_RATES[id]) return false;
-  // An explicit free-tier label wins over the family guesses below: the
-  // provider named this id free (`*-free`, the harness's own `opencode/*`
-  // namespace), which is stronger evidence than a substring rate rule.
+  // An explicit free-tier label beats the family guesses below.
   if (FREE_TIER_MODEL.test(id)) return true;
-  // Nor is one that resolves to a known hosted family (covers Bedrock-prefixed
-  // and suffixed variants of every id in the table).
+  // Nor one resolving to a known hosted family (incl. Bedrock-prefixed variants).
   if (resolveModelRates(null, id).matched !== 'fallback') return false;
   if (FREE_ID.test(id)) return true;
   return LOCAL_TAGGED_MODEL.test(id);
@@ -638,10 +567,6 @@ export function isFreeProvider(providerOrId) {
  * their own tiers via the optional 4th argument. Passing them as `tokensIn`
  * would overcharge a cache read by 10x — for agentic CLI runs, where cache reads
  * are >90% of input volume, that dwarfs every other error in the estimate.
- *
- * The cache argument is optional so the three-positional-argument form keeps
- * working for records that predate cache capture (absent = 0, no cache cost).
- *
  * @param {number} tokensIn uncached input tokens
  * @param {number} tokensOut
  * @param {{inputPer1M: number, outputPer1M: number, cacheReadPer1M?: number, cacheWritePer1M?: number}} rates

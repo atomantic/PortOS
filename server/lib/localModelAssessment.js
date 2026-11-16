@@ -13,15 +13,9 @@
  * measurement into the catalog's size-estimate fit badge, keeping the disagreement). Pure. `null`
  * strictly means NOT MEASURED — never 0, never "failed".
  *
- * PortOS already guesses whether a local model fits from catalog metadata alone
- * (weight bytes × a fixed overhead multiplier, in `huggingFaceCatalog.js`). That
- * guess never touches the machine: it can't tell a model that loads and streams
- * fast from one that loads, thrashes, and crawls, and it says
- * nothing at all about how a model behaves as the prompt gets long.
- *
- * This module turns *measured* evidence — one bounded generation per context
- * length, recorded by `services/localModelAssessments.js` — into an explainable
- * verdict and an intent-specific ranking.
+ * PortOS's catalog fit guess (weight bytes × overhead, `huggingFaceCatalog.js`) never
+ * touches the machine. This module turns *measured* evidence (one bounded generation
+ * per context length) into an explainable verdict and intent-specific ranking.
  *
  * ## The sentinel contract (read before touching anything here)
  *
@@ -294,21 +288,13 @@ export function buildThroughputReport(assessments) {
   };
 }
 
-// Speed normalization anchor, in CHARACTERS per second.
+// Speed normalization anchor, in CHARACTERS per second. Chars/s, not tokens/s: a
+// runtime without a usage block would score `null` and drop out, and older records
+// carry no token counts, so chars/s is the one figure everywhere. Nothing derives
+// tokens from characters.
 //
-// Chars/s, not tokens/s, and deliberately so. PortOS now RECORDS tokens/s when
-// the daemon reports token counts (`summarizeTimings`), and reports it — but it
-// cannot SCORE on it: a runtime that reports no usage block would score `null`
-// on speed and drop out of the ranking entirely, and records written before
-// token counts existed carry none. Chars/s is the one figure every runtime and
-// every stored record has, so the ranking stays comparable across both.
-// Still no tokenizer in the repo: nothing here ever derives a token count from
-// a character count.
-//
-// 240 chars/s (~60 tok/s at the conventional ~4 chars/token) is a comfortable
-// interactive rate on consumer hardware; at or above it the axis scores 1, below
-// it the score is linear so a crawling model reads as clearly worse rather than
-// both bottoming out.
+// 240 chars/s (~60 tok/s) is a comfortable interactive rate; at or above it the
+// axis scores 1, below it linear.
 const SPEED_CEILING_CHARS_PER_SECOND = 240;
 
 // Parameter-count anchor for the capability score. Local models above ~70B are
@@ -481,23 +467,14 @@ export function rankByIntent(assessments, intent = 'balanced') {
       coverage,
       scores,
       performance: assessment?.performance || null,
-      // The measured footprint feeds the memory axis, so it has to travel WITH
-      // the ranked entry — a consumer that renders it from the entry alone would
-      // otherwise show "not measured" for every model /api/ps actually measured.
+      // The measured footprint feeds the memory axis, so it travels WITH the entry.
       residentGb: Number.isFinite(assessment?.residentGb) ? assessment.residentGb : null,
       params: assessment?.params ?? null,
       assessedAt: assessment?.assessedAt || null,
-      // Travels with the entry so the UI can mark a reading taken before a RAM
-      // upgrade / backend update WITHOUT re-deriving the comparison client-side.
-      // `null` = the caller did not annotate staleness, which is not the same as
-      // "compared and current".
+      // `null` = staleness not annotated, not "compared and current".
       staleness: assessment?.staleness || null,
-      // The tuning IS part of this row's identity, not decoration. A model can
-      // hold several measurements, one per launch configuration, and the
-      // consumer uses these to key the row, to delete THIS measurement rather
-      // than the backend-defaults one, and to pre-fill a re-measure with the
-      // configuration that produced it. Dropping them collapsed every variant
-      // onto the default record.
+      // Tuning is part of the row's identity: consumers key rows by it, delete THIS
+      // measurement, and pre-fill re-measures from it.
       tuningKey: assessment?.tuningKey || '',
       tuning: assessment?.tuning || {},
       tuningLabel: assessment?.tuningLabel || null,
@@ -509,15 +486,10 @@ export function rankByIntent(assessments, intent = 'balanced') {
     });
   }
 
-  // FRESH evidence outranks stale evidence outright, before score is even
-  // considered: a reading taken before a RAM upgrade or a backend update
-  // describes a machine that no longer exists, so it must never be the top
-  // recommendation — the same rule `reconcileFit` and the editorial recommender
-  // apply. Stale rows stay in the list (labelled) rather than vanishing, because
-  // this panel is where the user goes to see and re-run them.
-  // Then: higher score first; ties broken by evidence coverage so a
-  // fully-measured model outranks one scored on a single axis, then by model id
-  // for stability.
+  // FRESH evidence outranks stale before score: a reading from before a RAM upgrade
+  // or backend update describes a machine that no longer exists (same rule as
+  // `reconcileFit`). Stale rows stay, labelled, so the user can re-run them. Then
+  // score, then evidence coverage, then model id.
   const isStale = (entry) => (entry.staleness?.stale ? 1 : 0);
   ranked.sort((a, b) =>
     (isStale(a) - isStale(b))
@@ -549,15 +521,9 @@ const targetKey = (t) => `${t.backend}:${t.modelId}@${t.tuningKey || ''}`;
  * reproduce the same configuration, or the sweep would quietly replace every
  * tuned reading with a backend-defaults one.
  *
- * ## The second dimension
- *
- * `tunings` swaps that rule out: instead of each model keeping the tuning it
- * carries, every model is crossed with the supplied grid — one measurement per
- * (model, tuning) pair. That is what makes a TUNING sweep a case of this
- * function rather than a queue of its own, and it is why the dedupe below is
- * keyed on model AND tuning: two variants sharing a key are one measurement, and
- * running it twice would put the same configuration on both sides of the
- * comparison table.
+ * `tunings` crosses every selected model with the supplied grid instead of keeping
+ * each record's own tuning. The dedupe is keyed on model AND tuning, so one
+ * configuration never lands on both sides of the comparison table.
  *
  * @param {object} options
  * @param {Array<object>} options.assessments stored records, already filtered to
@@ -587,13 +553,9 @@ export function selectSweepTargets({ assessments = [], unassessed = [], scope = 
   const add = (target) => {
     const key = targetKey(target);
     if (!target.backend || !target.modelId || seen.has(key)) return;
-    // An assessment measures a model by GENERATING with it, so an embedding-only
-    // model has no measurement to take: the daemon answers every sample with
-    // `400 "<model>" does not support chat`, the record lands as `incompatible`
-    // (which reads as "this machine can't run it" — it can, that is just not
-    // what it does), and each doomed sample raises an AI-provider investigation
-    // task. Excluded from BOTH branches, so a bogus record written before this
-    // existed is not re-queued forever by the `stale`/`all` scopes.
+    // Embedding-only models can't be measured by generating: every sample 400s, the
+    // record lands as a bogus `incompatible`, and each sample raises an AI-provider
+    // investigation task. Excluded from BOTH branches so old records aren't re-queued.
     if (isEmbeddingModel(target.modelId)) return;
     seen.add(key);
     targets.push(target);

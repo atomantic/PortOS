@@ -1,53 +1,35 @@
 /**
  * The OPTIONAL five-stage character evolution lens (#6440, epic #6418).
  *
- * A story-scoped craft lens layered over the universe-level psychology profile
- * in `characterFramework.js` (Ghost → Wound → Lie → Want → Need, theory of
- * control, drives). That profile is the character's baseline IDENTITY and is
- * owned by the universe; this module models what ONE story does to it — the
- * belief it puts under test, the pressure it applies, the choice the character
- * makes, and what that choice causes. A series/work/branch's realized change
- * must never be written back over world-level identity, which is why the lens
- * hangs off the story record (`series.characterArcs[].evolution`,
- * `loom.seriesPlan.characterEvolutions[]`) and links to the cast by character
- * id alone.
+ * A story-scoped craft lens layered over the universe-level psychology profile in `characterFramework.js`
+ * (Ghost -> Wound -> Lie -> Want -> Need). That profile is the character's baseline IDENTITY, owned by the
+ * universe; this module models what ONE story does to it. A story's realized change must never be written back
+ * over world-level identity, so the lens hangs off the story record (`series.characterArcs[].evolution`,
+ * `loom.seriesPlan.characterEvolutions[]`) and links to the cast by character id alone.
  *
- * Deliberate non-rules, carried from #6418:
- *   - The lens is OPTIONAL. Every arc, beat structure and authored transition
- *     kind stays valid with it unset; nothing here becomes a gate.
- *   - The five stages are a craft lens over authored beats, NOT a page count,
- *     a chapter count, or a percentage layout.
+ * Deliberate non-rules:
+ *   - The lens is OPTIONAL; nothing here becomes a gate.
+ *   - The five stages are a craft lens over authored beats, NOT a page/chapter count or percentage layout.
  *   - The changed belief need not be the literal negation of the tested one.
- *   - Not every character transforms. `tragic-refusal`, `flat-testing` and
- *     `partial-open` are DECLARED outcomes, not defects — declaring one is what
- *     stops a downstream review reading a deliberate flat arc as a gap.
+ *   - `tragic-refusal`, `flat-testing` and `partial-open` are DECLARED outcomes, not defects.
  *   - Stages are SPARSE: a lens with only stages 1 and 3 authored is valid.
  *
- * A PURE LEAF (imports only `bibleLimits.js` + the dependency-free trim
- * helpers in `textUtils.js`), matching `characterFramework.js`, so
- * `client/src/lib/characterEvolution.js` can re-export the vocabularies into
- * the browser bundle without dragging `crypto` / `fileUtils` along. That
- * purity is why a stage has no minted uuid: `stageId` is the identity (one
- * record per stage per lens), which needs no id generator and keeps a
+ * A PURE LEAF (imports only `bibleLimits.js` + the trim helpers in `textUtils.js`) so
+ * `client/src/lib/characterEvolution.js` can re-export the vocabularies without dragging `crypto` / `fileUtils`
+ * into the browser bundle. That is why a stage has no minted uuid: `stageId` is the identity, which keeps a
  * round trip byte-stable.
  *
- * Embedded by `seriesCharacterArc.js` (`series.characterArcs[].evolution`),
- * `services/fableLoom/records.js` (`loom.seriesPlan.characterEvolutions[]`) and
- * `lib/storyBible.js`'s `sanitizeCharacter` (`characters[].evolution`, which is
- * how a Writers Room work carries the lens per work WITHOUT being promoted to a
- * Pipeline series — #6445), all of which sanitize on load/save/sync.
+ * Embedded by `seriesCharacterArc.js`, `services/fableLoom/records.js` and `lib/storyBible.js`'s
+ * `sanitizeCharacter` (a Writers Room work carries the lens per work without becoming a Pipeline series), all of
+ * which sanitize on load/save/sync.
  */
 
 import { BIBLE_LIMITS } from './bibleLimits.js';
 import { trimTo, trimToClause, isStr } from './textUtils.js';
 
-// Storr's sequence as #6418 restates it, in order: the control strategy is
-// visibly failing; an event forces exploration of another way; the character
-// commits to a changed strategy; consequences test whether they can bear its
-// cost; a final choice and its aftermath demonstrate enduring change (or
-// refusal). An unknown stage id is REJECTED rather than coerced — a beat that
-// cannot be placed in the sequence cannot be reasoned about, and silently
-// snapping it to a neighbouring stage would fabricate authored intent.
+// Storr's sequence, in order: control strategy visibly failing; an event forces exploration; commitment to a
+// changed strategy; consequences test its cost; a final choice demonstrates enduring change (or refusal). An
+// unknown stage id is REJECTED, not coerced: snapping it to a neighbour would fabricate authored intent.
 export const EVOLUTION_STAGES = Object.freeze([
   'control-strategy-failing',
   'pressure-forces-exploration',
@@ -56,12 +38,9 @@ export const EVOLUTION_STAGES = Object.freeze([
   'final-proof',
 ]);
 
-// The four DECLARED outcome kinds. `full-change` = the change endures;
-// `tragic-refusal` = the character doubles down on the control belief;
-// `flat-testing` = the belief is tested and deliberately holds (the character
-// changes the world instead of themselves); `partial-open` = only some of the
-// change is earned, or the ending leaves it genuinely open. All four are
-// first-class authored endings — none is a finding.
+// The four DECLARED outcome kinds. `full-change` = the change endures; `tragic-refusal` = doubles down on the
+// control belief; `flat-testing` = the belief is tested and holds; `partial-open` = only some change is earned or
+// the ending is open. All are first-class endings, none is a finding.
 export const EVOLUTION_OUTCOMES = Object.freeze([
   'full-change',
   'tragic-refusal',
@@ -74,9 +53,7 @@ export const EVOLUTION_STAGE_TEXT_FIELDS = Object.freeze([
   'testedBelief', 'externalPressure', 'characterChoice', 'causalConsequence',
 ]);
 
-// Per-field caps keyed by field name (mirrors CHARACTER_PSYCHOLOGY_LIMITS) so a
-// Zod schema or an editor sizes every input from one map instead of
-// re-deriving the `<FIELD>_MAX` naming convention.
+// Per-field caps keyed by field name (mirrors CHARACTER_PSYCHOLOGY_LIMITS) so schemas and editors size from one map.
 export const CHARACTER_EVOLUTION_LIMITS = Object.freeze({
   testedBelief: BIBLE_LIMITS.EVOLUTION_TESTED_BELIEF_MAX,
   externalPressure: BIBLE_LIMITS.EVOLUTION_EXTERNAL_PRESSURE_MAX,
@@ -85,9 +62,7 @@ export const CHARACTER_EVOLUTION_LIMITS = Object.freeze({
   outcomeNote: BIBLE_LIMITS.EVOLUTION_OUTCOME_NOTE_MAX,
   characterName: BIBLE_LIMITS.NAME_MAX,
   atSceneAnchor: BIBLE_LIMITS.EVOLUTION_EVIDENCE_ANCHOR_MAX,
-  // The verbatim manuscript snippet a Writers Room stage quotes. Same cap as
-  // the free-text scene anchor it plays the same role as: an authored locator,
-  // not an identifier.
+  // The verbatim manuscript snippet a Writers Room stage quotes; same cap as the free-text scene anchor.
   anchorQuote: BIBLE_LIMITS.EVOLUTION_EVIDENCE_ANCHOR_MAX,
   evidenceRef: BIBLE_LIMITS.EVOLUTION_EVIDENCE_REF_MAX,
   atIssue: BIBLE_LIMITS.STORY_ISSUE_NUMBER_MAX,
@@ -95,36 +70,24 @@ export const CHARACTER_EVOLUTION_LIMITS = Object.freeze({
   LENSES_PER_PLAN_MAX: BIBLE_LIMITS.EVOLUTIONS_PER_PLAN_MAX,
 });
 
-// How much a stage's evidence anchor actually PROVES. Only `anchored` counts
-// as verified — the epic's non-negotiable is that a missing or stale anchor can
-// never read as verified, so every other value must fail an "is this proven?"
-// test:
-//   `unanchored` — nothing authored. Not a defect on its own (the lens is a
-//                  plan; evidence arrives when the beat does), just unproven.
-//   `unverified` — a pointer is authored but the caller supplied no reference
-//                  set to check it against. Unknown, therefore not verified.
-//   `anchored`   — every authored pointer resolves against the host record.
-//   `stale`      — at least one authored pointer names something that no
-//                  longer exists. PRESERVED, never silently dropped, following
-//                  the `sanitizeStoryOutline` precedent that keeps an unknown
-//                  `targetKey` so `DANGLING_TRANSITION` can report it.
+// How much a stage's evidence anchor PROVES. Only `anchored` counts as verified: a missing or stale anchor must
+// never read as verified.
+//   `unanchored` - nothing authored (not a defect; evidence arrives with the beat).
+//   `unverified` - a pointer is authored but no reference set was supplied to check it.
+//   `anchored`   - every authored pointer resolves against the host record.
+//   `stale`      - a pointer names something that no longer exists. PRESERVED, never dropped (like
+//                  `sanitizeStoryOutline` keeping an unknown `targetKey` for `DANGLING_TRANSITION`).
 export const EVOLUTION_EVIDENCE_STATUSES = Object.freeze([
   'unanchored', 'unverified', 'anchored', 'stale',
 ]);
 
-// Shared per-character story-list primitives. They live in this leaf — the
-// lowest module both per-character story lists reach — rather than beside
-// either host, because a rule that lives in two places drifts: widen the canon
-// id shape on the arc path alone and the same id silently blanks on the lens
-// path, or refine the identity key on one side and two records that collapse
-// on the pipeline host stay split on the FableLoom host.
+// Shared per-character story-list primitives, in this leaf (the lowest module both hosts reach) so a rule isn't
+// duplicated and can't drift between the arc path and the lens path.
 const CHARACTER_ID_RE = /^chr-[a-zA-Z0-9-]+$/;
 const TRANSITION_ID_RE = /^trn-[a-zA-Z0-9-]+$/;
 const EPISODE_ID_RE = /^ep-[a-zA-Z0-9-]+$/;
-// A Writers Room manuscript segment (`buildSegmentIndex`). POSITIONAL, unlike
-// every other pointer here: `seg-003` is the third heading of the draft as it
-// stands, and the whole index is recomputed on every draft save. That is why
-// the Writers Room host pairs it with `anchorQuote` below.
+// A Writers Room manuscript segment (`buildSegmentIndex`). POSITIONAL: `seg-003` is the third heading as the
+// draft stands, recomputed on every save, so the Writers Room host pairs it with `anchorQuote`.
 const SEGMENT_ID_RE = /^seg-\d+$/;
 
 /** True for a canon cast pointer (`chr-<uuid>`). */
@@ -151,41 +114,32 @@ export const optIssueNumber = (raw, max) => (
   Number.isFinite(raw) ? Math.max(0, Math.min(max, Math.floor(raw))) : null
 );
 
-// A pointer is kept only when it matches its host's id shape; anything else
-// collapses to '' so a junk value can't masquerade as evidence. A well-shaped
-// pointer to a DELETED record is a different case entirely — it survives here
-// and `evolutionEvidenceStatus` reports it stale.
+// A pointer is kept only when it matches its host's id shape, else '' so junk can't masquerade as evidence. A
+// well-shaped pointer to a DELETED record survives and `evolutionEvidenceStatus` reports it stale.
 const shapedRef = (raw, re) => {
   if (!isStr(raw)) return '';
   const value = raw.trim();
   return re.test(value) ? value.slice(0, CHARACTER_EVOLUTION_LIMITS.evidenceRef) : '';
 };
 
-// A host reference set. A Map passes through unchanged (it answers `.has` like
-// a Set and additionally carries the passage text a QUOTED_ANCHORS check
-// needs), so a host can hand richer refs in without a second parameter.
+// A host reference set. A Map passes through (answers `.has` like a Set and carries passage text for QUOTED_ANCHORS).
 const asSet = (value) => {
   if (value instanceof Set || value instanceof Map) return value;
   if (Array.isArray(value)) return new Set(value);
   return null;
 };
 
-// The anchor fields each host owns, and the ref set each resolves against.
-// ONE table so the sanitizer, the status check, the renderer, the Zod schema
-// and the client editor never enumerate the vocabulary five different ways.
+// The anchor fields each host owns and the ref set each resolves against; ONE table so no consumer re-enumerates it.
 export const EVOLUTION_EVIDENCE_FIELDS = Object.freeze({
   pipelineSeries: Object.freeze(['atIssue', 'atSceneAnchor', 'transitionId']),
   fableLoom: Object.freeze(['episodeId', 'sceneKey']),
-  // Writers Room maps the lens RETROSPECTIVELY onto a manuscript it never
-  // promotes to a Pipeline series, so its only anchor primitive is the segment
-  // index. `anchorQuote` is not a second pointer — it is what makes the first
-  // one checkable across an edit.
+  // Writers Room maps the lens retrospectively onto a manuscript, so its only anchor is the segment index;
+  // `anchorQuote` makes it checkable across an edit.
   writersRoom: Object.freeze(['segmentId', 'anchorQuote']),
 });
 
-// Pointer fields that resolve against a host reference set, paired with the
-// `refs` key that carries it. `atIssue` / `atSceneAnchor` are deliberately
-// absent: they are authored locators with nothing to resolve against.
+// Pointer fields that resolve against a host reference set, paired with the `refs` key carrying it. `atIssue` /
+// `atSceneAnchor` are authored locators with nothing to resolve against.
 const RESOLVABLE_ANCHORS = Object.freeze([
   ['transitionId', 'transitionIds'],
   ['episodeId', 'episodeIds'],
@@ -193,37 +147,25 @@ const RESOLVABLE_ANCHORS = Object.freeze([
   ['segmentId', 'segmentIds'],
 ]);
 
-// Pointer fields that carry a companion QUOTE: `[pointer, refsKey, quoteField]`.
-// When the host hands the matching ref set in as a Map of pointer -> passage
-// text, the quote must still appear in that passage. Without it a positional
-// pointer proves only that SOMETHING still occupies that slot — and a Writers
-// Room `seg-003` is renumbered by any edit that adds a heading above it, so
-// "the id resolves" is exactly the false pass #6418 forbids. A host that hands
-// in a plain Set (or no set) is unchanged: the quote is then unverifiable, not
-// wrong.
+// Pointer fields with a companion QUOTE: `[pointer, refsKey, quoteField]`. When the host supplies the ref set as
+// a Map of pointer -> passage text, the quote must still appear in that passage; otherwise a positional pointer
+// (a Writers Room `seg-003` renumbers when a heading is added above it) would pass as "resolves" while naming
+// a different passage. A plain Set (or none) leaves the quote unverifiable, not wrong.
 const QUOTED_ANCHORS = Object.freeze([['segmentId', 'segmentIds', 'anchorQuote']]);
 
-// Quotes are compared whitespace-collapsed and case-folded: a manuscript edit
-// that rewraps a paragraph or re-cases a heading has not moved the passage.
+// Quotes compare whitespace-collapsed and case-folded, so a rewrap or re-case has not moved the passage.
 const normalizeQuote = (raw) => (isStr(raw) ? raw.replace(/\s+/g, ' ').trim().toLowerCase() : '');
 
 /**
  * Sanitize one stage's evidence anchor. Returns `null` when nothing is
  * authored so an evidence-free stage carries no empty husk.
  *
- * Both hosts' vocabularies live in one block on purpose — the lens shape is
- * shared, and each host resolves only the pointers it owns:
- *   - Pipeline series: `atIssue` / `atSceneAnchor` (the same optional pair
- *     `sanitizeTransition` accepts) plus `transitionId`, naming the authored
- *     `trn-` beat that proves the stage.
- *   - FableLoom: `episodeId` (`ep-<uuid>`) plus `sceneKey` (a
- *     `storyOutline.scenes[].key`).
- *   - Writers Room: `segmentId` (a `seg-NNN` from `buildSegmentIndex`) plus
- *     `anchorQuote`, a verbatim snippet of the passage it names. The segment id
- *     is positional and is rebuilt on every draft save, so the quote is what
- *     lets `evolutionEvidenceStatus` tell "still the same passage" from "that
- *     slot now holds a different chapter".
- * A field the host does not use simply stays empty.
+ * Both hosts' vocabularies live in one block; each host resolves only the pointers it owns:
+ *   - Pipeline series: `atIssue` / `atSceneAnchor` plus `transitionId` (the authored `trn-` beat proving the stage).
+ *   - FableLoom: `episodeId` (`ep-<uuid>`) plus `sceneKey` (a `storyOutline.scenes[].key`).
+ *   - Writers Room: `segmentId` (positional `seg-NNN`, rebuilt on every save) plus `anchorQuote`, a verbatim
+ *     snippet that lets `evolutionEvidenceStatus` tell "same passage" from "slot now holds another chapter".
+ * A field the host does not use stays empty.
  */
 export function sanitizeEvolutionEvidence(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -232,14 +174,10 @@ export function sanitizeEvolutionEvidence(raw) {
     atSceneAnchor: trimTo(raw.atSceneAnchor, CHARACTER_EVOLUTION_LIMITS.atSceneAnchor),
     transitionId: shapedRef(raw.transitionId, TRANSITION_ID_RE),
     episodeId: shapedRef(raw.episodeId, EPISODE_ID_RE),
-    // Outline scene keys are author-chosen slugs with no prefix contract, so
-    // they are length-bounded rather than shape-matched; resolution against the
-    // episode's real keys is what separates a live anchor from a stale one.
+    // Outline scene keys are author-chosen slugs, so length-bounded rather than shape-matched.
     sceneKey: trimTo(raw.sceneKey, CHARACTER_EVOLUTION_LIMITS.evidenceRef),
     segmentId: shapedRef(raw.segmentId, SEGMENT_ID_RE),
-    // Free text, deliberately not shape-matched: it is a verbatim snippet of
-    // the author's own prose, and it is PRESERVED when its segment pointer goes
-    // stale so it can drive the re-anchor.
+    // Free text (a verbatim snippet of the author's prose); PRESERVED when its segment pointer goes stale, to drive re-anchor.
     anchorQuote: trimTo(raw.anchorQuote, CHARACTER_EVOLUTION_LIMITS.anchorQuote),
   };
   const authored = evidence.atIssue !== null
@@ -253,10 +191,9 @@ export function sanitizeEvolutionEvidence(raw) {
 }
 
 /**
- * How much this evidence proves, given what the host record actually contains.
- * DERIVED on read rather than persisted, so a status can never drift out of
- * step with the record it describes and a peer can never assert its own
- * anchors verified. Pass whichever reference sets the host owns:
+ * How much this evidence proves given what the host record contains. DERIVED on read, never persisted, so it
+ * can't drift and a peer can't assert its own anchors verified. Pass whichever reference sets the host owns:
+ *
  *
  *   { transitionIds, episodeIds, sceneKeys }   // Set | Array | omitted
  *
@@ -266,10 +203,8 @@ export function sanitizeEvolutionEvidence(raw) {
 export function evolutionEvidenceStatus(evidence, refs = {}) {
   if (!evidence || typeof evidence !== 'object') return 'unanchored';
   const authored = RESOLVABLE_ANCHORS.filter(([field]) => Boolean(evidence[field]));
-  // A free-text scene anchor / issue number is an authored locator with nothing
-  // to resolve against — it counts as authored evidence but can never be
-  // machine-verified, so on its own it stays `unverified`. Checked before the
-  // ref sets are materialized so the common no-pointer case allocates nothing.
+  // A free-text scene anchor / issue number counts as authored evidence but can never be machine-verified, so
+  // alone it stays `unverified`. Checked before materializing ref sets so the no-pointer case allocates nothing.
   if (authored.length === 0) {
     return evidence.atIssue != null || evidence.atSceneAnchor || evidence.anchorQuote
       ? 'unverified'
@@ -281,9 +216,8 @@ export function evolutionEvidenceStatus(evidence, refs = {}) {
     if (!known) unchecked = true;
     else if (!known.has(evidence[field])) return 'stale';
   }
-  // A quoted pointer that resolved still has to still SAY what it said. The
-  // check runs only when the host supplied the passage text; otherwise the
-  // anchor is merely unchecked, which is `unverified` below, never `anchored`.
+  // A resolved quoted pointer must still SAY what it said; checked only when the host supplied passage text,
+  // else the anchor is merely unchecked (`unverified`), never `anchored`.
   for (const [field, refsKey, quoteField] of QUOTED_ANCHORS) {
     const quote = normalizeQuote(evidence[quoteField]);
     if (!evidence[field] || !quote) continue;
@@ -308,22 +242,17 @@ export function sanitizeEvolutionStage(raw) {
   const stage = { stageId: raw.stageId };
   let authored = false;
   for (const field of EVOLUTION_STAGE_TEXT_FIELDS) {
-    // Prose, not identifiers: `trimToClause` so an over-cap stage ends on a
-    // sentence (or at worst a whole word) rather than mid-word. A hard clip
-    // hands the next verify round a belief that stops mid-thought, which reads
-    // as an authoring gap — see the same note in `seriesCharacterArc.js`.
+    // Prose: `trimToClause` ends an over-cap stage on a sentence/word, since a hard clip reads as an authoring gap
+    // (see `seriesCharacterArc.js`).
     stage[field] = trimToClause(raw[field], CHARACTER_EVOLUTION_LIMITS[field]);
     if (stage[field]) authored = true;
   }
   stage.evidence = sanitizeEvolutionEvidence(raw.evidence);
-  // A stage id with no prose and no anchor is an empty marker with nothing to
-  // render or reason about (mirrors `sanitizeTransition`'s label/note rule).
+  // A stage with no prose and no anchor is an empty marker (mirrors `sanitizeTransition`).
   return authored || stage.evidence ? stage : null;
 }
 
-// Stages are stored in canonical sequence order, deduplicated by `stageId`
-// (last write wins) — the lens is five ORDERED stages, so a round trip that
-// re-sorted arbitrarily would never be byte-stable.
+// Stored in canonical sequence order, deduplicated by `stageId` (last write wins); arbitrary re-sorting would break byte-stability.
 function cleanStages(rawList) {
   if (!Array.isArray(rawList)) return [];
   const byStage = new Map();
@@ -339,16 +268,11 @@ function cleanStages(rawList) {
  * authored, mirroring `sanitizeCharacterArc`'s "no identifying content ⇒ drop"
  * rule — so a record that never opted into the lens round-trips byte-identical.
  *
- * `outcome` is the DECLARATION that keeps a deliberate flat or tragic arc from
- * reading as a defect downstream, and an unknown value is rejected outright
- * rather than coerced to a default (which would fabricate a declaration the
- * author never made). It is nullable rather than mandatory on purpose: an
- * author fills stages before they know how the story lands, a peer may send a
- * lens through an older sanitizer, and BOTH host records carry the lens inside
- * a wholesale-replaced field — so refusing a lens with no declared outcome
- * would delete authored prose on a partial save and 400 an unrelated edit.
- * `isDeclaredEvolution` is the gate downstream reviews use instead; an
- * undeclared lens is incomplete, never a declared flat arc.
+ * `outcome` is the DECLARATION that keeps a deliberate flat or tragic arc from reading as a defect; an unknown
+ * value is rejected, not coerced (which would fabricate a declaration). It is nullable on purpose: authors fill
+ * stages before knowing how the story lands, and both hosts carry the lens in a wholesale-replaced field, so
+ * refusing an undeclared lens would delete authored prose on a partial save. `isDeclaredEvolution` is the
+ * downstream gate; an undeclared lens is incomplete, never a declared flat arc.
  */
 export function sanitizeCharacterEvolution(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -360,10 +284,8 @@ export function sanitizeCharacterEvolution(raw) {
 }
 
 /**
- * True only when the author has DECLARED how the arc lands. The epic's
- * non-negotiable — a declared flat or tragic-refusal arc is first-class, not a
- * finding — applies to declared lenses only; an undeclared one is unfinished
- * planning and must read as such.
+ * True only when the author has DECLARED how the arc lands; a declared flat or tragic-refusal arc is first-class,
+ * an undeclared one is unfinished planning.
  */
 export const isDeclaredEvolution = (evolution) => (
   Boolean(evolution) && EVOLUTION_OUTCOMES.includes(evolution.outcome)
@@ -371,15 +293,10 @@ export const isDeclaredEvolution = (evolution) => (
 
 /**
  * Sanitize a per-character lens LIST (`loom.seriesPlan.characterEvolutions[]`).
- * Each entry is `{ characterId, characterName, evolution }`; entries with no
- * identity or no authored lens are dropped, and the list dedupes by character
- * identity exactly as `sanitizeCharacterArcList` does (canon pointer first,
- * case-folded name as the fallback) so two lenses for one character collapse
- * last-write-wins. Returns [] for a non-array so a pre-lens plan migrates
- * forward without a writer pass.
- *
- * The pipeline host needs no equivalent: its lens nests inside the already
- * per-character, already deduplicated `series.characterArcs[]`.
+ * Entries are `{ characterId, characterName, evolution }`; entries with no identity or no lens are dropped and the
+ * list dedupes by character identity as `sanitizeCharacterArcList` does (last write wins). Returns [] for a
+ * non-array so a pre-lens plan migrates forward. The pipeline host needs no equivalent: its lens nests in
+ * `series.characterArcs[]`.
  */
 export function sanitizeCharacterEvolutionList(rawList) {
   if (!Array.isArray(rawList)) return [];
@@ -390,10 +307,8 @@ export function sanitizeCharacterEvolutionList(rawList) {
     const characterId = isCanonCharacterId(raw.characterId) ? raw.characterId : '';
     const characterName = trimTo(raw.characterName, CHARACTER_EVOLUTION_LIMITS.characterName);
     if (!characterId && !characterName) continue;
-    // Identity and cap are settled BEFORE the per-entry walk: a peer payload
-    // skips the route's `.max()` and reaches this sanitizer directly, so a
-    // 10k-entry list must not pay five stages of prose trimming per entry only
-    // to be dropped at the cap.
+    // Identity and cap are settled BEFORE the per-entry walk: peer payloads skip the route's `.max()`, so a
+    // 10k-entry list must not pay stage trimming per entry only to be dropped at the cap.
     const key = characterIdentityKey(characterId, characterName);
     const known = byKey.has(key);
     if (!known && byKey.size >= CHARACTER_EVOLUTION_LIMITS.LENSES_PER_PLAN_MAX) continue;
@@ -405,9 +320,7 @@ export function sanitizeCharacterEvolutionList(rawList) {
   return order.map((k) => byKey.get(k));
 }
 
-// Human-readable stage names for a prompt block or an editor heading. Exported
-// (rather than kept private) so `client/src/lib/characterEvolution.js` renders
-// the same words the review prompts do.
+// Exported so `client/src/lib/characterEvolution.js` renders the same words the review prompts do.
 export const EVOLUTION_STAGE_LABELS = Object.freeze({
   'control-strategy-failing': 'control strategy failing',
   'pressure-forces-exploration': 'pressure forces exploration',
@@ -440,19 +353,16 @@ const describeEvidence = (evidence) => {
 
 /**
  * Render one lens as a compact prompt block, or `null` when there is nothing
- * to render — mirroring `renderCharacterArcsForPrompt` so every later slice of
- * #6418 shares one renderer instead of writing three.
+ * to render, mirroring `renderCharacterArcsForPrompt`.
  *
- * `refs` is optional and is forwarded to `evolutionEvidenceStatus`; an anchor
- * is annotated only when it is stale or when it resolves, so a prompt can
- * never present an unresolvable pointer as proof.
+ * `refs` is forwarded to `evolutionEvidenceStatus`; an anchor is annotated only when stale or resolved, so a
+ * prompt never presents an unresolvable pointer as proof.
  */
 export function renderCharacterEvolutionForPrompt(evolution, refs = {}) {
   if (!evolution || typeof evolution !== 'object') return null;
   const outcome = EVOLUTION_OUTCOMES.includes(evolution.outcome) ? evolution.outcome : 'undeclared';
   const note = isStr(evolution.outcomeNote) && evolution.outcomeNote ? ` — ${evolution.outcomeNote}` : '';
-  // Materialize the ref sets ONCE rather than per stage — a caller that hands
-  // in arrays would otherwise rebuild the same Sets five times per lens.
+  // Materialize the ref sets ONCE, not per stage.
   const resolved = Object.fromEntries(RESOLVABLE_ANCHORS
     .map(([, refsKey]) => [refsKey, asSet(refs[refsKey])])
     .filter(([, known]) => known));
@@ -467,29 +377,19 @@ export function renderCharacterEvolutionForPrompt(evolution, refs = {}) {
     if (status !== 'unanchored') parts.push(`evidence: ${describeEvidence(stage.evidence)} [${status}]`);
     stageLines.push(`  ${EVOLUTION_STAGE_LABELS[stage.stageId] || stage.stageId}: ${parts.join('; ') || '(not yet authored)'}`);
   }
-  // A lens with a declared outcome but no stages is still worth rendering —
-  // the declaration is the part a review must not mistake for a gap. A lens
-  // with neither is nothing at all (and the sanitizer would have dropped it).
+  // A declared outcome with no stages is still worth rendering (a review must not mistake it for a gap); neither means nothing.
   if (!stageLines.length && outcome === 'undeclared' && !note) return null;
   return [`declared outcome: ${outcome}${note}`, ...stageLines].join('\n');
 }
 
 /**
  * Render every authored lens in a per-character LIST as one prompt block, or
- * `null` when nothing in the list carries one.
- *
- * Both hosts keep a per-character list — `series.characterArcs[]` on the
- * pipeline side, `loom.seriesPlan.characterEvolutions[]` on the FableLoom side
- * — and each needs the same nesting, the same "null, not ''" contract (which
- * is what keeps a consumer's `{{#characterEvolution*}}` section empty and its
- * behavior byte-identical to pre-lens), and the same per-entry evidence
- * resolution. Written once here rather than per host, because the rule that
- * differs is only WHERE the reference sets come from.
- *
- * `refs` is either one reference-set object shared by every entry (FableLoom:
- * episode ids and scene keys are loom-wide) or a function called per entry to
- * derive its own (pipeline: a lens resolves against ITS OWN arc's transition
- * beats, never the whole cast's).
+ * Both hosts keep a per-character list and need the same nesting, the same "null, not ''" contract (keeps a
+ * consumer's `{{#characterEvolution*}}` section empty) and per-entry evidence resolution; only WHERE the ref sets
+ * come from differs.
+
+ * `refs` is one shared reference-set object (FableLoom: loom-wide ids) or a function called per entry (pipeline: a
+ * lens resolves against ITS OWN arc's transition beats).
  */
 export function renderCharacterEvolutionListForPrompt(list, refs = {}) {
   if (!Array.isArray(list)) return null;
@@ -500,9 +400,7 @@ export function renderCharacterEvolutionListForPrompt(list, refs = {}) {
     const lens = renderCharacterEvolutionForPrompt(entry.evolution, refsFor(entry));
     if (!lens) continue;
     const name = entry.characterName || '(unnamed character)';
-    // Indent the lens body under its character so a multi-character block stays
-    // readable — the renderer already indents stage lines two spaces relative
-    // to the outcome line, and this preserves that nesting.
+    // Indent the lens body under its character, preserving the renderer's two-space stage nesting.
     blocks.push(`- ${name}\n${lens.split('\n').map((line) => `    ${line}`).join('\n')}`);
   }
   return blocks.length ? blocks.join('\n') : null;
