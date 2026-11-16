@@ -1,16 +1,9 @@
-// Agent guard — keeps spawned AI agents from killing the shared PM2 daemon.
+// Agent guard: keeps spawned AI agents from killing the shared PM2 daemon.
 //
-// CoS "Fix with AI" tasks and the autofixer app run their CLI with
-// `--dangerously-skip-permissions` (fully unrestricted Bash). A confused agent
-// asked to "restart the app" once ran `pm2 kill`, which took down EVERY app on
-// the machine — including PortOS itself. `agentGuardEnv()` returns an env patch
-// that prepends a guarded `pm2` shim (./bin/pm2) to the agent's PATH so a bare
-// `pm2 kill` / `pm2 delete all` is intercepted before it reaches the real pm2.
-// The shim's blocked-subcommand list mirrors `validatePm2Command` in
-// commandSecurity.js (which guards the non-agentic command paths).
-//
-// POSIX-only by design: the shim is a bash script, so on Windows (pm2.cmd, no
-// bash) the prepend is a harmless no-op and pm2 resolves normally.
+// CoS "Fix with AI" tasks and the autofixer run their CLI with `--dangerously-skip-permissions`, and a bare `pm2 kill`
+// takes down EVERY app including PortOS. `agentGuardEnv()` prepends a guarded `pm2` shim (./bin/pm2) to the agent's PATH;
+// its blocked-subcommand list mirrors `validatePm2Command` in commandSecurity.js.
+// POSIX-only: the shim is a bash script, so on Windows (pm2.cmd) the prepend is a harmless no-op.
 
 import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,8 +14,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // Directory containing the guarded `pm2` shim.
 export const AGENT_GUARD_BIN = join(HERE, 'bin');
 
-// Node-resolved path to the REAL pm2 binary, handed to the shim via
-// PORTOS_REAL_PM2 so it doesn't have to rediscover it on PATH. Resolved once.
+// Real pm2 binary, handed to the shim via PORTOS_REAL_PM2. Resolved once; unresolved is non-fatal (shim scans PATH).
 function resolveRealPm2() {
   const require = createRequire(import.meta.url);
   // require.resolve throws when pm2 isn't installed — the shim falls back to a

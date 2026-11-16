@@ -1,21 +1,10 @@
 /**
  * Shared module-level singleton holding the AI Toolkit instance.
  *
- * Module-level singleton for the toolkit instance shared by the `providers`/`runner`/`promptService`
- * shims — `setAIToolkitInstance` / `requireToolkit` (throws `AI_TOOLKIT_NOT_INITIALIZED`) /
- * `getAIToolkitInstance` (no-throw for cleanup paths).
- *
- * `server/index.js` wires the toolkit once at boot and the three service shims
- * (`providers.js`, `runner.js`, `promptService.js`) all read it through here
- * — replacing three identical `let aiToolkitInstance = null` + `requireToolkit()`
- * pairs that previously lived in each shim.
- *
- * `requireToolkit()` throws a typed `ServerError` so callers can gate on
- * `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'` rather than message-match; status
- * 503 because the toolkit warms at boot and a not-initialized state means the
- * service hasn't finished starting. `getAIToolkitInstance()` is the no-throw
- * variant used by cleanup paths (e.g. `unregisterActiveRun`) that should be
- * tolerant of running after the toolkit is gone.
+ * `server/index.js` wires the toolkit once at boot; the `providers`/`runner`/`promptService`
+ * shims read it here. `requireToolkit()` throws a typed `ServerError`
+ * (`AI_TOOLKIT_NOT_INITIALIZED`, 503: still starting); `getAIToolkitInstance()` is
+ * the no-throw variant for cleanup paths that may run after the toolkit is gone.
  */
 
 import { ServerError } from './errorHandler.js';

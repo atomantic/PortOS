@@ -1,34 +1,15 @@
 /**
- * CoS run reconciliation — the ledger read BACK against the run record.
+ * CoS run reconciliation: the ledger (`data/cos/run-events.jsonl`, folded by `projectRunStates`) read BACK against
+ * the run record (`data/runs/{id}/metadata.json`). Pure (no disk, no clock).
  *
- * Slices 1 and 2 of #4540 made the lifecycle observable: every boundary appends
- * to `data/cos/run-events.jsonl`, and `projectRunStates` folds that stream into
- * "what this run is now". But the fold has been write-only so far — the ledger
- * is appended *alongside* `data/runs/{id}/metadata.json` and nothing ever
- * compared the two. When they disagree, the mutable record wins by default and
- * the disagreement is invisible, which is precisely the class of failure the
- * ledger exists to explain.
+ * The service half (`services/agentRunReconciler.js`) supplies projections, records and the write.
  *
- * This module is the comparison. It is pure — no disk, no clock — so every
- * finding case is a table test rather than a fixture tree. The service half
- * (`services/agentRunReconciler.js`) supplies the projections, the records, and
- * the write.
- *
- * **Repairs run one direction only: ledger → record.** A run record left open
- * because the process died between the ledger append and the metadata write can
- * be closed from the stream, because the stream holds the verdict. The reverse
- * — a record that is closed while the ledger never saw the close — is reported
- * and never "fixed": inventing the missing lifecycle event would put a fact in
- * the append-only stream that nothing ever observed, and a ledger that
- * back-fills itself from the record it is supposed to audit can no longer audit
- * it.
+ * **Repairs run one direction only: ledger -> record.** A record left open because the process died between the ledger
+ * append and the metadata write can be closed from the stream. The reverse (record closed, ledger never saw the close) is
+ * reported and never "fixed": back-filling the append-only ledger from the record it audits would invent unobserved facts.
  */
 
-/**
- * The closed finding vocabulary. Closed for the same reason the event kinds are:
- * the summary below is exhaustive over it, and a typo becomes a test failure
- * rather than a finding nothing counts.
- */
+/** The closed finding vocabulary; the summary is exhaustive over it, so a typo becomes a test failure. */
 export const RUN_RECONCILE_FINDINGS = Object.freeze([
   // Ledger reached a verdict; the run record still has no `endTime`. The one
   // repairable case — the stream holds everything the close needs.
@@ -62,12 +43,8 @@ const PROCESS_ENDED_STATUSES = new Set([...TERMINAL_STATUSES, 'orphaned']);
 /** Projection statuses that contradict a CLOSED record. */
 const LIVE_STATUSES = new Set(['running', 'orphaned', 'paused', 'interrupted']);
 
-/**
- * `unknown` is deliberately in none of the three sets above. A projection with
- * only, say, a `run.pr-verified` event says nothing about whether the run is
- * open, so pairing it with any record shape is not a finding — reporting it
- * would fill the panel with rows that have no defect behind them.
- */
+// `unknown` is deliberately in none of the sets above: a projection with only an annotation event (e.g. `run.pr-verified`)
+// says nothing about whether the run is open, so it is not a finding.
 
 /** Is this projection key a real run id, or the `agent:<id>` fallback? */
 export const isAgentFallbackKey = (id) => typeof id === 'string' && id.startsWith('agent:');

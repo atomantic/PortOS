@@ -1,6 +1,6 @@
 # PortOS workspace design guide
 
-Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. The [audit](research/UX_DESIGN_AUDIT.md) records the evidence. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding. The rollout history is in epic [#7791](https://github.com/atomantic/PortOS/issues/7791).
+Status: reviewed design specification v1, 2026-09-20, for incremental implementation. The review preserves icon-prefixed desktop navigation and the CoS-style compact mobile icon row as explicit product requirements. This is not a claim that existing pages implement the specification. The [audit](research/UX_DESIGN_AUDIT.md) records the evidence and pilot scope. Existing accessibility, routing, privacy, and behavior contracts in `client/src/AGENTS.md` remain binding.
 
 ## 1. The product experience
 
@@ -29,7 +29,32 @@ Do not start by placing existing JSX blocks into a larger grid. Decide what belo
 - Breadcrumbs show ancestry; they do not replace navigation. Search, command palette, and voice are accelerators, never the only discovery path.
 - Page titles name the actual destination: “Jev decision scorer” or “Model performance,” rather than spending a separate header row on “Models” alone. The Models shell does this with the active section destination’s label and icon. A destination with two jobs uses a local task row under that title; the title does not change per task, and the destination name is not repeated as the first card heading. Explanations that would be copied onto every group live in one help drawer opened from that row.
 - Keep canonical command IDs, current URLs, aliases, and legacy redirects. Moving a link in navigation does not require moving its route.
-- `server/lib/navManifest.js` is the route and command source of truth; add grouping metadata through the existing navigation pipeline (`client/src/lib/navPresentation.js` owns icons), never a parallel route array. Keep optional-feature filtering, alphabetical ordering, and command/voice coverage intact.
+
+### Models proposal
+
+Expose all current destinations in the Models navigator, including those currently missing from its top-level tabs. Groups are visible labels, not extra pages or collapsed default categories. Keep groups and links alphabetical to preserve the existing navigation convention.
+
+| Group | Destinations (existing paths retained) |
+| --- | --- |
+| Connect | AI Services (`/ai/services`), Harnesses (`/ai/harnesses`), Providers (`/ai/presets`), Runtimes (`/models/llms-runtimes`) |
+| Evaluate | Comparison (`/models/comparison`), Performance (`/models/performance`), Playground (`/local-llm/playground`) |
+| Library | 3D (`/models/3d`), Embeddings (`/models/embeddings`), LoRAs (`/models/loras`), Media (`/models/media`), Model Library (`/models/llms`), Training (`/models/training`) |
+| Operate | Quota Burn (`/devtools/quota-burn`), Status (`/models/status`), Subscriptions (`/models/subscriptions`), Usage (`/devtools/usage`) |
+| Policies | Abuse Guard (`/models/llms/abuse`), Code Reviewers (`/models/code-reviewers`), Jev decision scorer (`/models/llms/jev`) |
+
+“Policies” groups tools by their integration-management job; Jev remains a decision scorer, not a security guarantee. Confirm this label through the findability exercise below. Keep “jev” and “LLMs” as search/voice aliases even if visible labels expand.
+
+The desktop pilot uses the existing compact global icon rail plus a 208–240px section navigator with an icon before every destination label. Preserve the user's global-sidebar preference: when that sidebar is expanded, present the same grouped Models destinations there and suppress the duplicate section column. Do not stack an expanded global sidebar, a second expanded section sidebar, and a third page sidebar. Long destination lists may scroll vertically with the selected item kept in view; never truncate the final group out of reach.
+
+On smaller screens, retain the **CoS-style `TabPills mobileCompact` icon row** for fixed section destinations and local task views. Each destination keeps its distinct icon, accessible name, selected state, and overflow chevrons; selection scrolls into view. Section destinations remain reachable directly from this row. A labeled “All Models destinations” button may additionally open the grouped icon-and-label navigator for discovery; a sheet, hamburger-only menu, text-only strip, or select must not replace the icon row. Keep the current destination title visible for touch users. Unbounded record pickers remain distinct from fixed navigation.
+
+Desktop and mobile use the same icon identity for a destination. Prefer existing `NAV_PRESENTATION` entries; add missing Jev and Abuse Guard entries with distinct icons before promotion. Reuse the existing Scale icon for Jev; select a guard icon distinct from Code Reviewers' ShieldCheck. Every fixed task view also needs an icon. The CoS navigation at `client/src/pages/ChiefOfStaff.jsx` is the reference interaction, not a feature to redesign away.
+
+Grouped links use a named navigation landmark and `aria-current="page"`; existing `TabPills` retain shared tab keyboard/panel semantics. Decorative icons use `aria-hidden`; mobile accessible names match desktop labels. Selection has a non-color cue, keyboard focus remains visible and scrolls into view, and icon-only controls retain effective touch targets and focus/hover labels. Do not require hover to identify the current destination. Hidden desktop/mobile navigation copies must not remain in the tab order.
+
+### Implementation ownership
+
+`server/lib/navManifest.js` remains the route and command source of truth. Add grouping/presentation metadata through the existing navigation pipeline; `client/src/lib/navPresentation.js` owns icons/presentation. Do not introduce a manually maintained parallel route array. Preserve optional-feature filtering on the client, selected disabled-feature routes, alphabetic ordering, and command/voice coverage. Register any new task-view routes and route-backed record selections when they ship. The same Models navigator and active-destination resolution must cover cross-prefix hosts (`/ai/*`, `/devtools/usage`, `/devtools/quota-burn`, `/local-llm/playground`) and retain the owning destination on detail routes.
 
 ## 3. Layout system
 
@@ -88,7 +113,7 @@ Copy has three levels: a short label, one useful sentence, then optional explana
 
 ## 5. Visual language
 
-Use existing theme tokens in `client/src/index.css`; this guide defines a hierarchy, not a parallel palette. Add semantic text/surface tokens centrally if existing mappings cannot express it.
+Use existing theme tokens in `client/src/index.css`; this guide proposes a hierarchy, not a parallel palette. Add semantic text/surface tokens centrally if existing mappings cannot express it.
 
 | Element | Starting specification |
 | --- | --- |
@@ -109,8 +134,6 @@ Use existing theme tokens in `client/src/index.css`; this guide defines a hierar
 - Density changes spacing, not legibility. Start with one comfortable default; introduce a saved density preference only where repeated expert use demonstrates value.
 
 ## 6. Interaction contracts
-
-Reuse existing primitives (`PageHeader`, `TabPills`, `Drawer`, `FormField`, `Banner`, `OverflowMenu`, `PageSkeleton`) before creating new ones. Do not build a universal schema-driven page engine, and do not replace mature screens wholesale.
 
 ### Actions and forms
 
@@ -135,6 +158,54 @@ Rows serve comparison; details serve inspection. Show identity, the few decision
 
 For Performance, never combine characters/s and tokens/s into the same unlabeled rank. Include context length, runtime/tuning, timing basis, measurement age, and missing evidence in the comparison/detail contract. Capability evidence is task-specific; do not market a structural writing check as literary quality or a composite score as universal intelligence.
 
+## 7. Jev pilot specification
+
+Default ready-state view: **Try a decision**. Keep all five views directly visible:
+
+| View | Main workspace | Supporting information |
+| --- | --- | --- |
+| Try a decision | Premise and answer options beside the resulting choice or abstention | Runtime state, model loaded/idle, concise margin explanation |
+| Integrations | Source rows with current mode and one-line consequence; scope advisory separate | Global integration state, effective policy/overrides, link to canonical Abuse Guard policy editor |
+| Results | Agreement, abstention, and unavailable counts by decision | Sample counts and interpretation; agreement is not correctness |
+| Training | Project-head eligibility, baseline comparison, train/adopt actions | Local-only data boundary, adoption blockers, current progress |
+| Setup | Installation stages, repair/download actions and logs | Model revision, size, runtime lifecycle and unload action |
+
+At the top show installation readiness and integration enablement as **separate states**. “Ready” must not imply that automatic integrations are enabled. A compact Setup link can say “4 checks passed”; detailed installation cards live in Setup. If unavailable, show a clear “Complete setup” action without hiding other views or historical evidence.
+
+Preserve modes and consequences exactly: Shadow compares without replacing the chat answer; Prefer local falls back to chat on abstention/failure; Local only skips unresolved items; Disabled runs no scoring for that source. Show these in a mode legend and the affected row, not one wall of prose. Scope checking stays advisory; completion reviews remain a separate system. Keep adoption gates and training data locality unchanged.
+
+Existing `/models/llms/jev` stays valid and opens Try a decision. Add explicit `/models/llms/jev/:view` routes for `try`, `integrations`, `results`, `training`, and `setup`, ahead of the generic Models dispatcher. An invalid view replaces the URL with the `try` route. Register task destinations in the nav manifest without turning them into duplicate section-level entries. Do not overload the existing `recordId=jev` slot. Hold drafts, pending mutations, installed/runtime state, and the last score above the view body; switching views or using Back must not clear drafts, repeat scoring, or duplicate subscriptions. Reload restores the selected view; text drafts need not persist across a full reload or leaving the tool, but unsaved navigation must follow the existing guard policy. The earlier interactive concept is an illustrative ready-state, not live model output; its text-only navigation and mobile menu are superseded by the icon contract above.
+
+## 8. Performance pilot specification
+
+Default to **Results**, with **Capability tests**, **Agent checks**, and **Tuning** as sibling task views. A single “Run assessment” action opens the existing run-configuration flow. Batch scope belongs there; selecting the page must remain read-only.
+
+- Results starts with the ranking intent and a compact comparable model table. Use one row per model/runtime/tuning measurement, clear missing/stale states, and selected evidence alongside it when space permits.
+- Capability tests keeps its task filter and matrix but moves long test descriptions into test details. Keep all stored outputs reachable. Task recommendations include the evidence and limitations beside them.
+- Agent checks owns PTY/harness benchmarks. Keep startup/paste overhead distinct from direct engine throughput.
+- Tuning compares configurations for a selected model; throughput-by-context and timing details belong here or in the selected result, rather than after a long card stack.
+- Show runtime availability compactly; expand only affected blockers and provide a named route to fix them. Do not repeat the same runtime warning in multiple large banners.
+- Explain local-machine measurement scope once near the result context. Keep incomparable/stale results visible as such; no synthetic universal winner.
+
+### Performance routes and state
+
+Keep `/models/performance` as the Results landing. Add explicit `/models/performance/:view` routes for `results`, `capabilities`, `agent-checks`, and `tuning`; unknown views replace the URL with `results`. A selected measurement uses `/models/performance/results/:assessmentKey`, not the same segment as the view. Define `assessmentKey` as a reversible URL-safe encoding of the existing measurement identity tuple (backend, model ID, tuning key), with an explicit null/default tuning representation and parser tests; do not add a persisted ID or data migration just for navigation. Malformed/missing/deleted measurements show a recovery link to Results. Model IDs containing slashes and multiple tunings of one model must round-trip unambiguously.
+
+Preserve existing measurement/sweep drawer search parameters (`measureBackend`, `measureModel`, `measureTuning`, and the existing sweep parameters) on legacy URLs and through view changes; retain the current one-drawer-at-a-time precedence. Keep the run owner and its event subscriptions above the active task view so navigation does not cancel/restart work, lose cancellation access, clear tuning drafts, or duplicate listeners. Back/forward and reload restore selection; server run state is reattached without implicitly starting a run. Use saved result identities and existing capability-detail URL contracts, rather than replacing them with component-only selection.
+
+## 9. Shared patterns and implementation sequence
+
+Reuse `PageHeader`, `TabPills`, `SectionTabsHeader`, `Drawer`, `FormField`, `Banner`, `Pill`, `OverflowMenu`, `PageSkeleton`, and existing asynchronous action/progress helpers. Consult the component and helper catalogs before creating anything.
+
+Candidate additions after the two pilots prove the need: a section-navigation presentation for the existing manifest, a workspace layout with main/inspector slots, and common results-table framing. These are proposed responsibilities, not components that already exist. Do not build a universal schema-driven page engine or replace every component before delivering the first useful page.
+
+1. Validate the reviewed navigation and page families through the pilot task study; earlier interactive examples remain exploratory and do not override the icon requirements.
+2. Pilot Models navigation + Jev: preserve actions, URLs, validation, requests, and state semantics; compare desktop and narrow layouts.
+3. Pilot Performance: results-first table, bounded run setup, task-specific evidence; retain all legacy measurements.
+4. Extract only the patterns actually shared by those pilots; update component catalogs and client conventions with the accepted defaults.
+5. Apply the same audit to Runtimes, CoS Tasks, Settings, Brain, and Apps; pick each page's primary task rather than copying the Jev layout.
+6. Expand to remaining pages in small reviewable changes. Avoid a global CSS rewrite that changes every mature screen at once.
+
 ## 10. Acceptance and evaluation
 
 For every migrated page, review these scenarios with synthetic data:
@@ -155,9 +226,24 @@ Use focused behavior tests at rendered interactions and route boundaries plus vi
 
 > Apply `docs/UX_DESIGN_GUIDE.md` to this page. Read its nested conventions and audit the current user tasks, routes, states, and shared components. State the primary job and select the page family. Put the useful work first, use desktop width for related work/evidence, and specify narrow-screen reflow. Preserve behavior, privacy, saved-state gates, deep links, and explicit provider consent. Produce a before/after content map, reuse existing primitives, implement a bounded slice, and verify representative viewport, keyboard, loading, failure, and route scenarios. Report what was observed versus inferred; use only synthetic data in published evidence.
 
+## Implementation tracking
+
+[Epic #7791](https://github.com/atomantic/PortOS/issues/7791) owns the bounded first rollout. Merging this specification does not complete the epic or its implementation tasks. Each task waits for the specification PR to merge; later prerequisites are sequencing choices so pilots inform the next surface, not claims that all work is technically coupled.
+
+| Task | Prerequisites after specification merge | Status/evidence |
+| --- | --- | --- |
+| [#7792 — Models navigation and icons](https://github.com/atomantic/PortOS/issues/7792) | None | Shipped in merged PR #7808 |
+| [#7793 — Jev task views](https://github.com/atomantic/PortOS/issues/7793) | Models navigation | Shipped in merged PR #7839; synthetic responsive evidence is in the audit |
+| [#7794 — Performance results workspace](https://github.com/atomantic/PortOS/issues/7794) | Models navigation and Jev pilot | Shipped in merged PR #7841 |
+| [#7795 — Runtimes operations roster](https://github.com/atomantic/PortOS/issues/7795) | Performance pilot | Shipped in merged PR #7851; [synthetic validation](validation/7795-runtimes-workspace.md) |
+| [#7796 — CoS queue-first Tasks](https://github.com/atomantic/PortOS/issues/7796) | Performance pilot | Shipped in merged PR #7850 |
+| [#7797 — Settings, Brain and Apps follow-up audit](https://github.com/atomantic/PortOS/issues/7797) | Runtimes and CoS pilot outcomes | Audit shipped with [#7858](https://github.com/atomantic/PortOS/issues/7858), [#7859](https://github.com/atomantic/PortOS/issues/7859), and [#7860](https://github.com/atomantic/PortOS/issues/7860) as implementation slices |
+
+Runtimes and CoS can proceed independently once their shared prerequisite is complete. The final audit files evidence-backed follow-ups; it does not silently expand this epic into an implementation promise for every page. Check live issue state and remove `blocked` only when the listed prerequisites have been met.
+
 ## Sources and rationale
 
-The page families, spacing, and navigation grouping are PortOS design defaults based on the [repository/live audit](research/UX_DESIGN_AUDIT.md), not externally mandated rules.
+The page families, spacing, navigation grouping, and pilot choices are PortOS design proposals based on the [repository/live audit](research/UX_DESIGN_AUDIT.md), not externally mandated rules.
 
 - [NN/g: Progressive disclosure](https://www.nngroup.com/articles/progressive-disclosure/) supports moving secondary detail behind explicit requests while keeping primary work clear. Disclosure does not justify hiding sibling destinations.
 - [W3C: Reflow](https://www.w3.org/WAI/WCAG22/Understanding/reflow.html) explains narrow-width/zoom reflow and the exception for two-dimensional tables within their own scroll region.

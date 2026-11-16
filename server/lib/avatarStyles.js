@@ -1,23 +1,11 @@
 /**
- * Single source of truth for the CoS avatar-style vocabulary.
+ * Single source of truth for the CoS avatar-style vocabulary: `AVATAR_STYLES` (`{id, label, webgl}`),
+ * `AVATAR_STYLE_IDS` (the `avatarStyle` zod enum), `AVATAR_STYLE_LABELS`, `WEBGL_AVATAR_STYLE_IDS`.
  *
- * The CoS avatar-style vocabulary (#6253) — `AVATAR_STYLES` (`{id, label, webgl}`), `AVATAR_STYLE_IDS`
- * (the `avatarStyle` zod enum in `cosStatusRoutes.js`), `AVATAR_STYLE_LABELS`, and
- * `WEBGL_AVATAR_STYLE_IDS` (the three.js-stage set). `client/src/lib/avatarStyles.js` re-exports it
- * for the picker and the lazy-load map.
- *
- * Every consumer that used to hand-maintain its own list derives from `AVATAR_STYLES` instead (#6253):
- * the picker labels (`components/cos/constants.js`), the lazy-load map and WebGL-stage set
- * (`pages/ChiefOfStaff.jsx`), and the server's `avatarStyle` zod enum
- * (`server/routes/cosStatusRoutes.js`, which imports it directly).
- *
- * `webgl: true` marks a style that needs the three.js canvas stage —
- * `CANVAS_AVATAR_STYLES` derives from this flag. The 2D `core` canvas style
- * and the inline `svg`/`ascii` styles are deliberately `webgl: false`.
- *
- * Lives server-side because the dependency direction is one-way: the client
- * imports pure `server/lib` leaves, never the reverse. `client/src/lib/avatarStyles.js`
- * re-exports this module for the UI.
+ * Every consumer derives from `AVATAR_STYLES`. `webgl: true` marks a style needing the three.js
+ * stage; the 2D `core` canvas and inline `svg`/`ascii` styles are `webgl: false`. Lives
+ * server-side because the client imports pure `server/lib` leaves, never the reverse;
+ * `client/src/lib/avatarStyles.js` re-exports it.
  */
 
 export const AVATAR_STYLES = [

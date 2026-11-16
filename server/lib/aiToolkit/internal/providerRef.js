@@ -1,20 +1,11 @@
 /**
- * The composite provider-id grammar (`<harness>.<method>@<service-slug>
- * [+<bootstrap-slug>]`, #7564) as the toolkit needs it: enough to tell a
- * composite reference from a preset record id, so `getProviderById` knows when
- * to hand a lookup to the host's resolver and `runSchema.providerId` accepts
- * either spelling.
- *
- * A DELIBERATE MIRROR of `server/lib/providerRef.js`. This directory is
- * vendored and stays self-contained — no imports out to other PortOS modules
- * (see `aiToolkit/AGENTS.md`) — so the rule is duplicated rather than imported,
- * exactly as `gateways.js` and `harnesses.js` are. `server/lib/providerRef.parity.test.js`
- * fails when the two drift.
- *
- * Imports nothing.
+ * The composite provider-id grammar (`<harness>.<method>@<service-slug>[+<bootstrap-slug>]`):
+ * tells a composite reference from a preset record id. A DELIBERATE MIRROR of
+ * `server/lib/providerRef.js` (see `aiToolkit/AGENTS.md`), kept honest by
+ * `providerRef.parity.test.js`. Imports nothing.
  */
 
-/** A preset record id — the slug `createProvider` assigns. */
+/** A preset record id (the slug `createProvider` assigns). */
 export const PRESET_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 /** `<harness>.<method>@<service-slug>[+<bootstrap-slug>]`. */
