@@ -599,53 +599,6 @@ export async function getTags() {
 }
 
 /**
- * Get related memories (by ID links + embedding similarity)
- */
-export async function getRelatedMemories(id, limit = 10) {
-  const memory = await loadMemory(id);
-  if (!memory) return [];
-
-  const embeddings = await loadEmbeddings();
-  const index = await loadIndex();
-  const indexMap = new Map(index.memories.map(m => [m.id, m]));
-
-  const related = [];
-
-  // Add explicitly linked memories
-  for (const relId of memory.relatedMemories) {
-    const meta = indexMap.get(relId);
-    if (meta && meta.status === 'active') {
-      related.push({ ...meta, relationship: 'linked', similarity: 1.0, linkType: DEFAULT_MEMORY_LINK_TYPE, direction: 'outgoing' });
-    }
-  }
-  for (const link of memory.typedLinks || []) {
-    const meta = indexMap.get(link.targetId);
-    if (meta && meta.status === 'active') {
-      related.push({
-        ...meta, relationship: 'linked', similarity: 1.0, linkId: link.id, linkType: link.linkType,
-        direction: 'outgoing', note: link.note, createdBy: link.createdBy
-      });
-    }
-  }
-
-  // Add similar by embedding
-  if (memory.embedding && embeddings.vectors[id]) {
-    const similar = findTopK(memory.embedding, embeddings.vectors, limit + related.length);
-    for (const item of similar) {
-      if (item.id === id) continue;
-      if (related.some(r => r.id === item.id)) continue;
-
-      const meta = indexMap.get(item.id);
-      if (meta && meta.status === 'active') {
-        related.push({ ...meta, relationship: 'similar', similarity: item.similarity });
-      }
-    }
-  }
-
-  return related.slice(0, limit);
-}
-
-/**
  * Get graph data for visualization.
  *
  * `sourceIds` mirrors the PostgreSQL backend (#10953): absent (undefined/null)

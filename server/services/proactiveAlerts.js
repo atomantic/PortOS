@@ -36,13 +36,3 @@ export async function generateAlerts() {
 
   return { alerts: all, counts, checkedAt: new Date().toISOString() };
 }
-
-/** Get a compact summary suitable for dashboard display. */
-export async function getAlertsSummary() {
-  const result = await generateAlerts();
-  return {
-    alerts: result.alerts.slice(0, 5),
-    counts: result.counts,
-    checkedAt: result.checkedAt,
-  };
-}

@@ -227,15 +227,3 @@ export async function getTrainingStats(days = 30) {
     byDrill: summary,
   };
 }
-
-/**
- * Get recent training entries for display. Reads through
- * `getAllTrainingEntries`, so each entry's `date` is re-derived in the user's
- * current timezone (#4168) and the history list agrees with the streak/stats
- * that are computed off the same day keys.
- */
-export async function getTrainingEntries(limit = 20) {
-  const entries = await getAllTrainingEntries();
-  if (!limit) return entries.slice().reverse();
-  return entries.slice(-limit).reverse();
-}

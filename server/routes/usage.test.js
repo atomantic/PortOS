@@ -7,9 +7,7 @@ vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
   getFirstActivityDay: vi.fn(() => '2026-01-01'),
-  recordSession: vi.fn(),
   recordMessages: vi.fn(),
-  recordTokens: vi.fn(),
   resetUsage: vi.fn()
 }));
 
@@ -445,16 +443,6 @@ describe('usage routes', () => {
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
   });
 
-  it('POST /api/usage/session records a session and returns its number', async () => {
-    usage.recordSession.mockResolvedValue(42);
-    const res = await request(buildApp())
-      .post('/api/usage/session')
-      .send({ providerId: 'anthropic', providerName: 'Anthropic', model: 'opus' });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ sessionNumber: 42 });
-    expect(usage.recordSession).toHaveBeenCalledWith('anthropic', 'Anthropic', 'opus');
-  });
-
   it('POST /api/usage/messages records messages and returns success', async () => {
     usage.recordMessages.mockResolvedValue();
     const res = await request(buildApp())
@@ -463,31 +451,6 @@ describe('usage routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(usage.recordMessages).toHaveBeenCalledWith('p1', 'm', 3, 1000, 0);
-  });
-
-  it('POST /api/usage/tokens defaults missing token counts to 0', async () => {
-    usage.recordTokens.mockResolvedValue();
-    const res = await request(buildApp()).post('/api/usage/tokens').send({});
-    expect(res.status).toBe(200);
-    expect(usage.recordTokens).toHaveBeenCalledWith(0, 0);
-  });
-
-  it.each(['5', -1, 1.5, {}, []])('POST /api/usage/tokens rejects %j', async (bad) => {
-    usage.recordTokens.mockClear();
-    const res = await request(buildApp()).post('/api/usage/tokens').send({ inputTokens: bad });
-    expect(res.status).toBe(400);
-    expect(usage.recordTokens).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { providerId: 5 },
-    { providerId: 'p1', providerName: {} },
-    { providerId: 'p1', model: [] }
-  ])('POST /api/usage/session rejects %j', async (body) => {
-    usage.recordSession.mockClear();
-    const res = await request(buildApp()).post('/api/usage/session').send(body);
-    expect(res.status).toBe(400);
-    expect(usage.recordSession).not.toHaveBeenCalled();
   });
 
   it('DELETE /api/usage resets usage data', async () => {

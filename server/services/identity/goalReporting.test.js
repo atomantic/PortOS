@@ -29,7 +29,7 @@ vi.mock('../calendarAccounts.js', () => ({
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { DEFAULT_GOALS, GOALS_FILE } from './store.js';
-import { createGoal, getGoalCalendarEvents, getGoalsTree, linkCalendarToGoal, updateGoalProgress } from './goals.js';
+import { createGoal, getGoalsTree, linkCalendarToGoal, updateGoalProgress } from './goals.js';
 
 beforeEach(async () => {
   await mkdir(PATHS.digitalTwin, { recursive: true });
@@ -39,26 +39,6 @@ afterEach(() => vi.useRealTimers());
 afterAll(cleanupTempDataRoots);
 
 describe('goal reporting workflows', () => {
-  it('returns linked calendar matches beyond 200 unrelated events while retaining calendar filters', async () => {
-    const goal = await createGoal({ title: 'Example goal' });
-    await linkCalendarToGoal(goal.id, { subcalendarId: 'linked', matchPattern: 'practice' });
-    const event = (id, subcalendarId, title, startTime = '2026-01-02T12:00:00Z') => ({
-      id, subcalendarId, title, startTime, endTime: startTime,
-    });
-    const events = [
-      ...Array.from({ length: 205 }, (_, i) => event(`other-${i}`, 'other', 'Unrelated', '2026-01-01T12:00:00Z')),
-      event('match', 'linked', 'Practice session'),
-      event('nonmatch', 'linked', 'Other session'),
-      { ...event('declined', 'linked', 'Practice'), myStatus: 'declined' },
-      event('disabled', 'disabled', 'Practice'),
-      event('outside', 'linked', 'Practice', '2026-02-01T12:00:00Z'),
-    ];
-    await mkdir(join(PATHS.calendar, 'cache'), { recursive: true });
-    await writeFile(join(PATHS.calendar, 'cache', '11111111-1111-1111-1111-111111111111.json'), JSON.stringify({ events }));
-
-    expect((await getGoalCalendarEvents(goal.id, '2026-01-01', '2026-01-31')).map(e => e.id)).toEqual(['match']);
-    expect(await getGoalCalendarEvents('missing', '2026-01-01', '2026-01-31')).toEqual([]);
-  });
 
   it.each([
     ['stable decline', [90, 80, 70, 60], 'stable'],

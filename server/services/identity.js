@@ -23,7 +23,7 @@ export { getChronotype, deriveChronotype, updateChronotypeBehavioral, getEnergyS
 export { getLongevity, deriveLongevity } from './identity/longevity.js';
 
 // Goals
-export { getGoals, setBirthDate, createGoal, updateGoal, deleteGoal, getGoalsTree, linkActivity, unlinkActivity, addMilestone, addProgressEntry, reconcileCalendarProgress, deleteProgressEntry, completeMilestone, linkCalendarToGoal, unlinkCalendarFromGoal, getGoalCalendarEvents, generateGoalPhases, acceptGoalPhases, decomposeGoal, acceptGoalDecomposition, completeMilestoneTask, organizeGoals, applyGoalOrganization, checkInGoal, updateGoalProgress } from './identity/goals.js';
+export { getGoals, setBirthDate, createGoal, updateGoal, deleteGoal, getGoalsTree, linkActivity, unlinkActivity, addMilestone, addProgressEntry, reconcileCalendarProgress, deleteProgressEntry, completeMilestone, linkCalendarToGoal, unlinkCalendarFromGoal, generateGoalPhases, acceptGoalPhases, decomposeGoal, acceptGoalDecomposition, completeMilestoneTask, organizeGoals, applyGoalOrganization, checkInGoal, updateGoalProgress } from './identity/goals.js';
 
 // Todos
 export { addTodo, updateTodo, deleteTodo } from './identity/todos.js';

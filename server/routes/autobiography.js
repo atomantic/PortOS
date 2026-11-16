@@ -221,15 +221,6 @@ router.post('/stories/:id/follow-ups', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /api/digital-twin/autobiography/stories/:id/chain
- * Get the full chain of stories linked to a story (ancestors + descendants)
- */
-router.get('/stories/:id/chain', asyncHandler(async (req, res) => {
-  const chain = await autobiographyService.getStoryChain(req.params.id);
-  res.json(chain);
-}));
-
-/**
  * POST /api/digital-twin/autobiography/stories/:id/weave
  * Weave the story's full chain into a single cohesive first-person narrative
  */
@@ -245,14 +236,5 @@ router.post('/stories/:id/weave', asyncHandler(async (req, res) => {
 // =============================================================================
 // PROMPT TRIGGER
 // =============================================================================
-
-/**
- * POST /api/digital-twin/autobiography/trigger
- * Manually trigger a story prompt notification
- */
-router.post('/trigger', asyncHandler(async (req, res) => {
-  const result = await autobiographyService.checkAndPrompt();
-  res.json(result);
-}));
 
 export default router;

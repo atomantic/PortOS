@@ -15,7 +15,6 @@ vi.mock('../services/memoryBackend.js', () => ({
   getMemory: vi.fn(),
   getMemoryVersion: vi.fn(),
   getMemoryVersions: vi.fn(),
-  getRelatedMemories: vi.fn(),
   createMemory: vi.fn(),
   updateMemory: vi.fn(),
   updateMemoryEmbedding: vi.fn(),
@@ -66,20 +65,12 @@ vi.mock('../services/settings.js', async () => ({
 }));
 
 import { PEER_INSTANCE_ID_HEADER } from '../services/sharing/peerPullAuthorization.js';
-import { ensureBackend, getRelatedMemories, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
+import { ensureBackend, getMemories, getTimeline, archiveMemory, purgeMemory, applyDecay, linkMemories } from '../services/memoryBackend.js';
 import { checkHealth } from '../lib/db.js';
 import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 
 describe('Memory Routes', () => {
-  it('GET /:id/related 400s on a repeated limit key and never reads related memories', async () => {
-    const app = express();
-    app.use('/api/memory', memoryRoutes);
-    const res = await request(app).get('/api/memory/mem-1/related?limit=1&limit=2');
-    expect(res.status).toBe(400);
-    expect(getRelatedMemories).not.toHaveBeenCalled();
-  });
-
   it('GET /:id/runs lists recent runs that used the memory (#10495)', async () => {
     const app = express();
     app.use('/api/memory', memoryRoutes);

@@ -50,12 +50,6 @@ const touchpointSchema = z.object({
   metadata: z.record(z.unknown()).optional().default({}),
 });
 
-const calendarTouchpointSchema = z.object({
-  accountId: z.string().guid(),
-  eventId: z.string().min(1).max(500),
-  summary: z.string().max(2000).optional(),
-});
-
 const memoryLinkSchema = z.object({
   memoryId: z.string().guid(),
   note: z.string().max(1000).optional().default(''),
@@ -220,13 +214,6 @@ router.get('/people/:id/touchpoints', asyncHandler(async (req, res) => {
 router.post('/people/:id/touchpoints', asyncHandler(async (req, res) => {
   const data = validateRequest(touchpointSchema, req.body);
   const touchpoint = await tribe.createTouchpoint(req.params.id, data);
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
-  res.status(201).json(touchpoint);
-}));
-
-router.post('/people/:id/touchpoints/calendar', asyncHandler(async (req, res) => {
-  const data = validateRequest(calendarTouchpointSchema, req.body);
-  const touchpoint = await tribe.createCalendarTouchpoint(req.params.id, data);
   req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
   res.status(201).json(touchpoint);
 }));

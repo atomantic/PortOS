@@ -40,17 +40,6 @@ export async function listDayFiles() {
     .sort();
 }
 
-/**
- * Get the available date range from all health day files.
- *
- * @returns {Promise<Object|null>} { from, to, totalDays } or null if no files
- */
-export async function getAvailableDateRange() {
-  const dates = await listDayFiles();
-  if (dates.length === 0) return null;
-  return { from: dates[0], to: dates[dates.length - 1], totalDays: dates.length };
-}
-
 // === Aggregation Helpers ===
 
 /**

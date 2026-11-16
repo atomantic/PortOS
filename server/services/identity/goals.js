@@ -651,30 +651,6 @@ export async function unlinkCalendarFromGoal(goalId, subcalendarId) {
   });
 }
 
-export async function getGoalCalendarEvents(goalId, startDate, endDate) {
-  const goals = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
-  const goal = goals.goals.find(g => g.id === goalId);
-  if (!goal || !goal.linkedCalendars?.length) return [];
-
-  const { getEvents } = await import('../calendarSync.js');
-  // The calendar reader already loads this window; filter all of it rather
-  // than letting unrelated calendars consume a page before matching the goal.
-  const { events } = await getEvents({ startDate, endDate, limit: Infinity });
-
-  const linkedIds = new Set(goal.linkedCalendars.map(lc => lc.subcalendarId));
-  const patternMap = {};
-  for (const lc of goal.linkedCalendars) {
-    patternMap[lc.subcalendarId] = lc.matchPattern;
-  }
-
-  return events.filter(e => {
-    if (!linkedIds.has(e.subcalendarId)) return false;
-    const pattern = patternMap[e.subcalendarId];
-    if (!pattern) return true;
-    return e.title?.toLowerCase().includes(pattern.toLowerCase());
-  });
-}
-
 // =============================================================================
 // AI Phase Planning
 // =============================================================================

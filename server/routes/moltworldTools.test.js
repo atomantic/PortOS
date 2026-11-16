@@ -74,7 +74,7 @@ describe('/api/agents/tools/moltworld', () => {
     const res = await request(app).get(`${BASE}/status?accountId=acct-1`);
     expect(res.body).toEqual({ profile: { x: 1, y: 2 }, balance: { sim: 10 } });
 
-    for (const path of ['status', 'balance', 'rate-limits']) {
+    for (const path of ['status', 'rate-limits']) {
       const missing = await request(app).get(`${BASE}/${path}`);
       expect(missing.status, path).toBe(400);
       expect(missing.body.code).toBe('VALIDATION_ERROR');

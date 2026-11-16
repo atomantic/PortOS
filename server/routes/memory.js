@@ -193,13 +193,6 @@ router.get('/:id/versions', asyncHandler(async (req, res) => {
   res.json({ versions: await memory.getMemoryVersions(id, options) });
 }));
 
-// GET /api/memory/:id/related - Get related memories
-router.get('/:id/related', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
-  const related = await memory.getRelatedMemories(req.params.id, limit);
-  res.json(related);
-}));
-
 // GET /api/memory/:id/runs - Recent agent runs whose prompt included this memory
 router.get('/:id/runs', asyncHandler(async (req, res) => {
   const { id } = validateRequest(memoryIdParamSchema, req.params);

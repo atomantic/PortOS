@@ -12,21 +12,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { userActionsListQuerySchema, validateRequest } from '../lib/validation.js';
-import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../lib/userActionTypes.js';
-import { DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT, listUserActions } from '../services/userActions.js';
+import { listUserActions } from '../services/userActions.js';
 
 const router = Router();
-
-// GET /api/user-actions/types — the closed vocabulary, for a filter UI that must
-// not hardcode a mirror of the server list.
-router.get('/types', asyncHandler(async (_req, res) => {
-  res.json({
-    types: [...USER_ACTION_TYPES],
-    actors: [...USER_ACTION_ACTORS],
-    defaultLimit: DEFAULT_LIST_LIMIT,
-    maxLimit: MAX_LIST_LIMIT,
-  });
-}));
 
 // GET /api/user-actions — newest-first slice of the ledger.
 router.get('/', asyncHandler(async (req, res) => {

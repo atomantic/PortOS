@@ -940,31 +940,6 @@ export async function getBranches(dir, { strict = false } = {}) {
     }));
 }
 
-/**
- * Pull changes from remote for current branch
- */
-export async function pull(dir) {
-  return withCheckoutMutation(dir, () => pullAdmitted(dir));
-}
-
-async function pullAdmitted(dir) {
-  const result = await execGit(['pull', '--rebase', '--autostash'], dir).catch((err) => {
-    // A rebase killed mid-flight can leave the repo in a rebase-in-progress
-    // state, so a lock found here is cleared but NOT retried — blindly
-    // re-running `pull --rebase` could stack onto that abandoned state instead
-    // of starting clean. Surface it so the next explicit pull starts fresh.
-    const clearedLock = clearStaleGitLock(err.message);
-    if (clearedLock) {
-      throw new Error(
-        `Cleared an abandoned git lock (${clearedLock}) left by a killed git process. `
-        + `The pull did not run — retry it now that the lock is clear.`
-      );
-    }
-    throw err;
-  });
-  return { success: true, output: result.stdout + result.stderr };
-}
-
 function gitResultOutput(result) {
   return `${result.stdout || ''}${result.stderr || ''}`;
 }

@@ -312,16 +312,6 @@ async function runAccountSync(accountId, io, options) {
   return result;
 }
 
-export async function getSyncStatus(accountId) {
-  const account = await getAccount(accountId);
-  if (!account) return null;
-  return {
-    accountId,
-    lastSyncAt: account.lastSyncAt,
-    lastSyncStatus: account.lastSyncStatus
-  };
-}
-
 // Auto-log Tribe touchpoints for synced calendar events (#2033). Deterministic:
 // an event's organizer/attendees are matched to tracked people by email/handle
 // (or unique exact name) and one touchpoint per person is logged, idempotent on

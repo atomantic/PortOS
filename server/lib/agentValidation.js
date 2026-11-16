@@ -260,16 +260,6 @@ export const updateDraftSchema = z.object({
 // MOLTWORLD TOOL SCHEMAS
 // =============================================================================
 
-export const moltworldJoinSchema = z.object({
-  accountId: z.string().min(1),
-  agentId: z.string().min(1).optional(),
-  x: z.number().int().min(-240).max(240).optional(),
-  y: z.number().int().min(-240).max(240).optional(),
-  thinking: z.string().max(500).optional(),
-  say: z.string().max(500).optional(),
-  sayTo: z.string().optional()
-});
-
 export const moltworldBuildSchema = z.object({
   accountId: z.string().min(1),
   agentId: z.string().min(1).optional(),
@@ -317,10 +307,6 @@ export const moltworldWsMoveSchema = z.object({
 
 export const moltworldWsThinkSchema = z.object({
   thought: z.string().min(1).max(500)
-});
-
-export const moltworldWsNearbySchema = z.object({
-  radius: z.number().int().min(1).max(500).optional()
 });
 
 export const moltworldWsInteractSchema = z.object({

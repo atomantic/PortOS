@@ -45,7 +45,6 @@ import {
   parseIndexParam,
   parsePagination,
   seriesAutopilotSettingsSchema,
-  portsCheckSchema,
   portsAllocateSchema,
   databaseSwitchSchema,
   databaseBackendSchema,
@@ -2267,19 +2266,6 @@ describe('seriesAutopilotSettingsSchema (#2174)', () => {
 });
 
 describe('ad-hoc route schemas (#2521)', () => {
-  describe('portsCheckSchema', () => {
-    it('accepts a non-empty array of port numbers', () => {
-      expect(portsCheckSchema.safeParse({ ports: [3000, 8080] }).success).toBe(true);
-    });
-    it('rejects an empty array, non-array, and out-of-range/non-integer ports', () => {
-      expect(portsCheckSchema.safeParse({ ports: [] }).success).toBe(false);
-      expect(portsCheckSchema.safeParse({ ports: 'x' }).success).toBe(false);
-      expect(portsCheckSchema.safeParse({ ports: [0] }).success).toBe(false);
-      expect(portsCheckSchema.safeParse({ ports: [70000] }).success).toBe(false);
-      expect(portsCheckSchema.safeParse({ ports: [3000.5] }).success).toBe(false);
-    });
-  });
-
   describe('portsAllocateSchema', () => {
     it('defaults count to 1 when absent and coerces numeric strings', () => {
       expect(portsAllocateSchema.parse({})).toEqual({ count: 1 });

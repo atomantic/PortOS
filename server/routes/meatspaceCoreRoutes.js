@@ -93,13 +93,4 @@ router.get('/death-clock', asyncHandler(async (req, res) => {
   res.json(deathClock);
 }));
 
-/**
- * GET /api/meatspace/lev
- * LEV 2045 tracker data
- */
-router.get('/lev', asyncHandler(async (req, res) => {
-  const lev = await meatspaceService.getLEV();
-  res.json(lev);
-}));
-
 export default router;

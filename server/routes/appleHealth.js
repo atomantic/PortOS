@@ -14,7 +14,6 @@ import { importClinicalRecords } from '../services/appleHealthClinical.js';
 import {
   getMetricSummary,
   getDailyAggregates,
-  getAvailableDateRange,
   getCorrelationData,
   getAvailableMetrics,
   getLatestMetricValues
@@ -84,13 +83,6 @@ router.get('/metrics/:metricName/daily', asyncHandler(async (req, res) => {
   const { from, to } = req.query;
   const daily = await getDailyAggregates(metricName, from, to);
   res.json(daily);
-}));
-
-// GET /api/health/range
-// Returns available date range from all health day files
-router.get('/range', asyncHandler(async (req, res) => {
-  const range = await getAvailableDateRange();
-  res.json(range);
 }));
 
 // GET /api/health/correlation

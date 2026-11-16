@@ -29,7 +29,6 @@ import {
   getPerson,
   createPerson,
   createTouchpoint,
-  createCalendarTouchpoint,
   normalizeTags,
   normalizeEmails,
   isoDate,
@@ -252,60 +251,6 @@ describe('tribe service — createTouchpoint', () => {
       expect.stringContaining('SET last_contact_on'),
       ['person-1', '2026-01-01', ''],
     );
-  });
-});
-
-describe('tribe service — createCalendarTouchpoint (#8451 UTC-offset day shift)', () => {
-  beforeEach(() => {
-    query.mockReset();
-    withTransaction.mockReset();
-    getEvent.mockReset();
-    getUserTimezone.mockClear();
-  });
-
-  it('stores the user-local day for an evening calendar event, not its UTC day', async () => {
-    getEvent.mockResolvedValue({
-      title: 'Dinner',
-      startTime: '2026-09-11T01:00:00.000Z', // 2026-09-10 18:00 America/Los_Angeles
-      endTime: '2026-09-11T02:00:00.000Z',
-    });
-    query.mockResolvedValue({ rows: [{ id: 'person-1', name: 'Example Person', ring: 'tribe', cadence_days: 45 }] });
-    const clientQuery = vi.fn()
-      .mockResolvedValueOnce({ rows: [{ id: 'touch-1', person_id: 'person-1' }] })
-      .mockResolvedValueOnce({ rows: [] });
-    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
-
-    await createCalendarTouchpoint('person-1', { accountId: 'acct-1', eventId: 'evt-1' });
-
-    expect(clientQuery).toHaveBeenNthCalledWith(
-      2,
-      expect.stringContaining('SET last_contact_on'),
-      ['person-1', '2026-09-10', 'Calendar'],
-    );
-  });
-});
-
-describe('tribe service — createCalendarTouchpoint idempotency', () => {
-  beforeEach(() => {
-    query.mockReset();
-    withTransaction.mockReset();
-    getEvent.mockReset();
-  });
-
-  it('keys the insert on the same cal:<account>:<externalId> the sync auto-logger uses, and returns the existing row on conflict', async () => {
-    getEvent.mockResolvedValue({ id: 'local-id', externalId: 'provider-evt', title: 'Dinner', startTime: '2026-09-11T01:00:00.000Z' });
-    query.mockResolvedValue({ rows: [{ id: 'person-1', name: 'Example Person', ring: 'tribe', cadence_days: 45 }] });
-    const clientQuery = vi.fn()
-      .mockResolvedValueOnce({ rows: [] }) // ON CONFLICT DO NOTHING — row already logged by sync or a prior click
-      .mockResolvedValueOnce({ rows: [{ id: 'touch-existing', person_id: 'person-1' }] });
-    withTransaction.mockImplementation(async (fn) => fn({ query: clientQuery }));
-
-    const result = await createCalendarTouchpoint('person-1', { accountId: 'acct-1', eventId: 'local-id' });
-
-    expect(clientQuery.mock.calls[0][0]).toContain('ON CONFLICT (person_id, dedupe_key)');
-    expect(clientQuery.mock.calls[0][1][8]).toBe('cal:acct-1:provider-evt');
-    expect(clientQuery).toHaveBeenCalledTimes(2); // no last_contact_on / channel rewrite for a duplicate
-    expect(result.id).toBe('touch-existing');
   });
 });
 
