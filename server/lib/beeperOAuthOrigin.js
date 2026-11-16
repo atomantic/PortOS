@@ -1,19 +1,11 @@
 /**
- * Which origin the Beeper OAuth `redirect_uri` may be built from (fork issue
- * #1, final live pass).
+ * Which origin the Beeper OAuth `redirect_uri` may be built from (fork issue #1).
  *
- * The redirect URI used to be derived from `req.protocol` + `req.headers.host`
- * alone. Under the Vite dev proxy that is wrong in the one way that breaks the
- * flow: the proxy sets `changeOrigin: true` and forwards no `x-forwarded-*`, so
- * the server sees its OWN origin — the HTTPS API on the API port — rather than
- * the UI origin the browser is actually on. Beeper's consent screen then
- * redirects the browser to a host the TLS certificate does not cover (a
- * Tailscale cert covers `<machine>.<tailnet>.ts.net` and nothing else), so the
- * user lands on a certificate error even though the exchange completed.
- *
- * The browser knows its own origin, so it sends it. That makes it UNTRUSTED
- * input — whatever ends up in `redirect_uri` is where Beeper sends the
- * authorization code — so it is validated here rather than used as given:
+ * Under the Vite dev proxy (`changeOrigin: true`, no `x-forwarded-*`) the server
+ * sees its OWN origin, not the UI origin the browser is on, and Beeper would
+ * redirect to a host the TLS certificate does not cover. So the browser sends its
+ * origin. That is UNTRUSTED input — `redirect_uri` is where Beeper sends the
+ * authorization code — so it is validated here:
  *
  *   - It has to be a bare `http(s)` origin: scheme, host, optional port, and
  *     nothing else. A value carrying a path, a query, credentials or a
@@ -25,21 +17,13 @@
  *     the UI and the API are different ports of the same install, which is the
  *     whole case this exists for.
  *
- * Anything else is refused and the caller falls back to the request-derived
- * origin — the previous behaviour, so a rejected value never leaves the user
- * worse off than before.
+ * Anything else is refused and the caller falls back to the request-derived origin.
  *
- * Pure: no I/O, no request object, nothing to mock.
+ * Pure: no I/O, no request object.
  */
 import { isLoopbackHostname } from '../../lib/portosAuthCore.js';
 
-// `localhost`, `127.0.0.1` and `::1` are the same host wearing different
-// spellings — a dual-stack box resolves them differently, and Beeper's own base
-// URL defaults to `127.0.0.1` for exactly that reason.
-// Exported so other Beeper-facing modules that make the same "is this
-// loopback" decision (the `settings.beeper.baseUrl` gate, #30/SEC-2; the OAuth
-// token-endpoint host pin, SEC-3) reuse this one predicate rather than each
-// keeping their own copy of the loopback-spelling list.
+// Re-exported so other Beeper-facing modules reuse this one loopback-spelling predicate.
 export { isLoopbackHostname };
 
 /**
@@ -99,13 +83,9 @@ export function resolveOAuthOrigin({ clientOrigin, requestOrigin, configuredOrig
   const hostname = parsed.hostname.toLowerCase();
   const loopback = isLoopbackHostname(hostname);
 
-  // An https→http downgrade of the redirect origin: the request reached this
-  // install over TLS, but the browser-supplied origin proposes handing the
-  // authorization code back over plaintext HTTP on a non-loopback host — a
-  // network attacker on that path could otherwise intercept the code. The
-  // loopback branch is exempt: Beeper Desktop and the Vite dev proxy both
-  // round-trip through plain `http://127.0.0.1`/`localhost` even when the API
-  // itself terminates TLS, and loopback traffic never leaves the machine.
+  // Refuse an https→http downgrade on a non-loopback host: it would hand the
+  // authorization code back over plaintext. Loopback is exempt (Beeper Desktop and
+  // the Vite dev proxy use plain http there and traffic never leaves the machine).
   const requestIsHttps = parseBrowserOrigin(requestOrigin)?.protocol === 'https:';
   if (!loopback && requestIsHttps && parsed.protocol === 'http:') {
     return {

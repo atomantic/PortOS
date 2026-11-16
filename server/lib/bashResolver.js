@@ -2,34 +2,12 @@
  * POSIX `bash` resolution for running bundled `*.sh` scripts (notably
  * `scripts/db.sh`) on Windows.
  *
- * `resolveBashBinary()` — resolves the POSIX `bash` for running bundled `*.sh` scripts (e.g.
- * `scripts/db.sh`). On Windows a bare `bash` often resolves (via PM2's PATH) to WSL, which mounts
- * drives at `/mnt/h` and can't see a `H:/...` drive path (exit 127); this prefers Git Bash
- * (PORTOS_BASH override → standard install dirs → derived from `git` on PATH → bare `bash`). No-op
- * (`bash`) on non-Windows. `toBashPath(p)` — the companion path rule: bash reads backslashes as
- * escapes, so a Windows path must reach it with forward slashes.
- *
- * THE PROBLEM. On a typical Windows dev box `bash` resolves, in PATH order, to
- * one of several interpreters:
- *   - C:\Program Files\Git\...\bash.exe  — Git Bash (MSYS2)
- *   - C:\Windows\System32\bash.exe       — WSL
- *   - %LOCALAPPDATA%\Microsoft\WindowsApps\bash.exe — WSL launcher
- * PM2 (which launches the PortOS server) frequently resolves the WSL one first.
- * WSL mounts drives at `/mnt/h/...`, so it CANNOT see a Windows drive path like
- * `H:/.../db.sh` and exits 127 ("No such file or directory"). Even if the path
- * were translated, WSL would run db.sh against Linux `docker`/`psql`, not the
- * Windows toolchain the script expects. Git Bash is the correct interpreter:
- * it accepts `H:/...` drive paths and shells out to the Windows tools.
- *
- * Path-format normalization alone can't fix this — no single drive-path string
- * works in BOTH Git Bash and WSL — so we resolve the Git Bash binary explicitly.
- *
- * Resolution order (Windows):
- *   1. PORTOS_BASH override — explicit escape hatch, always wins.
- *   2. Git Bash at the standard install locations.
- *   3. Git Bash derived from `git` on PATH (…\Git\cmd\git.exe → …\Git\bin\bash.exe).
- *   4. bare `bash` — last resort (preserves prior behavior).
- * On non-Windows there is only one bash; always return bare `bash`.
+ * On Windows a bare `bash` often resolves (via PM2's PATH) to WSL, which mounts drives at
+ * `/mnt/h`, cannot see `H:/...` paths (exit 127), and would use Linux `docker`/`psql`. Git
+ * Bash accepts drive paths and runs the Windows toolchain. No single path string works in both,
+ * so `resolveBashBinary()` picks Git Bash explicitly: PORTOS_BASH override, standard install
+ * dirs, derived from `git` on PATH, then bare `bash`. Always bare `bash` on non-Windows.
+ * `toBashPath(p)` is the companion path rule: bash reads backslashes as escapes.
  *
  * Self-contained: no imports out to other PortOS modules.
  */
@@ -73,12 +51,8 @@ function gitBashFromPath() {
 }
 
 /**
- * A path in the form bash can open. Windows-native paths arrive with
- * backslashes, which bash reads as escape characters — `H:\repo\x.sh` collapses
- * to `H:repox.sh` and exits 127 ("No such file or directory"). Git Bash accepts
- * drive paths written with forward slashes. No-op on POSIX, which has no
- * backslashes to convert.
- *
+ * A path in the form bash can open: backslashes are escapes to bash (`H:\repo\x.sh` becomes
+ * `H:repox.sh`), while Git Bash accepts forward-slash drive paths. No-op on POSIX.
  * @param {string} p
  * @returns {string}
  */
@@ -87,10 +61,8 @@ export const toBashPath = (p) => String(p).replace(/\\/g, '/');
 let cached;
 
 /**
- * Resolve the bash binary to use for `*.sh` scripts. Memoized after first call.
- *
- * @returns {string} an absolute path to Git Bash on Windows (when found), or
- *   the bare command `bash` (non-Windows, or Windows fallback).
+ * Resolve the bash binary for `*.sh` scripts; memoized after first call.
+ * @returns {string} absolute Git Bash path on Windows when found, else bare `bash`.
  */
 export function resolveBashBinary() {
   if (cached !== undefined) return cached;
@@ -108,16 +80,13 @@ export function resolveBashBinary() {
     cached = found;
     return cached;
   }
-  // Nothing found — fall back to bare `bash` and warn, since this is the path
-  // that produces the WSL drive-path failure if PATH resolves WSL first.
+  // Bare `bash` here yields the WSL drive-path failure if PATH resolves WSL first.
   console.warn('🐚 Git Bash not found; falling back to bare `bash` (set PORTOS_BASH to override). On Windows this may resolve to WSL and fail to see drive paths.');
   cached = 'bash';
   return cached;
 }
 
-/**
- * Reset the memoized resolution. Test-only.
- */
+/** Reset the memoized resolution. Test-only. */
 export function _resetBashResolverCache() {
   cached = undefined;
 }

@@ -29,21 +29,15 @@ import { promisify } from 'node:util';
 
 export { ChildProcess };
 
-/**
- * Fill in `windowsHide: true` unless the caller stated an opinion.
- * @param {object} [options]
- * @returns {object}
- */
+/** Fill in `windowsHide: true` unless the caller stated an opinion. */
 function withHide(options) {
   if (options && Object.hasOwn(options, 'windowsHide')) return options;
   return { ...options, windowsHide: true };
 }
 
 /**
- * Normalize any of node's `(…[, args][, options][, callback])` overloads into
- * the positional list it expects, with `windowsHide` injected. Classifying by
- * type rather than position is what lets one helper serve all of them — the
- * spawn family simply never passes a callback.
+ * Normalize node's `(…[, args][, options][, callback])` overloads, classifying by type
+ * rather than position, with `windowsHide` injected.
  * @param {Array} rest - every argument after the command/file/module
  * @returns {Array}
  */
@@ -59,19 +53,13 @@ function normalize(rest) {
   return [...(args ? [args] : []), withHide(options), ...(callback ? [callback] : [])];
 }
 
-/**
- * `child_process.spawn` with `windowsHide` defaulted on.
- * @returns {ChildProcess}
- */
+/** `child_process.spawn` with `windowsHide` defaulted on. */
 export const spawn = (command, ...rest) => nodeSpawn(command, ...normalize(rest));
 
 /** `child_process.spawnSync` with `windowsHide` defaulted on. */
 export const spawnSync = (command, ...rest) => nodeSpawnSync(command, ...normalize(rest));
 
-/**
- * `child_process.fork` with `windowsHide` defaulted on.
- * @returns {ChildProcess}
- */
+/** `child_process.fork` with `windowsHide` defaulted on. */
 export const fork = (modulePath, ...rest) => nodeFork(modulePath, ...normalize(rest));
 
 /** `child_process.execSync` with `windowsHide` defaulted on. */
@@ -81,17 +69,10 @@ export const execSync = (command, options) => nodeExecSync(command, withHide(opt
 export const execFileSync = (file, ...rest) => nodeExecFileSync(file, ...normalize(rest));
 
 /**
- * `child_process.exec` with `windowsHide` defaulted on.
- *
- * The `promisify.custom` hook delegates to the *native* promisified `exec`, so
- * `promisify(exec)` keeps resolving to `{ stdout, stderr }` (and keeps the
- * `.child` property on the returned promise). Without it, `promisify` would
- * fall back to generic callback wrapping and resolve to `stdout` alone,
- * silently breaking every `const { stdout } = await execAsync(...)` caller.
- *
- * Both hooks promisify at call time rather than at module load, so a test that
- * partially mocks child_process can't crash every importer on a binding it
- * never uses.
+ * `child_process.exec` with `windowsHide` defaulted on. The `promisify.custom` hook
+ * delegates to the native promisified `exec` so `promisify(exec)` still resolves to
+ * `{ stdout, stderr }` (with `.child`) instead of `stdout` alone. Both hooks promisify at
+ * call time so a test that partially mocks child_process can't crash importers.
  * @returns {ChildProcess}
  */
 export const exec = Object.assign(
@@ -101,11 +82,7 @@ export const exec = Object.assign(
   { [promisify.custom]: (command, options) => promisify(nodeExec)(command, withHide(options)) }
 );
 
-/**
- * `child_process.execFile` with `windowsHide` defaulted on. Carries the same
- * `promisify.custom` delegation as `exec` above.
- * @returns {ChildProcess}
- */
+/** `child_process.execFile` with `windowsHide` defaulted on; same `promisify.custom` delegation as `exec`. */
 export const execFile = Object.assign(
   function execFile(file, ...rest) {
     return nodeExecFile(file, ...normalize(rest));

@@ -1,26 +1,13 @@
 /**
  * Status lines PortOS writes INTO an agent's output buffer.
  *
- * A TUI agent's `output.txt` is not a transcript — the live PTY stream goes to
- * `raw.txt` and the Shell tab. What lands in `output.txt` is a mix of two very
- * different things:
- *   1. lifecycle telemetry PortOS itself appends (`📟 TUI session started…`,
- *      `💡 Open the Shell tab…`, `⚠️ Paste verification failed…`), and
- *   2. the agent's own `.agent-done` summary, ingested behind
- *      `SENTINEL_COMPLETION_MARKER` when the run finalizes.
+ * A TUI agent's `output.txt` mixes (1) lifecycle telemetry PortOS appends and (2) the agent's own `.agent-done` summary,
+ * ingested behind `SENTINEL_COMPLETION_MARKER`. Consumers that present the agent's words (notably the generated PR
+ * description) must keep (2) and drop (1).
  *
- * Downstream consumers that present the agent's words to a human — most
- * importantly the generated PR description — must keep (2) and drop (1).
- *
- * Every lifecycle line is declared ONCE, in `LIFECYCLE_LINES` below: the emitter
- * (`services/agentTuiSpawning.js` and its `agentTuiSpawning/` modules) writes
- * `LIFECYCLE_LINES.<id>(values)`, and the reader's pattern is derived from that
- * same template. There is no second list to keep in sync — the hand-kept regex
- * list this replaced was written against nine messages and silently missed every
- * one added after it (merge-gate, stall, OOM and permission nudges, host restart,
- * provider-signal holds), so those leaked into PR bodies again.
- * `agentOutputMarkers.test.js` fails on a literal `appendLine('…')` in the TUI
- * spawner, so a line written there has to be declared here first.
+ * Every lifecycle line is declared ONCE in `LIFECYCLE_LINES`: the emitter (`services/agentTuiSpawning.js` and its modules)
+ * writes `LIFECYCLE_LINES.<id>(values)` and the reader's pattern is derived from the same template, so there is no second
+ * list to drift. `agentOutputMarkers.test.js` fails on a literal `appendLine('...')` in the TUI spawner.
  */
 
 import { escapeRegExp } from './textUtils.js';
@@ -36,18 +23,11 @@ const formatter = (strings, keys) => (values = {}) => strings.reduce(
 );
 
 /**
- * Declare a lifecycle line as a tagged template whose interpolations NAME its
- * per-run values: lifecycleLine`📟 TUI session started: ${'session'} (${'commandLine'})`.
+ * Declare a lifecycle line as a tagged template whose interpolations NAME its per-run values.
  *
- * The reader matches on ALL of the template's fixed text, in order — the
- * message's actual shape, deliberately NOT "any line starting with an emoji."
- * The agent's own summary is markdown, but nothing stops it from writing a
- * checklist line like `✅ Tests passed` or `⚠️ Known limitation: …` with no
- * leading `-`. A bare emoji-prefix test would classify those as telemetry and
- * silently delete them from the PR description — and a summary made mostly of
- * such lines could shrink under `extractAgentSummary`'s minimum length and fall
- * all the way back to commit messages. So a template with too little fixed text
- * to tell it apart from an agent's line is refused at load.
+ * The reader matches ALL the template's fixed text in order, deliberately NOT "any line starting with an emoji": an agent
+ * summary may contain `✅ Tests passed` or `⚠️ Known limitation: ...`, and misclassifying those as telemetry would delete
+ * them from the PR description. A template with too little fixed text to tell it apart is refused at load.
  */
 function lifecycleLine(strings, ...keys) {
   const fixedText = strings.join('');
