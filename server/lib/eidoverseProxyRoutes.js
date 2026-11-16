@@ -27,7 +27,6 @@ export const EIDOVERSE_ROOT_EXACT_PATHS = Object.freeze([
   '/auth',
   '/logout',
   '/geom',
-  '/residency',
   '/upload',
   '/seat-profile',
   '/snap',
