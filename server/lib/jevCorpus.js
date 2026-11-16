@@ -3,29 +3,23 @@
  *
  * Schema is daseinlabs/open-jev's **Route A**: one JSON object per line,
  * `{"context": str, "options": [str, ...], "label": int}`, where `label`
- * indexes `options`. Adopted deliberately rather than invented — it keeps
- * `openjev eval` usable as an independent cross-check on a corpus PortOS
- * built, which is the only outside opinion available on whether a head that
- * beat our baselines actually learned anything.
+ * indexes `options`. Kept so `openjev eval` stays usable as an independent
+ * cross-check on a corpus PortOS built.
  *
  * ## What the labels are worth
  *
- * They are WEAK. A merged pull request is evidence that the maintainer wanted
- * it, not a hand-annotation that it advances the clause the retriever paired it
- * with; a closed-unmerged one is evidence they did not. The whole apparatus
- * downstream — a held-out gold split, two baselines, a strictly-better
- * adoption gate — exists because these labels are weak enough that "the head
- * trained fine" proves nothing on its own.
+ * They are WEAK: a merged pull request is evidence the maintainer wanted it,
+ * not a hand-annotation that it advances the clause paired with it. Hence the
+ * held-out gold split, two baselines and a strictly-better adoption gate.
  *
  * ## The split is the safety property
  *
  * `splitCorpus` assigns each example to train or gold by hashing its own
- * content, so the split is deterministic across machines and rebuilds, and an
- * example cannot migrate between splits when the corpus grows around it.
- * `assertSplitDisjoint` then REFUSES a split whose two halves share an example
- * key. A gold set contaminated by its training split reports a score that is
- * partly memorization, and that score is the single number the adoption gate
- * reads — so the refusal is a hard stop, never a warning.
+ * content, so the split is deterministic across machines and rebuilds and an
+ * example cannot migrate when the corpus grows. `assertSplitDisjoint` REFUSES a
+ * split whose halves share an example key: a contaminated gold score is partly
+ * memorization and is the single number the adoption gate reads, so it is a
+ * hard stop, never a warning.
  *
  * Pure: no I/O, no forge access. `services/jevCorpusBuilder.js` runs the
  * queries and writes the file.
@@ -36,33 +30,24 @@ import { z } from 'zod';
 
 export const JEV_CORPUS_SCHEMA_VERSION = 1;
 
-/**
- * Bounds on one example. `context` is a composed premise, so it inherits the
- * scorer's premise budget; the option list inherits the decision's.
- */
+// Bounds on one example: `context` inherits the scorer's premise budget, the
+// option list the decision's.
 export const JEV_CORPUS_MAX_CONTEXT_CHARS = 32_000;
 export const JEV_CORPUS_MAX_OPTIONS = 32;
 
 /**
- * The share of examples held out for the gold set.
- *
- * A third, not the customary tenth: these corpora are small (a few hundred
- * examples on a busy repository, far fewer on a young one), and the gold set
- * has to separate three numbers that may differ by a few points. A 10% split of
- * 200 examples is 20 rows, where one flipped label moves accuracy 5 points.
+ * The share of examples held out for the gold set. A third, not a tenth: these
+ * corpora are small and the gold set must separate three numbers that may
+ * differ by a few points (10% of 200 is 20 rows; one flip moves 5 points).
  */
 export const JEV_CORPUS_GOLD_FRACTION = 1 / 3;
 
 /**
- * The fewest examples a corpus may have and still be trained on.
- *
- * Below this the gold set cannot support a comparison against two baselines
- * at all, and the honest answer is "this install has no history to learn
- * from", not a head with a score.
+ * The fewest examples a corpus may have and still be trained on; below this the
+ * gold set cannot support a comparison against two baselines.
  */
 export const JEV_CORPUS_MIN_EXAMPLES = 60;
 
-/** The weak-evidence sources a corpus may draw from. */
 export const JEV_CORPUS_SOURCES = Object.freeze([
   'merged-pr',
   'closed-unmerged-pr',
@@ -74,18 +59,14 @@ export const jevCorpusExampleSchema = z.object({
   context: z.string().min(1).max(JEV_CORPUS_MAX_CONTEXT_CHARS),
   options: z.array(z.string().min(1)).min(2).max(JEV_CORPUS_MAX_OPTIONS),
   label: z.number().int().min(0),
-  // PortOS's own provenance, ignored by `openjev eval`. Kept so a corpus can be
-  // audited for source balance without re-running the forge queries.
+  // PortOS's own provenance, ignored by `openjev eval`.
   source: z.enum(JEV_CORPUS_SOURCES),
 }).strict().refine((row) => row.label < row.options.length, { path: ['label'] });
 
 /**
- * A stable identity for one example.
- *
- * Content-addressed, and covering the OPTIONS as well as the context: the same
- * change scored against the same clause under a different option wording is a
- * different question, and collapsing the two would let a re-worded decision
- * silently inherit the old split assignment.
+ * A stable, content-addressed identity for one example. Covers the OPTIONS as
+ * well as the context: a re-worded decision is a different question and must
+ * not inherit the old split assignment.
  */
 export function corpusExampleKey(example) {
   return createHash('sha256')
@@ -97,11 +78,8 @@ export function corpusExampleKey(example) {
 }
 
 /**
- * Hash of the whole corpus, order-independent.
- *
- * Recorded on both the manifest and every head fit from it. Order-independent
- * because the builder's forge queries are paginated and a page boundary moving
- * must not re-key a corpus that contains exactly the same examples.
+ * Order-independent hash of the whole corpus, so paginated forge queries can't
+ * re-key a corpus with the same examples.
  */
 export function corpusHash(examples) {
   const keys = (Array.isArray(examples) ? examples : [])
@@ -111,12 +89,10 @@ export function corpusHash(examples) {
 }
 
 /**
- * Turn a weakly-labelled observation into a Route A example.
- *
- * `options` is the decision's own hypothesis list, in its own order, so a
- * corpus row asks exactly the question the scorer is asked at inference time.
- * Returns null rather than throwing on anything malformed — the builder pulls
- * from a forge, and one unusable row must not fail a build of four hundred.
+ * Turn a weakly-labelled observation into a Route A example. `options` is the
+ * decision's own hypothesis list in its own order, so a row asks the question
+ * the scorer is asked at inference. Returns null rather than throwing: one
+ * unusable forge row must not fail the whole build.
  */
 export function buildCorpusExample({ context, options, chosen, source } = {}) {
   if (!Array.isArray(options)) return null;
@@ -127,26 +103,20 @@ export function buildCorpusExample({ context, options, chosen, source } = {}) {
 }
 
 /**
- * Drop examples that ask the same question twice.
- *
- * A repository re-states a goal across `PRD.md` and `GOALS.md` often enough
- * that the retriever pairs one change with two byte-identical clauses. Left in,
- * those duplicates land in different splits by definition of the hash — the
- * same question appearing in both train and gold, which is precisely the
- * contamination `assertSplitDisjoint` exists to catch, arriving through the
- * front door. The FIRST label wins; a duplicate that disagrees is dropped with
- * it, because there is no principled way to pick between two weak labels.
+ * Drop examples that ask the same question twice. A goal restated across
+ * `PRD.md` and `GOALS.md` can pair one change with two byte-identical clauses;
+ * left in, the hash would put them in different splits, the contamination
+ * `assertSplitDisjoint` exists to catch. The FIRST label wins; a disagreeing
+ * duplicate is dropped, since there is no principled way to pick between two
+ * weak labels.
  */
 export function dedupeCorpus(examples) {
   return [...keyedCorpus(examples).values()];
 }
 
 /**
- * Deduplicated examples by key, so a caller that needs both does not hash twice.
- *
- * A context can be up to 32 KB and a corpus a thousand rows, so the SHA-256 is
- * not free: `dedupeCorpus` followed by a bucketing loop that re-derived the
- * same key digested the whole corpus twice to learn nothing new.
+ * Deduplicated examples by key, so a caller needing both does not hash twice
+ * (a context can be 32 KB, so the SHA-256 is not free).
  */
 function keyedCorpus(examples) {
   const seen = new Map();
@@ -158,21 +128,16 @@ function keyedCorpus(examples) {
 }
 
 /**
- * Deterministic train/gold split.
- *
- * The bucket comes from the example's OWN content hash, not from a shuffle and
- * not from its position: two builds of the same corpus on two machines must
- * produce the same gold set, or a head's reported score cannot be reproduced by
- * the person reading it.
+ * Deterministic train/gold split. The bucket comes from the example's OWN
+ * content hash, not a shuffle or its position, so the same corpus yields the
+ * same gold set on any machine and a head's score is reproducible.
  */
 export function splitCorpus(examples, { goldFraction = JEV_CORPUS_GOLD_FRACTION } = {}) {
   const train = [];
   const gold = [];
-  // 16 bits of the key, compared against the same fraction of 65536. Enough
-  // resolution that a corpus of a few hundred lands within a point of the
-  // requested fraction, and cheap to recompute anywhere.
+  // 16 bits of the key against the same fraction of 65536: fine enough for a
+  // corpus of a few hundred to land within a point of the requested fraction.
   const cutoff = Math.round(goldFraction * 0x10000);
-  // Dedupe and bucket in one pass over the keys the dedupe already computed.
   for (const [key, example] of keyedCorpus(examples)) {
     (parseInt(key.slice(0, 4), 16) < cutoff ? gold : train).push(example);
   }
@@ -180,16 +145,12 @@ export function splitCorpus(examples, { goldFraction = JEV_CORPUS_GOLD_FRACTION 
 }
 
 /**
- * REFUSE a split whose halves overlap.
+ * REFUSE a split whose halves overlap: the gold score is the only evidence the
+ * adoption gate reads, and an overlap would make the head look better than it
+ * is with nothing downstream able to tell.
  *
- * The gold score is the only evidence the adoption gate reads. An example that
- * appears in both halves makes that score partly a memorization check, and
- * nothing downstream could tell the difference — the head would simply look
- * better than it is and get adopted for it.
- *
- * Also refuses a gold set too small to separate three numbers: with fewer than
- * `JEV_CORPUS_MIN_GOLD` rows, one label flip moves accuracy by more than the
- * margin the gate is deciding on.
+ * Also refuses a gold set under `JEV_CORPUS_MIN_GOLD` rows, where one label
+ * flip moves accuracy by more than the margin the gate decides on.
  */
 export const JEV_CORPUS_MIN_GOLD = 20;
 
@@ -204,12 +165,8 @@ export function assertSplitDisjoint({ train, gold } = {}) {
 }
 
 /**
- * Accuracy of always predicting the most common gold label.
- *
- * One of the two baselines the adoption gate compares against, computed here
- * rather than in the trainer so the Node side can state it without a Python
- * round trip — and so the number an operator is shown comes from the same code
- * path in a test as it does in the panel.
+ * Accuracy of always predicting the most common gold label — one of the two
+ * adoption-gate baselines, computed here so Node needs no Python round trip.
  */
 export function majorityClassAccuracy(gold) {
   const rows = Array.isArray(gold) ? gold : [];
@@ -219,7 +176,6 @@ export function majorityClassAccuracy(gold) {
   return Math.max(...counts.values()) / rows.length;
 }
 
-/** Per-source example counts, for the manifest and the panel's build summary. */
 export function summarizeCorpusSources(examples) {
   const counts = Object.fromEntries(JEV_CORPUS_SOURCES.map((source) => [source, 0]));
   for (const example of Array.isArray(examples) ? examples : []) {
@@ -228,19 +184,15 @@ export function summarizeCorpusSources(examples) {
   return counts;
 }
 
-/** Serialize to JSONL. `source` is kept: it is ours, and `openjev eval` ignores it. */
 export const toCorpusJsonl = (examples) => (Array.isArray(examples) ? examples : [])
   .map((example) => JSON.stringify(example))
   .join('\n');
 
 /**
- * Validate one already-parsed JSONL row, or null.
- *
- * Takes an OBJECT, not a line of text: `JSON.parse` throws, and the sanctioned
- * non-throwing wrapper lives in `fileUtils.js`, whose closure reaches `fs` and
- * `child_process`. Keeping the decode in `services/jevCorpusBuilder.js` is what
- * lets this file stay the pure leaf it advertises itself as
- * (`server/lib/importScoping.test.js`).
+ * Validate one already-parsed JSONL row, or null. Takes an OBJECT, not a line:
+ * the non-throwing JSON wrapper lives in `fileUtils.js`, whose closure reaches
+ * `fs` and `child_process`, so decoding stays in `services/jevCorpusBuilder.js`
+ * to keep this file a pure leaf (`server/lib/importScoping.test.js`).
  */
 export function validateCorpusRow(parsed) {
   const result = jevCorpusExampleSchema.safeParse(parsed);

@@ -27,6 +27,10 @@ const GIT_TIMEOUT_MS = 10_000;
  * branch), a string is the configured ref, `null` is COULD NOT READ. Folding null
  * into `''` would let a wedged git report a branch tracking `main` as untracked.
  * `git config --get` exits 1 for an unset key and 128 for a bad repo. Non-throwing.
+ *
+ * @param {string} repo - repository (or worktree) path to read config from
+ * @param {string} branchName
+ * @returns {Promise<{remote: string|null, merge: string|null}>}
  */
 export async function readBranchUpstream(repo, branchName) {
   if (!repo || !branchName) return { remote: '', merge: '' };
@@ -48,6 +52,9 @@ export async function readBranchUpstream(repo, branchName) {
  * The invariant as a pure predicate: safe when ABSENT or the branch's OWN ref (not
  * merely "not the default branch"). Accepts the short form as well as
  * `refs/heads/<name>`. A `null` merge (unreadable) is NOT safe.
+ *
+ * @param {string} branchName
+ * @param {string|null} merge - the `branch.<name>.merge` value
  */
 export function isSafeBranchUpstream(branchName, merge) {
   if (merge === null || merge === undefined) return false;
@@ -61,6 +68,11 @@ export function isSafeBranchUpstream(branchName, merge) {
  * repair, or when the config is unreadable; it runs inside `createWorktree`'s
  * promise chain, whose callers handle a rejected create and undo the `worktree add`.
  * `options.remoteBranch` is the explicit PR head when the local name is namespaced.
+ *
+ * @param {string} repo - repository path whose config holds the branch
+ * @param {string} branchName
+ * @param {{remoteBranch?: string}} options - explicit PR head when the local name is namespaced
+ * @returns {Promise<{safe: boolean, repaired: boolean, upstream: string}>}
  */
 export async function enforceSafeBranchUpstream(repo, branchName, { remoteBranch = branchName } = {}) {
   if (!repo || !branchName) return { safe: true, repaired: false, upstream: '' };

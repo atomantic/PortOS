@@ -17,9 +17,13 @@ export const PUBLIC_REVIEW_PATCH_DIRNAME = '.portos-public-review';
 /** Worktree-relative scratch paths (files or directory roots); a directory covers everything under it. */
 export const AGENT_SCRATCH_PATHS = [PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME];
 
-// Does this worktree-relative path sit at, or under, one of `roots`? Pure. The prefix half matters because git collapses
-// an untracked directory to its root (`.portos-public-review/`) but expands it to files under `-uall`.
-// @param path - worktree-relative path from `git status --porcelain`; @param roots - file or directory-root paths
+/**
+ * Does this worktree-relative path sit at, or under, one of `roots`? Pure. The prefix half matters because git collapses
+ * an untracked directory to its root (`.portos-public-review/`) but expands it to files under `-uall`.
+ *
+ * @param {string} path - worktree-relative path from `git status --porcelain`
+ * @param {string[]} roots - file or directory-root paths
+ */
 export function matchesScratchRoot(path, roots = []) {
   if (typeof path !== 'string' || !roots.length) return false;
   const strip = (value) => String(value ?? '').trim().replace(/\/+$/, '');
@@ -32,6 +36,10 @@ export function matchesScratchRoot(path, roots = []) {
   });
 }
 
-/** Is this worktree-relative path PortOS's own runtime scratch rather than work product? */
+/**
+ * Is this worktree-relative path PortOS's own runtime scratch rather than work product?
+ *
+ * @param {string} path
+ */
 export const isAgentScratchPath = (path) => path === '.cache/pregate/report.json'
   || matchesScratchRoot(path, AGENT_SCRATCH_PATHS);

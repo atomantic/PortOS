@@ -1,43 +1,18 @@
 /**
- * `killWithEscalation(proc, {label, stillRunning, delayMs=8000})` — shared SIGTERM→grace→SIGKILL
- * cancel-escalation for spawn-based media jobs.
+ * Shared SIGTERM→grace→SIGKILL cancel-escalation for spawn-based media jobs: `killWithEscalation(proc, {label, stillRunning, delayMs=8000})`.
  *
- * Sends SIGTERM, then escalates to SIGKILL after `delayMs` only when `stillRunning()` holds and the
- * child hasn't exited (`exitCode===null && signalCode===null`). The timer is unref'd and the callback
- * is try/catch-wrapped (runs outside the request lifecycle). Converges musicVideo/render,
- * videoTimeline, imageGen local+codex, videoGen, loraTraining, and the yt-dlp track import cancel
- * paths.
- */
-
-/**
- * Shared SIGTERM→grace→SIGKILL cancel-escalation for spawn-based media jobs.
+ * SIGTERM is sent synchronously; after `delayMs` it escalates to SIGKILL only when the caller's
+ * `stillRunning()` guard holds (e.g. `job.process === proc`, so a replaced handle is left alone) AND the
+ * child hasn't exited (`exitCode === null && signalCode === null`; `proc.killed` is set as soon as
+ * `kill()` is called and does NOT mean the child exited).
  *
- * Every spawn-based job service (musicVideo/render, videoTimeline/local,
- * imageGen/local, imageGen/codex, videoGen/local, loraTraining, the yt-dlp
- * track import) cancels an in-flight child the same way: SIGTERM first, then
- * escalate to SIGKILL after a grace window IFF the tracked process is still the
- * one we spawned and hasn't exited yet. This helper is that single convention
- * so new job services converge here instead of re-copying the block by hand.
+ * The timer runs OUTSIDE the request lifecycle, so the callback is try/catch-wrapped (an uncaught throw
+ * would crash Node) and the timer is `unref()`'d so it can't hold the event loop open.
  *
- * Semantics preserved verbatim from the pre-existing call sites:
- *   - `proc.kill('SIGTERM')` is sent synchronously.
- *   - After `delayMs`, escalate to SIGKILL only when BOTH the caller's
- *     `stillRunning()` guard holds (e.g. `job.process === proc`, so a replaced
- *     or already-cleared handle is left alone) AND the child hasn't exited
- *     (`proc.exitCode === null && proc.signalCode === null` — `proc.killed` is
- *     set the moment `kill()` is called and does NOT mean the child exited).
- *
- * The escalation runs in a `setTimeout` OUTSIDE the Express request lifecycle,
- * so the callback is wrapped in try/catch (an uncaught throw there would crash
- * the Node process — there is no `next(err)` to bubble to). The timer is
- * `unref()`'d so a pending escalation can't hold the event loop open.
- *
- * @param {import('child_process').ChildProcess} proc - the child to terminate.
+ * @param {import('child_process').ChildProcess} proc
  * @param {object} opts
- * @param {string} opts.label - per-site label for the warning log (e.g.
- *   `music-video render`, `image child`, `yt-dlp import`).
- * @param {() => boolean} opts.stillRunning - predicate reproducing the caller's
- *   guard; escalation is skipped when it returns false.
+ * @param {string} opts.label - per-site label for the warning log.
+ * @param {() => boolean} opts.stillRunning - escalation is skipped when it returns false.
  * @param {number} [opts.delayMs=8000] - grace window before SIGKILL.
  * @returns {NodeJS.Timeout} the escalation timer (already unref'd).
  */

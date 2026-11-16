@@ -41,6 +41,8 @@ function looksLikeFilename(token) {
 /**
  * If `text` is nothing but a single URL, return it normalized; null for free text,
  * multi-token input, surrounding prose, or a non-http(s)/git scheme.
+ * @param {string} text
+ * @returns {string|null}
  */
 export function parseBareUrl(text) {
   const trimmed = (text ?? '').trim();

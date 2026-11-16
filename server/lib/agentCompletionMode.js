@@ -14,6 +14,10 @@
  * branch and hands to a recovery agent. Under this posture the contract is commit-only on every path that can type
  * slashdo. Other worktree contracts (discard, claim flow, PR follow-up, no-code) are decided BEFORE this question;
  * callers apply their precedence first, as `buildCompletionGuidelineBullet` does.
+ *
+ * @param {object} params
+ * @param {object|null} params.worktreeInfo
+ * @param {boolean} params.willOpenPR
  */
 export function portosMergesBranchOnExit({ worktreeInfo, willOpenPR }) {
   return Boolean(worktreeInfo) && !willOpenPR;
@@ -90,6 +94,22 @@ const COMPLETION_MODE_RULES = Object.freeze([
  * defaults to `portosMergesBranchOnExit({ worktreeInfo, willOpenPR })`.
  *
  * @param {Object} flags
+ * @param {boolean} [flags.toolFreeReasoning]
+ * @param {boolean} [flags.sentinelPayloadOutput]
+ * @param {boolean} [flags.externalRepositoryOutput]
+ * @param {boolean} [flags.noCodeOutput]
+ * @param {boolean} [flags.discardWorktree]
+ * @param {boolean} [flags.claimFlow]
+ * @param {boolean} [flags.isReadOnly]
+ * @param {boolean} [flags.isReviewLoopFollowUp]
+ * @param {string} [flags.taskHookType] - Canonical task identity from resolveTaskHookType.
+ * @param {string} [flags.slashdoCommand]
+ * @param {boolean} [flags.isTui]
+ * @param {boolean} [flags.canRunSlashCommands] - Defaults to `true`.
+ * @param {boolean} [flags.portosMergesBranch] - Defaults to `portosMergesBranchOnExit({ worktreeInfo, willOpenPR })`.
+ * @param {Object|null} [flags.worktreeInfo]
+ * @param {boolean} [flags.willOpenPR]
+ * @returns {string} one of {@link COMPLETION_MODES}
  */
 export function resolveCompletionMode(flags = {}) {
   const resolved = {

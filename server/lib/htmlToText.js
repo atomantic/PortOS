@@ -1,62 +1,29 @@
 /**
  * Shared HTML → readable plain text converter.
  *
- * Shared HTML → plain-text converter. `htmlToText(html, { extraEntities?, paragraphBreak?,
- * collapseSpaces? })` — strips script/style/head/noscript blocks, converts ` `/block closes to
- * newlines, strips remaining tags, decodes entities via `decodeXmlEntities`, collapses 3+ newlines,
- * trims. Options preserve caller-specific output (Gmail: `paragraphBreak: '\n\n'` + `collapseSpaces`;
- * SongBook import: defaults — space runs preserved for tab alignment).
+ * Dependency-free strip-tags pipeline for fetched/synced HTML (Gmail bodies, SongBook URL imports):
+ * drop script/style/head/noscript blocks, turn <br>/block closes into newlines, strip tags,
+ * decode entities via `decodeXmlEntities`, collapse 3+ newlines, trim.
  *
- * A single dependency-free strip-tags pipeline for the places PortOS turns
- * fetched/synced HTML into text (Gmail message bodies, SongBook URL imports).
- * Replaces the near-identical private copies that lived in
- * `services/messageGmailSync.js` and `services/brainSongbookImport.js`.
- *
- * Pipeline: drop <script>/<style>/<head>/<noscript> blocks wholesale, convert
- * <br> and block-element closes to newlines, strip every remaining tag, decode
- * entities via the shared `decodeXmlEntities`, normalize line endings, collapse
- * runs of 3+ newlines to a blank line, and trim.
- *
- * Options exist only to preserve each caller's historical observable output:
- *   - `extraEntities`     — merged on top of `{ nbsp: ' ' }` (Gmail adds
- *                           `{ zwnj: '' }` for mail-specific zero-width chars).
- *   - `paragraphBreak`    — what `</p>` becomes. Default `'\n'` (SongBook —
- *                           tab sheets want tight lines); Gmail passes `'\n\n'`
- *                           so paragraphs keep a blank line between them.
- *   - `collapseSpaces`    — collapse runs of spaces/tabs to one space. Default
- *                           false — NEVER enable for tab/chord sheets, whose
- *                           column alignment is meaningful. Gmail enables it.
+ * Options preserve each caller's output: `extraEntities` (merged over `{ nbsp: ' ' }`; Gmail adds
+ * `zwnj`), `paragraphBreak` (what `</p>` becomes; default `'\n'` for tab sheets, Gmail passes
+ * `'\n\n'`), `collapseSpaces` (default false: NEVER enable for tab/chord sheets, whose column
+ * alignment is meaningful).
  */
 
 import { decodeXmlEntities } from './xmlEntities.js';
 
-/**
- * Convert an HTML document/fragment to plain text.
- *
- * @param {string} html - Raw HTML. Non-strings return ''.
- * @param {object} [options]
- * @param {Object<string,string>} [options.extraEntities] - Extra named entities
- *   merged on top of `{ nbsp: ' ' }` and the predefined five.
- * @param {string} [options.paragraphBreak='\n'] - Replacement for `</p>`.
- * @param {boolean} [options.collapseSpaces=false] - Collapse space/tab runs.
- * @returns {string} Readable plain text, trimmed.
- */
 const CONTAINER_OPEN_RE = /<(script|style|head|noscript)\b/gi;
 
-// Remove each container element with its content. A lazy `[\s\S]*?` between
-// the open and close tags rescans to the end of the document for every open
-// tag that has no close, which is quadratic on hostile HTML (inbound mail from
-// any sender reaches this): 200 KB of bare `<head>` stalled the loop for
-// seconds. Index scanning keeps the old semantics — an unclosed container is
-// left in place — in linear time.
-// ASCII-only fold: tag names are ASCII, and a full `toLowerCase()` can change
-// the string length (U+0130 expands), which would skew every index below.
+// Remove each container element with its content by index scanning: a lazy `[\s\S]*?` rescans to
+// the end for every unclosed open tag, which is quadratic on hostile inbound mail. An unclosed
+// container is left in place.
+// ASCII-only fold: a full `toLowerCase()` can change string length (U+0130 expands) and skew indexes.
 const asciiLower = (text) => text.replace(/[A-Z]+/g, (run) => run.toLowerCase());
 
 function stripContainerElements(html) {
   const lower = asciiLower(html);
-  // Next close position per tag, so a run of unclosed opens does not rescan
-  // to the end for each one (-1 = no close anywhere after the cached search).
+  // Next close position per tag (-1 = none), so unclosed opens do not each rescan to the end.
   const nextClose = new Map();
   let out = '';
   let cursor = 0;
@@ -77,6 +44,17 @@ function stripContainerElements(html) {
   return out + html.slice(cursor);
 }
 
+/**
+ * Convert an HTML document/fragment to plain text.
+ *
+ * @param {string} html - Raw HTML. Non-strings return ''.
+ * @param {object} [options]
+ * @param {Object<string,string>} [options.extraEntities] - Extra named entities
+ *   merged on top of `{ nbsp: ' ' }` and the predefined five.
+ * @param {string} [options.paragraphBreak='\n'] - Replacement for `</p>`.
+ * @param {boolean} [options.collapseSpaces=false] - Collapse space/tab runs.
+ * @returns {string} Readable plain text, trimmed.
+ */
 export function htmlToText(html, { extraEntities, paragraphBreak = '\n', collapseSpaces = false } = {}) {
   if (typeof html !== 'string') return '';
   const stripped = stripContainerElements(html)

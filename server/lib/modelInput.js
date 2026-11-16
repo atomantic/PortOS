@@ -1,29 +1,19 @@
 /**
- * Records what a model actually received beyond user text: `promptAddition`, `sentPromptRecord`,
- * `carriedPromptAdditions` and the `promptAdditionsSchema` request field.
+ * Records what a model actually received beyond user text (#11317).
  *
- * What a model actually received beside what the user wrote (#11317): `promptAddition`,
- * `sentPromptRecord`, `carriedPromptAdditions`, `agentInstructionsAddition`, and the
- * `promptAdditionsSchema` request field. Records `sentPrompt` / `sentNegativePrompt` /
- * `promptAdditions` on every render.
+ * Exports `promptAddition`, `sentPromptRecord`, `carriedPromptAdditions`, `agentInstructionsAddition` and the
+ * `promptAdditionsSchema` request field.
  */
 
 import { z } from 'zod';
 
 /**
- * What a model actually received, beside what the user wrote (AGENTS.md "Never
- * modify a model's input out of the user's sight", #11317).
- *
- * The user's text box keeps only their own words. Everything PortOS adds around
- * them (a style, a bible, a negative folded in as "Avoid:", an agent's tool
- * instructions, LoRA trigger words) is a labeled addition the UI lists as a chip,
- * and `sentPrompt` is the exact final text, so a render can be inspected after
- * the fact even when nothing showed it before the send (autopilot, batch).
+ * The user's text box keeps only their own words; everything PortOS adds around them is a labeled
+ * addition the UI lists as a chip, and `sentPrompt` is the exact final text, so a render can be
+ * inspected afterwards even when nothing showed it before the send (autopilot, batch).
  */
 
-// A request-size guard for additions a client sends back, not a display cap: a chip
-// always holds its block whole (a long production bible included), so the server
-// never cuts one and only refuses a request too large to be a real addition.
+// Request-size guard, not a display cap: the server never cuts an addition, only refuses an oversized request.
 const ADDITION_TEXT_MAX = 1_000_000;
 
 /** One labeled block PortOS adds to a model's input, or null when it adds nothing. */

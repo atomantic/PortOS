@@ -107,6 +107,9 @@ export function parseSentinelPayload(contents) {
  * recovers the `{ ..., "payload": ... }` envelope, so a markdown sentinel containing a `{...}` block stays text. Lazy
  * jsonExtract import so the barrel doesn't pull its services chain into every lib consumer. Second tier after
  * `parseSentinelPayload` returns a null payload (agentLifecycle's dispatchTaskOutputHook).
+ *
+ * @param {string|null|undefined} contents — raw `.agent-done` contents
+ * @returns {Promise<{ summary: string, payload: unknown }>}
  */
 export async function salvageSentinelPayload(contents) {
   const trimmed = typeof contents === 'string' ? contents.trim() : '';
@@ -135,6 +138,10 @@ export async function salvageSentinelPayload(contents) {
  * Blocks are walked in REVERSE closing order so the final answer beats an earlier prompt echo of the schema and an
  * enclosing object beats its children. `tryParseWithRepair` is used because for a tool-free stage the print IS the
  * deliverable; its repairs are conservative and string-aware. Lazy imports as in `salvageSentinelPayload`.
+ *
+ * @param {string|null|undefined} transcript — ANSI-bearing raw PTY text
+ * @param {(payload:unknown)=>boolean} isPayload — the hook's shape predicate
+ * @returns {Promise<{ summary: string, payload: unknown }>}
  */
 export async function extractSentinelPayloadFromTranscript(transcript, isPayload) {
   const none = { summary: '', payload: null };

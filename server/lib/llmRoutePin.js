@@ -1,52 +1,24 @@
 /**
- * The per-record LLM route pin — `{ providerId, model, effort }` saved on a
- * record so an action run against it uses the provider the user picked there
- * instead of the global active provider.
+ * The per-record LLM route pin (`{ providerId, model, effort }`) saved on a record so actions run against it use the provider the user picked there.
  *
- * Eight subsystems each hand-rolled this shape (series `llm`, FableLoom
- * `playSettings`, CoS job pins, creative-director stage pins, …), and every
- * copy re-derived the same rule from scratch. This module owns it once:
- *
- * **A model id and an effort level belong to the provider they were picked
- * for.** Forwarding either to a different provider fails at run time — a
- * `claude --model gemini-…` spawn, or an effort level the target CLI's ladder
- * has never heard of. So a per-call pick beats the pin outright, and the pin's
- * model/effort are inherited ONLY while the effective provider is still the
- * one they were picked for. A per-call switch that names no model leaves the
- * model blank so the new provider's default resolves.
- *
- * `null` (never `''`) marks an unset dimension, so "fall through to the next
- * layer" stays distinguishable from a deliberate empty choice.
- *
- * That rule has TWO shapes, and picking the wrong one silently crosses
- * providers:
- *
- * - `resolveLlmRoutePin(pin, perCall)` — a saved record pin plus an independent
- *   one-off pick. The two merge per FIELD, guarded by a provider-id comparison.
- * - `pickLlmRoutePinLayer(...layers)` — configuration layers whose provider and
- *   model were chosen together in one control. The winning layer is taken
- *   WHOLE, which enforces the same rule without a comparison.
+ * A model id and effort level belong to the provider they were picked for; forwarding either to another provider fails at run time.
+ * So a per-call pick beats the pin, and the pin's model/effort are inherited only while the effective provider is the pinned one.
+ * `null` (never `''`) marks an unset dimension. Two shapes enforce the rule: `resolveLlmRoutePin` (pin + independent per-call pick,
+ * merged per field behind a provider-id comparison) and `pickLlmRoutePinLayer` (layers chosen together; the winner is taken whole).
  */
 
 import { z } from 'zod';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { trimTo } from './textUtils.js';
 
-/** Field caps for a pin — the one source of truth for both the door check
- *  (`llmRoutePinSchema`) and the sanitizer, so they can never drift. */
+// Single source for the door check (`llmRoutePinSchema`) and the sanitizer.
 export const LLM_ROUTE_PIN_LIMITS = Object.freeze({
   PROVIDER_ID_MAX: 100,
   MODEL_ID_MAX: 200,
   EFFORT_MAX: 20,
 });
 
-/**
- * Zod fragment for a pin. Every field is nullable (a cleared select sends
- * `null`) and optional (an unset dimension is simply absent). `effort` is the
- * shared ladder enum rather than a capped free string — the runner clamps an
- * unknown level silently, and the door check is where a typo should surface.
- * Callers add `.nullable()` when the whole pin can be cleared at once.
- */
+// Fields are nullable (cleared select) and optional (unset). `effort` is the shared enum so a typo surfaces at the door instead of being silently clamped by the runner.
 export const llmRoutePinSchema = z.object({
   providerId: z.string().max(LLM_ROUTE_PIN_LIMITS.PROVIDER_ID_MAX).nullable().optional(),
   model: z.string().max(LLM_ROUTE_PIN_LIMITS.MODEL_ID_MAX).nullable().optional(),
@@ -54,9 +26,7 @@ export const llmRoutePinSchema = z.object({
 });
 
 /**
- * Trim/cap a raw pin into the stored shape. Returns `null` for a non-object or
- * an all-empty pin, so a record never persists a pin that pins nothing.
- *
+ * Trim/cap a raw pin into the stored shape. Null for a non-object or all-empty pin, so a record never persists a pin that pins nothing.
  * @param {unknown} raw
  * @returns {{ providerId: string|null, model: string|null, effort: string|null }|null}
  */
@@ -73,11 +43,7 @@ export function sanitizeLlmRoutePin(raw) {
 
 /**
  * Resolve the effective route for one call against a saved pin.
- *
- * `providerMatchesPin` is `true` when the call is still running on the
- * provider the pin's model/effort were picked for — either because the call
- * named no provider, or because it named the pinned one. Callers surface it
- * when they need to explain why a pinned model was dropped.
+ * `providerMatchesPin` is true when the call runs on the provider the pin's model/effort were picked for.
  *
  * @param {{ providerId?: string|null, model?: string|null, effort?: string|null }|null|undefined} pin
  * @param {{ providerId?: string|null, model?: string|null, effort?: string|null }} [perCall]
@@ -94,35 +60,17 @@ export function resolveLlmRoutePin(pin, perCall = {}) {
   };
 }
 
-/** Does this layer pin a route at all? A layer that names no `providerId` pins
- *  nothing the runtime can key on — the model alone is unresolvable, since the
- *  runtime looks the provider up first. */
+// A layer without `providerId` pins nothing: the runtime looks the provider up before the model.
 export function llmRoutePinNamesProvider(layer) {
   return Boolean(layer?.providerId);
 }
 
 /**
- * The OTHER precedence rule, for pins arranged in configuration LAYERS rather
- * than pin-plus-per-call: the most specific layer that names a provider wins as
- * a WHOLE, and the least specific layer is the base everything falls through to.
+ * For layers whose provider and model were picked TOGETHER in one control: the most specific layer naming a provider wins WHOLE,
+ * since merging the next layer's model per field would hand one provider another's model. The last layer is returned even without
+ * a provider; null when no layer was supplied.
  *
- * Use this — not `resolveLlmRoutePin` — when each layer's provider and model
- * were picked TOGETHER in one control (a drawer's provider + model selects, a
- * settings assignment row). There, a layer that names a provider but no model
- * means "that provider's default model", so merging the next layer's model in
- * per-field would hand one provider a model chosen for another: the same
- * never-cross-providers rule as `resolveLlmRoutePin`, enforced by taking the
- * winning layer whole instead of by comparing provider ids.
- *
- * `resolveLlmRoutePin` stays right where the layers are a saved record pin and a
- * one-off per-call pick, which are independent choices and DO merge per field.
- *
- * The final layer is returned even when it names no provider, so a base layer
- * that carries only a model still reaches the caller. Returns `null` when no
- * layer was supplied at all.
- *
- * @param {...({ providerId?: string|null, model?: string|null, effort?: string|null }|null|undefined)} layers
- *   most specific first, base last
+ * @param {...({ providerId?: string|null, model?: string|null, effort?: string|null }|null|undefined)} layers most specific first, base last
  * @returns {object|null}
  */
 export function pickLlmRoutePinLayer(...layers) {

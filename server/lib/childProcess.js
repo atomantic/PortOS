@@ -29,7 +29,10 @@ import { promisify } from 'node:util';
 
 export { ChildProcess };
 
-/** Fill in `windowsHide: true` unless the caller stated an opinion. */
+/**
+ * Fill in `windowsHide: true` unless the caller stated an opinion.
+ * @param {object} [options]
+ */
 function withHide(options) {
   if (options && Object.hasOwn(options, 'windowsHide')) return options;
   return { ...options, windowsHide: true };

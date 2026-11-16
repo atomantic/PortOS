@@ -1,70 +1,23 @@
 /**
- * What a large prompt costs on a LOCAL inference endpoint (#6117).
+ * What a large prompt costs to PREFILL on a model server on this machine (#6117).
  *
- * What a large prompt costs to PREFILL on a model server running on this machine (#6117).
- * `planLocalPromptBudget({ prompt, endpoint, baseDurationMs })` → `{ promptTokens, prefillMs,
- * expectedDurationMs, longPrefill, … }`, or `null` for a cloud endpoint / no prompt to measure — a
- * sentinel a caller must read as "no estimate", never as a small one. `estimateLocalPrefillMs` and
- * `describeLocalPromptBudget` are the token→ms and plan→sentence halves;
- * `LOCAL_PREFILL_TOKENS_PER_SECOND` is a deliberately pessimistic constant, since over-estimating only
- * widens the window a healthy run gets. Never refuses a dispatch: it raises the run's duration
- * estimate so a ~100K-token public-review envelope reads as a long silent prefill instead of a wedged
- * run. Pure.
- *
- * A public-review Stage 3 dispatch inlines the whole screened
- * `<cleared-public-review-input>` envelope, which routinely runs to ~100K
- * tokens. A hosted provider prefills that in seconds; a model server on this
- * box does not — the observed run sat silent for ~9 minutes before the child
- * emitted its first line, against a run the queue expected to take ~13 minutes
- * end to end. Nothing compared the assembled prompt against the throughput of
- * the endpoint it was about to be dispatched to, so the run either finished
- * with no margin or looked wedged the whole time it was healthy.
- *
- * This module answers that one question, and only for an endpoint on this
- * machine: how long is this prompt's prefill, and what does the run's duration
- * estimate become once that is added to it. It deliberately does NOT refuse a
- * dispatch — the user chose the local provider, and refusing would make a
- * legitimately-configured endpoint unusable for the stage. Refusal stays the
- * answer only when the prompt exceeds the model's advertised context window,
- * which is a separate, already-fatal condition the provider itself reports.
- *
- * Trimming the envelope is explicitly not an option here: the reviewer must see
- * the complete screened material, and a truncated one produces a review of a
- * partial patch.
- *
- * Pure / side-effect-free — unit-tested in localPromptBudget.test.js.
+ * `planLocalPromptBudget` returns `{ promptTokens, prefillMs, expectedDurationMs, longPrefill, ... }`,
+ * or `null` for a cloud endpoint / no prompt, which a caller must read as "no estimate", never a small one.
+ * It never refuses a dispatch or trims the prompt (the reviewer must see the complete envelope); it only raises the run's duration estimate so a ~100K-token
+ * envelope reads as a long silent prefill rather than a wedged run. Pure.
  */
 
 import { estimateTokens } from './contextBudget.js';
 
-/**
- * Prefill throughput assumed for a model server on this machine, in tokens per
- * second. Deliberately BELOW what the observed run measured (~100K tokens in
- * ~9 minutes ≈ 185 tok/s on a 27B local model): the number exists to keep an
- * estimate from undershooting, and an over-estimate merely widens the window a
- * healthy run is allowed, while an under-estimate re-creates the bug.
- *
- * It is a single conservative constant on purpose. A per-model measured rate
- * would be more accurate and is not needed to answer "is this prompt going to
- * cost minutes?" — the question this budget exists for.
- */
+// Assumed prefill throughput (tokens/s), deliberately below the observed ~185 tok/s on a 27B model: over-estimating only widens the window a healthy run gets.
 export const LOCAL_PREFILL_TOKENS_PER_SECOND = 120;
 
-/**
- * Prefill at or above which a run is expected to be SILENT for long enough that
- * a viewer would otherwise read it as wedged. One minute: below that the card's
- * ordinary "initializing" state already covers the gap.
- */
+// Prefill at or above which a run is silent long enough to read as wedged; below one minute the card's "initializing" state covers it.
 export const LONG_PREFILL_MS = 60_000;
 
 const positiveNumber = (value) => (Number.isFinite(value) && value > 0 ? value : null);
 
-/**
- * Milliseconds of prefill `promptTokens` costs at `tokensPerSecond`.
- *
- * `null` — not `0` — for a non-positive/garbled token count, so "no estimate"
- * can never be mistaken for "estimated to be instant".
- */
+// Null, not 0, for a non-positive/garbled token count, so "no estimate" is never "instant".
 export function estimateLocalPrefillMs(promptTokens, tokensPerSecond = LOCAL_PREFILL_TOKENS_PER_SECOND) {
   const tokens = positiveNumber(Number(promptTokens));
   const rate = positiveNumber(Number(tokensPerSecond)) ?? LOCAL_PREFILL_TOKENS_PER_SECOND;
@@ -73,25 +26,13 @@ export function estimateLocalPrefillMs(promptTokens, tokensPerSecond = LOCAL_PRE
 }
 
 /**
- * What a run's duration estimate should be, given the prompt it is about to be
- * dispatched with and the endpoint that prompt lands on.
- *
  * @param {object} args
- * @param {string} args.prompt - the FULLY assembled prompt (the envelope included).
- * @param {string|null} args.endpoint - the local endpoint this run's inference
- *   occupies (`localEndpointOfProvider`), or null/'' for a cloud provider.
- * @param {number|null} [args.baseDurationMs] - the run's duration estimate
- *   before prefill (the learned per-task-type average). `null` = nothing
- *   learned yet, which is NOT the same as "estimated at zero".
+ * @param {string} args.prompt - the FULLY assembled prompt (envelope included)
+ * @param {string|null} args.endpoint - the local endpoint this run occupies, or null/'' for a cloud provider
+ * @param {number|null} [args.baseDurationMs] - learned estimate before prefill; null means nothing learned, NOT zero
  * @param {number} [args.tokensPerSecond]
- * @returns {null | {
- *   endpoint: string, promptChars: number, promptTokens: number,
- *   tokensPerSecond: number, prefillMs: number,
- *   baseDurationMs: number|null, expectedDurationMs: number|null,
- *   longPrefill: boolean
- * }}
- *   `null` when the question does not apply — a cloud endpoint, or no prompt to
- *   measure. A caller must treat that as "no estimate", never as a small one.
+ * @returns {null | { endpoint: string, promptChars: number, promptTokens: number, tokensPerSecond: number, prefillMs: number,
+ *   baseDurationMs: number|null, expectedDurationMs: number|null, longPrefill: boolean }} null when the question does not apply
  */
 export function planLocalPromptBudget({
   prompt,
@@ -117,10 +58,7 @@ export function planLocalPromptBudget({
     tokensPerSecond: rate,
     prefillMs,
     baseDurationMs: base === null ? null : Math.round(base),
-    // The RAISED estimate: whatever the run was expected to take, plus the
-    // prefill this prompt costs before the model can emit its first token.
-    // Stays `null` when nothing was learned — reporting the bare prefill as the
-    // whole run's estimate would understate it just as badly as the bug did.
+    // Raised estimate = base + prefill; stays null when nothing was learned (bare prefill would understate the run).
     expectedDurationMs: base === null ? null : Math.round(base) + prefillMs,
     longPrefill: prefillMs >= LONG_PREFILL_MS,
   };

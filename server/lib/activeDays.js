@@ -17,7 +17,10 @@ const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * Normalize one stored date value (bare day key or full ISO timestamp) to a user-local `YYYY-MM-DD` day key.
- * Returns `null` when the value is not a date at all.
+ *
+ * @param {unknown} value - a bare day key, or a full ISO timestamp
+ * @param {string} timezone - IANA timezone (from `getUserTimezone()`)
+ * @returns {string|null} the day key, or `null` when the value is not a date at all
  */
 export function toUserDayKey(value, timezone) {
   if (typeof value !== 'string' || !value) return null;
@@ -40,6 +43,10 @@ export function toUserDayKey(value, timezone) {
  * Union several domains' date values into one sorted set of user-local day keys (`.length` is the honest count).
  * A non-array source contributes nothing rather than throwing; classifying an unreadable domain as `unavailable`
  * (never a confident 0) is the CALLER's job.
+ *
+ * @param {Array<Array<unknown>|null|undefined>} sources - one array of date values per domain
+ * @param {string} timezone - IANA timezone (from `getUserTimezone()`)
+ * @returns {string[]} sorted, de-duplicated day keys. `.length` is the honest "days active".
  */
 export function unionActiveDayKeys(sources, timezone) {
   if (!Array.isArray(sources)) return [];

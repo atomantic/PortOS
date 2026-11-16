@@ -1,34 +1,12 @@
 /**
- * Shared source-comparison helpers for server↔client "mirror" parity tests.
+ * Shared source-comparison helpers for server↔client "mirror" parity tests: each `<name>.mirror.test.js` extracts
+ * the mirrored declarations from both files and diffs them with comments stripped.
  *
- * A shared PURE module is imported, not copied — the client re-exports the
- * `server/lib` leaf (see "One pure module, one definition" in
- * client/src/lib/README.md), so it needs no parity test at all. What is left are
- * the pairs that cannot be one module: a vocabulary restated in a React
- * component's constants file, or a table a service and a page each own. Each of
- * those is pinned by a `<name>.mirror.test.js` that extracts the mirrored
- * declarations from both files and diffs them with comments stripped, so
- * per-side commentary can diverge but logic cannot.
- *
- * Reach for this only when the two sides genuinely cannot be one module. If they
- * can, move the logic into a pure `server/lib` leaf and delete the copy.
- *
- * Every such test needs the same two primitives, and hand-rolling them per
- * mirror means a bug in the brace-walker has to be found and fixed once per
- * copy — copies that had already drifted (one handled `async function`, the
- * other counted brackets) before this was extracted.
- *
- * Deliberately pure — no `vitest` import — so importing it never pulls a test
- * framework into production. Callers own the assertions.
+ * Use only when the two sides cannot be one pure `server/lib` leaf (see "One pure module, one definition" in
+ * client/src/lib/README.md). Pure, no `vitest` import; callers own the assertions.
  */
 
-/**
- * Strip single-line (`//`) and block (`/* … *\/`) comments, then collapse all
- * whitespace runs to a single space.
- *
- * This is what lets the two sides carry different commentary — only code
- * survives the normalization.
- */
+/** Strip `//` and block comments, then collapse whitespace runs, so only code is compared. */
 export function stripCommentsAndNormalize(src) {
   return src
     .replace(/\/\*[\s\S]*?\*\//g, '')
@@ -61,13 +39,9 @@ function matchDelimiter(src, openIdx) {
  * function). Returns the declaration text, or `null` when the name is absent
  * or its source is unbalanced.
  *
- * The two forms terminate differently, and conflating them is a trap worth
- * spelling out: a naive "walk to the first time depth returns to 0" returns
- * `function f(a)` — the closing paren of the PARAMETER LIST — so the entire
- * body escapes the parity diff and a gutted mirror passes green. Likewise it
- * truncates `const RE = /(?:a|b):\/\//i` at the non-capturing group's `)`.
- * So: a function is walked to the matching brace of its BODY, and a const to
- * its terminating `;`.
+ * A function is walked to the matching brace of its BODY and a const to its terminating `;`: walking to
+ * the first return to depth 0 would stop at the parameter list's `)` (letting a gutted body pass) or at a
+ * regex's non-capturing group.
  */
 export function extractDeclaration(src, name) {
   const startRe = new RegExp(`(?:export\\s+)?(?:async\\s+function|function|const)\\s+${name}[\\s=(]`);
@@ -88,11 +62,8 @@ export function extractDeclaration(src, name) {
     return braceClose === -1 ? null : src.slice(start, braceClose + 1);
   }
 
-  // `const`: run to the statement's terminating `;` at depth 0. This ends a
-  // regex literal, an array/object initializer, and an arrow function alike.
-  // Caveat: a `;` inside a top-level string/regex literal would end the slice
-  // early — no mirrored declaration does that, and a full lexer isn't worth it
-  // here. Every mirrored `const` must be semicolon-terminated.
+  // Caveat: a `;` inside a top-level string/regex literal ends the slice early; every mirrored
+  // `const` must be semicolon-terminated.
   let depth = 0;
   for (let i = start; i < src.length; i++) {
     const ch = src[i];

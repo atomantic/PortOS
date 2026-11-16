@@ -1,49 +1,19 @@
 /**
- * scrubHomePath — replace the running user's home-directory prefix with `~`.
+ * scrubHomePath replaces the running user's home-directory prefix with `~`; non-strings pass through.
  *
- * `scrubHomePath(value)` — replace the running user's home-directory prefix with `~` anywhere in a
- * string, so `/Users/<name>/…` never embeds the OS username in anything a user pastes into a bug
- * report. Non-strings pass through; a root-user container reporting `/` as home is left alone
- * (substituting on it would rewrite every separator in every path). Zero-dependency by design:
- * `agentRunEvents.js` re-exports it for the CoS ledger, and `scripts/doctor.js` imports it statically
- * because it must load from a bare checkout with no `node_modules`
- * (`scripts/pre-install-entrypoints.test.js` enforces that).
- *
- * Lives in its own zero-dependency module, rather than beside the other
- * redaction helpers in `agentRunEvents.js`, because two callers need it from
- * opposite ends of the dependency graph:
- *
- *   - the CoS run ledger (`agentRunEvents.js`), which re-exports this symbol so
- *     every existing `import { scrubHomePath } from './agentRunEvents.js'`
- *     caller is unchanged, and
- *   - `scripts/doctor.js`, whose whole job is explaining an install that will
- *     not start — including one where `server/node_modules` was never installed.
- *     Everything doctor imports statically therefore has to load from a bare
- *     checkout using Node builtins only (`scripts/pre-install-entrypoints.test.js`
- *     enforces that). Reaching for the scrubber through `agentRunEvents.js`
- *     would drag in zod and the trajectory schemas, and the diagnostic would
- *     crash on exactly the installs it exists to diagnose.
- *
- * Builtins only. Keep it that way — see the guard test above.
+ * Builtins only: `scripts/doctor.js` loads it from a bare checkout (`scripts/pre-install-entrypoints.test.js`).
  */
 import { homedir } from 'os';
 
 /**
  * Replace the user's home directory prefix with `~` anywhere in a string.
  *
- * Workspace paths are the most common thing a lifecycle payload carries, and
- * `/Users/<name>/…` embeds the OS username. The ledger is machine-local, but a
- * diagnostic is exactly the thing a user pastes into a bug report, so the
- * username never gets written down in the first place.
- *
  * @param {*} value - any value; non-strings pass through untouched
  * @returns {*} the scrubbed string, or `value` unchanged
  */
 export function scrubHomePath(value) {
   const home = homedir();
-  // A root-user container reports `/` as the home directory. Substituting on
-  // that would rewrite every separator in every path (`/var/log` → `~var~log`),
-  // destroying the diagnostic to protect a username that isn't in the string.
+  // A root-user container reports `/` as home; substituting would rewrite every separator.
   if (typeof value !== 'string' || !home || home === '/' || home === '\\') return value;
   return value.split(home).join('~');
 }

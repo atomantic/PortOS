@@ -13,6 +13,7 @@ export const MAX_RETENTION_COUNT = 365;
 /**
  * Absent or `null` `retentionCount` means UNLIMITED, so new installs get 30 from the seeded
  * `data.reference/settings.json` while upgrades never start silently deleting an archive.
+ * @param {object} [backup] - the `settings.backup` slice, or undefined
  * @returns {number|null} snapshots to keep per source, or `null` for unlimited
  */
 export function resolveRetentionCount(backup) {
@@ -25,6 +26,8 @@ export function resolveRetentionCount(backup) {
 /**
  * Resolve the effective schedule from a (possibly sparse) `settings.backup` slice.
  * `enabled` is intent; `scheduled` also requires a destination.
+ * @param {object} [backup] - the `settings.backup` slice, or undefined
+ * @returns {{ destPath: string|null, enabled: boolean, cronExpression: string, scheduled: boolean, retentionCount: number|null }}
  */
 export function resolveBackupConfig(backup) {
   const destPath = backup?.destPath || null;

@@ -34,6 +34,9 @@ const positiveInt = (value) => {
  * top-level `context_length` is the widest any upstream offers while
  * `top_provider.context_length` is what the default route serves, and a local
  * server may report trained maximum and loaded window.
+ *
+ * @param {unknown} entry
+ * @returns {number|null}
  */
 export function catalogContextWindow(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -60,8 +63,10 @@ export function catalogContextWindow(entry) {
  *
  * `contextWindows` only has models whose window was declared; `{}` means
  * "unknown", never "no window".
-
+ *
+ * @param {unknown[]} entries
  * @param {string} key — the payload key the entries came from, for the error text
+ * @returns {{ models: string[], contextWindows: Record<string, number> }}
  */
 export function parseModelCatalog(entries, key) {
   const models = [];
@@ -85,6 +90,9 @@ export function parseModelCatalog(entries, key) {
  * Most fetchers answer with a plain `string[]`; only the OpenAI-compatible
  * `/models` parser returns the rich shape. Normalizing here keeps
  * `fetchProviderModels`' `string[]` contract intact.
+ *
+ * @param {unknown} result
+ * @returns {{ models: string[], contextWindows: Record<string, number> }|null}
  */
 export function toModelCatalog(result) {
   if (Array.isArray(result)) return { models: result, contextWindows: {} };
@@ -115,8 +123,10 @@ export const modelContextWindowPatch = (windows, { clearWhenEmpty = false } = {}
  * map is a MERGE: catalogs inconsistently declare `context_length`, so replacing
  * would drop undeclared models back to the assumed 128K. Carry forward earlier
  * windows, let the fresh catalog overwrite, and prune models no longer listed.
-
+ *
+ * @param {{models: string[], contextWindows: Record<string, number>}} catalog
  * @param {Record<string, number>} [previousWindows] — what the record already knew
+ * @returns {{models: string[], modelContextWindows?: Record<string, number>}}
  */
 export function modelCatalogUpdate(catalog, previousWindows) {
   const listed = new Set(catalog.models);

@@ -1,35 +1,18 @@
 /**
- * Where a llama.cpp install comes from on this host, and how to read what the
- * platform's package manager knows about it.
+ * Where a llama.cpp install comes from on this host (Homebrew or winget), and how to read what the package manager
+ * knows about it.
  *
- * llama.cpp publishes an official package for both managers PortOS can drive:
- * Homebrew on macOS/Linux (`brew install llama.cpp`) and winget on Windows
- * (`winget install ggml.llamacpp`, a portable zip whose shims land in WinGet's
- * Links directory). Keeping the descriptor here — rather than branching on
- * `process.platform` at each call site in `services/llamaServerManager.js` —
- * is what lets the LLMs page name the command that actually works instead of
- * telling a Windows user to run Homebrew.
- *
- * Pure, and free of ambient platform detection: the plan takes the platform as
- * an argument and the WinGet path helpers take the environment, so both
- * branches are coverable from either OS.
+ * Pure: platform and env are arguments so both branches are coverable from either OS.
  */
 
-// Two path flavours, deliberately: `isWingetManagedPath` CLASSIFIES a path
-// string that came off a Windows PATH, so it must reason in win32 whatever host
-// is running it (on POSIX, `path.isAbsolute('C:\\…')` is false and would quietly
-// answer "no", making the rule uncoverable from a macOS/Linux checkout).
-// `wingetLinkDirs` builds paths the LOCAL FILESYSTEM is then asked about, so it
-// must use the native flavour — see the note on that function.
+// `isWingetManagedPath` classifies a string off a Windows PATH, so it uses win32 on any host; `wingetLinkDirs` builds paths the local filesystem is asked about, so it uses the native flavour.
 import nativePath, { win32 as winPath } from 'path';
 
 export const LLAMA_CPP_DOWNLOAD_URL = 'https://github.com/ggml-org/llama.cpp/releases';
 export const LLAMA_CPP_BREW_FORMULA = 'llama.cpp';
 export const LLAMA_CPP_WINGET_ID = 'ggml.llamacpp';
 
-// `--disable-interactivity` keeps winget from drawing a prompt no one can answer
-// from a spawned child, and the two `--accept-*` flags stand in for the source
-// and package agreements it otherwise blocks on the first time.
+// Without these winget blocks on prompts and agreements nobody can answer from a spawned child.
 const WINGET_FLAGS = ['--exact', '--disable-interactivity'];
 const WINGET_AGREEMENTS = ['--accept-source-agreements', '--accept-package-agreements'];
 
@@ -56,12 +39,8 @@ const WINGET_PLAN = Object.freeze({
   installCommand: `winget install ${LLAMA_CPP_WINGET_ID}`,
   installArgs: Object.freeze(['install', '--id', LLAMA_CPP_WINGET_ID, ...WINGET_FLAGS, ...WINGET_AGREEMENTS]),
   upgradeArgs: Object.freeze(['upgrade', '--id', LLAMA_CPP_WINGET_ID, ...WINGET_FLAGS, ...WINGET_AGREEMENTS]),
-  // Presence and installed version.
   listArgs: Object.freeze([...WINGET_LIST_ARGS]),
-  // The same listing, restricted to packages winget has a newer build for — that
-  // row IS the staleness signal, since winget has no `outdated` field the way
-  // `brew info --json` does, and llama.cpp's versions are build numbers
-  // (`b10730`) that no semver comparison orders.
+// Restricted to packages with a newer build: winget has no `outdated` field and llama.cpp build numbers (`b10730`) are not semver-orderable.
   upgradeCheckArgs: Object.freeze([...WINGET_LIST_ARGS, '--upgrade-available']),
   missingManagerError:
     `winget was not found. Install "App Installer" from the Microsoft Store, or download a Windows llama.cpp build from ${LLAMA_CPP_DOWNLOAD_URL} and put its bin directory on PATH.`,
@@ -80,21 +59,14 @@ export function llamaCppInstallPlan(platform) {
 }
 
 /**
- * Pull one package's fields out of `winget list` table output.
- *
- * winget has no machine-readable output mode, and its table is column-aligned
- * under LOCALIZED headers, so the header row cannot be used to find the columns.
- * The package id is a whitespace-free token that appears nowhere else in the
- * table, so the fields are read positionally from the tokens that follow it:
- * `Version [Available] [Source]`. Padding for an empty column collapses under a
- * whitespace split, which is why the caller must not index past what the
- * specific invocation guarantees — `--upgrade-available` guarantees `Available`,
- * a plain `list` does not.
+ * Pull one package's fields out of `winget list` output. winget has no machine-readable mode and localizes its
+ * headers, so fields are read positionally from the tokens after the package id: `Version [Available] [Source]`.
+ * Empty columns collapse, so index only what the invocation guarantees (`--upgrade-available` guarantees `Available`).
+ * Returns null when the package is not listed (winget prints "No installed package found…", not an error).
  *
  * @param {string} stdout raw `winget list` output
  * @param {string} packageId the exact id that was queried
- * @returns {string[]|null} the fields after the id, or `null` when the package
- *   is not listed (winget prints "No installed package found…", not an error).
+ * @returns {string[]|null} the fields after the id, or `null` when the package is not listed
  */
 export function parseWingetPackageFields(stdout, packageId) {
   const wanted = String(packageId || '').toLowerCase();
@@ -108,25 +80,13 @@ export function parseWingetPackageFields(stdout, packageId) {
 }
 
 /**
- * The directories winget links a portable package's executables into. Both
- * scopes are returned because PortOS cannot know which one the user's install
- * chose, and neither is guaranteed to exist.
- *
- * Joined with the NATIVE separator, not win32: the caller stats these paths and
- * splices them into `process.env.PATH`, so they have to be shaped for the
- * filesystem actually running the code. On Windows — the only host that reaches
- * this in production — native IS win32, so nothing changes there; joining with
- * win32 unconditionally would instead emit backslash paths a POSIX test host can
- * neither create nor stat.
+ * The directories winget links a portable package's executables into (both scopes; neither is guaranteed to exist).
+ * Joined with the NATIVE separator because callers stat these and splice them into `process.env.PATH`.
  */
 export function wingetLinkDirs(env = process.env) {
   return wingetRoots(env, nativePath).map((root) => nativePath.join(root, 'Links'));
 }
 
-/**
- * The per-user and machine-wide directories winget installs packages under, in
- * the caller's chosen path flavour (see the import note at the top).
- */
 function wingetRoots(env, pathFlavour) {
   return [
     env.LOCALAPPDATA ? pathFlavour.join(env.LOCALAPPDATA, 'Microsoft', 'WinGet') : null,
@@ -134,14 +94,7 @@ function wingetRoots(env, pathFlavour) {
   ].filter(Boolean);
 }
 
-/**
- * Is this binary one winget installed?
- *
- * The Windows counterpart of `services/llamaServerManager.js#isHomebrewLlamaServer`:
- * a source build or a hand-extracted release zip earlier on PATH must not be
- * offered a `winget upgrade`, which would swap a package the running process is
- * not using. Compared case-insensitively because Windows paths are.
- */
+// Windows counterpart of `isHomebrewLlamaServer`: a source build earlier on PATH must not be offered a `winget upgrade`. Case-insensitive like Windows paths.
 export function isWingetManagedPath(binaryPath, env = process.env) {
   if (!binaryPath || !winPath.isAbsolute(binaryPath)) return false;
   const candidate = winPath.normalize(binaryPath).toLowerCase();

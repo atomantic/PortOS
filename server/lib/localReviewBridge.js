@@ -1,33 +1,17 @@
 /**
- * `LOCAL_REVIEW_BRIDGE_SCRIPT`: absolute path of the stdin bridge script that invokes the local
- * code-review service with the same reviewers.
+ * `LOCAL_REVIEW_BRIDGE_SCRIPT`: absolute path of the stdin bridge into the local code-review service, shared by
+ * the two prompt builders that hand it to agents.
  *
- * `LOCAL_REVIEW_BRIDGE_SCRIPT` — absolute path of `server/scripts/run-local-code-review.mjs`, the
- * stdin bridge into the local-review service (same reviewers and `timeoutMs` forwarding as `POST
- * /api/code-review/local`, no HTTP and so no instance-password gate).
- * `localReviewAttributionErrorGate` retains completed review evidence and blocks publication
- * separately from reviewer availability when receipt persistence fails. `localReviewBridgeRequest`
- * preserves claim-review isolation even if its redundant `toolFree` flag is cleared. Shared by the two
- * prompt builders that hand it to agents, so renaming the script cannot break one while the other
- * keeps working.
+ * `localReviewAttributionErrorGate` retains completed review evidence and blocks publication separately from
+ * reviewer availability when receipt persistence fails. `localReviewBridgeRequest` preserves claim-review
+ * isolation even if its redundant `toolFree` flag is cleared.
  */
 
 import { join } from 'path';
 import { PATHS } from './fileUtils.js';
 
-/**
- * Absolute path of the stdin bridge into the local-review service
- * (`server/scripts/run-local-code-review.mjs`): same reviewers, same
- * `timeoutMs` forwarding as `POST /api/code-review/local`, but no HTTP and so
- * no instance-password gate.
- *
- * Two prompt builders hand it to agents — the CoS claim procedure
- * (`services/cosTaskPrompts.js`) drives every tool-free reviewer through it, and
- * the review-loop section (`services/promptSections/reviewLifecycle.js`) names
- * it as the fallback when the gated endpoint answers 401. Resolved once here so
- * moving or renaming the script cannot break one prompt while the other keeps
- * working. Each caller applies its own `shellQuote`.
- */
+// `server/scripts/run-local-code-review.mjs`: same reviewers and `timeoutMs` forwarding as `POST /api/code-review/local`, but no HTTP and so no instance-password gate.
+// Resolved once because the CoS claim procedure and the review-loop section both name it; callers apply their own `shellQuote`.
 export const LOCAL_REVIEW_BRIDGE_SCRIPT = join(PATHS.root, 'server/scripts/run-local-code-review.mjs');
 export const LOCAL_REVIEW_LIFECYCLE_GUIDE = join(PATHS.root, 'docs/LOCAL_REVIEW_LIFECYCLE.md');
 export const LOCAL_REVIEW_LIFECYCLE_SCRIPT = join(PATHS.root, 'server/scripts/local-review-lifecycle.mjs');
