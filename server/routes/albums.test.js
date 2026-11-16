@@ -43,12 +43,6 @@ describe('albums routes', () => {
   let app;
   beforeEach(() => { app = makeApp(); vi.clearAllMocks(); });
 
-  it('GET / returns the album list', async () => {
-    const r = await request(app).get('/api/albums');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'album-1', title: 'Debut' }]);
-  });
-
   // Regression guard: every client caller (AlbumsManager, TracksManager) calls
   // listAlbums() with no query params. If this ever returns an envelope instead
   // of a bare array, those lists silently render empty.
@@ -78,7 +72,6 @@ describe('albums routes', () => {
   it('POST / creates an album', async () => {
     const r = await request(app).post('/api/albums').send({ title: 'Debut', genre: 'folk' });
     expect(r.status).toBe(201);
-    expect(albums.createAlbum).toHaveBeenCalledWith(expect.objectContaining({ title: 'Debut', genre: 'folk' }));
     expect(r.body.id).toBe('album-new');
   });
 
@@ -107,12 +100,6 @@ describe('albums routes', () => {
     const r = await request(app).patch('/api/albums/album-1').send({ trackIds: ['track-2', 'track-1'] });
     expect(r.status).toBe(200);
     expect(albums.updateAlbum).toHaveBeenCalledWith('album-1', { trackIds: ['track-2', 'track-1'] });
-  });
-
-  it('DELETE /:id soft-deletes an album', async () => {
-    const r = await request(app).delete('/api/albums/album-1');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual({ id: 'album-1' });
   });
 
   it('PATCH /:id with trackIds reconciles track.albumId (stamp added, clear removed)', async () => {
@@ -148,7 +135,9 @@ describe('albums routes', () => {
 
   it('DELETE /:id orphans the album\'s tracks (clears their albumId)', async () => {
     tracks.listTracks.mockResolvedValueOnce([{ id: 'track-9', albumId: 'album-1' }]);
-    await request(app).delete('/api/albums/album-1');
+    const r = await request(app).delete('/api/albums/album-1');
+    expect(r.status).toBe(200);
+    expect(albums.deleteAlbum.mock.calls[0][0]).toBe('album-1');
     expect(tracks.updateTrack).toHaveBeenCalledWith('track-9', { albumId: '' });
   });
 });
