@@ -9,14 +9,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { useSocket } from './useSocket';
-import { useThemeContext } from '../components/ThemeContext';
+import { useSocket } from '../../hooks/useSocket';
+import { useThemeContext } from '../ThemeContext';
 import {
   createShellTerminal,
   readTerminalTheme,
   TERMINAL_SCROLLBACK_LINES,
-} from '../components/shell/createShellTerminal';
-import { attachDictationBridge } from '../lib/terminalDictation';
+} from './createShellTerminal';
+import { attachDictationBridge } from '../../lib/terminalDictation';
 
 export const ITERM_SHELL_PATH = '/shell/iterm';
 

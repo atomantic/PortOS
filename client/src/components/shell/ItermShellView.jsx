@@ -4,7 +4,7 @@ import { AppWindow, Maximize2, Minimize2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { readClipboard } from '../../lib/clipboard';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
-import { useItermSession } from '../../hooks/useItermSession';
+import { useItermSession } from './useItermSession';
 import useTerminalFullscreen from '../../hooks/useTerminalFullscreen';
 import TerminalHotKeys from './TerminalHotKeys';
 import ShellSourceSwitch from './ShellSourceSwitch';

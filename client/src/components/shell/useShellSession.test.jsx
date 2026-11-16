@@ -21,8 +21,8 @@ const { handlers, emitted, socketMock } = vi.hoisted(() => {
   };
   return { handlers, emitted, socketMock };
 });
-vi.mock('../services/socket', () => ({ default: socketMock }));
-vi.mock('../components/ThemeContext', () => ({
+vi.mock('../../services/socket', () => ({ default: socketMock }));
+vi.mock('../ThemeContext', () => ({
   useThemeContext: () => ({ themeId: 'test', theme: { mode: 'night' } }),
 }));
 const { readFileAsBase64, sendShellImage, toastMock } = vi.hoisted(() => ({
@@ -30,9 +30,9 @@ const { readFileAsBase64, sendShellImage, toastMock } = vi.hoisted(() => ({
   sendShellImage: vi.fn(),
   toastMock: { error: vi.fn(), success: vi.fn() },
 }));
-vi.mock('../utils/fileUpload', () => ({ readFileAsBase64 }));
-vi.mock('../services/api', () => ({ sendShellImage }));
-vi.mock('../components/ui/Toast', () => ({ default: toastMock }));
+vi.mock('../../utils/fileUpload', () => ({ readFileAsBase64 }));
+vi.mock('../../services/api', () => ({ sendShellImage }));
+vi.mock('../ui/Toast', () => ({ default: toastMock }));
 
 import { useShellSession, } from './useShellSession.js';
 

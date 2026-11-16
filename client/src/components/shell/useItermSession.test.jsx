@@ -32,11 +32,11 @@ const { handlers, emitted, socketMock, terminalHarness } = vi.hoisted(() => {
   };
   return { handlers, emitted, socketMock, terminalHarness };
 });
-vi.mock('../services/socket', () => ({ default: socketMock }));
-vi.mock('../components/ThemeContext', () => ({
+vi.mock('../../services/socket', () => ({ default: socketMock }));
+vi.mock('../ThemeContext', () => ({
   useThemeContext: () => ({ themeId: 'test', theme: { mode: 'night' } }),
 }));
-vi.mock('../components/shell/createShellTerminal', () => ({
+vi.mock('./createShellTerminal', () => ({
   createShellTerminal: terminalHarness.createShellTerminal,
   readTerminalTheme: vi.fn(() => ({})),
   TERMINAL_SCROLLBACK_LINES: 5000,

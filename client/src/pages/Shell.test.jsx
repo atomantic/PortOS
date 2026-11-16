@@ -3,14 +3,14 @@ import { render, cleanup, act, screen, fireEvent } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router';
 
 const mocks = vi.hoisted(() => ({ shell: vi.fn(), iterm: vi.fn(), state: {}, itermEnabled: true, restart: vi.fn(), stop: vi.fn(), start: vi.fn() }));
-vi.mock('../hooks/useShellSession', () => ({
+vi.mock('../components/shell/useShellSession', () => ({
   MAX_SESSIONS: 20,
   useShellSession: (...args) => {
     mocks.shell(...args);
     return mocks.state;
   },
 }));
-vi.mock('../hooks/useItermSession', () => ({
+vi.mock('../components/shell/useItermSession', () => ({
   useItermSession: (...args) => {
     mocks.iterm(...args);
     return { terminalRef: { current: null }, sessions: [], listed: false, status: null, activeSession: null, connected: false };

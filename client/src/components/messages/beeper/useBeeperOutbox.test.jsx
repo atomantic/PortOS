@@ -15,7 +15,7 @@ const sendOutboxEntry = vi.fn();
 const discardOutboxEntry = vi.fn();
 const reconcileOutboxEntry = vi.fn();
 
-vi.mock('../services/apiBeeper', () => ({
+vi.mock('../../../services/apiBeeper', () => ({
   listOutboxEntries: (...args) => listOutboxEntries(...args),
   createOutboxEntry: (...args) => createOutboxEntry(...args),
   sendOutboxEntry: (...args) => sendOutboxEntry(...args),
@@ -24,7 +24,7 @@ vi.mock('../services/apiBeeper', () => ({
 }));
 
 const invalidateHandlers = new Set();
-vi.mock('./useBeeperRealtime', () => ({
+vi.mock('../../../hooks/useBeeperRealtime', () => ({
   default: ({ onInvalidate } = {}) => {
     invalidateHandlers.add(onInvalidate);
     return { realtime: null };
@@ -32,7 +32,7 @@ vi.mock('./useBeeperRealtime', () => ({
 }));
 
 const toastError = vi.fn();
-vi.mock('../components/ui/Toast', () => ({
+vi.mock('../../ui/Toast', () => ({
   default: { error: (...args) => toastError(...args), success: vi.fn() },
 }));
 

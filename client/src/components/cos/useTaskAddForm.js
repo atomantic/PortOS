@@ -6,11 +6,11 @@
  */
 
 import { useEffect, useMemo, useReducer, useRef } from 'react';
-import { shortClaudeModelName } from '../utils/formatters';
-import toast from '../components/ui/Toast';
-import * as api from '../services/api';
-import { processScreenshotUploads, processAttachmentUploads } from '../services/apiMedia';
-import { isCompositeProviderId } from '../utils/providerRef';
+import { shortClaudeModelName } from '../../utils/formatters';
+import toast from '../ui/Toast';
+import * as api from '../../services/api';
+import { processScreenshotUploads, processAttachmentUploads } from '../../services/apiMedia';
+import { isCompositeProviderId } from '../../utils/providerRef';
 import {
   effortSurvivingModel,
   isCliProvider,
@@ -20,20 +20,20 @@ import {
   resolveProviderModelOptions,
   MODEL_SOURCE,
   seedModelEffort,
-} from '../utils/providers';
-import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerModels';
-import { PORTOS_APP_ID } from '../lib/appIdentity';
-import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage, safeWriteStorage } from '../lib/safeStorage';
+} from '../../utils/providers';
+import { reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../../lib/reviewerModels';
+import { PORTOS_APP_ID } from '../../lib/appIdentity';
+import { safeReadJsonStorage, safeReadStorage, safeRemoveStorage, safeWriteJsonStorage, safeWriteStorage } from '../../lib/safeStorage';
 import {
   DEFAULT_PR_COMPLETION,
   DEFAULT_REVIEWERS,
   prCompletionMerges,
   resolveUseAutoMerge,
   DEFAULT_REVIEW_STOP_MODE,
-} from '../components/cos/constants.js';
-import useAssignableInstances from './useAssignableInstances.js';
-import { useInstanceFeatures } from './useInstanceFeatures.js';
-import useReviewerModelOptions from './useReviewerModelOptions.js';
+} from './constants.js';
+import useAssignableInstances from '../../hooks/useAssignableInstances.js';
+import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
+import useReviewerModelOptions from '../../hooks/useReviewerModelOptions.js';
 
 const TASK_DESCRIPTION_DRAFT_KEY = 'portos-cos-task-description-draft';
 const QUICK_TEMPLATES_EXPANDED_KEY = 'portos-cos-quick-templates-expanded';

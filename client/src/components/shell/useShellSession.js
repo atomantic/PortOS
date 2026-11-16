@@ -4,23 +4,23 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import useMounted from './useMounted';
+import useMounted from '../../hooks/useMounted';
 import { useSearchParams, useParams, useNavigate } from 'react-router';
-import { useSocket } from './useSocket';
-import { useThemeContext } from '../components/ThemeContext';
-import { createShellTerminal, readTerminalTheme } from '../components/shell/createShellTerminal';
-import { attachDictationBridge } from '../lib/terminalDictation';
-import { fitTerminal } from '../lib/terminalFit';
+import { useSocket } from '../../hooks/useSocket';
+import { useThemeContext } from '../ThemeContext';
+import { createShellTerminal, readTerminalTheme } from './createShellTerminal';
+import { attachDictationBridge } from '../../lib/terminalDictation';
+import { fitTerminal } from '../../lib/terminalFit';
 import {
   attachTerminalTouchScroll,
   attachTerminalWheelScroll,
   resetTerminalWheelScroll,
   scrollTerminalPage,
-} from '../lib/terminalScroll';
-import { readFileAsBase64 } from '../utils/fileUpload';
-import * as api from '../services/api';
-import toast from '../components/ui/Toast';
-import { MAX_TOTAL_SESSIONS } from '../../../server/lib/shellLimits.js';
+} from '../../lib/terminalScroll';
+import { readFileAsBase64 } from '../../utils/fileUpload';
+import * as api from '../../services/api';
+import toast from '../ui/Toast';
+import { MAX_TOTAL_SESSIONS } from '../../../../server/lib/shellLimits.js';
 
 // Shared with the server (lib/shellLimits.js) so the "at cap" UI can't drift.
 export const MAX_SESSIONS = MAX_TOTAL_SESSIONS;

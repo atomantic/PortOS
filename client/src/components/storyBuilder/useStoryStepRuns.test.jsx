@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { MockEventSource, lastEventSource } from '../test/mockEventSource';
+import { MockEventSource, lastEventSource } from '../../test/mockEventSource';
 import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from './useStoryStepRuns.jsx';
 
-vi.mock('../services/api', () => ({
+vi.mock('../../services/api', () => ({
   storyStepProgressSseUrl: (sessionId, stepId) => `/api/story-builder/${sessionId}/steps/${stepId}/progress`,
 }));
 

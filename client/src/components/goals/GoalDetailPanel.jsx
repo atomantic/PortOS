@@ -6,7 +6,7 @@ import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import {
   CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, GOAL_TYPE_OPTIONS, DEFAULT_NEW_GOAL
 } from './goalConstants';
-import { useGoalDetail } from '../../hooks/useGoalDetail';
+import { useGoalDetail } from './useGoalDetail';
 import ProgressSlider from './ProgressSlider';
 import GoalEditForm from './GoalEditForm';
 import GoalTodoList from './GoalTodoList';

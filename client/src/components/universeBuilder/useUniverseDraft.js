@@ -10,8 +10,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import useMounted from './useMounted';
-import toast from '../components/ui/Toast';
+import useMounted from '../../hooks/useMounted';
+import toast from '../ui/Toast';
 import {
   addUniverseStyleReference,
   adoptUniverseStyleGuide,
@@ -28,15 +28,15 @@ import {
   updateUniverse,
   WORLD_LOCKABLE_FIELDS,
   ensureInfluences,
-} from '../services/api';
+} from '../../services/api';
 import {
   deriveAvailableBackends, renderPinLadder, renderTargetPin,
   IMAGE_GEN_MODE, RENDER_TARGET,
-} from '../lib/imageGenBackends';
-import { resolveRenderCfg } from '../lib/pipelineImageDefaults';
-import { sameJsonShape } from '../lib/sameJsonShape';
-import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
-import { mergeCanonByName } from '../lib/universeBuilderExpand';
+} from '../../lib/imageGenBackends';
+import { resolveRenderCfg } from '../../lib/pipelineImageDefaults';
+import { sameJsonShape } from '../../lib/sameJsonShape';
+import { upsertByIdPrepend } from '../../lib/upsertByIdPrepend';
+import { mergeCanonByName } from '../../lib/universeBuilderExpand';
 import {
   TRUNK_BY_KIND,
   adoptServerCategoryIds,
@@ -44,7 +44,7 @@ import {
   ensureDraftCategories,
   humanizeCategory,
   normalizeCategoryKey,
-} from '../lib/universeBuilderShared';
+} from '../../lib/universeBuilderShared';
 
 // Distinguishes "this request failed" from "this request returned nothing". A unique
 // object is used rather than null/undefined so it can never collide with a legitimate

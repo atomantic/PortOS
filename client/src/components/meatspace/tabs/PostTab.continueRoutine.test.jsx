@@ -32,7 +32,7 @@ vi.mock('../../../services/api', () => ({
   getPostStats: () => Promise.resolve(null),
 }));
 
-vi.mock('../../../hooks/usePostSession', () => ({
+vi.mock('../post/usePostSession', () => ({
   usePostSession: () => ({
     state: 'idle',
     drills: [],

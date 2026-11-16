@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-vi.mock('../services/api', () => ({
+vi.mock('../../../services/api', () => ({
   generatePostDrill: vi.fn(),
   submitPostSession: vi.fn(),
   scorePostLlmDrill: vi.fn(),
   submitTrainingRun: vi.fn(),
 }));
-vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../services/api';
+import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../../../services/api';
 import { usePostSession } from './usePostSession';
 
 describe('usePostSession — Applied Numeracy', () => {

@@ -5,15 +5,15 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../services/api';
-import toast from '../components/ui/Toast';
-import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../lib/safeStorage.js';
-import { uuidv4 } from '../lib/uuid.js';
-import { resolveEstimationTolerancePct } from '../../../server/lib/postScoring.js';
+import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingRun } from '../../../services/api';
+import toast from '../../ui/Toast';
+import { safeReadJsonSession, safeRemoveSession, safeWriteJsonSession } from '../../../lib/safeStorage.js';
+import { uuidv4 } from '../../../lib/uuid.js';
+import { resolveEstimationTolerancePct } from '../../../../../server/lib/postScoring.js';
 import {
   LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
   WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD, appliedNumeracyAnswerCorrect,
-} from '../components/meatspace/post/constants';
+} from './constants';
 
 // sessionStorage key for the single in-progress run. Single-user tool → one
 // active run at a time, so a single key is enough. Restored on refresh so a

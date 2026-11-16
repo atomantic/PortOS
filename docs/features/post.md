@@ -39,7 +39,7 @@ Each generated executive-control drill carries a seed. The server regenerates it
 
 ## Session Structure
 
-The launcher offers two ways to start (`DrillTransition.jsx` handles the between-drill interstitials; the session state machine is `client/src/hooks/usePostSession.js`):
+The launcher offers two ways to start (`DrillTransition.jsx` handles the between-drill interstitials; the session state machine is `client/src/components/meatspace/post/usePostSession.js`):
 
 - **Full session** — queues every enabled math/LLM/cognitive drill; math and LLM drills carry their configured time limits, while cognitive drills are self-paced/stimulus-driven with no countdown.
 - **Quick session** — pulls one random drill per enabled domain against the per-domain time budgets above (~5.5 minutes total with transitions).

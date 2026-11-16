@@ -10,8 +10,8 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { storyStepProgressSseUrl } from '../services/api';
-import { usePipelineProgress } from './usePipelineProgress';
+import { storyStepProgressSseUrl } from '../../services/api';
+import { usePipelineProgress } from '../../hooks/usePipelineProgress';
 
 // Story Builder generate/refine runs, hoisted OUT of the step panel that starts
 // them (#3905). The panel is keyed by the active step id, so clicking another

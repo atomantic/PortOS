@@ -7,11 +7,11 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import * as api from '../services/api';
-import useListResource from './useListResource';
-import useUserTimezone from './useUserTimezone.js';
-import { todayKeyInTimezone } from '../utils/timezone.js';
-import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
+import * as api from '../../services/api';
+import useListResource from '../../hooks/useListResource';
+import useUserTimezone from '../../hooks/useUserTimezone.js';
+import { todayKeyInTimezone } from '../../utils/timezone.js';
+import { MAX_TAGS, MAX_TAG_LENGTH } from './goalConstants';
 
 // Module-level so useListResource sees a stable fetcher. silent: the pickers
 // render their own inline error + Retry, so the default toast would duplicate it.

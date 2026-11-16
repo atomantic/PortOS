@@ -4,17 +4,17 @@
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import toast from '../components/ui/Toast';
-import { extractLastFrame } from '../services/api';
-import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES, isLtx2FamilyRuntime } from '../lib/runnerFamilies';
+import toast from '../ui/Toast';
+import { extractLastFrame } from '../../services/api';
+import { videoLoraFamily, isVideoLoraFamily, loraFamilyOf, VIDEO_LORA_FAMILIES, isLtx2FamilyRuntime } from '../../lib/runnerFamilies';
 import {
   DEFAULT_I2V_REFERENCE_MODE, isDefaultI2vReferenceMode, normalizeI2vReferenceMode,
   runtimeSupportsI2vReferenceMode, resolveI2vReferenceStrength,
-} from '../lib/videoReferenceModes';
+} from '../../lib/videoReferenceModes';
 import {
   resolutionOptionsForModel, defaultResolutionForModel, snapAspectToImage,
-} from '../lib/videoGenResolutions';
-import { normalizeVideoTiling } from '../lib/videoTilingOptions';
+} from '../../lib/videoGenResolutions';
+import { normalizeVideoTiling } from '../../lib/videoTilingOptions';
 import {
   MAX_CHUNKS, supportsContextWindow,
   videoModelMemoryGb, isModelAllowedForMode, videoModelModeOptions,
@@ -25,16 +25,16 @@ import {
   normalizeSpeedProfileForModel, speedProfileIdFromRecord,
   DEFAULT_DRAFT_DECODE_ID, draftDecodeOptionsForModel,
   resolveDraftDecodeForModel, draftDecodeFromRecord,
-} from '../lib/videoGenParams.js';
-import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
-import { falExtraReferenceLimit } from '../lib/falVideoModels.js';
-import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../lib/runwayVideoModels.js';
-import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../server/lib/runwaySpecialVideoModels.js';
-import { useVideoGenBackendCaps } from './useVideoGenBackendCaps.js';
-import { useVideoGenFieldState } from './useVideoGenFieldState.js';
-import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
-import { useVideoGenUrlPrefill, readVideoGenIncoming } from './useVideoGenUrlPrefill.js';
-import { useVideoGenValidation } from './useVideoGenValidation.js';
+} from '../../lib/videoGenParams.js';
+import { videoStreamingModeFromRecord } from '../../lib/videoStreamingMode.js';
+import { falExtraReferenceLimit } from '../../lib/falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../../server/lib/runwaySpecialVideoModels.js';
+import { useVideoGenBackendCaps } from '../../hooks/useVideoGenBackendCaps.js';
+import { useVideoGenFieldState } from '../../hooks/useVideoGenFieldState.js';
+import { useVideoGenSubmitFlow } from '../../hooks/useVideoGenSubmitFlow.js';
+import { useVideoGenUrlPrefill, readVideoGenIncoming } from '../../hooks/useVideoGenUrlPrefill.js';
+import { useVideoGenValidation } from '../../hooks/useVideoGenValidation.js';
 
 // A Remix is an editing starting point. A fixed sampler profile (for example,
 // MiniMax H3) cannot honor a negative prompt, steps, or CFG override, so

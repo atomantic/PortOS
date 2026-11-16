@@ -5,11 +5,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import socket from '../services/socket';
-import { cancelImageGen } from '../services/apiImageVideo';
-import { evictOldest, ORPHAN_BUFFER_MAX } from '../lib/boundedMap';
-import toast from '../components/ui/Toast';
-import useMediaJobReconnectSettle from './useMediaJobReconnectSettle';
+import socket from '../../services/socket';
+import { cancelImageGen } from '../../services/apiImageVideo';
+import { evictOldest, ORPHAN_BUFFER_MAX } from '../../lib/boundedMap';
+import toast from '../ui/Toast';
+import useMediaJobReconnectSettle from '../../hooks/useMediaJobReconnectSettle';
 
 // useImageGenQueue — work-scoped live queue of in-flight image renders.
 //
