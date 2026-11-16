@@ -30,10 +30,14 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  # A newer push to main supersedes the run in flight (its tree contains the
-  # older one). `github.ref` is the caller's ref when release.yml calls this
-  # workflow, so a release run is never cancelled.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+  # A newer PR push supersedes the run in flight. On main the run in flight
+  # finishes and only the newest waiting push runs next (GitHub cancels a
+  # pending run when a newer one queues, and its tree contains the older
+  # ones): with merges minutes apart, cancelling in flight meant no push run
+  # ever finished, so main went untested and never saved the memo records
+  # that related selection narrows with (#16424). `github.ref` is the
+  # caller's ref when release.yml calls this workflow.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   impact:
@@ -315,7 +319,7 @@ jobs:
           echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
           echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
 
-      # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): pull requests only
+      # The test memo (docs/TEST_MEMO.md): pull requests only
       # read; trusted full runs save (see the action for the key lineage).
       - name: Restore the test memo
         id: test-memo
@@ -323,6 +327,8 @@ jobs:
         with:
           suite: server
           partition: server-${{ matrix.shard }}of${{ strategy.job-total }}
+          # FULL_SUITE_SHARDS.server; scripts/ci-test-memo-cache.test.js pins it.
+          merge-shards: 2
 
       - name: Run server tests
         id: server-tests
@@ -344,9 +350,11 @@ jobs:
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
 
-      # Only trusted full runs on the default/release branches seed the memo,
-      # and only from a green test step: the runner writes no entry from a
-      # red process, and a step that never ran has nothing to save.
+      # Only trusted runs on the default/release branches seed the memo, and
+      # only from a green test step: the runner writes no entry from a red
+      # process, and a step that never ran has nothing to save. Each shard
+      # saves on its own as soon as its tests pass, so a later failure or
+      # cancellation elsewhere in the run does not lose its records.
       - name: Save the test memo
         if: steps.server-tests.outcome == 'success' && github.event_name != 'pull_request'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

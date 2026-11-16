@@ -1511,7 +1511,7 @@ describe('CI test impact planner', () => {
     const relatedWindows = buildCiTestPlan(['server/lib/bufferedSpawn.js'], { trackedFiles: TRACKED });
     expect(relatedWindows).toMatchObject({ full: false, windowsMode: 'files',
       windowsSources: [],
-      shards: { server: [1, 2], client: [1], windows: [1] } });
+      shards: { server: [1], client: [1], windows: [1] } });
     expect(relatedWindows.windowsFiles).toEqual(WINDOWS_CONTRACT_TESTS.filter(path => TRACKED.includes(path)).sort());
     const exactWindows = buildCiTestPlan(['server/lib/bufferedSpawn.test.js'], { trackedFiles: TRACKED });
     expect(exactWindows).toMatchObject({ windowsMode: 'files', shards: { windows: [1] } });
@@ -1564,32 +1564,19 @@ describe('CI test impact planner', () => {
       expect(underCap.shards.client).toEqual([1]);
     });
 
-    it('shards a server related graph, but not an exact-file plan under the cap', () => {
+    it('keeps a server related graph and an exact-file plan under the cap on one runner', () => {
+      // Record-aware selection (#16424) bounds a related plan's reach, so only the cap fans out.
       const source = 'server/services/flat.js';
       const tests = featureTests('server/services/flatfeature', 3);
       const trackedFiles = [...TRACKED, source, ...tests];
       const related = buildCiTestPlan([source, ...tests.slice(0, 2)], { trackedFiles });
       expect(related.server.mode).toBe('related');
-      expect(related.shards.server).toEqual(SERVER_FANOUT);
-      expect(related.suiteReasons.server).toMatch(/related import graph sharded 2 ways/);
+      expect(related.shards.server).toEqual([1]);
+      expect(related.suiteReasons.server).not.toMatch(/sharded/);
 
       const exact = buildCiTestPlan(tests, { trackedFiles });
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
-    });
-
-    it("stays on one runner when Vitest's shard guard could see fewer files than shards", () => {
-      // Vitest throws when the shard count exceeds the files it resolves. The
-      // Linux job never runs DB or browser suites, so they cannot meet the floor.
-      const source = 'server/services/flat.js';
-      const unit = 'server/services/flat.test.js';
-      const floor = (extra) => buildCiTestPlan([source, unit, ...extra],
-        { trackedFiles: [source, unit, ...extra] }).shards.server;
-
-      expect(floor([])).toEqual([1]);
-      expect(floor(['server/services/appQuality.db.test.js'])).toEqual([1]);
-      expect(floor(['server/lib/filmLook.browser.test.js'])).toEqual([1]);
-      expect(floor(['server/services/flat.contract.test.js'])).toEqual(SERVER_FANOUT);
     });
   });
 

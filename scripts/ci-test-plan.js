@@ -77,26 +77,16 @@ export const shardIndexes = (mode, count) => (
  * Whether a scoped Linux runner fans out across its full-suite shard count.
  *
  * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
- * - Server `related` mode: always. Its import-graph fan-out is unbounded by the
- *   explicit count (#9999: 57 selectors became ~941 files), and scoped server
- *   runs took 6.1 min median / 9.4 p90 on one runner. Each shard repeats
- *   Vitest's related-graph pass on the primary runner.
- *   Client related plans stay on one runner unless over the cap.
- * - Exact-file plans under the cap stay on one runner: they run in seconds.
+ * - Everything else stays on one runner. A server `related` plan used to fan
+ *   out unconditionally because lazy `import()` edges let one changed source
+ *   select ~1,300 suites; the runner now narrows a recorded test to the
+ *   modules its green run loaded (`recordedReach` in lib/testMemo.js, #16424),
+ *   so graph reach alone no longer justifies a second runner.
  *
- * Vitest throws when the shard count exceeds the files it resolved
- * (`--shard <count> must be a smaller than count of test files`). Every
- * explicit selector is in the resolved set — `vitest related` selects a test
- * file passed as input — so the floor counts explicit files the Linux runner
- * does not exclude (DB suites run in their own job, browser suites in theirs).
- * Below the floor the runner stays on one shard.
+ * No shard-count floor is needed: the runner slices the selection itself and
+ * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
-const fansOut = (runner, { mode, files }, excludedFiles) => {
-  if (mode === 'skip' || mode === 'full') return false;
-  const runnable = files.filter((path) => !excludedFiles.has(path));
-  if (runnable.length < FULL_SUITE_SHARDS[runner]) return false;
-  return files.length > MAX_TARGETED_TEST_FILES || (runner === 'server' && mode === 'related');
-};
+const fansOut = ({ mode, files }) => mode !== 'skip' && mode !== 'full' && files.length > MAX_TARGETED_TEST_FILES;
 
 const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
 
@@ -912,9 +902,7 @@ export const isRouteOnlyAppDiff = (diff) => {
 const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
-  return plan[runner].files.length > MAX_TARGETED_TEST_FILES
-    ? `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`
-    : `; related import graph sharded ${count} ways`;
+  return `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
 };
 
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
@@ -1248,19 +1236,13 @@ function buildSuitePlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
-  }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
+  }, { appRouteOnly });
 }
 
-/**
- * The derived fields every plan carries: per-suite reasons and shard matrices.
- *
- * `linuxRunnerExcludes` names selected files the Linux test jobs never run
- * (DB and browser suites have their own jobs); fansOut() keeps them out of the
- * shard-count floor.
- */
-const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) => {
+/** The derived fields every plan carries: per-suite reasons and shard matrices. */
+const finishPlan = (plan, options = {}) => {
   const linuxShards = (runner) => shardIndexes(
-    fansOut(runner, plan[runner], linuxRunnerExcludes) ? 'full' : plan[runner].mode,
+    fansOut(plan[runner]) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {

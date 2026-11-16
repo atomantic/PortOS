@@ -43,6 +43,11 @@
  * either. Every unknown construct lands in one of those buckets rather than
  * silently narrowing the key.
  *
+ * Related selection (`relatedTests`) reuses the records: a test with a
+ * version 2 record (per-module digests) is selected through
+ * `recordedReach`, which follows a lazy `import()` only where the record
+ * cannot vouch for it; any other test through its full closure.
+ *
  * The store is `testMemoStore.js`; selection and the summary line live in
  * `scripts/run-ci-tests.js`.
  */
@@ -57,6 +62,13 @@ export { tokenize } from './sourceTokens.js';
 
 /** Opt-out marker; anywhere in a test or a closure member. */
 export const NEVER_MARKER = /\/\/\s*test-memo:\s*never\b/;
+
+/**
+ * Hex characters of sha256 a v2 memo record keeps per loaded module. It only
+ * detects that a module changed since the record (never authenticates), so
+ * 64 bits is ample and keeps records small.
+ */
+export const RECORD_DIGEST_LENGTH = 16;
 
 /** A literal directory input larger than this is "the tree", not an input. */
 export const DIRECTORY_INPUT_LIMIT = 400;
@@ -196,7 +208,7 @@ const NON_READ_CALLEES = new Set([
   'toBe', 'toEqual', 'toStrictEqual', 'toContain', 'toMatch', 'toHaveBeenCalledWith', 'toMatchObject', 'log',
   'error', 'warn', 'info', 'debug', 'stringify', 'encodeURIComponent', 'escapeRegExp', 'RegExp', 'toModuleKey',
   'push', 'add', 'set', 'has', 'get', 'map', 'filter', 'some', 'every', 'test', 'match', 'exec', 'isDirectlyInvoked',
-  'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat',
+  'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat', 'createRequire',
   'mkdirSync', 'mkdir', 'writeFileSync', 'writeFile', 'rmSync', 'rm', 'unlinkSync', 'renameSync', 'rename',
 ]);
 /** `exec`/`spawn`-style sinks whose first argument names a program. */
@@ -553,7 +565,7 @@ function widestPathExpression(tokens, match, index) {
 export function extractFileFacts(src, { fileRel, cwdRel }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
-    paths: [], // { rel, walk } — repo-relative literal paths
+    paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
     dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
     scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
@@ -630,7 +642,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       facts.dirs.push({ rel: value.v, walk });
       return true;
     }
-    facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v) });
+    facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v), read: consumer !== null && READ_CALLEES.has(consumer) });
     return true;
   };
 
@@ -729,7 +741,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // (its own `function readServerSource(rel)` definition is not a call).
       const arg = literalArg(open);
       const base = token.v === 'readServerSource' ? 'server' : 'client/src';
-      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(base, arg.value)), walk: false });
+      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(base, arg.value)), walk: false, read: true });
       else if (arg.kind === 'expr') facts.unresolvedInputs.push(`${token.v}() with a non-literal path`);
       continue;
     }
@@ -886,6 +898,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       modules: new Set(), // import edges: narrowed to what a green run loaded by the recorded key
       sideModules: new Set(), // JS read as text, spawned, loaded natively or as a worker: in every key with its closure
       mockOnly: new Set(), // modules only named by a vi.mock-style registration, which loads nothing by itself
+      lazyModules: new Set(), // modules only reached through a literal import(): followed for selection only where no current record vouches (`recordedReach`)
+      dataModules: new Set(), // side modules only read as data (as text, or listed by a directory read); never spawned, required or run as a worker
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
     };
@@ -933,7 +947,9 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         }
       }
     };
-    const addFile = (target, { edge = false } = {}) => {
+    const executedSide = new Set();
+    const addFile = (target, { edge = false, data = false } = {}) => {
+      if (JS_EXT.test(target) && !edge) (data ? resolved.dataModules : executedSide).add(target);
       if (JS_EXT.test(target)) (edge ? resolved.modules : resolved.sideModules).add(target);
       else if (target.endsWith('.py')) addPython(target);
       else resolved.inputs.add(target);
@@ -947,28 +963,30 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       if (fs.kind(dirRel) !== 'dir') return;
       const files = tree(dirRel);
       if (files === null) { resolved.oversized.push(dirRel || '<repo root>'); return; }
-      for (const file of files) addFile(file);
+      for (const file of files) addFile(file, { data: !walk });
     };
-    const addPath = (target, walk) => {
+    const addPath = (target, walk, read = false) => {
       if (underGit(target)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
       if (localState(target)) { resolved.localReads.push(target); return; }
       if (ignoredInput(target)) return;
       const inModules = target.match(/(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)/);
       if (inModules) { addPackage(inModules[1]); return; }
       const kind = fs.kind(target);
-      if (kind === 'file') { addFile(target); return; }
+      if (kind === 'file') { addFile(target, { data: read }); return; }
       if (kind === 'dir') { addDir(target, walk); return; }
       const viaExt = resolveRelativeSpecifier('x', `./${target}`, fs.kind);
-      if (viaExt) addFile(viaExt);
+      if (viaExt) addFile(viaExt, { data: read });
     };
 
     const registered = new Set();
     const loaded = new Set();
+    const eager = new Set();
     for (const { spec, kind } of raw.edges) {
       if (spec.startsWith('/')) { resolved.unresolvedEdges.push(`absolute specifier ${spec}`); continue; }
       if (spec.startsWith('.')) {
         const target = resolveRelativeSpecifier(rel, spec, fs.kind);
         if (target !== null) (kind === 'mock' ? registered : loaded).add(target);
+        if (target !== null) (kind === 'dynamic' ? resolved.lazyModules : eager).add(target);
         // require() is a native load the Vite module runner never records.
         if (target !== null) { addFile(target, { edge: kind !== 'require' }); continue; }
         // Node cannot load a module whose import is missing, so a file with one
@@ -982,7 +1000,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       addPackage(spec, { mock: kind === 'mock' || kind === 'mock-import' });
     }
     for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
-    for (const { rel: target, walk } of raw.paths) addPath(target, walk);
+    for (const target of eager) resolved.lazyModules.delete(target);
+    for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
     for (const { rel: dirRel, walk } of raw.dirs) addDir(dirRel, walk);
     for (const { value, walk, dir } of raw.cwdLiterals) {
       const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
@@ -990,10 +1009,12 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         const target = normalizeRel(posix.join(base, value));
         if (target.startsWith('..')) continue;
         const kind = fs.kind(target);
-        if (kind === 'file') { addPath(target, walk); break; }
+        if (kind === 'file') { addPath(target, walk, !walk); break; }
         if (kind === 'dir' && dir) { addDir(target, walk); break; }
       }
     }
+    // One executing reference outweighs any number of data reads.
+    for (const target of executedSide) resolved.dataModules.delete(target);
     return resolved;
   };
 
@@ -1128,13 +1149,78 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return { key: sha256(lines.join('\n')), memoizable: true, reasons: [] };
   };
 
+  /** The truncated content digest a v2 memo record stores per loaded module; null for a missing file. */
+  const moduleDigest = (rel) => fileHash(rel)?.slice(0, RECORD_DIGEST_LENGTH) ?? null;
+
+  /**
+   * What can change a recorded test's outcome, for related selection: the
+   * test, every module its green run loaded, the names those modules import,
+   * and their non-JS inputs. A module the run did not load is reached by
+   * name only: under unchanged recorded code it was mocked away or on an
+   * untaken path. A literal `import()` edge is followed only from the test
+   * itself and below a member whose bytes no longer match the record's
+   * digest: a lazy edge gained since the run is in such a member, so its
+   * whole closure counts, as it does for an unrecorded test. Side modules
+   * keep their whole closure because the module runner never records them.
+   * An unresolved edge fails closed in a stale member or below a side module
+   * that executes (spawned, `require()`d, run as a worker); JS only read as
+   * data (`dataModules`: read as text, or listed by a directory read) counts
+   * by its own bytes, and with its closure (which cannot fail closed, the
+   * trust the recorded key gives it) only when the reader has a non-literal
+   * import that could evaluate it. Only a record whose members all still exist gets here (the
+   * recorded key fails closed on a missing one).
+   *
+   * @param {{ modules: string[], digests: string[] }} record
+   * @returns {{ reach: Set<string>, failClosed: string|null }}
+   */
+  const recordedReach = (testRel, record) => {
+    const recordedDigest = new Map(record.modules.map((rel, index) => [rel, record.digests[index]]));
+    const NARROW = 0;
+    const DATA = 1;
+    const FULL = 2;
+    const reach = new Set();
+    const walked = new Map(); // rel -> highest mode walked; a wider later visit re-walks it
+    const stack = [testRel, ...record.modules].map((rel) => ({ rel, mode: NARROW }));
+    let failClosed = null;
+    while (stack.length) {
+      const next = stack.pop();
+      const { rel } = next;
+      reach.add(rel);
+      if (fileHash(rel) === null) continue;
+      const stale = recordedDigest.has(rel) && moduleDigest(rel) !== recordedDigest.get(rel);
+      const mode = stale ? FULL : next.mode;
+      // Reached only through unchanged recorded code yet absent from the record:
+      // the green run never loaded it (mocked away or on an untaken path), so
+      // nothing below it can change the outcome. Its own name stays in reach.
+      if (mode === NARROW && !recordedDigest.has(rel) && rel !== testRel) continue;
+      if ((walked.get(rel) ?? -1) >= mode) continue;
+      walked.set(rel, mode);
+      const f = factsFor(rel);
+      for (const input of f.inputs) reach.add(input);
+      if (mode === FULL && f.unresolvedEdges.length && failClosed === null) failClosed = `${rel}: ${f.unresolvedEdges[0]}`;
+      const lazy = mode !== NARROW || rel === testRel;
+      for (const dep of f.modules) if (lazy || !f.lazyModules.has(dep)) stack.push({ rel: dep, mode });
+      for (const side of f.sideModules) {
+        // Read as data by a module with only literal edges: just those bytes count.
+        // A reader with a non-literal import may evaluate what it read (a data: URL), so the closure counts.
+        if (f.dataModules.has(side) && f.unresolvedEdges.length === 0) reach.add(side);
+        else stack.push({ rel: side, mode: mode === DATA || f.dataModules.has(side) ? DATA : FULL });
+      }
+    }
+    return { reach, failClosed };
+  };
+
   /**
    * Both keys for one test. `recorded` is the module list a previous green
-   * run loaded (repo-relative), or null when none is on record.
+   * run loaded (repo-relative), or null when none is on record. `digests`
+   * (aligned with `recorded`, from a v2 record) also narrows related
+   * selection to `recordedReach` when the recorded key is memoizable — the
+   * gate the record was written under, so selection never trusts a record
+   * the memo itself would not.
    *
-   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean }}
+   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean, narrowed: object|null }}
    */
-  const analyzeTest = (testRel, { baseClosure, recorded = null }) => {
+  const analyzeTest = (testRel, { baseClosure, recorded = null, digests = null }) => {
     const closure = closureOf(testRel);
     const fixtures = fixtureInputs(testRel);
     const floor = verdict(testRel, closure, fixtures, baseClosure, { requireEdges: true });
@@ -1151,37 +1237,46 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         recordedVerdict = verdict(testRel, gathered, fixtures, base, { requireEdges: false });
       }
     }
-    return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0 };
+    const narrowed = recordedVerdict?.memoizable && Array.isArray(digests) && digests.length === recorded.length
+      ? recordedReach(testRel, { modules: recorded, digests })
+      : null;
+    return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0, narrowed };
   };
 
-  return { analyzeTest, closureOf, fileHash, workspaceBase, factsFor };
+  return { analyzeTest, closureOf, fileHash, moduleDigest, workspaceBase, factsFor };
 }
 
 /**
  * Keys for `testFiles` (repo-relative posix paths) in one workspace.
  * `records` maps a test to the module list its last green run loaded.
+ * `digests` maps a test to that record's per-module digests (a v2 record),
+ * which lets related selection narrow it.
  *
  * @returns {Map<string, { floor, recorded, closure: Set<string>, edgesResolved: boolean }>}
  */
-export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, records = new Map() }) {
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, records = new Map(), digests = new Map() }) {
   const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion });
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
-  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null }));
+  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null, digests: digests.get(test) ?? null }));
   return out;
 }
 
 /**
- * Tests related to `sources` under closure-based selection: a test is related
- * when a source is in its module closure or among the non-JS inputs it
- * reaches (a JSON or CSS import, a fixture), or when its edges could not all
- * be resolved (fail closed: it may reach anything).
+ * Tests related to `sources` under closure-based selection. A test with a
+ * narrowing record (`analyzeTest`'s `narrowed`) is related when a source is
+ * in its `recordedReach`, or when that walk failed closed. Any other test is
+ * related when a source is in its static+dynamic module closure or among the
+ * non-JS inputs it reaches (a JSON or CSS import, a fixture), or when its
+ * edges could not all be resolved (fail closed: it may reach anything).
  */
 export function relatedTests(keys, sources) {
   const changed = new Set(sources);
   const reaches = (set) => [...set].some((rel) => changed.has(rel));
   return [...keys.entries()]
-    .filter(([, info]) => !info.edgesResolved || reaches(info.closure) || reaches(info.inputs))
+    .filter(([, info]) => (info.narrowed
+      ? info.narrowed.failClosed !== null || reaches(info.narrowed.reach)
+      : !info.edgesResolved || reaches(info.closure) || reaches(info.inputs)))
     .map(([test]) => test);
 }
 

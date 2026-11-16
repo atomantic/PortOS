@@ -4,6 +4,7 @@
  * the input it exercises.
  */
 
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
 import {
@@ -489,6 +490,155 @@ describe('closure-based related selection', () => {
   });
 });
 
+describe('record-aware related selection (#16424)', () => {
+  // hub.js is a lazy hub: it statically imports util.js and lazily imports
+  // lazy.js. user.test.js calls load(), so its green run loaded lazy.js;
+  // bystander.test.js imports the hub and never calls it.
+  const HUB = {
+    ...BASE,
+    'server/lib/hub.js': "import { u } from './util.js';\nexport const load = () => import('./lazy.js');\nexport const hub = u;\n",
+    'server/lib/util.js': 'export const u = 1;\n',
+    'server/lib/lazy.js': 'export const lazy = 1;\n',
+    'server/lib/newLazy.js': 'export const fresh = 1;\n',
+    'server/lib/user.test.js': "import { it } from 'vitest';\nimport { load } from './hub.js';\nit('u', async () => { await load(); });\n",
+    'server/lib/bystander.test.js': "import { it } from 'vitest';\nimport { hub } from './hub.js';\nit('b', () => hub);\n",
+    'server/lib/unrecorded.test.js': "import { it } from 'vitest';\nimport { hub } from './hub.js';\nit('n', () => hub);\n",
+  };
+  const TESTS = ['server/lib/bystander.test.js', 'server/lib/unrecorded.test.js', 'server/lib/user.test.js'];
+  const LOADED = {
+    'server/lib/user.test.js': ['server/lib/hub.js', 'server/lib/lazy.js', 'server/lib/user.test.js', 'server/lib/util.js'],
+    'server/lib/bystander.test.js': ['server/lib/bystander.test.js', 'server/lib/hub.js', 'server/lib/util.js'],
+  };
+  // The digest a v2 record stores, computed independently of the analyzer: sha256, 16 hex.
+  const digest = (files, rel) => (rel in files ? createHash('sha256').update(files[rel]).digest('hex').slice(0, 16) : '0'.repeat(16));
+  /** Keys for `now`, with v2 records written when the tree was `recordedFrom` (default: `now`). */
+  const keysFor = (now, { recordedFrom = now, loaded = LOADED, digests = true, tests = TESTS } = {}) => computeTestMemoKeys(tests, options(now, {
+    records: new Map(Object.entries(loaded)),
+    digests: digests ? new Map(Object.entries(loaded).map(([test, modules]) => [test, modules.map((rel) => digest(recordedFrom, rel))])) : new Map(),
+  }));
+  const unnarrowed = (now) => computeTestMemoKeys(TESTS, options(now));
+
+  it('selects a recorded test only through what it loaded, and an unrecorded test through the whole lazy closure', () => {
+    const keys = keysFor(HUB);
+    expect(keys.get('server/lib/user.test.js').narrowed).not.toBeNull();
+    expect(keys.get('server/lib/unrecorded.test.js').narrowed).toBeNull();
+    expect(relatedTests(keys, ['server/lib/lazy.js'])).toEqual(['server/lib/unrecorded.test.js', 'server/lib/user.test.js']);
+    // Before: the lazy edge put every hub importer in the selection.
+    expect(relatedTests(unnarrowed(HUB), ['server/lib/lazy.js'])).toEqual(TESTS);
+    // Static closures and the hub itself still select every importer.
+    for (const source of ['server/lib/hub.js', 'server/lib/util.js']) expect(relatedTests(keys, [source]), source).toEqual(TESTS);
+    expect(relatedTests(keys, ['server/lib/nothing.js'])).toEqual([]);
+  });
+
+  it('selects a test with no record, or with a record from before digests, exactly as before', () => {
+    const variants = {
+      ...HUB,
+      'server/lib/hub.js': "import { u } from './util.js';\nexport const load = (name) => import(name);\nexport const more = () => import('./lazy.js');\nexport const hub = u;\n",
+    };
+    for (const tree of [HUB, variants]) {
+      const before = unnarrowed(tree);
+      const legacy = keysFor(tree, { digests: false });
+      for (const info of legacy.values()) expect(info.narrowed).toBeNull();
+      for (const source of Object.keys(tree)) {
+        expect(relatedTests(legacy, [source]), source).toEqual(relatedTests(before, [source]));
+        // In a mixed store the unrecorded test keeps exactly its old membership.
+        const mixed = relatedTests(keysFor(tree), [source]).includes('server/lib/unrecorded.test.js');
+        expect(mixed, source).toBe(relatedTests(before, [source]).includes('server/lib/unrecorded.test.js'));
+      }
+    }
+  });
+
+  it('keeps selecting every test that recorded an importer once it gains a new lazy edge', () => {
+    // Another change added `import('./newLazy.js')` to the hub after the records were written.
+    const gained = { ...HUB, 'server/lib/hub.js': "import { u } from './util.js';\nexport const load = () => import('./lazy.js');\nexport const next = () => import('./newLazy.js');\nexport const hub = u;\n" };
+    const keys = keysFor(gained, { recordedFrom: HUB });
+    // The change that adds the edge selects every recorder of the importer...
+    expect(relatedTests(keys, ['server/lib/hub.js'])).toEqual(TESTS);
+    // ...and so does a later change to the new lazy target alone, before any re-record:
+    // the hub's digest no longer matches, so its closure is walked whole.
+    expect(relatedTests(keys, ['server/lib/newLazy.js'])).toEqual(TESTS);
+    // Once a green run re-records with the new bytes, a bystander that never calls it narrows again.
+    expect(relatedTests(keysFor(gained), ['server/lib/newLazy.js'])).toEqual(['server/lib/unrecorded.test.js']);
+  });
+
+  it('fails closed on an unresolved edge only where the record cannot vouch for the walk', () => {
+    const dynamic = { ...HUB, 'server/lib/util.js': 'export const u = 1;\nexport const any = (name) => import(name);\n' };
+    // util.js is recorded and unchanged: the run's record covers what it loaded.
+    expect(relatedTests(keysFor(dynamic), ['server/lib/nothing.js'])).toEqual(['server/lib/unrecorded.test.js']);
+    // Changed since the record: its non-literal import could reach anything now.
+    const changed = { ...dynamic, 'server/lib/util.js': `${dynamic['server/lib/util.js']}// edited\n` };
+    expect(relatedTests(keysFor(changed, { recordedFrom: dynamic }), ['server/lib/nothing.js'])).toEqual(TESTS);
+  });
+
+  it('keeps a spawned side module whole and fails closed on its unresolved edges, but not on a tree only copied as data', () => {
+    const tree = {
+      ...HUB,
+      'server/lib/templates/page.js': 'export const page = (name) => import(name);\n',
+      'server/lib/worker.js': "export const run = (name) => import(name);\nimport './helper.js';\n",
+      'server/lib/helper.js': 'export const h = 1;\n',
+      'server/lib/hub.js': [
+        "import { readdir } from 'node:fs/promises';",
+        "import { spawn } from 'node:child_process';",
+        "import { join } from 'node:path';",
+        "import { u } from './util.js';",
+        "export const copy = (id) => readdir(join(import.meta.dirname, 'templates', id));",
+        "export const start = () => spawn(process.execPath, [new URL('./worker.js', import.meta.url).pathname]);",
+        'export const hub = u;',
+      ].join('\n'),
+    };
+    const only = (test) => keysFor(tree, { tests: [test], loaded: { [test]: LOADED['server/lib/bystander.test.js'] } });
+    const keys = only('server/lib/bystander.test.js');
+    // The spawned worker's whole closure is in reach, and its non-literal import fails closed.
+    expect(keys.get('server/lib/bystander.test.js').narrowed.failClosed).toMatch(/worker\.js/);
+    const copied = { ...tree, 'server/lib/hub.js': tree['server/lib/hub.js'].replace(/^export const start.*$/m, '') };
+    const quiet = keysFor(copied, { tests: ['server/lib/bystander.test.js'], loaded: { 'server/lib/bystander.test.js': LOADED['server/lib/bystander.test.js'] } });
+    expect(quiet.get('server/lib/bystander.test.js').narrowed.failClosed).toBeNull();
+    // A copied template is still an input: editing it selects the test.
+    expect(relatedTests(quiet, ['server/lib/templates/page.js'])).toEqual(['server/lib/bystander.test.js']);
+    expect(relatedTests(keys, ['server/lib/helper.js'])).toEqual(['server/lib/bystander.test.js']);
+  });
+
+  it('counts JS read as text by its bytes, and by its closure only when the reader can evaluate it', () => {
+    const reader = (extra = '') => ({
+      ...HUB,
+      'server/lib/source.js': "import './sourceDep.js';\nexport const s = 1;\n",
+      'server/lib/sourceDep.js': 'export const d = 1;\n',
+      'server/lib/bystander.test.js': [
+        "import { it } from 'vitest';",
+        "import { readFileSync } from 'node:fs';",
+        "import { hub } from './hub.js';",
+        "const text = readFileSync(new URL('./source.js', import.meta.url), 'utf8');",
+        extra,
+        "it('b', () => hub && text);",
+      ].join('\n'),
+    });
+    const test = 'server/lib/bystander.test.js';
+    const keysOf = (files) => keysFor(files, { tests: [test], loaded: { [test]: LOADED[test] } });
+    const plain = keysOf(reader());
+    expect(relatedTests(plain, ['server/lib/source.js'])).toEqual([test]);
+    expect(relatedTests(plain, ['server/lib/sourceDep.js'])).toEqual([]);
+    // Evaluating the text through a data: URL runs its imports, so they count too (and cannot fail closed).
+    const evaluating = keysOf(reader("const mod = await import(`data:text/javascript,${encodeURIComponent(text)}`);"));
+    expect(evaluating.get(test).narrowed.failClosed).toBeNull();
+    expect(relatedTests(evaluating, ['server/lib/sourceDep.js'])).toEqual([test]);
+  });
+
+  it('does not narrow a record the recorded key rejects: a deleted member or one outside the repository', () => {
+    const gone = { ...HUB };
+    delete gone['server/lib/lazy.js'];
+    gone['server/lib/hub.js'] = "import { u } from './util.js';\nexport const hub = u;\n";
+    // The record names a module that no longer exists, so the test is selected as before: the
+    // importer edit that dropped the import selects it, as it does every hub importer.
+    const deleted = keysFor(gone, { recordedFrom: HUB });
+    expect(deleted.get('server/lib/user.test.js').narrowed).toBeNull();
+    expect(relatedTests(deleted, ['server/lib/hub.js'])).toEqual(TESTS);
+    // A record that reaches outside the repository is not memoizable, so it cannot narrow either.
+    const outside = keysFor(HUB, { loaded: { ...LOADED, 'server/lib/user.test.js': [...LOADED['server/lib/user.test.js'], '../outside/x.js'] } });
+    expect(outside.get('server/lib/user.test.js').recorded.memoizable).toBe(false);
+    expect(outside.get('server/lib/user.test.js').narrowed).toBeNull();
+  });
+});
+
 describe('extractFileFacts', () => {
   it('resolves anchored literals, directories, templates and spawned scripts', () => {
     const src = [
@@ -504,10 +654,10 @@ describe('extractFileFacts', () => {
     ].join('\n');
     const facts = extractFileFacts(src, { fileRel: 'server/lib/x.test.js', cwdRel: 'server' });
     expect(facts.paths).toEqual(expect.arrayContaining([
-      { rel: 'docs/API.md', walk: false },
-      { rel: 'server/lib/x.json', walk: false },
-      { rel: 'scripts/tool.js', walk: true },
-      { rel: 'data/settings.json', walk: false },
+      { rel: 'docs/API.md', walk: false, read: true },
+      { rel: 'server/lib/x.json', walk: false, read: true },
+      { rel: 'scripts/tool.js', walk: true, read: false },
+      { rel: 'data/settings.json', walk: false, read: true },
     ]));
     expect(facts.paths.map((p) => p.rel)).not.toContain('');
     expect(facts.dirs.map((d) => d.rel)).toContain('server/lib/fixtures');

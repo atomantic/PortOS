@@ -5,11 +5,15 @@
  * `PORTOS_TEST_MEMO_DIR` says otherwise):
  *
  *   entries/<key[0..2]>/<key>.json   { test, workspace, verifiedAt, source, commit }
- *   records/<workspace>/<sha256(test)>.json   { test, modules: [repo-relative...], recordedAt }
+ *   records/<workspace>/<sha256(test)>.json   { version: 2, test, modules: [repo-relative...], digests: [...], recordedAt }
  *
  * An entry says "a trusted run verified this key green". A record says which
  * modules the test loaded in its last green run, so the next key can be
- * computed over that exact set (`testMemo.js`, recorded key).
+ * computed over that exact set (`testMemo.js`, recorded key). A version 2
+ * record also stores each module's truncated content digest, aligned with
+ * `modules`; only such a record narrows related selection (`recordedReach`),
+ * because the digests show which loaded modules changed since the run. A
+ * record without them still feeds the recorded key.
  *
  * Several worktrees run pregate at once against the same directory: every
  * write is a temp file renamed into place, so a reader never sees a torn
@@ -20,7 +24,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -71,15 +75,78 @@ export function writeMemoEntry(dir, key, { test, workspace, source, commit }) {
   writeJsonAtomic(entryPath(dir, key), { test, workspace, verifiedAt: new Date().toISOString(), source, commit: commit ?? null });
 }
 
-/** The module list `test` loaded in its last recorded green run, or null. */
+export const MEMO_RECORD_VERSION = 2;
+const DIGEST_PATTERN = /^[0-9a-f]{8,64}$/;
+
+/**
+ * `{ modules, digests }` for the modules `test` loaded in its last recorded
+ * green run, or null. `digests` is null unless the record is version 2 with
+ * one well-formed digest per module.
+ */
 export function readMemoRecord(dir, workspace, test) {
   if (!dir) return null;
   const record = readJson(recordPath(dir, workspace, test));
   if (!record || record.test !== test || !Array.isArray(record.modules) || !record.modules.every((m) => typeof m === 'string')) return null;
-  return record.modules;
+  const digests = record.version === MEMO_RECORD_VERSION && Array.isArray(record.digests) && record.digests.length === record.modules.length
+    && record.digests.every((digest) => typeof digest === 'string' && DIGEST_PATTERN.test(digest)) ? record.digests : null;
+  return { modules: record.modules, digests };
 }
 
-export function writeMemoRecord(dir, workspace, test, modules) {
+/** `digestOf(rel)` gives each module's digest; a module without one leaves the record digest-free (no narrowing). */
+export function writeMemoRecord(dir, workspace, test, modules, digestOf = () => null) {
   if (!dir) return;
-  writeJsonAtomic(recordPath(dir, workspace, test), { test, modules: [...modules].sort(), recordedAt: new Date().toISOString() });
+  const sorted = [...modules].sort();
+  const digests = sorted.map((rel) => digestOf(rel));
+  const complete = digests.every((digest) => typeof digest === 'string');
+  writeJsonAtomic(recordPath(dir, workspace, test), complete
+    ? { version: MEMO_RECORD_VERSION, test, modules: sorted, digests, recordedAt: new Date().toISOString() }
+    : { test, modules: sorted, recordedAt: new Date().toISOString() });
+}
+
+const listDir = (path) => {
+  try { return readdirSync(path); } catch { return []; }
+};
+
+/**
+ * Fold `sourceDir`'s store into `targetDir`. A matrix shard only records the
+ * tests in its slice, so a job that restores one shard's lineage would see
+ * records for that slice alone and select everything else unnarrowed; the
+ * CI restore merges every full-run shard lineage (`.github/actions/test-memo`).
+ * An entry is copied when the target lacks one that is younger, a record when
+ * the target's is missing or older; unreadable or foreign files are skipped,
+ * and expired entries are left behind (they are misses anyway, and copying
+ * them would only grow the cache). Returns the counts copied.
+ */
+export function mergeMemoStore(targetDir, sourceDir, { now = Date.now() } = {}) {
+  const copied = { entries: 0, records: 0 };
+  const stamp = (value, field) => {
+    const time = Date.parse(value?.[field]);
+    return Number.isFinite(time) ? time : null;
+  };
+  for (const bucket of listDir(join(sourceDir, 'entries'))) {
+    for (const name of listDir(join(sourceDir, 'entries', bucket))) {
+      const key = name.replace(/\.json$/, '');
+      if (!KEY_PATTERN.test(key) || bucket !== key.slice(0, 2)) continue;
+      const entry = readJson(join(sourceDir, 'entries', bucket, name));
+      const verified = stamp(entry, 'verifiedAt');
+      if (verified === null || now - verified > MAX_ENTRY_AGE_MS) continue;
+      const existing = stamp(readJson(entryPath(targetDir, key)), 'verifiedAt');
+      if (existing !== null && existing >= verified) continue;
+      writeJsonAtomic(entryPath(targetDir, key), entry);
+      copied.entries += 1;
+    }
+  }
+  for (const workspace of listDir(join(sourceDir, 'records'))) {
+    for (const name of listDir(join(sourceDir, 'records', workspace))) {
+      const record = readJson(join(sourceDir, 'records', workspace, name));
+      if (typeof record?.test !== 'string' || recordPath(sourceDir, workspace, record.test) !== join(sourceDir, 'records', workspace, name)) continue;
+      const recorded = stamp(record, 'recordedAt');
+      if (recorded === null) continue;
+      const existing = stamp(readJson(recordPath(targetDir, workspace, record.test)), 'recordedAt');
+      if (existing !== null && existing >= recorded) continue;
+      writeJsonAtomic(recordPath(targetDir, workspace, record.test), record);
+      copied.records += 1;
+    }
+  }
+  return copied;
 }
