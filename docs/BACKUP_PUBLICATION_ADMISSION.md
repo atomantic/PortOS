@@ -132,10 +132,10 @@ Admission inventory (`withBackupAssetPublication`):
 | Owner | Status |
 | --- | --- |
 | Music Designer take publication (`musicTakePublication.js`) | Covered (#9980) |
-| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
+| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/persistence.js`) | Covered |
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
-| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/index.js`) | Covered: only an admitted snapshot commits it (#9982) |
+| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/persistence.js`) | Covered: only an admitted snapshot commits it (#9982) |
 | Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982) |
 | Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982) |
 | Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
