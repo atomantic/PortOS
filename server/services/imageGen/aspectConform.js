@@ -17,7 +17,10 @@ const ASPECT_TOLERANCE = 0.02;
 
 const positive = (n) => Number.isFinite(Number(n)) && Number(n) > 0;
 
-// Crop box conforming a frame to the target ratio, or null when within tolerance or unusable.
+/**
+ * Crop box conforming a frame to the target ratio, or null when within tolerance or unusable.
+ * @returns {{ width: number, height: number }|null}
+ */
 export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
   if (![srcW, srcH, targetW, targetH].every(positive)) return null;
   const target = targetW / targetH;

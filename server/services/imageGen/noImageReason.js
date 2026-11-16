@@ -13,8 +13,13 @@ const isStructuralNoise = (line) => /^-{2,}$/.test(line) || /^[\d,]+$/.test(line
 const NARRATION_LINES = 4;
 const NARRATION_MAX_CHARS = 600;
 
-// opts: `hint` fallback when nothing usable was said, `dropLine` extra per-provider
-// filter, `describe` phrases the quoted output.
+/**
+ * @param {string} stdoutTail  rolling tail of the child's stdout
+ * @param {object} opts
+ * @param {string} opts.hint       fallback message when nothing usable was said
+ * @param {(line: string) => boolean} [opts.dropLine]  extra per-provider filter
+ * @param {(said: string) => string} opts.describe     phrase the quoted output
+ */
 export function buildNoImageReason(stdoutTail = '', { hint, dropLine, describe }) {
   const clean = stripAnsi(String(stdoutTail)).trim();
   const lines = clean.split('\n')

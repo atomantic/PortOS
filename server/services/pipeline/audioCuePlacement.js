@@ -4,8 +4,13 @@
  * cue to its span, so each beat gets an equal stretch of the ffprobed duration.
  */
 
-// Returns a NEW cue array with `startSec`/`endSec`: N equal stretches, the last
-// pinned to end exactly at `totalDurationSec` (> 0).
+/**
+ * Returns a NEW cue array with `startSec`/`endSec`: N equal stretches, the last
+ * pinned to end exactly at `totalDurationSec` (> 0).
+ * @param {Array} cues               ordered cue objects (need at least `id`)
+ * @param {number} totalDurationSec  episode length in seconds (> 0)
+ * @returns {Array} cues with startSec/endSec set
+ */
 export function placeCuesOnTimeline(cues, totalDurationSec) {
   if (!Array.isArray(cues) || cues.length === 0) return [];
   const total = Number(totalDurationSec);

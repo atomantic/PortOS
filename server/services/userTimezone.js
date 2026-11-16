@@ -28,7 +28,7 @@ export async function getUserTimezone() {
  * settings.js `save()`), or null when never recorded: callers must not treat
  * absence as a floor. Schedulers use it to avoid replaying a slot from a
  * timezone no longer active (catchUpMissedSlot in meatspacePostReminder.js).
- * @returns {Promise<number|null>}
+ * @returns {Promise<number|null>} UTC ms, or null when unset.
  */
 export async function getTimezoneUpdatedAt() {
   const settings = await getSettings()

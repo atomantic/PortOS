@@ -7,7 +7,13 @@
 
 import { formatPlannerLabelGuidance, resolvePlannerId, MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
 
-/** The `## Planner Attribution` section, or '' when no identity resolves (never invite a guessed label). */
+/**
+ * The `## Planner Attribution` section, or '' when no identity resolves (never invite a guessed label).
+ * @param {object} options
+ * @param {string|null} [options.providerId] - resolved provider id
+ * @param {string|null} [options.model] - resolved per-task model
+ * @param {'gh'|'glab'} [options.forgeCli] - forge the run would file into
+ */
 export function buildPlannerAttributionSection({ providerId = null, model = null, forgeCli = 'gh' } = {}) {
   const guidance = formatPlannerLabelGuidance(
     resolvePlannerId({ providerId, model }),
@@ -26,6 +32,7 @@ const EMBEDDED_CONTRACT = collapseWhitespace(MANDATORY_DISPATCH_HINT_GUIDANCE);
  * prompt). Whitespace-collapsed match: an indented copy matches, a paraphrase does not.
  * Attribution is always emitted: a task cannot name its own model.
  * @param {string[]} [options.taskBody] - rendered task parts (description, context)
+ * @param {object} [options]
  */
 export function buildIssueFilingSection({ taskBody = [], ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);

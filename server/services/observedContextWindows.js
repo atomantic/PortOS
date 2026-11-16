@@ -9,9 +9,13 @@ import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { aliasServedContextWindows, mergeObservedContextWindows } from '../lib/providerContextWindows.js';
 import { probeOpenAiModelsCached } from '../lib/openAiModelsProbeCache.js';
 
-// Windows the provider's daemon serves now (null when none), keyed by both the
-// daemon's bare id and the `<kind>/`-prefixed form `resolveEffectiveModel` yields.
-// `provider` must be a RAW record (endpoint + envVars intact).
+/**
+ * Windows the provider's daemon serves now (null when none), keyed by both the
+ * daemon's bare id and the `<kind>/`-prefixed form `resolveEffectiveModel` yields.
+ * @param {object} provider — a RAW provider record (endpoint + envVars intact)
+ * @param {{probe?: Function}} [deps]
+ * @returns {Promise<Record<string, number>|null>}
+ */
 export async function observedContextWindows(provider, deps = {}) {
   const runtime = localRuntimeForProvider(provider);
   // Cloud endpoints are not ours to probe; their windows arrive via model refresh.
@@ -22,9 +26,14 @@ export async function observedContextWindows(provider, deps = {}) {
   return aliasServedContextWindows(provider, runtime, result?.contextWindows);
 }
 
-// `provider` with its daemon's live windows merged into `modelContextWindows`
-// (same object when nothing is observed; in-memory only). Ranking lives in
-// `lib/providerContextWindows.js`, shared with the provider card.
+/**
+ * `provider` with its daemon's live windows merged into `modelContextWindows`
+ * (same object when nothing is observed; in-memory only). Ranking lives in
+ * `lib/providerContextWindows.js`, shared with the provider card.
+ * @param {object} provider
+ * @param {{probe?: Function}} [deps]
+ * @returns {Promise<object>}
+ */
 export async function withObservedContextWindows(provider, deps = {}) {
   return mergeObservedContextWindows(provider, await observedContextWindows(provider, deps));
 }

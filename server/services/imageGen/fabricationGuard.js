@@ -21,12 +21,18 @@ const CODE_DIRS = new Set(['__pycache__', 'node_modules', 'venv', '.venv']);
 /**
  * The clause that forbids producing the image by any means other than the named tool.
  * Naming failure as the correct outcome is what makes the prohibition followable.
+ * @param {string} toolName - the provider's image tool (`generate_image`, `image_gen`)
  */
 export const noFabricationClause = (toolName) =>
   `Only the ${toolName} tool may produce this image. Do not draw, render, or assemble it by any other means — no code, no scripts, no plotting or imaging libraries, no HTML/SVG/canvas rendering, and no placeholder, mock-up or diagram standing in for the image. If ${toolName} is unavailable, rate-limited, refuses, or errors, write nothing at that path and report what went wrong. Reporting the failure is the correct outcome; an image produced any other way is a failed run.`;
 
-// Scan a finished scratch dir for evidence the agent drew the image with code; returns the
-// failure reason or null. Only source files and interpreter caches count; CLI logs are ignored.
+/**
+ * Scan a finished scratch dir for evidence the agent drew the image with code. Only source
+ * files and interpreter caches count; CLI logs are ignored.
+ * @param {string} scratchDir - the throwaway cwd the CLI ran in
+ * @param {string} toolName - the image tool that should have produced the file
+ * @returns {Promise<string|null>} failure reason, or null if clean
+ */
 export async function checkFabrication(scratchDir, toolName) {
   // A failed scan is not a clean scan, but this is only a backstop: fail open (loudly)
   // rather than discard a render the user already spent quota on. ENOENT is a clean answer.

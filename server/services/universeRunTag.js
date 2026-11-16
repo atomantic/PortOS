@@ -23,7 +23,8 @@ import { findOrCreateUniverseCollection } from './mediaCollections.js';
  * @param {string} [args.runId] - minted per call when omitted.
  * @param {object|null} [args.collection] - `undefined` provisions; an explicit `null` means "already resolved, none".
  * @param {string} [args.errorContext] - prefix for the provisioning error log.
- * @returns {Promise<object|undefined>}
+ * @returns {Promise<object|undefined>} the `universeRun` tag, or `undefined` when there
+ *   is no collection and no `entryRef`.
  */
 export async function buildUniverseRunTag({
   universeId,
