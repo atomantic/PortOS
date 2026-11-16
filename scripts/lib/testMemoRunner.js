@@ -6,7 +6,10 @@
  *
  * Selection is closure-based (`testMemo.js`): in `related` mode a test is
  * selected when a changed source is in its module closure, or when its edges
- * could not all be resolved. The planner's explicit files are always added.
+ * could not all be resolved. A test with a version 2 memo record (per-module
+ * digests) is narrowed: lazy `import()` edges count only where the record
+ * cannot vouch for them (`recordedReach`), so a hub's lazy fan-out no longer
+ * selects every suite. The planner's explicit files are always added.
  * Vitest then receives the exact list through a selection file
  * (`vitestRunnerSelection` in `scripts/vitestCiPool.js`).
  *
@@ -74,12 +77,12 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
-  const analyze = (test, recorded) => {
+  const analyze = (test, recorded, digests = null) => {
     if (!primary) {
       const analyzer = createTestMemoAnalyzer(options);
       primary = { analyzer, baseClosure: analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[scope], WORKSPACE_SETUP_ENTRIES[scope]) };
     }
-    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded });
+    return primary.analyzer.analyzeTest(test, { baseClosure: primary.baseClosure, recorded, digests });
   };
   // A second analyzer with empty caches re-reads every input after the run,
   // so an entry is written only for inputs that did not change meanwhile.
@@ -91,6 +94,8 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     }
     return fresh.analyzer.analyzeTest(test, { baseClosure: fresh.baseClosure, recorded });
   };
+  // Digests for a new record come from the post-run analyzer, whose key matched the pre-run one.
+  const moduleDigest = (rel) => fresh?.analyzer.moduleDigest(rel) ?? null;
 
   // Closures are needed to look up memo entries and to resolve a related
   // plan. With the memo off, a full or files plan is just its list — the
@@ -98,7 +103,12 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   // least of all for a launcher the browser supervisor holds to a deadline.
   const verdicts = new Map();
   if (memoDir || mode === 'related') {
-    for (const test of candidates) if (!unmemoizable.has(test)) verdicts.set(test, analyze(test, memoDir ? readRecord(memoDir, scope, test) : null));
+    for (const test of candidates) {
+      if (unmemoizable.has(test)) continue;
+      const record = memoDir ? readRecord(memoDir, scope, test) : null;
+      // Digests only matter to related selection; other modes skip the narrowed walk.
+      verdicts.set(test, analyze(test, record?.modules ?? null, mode === 'related' ? record?.digests ?? null : null));
+    }
   }
 
   const selected = mode === 'related'
@@ -121,11 +131,12 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     run.push(test);
     if (info && !info.floor.memoizable) reasons.set(test, info.recorded?.memoizable ? 'no green entry yet (recorded key)' : info.recorded?.reason ?? info.floor.reason);
   }
-  return { selected, slice, run, skipped, reasons, unanalyzed, analyze, freshAnalyze, verdicts };
+  const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
+  return { selected, slice, run, skipped, reasons, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts };
 }
 
 export function memoSummaryLine(plan) {
-  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.${plan.unanalyzed ? ` ${plan.unanalyzed} never-memoized guards not analyzed.` : ''}`;
+  return `🧠 Test memo: skipped ${plan.skipped.length} of ${plan.slice.length} selected files (closure unchanged); running ${plan.run.length}.${plan.unanalyzed ? ` ${plan.unanalyzed} never-memoized guards not analyzed.` : ''}${plan.narrowed ? ` Related selection used ${plan.narrowed} digest records.` : ''}`;
 }
 
 /** Vitest's `BaseSequencer.calculateShardRange`: the [start, end) slice of `count` hash-sorted files for shard `index` of `total`. */
@@ -228,16 +239,21 @@ export function passedTestFiles(fileResults, { repoRoot, namePattern = false, st
 /**
  * Vitest's recorded depfile: test -> modules it loaded, both repo-relative.
  * A test recorded by several projects gets the union, so a stale project
- * entry can only widen a record. Null when absent or unreadable.
+ * entry can only widen a record. Null when absent, unreadable, or a format
+ * this reader does not know. Version 1 maps a test to its module indexes;
+ * version 2 (Vitest 5.1's `DependenciesCache`) to `{ at, deps }`. Reading
+ * only version 1 silently stopped every record and recorded-key entry after
+ * the 5.1 bump, so the runner tests pin the installed Vitest's real output.
  */
 export function readVitestDependencies(path, scope) {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
-    if (parsed?.version !== 1 || typeof parsed.projects !== 'object') return null;
+    if (![1, 2].includes(parsed?.version) || typeof parsed.projects !== 'object') return null;
     const out = new Map();
     for (const project of Object.values(parsed.projects)) {
       if (!Array.isArray(project?.modules) || typeof project.files !== 'object') continue;
-      for (const [test, indexes] of Object.entries(project.files)) {
+      for (const [test, entry] of Object.entries(project.files)) {
+        const indexes = parsed.version === 1 ? entry : entry?.deps;
         if (!Array.isArray(indexes)) continue;
         // Vite's own virtual modules (`/@vite/client` under happy-dom) are not files.
         const modules = indexes.map((index) => project.modules[index])
@@ -318,7 +334,7 @@ export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, depende
     if (!modules) continue;
     const recorded = plan.analyze(test, modules).recorded;
     if (!recorded?.memoizable || after.recorded?.key !== recorded.key) continue;
-    writeRecord(memoDir, scope, test, modules);
+    writeRecord(memoDir, scope, test, modules, plan.moduleDigest);
     writeEntry(memoDir, recorded.key, meta);
     written += 1;
   }

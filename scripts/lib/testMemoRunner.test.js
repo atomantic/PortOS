@@ -5,7 +5,8 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -65,7 +66,7 @@ describe('planTestMemo and recordTestMemo', () => {
       const impact = buildCiTestPlan([source], { trackedFiles: [guard, source] });
       expect(impact.full).toBe(false);
       const memo = plan({ mode: impact.server.mode, repoFiles: impact.server.files, repoSources: impact.server.sources,
-        listTests: () => ['lib/layering.test.js'], readRecord: () => [guard], readEntry: () => true });
+        listTests: () => ['lib/layering.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
       expect(memo.selected).toContain(guard);
       expect(memo.skipped).toEqual([]);
       expect(memo.run).toContain(guard);
@@ -132,11 +133,21 @@ describe('planTestMemo and recordTestMemo', () => {
       parallel: { modules: ['lib/x.test.js', 'lib/x.js'], files: { 'lib/x.test.js': [0, 1] } },
     } }));
     expect(readVitestDependencies(twice, 'server').get('server/lib/x.test.js')).toEqual(['server/lib/newDep.js', 'server/lib/x.js', 'server/lib/x.test.js']);
+    // Vitest 5.1 writes version 2: each file maps to `{ at, deps }`; an unknown version is no records at all.
+    const v2 = join(root, 'v2.json');
+    writeFileSync(v2, JSON.stringify({ version: 2, projects: { parallel: {
+      modules: ['lib/x.test.js', 'lib/x.js'], config: { at: 1, deps: [] }, files: { 'lib/x.test.js': { at: 1, deps: [0, 1] } },
+    } } }));
+    expect(readVitestDependencies(v2, 'server').get('server/lib/x.test.js')).toEqual(['server/lib/x.js', 'server/lib/x.test.js']);
+    writeFileSync(v2, JSON.stringify({ version: 3, projects: {} }));
+    expect(readVitestDependencies(v2, 'server')).toBeNull();
     expect(dependencies.get('server/lib/a.test.js')).toEqual(['server/lib/a.js', 'server/lib/a.test.js']);
 
     const written = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed, dependencies, source: 'local', commit: 'abc' });
     expect(written).toBe(2);
-    expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual(['server/lib/a.js', 'server/lib/a.test.js']);
+    // A v2 record: each loaded module's digest, so related selection can narrow it.
+    expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual({ modules: ['server/lib/a.js', 'server/lib/a.test.js'],
+      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)) });
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/a.test.js').floor.key, { test: 'server/lib/a.test.js', workspace: 'server' })).toMatchObject({ source: 'local', commit: 'abc' });
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/b.test.js').floor.key, { test: 'server/lib/b.test.js', workspace: 'server' })).toBeNull();
@@ -183,6 +194,59 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(off.verdicts.size).toBe(0);
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
+
+  // The #16424 probe: real Vitest records what each test loaded, the record
+  // narrows related selection, and a deliberately broken lazily imported
+  // module is still caught by the tests the narrowed plan selects.
+  it('catches a broken lazily imported module through record-narrowed selection, from a real Vitest depfile', () => {
+    // realpath: Vitest reports resolved paths, and macOS tmpdir is a symlink.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-memo-probe-')));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-probe-store-'));
+    const probe = {
+      ...FILES,
+      'server/lib/probeHub.js': "export const load = () => import('./probeLazy.js');\nexport const hub = 1;\n",
+      'server/lib/probeLazy.js': 'export const answer = () => 42;\n',
+      // Globals, not `import … from 'vitest'`: the fixture's vitest package is a stub.
+      'server/lib/user.test.js': "import { load } from './probeHub.js';\nit('reads the lazy answer', async () => { expect((await load()).answer()).toBe(42); });\n",
+      'server/lib/bystander.test.js': "import { hub } from './probeHub.js';\nit('never loads the lazy module', () => { expect(hub).toBe(1); });\n",
+      'server/vitest.probe.config.mjs': "export default { cacheDir: '.cache/vitest', test: { globals: true, include: ['lib/**/*.test.js'], maxWorkers: 1 } };\n",
+    };
+    writeRepo(root, probe);
+    const tests = ['lib/a.test.js', 'lib/b.test.js', 'lib/bystander.test.js', 'lib/c.test.js', 'lib/user.test.js'];
+    const user = 'server/lib/user.test.js';
+    const bystander = 'server/lib/bystander.test.js';
+    const report = join(root, 'report.json');
+    const vitest = (files, extra = []) => spawnSync(process.execPath, [join(import.meta.dirname, '../../server/node_modules/vitest/vitest.mjs'),
+      'run', ...files.map((rel) => rel.replace(/^server\//, '')), '--config', 'vitest.probe.config.mjs', '--reporter=json', `--outputFile=${report}`, ...extra], {
+      cwd: join(root, 'server'), encoding: 'utf8', timeout: 60000,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_MEMO: 'off' },
+    });
+
+    // A trusted green full run records both suites (v2 records, with digests).
+    const full = plan({ listTests: () => tests, repoFiles: [user, bystander] });
+    const green = vitest(full.run, ['--experimental.recordDependencies']);
+    expect(green.status, green.stderr).toBe(0);
+    const dependencies = readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server');
+    expect(dependencies?.get(user)).toContain('server/lib/probeLazy.js');
+    expect(dependencies.get(bystander)).not.toContain('server/lib/probeLazy.js');
+    const passed = passedTestFiles(fileResultsFromReport(report), { repoRoot: root, status: 0, runReport: { reason: 'passed', errorCount: 0 } });
+    expect(passed).toEqual(expect.arrayContaining([user, bystander]));
+    recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed, dependencies, source: 'ci', commit: 'abc' });
+    expect(readMemoRecord(memoDir, 'server', bystander).digests).toHaveLength(dependencies.get(bystander).length);
+
+    // Break the lazy module. Before #16424 the hub's lazy edge selected every importer.
+    writeFileSync(join(root, 'server/lib/probeLazy.js'), 'export const answer = () => 41;\n');
+    const related = (overrides = {}) => plan({ mode: 'related', listTests: () => tests, repoFiles: [], repoSources: ['server/lib/probeLazy.js'], ...overrides });
+    const unnarrowed = related({ readRecord: (dir, scope, test) => ({ modules: readMemoRecord(dir, scope, test)?.modules ?? null, digests: null }) });
+    expect(unnarrowed.selected).toEqual([bystander, user]);
+    const narrowed = related();
+    expect(narrowed.narrowed).toBeGreaterThanOrEqual(2);
+    expect(narrowed.selected).toEqual([user]);
+    expect(narrowed.run).toEqual([user]);
+    const red = vitest(narrowed.run);
+    expect(red.status).toBe(1);
+    expect(fileResultsFromReport(report)).toEqual([expect.objectContaining({ file: join(root, user), status: 'failed' })]);
+  }, 120000);
 
   it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));

@@ -387,7 +387,7 @@ passed is skipped, and new green results are recorded under
 `~/.portos/test-memo/`. Tree-wide scanners and anything that reads repository
 state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
 `PORTOS_TEST_MEMO_VERBOSE=1` lists the skipped files; see
-[GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md#test-memo).
+[TEST_MEMO.md](./TEST_MEMO.md).
 
 Pull requests into `main` run the tests for affected feature directories, with
 conservative fallbacks to the runner's related-test mode or the complete suite; a
