@@ -30,6 +30,7 @@ import { applyPreflightStep, createPreflightState, finalizePreflight, preflightH
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
 import { isUserOriginRequest } from './taskScheduleConstants.js';
 import { isPreflightActive } from './preflightActivity.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 /**
  * How long a card may sit `in_progress` before the orphan sweep calls it
@@ -269,7 +270,7 @@ export async function closeStalePreflightCard(task, now = Date.now()) {
   return updateSchedule(async schedule => {
     const current = await getTaskById(task.id);
     const preflight = current?.metadata?.preflight;
-    const local = current?.metadata?.machineLocal === true || current?.metadata?.machineLocal === 'true';
+    const local = isTruthyMeta(current?.metadata?.machineLocal);
     const requests = schedule.onDemandRequests;
     const handoffs = schedule.onDemandHandoffs;
     if (!local || current.status !== 'in_progress' || !preflight?.requestId || !isStalePreflightCard(current, now)

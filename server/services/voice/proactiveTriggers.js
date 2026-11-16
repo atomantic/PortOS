@@ -175,8 +175,8 @@ export const formatEscalationOpeningLine = (notification) => {
   return `This is PortOS. Something critical is still waiting for you: ${title}.${description ? ` ${description}` : ''}`;
 };
 
-// Truthy check mirroring isTruthyMeta — task metadata round-trips through
-// TASKS.md, so `voiceDispatch: true` comes back as the STRING 'true'. Kept
+// Truthy check mirroring isTruthyMeta — rows stored before #16407 and peers on older versions hold
+// `voiceDispatch: true` as the STRING 'true'. Kept
 // inline so this module stays decoupled from the agent-state helpers.
 
 // Completion of a voice-dispatched coding task, keyed off the task's TERMINAL

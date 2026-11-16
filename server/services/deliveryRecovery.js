@@ -4,6 +4,7 @@ import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
 import { updateTask } from './cosTaskStore.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 /** Adopt old outcome blocks once, retaining the original task, budget and checkout.
  * Manual holds, provider safety refusals and live owners are never revived here.
@@ -16,7 +17,7 @@ export async function recoverLegacyDeliveryBlocks(agents, deps = {}) {
   let recovered = 0;
   for (const task of tasks) {
     if (recovered >= 3) break;
-    if (task.status !== 'blocked' || task.metadata?.spawnBudgetReconciledHold === 'true' || !['task-blocked', 'task-incomplete'].includes(task.metadata?.blockedCategory)
+    if (task.status !== 'blocked' || isTruthyMeta(task.metadata?.spawnBudgetReconciledHold) || !['task-blocked', 'task-incomplete'].includes(task.metadata?.blockedCategory)
       || task.metadata?.legacyDeliveryRecovery || task.metadata?.blocker || isPrivateSecurityTask(task)) continue;
     const outcome = normalizeTaskOutcome(task.metadata.taskOutcome);
     if (!outcome || !['blocked', 'incomplete'].includes(outcome.status)) continue;

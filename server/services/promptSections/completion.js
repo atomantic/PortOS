@@ -592,7 +592,7 @@ export function claimReviewersCsv(task, codeReviewDefaults, defaultReviewers) {
  */
 export function claimResumeContext(task, worktreeInfo = null) {
   const meta = task?.metadata;
-  if (meta?.claimResumeInPlace !== true && meta?.claimResumeInPlace !== 'true') return null;
+  if (!isTruthyMeta(meta?.claimResumeInPlace)) return null;
   const worktreePath = worktreeInfo?.worktreePath || meta.resumeWorktreePath;
   const branchName = worktreeInfo?.branchName || meta.existingBranch;
   const priorAgentId = meta.resumedFromAgentId;

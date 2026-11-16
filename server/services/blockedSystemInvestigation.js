@@ -18,7 +18,7 @@ const eligible = task => {
   const m = task?.metadata || {};
   const category = m.blockedCategory;
   return task?.taskType === 'internal' && task.status === 'blocked' && typeof category === 'string'
-    && m.spawnBudgetReconciledHold !== 'true'
+    && !isTruthyMeta(m.spawnBudgetReconciledHold)
     && !isInvestigationTask(task) && !isPrivateSecurityTask(task) && !isTruthyMeta(task.approvalRequired) && !isTruthyMeta(m.approvalRequired)
     && !(typeof m.blocker === 'string' && m.blocker.trim())
     && m.recoveryOrigin?.subsystem !== 'repository-cleanup'

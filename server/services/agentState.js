@@ -149,7 +149,7 @@ export const hasActiveTaskOwner = (taskId, agents = {}) => {
   return false;
 };
 
-// Metadata booleans may arrive as true/'true' or false/'false' (JSON vs TASKS.md string round-trip)
+// Metadata booleans may arrive as true/'true' or false/'false' (typed rows vs rows stored before #16407 and peers on older versions)
 export { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 
 // Metadata strings may be absent, empty, or non-string (objects/numbers leak past `||` checks).

@@ -42,6 +42,7 @@ import BlockedSystemRecovery from '../BlockedSystemRecovery';
 import { ReleasePublicationLine } from '../AgentResultLine';
 import { isDeliveryCleanupHeld, isRetryHeld } from '../../../../../server/lib/taskRetryHold.js';
 import { hasSpawnBudgetResetPrerequisite } from '../../../../../server/lib/taskBlockCategories.js';
+import { isTruthyMeta } from '../../../../../server/lib/metadataFlags.js';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -861,7 +862,7 @@ export default function TaskItem({ task, agent = null, liveOutput, isSystem, spa
                   && !unconfirmed
                   && !task.metadata?.preflight?.requestId
                   && !hasSpawnBudgetResetPrerequisite(task.metadata) && !isDeliveryCleanupHeld(task.metadata) && !isRetryHeld(task.metadata)
-                  && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || task.metadata?.spawnBudgetReconciledHold === 'true' || budgetResetAvailable)
+                  && (task.status === 'in_progress' || !task.metadata?.spawnBudgetProof || isTruthyMeta(task.metadata?.spawnBudgetReconciledHold) || budgetResetAvailable)
                   && (budgetResetConfirm ? (
                     <ConfirmButtonPair prompt="Reset spawn count to zero and run? Failure count stays." confirmText="Reset and run"
                       ariaLabel="Confirm reset spawn budget and run" busy={budgetResetting} tone="warning" largeTouchTargets

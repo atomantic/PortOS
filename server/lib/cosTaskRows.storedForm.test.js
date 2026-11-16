@@ -1,24 +1,29 @@
 /**
- * Invariant: `storedForm(task, source)` returns exactly what writing the task as
- * one row of the retired Markdown file and reading it back returned,
- * `parseTasksMarkdown(generateTasksMarkdown([task], source === 'internal'))[0]`,
- * including throwing where that round-trip lost the row (#16407 part 1).
+ * The stored form of a CoS task (#16407): metadata keeps its JSON types and nulls,
+ * the description keeps its line breaks.
  *
- * The generator covers the shapes the round-trip was lossy on: scalar metadata
- * (booleans, numbers, NaN), nullish values, nested objects/arrays, empty strings,
- * strings holding newlines, backslashes, `\r`, U+2028, the JSON sentinel, the words
- * `null` / `undefined`, leading/trailing whitespace, descriptions with newlines or a
- * leading `AUTO |` / `APPROVAL |`, Title-Case and invalid metadata keys, ids with
- * and without a registered prefix, numeric ids, unrepresentable statuses and
- * priorities, and every approval-flag combination for both queues.
+ * Invariants, over seeded generated tasks:
  *
- * Outside the generator, by design: ids or keys holding `|`, `:` or a newline
- * (refused or dropped, see `storedId` / `storedKey`; asserted separately below),
- * and non-JSON values (functions, symbols), which no task carries.
+ *  1. Older peers lose nothing. A peer on a version before #16407 stores what it
+ *     receives through the retired Markdown round-trip, so for every task that
+ *     round-trip accepts, `legacy(storedForm(task))` equals `legacy(task)`: the
+ *     typed form carries everything the old form carried.
+ *  2. Storing is idempotent: `storedForm(storedForm(task))` equals
+ *     `storedForm(task)`, so an unchanged task never looks changed to planListSave.
+ *
+ * The generator covers odd strings (newlines, `\r`, U+2028, backslashes, the JSON
+ * sentinel, the words `null` / `undefined`), booleans, numbers, NaN, nulls, nested
+ * metadata, empty values, Title-Case and invalid keys, and every approval-flag
+ * combination for both queues. Invariant 1 skips a description that opens with
+ * `AUTO |` / `APPROVAL |`, which the old reader took as a flag. Outside the
+ * generator, by design: ids or keys holding `|`,
+ * `:` or a newline (refused or dropped, as before #16407).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { storedForm } from './cosTaskRows.js';
 import { generateTasksMarkdown, parseTasksMarkdown } from './legacyTaskMarkdown.js';
+import { isTruthyMeta } from './metadataFlags.js';
+import { mergeTaskLists } from '../services/cosTaskMerge.js';
 
 const SEED = 16407;
 const RUNS = 3000;
@@ -103,62 +108,99 @@ const outcome = (fn) => {
   }
 };
 
-const viaMarkdown = (task, source) => {
+/** What a peer on a version before #16407 stores for a task it receives. */
+const legacy = (task, source) => {
   const [stored] = parseTasksMarkdown(generateTasksMarkdown([task], source === 'internal'));
   if (!stored) throw new Error(`Task ${task?.id} cannot be stored`);
   return stored;
 };
 
-describe('storedForm equals the retired Markdown round-trip', () => {
-  it(`matches it on ${RUNS} generated tasks per queue (seed ${SEED})`, () => {
+const FLAG_TEXT = /^\s*(AUTO|APPROVAL)\s*\|/i;
+const base = { id: 'task-a', status: 'pending', priority: 'MEDIUM', description: 'Do it', metadata: {} };
+
+describe('storedForm keeps types, nulls and line breaks', () => {
+  it('reads { flag: true, n: 3, note: null } back with the same types', () => {
+    const stored = storedForm({ ...base, metadata: { flag: true, n: 3, note: null, gone: undefined, nested: { deep: [1, null] } } }, 'user');
+    expect(stored.metadata).toStrictEqual({ flag: true, n: 3, note: null, nested: { deep: [1, null] } });
+  });
+
+  it('keeps a description\'s newlines and writes every line break as \\n', () => {
+    expect(storedForm({ ...base, description: '  Line one\nLine two\r\nLine three\rLine four\u2028end  ' }, 'user').description)
+      .toBe('Line one\nLine two\nLine three\nLine four\nend');
+  });
+
+  it('keeps strings as they were written, including the old sentinel and null words', () => {
+    const metadata = { a: ' padded ', b: '__json__:5', c: 'null', d: 'true', e: '' };
+    expect(storedForm({ ...base, metadata }, 'user').metadata).toStrictEqual(metadata);
+  });
+
+  it('keeps a row written before #16407 exactly as it is', () => {
+    const old = legacy({ ...base, description: 'Line one\nLine two', metadata: { flag: true, n: 3 } }, 'user');
+    expect(storedForm(old, 'user')).toStrictEqual(old);
+  });
+
+  it('stores a description that opens with "AUTO |" as text, not as an approval flag', () => {
+    expect(storedForm({ ...base, description: 'APPROVAL | hold me' }, 'user'))
+      .toMatchObject({ description: 'APPROVAL | hold me', approvalRequired: false, autoApproved: true });
+  });
+});
+
+describe(`storedForm properties (seed ${SEED})`, () => {
+  it('loses nothing an older peer stores, and is idempotent', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { task } = makeGen(mulberry32(SEED));
-    let stored = 0;
-    let refused = 0;
+    let compared = 0;
     try {
       for (let run = 0; run < RUNS; run++) {
         const input = task();
         for (const source of ['user', 'internal']) {
-          warn.mockClear();
-          const expected = outcome(() => viaMarkdown(structuredClone(input), source));
-          const expectedWarnings = warn.mock.calls.map(([line]) => line.replace(' markdown', ''));
-          warn.mockClear();
-          const actual = outcome(() => storedForm(structuredClone(input), source));
-          const actualWarnings = warn.mock.calls.map(([line]) => line);
           const label = `run ${run} (${source}): ${JSON.stringify(input)}`;
-          expect(actual, label).toStrictEqual(expected);
-          expect(actualWarnings, label).toEqual(expectedWarnings);
-          if (expected.threw) refused++; else stored++;
+          const stored = outcome(() => storedForm(structuredClone(input), source));
+          const before = outcome(() => legacy(structuredClone(input), source));
+          if (stored.threw) {
+            expect(before.threw, label).toBeDefined();
+            continue;
+          }
+          expect(storedForm(structuredClone(stored.value), source), label).toStrictEqual(stored.value);
+          // The old reader took a description opening with `AUTO |` / `APPROVAL |` as the
+          // flag; the stored form keeps it as text (asserted above), so the views differ.
+          if (before.threw || FLAG_TEXT.test(`${input.description}`)) continue;
+          expect(legacy(structuredClone(stored.value), source), label).toStrictEqual(before.value);
+          compared++;
         }
       }
     } finally {
       warn.mockRestore();
     }
-    // The generator must exercise both outcomes, or the comparison proves little.
-    expect(stored).toBeGreaterThan(RUNS);
-    expect(refused).toBeGreaterThan(50);
-  });
-
-  it('keeps the documented example: strings for scalars, no nullish keys, one-line description', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const input = { id: 'task-a', status: 'pending', priority: 'MEDIUM', description: 'Line one\nLine two', metadata: { flag: true, n: 3, note: null } };
-    expect(storedForm(input, 'user')).toStrictEqual(viaMarkdown(input, 'user'));
-    expect(storedForm(input, 'user')).toMatchObject({ description: 'Line one Line two', metadata: { flag: 'true', n: '3' } });
-    warn.mockRestore();
+    expect(compared).toBeGreaterThan(RUNS);
   });
 });
 
-describe('storedForm refuses what the round-trip could only mangle', () => {
-  const base = { status: 'pending', priority: 'HIGH', description: 'Do it', metadata: {} };
+describe('peer merge with one side typed and the other holding strings', () => {
+  const NOW = Date.parse('2026-11-16T12:00:00Z');
+  const typed = storedForm({ ...base, metadata: { openPR: true, retryCount: 2, updatedAt: '2026-11-16T10:00:00.000Z', note: null } }, 'user');
+  const strings = legacy(typed, 'user');
 
-  it('refuses an id holding a pipe instead of re-keying the task under its first segment', () => {
-    // The round-trip stored `task-abc` with the id's tail spliced into the description.
-    expect(viaMarkdown({ ...base, id: 'abc|HIGH' }, 'user')).toMatchObject({ id: 'task-abc', description: 'HIGH | Do it' });
-    expect(() => storedForm({ ...base, id: 'abc|HIGH' }, 'user')).toThrow('cannot be stored');
+  it.each([
+    ['local typed, remote strings', [typed], [strings]],
+    ['local strings, remote typed', [strings], [typed]],
+  ])('%s: both peers pick the same record and read the same flags', (_label, local, remote) => {
+    const here = mergeTaskLists(local, remote, { now: NOW });
+    const there = mergeTaskLists(remote, local, { now: NOW });
+    expect(here).toStrictEqual(there);
+    const [merged] = here;
+    expect(isTruthyMeta(merged.metadata.openPR)).toBe(true);
+    expect(Number(merged.metadata.retryCount)).toBe(2);
+    expect(merged.metadata.note ?? null).toBeNull();
+    // Whatever record won, storing it again is stable on this version and on an older one.
+    expect(storedForm(storedForm(merged, 'user'), 'user')).toStrictEqual(storedForm(merged, 'user'));
+    expect(legacy(merged, 'user')).toStrictEqual(strings);
   });
+});
 
-  it('drops a metadata key holding a colon or newline instead of re-keying its value', () => {
-    expect(viaMarkdown({ ...base, id: 'task-1', metadata: { 'app: x': 'y' } }, 'user').metadata).toEqual({ app: 'x: y' });
-    expect(storedForm({ ...base, id: 'task-1', metadata: { 'app: x': 'y', 'a\n  - app': 'z' } }, 'user').metadata).toEqual({});
+describe('storedForm refuses what a row could never carry', () => {
+  it('refuses an id holding a pipe and drops a key holding a colon or newline', () => {
+    expect(() => storedForm({ ...base, id: 'abc|HIGH' }, 'user')).toThrow('cannot be stored');
+    expect(storedForm({ ...base, metadata: { 'app: x': 'y', 'a\n  - app': 'z' } }, 'user').metadata).toStrictEqual({});
   });
 });

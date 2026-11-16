@@ -30,6 +30,7 @@ import { reconcileStaleAgentReservations, releaseAgentReservation } from './agen
 import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHistoricalReleaseReceipt } from '../lib/releasePublication.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 function hasPendingRepoStateVerification(agent) {
   return agent?.status === 'completed' && agent?.metadata?.repoStateVerification?.status === 'pending';
@@ -1366,8 +1367,7 @@ export async function cleanupZombieAgents() {
       // started'. Reaping here archives a run that goes on to launch normally.
       if (agent.taskId && spawningTasks.has(agent.taskId)) continue;
       const executionMode = agent.metadata?.executionMode;
-      const runnerOwned = agent.metadata?.useRunner === true
-        || agent.metadata?.useRunner === 'true'
+      const runnerOwned = isTruthyMeta(agent.metadata?.useRunner)
         || executionMode === 'runner'
         || executionMode === 'runner-tui';
       // Same as the orphan sweep: a failed probe is not evidence the runner

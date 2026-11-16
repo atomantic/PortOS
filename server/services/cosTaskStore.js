@@ -22,7 +22,7 @@ import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode
  */
 
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isTruthyMeta, sameMetaValue } from '../lib/metadataFlags.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
@@ -48,7 +48,7 @@ import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeRes
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
 // First non-empty line of a string — used by addTask's dedup, since stored
-// descriptions are flattened to a single line by storedForm (lib/cosTaskRows.js). Declared
+// descriptions are collapsed to their first line on create (see #16466). Declared
 // in the dependency-free text leaf and re-exported here at the address this
 // module's callers already import it from.
 import { firstLine } from '../lib/textUtils.js';
@@ -63,9 +63,9 @@ const DESCRIPTION_OVERFLOW_HEADING = '(from description)';
 /**
  * Normalize a multi-line `description` on the UPDATE path, preserving the body.
  *
- * A stored task's description is ONE line (`storedForm` in lib/cosTaskRows.js
- * keeps the old Markdown row's rule; the task files once held it as
- * `- [ ] #id | PRIORITY | <description>` and read only that first line). `addTask` has collapsed a
+ * The task files once held a description as ONE line
+ * (`- [ ] #id | PRIORITY | <description>`) and read only that first line; the
+ * stored form keeps newlines since #16407, and retiring this collapse is #16466. `addTask` has collapsed a
  * multi-line description for exactly that reason since #4153 — `writeTaskUpdate`
  * did not, so saving a multi-line edit from the task editor's textarea wrote the
  * extra lines into the file as free text. Reparsing then silently truncated the
@@ -116,16 +116,6 @@ export { PAUSED_BLOCKED_CATEGORIES };
 // a multi-line note edit can't overwrite the payload (see `splitTaskPromptFields`).
 const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'executionOptions', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
 
-// Equality for metadata values across a fresh markdown re-parse: primitives by
-// ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
-// sides are independent parses with different references but equal content.
-const metaValueEqual = (a, b) => {
-  if (a === b) return true;
-  if (a && b && typeof a === 'object' && typeof b === 'object') {
-    return JSON.stringify(a) === JSON.stringify(b);
-  }
-  return false;
-};
 
 /**
  * Does an `updateTask` patch change a task's EDITABLE CONTENT (vs only its
@@ -158,7 +148,7 @@ function isContentEdit(updates, existingMetadata = {}) {
     const existing = (existingMetadata && typeof existingMetadata === 'object') ? existingMetadata : {};
     for (const [key, value] of Object.entries(updates.metadata)) {
       if (CLAIM_KEY_SET.has(key) || key === 'updatedAt') continue; // claim keys + the stamp never count
-      if (!metaValueEqual(value, existing[key])) return true;      // a non-claim key counts only if it CHANGED
+      if (!sameMetaValue(value, existing[key])) return true;      // a non-claim key counts only if it CHANGED
     }
   }
   return false;
@@ -906,7 +896,7 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
   // Provenance is owned by the store, not by callers carrying task snapshots.
   // Compatibility only: retain historical membership for independently upgraded peers.
   delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
-  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
+  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] != null) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
   // Older peers may still use complete membership to authorize recovery. A
   // dispatch omitted by this version makes that historical record incomplete.
   if (spawnBudgetOperation?.kind === 'dispatch' && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
@@ -918,9 +908,9 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
   // A reconciliation never grants a retry. Keep the hold until an explicit
   // reset, including when a stale completion supplies its older metadata.
   delete updatedMetadata.spawnBudgetReconciledHold;
-  if (current.metadata?.spawnBudgetReconciledHold === 'true') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  if (isTruthyMeta(current.metadata?.spawnBudgetReconciledHold)) updatedMetadata.spawnBudgetReconciledHold = true;
   const kind = spawnBudgetOperation?.kind;
-  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = true;
   const oldCount = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
   const nextCount = spawnBudgetCount(updatedMetadata.totalSpawnCount ?? 0);
   if (kind === 'completion') {
@@ -1041,7 +1031,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // retries and stale completion patches cannot revoke its durable owner.
   if (current.metadata?.releaseSynchronization && updates.metadata) {
     const nextMetadata = storedForm({ ...current, metadata: { ...current.metadata, ...updates.metadata } }, taskType).metadata;
-    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(current.metadata[key], nextMetadata[key]))) {
+    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !sameMetaValue(current.metadata[key], nextMetadata[key]))) {
       return { error: 'Release synchronization dispatch ownership is immutable' };
     }
   }
@@ -1151,8 +1141,9 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     if (updatedMetadata[key] === undefined) delete updatedMetadata[key];
   });
 
-  // Collapse a multi-line description to the one-line record the markdown row can
-  // hold, re-homing the body into prompt/context rather than dropping it (#7240).
+  // Collapse a multi-line description to one line, re-homing the body into
+  // prompt/context rather than dropping it (#7240). Storage keeps newlines since
+  // #16407; retiring this collapse is #16466.
   const normalizedDescription = normalizeUpdatedDescription(updates.description, updatedMetadata);
   const nextMetadata = normalizedDescription ? normalizedDescription.metadata : updatedMetadata;
   const nextDescription = normalizedDescription ? normalizedDescription.description : updates.description;
@@ -1283,9 +1274,9 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
         { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
       if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
       else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
-      if ((!local || localEpoch === remoteEpoch) && (local?.metadata?.spawnBudgetReconciledHold === 'true'
-        || remote.metadata?.spawnBudgetReconciledHold === 'true')) {
-        task.metadata.spawnBudgetReconciledHold = 'true';
+      if ((!local || localEpoch === remoteEpoch) && (isTruthyMeta(local?.metadata?.spawnBudgetReconciledHold)
+        || isTruthyMeta(remote.metadata?.spawnBudgetReconciledHold))) {
+        task.metadata.spawnBudgetReconciledHold = true;
       }
       // Only an explicit chain of prior dispatch tuples establishes ancestry;
       // a higher counter alone cannot order concurrent peer dispatches.

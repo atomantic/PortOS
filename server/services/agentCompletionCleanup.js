@@ -568,7 +568,7 @@ async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess
       emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
     });
 
-    const prUrl = jiraCreatePR === false ? null : await createJiraPullRequest({
+    const prUrl = isFalsyMeta(jiraCreatePR) ? null : await createJiraPullRequest({
       agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer, scannerMetadata: agentState?.metadata,
     });
 

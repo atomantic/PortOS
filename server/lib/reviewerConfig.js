@@ -620,7 +620,7 @@ export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultRevie
  */
 export function resolveReviewPolicy(metadata, codeReviewDefaults, defaultReviewers, { crossesPublicForge = false } = {}) {
   const { usernames, ...config } = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
-  const configuredReviewerApplies = metadata?.reviewerApplies !== undefined
+  const configuredReviewerApplies = metadata?.reviewerApplies != null
     ? isTruthyMeta(metadata.reviewerApplies)
     : (codeReviewDefaults?.reviewerApplies === true);
   return Object.freeze({

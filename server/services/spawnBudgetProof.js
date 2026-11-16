@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 // Per-run dispatch accounting. A new task carrying any of these is not a fresh
 // episode, so addTask grants it no spawn-budget proof and dispatch holds it.
@@ -50,7 +51,7 @@ export function matchesSpawnBudgetProof(task, agent) {
 export async function spawnBudgetHoldReason(task) {
   const metadata = task?.metadata || {};
   const proof = metadata.spawnBudgetProof;
-  if (!validSpawnBudgetEpisode(proof) || metadata.spawnBudgetReconciledHold === 'true') return 'Spawn budget history is unverified or held';
+  if (!validSpawnBudgetEpisode(proof) || isTruthyMeta(metadata.spawnBudgetReconciledHold)) return 'Spawn budget history is unverified or held';
   if (!proof.dispatch) return spawnBudgetCount(metadata.totalSpawnCount ?? 0) === spawnBudgetCount(proof.baseline ?? 0)
     ? null : 'Spawn budget history is unverified or held';
   const { readAgentsStateForSafetyCheck } = await import('./cosState.js');

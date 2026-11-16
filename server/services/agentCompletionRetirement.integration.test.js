@@ -164,11 +164,12 @@ describe('completion to in-place retirement (real Git and persisted service stat
     activeAgents.set(running.id, { task: fixture.task });
     if (scenario === 'lexical-workspace') await persistTask();
     expect(await bindCompletionTaskDispatch(running.id, fixture.task)).toBe(true);
-    // The dispatcher binds the numeric write result, but completion reads the
-    // persisted scalar text. Losing this handoff misclassifies a clean run as
-    // an orphan and exhausts its retry budget after successful retirement.
+    // The dispatcher binds the numeric write result and completion reads the
+    // persisted value (a number since #16407, its string on older rows). Losing
+    // this handoff misclassifies a clean run as an orphan and exhausts its retry
+    // budget after successful retirement.
     await persistTask();
-    expect(fixture.task.metadata.totalSpawnCount).toBe('1');
+    expect(fixture.task.metadata.totalSpawnCount).toBe(1);
     expect(await prepareCompletionTaskHandoff(await getAgentRecord(running.id), { hookDelivery: { selectedPaths: ['feature.txt'] } })).toBe(true);
     if (scenario === 'unchanged') {
       // Receipts from a numeric task snapshot must replay against stored text,
