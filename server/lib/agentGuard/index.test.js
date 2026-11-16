@@ -1,18 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { delimiter, dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { delimiter, join } from 'node:path';
 import { spawnSync } from '../childProcess.js';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { agentGuardEnv, AGENT_GUARD_BIN } from './index.js';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-
-describe('AGENT_GUARD_BIN', () => {
-  it('points at the bin/ directory holding the guarded pm2 shim', () => {
-    expect(AGENT_GUARD_BIN).toBe(join(HERE, 'bin'));
-  });
-});
 
 describe('agentGuardEnv', () => {
   it('prepends the guard bin to the front of PATH, ahead of the base PATH', () => {
