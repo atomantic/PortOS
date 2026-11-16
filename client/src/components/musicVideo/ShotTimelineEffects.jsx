@@ -20,7 +20,8 @@ const MARKER_MIN_PX = 8;
  * tints the whole lane) with a marker at each in-shot effect, as long as the
  * effect runs, and a dot at each of its repeats.
  *
- * Tap a lane or a marker to configure that shot's effects (`onSelect(sceneId)`).
+ * Tap a lane or a marker to configure that shot's effects (`onSelect(sceneId,
+ * toggle)`: a lane tapped again closes them, a marker only ever opens them).
  * With `onEditShot(sceneId, patch)` a marker can be dragged along its shot (it
  * lands on a frame, pulled onto a nearby beat or lyric line) or nudged a frame
  * with the arrow keys; the shot's `glitches` are saved with that one moved.
@@ -76,7 +77,7 @@ export function TimelineEffectsTrack({ shots, pxPerSec, options, shotName, selec
         ].filter(Boolean);
         const roomy = width >= LABEL_MIN_PX;
         return (
-          <button key={shot.sceneId} type="button" onClick={() => onSelect?.(shot.sceneId)} aria-pressed={shot.sceneId === selectedId}
+          <button key={shot.sceneId} type="button" onClick={() => onSelect?.(shot.sceneId, true)} aria-pressed={shot.sceneId === selectedId}
             aria-label={`Effects of ${name}: ${parts.length ? parts.join('; ') : 'none'}`} title={parts.length ? parts.join(' · ') : 'No effects'}
             className={`absolute inset-y-0.5 flex items-center justify-between overflow-hidden rounded-sm border text-[10px] leading-none pointer-coarse:min-h-11 ${effects.image ? 'bg-port-accent/15' : ''} ${shot.sceneId === selectedId ? 'border-port-accent' : 'border-transparent hover:border-port-border'}`}
             style={{ left: shot.startSec * pxPerSec, width }}>

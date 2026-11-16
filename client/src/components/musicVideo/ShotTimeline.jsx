@@ -425,7 +425,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           </div>
           {effectOptions && (
             <TimelineEffectsTrack shots={shots} pxPerSec={pxPerSec} options={effectOptions} shotName={shotName} selectedId={effectsShot?.sceneId ?? null}
-              onSelect={(sceneId) => setEffectsOfId((current) => (current === sceneId ? null : sceneId))} onEditShot={onEditShot} snapPoints={snapPoints} />
+              onSelect={(sceneId, toggle) => setEffectsOfId((current) => (toggle && current === sceneId ? null : sceneId))} onEditShot={onEditShot} snapPoints={snapPoints} />
           )}
           {cues.length > 0 && (
             <div className="relative h-5 border-t border-port-border" aria-hidden="true">

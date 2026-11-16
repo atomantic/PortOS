@@ -161,6 +161,9 @@ describe('ShotTimeline', () => {
     // A press that never moves is a tap: it opens the shot's effect controls under the timeline.
     fireEvent.pointerDown(first, { clientX: 120, pointerId: 2, button: 0 });
     fireEvent.pointerUp(first, { clientX: 120, pointerId: 2 });
+    // Tapping a marker again keeps them open; only the lane closes them.
+    fireEvent.pointerDown(first, { clientX: 120, pointerId: 3, button: 0 });
+    fireEvent.pointerUp(first, { clientX: 120, pointerId: 3 });
     const panel = screen.getByRole('region', { name: 'Effects of Shot s2' });
     fireEvent.click(within(panel).getByRole('button', { name: 'Remove effect 1' }));
     expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 6, style: 'color-block', strength: 0.5 }] });
