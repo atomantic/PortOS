@@ -49,7 +49,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `creativeStyleSources.js` | Resolves a universe style guide or mood board into art-direction text plus local reference images; shared by Code Animation and Creative Commissions. |
 | `creativeDirector/firstPassGen.js` | Gracefully gated first-pass portraits and scene frames. |
 | `universeCharacterSheet.js` | Character reference-sheet render and completion workflow. |
-| `loraDatasetGenerate.js` | Training-image render and dataset lifecycle. |
+| `loraDatasets.js` | Retained LoRA dataset store and the surviving-trainer status update; training is retired. |
 | `dataMaintenance.js` | Allowlisted retired-data inventory, expiring previews and explicit serialized removal with active-work refusal. |
 | `sprites/reference.js` | Sprite reference candidate rendering and provenance. |
 | `deckRender.js` | Deck card image render jobs. |

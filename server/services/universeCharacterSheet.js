@@ -96,8 +96,7 @@ export const DEFAULT_PHOTOGRAPHIC_SHEET_STYLE = 'Style: natural studio photograp
 // Shared field bag used by every variant's prompt builder. Centralizes the
 // trim/flatten calls so a new variant only writes the style-specific layout
 // sentences. Pure — caller decides which fields to weave into its prompt.
-// Exported for reuse by the LoRA training dataset prompt builder
-// (server/lib/loraDataset.js), which needs the same canon field extraction.
+// Exported for reuse by the catalog sheet prompt builders.
 export function extractCharacterPromptCommon(character) {
   return {
     name: trim(character.name) || 'Unnamed',

@@ -287,7 +287,6 @@ describe('shipped copy names a Models page by route, never by literal (#7419)', 
   // "Models → LLMs" doesn't already say correctly.
   const ALLOWLISTED_FILES = new Set([
     'server/lib/navManifest.js',
-    'server/services/loraDatasetCaption.js',
   ]);
 
   /**

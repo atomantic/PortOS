@@ -6,7 +6,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'maintenance-fixture-')));
-const state = vi.hoisted(() => ({ jobs: [], busy: false, caption: null, authorized: true, failRemoval: false, recreate: false }));
+const state = vi.hoisted(() => ({ jobs: [], busy: false, authorized: true, failRemoval: false, recreate: false }));
 vi.mock('../lib/fileUtils.js', async original => {
   const actual = await original();
   return { ...makePathsProxy(actual, { dataRoot: root }), rmGuarded: async (path, options) => {
@@ -20,7 +20,6 @@ vi.mock('../lib/fileUtils.js', async original => {
 });
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => state.jobs }));
 vi.mock('../services/dataManagerBusy.js', () => ({ trainingRunsBusy: async () => ({ busy: state.busy }) }));
-vi.mock('../services/loraDatasetCaption.js', () => ({ getActiveCaptionRun: () => state.caption }));
 vi.mock('../lib/backupSnapshotBoundary.js', () => ({ withBackupAssetPublication: work => work() }));
 // hostControlRouteGate (#16018) admits the writes; the inventory GET carries its own check.
 const gate = (_req, res, next) => state.authorized ? next() : res.sendStatus(403);
@@ -37,7 +36,7 @@ beforeEach(() => {
   writeFileSync(join(root, 'training-runs/run-example/checkpoint.bin'), 'unique checkpoint');
   writeFileSync(join(root, 'lora-datasets/example/images/source.png'), 'unique source');
   writeFileSync(join(root, 'loras/example.safetensors'), 'shared adapter');
-  state.jobs = []; state.busy = false; state.caption = null; state.authorized = true; state.failRemoval = false; state.recreate = false;
+  state.jobs = []; state.busy = false; state.authorized = true; state.failRemoval = false; state.recreate = false;
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe('allowlisted data maintenance HTTP workflow', () => {
@@ -62,10 +61,9 @@ describe('allowlisted data maintenance HTTP workflow', () => {
     expect((await execute(fresh)).body.code).toBe('MAINTENANCE_BUSY');
     expect(existsSync(join(root, 'training-runs/run-example/new.bin'))).toBe(true);
   });
-  it('refuses surviving trainers, captioning, arbitrary paths, shared assets, unknown previews and unauthorized callers', async () => {
+  it('refuses surviving trainers, arbitrary paths, shared assets, unknown previews and unauthorized callers', async () => {
     state.busy = true; expect((await preview()).body.code).toBe('MAINTENANCE_BUSY');
-    state.busy = false; state.caption = { status: 'running' }; expect((await preview()).body.code).toBe('MAINTENANCE_BUSY');
-    state.caption = null;
+    state.busy = false;
     for (const operationId of ['../loras', 'shared-lora-adapters', 'archives']) expect((await request(app).post('/api/data-maintenance/preview').send({ operationId })).status).toBe(404);
     expect((await execute({ token: '00000000-0000-4000-8000-000000000001', confirmation: 'DELETE training-runs' })).body.code).toBe('MAINTENANCE_STALE');
     state.authorized = false; expect((await preview()).status).toBe(403);

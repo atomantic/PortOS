@@ -45,7 +45,7 @@ The page is not a backup system.
    measured size and the consequence of removing that category.
 2. Cancel to leave everything intact, or type the exact confirmation shown.
 3. Confirm within five minutes. Changed inventory, symlinks, an unreadable tree,
-   outstanding captioning, a surviving trainer or queued/running media work refuses
+   a surviving trainer or queued/running media work refuses
    removal. Refresh and preview again after resolving the reason.
 
 Removal is permanent. There is no fake recovery/archive promise. A short admission

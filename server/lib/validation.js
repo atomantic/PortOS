@@ -19,7 +19,6 @@ import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
-import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
@@ -2572,9 +2571,6 @@ export const settingsSlicePartialSchemas = Object.freeze({
   // from either cannot drop the other's prefs or a template saved elsewhere.
   'music.chiptune': musicSettingsSchema.shape.chiptune.unwrap().strict(),
   'music.designer': musicSettingsSchema.shape.designer.unwrap().strict(),
-  // The caption-model picker owns only these two keys; the rest of the slice
-  // (training defaults, segmentation, watchdog, display sleep) is hand-set.
-  loraTraining: loraTrainingConfigSchema.pick({ captionProviderId: true, captionModel: true }).strict(),
 });
 
 // Check raw JSON before Zod can strip a dangerous key. Arrays can contain

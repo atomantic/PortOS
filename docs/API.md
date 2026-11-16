@@ -43,8 +43,7 @@ Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
 `imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
 `imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
 `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
-`music.chiptune`, `music.designer`, and `loraTraining` (its caption-model keys
-only). The Media settings drawer, Chiptune panel, Music Designer and LoRA caption-model picker each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value or the hand-set LoRA training knobs. A `renderDefaults` target sent
+`music.chiptune` and `music.designer`. The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
@@ -195,7 +194,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/importer` | Story importer |
 | `/api/story-builder` | Story Builder |
 | `/api/loras` | Supported inference adapter management |
-| `/api/lora-datasets`, `/api/lora-training` | Retained read/cancel/checkpoint operations; training launch/resume and dataset mutation return 410 |
+| `/api/lora-datasets`, `/api/lora-training` | `/api/lora-training` keeps read, cancel and checkpoint operations; launch, resume and every `/api/lora-datasets` request return 410 `LORA_TRAINING_RETIRED` |
 | `/api/data-maintenance` | Operator-authorized retired-data inventory, fresh preview and confirmed allowlisted removal; see [Data Maintenance](DATA_MAINTENANCE.md) |
 | `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |
