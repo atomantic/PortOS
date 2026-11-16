@@ -396,6 +396,9 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
+  // Size ratchet over rendered claim prompts (#16409): growth comes from edits to any prompt
+  // fragment the claim composers import, which no scope reliably selects it for.
+  'server/services/taskPromptDefaults/claimPromptSize.test.js',
 ];
 
 /**
