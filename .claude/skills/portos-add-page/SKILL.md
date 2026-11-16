@@ -46,3 +46,11 @@ See `client/src/AGENTS.md` for the two client-side rules that go with this:
 
 - **ID-based deep linking** — any selection lives in the URL via a route param, never in local `useState`.
 - **Layout scroll mode** — the shell is where the `<Route>` sits (step 2 above): a normal title/nav page goes under `FullWidthMain`; only an intentional document/form route goes under `PaddedMain`. `client/src/pageShellConventions.test.js` fails when a `PageHeader` workspace lands in the padded shell. Full rule: "Pick the right Layout scroll mode" in `client/src/AGENTS.md`.
+
+## Sub-nav on a phone
+
+**A sub-nav that doesn't fit a phone collapses to icon links, never a `<select>`** (#7283 was reverted): pass `mobileCompact` to `TabPills` (icon-only below `sm`, `max-sm:sr-only` labels); `RouteTabsHeader` decides via `MOBILE_COMPACT_THRESHOLD`. **Reuse `TabPills`; never roll a new tab bar.** Each tab in a fixed section set needs a unique icon via `buildSectionNavTabs(getSectionNavTabs(s), NAV_PRESENTATION, s)` (throws on a missing one; `lib/navPresentation.test.js`). A `<select>` is only for unbounded data-driven lists sharing one glyph (FableLoomStory episodes); record pickers (`pages/StackerNews.jsx` account switcher) are not sub-navs. *Enforced:* `subNavConventions.test.js`.
+
+## Navigation gating and background-work toggles
+
+`NAV_COMMANDS` in `server/lib/navManifest.js` drives `⌘K` and voice `ui_navigate`: **a `<Route>` without an entry is unreachable from both** (procedure, feature gates, sidebar rows: [portos-add-page](SKILL.md)). Optional features gate navigation, never routes, and **a toggle that arms background work reconciles at toggle time** via one idempotent `reconcile…()` (`docs/INSTANCE_FEATURES.md`).

@@ -42,6 +42,11 @@ const INSTRUCTION_DIRS = [
  */
 const ROOT_MAX_BYTES = 28 * 1024;
 const NESTED_MAX_BYTES = 12 * 1024;
+// A file sitting within a few bytes of its ceiling makes every one-line rule
+// need a matching deletion, and two in-cap edits that merge separately land over
+// it (five branches broke on 2026-11-15). Keeping 10% free is what lets
+// concurrent small edits merge; the ceiling itself stays the hard limit.
+const HEADROOM_FRACTION = 0.9;
 
 /** Entire body of a bridge file. */
 const IMPORT_BODY = '@AGENTS.md\n';
@@ -84,7 +89,7 @@ describe('agent-instructions files (#4852)', () => {
     }
   });
 
-  it('every AGENTS.md stays under its byte ceiling', () => {
+  it('every AGENTS.md stays at or below 90% of its byte ceiling', () => {
     const tracked = git('ls-files', '--', 'AGENTS.md', '*/AGENTS.md').split('\n').filter(Boolean);
     expect(tracked, 'detector self-check: root AGENTS.md must be tracked').toContain('AGENTS.md');
 
@@ -93,8 +98,8 @@ describe('agent-instructions files (#4852)', () => {
         const limit = file === 'AGENTS.md' ? ROOT_MAX_BYTES : NESTED_MAX_BYTES;
         return { file, size: statSync(join(REPO_ROOT, file)).size, limit };
       })
-      .filter(({ size, limit }) => size > limit)
-      .map(({ file, size, limit }) => `${file}: ${size} bytes > ${limit} (move procedure into a skill or doc)`);
+      .filter(({ size, limit }) => size > limit * HEADROOM_FRACTION)
+      .map(({ file, size, limit }) => `${file}: ${size} bytes > ${Math.floor(limit * HEADROOM_FRACTION)} (90% of the ${limit} ceiling; move procedure into a skill or doc)`);
 
     expect(oversized).toEqual([]);
   });
