@@ -7,23 +7,14 @@ import { getRunwayImageModel } from './runwayImageModels.js';
 /**
  * Per-backend image-gen capability literals.
  *
- * A dependency-free leaf beside `generationModes.js`, for the same reason that
- * module exists: these are FACTS about each render backend (what its image tool
- * accepts, what PortOS ships as its default model/effort), and both the server
- * services and the browser bundle need them. They used to live in
- * `services/imageGen/{modes,cloudProviderConfig,grok}.js`, which the client
- * cannot import — those modules pull `lib/errorHandler.js`, and through it
- * Node's `events` — so `client/src/lib/imageGenModes.js` hand-copied them and
- * a server-side parity suite bound three of the copies. The shipped defaults
- * and the aspect-ratio alphabets were unbound and could drift silently.
+ * A dependency-free leaf beside `generationModes.js`: FACTS about each render
+ * backend (what its image tool accepts, shipped default model/effort) that both
+ * the server services and the browser bundle need. The service modules
+ * (`services/imageGen/{modes,cloudProviderConfig,grok}.js`) re-export them.
  *
- * Nothing here may import anything but `generationModes.js` and the equally
- * dependency-free `falImageModels.js` catalog: the moment this file reaches a
- * service module, the client copies come back.
- *
- * The three service modules re-export their old bindings, so every existing
- * server import site is untouched — the same compatibility pattern `modes.js`
- * already uses for the backend alphabets.
+ * Nothing here may import beyond the dependency-free model catalogs: reaching
+ * a service module (which pulls `lib/errorHandler.js` and Node's `events`)
+ * would make the client unable to import this file.
  */
 
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
@@ -35,52 +26,32 @@ import { GOOGLE_IMAGE_MAX_INPUT_IMAGES, googleImageFamily } from './googleImageM
 export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 
 // Backends that cannot take an input image at all (#3243). Every *queueable*
-// backend now can: local (mflux/diffusers `--image-path` + FLUX.2 references),
-// codex (`image_gen.referenced_image_paths`), grok (`image_edit.image`) and agy
-// (`generate_image.ImagePaths`) all accept an init image and/or reference
-// images — see `maxInputImages` below for the probed per-backend limits. Agy
-// was listed here until its tool schema was probed directly and turned out to
-// document ImagePaths as "images to use in generation… edit, combine, or use as
-// references".
-//
-// The external SD-API backend is the one that genuinely has no input-image
-// wiring in this codebase, so it inherits the slot. This is the SINGLE source
-// for the fact — a future edit-incapable backend belongs here and nowhere else.
+// backend can (local, codex, grok, agy — see `maxInputImages` below for the
+// per-backend limits); only the external SD-API backend has no input-image
+// wiring. This is the SINGLE source for the fact.
 export const EDIT_INCAPABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.EXTERNAL]);
 
 /** Can `mode` accept an input image (i2i / edit / reference)? */
 export const isEditCapableMode = (mode) => !EDIT_INCAPABLE_IMAGE_MODES.includes(mode);
 
-// The complement of the list above, derived rather than restated — this is what
-// the i2i-only pickers (the sprite fork modal, #3331) filter their backend
-// options through, and what `pickI2iMode` walks in order. That walk wants the
-// best backend first (local's form exposes strength + LoRAs, then the cloud
-// CLIs), which is the order `IMAGE_GEN_MODES` already has once external — its
-// one edit-incapable member — is filtered out.
+// The complement of the list above: what the i2i-only pickers filter their
+// backend options through and what `pickI2iMode` walks in order (best backend
+// first — local, then the cloud CLIs — which is `IMAGE_GEN_MODES` order).
 export const I2I_CAPABLE_MODES = Object.freeze(IMAGE_GEN_MODES.filter(isEditCapableMode));
 
 // Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
 // tool otherwise runs whatever model its logged-in session defaults to — often
-// the heaviest, most expensive tier — at default reasoning effort. Pin the cheap
-// `gpt-6-luna` model at `low` reasoning effort so every media-pipeline render
-// pays the light path by default. Applied as a code-level default (not a
-// settings migration) so it reaches every install and federated peer with no
-// per-install bookkeeping; an explicit `imageGen.codex.model` / `.effort` in
+// the heaviest tier. Pin the cheap `gpt-6-luna` at `low` effort. A code-level
+// default (not a settings migration) so it reaches every install and peer; an explicit `imageGen.codex.model` / `.effort` in
 // Settings still wins. Effort is one of providerModels' CODEX_EFFORT_LEVELS.
 export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-6-luna';
 export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 
-// The Agy mirror of the Codex pin above (#3231). An unpinned agy render used to
-// resolve to the ANTIGRAVITY_CONFIGURED_DEFAULT sentinel, which resolveCliModel
-// maps to null — no `--model` flag at all — so agy ran the session on whatever
-// its own config selected, potentially a reasoning-heavy tier
-// (claude-opus-4-6-thinking) just to relay one generate_image tool call. The
-// driving agent does no creative work on the image, so the cheapest flash tier
-// that reliably issues the tool call is the correct shipped default
-// (empirically verified to complete a render). Agy bakes the effort ladder into
-// the model id (-low/-medium/-high), so there is no separate effort pin. Same
-// code-level-default rationale as Codex: reaches every install and peer with no
-// migration; an explicit `imageGen.agy.model` in Settings still wins. If this
+// The Agy mirror of the Codex pin above (#3231). Unpinned, agy would run on
+// whatever its own config selects — potentially a reasoning-heavy tier just to
+// relay one generate_image call — so the shipped default is the cheapest flash
+// tier that reliably issues the tool call. Agy bakes the effort ladder into the
+// model id, so there is no separate effort pin. Code-level default as for Codex; an explicit `imageGen.agy.model` in Settings still wins. If this
 // tier ever proves flaky at issuing generate_image, escalate exactly one rung
 // (gemini-3.8-flash-medium) and record why here.
 //
