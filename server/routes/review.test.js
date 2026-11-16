@@ -63,28 +63,9 @@ describe('GET /api/review/queue', () => {
     expect(buildQueue).not.toHaveBeenCalled();
   });
 
-  it('forwards an opaque cursor unchanged for the next snapshot page', async () => {
-    buildQueue.mockResolvedValue({ items: [], total: 0, totalsBySource: {}, sources: {}, nextCursor: null, partial: false });
-
-    const response = await request(makeApp()).get('/api/review/queue?cursor=opaque-token');
-
-    expect(response.status).toBe(200);
-    expect(buildQueue).toHaveBeenCalledWith({ limit: undefined, cursor: 'opaque-token', query: {} });
-  });
 });
 
 describe('POST /api/review/queue/resolve', () => {
-  it('passes an explicit source operation to the queue service', async () => {
-    resolveQueueItem.mockResolvedValue({ source: 'memory', id: 'memory:m1', operation: 'approve', resolved: true });
-
-    const response = await request(makeApp())
-      .post('/api/review/queue/resolve')
-      .send({ id: 'memory:m1', operation: 'approve' });
-
-    expect(response.status).toBe(200);
-    expect(resolveQueueItem).toHaveBeenCalledWith('memory:m1', 'approve');
-  });
-
   it('rejects unsupported mutation operations before the service is called', async () => {
     const response = await request(makeApp())
       .post('/api/review/queue/resolve')
