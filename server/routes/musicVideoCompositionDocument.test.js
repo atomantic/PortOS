@@ -49,7 +49,14 @@ const { createSession } = await import('../services/auth.js');
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
+const { buildDocumentPreview } = await import('../services/musicVideo/documentPreview.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
+
+// The document preview page has no HTTP route; the service is the contract.
+const previewOf = async (id) => {
+  try { return { status: 200, body: await buildDocumentPreview(await projects.getProject(id)) }; }
+  catch (error) { return { status: error.status ?? 500, body: { code: error.code, error: error.message } }; }
+};
 
 const appFor = (address = '127.0.0.1') => {
   const app = express();
@@ -332,7 +339,7 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
     } }));
-    expect((await request(app).get(`/api/music-video/${project.id}/composition/document/preview`)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+    expect((await previewOf(project.id)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
     const customized = await request(app).post(path).send({ directory });
     expect(customized.status).toBe(409);
     expect(customized.body.code).toBe('COMPOSITION_ENGINE_CUSTOM');
@@ -399,15 +406,14 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'a', startSec: 0, endSec: 2, glitches: [{ atSec: 0.5, style: 'light-leak' }] }],
     } }));
-    const preview = `/api/music-video/${project.id}/composition/document/preview`;
-    const unsupported = await request(app).get(preview);
+        const unsupported = await previewOf(project.id);
     expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
     expect(unsupported.body.error).toMatch(/in-shot glitches.*Update the layered engine/);
     // The live preview plays anyway and names the shot it draws without its effect.
     expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual([{ sceneId: 'a', effects: ['glitch'] }]);
     const upgraded = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: original });
     expect(upgraded.body.changed).toBe(true);
-    expect((await request(app).get(preview)).status).toBe(200);
+    expect((await previewOf(project.id)).status).toBe(200);
     expect(await unsupportedDocumentEffects(await projects.getProject(project.id))).toEqual([]);
   });
 
@@ -429,21 +435,20 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'placed', startSec: 0, endSec: 2 }, untimed],
     } }));
-    const preview = `/api/music-video/${project.id}/composition/document/preview`;
-    expect((await request(app).get(preview)).status).toBe(200);
+        expect((await previewOf(project.id)).status).toBe(200);
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       scenes: [current.scenes[0], { ...untimed, startSec: 30, endSec: 32 }],
     } }));
-    expect((await request(app).get(preview)).status).toBe(200);
+    expect((await previewOf(project.id)).status).toBe(200);
     // A transition centered just beyond the song can still lead into its last frames.
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       scenes: [current.scenes[0], { ...untimed, startSec: 2.1, endSec: 4 }],
     } }));
-    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+    expect((await previewOf(project.id)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       scenes: [current.scenes[0], { ...untimed, startSec: 1, endSec: 2 }],
     } }));
-    const unsupported = await request(app).get(preview);
+    const unsupported = await previewOf(project.id);
     expect([unsupported.status, unsupported.body.code]).toEqual([422, 'DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED']);
   });
 
@@ -458,12 +463,11 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       audioAnalysis: { durationSec: 2 }, scenes: [{ sceneId: 'placed', startSec: 0, endSec: 1 }, incomplete],
     } }));
-    const preview = `/api/music-video/${project.id}/composition/document/preview`;
-    expect((await request(app).get(preview)).status).toBe(200);
+        expect((await previewOf(project.id)).status).toBe(200);
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current,
       scenes: [current.scenes[0], { ...incomplete, endSec: 1.9 }],
     } }));
-    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+    expect((await previewOf(project.id)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
   });
 
   it('still detects an end-image effect when a later shot has no playable interval', async () => {
@@ -479,8 +483,7 @@ describe('music-video composition documents', () => {
         { sceneId: 'unplaced', startSec: 2, endSec: null },
       ],
     } }));
-    const preview = `/api/music-video/${project.id}/composition/document/preview`;
-    expect((await request(app).get(preview)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
+        expect((await previewOf(project.id)).body.code).toBe('DOCUMENT_SELECTED_EFFECTS_UNSUPPORTED');
   });
 
   it('preserves source document bytes when a fork imports revised code, including after source removal', async () => {
@@ -575,7 +578,7 @@ describe('music-video composition documents', () => {
     expect(Object.keys(round).sort()).toEqual(Object.keys(FILES).sort());
     expect(round['app.js'].toString()).toBe(FILES['app.js']);
 
-    const preview = await request(app).get(`/api/music-video/${project.id}/composition/document/preview`);
+    const preview = await previewOf(project.id);
     expect(preview.status).toBe(200);
     // Self-contained: no network, the stylesheet/script/asset inlined, PORTOS_MV injected, portos-mv.js dropped.
     expect(preview.body.html).toContain("default-src 'none'");
@@ -651,7 +654,7 @@ describe('music-video composition documents', () => {
     const manifest = await request(app).get(`/api/music-video/${project.id}/composition/document`);
     expect(manifest.status).toBe(200);
     expect(manifest.body.files.some(({ path }) => /\.test\.[cm]?js$/.test(path))).toBe(false);
-    const preview = await request(app).get(`/api/music-video/${project.id}/composition/document/preview`);
+    const preview = await previewOf(project.id);
     expect(preview.status).toBe(200);
     expect(preview.body.html).toContain("default-src 'none'");
     expect(preview.body.html).toContain('window.PORTOS_MV = ');

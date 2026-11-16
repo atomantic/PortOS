@@ -25,7 +25,6 @@ import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
 import {
   getModelPerformanceReport,
-  recordModelOutcome,
 } from '../../services/pipeline/seriesAutopilot/modelPerformance.js';
 import { READINESS_GATES } from '../../services/pipeline/editorialScore.js';
 import { mapServiceError, providerOverrideShape } from './shared.js';
@@ -139,18 +138,6 @@ const autopilotStartSchema = z.object({
   overrideStagePins: z.boolean().optional(),
 });
 
-const modelOutcomeSchema = z.object({
-  runId: z.string().uuid(),
-  role: z.enum(['creative', 'judge']),
-  stage: z.string().trim().min(1).max(80),
-  outcome: z.enum(['accepted', 'rejected', 'valid', 'invalid']),
-  effort: z.enum(EFFORT_LEVELS).optional(),
-  target: z.string().trim().max(120).optional(),
-  scoreBefore: z.number().finite().optional(),
-  scoreAfter: z.number().finite().optional(),
-  weightedBefore: z.number().finite().optional(),
-  weightedAfter: z.number().finite().optional(),
-}).strict();
 
 router.post('/series/:id/autopilot/start', asyncHandler(async (req, res) => {
   // 404 before we kick off if the series doesn't exist.
@@ -203,16 +190,6 @@ router.get('/series/:id/autopilot/status', asyncHandler(async (req, res) => {
 router.get('/series/:id/autopilot/model-metrics', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(await getModelPerformanceReport());
-}));
-
-// Operator correction/backfill: annotate historic runs or fix a misclassified outcome (a
-// technically successful run can still be rejected by a later quality gate) without editing run files.
-router.post('/series/:id/autopilot/model-outcomes', asyncHandler(async (req, res) => {
-  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const body = validateRequest(modelOutcomeSchema, req.body ?? {});
-  const recorded = await recordModelOutcome(body.runId, body, req.params.id);
-  if (!recorded) throw new ServerError('AI run not found', { status: 404, code: 'RUN_NOT_FOUND' });
-  res.json({ success: true, runId: body.runId });
 }));
 
 export default router;

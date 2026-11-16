@@ -484,13 +484,6 @@ router.post('/:id/song/keep-timing', asyncHandler(async (req, res) => {
   res.json(await presentProjectForRead(await keepSongTiming(req.params.id)));
 }));
 
-// The lyric timing playthrough: the aligned words drawn by the shipped template over a
-// plain frame, laid out as scenes, for checking word timing before any picture exists.
-router.get('/:id/lyrics/playthrough/preview', asyncHandler(async (req, res) => {
-  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
-  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id)));
-}));
-
 // The same words alone on a transparent page, laid over the storyboard animatic's frames.
 router.get('/:id/lyrics/overlay/preview', asyncHandler(async (req, res) => {
   const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');

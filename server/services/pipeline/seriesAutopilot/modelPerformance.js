@@ -171,11 +171,9 @@ export async function getModelPerformanceReport() {
   };
 }
 
-// HTTP corrections require recorded series ownership; internal lifecycle callers
-// already own their run ids and may annotate legacy evidence without this scope.
-export async function recordModelOutcome(runId, patch = {}, seriesId) {
+export async function recordModelOutcome(runId, patch = {}) {
   const run = runId ? await getRun(runId) : null;
-  if (!run || (seriesId !== undefined && run.seriesId !== seriesId)) return false;
+  if (!run) return false;
   const scoreBefore = finiteOrNull(patch.scoreBefore);
   const scoreAfter = finiteOrNull(patch.scoreAfter);
   await patchRunMetadata(runId, {

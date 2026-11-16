@@ -182,17 +182,6 @@ describe('mood-board routes', () => {
     });
   });
 
-  describe('POST /:id/backfill-prompts', () => {
-    it('404s when the board is missing and returns the updated board otherwise', async () => {
-      svc.backfillGalleryPrompts.mockResolvedValueOnce(null);
-      expect((await request(makeApp()).post('/api/mood-boards/nope/backfill-prompts')).status).toBe(404);
-      svc.backfillGalleryPrompts.mockResolvedValueOnce({ id: 'mb-1', items: [{ id: 'i1', caption: 'p' }] });
-      const res = await request(makeApp()).post('/api/mood-boards/mb-1/backfill-prompts');
-      expect(res.status).toBe(200);
-      expect(res.body.items[0].caption).toBe('p');
-    });
-  });
-
   describe('POST /:id/x-post', () => {
     it('imports into the board named by the path', async () => {
       svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });

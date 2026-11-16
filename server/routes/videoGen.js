@@ -10,7 +10,6 @@ import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/vide
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
 import { checkHiggsfieldNewModels } from '../services/higgsfieldCatalogCheck.js';
-import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
@@ -717,10 +716,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
     higgsfieldEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.HIGGSFIELD),
     googleEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GOOGLE),
   });
-}));
-
-router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
-  res.json(await clearMetalBufferProfiles());
 }));
 
 // Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`

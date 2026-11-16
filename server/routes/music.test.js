@@ -569,26 +569,6 @@ describe('music routes', () => {
     expect(sse.run).not.toHaveBeenCalled();
   });
 
-  it('GET /setup/runtime-status reports music runtime readiness', async () => {
-    gen.ready = false;
-    const missing = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
-    expect(missing.status).toBe(200);
-    expect(missing.body).toMatchObject({
-      runtime: 'acestep',
-      label: 'ACE-Step',
-      installed: false,
-      venvPath: null,
-      expectedVenvPath: '/v/ace',
-      installEnvVar: 'INSTALL_ACESTEP',
-    });
-
-    gen.ready = true;
-    const ready = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
-    expect(ready.status).toBe(200);
-    expect(ready.body.installed).toBe(true);
-    expect(ready.body.venvPath).toBe('/v/ace/bin/python3');
-  });
-
   it('POST /setup/runtime-install 400s on a repeated runtime key without spawning', async () => {
     const r = await request(app).post('/api/music/setup/runtime-install?runtime=acestep&runtime=minimax-music3');
     expect(r.status).toBe(400);

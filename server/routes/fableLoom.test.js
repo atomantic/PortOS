@@ -556,17 +556,6 @@ describe('FableLoom routes', () => {
       expect(fableLoom.startEpisodeProductionBatch).toHaveBeenCalledWith('loom-1', 'ep-1', { mode: 'current_canon' });
     });
 
-    it('GET /:id/episodes/:episodeId/production/batch/:runId retrieves batch run or 404s', async () => {
-      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
-      const res = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-1');
-      expect(res.status).toBe(200);
-      expect(res.body.id).toBe('batch-1');
-
-      fableLoom.getEpisodeProductionBatch.mockReturnValueOnce(null);
-      const notFound = await request(makeApp()).get('/api/fableloom/loom-1/episodes/ep-1/production/batch/batch-none');
-      expect(notFound.status).toBe(404);
-    });
-
     it('POST /:id/episodes/:episodeId/production/batch/:runId/cancel cancels run', async () => {
       fableLoom.getEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', loomId: 'loom-1', episodeId: 'ep-1', status: 'in_progress' });
       fableLoom.cancelEpisodeProductionBatch.mockReturnValueOnce({ id: 'batch-1', status: 'canceled' });

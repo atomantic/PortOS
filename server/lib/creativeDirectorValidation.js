@@ -222,11 +222,6 @@ export const creativeDirectorProjectCreateSchema = z.object({
 const autoCastTypes = z.array(z.string().trim().min(1).max(64)).max(10).optional();
 const autoCastLimit = z.number().int().min(1).max(50).optional();
 
-export const creativeDirectorAutoCastSuggestSchema = z.object({
-  brief: z.string().min(1).max(10000),
-  types: autoCastTypes,
-  limit: autoCastLimit,
-});
 
 export const creativeDirectorAutoCastApplySchema = z.object({
   // Omitted → the service derives the brief from the project's name/style/story.

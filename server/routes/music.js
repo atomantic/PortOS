@@ -100,8 +100,6 @@ const sendRuntimeStatus = async (req, res) => {
   });
 };
 
-router.get('/setup/runtime-status', asyncHandler(sendRuntimeStatus));
-
 // Backward-compatible read surface for stale clients and status pollers. GET
 // reports readiness only; installing is restricted to the POST route below.
 router.get('/setup/runtime-install', asyncHandler(sendRuntimeStatus));
