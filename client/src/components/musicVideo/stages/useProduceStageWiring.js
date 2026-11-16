@@ -83,8 +83,7 @@ export default function useProduceStageWiring({
   };
 
   const handleAddScene = () => {
-    addMusicVideoScene(selected.id, { prompt: '' }, { silent: true })
-      .then((scene) => replaceProject({ ...selected, scenes: [...(selected.scenes || []), scene] }))
+    boardEdit((projectId, options) => addMusicVideoScene(projectId, { prompt: '' }, options))
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
 
