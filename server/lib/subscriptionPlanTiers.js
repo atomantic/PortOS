@@ -1,57 +1,15 @@
 /**
- * Subscription plan tier labels (for example Max 20x, Pro) per provider: `MAX_PLAN_TIER_LENGTH` and
- * `normalizePlanTier` helpers.
+ * Subscription plan tier labels ("Max 20x", "Pro") as short free text per provider family: `MAX_PLAN_TIER_LENGTH`, `normalizePlanTier` / `normalizePlanTiers`.
  *
- * Which TIER of a subscription plan the user is on ("Max 20x", "Pro"), as a short free-text label per
- * provider family — `MAX_PLAN_TIER_LENGTH` (the cap the Zod schema enforces), `normalizePlanTier` /
- * `normalizePlanTiers` (trim, cap, and collapse empty/non-string to `null` = not recorded).
- * Deliberately free text: tiers are vendor marketing names that change off the PortOS release cycle.
- * Pure; persistence lives in `services/subscriptions.js`.
+ * Pure (the Zod schema guarding the persisted write needs the cap and can't import a service); persistence lives in `services/subscriptions.js`. Free text, not an enum, since tiers are vendor marketing names that change off the PortOS release cycle (a stale enum would reject the plan being paid for). The price in `services/subscriptionCosts.js` can't say WHICH plan produced it (two $100/mo installs may be on different tiers with different quota ceilings).
  */
 
 import { trimTo } from './textUtils.js';
 
-/**
- * Which TIER of a subscription the user is on — "Max 5x" vs "Max 20x", "Pro"
- * vs "Plus" — as a short free-text label per provider family.
- *
- * The price in `services/subscriptionCosts.js` already answers "what does this
- * plan cost", and that number is what every savings figure is computed from.
- * What it cannot answer is WHICH plan produced it: two installs both paying
- * $100/mo may be on different Claude tiers with different quota ceilings, and
- * the quota scrape reports a window's percentage, not a plan name. Recording
- * the tier keeps that identity next to the price without overloading it — a
- * numeric field can never hold "Max 20x", and a price that silently doubled
- * would be the only trace of an upgrade.
- *
- * Deliberately free text, not an enum: the tiers are each vendor's marketing
- * names and they change on the vendor's schedule, not on PortOS releases. A
- * stale enum would reject the plan the user is actually paying for.
- *
- * Pure by design, like `lib/subscriptionSavings.js` beside it: the Zod schema
- * that guards the persisted write needs the cap, and a schema cannot import a
- * service. Persistence and the merge semantics live in
- * `services/subscriptions.js`.
- */
 
-/**
- * Longest stored tier label. Generous enough for every real plan name
- * ("Claude Max 20x", "ChatGPT Pro"), short enough that the value stays a LABEL
- * — settings.json must not become a notes field, and the row renders inline
- * beside a price input.
- */
 export const MAX_PLAN_TIER_LENGTH = 60;
 
-/**
- * Pure: a stored/incoming tier as a trimmed label, or null for "not recorded".
- *
- * ONE definition of the rule, used on both read and write, so a tier can never
- * mean different things depending on which side of the store you read it from
- * (the same contract `normalizeCost` holds for prices). Empty, whitespace-only
- * and non-string all collapse to null — a CLEARED tier, never an empty-string
- * tier that renders as a blank pill the user cannot remove. `trimTo` is the
- * tree's sole string bounder and already maps a non-string to `''`.
- */
+/** A stored/incoming tier as a trimmed label, or null for "not recorded": ONE rule on read and write (as `normalizeCost` for prices); empty, whitespace-only and non-string collapse to null (a CLEARED tier, never an empty pill the user can't remove). */
 export function normalizePlanTier(value) {
   const tier = trimTo(value, MAX_PLAN_TIER_LENGTH);
   return tier === '' ? null : tier;

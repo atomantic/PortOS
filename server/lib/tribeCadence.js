@@ -1,20 +1,7 @@
-// Pure Tribe care-cadence rules: `cadenceStatus(entity)` returns state and days remaining or overdue,
-// plus `daysSinceDate` and defaults, mirrored to the client.
+// Pure Tribe care-cadence rules (`cadenceStatus`, `daysSinceDate`), mirrored to the client.
 //
-// Authoritative, pure Tribe care-cadence rules (single source of truth, mirrored to
-// `client/src/lib/tribeCadence.js`): `cadenceStatus(entity)` → `{ state:
-// external/missing/overdue/soon/steady, daysRemaining, daysOverdue }`, `daysSinceDate(dateStr)`,
-// `DEFAULT_CADENCE_DAYS` (45), `SOON_WINDOW_DAYS` (7). Consumed by `personCadenceStatus` /
-// `getCareSummary` in `services/tribe.js` (proactive alert + Care widget) and by the client Tribe
-// page/map.
-//
-// Authoritative, pure cadence rules for the Tribe care system — the single
-// source of truth for "who needs care." Consumed on the server by
-// `personCadenceStatus` / `getCareSummary` (server/services/tribe.js → the
-// proactive-alerts check + the Tribe Care dashboard widget) and re-exported by
-// `client/src/lib/tribeCadence.js` for the client bundle (Tribe page + circle
-// map), so both sides run this code rather than two copies of it. Keep it pure:
-// no Node built-in, nothing outside `server/lib`.
+// Authoritative, pure Tribe care-cadence rules, the single source of truth for "who needs care" (mirrored to `client/src/lib/tribeCadence.js`, so both sides run this code): `cadenceStatus(entity)` → `{ state: external/missing/overdue/soon/steady, daysRemaining, daysOverdue }`, `daysSinceDate(dateStr)`, `DEFAULT_CADENCE_DAYS` (45), `SOON_WINDOW_DAYS` (7).
+// Consumed by `personCadenceStatus` / `getCareSummary` in `services/tribe.js` (proactive alert + Care widget) and the client Tribe page/map. Keep it pure: no Node built-in, nothing outside `server/lib`.
 
 // The four inner rings owe a care cadence; `external` (former contacts, a
 // nemesis) is outside the tribe and is never nagged.
@@ -22,11 +9,7 @@ export const DEFAULT_CADENCE_DAYS = 45;
 // A member with <= this many days left before their next check-in is "soon".
 export const SOON_WINDOW_DAYS = 7;
 
-// Default check-in cadence (days) per ring. Used by server/services/tribe.js
-// to set default cadence_days when creating new people, and mirrored on the
-// client in `client/src/lib/tribe.js` (the RINGS array's `cadenceDays`).
-// The SQL column default is a flat 45 (`cadence_days` in db.js / init-db.sql)
-// because the ring-aware default is resolved here before insert.
+// Default check-in cadence (days) per ring, used by server/services/tribe.js for new people and mirrored in `client/src/lib/tribe.js` (RINGS `cadenceDays`); the SQL column default is a flat 45 (`cadence_days` in db.js / init-db.sql) because the ring-aware default resolves here before insert.
 export const DEFAULT_RING_CADENCE = {
   support: 7,
   core: 21,
@@ -45,19 +28,11 @@ export function daysSinceDate(dateStr) {
   if (Number.isNaN(start.getTime())) return null;
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  // Both operands are LOCAL midnights, so the gap is a whole number of days give
-  // or take an hour when a DST change falls between them (23h or 25h days).
-  // `floor` turned a spring-forward crossing into one day too few — rounding
-  // recovers the calendar-day count in every zone.
+  // Both operands are LOCAL midnights, so the gap is whole days give or take an hour across a DST change (23h/25h days); `floor` lost a day on spring-forward, rounding recovers the calendar-day count in every zone.
   return Math.round((today - start) / 86400000);
 }
 
-// Cadence health for a tribe member: external / missing / overdue / soon /
-// steady. `daysRemaining` is cadenceDays - elapsed (negative once overdue);
-// null when there's no recorded last contact (distinct from a 0-days-remaining
-// member). `daysOverdue` is 0 unless overdue, and null for a `missing`
-// (never-contacted) member so callers can sort those to the top without a
-// magic number. External members carry no cadence.
+// Cadence health for a tribe member: external / missing / overdue / soon / steady. `daysRemaining` is cadenceDays - elapsed (negative once overdue), null with no recorded last contact (distinct from 0 remaining); `daysOverdue` is 0 unless overdue and null for `missing` so callers sort those to the top without a magic number; external members carry no cadence.
 export function cadenceStatus(entity) {
   if (entity.ring === 'external') return { state: 'external', daysRemaining: null, daysOverdue: 0 };
   const elapsed = daysSinceDate(entity.lastContact);

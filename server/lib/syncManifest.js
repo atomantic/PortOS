@@ -1,53 +1,13 @@
 /**
- * Snapshot-sync MANIFEST wire contract.
+ * Snapshot-sync MANIFEST wire contract for always-dirty, per-instance-slot categories such as `usage`.
  *
- * Wire contract for the snapshot-sync MANIFEST leg — the fix for a category that is always dirty AND a
- * map of per-instance slots (`usage`), where one instance advancing dragged every other instance's
- * digest across the wire. `isManifestEnvelope(value)` validates a `{ data: { instances }, checksum }`
- * response (a legacy peer that 404s the endpoint fails it, and the puller falls back to the whole
- * snapshot); `diffManifestSlots(remoteInstances, localInstances)` returns the sorted slot ids whose
- * REMOTE LWW stamp is strictly newer than ours — exactly the slots worth fetching. Comparison goes
- * through `lwwTimestamp.js`, so a tie breaks to what we already hold. Consumed by
- * `syncOrchestrator.syncDataCategoryFromPeer`; served by `dataSync.getManifest`.
- *
- * Most snapshot categories are effectively static, so the checksum
- * short-circuit in `syncOrchestrator` is enough: nothing moved → nothing
- * transfers. `usage` broke that assumption — it is always dirty (every recorded
- * AI run rewrites `usage.json`) and it is a MAP of per-instance slots, so a
- * single instance advancing its counters dragged every other instance's digest
- * across the wire on the next 60s cycle.
- *
- * A manifest fixes the granularity: the category serves
- * `{ instances: { <slotId>: <lww timestamp> }, tombstones }` — a few hundred
- * bytes — and the puller fetches only the slots whose timestamp actually moved.
- *
- * Two rules make it safe across independently-upgrading installs:
- *
- *  - **The manifest is the category's checksum.** A category that serves one
- *    hashes the manifest (not the payload) for BOTH `/checksum` and
- *    `/snapshot`, so an older peer that only knows those two endpoints still
- *    sees a checksum that changes exactly when a slot advances.
- *  - **Every leg degrades to the whole snapshot.** A puller that gets no usable
- *    manifest (older source peer → 404) falls back to the full snapshot, and a
- *    source peer that gets no `slots` filter serves everything. Receivers merge
- *    per slot under LWW either way, so a full payload is always applied
- *    idempotently.
- *
- * Timestamp comparison goes through `lwwTimestamp.js` so the polarity matches
- * every other sync merge: a tie breaks to what we already hold, and an
- * unparseable remote stamp never drags a slot across.
+ * every AI run rewrites `usage.json`, so one instance advancing dragged every other instance's digest across the wire each 60s cycle). The category serves `{ instances: { <slotId>: <lww timestamp> }, tombstones }` (a few hundred bytes) and the puller fetches only slots whose timestamp moved. `isManifestEnvelope(value)` validates `{ data: { instances }, checksum }` (a legacy peer that 404s fails it, so the puller falls back to the whole snapshot); `diffManifestSlots(remoteInstances, localInstances)` returns the sorted slot ids whose REMOTE LWW stamp is strictly newer (compared via `lwwTimestamp.js`, so a tie breaks to what we hold and an unparseable remote stamp never drags a slot across). Consumed by `syncOrchestrator.syncDataCategoryFromPeer`; served by `dataSync.getManifest`. Safe across independently-upgrading installs: **the manifest is the category's checksum** (hashed, not the payload, for BOTH `/checksum` and `/snapshot`, so an older peer knowing only those endpoints sees a checksum changing exactly when a slot advances), and **every leg degrades to the whole snapshot** (no usable manifest → full snapshot; no `slots` filter → serve everything; receivers merge per slot under LWW, so a full payload applies idempotently).
  */
 
 import { isPlainObject } from './objects.js';
 import { compareNewerWins } from './lwwTimestamp.js';
 
-/**
- * Hard cap on the slot ids one `?slots=` request may carry — a bound on the URL
- * and on the Set the server builds from it, not a tuning knob. Comfortably
- * above any real fleet (`peerUsage` stores at most 64 instances), but a puller
- * that DOES diff more stale slots than this must truncate AND leave its cached
- * checksum unadvanced, or the slots it dropped are never fetched again.
- */
+/** Hard cap on slot ids per `?slots=` request: a bound on the URL and the server's Set, not a tuning knob (above any real fleet; `peerUsage` stores at most 64). A puller diffing more stale slots must truncate AND leave its cached checksum unadvanced, or the dropped slots are never fetched again. */
 export const MAX_MANIFEST_SLOTS = 128;
 
 /** True when `value` is a usable `{ data: { instances }, checksum }` envelope. */
@@ -58,13 +18,7 @@ export function isManifestEnvelope(value) {
     && isPlainObject(value.data.instances);
 }
 
-/**
- * Slot ids whose REMOTE timestamp is strictly newer than the local one — i.e.
- * exactly the slots worth fetching. A slot we have never seen is always newer
- * (local `undefined` is unparseable, so `compareNewerWins` takes the remote).
- * Returned sorted so the request URL — and therefore any test asserting it — is
- * deterministic regardless of map ordering.
- */
+/** Slot ids whose REMOTE timestamp is strictly newer than the local one, exactly the slots worth fetching (a never-seen slot is newer: local `undefined` is unparseable so `compareNewerWins` takes the remote). Sorted so the request URL and any test asserting it are deterministic. */
 export function diffManifestSlots(remoteInstances, localInstances) {
   if (!isPlainObject(remoteInstances)) return [];
   const local = isPlainObject(localInstances) ? localInstances : {};

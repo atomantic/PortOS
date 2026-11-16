@@ -7,15 +7,7 @@
 
 import { forkLocalBranch, resolveTaskForkHead } from './forkHead.js';
 import { isTruthyMeta } from './metadataFlags.js';
-/**
- * Task target-branch metadata — one reader and one terminal-strip rule.
- *
- * A retry owns `existingBranch` as a short-lived resume pointer. A review-loop
- * follow-up instead owns `reviewLoopPRBranch`, which survives terminal cleanup so
- * it can continue to repair and merge the same PR. Older follow-ups may contain
- * both fields, so resolution remains backward compatible while new writers use
- * the single canonical review-loop key.
- */
+/** Task target-branch metadata: one reader and one terminal-strip rule. A retry owns `existingBranch` as a short-lived resume pointer; a review-loop follow-up owns `reviewLoopPRBranch`, which survives terminal cleanup so it can keep repairing and merging the same PR. Older follow-ups may carry both, so resolution stays backward compatible while new writers use the canonical review-loop key. */
 
 
 /**
@@ -31,11 +23,7 @@ function rawTaskTargetBranch(metadata) {
   return null;
 }
 
-/**
- * Does this metadata carry a retry-owned branch pointer that terminal cleanup
- * must clear? Review-loop follow-ups use `reviewLoopPRBranch` instead, so an
- * older duplicate `existingBranch` can be removed safely once a retry owns it.
- */
+/** Does this metadata carry a retry-owned branch pointer terminal cleanup must clear? Review-loop follow-ups use `reviewLoopPRBranch`, so an older duplicate `existingBranch` can be removed safely once a retry owns it. */
 export function shouldStripTaskTargetBranch(metadata) {
   return !!metadata?.resumedFromAgentId;
 }

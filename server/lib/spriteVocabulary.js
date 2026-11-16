@@ -1,17 +1,7 @@
 /**
  * Sprite identifier and direction vocabulary.
  *
- * Sprite id pattern, record kinds, the canonical 8-direction order + derived anchor set,
- * `TURNAROUND_ID`, and the animation provider ids — the alphabets the sprite route schemas enumerate,
- * kept below the sprite services.
- *
- * The alphabets the sprite route schemas enumerate, kept below both validation
- * and the sprite services so `lib/spriteValidation.js` can name a direction or a
- * record kind without importing service orchestration (issue #4901). Each
- * constant was defined beside the logic that consumes it; the owning service
- * modules re-export from here, so those call sites are unchanged.
- *
- * A leaf module (no imports).
+ * id pattern, record kinds, the canonical 8-direction order + derived anchor set, `TURNAROUND_ID` and animation provider ids, the alphabets the sprite route schemas enumerate. Kept below validation and the sprite services so `lib/spriteValidation.js` can name a direction or record kind without importing service orchestration (#4901); owning services re-export from here. A leaf module (no imports).
  */
 
 // Sprite record ids: lowercase kebab, 1–64 chars, must start alphanumeric.
@@ -19,8 +9,7 @@ export const SPRITE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export const SPRITE_RECORD_KINDS = ['character', 'place', 'object', 'props'];
 
-// Canonical 8-direction order (the source pipeline's RUNTIME_DIRECTION_ORDER)
-// — atlas row order in later phases depends on this, so keep it stable.
+// Canonical 8-direction order (the source pipeline's RUNTIME_DIRECTION_ORDER); atlas row order in later phases depends on it, so keep it stable.
 export const SPRITE_DIRECTIONS = [
   'south',
   'south-east',

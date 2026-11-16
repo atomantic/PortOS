@@ -1,40 +1,15 @@
 /**
- * Build and run the process-liveness probe for a launched TUI command in a PTY
- * session.
+ * Process-liveness probe for a launched TUI command in a persistent PTY shell.
  *
- * `buildLivenessProbeCommand(shellPid, platform?)` + `parseLivenessProbeOutput(stdout, shellPid)` +
- * `shellHasLiveChild(shellPid, opts?)` — platform-aware process-liveness probe for a launched TUI
- * command in a persistent PTY shell. POSIX (`ps -Ao ppid=`) / Windows (`Get-CimInstance Win32_Process
- * | Select-Object -ExpandProperty ParentProcessId` via PowerShell). Resolves true (assume alive) when
- * the probe fails or cannot run.
+ * `buildLivenessProbeCommand(shellPid, platform?)` + `parseLivenessProbeOutput(stdout, shellPid)` + `shellHasLiveChild(shellPid, opts?)`.
  *
- * The TUI runs as a CHILD of a persistent PTY shell (e.g. `claude` spawned inside
- * `zsh` or `cmd.exe`). When that command exits early during startup (bad config,
- * command not found, auth error), the PTY itself stays open — the shell returns to
- * its prompt, and onExit never fires.
- *
- * "The shell PID has no live child process" means the launched command has
- * already died. In that case, the spawner skips pasting the prompt into the bare
- * shell prompt and finalizes failure early.
- *
- * The probe is executed host-side via `execFile` from Node.js (not inside the PTY):
- *   • POSIX host (macOS / Linux): `ps -Ao ppid=` (lists parent PIDs)
- *   • Windows host: `powershell -NoProfile -NonInteractive -Command ...`
- *     using `Get-CimInstance Win32_Process | Select-Object -ExpandProperty ParentProcessId`.
- *
- * Resolves true (assume alive) if the probe fails or cannot run, so an environment
- * glitch never blocks an otherwise-healthy run.
+ * The TUI runs as a CHILD of the shell (`claude` inside `zsh` or `cmd.exe`); when it exits early (bad config, command not found, auth error) the PTY stays open (the shell returns to its prompt, onExit never fires). "The shell PID has no live child" means the command already died, so the spawner skips pasting the prompt into the bare shell and finalizes failure early.
+ * Run host-side via `execFile` (not inside the PTY): POSIX `ps -Ao ppid=`; Windows PowerShell `Get-CimInstance Win32_Process | Select-Object -ExpandProperty ParentProcessId`. Resolves true (assume alive) if the probe fails or can't run, so an environment glitch never blocks a healthy run.
  */
 
 import { execFile } from './childProcess.js';
 
-/**
- * Build the file + argv for probing children of `shellPid`.
- *
- * @param {number} _shellPid - PID of the hosting shell process
- * @param {string} [platform=process.platform] - OS platform
- * @returns {{ file: string, args: string[] }}
- */
+/** Build the file + argv for probing children of `shellPid` (`_shellPid`: hosting shell PID; `platform` defaults to `process.platform`) → `{ file, args }`. */
 export function buildLivenessProbeCommand(_shellPid, platform = process.platform) {
   if (platform === 'win32') {
     return {
@@ -53,13 +28,7 @@ export function buildLivenessProbeCommand(_shellPid, platform = process.platform
   };
 }
 
-/**
- * Parse the output of the liveness probe.
- *
- * @param {string} stdout - raw stdout from the probe command (lines of PPIDs)
- * @param {number} shellPid - PID of the hosting shell process
- * @returns {boolean} true if child process(es) were found
- */
+/** Parse the probe's output (lines of PPIDs from `stdout`, for the hosting `shellPid`): true if child process(es) were found. */
 export function parseLivenessProbeOutput(stdout, shellPid) {
   if (!stdout || !shellPid) return false;
   return String(stdout)

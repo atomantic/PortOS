@@ -1,44 +1,16 @@
 /**
- * Canonical YouTube single-video URL rule (#6014) — the ONE place the server
- * decides "is this a single YouTube video, and which one?".
+ * Canonical YouTube single-video URL rule (#6014): the ONE place the server decides "is this a single YouTube video, and which one?".
  *
- * Before this module the same question was answered four different ways: the
- * Takeout importer owned the id parser (so `server/lib/` tests had to import
- * from `server/services/`, inverting the dependency rule), the brain ingest
- * declared its own accept-regex, the Music Video track import declared an OLDER
- * regex that predated `music.youtube.com` / shorts / live / embed support, and
- * the client mirrored all of it a fifth time. The drift was user-visible:
- * pasting a YouTube Music or Shorts link into track import returned
- * `400 YOUTUBE_URL_INVALID` even though yt-dlp handles it and the other two
- * pipelines accepted it.
- *
- * A pure leaf: `client/src/lib/youtubeUrl.js` re-exports it (Quick Capture swaps
- * its whole submit path on the predicate), so this module must import no Node
- * built-in and nothing outside `server/lib`. The throwing form lives in
- * `youtubeUrlAssert.js` for that reason.
- *
- * Deliberately narrow: playlists, channels, and `/@handle` pages are NOT
- * matched — a paste that would have yt-dlp pull 300 videos must fail fast
- * rather than silently start a batch download.
+ * It was answered four ways (the Takeout importer owned the id parser so `server/lib/` tests imported from `server/services/`, inverting the dependency rule; brain ingest had its own regex; Music Video track import had an OLDER one predating `music.youtube.com` / shorts / live / embed, so a YouTube Music or Shorts link returned `400 YOUTUBE_URL_INVALID` though yt-dlp handles it; the client mirrored it a fifth time). A pure leaf: `client/src/lib/youtubeUrl.js` re-exports it (Quick Capture swaps its submit path on the predicate), so no Node built-in and nothing outside `server/lib` (the throwing form is in `youtubeUrlAssert.js`). Deliberately narrow: playlists, channels and `/@handle` pages are NOT matched (a paste that would have yt-dlp pull 300 videos must fail fast).
  */
 
-/**
- * Accepts every URL shape that carries exactly one video id, across the
- * `www.` / `m.` / `music.` hosts. Playlists, channels, and feeds are rejected.
- */
+/** Accepts every URL shape carrying exactly one video id across the `www.` / `m.` / `music.` hosts; playlists, channels and feeds are rejected. */
 export const YOUTUBE_VIDEO_URL_RE =
   /^https?:\/\/(www\.|m\.|music\.)?(youtube\.com\/(watch\?[^\s#]*\bv=[\w-]{6,}|shorts\/[\w-]{6,}|live\/[\w-]{6,}|embed\/[\w-]{6,})|youtu\.be\/[\w-]{6,})/i;
 
 /**
- * The video id in a YouTube URL, or null. Handles every shape YouTube emits:
- *   watch?v=ID · youtu.be/ID · /shorts/ID · /embed/ID · /live/ID · /v/ID
- * (`/live/` is the permalink a finished livestream keeps — Takeout watch
- * records carry it, so it must resolve rather than be dropped as unrecognized.)
- *
- * The charset is bounded so a garbage query string can't smuggle a giant "id"
- * into a dedupe key. Intentionally looser than `YOUTUBE_VIDEO_URL_RE`: it also
- * answers for URL fragments the Takeout importer meets, so validation callers
- * must test the regex too (see `isYoutubeVideoUrl`).
+ * The video id in a YouTube URL, or null. Handles `watch?v=ID` · `youtu.be/ID` · `/shorts/ID` · `/embed/ID` · `/live/ID` · `/v/ID` (`/live/` is a finished livestream's permalink, which Takeout watch records carry). The charset is bounded so a garbage query can't smuggle a giant "id" into a dedupe key;
+ * intentionally looser than `YOUTUBE_VIDEO_URL_RE` (it also answers for URL fragments the Takeout importer meets), so validation callers must test the regex too (see `isYoutubeVideoUrl`).
  */
 export function youtubeVideoIdFromUrl(url) {
   if (!url) return null;

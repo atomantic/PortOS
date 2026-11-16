@@ -1,31 +1,7 @@
 /**
  * Snapshot checksum helpers for cross-instance sync.
  *
- * The two snapshot-checksum flavours a sync category can want. `snapshotChecksum(data)` hashes
- * `JSON.stringify` — insertion-order SENSITIVE, correct only where the getter already canonicalizes
- * its own ordering (`dataSync.js`, `digital-twin-sync.js`). `canonicalSnapshotChecksum(data)` hashes
- * `canonicalStringify`, so two converged machines hash identically regardless of the order they
- * learned the data (`peerUsage.js`, whose payload is a map keyed by wire-supplied instance ids).
- * Picking the wrong one is not a crash — it is two synced peers whose checksums never match, which the
- * sync UI reads as "behind" forever.
- *
- * A sync category's checksum is what lets the orchestrator skip the full
- * payload transfer when nothing moved, so every snapshot getter needs one.
- * These are the shared implementations — three getters had grown their own
- * byte-identical copy (`dataSync.js`, `digital-twin-sync.js`, `peerUsage.js`).
- *
- * Two variants, and the choice matters:
- *
- * - `snapshotChecksum` hashes `JSON.stringify` output, so it is sensitive to
- *   key INSERTION ORDER. Correct only where the getter already canonicalizes
- *   ordering itself (sorted arrays, deterministically rebuilt objects).
- * - `canonicalSnapshotChecksum` hashes `canonicalStringify`, which sorts object
- *   keys recursively — so two machines holding identical data hash the same
- *   regardless of the order they happened to write it in. Use this for any
- *   payload whose top level is a map keyed by something arriving over the wire.
- *
- * Getting that wrong is not a crash: it is two converged peers whose checksums
- * never match, which the sync UI reads as "behind" forever.
+ * A category's checksum lets the orchestrator skip the full payload transfer when nothing moved (three getters had grown byte-identical copies: `dataSync.js`, `digital-twin-sync.js`, `peerUsage.js`). Two flavours: `snapshotChecksum(data)` hashes `JSON.stringify`, so it is key-INSERTION-ORDER sensitive and correct only where the getter already canonicalizes its ordering (sorted arrays, deterministically rebuilt objects); `canonicalSnapshotChecksum(data)` hashes `canonicalStringify` (recursively key-sorted), so converged machines hash alike regardless of write order: use it for any payload whose top level is a map keyed by wire-supplied ids (`peerUsage.js`). The wrong choice isn't a crash: it is two converged peers whose checksums never match, which the sync UI reads as "behind" forever.
  */
 
 import crypto from 'crypto';
