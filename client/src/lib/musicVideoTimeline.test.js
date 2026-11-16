@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  TIMELINE_MAX_PX_PER_SEC, clampPxPerSec, fitPxPerSec, lyricSpans, rulerStepSec, rulerTicks, timelineDurationSec, timelineShotAt, timelineShots,
+  TIMELINE_MAX_PX_PER_SEC, clampPxPerSec, fitPxPerSec, lyricSpans, reorderedSceneIds, rulerStepSec, rulerTicks, shotsWithCutAt, snapCutTime,
+  timelineCuts, timelineDurationSec, timelineShotAt, timelineShots,
 } from './musicVideoTimeline.js';
 
 const project = {
@@ -70,5 +71,63 @@ describe('lyricSpans', () => {
       { id: 'c2', text: 'two', startSec: 5, endSec: 13 },
       { id: 'cue-2', text: 'three', startSec: 30, endSec: 38 },
     ]);
+  });
+});
+
+describe('cuts', () => {
+  const gapped = {
+    scenes: [
+      { sceneId: 'a', startSec: 0, endSec: 4 },
+      { sceneId: 'b', startSec: 4, endSec: 12 },
+      { sceneId: 'c', startSec: 14, endSec: 18 },
+    ],
+  };
+  const { shots } = timelineShots(gapped);
+  const cuts = timelineCuts(shots, 20);
+
+  it('gives every shot an out-point, and an in-point only where nothing is joined before it', () => {
+    expect(cuts.map((cut) => [cut.id, cut.t, cut.minSec, cut.maxSec])).toEqual([
+      ['a:start', 0, 0, 3.9],
+      ['a:end', 4, 0.1, 11.9],
+      ['b:end', 12, 4.1, 17.9],
+      ['c:start', 14, 4.1, 17.9],
+      ['c:end', 18, 14.1, 20],
+    ]);
+  });
+
+  it('lands a dragged cut on a frame, on a nearby snap point, and inside its range', () => {
+    const cut = cuts[1];
+    expect(snapCutTime(5.01, cut)).toEqual({ t: 5, snapped: false });
+    expect(snapCutTime(5.03, cut)).toEqual({ t: 5.042, snapped: false });
+    expect(snapCutTime(5.4, cut, [5.5, 9], 0.15)).toEqual({ t: 5.5, snapped: true });
+    expect(snapCutTime(5.2, cut, [5.5], 0.15).snapped).toBe(false);
+    expect(snapCutTime(-3, cut).t).toBe(0.1);
+    expect(snapCutTime(99, cut).t).toBe(11.9);
+    // A snap point outside the range is not a place the cut can go.
+    expect(snapCutTime(11.85, cut, [12], 0.5)).toEqual({ t: 11.833, snapped: false });
+  });
+
+  it('previews a moved cut on the shot and the one joined across it', () => {
+    const span = (list) => list.map((shot) => [shot.startSec, shot.endSec]);
+    expect(span(shotsWithCutAt(shots, cuts[1], 6))).toEqual([[0, 6], [6, 12], [14, 18]]);
+    expect(span(shotsWithCutAt(shots, cuts[3], 13))).toEqual([[0, 4], [4, 13], [13, 18]]);
+    expect(shotsWithCutAt(shots, null, 6)).toBe(shots);
+  });
+});
+
+describe('reorderedSceneIds', () => {
+  it('moves a shot among the timeline shots and leaves shots off the clock in place', () => {
+    const board = [
+      { sceneId: 'cold', preMusic: { durationSec: 2 } },
+      { sceneId: 'a', startSec: 0, endSec: 4 },
+      { sceneId: 'b', startSec: 4, endSec: 8 },
+      { sceneId: 'untimed' },
+      { sceneId: 'c', startSec: 8, endSec: 12 },
+    ];
+    const { shots } = timelineShots({ scenes: board });
+    expect(reorderedSceneIds(board, shots, 2, 0)).toEqual(['cold', 'c', 'a', 'untimed', 'b']);
+    expect(reorderedSceneIds(board, shots, 0, 1)).toEqual(['cold', 'b', 'a', 'untimed', 'c']);
+    expect(reorderedSceneIds(board, shots, 1, 1)).toBeNull();
+    expect(reorderedSceneIds(board, shots, 0, 3)).toBeNull();
   });
 });

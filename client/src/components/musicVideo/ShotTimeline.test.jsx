@@ -85,4 +85,58 @@ describe('ShotTimeline', () => {
     await waitFor(() => expect(clips()[1]).toHaveAttribute('aria-current', 'true'));
     expect(clips()[0]).not.toHaveAttribute('aria-current');
   });
+
+  // Uniquely catches a dragged cut saving the wrong shot, edge or time, or snapping back before its save lands.
+  it('drags a cut to a frame, shows both shots meeting there, and saves it', async () => {
+    let settle;
+    const onMoveCut = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
+    const onSeek = vi.fn();
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={onSeek} onMoveCut={onMoveCut} />);
+    // At the fit zoom (20 px a second) both shots are wide enough to grab the cut between them.
+    const cut = screen.getByRole('slider', { name: 'Cut after Shot s1' });
+    expect(cut).toHaveAttribute('aria-valuenow', '4');
+    fireEvent.pointerDown(cut, { clientX: 80, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(cut, { clientX: 101, pointerId: 1 });
+    expect(screen.getByText('Cut 0:05.04 (+1.04s)')).toBeInTheDocument();
+    expect(clips().map(widthOf)).toEqual([100.84, 139.16]);
+    fireEvent.pointerUp(cut, { pointerId: 1 });
+    expect(onMoveCut).toHaveBeenCalledWith('s1', 'end', 5.042);
+    expect(onSeek).toHaveBeenLastCalledWith(5.042);
+    // Until the save lands the cut stays where it was dropped.
+    expect(widthOf(clips()[0])).toBe(100.84);
+    settle();
+    await waitFor(() => expect(widthOf(clips()[0])).toBe(80));
+  });
+
+  it('nudges a focused cut a frame with the arrow keys, and offers no cut handles without a save action', () => {
+    const onMoveCut = vi.fn(() => Promise.resolve());
+    const { unmount } = render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} onMoveCut={onMoveCut} />);
+    fireEvent.keyDown(screen.getByRole('slider', { name: 'Cut after Shot s1' }), { key: 'ArrowLeft' });
+    expect(onMoveCut).toHaveBeenCalledWith('s1', 'end', 3.958);
+    unmount();
+    render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} />);
+    expect(screen.queryByRole('slider', { name: /^Cut after/ })).not.toBeInTheDocument();
+  });
+
+  // Uniquely catches reorder sending the wrong song-order indexes, and a drag's release opening the clip.
+  it('moves the open shot earlier or later, and a clip dragged onto another with a mouse', () => {
+    const onReorder = vi.fn();
+    const onOpenShot = vi.fn();
+    render(<ShotTimeline project={project} activeSceneId="s2" shotName={shotName} onOpenShot={onOpenShot} onSeek={() => {}} onReorder={onReorder} />);
+    expect(screen.getByRole('button', { name: 'Move shot later' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Move shot earlier' }));
+    expect(onReorder).toHaveBeenLastCalledWith(1, 0);
+    const [first] = clips();
+    fireEvent.pointerDown(first, { clientX: 40, pointerId: 3, button: 0, pointerType: 'mouse' });
+    fireEvent.pointerMove(first, { clientX: 200, pointerId: 3, pointerType: 'mouse' });
+    fireEvent.pointerUp(first, { clientX: 200, pointerId: 3, pointerType: 'mouse' });
+    fireEvent.click(first);
+    expect(onReorder).toHaveBeenLastCalledWith(0, 1);
+    expect(onOpenShot).not.toHaveBeenCalled();
+    // A touch press never starts a reorder: it pans the view, and a tap still opens the shot.
+    fireEvent.pointerDown(first, { clientX: 40, pointerId: 4, button: 0, pointerType: 'touch' });
+    fireEvent.pointerMove(first, { clientX: 200, pointerId: 4, pointerType: 'touch' });
+    fireEvent.pointerUp(first, { clientX: 200, pointerId: 4, pointerType: 'touch' });
+    expect(onReorder).toHaveBeenCalledTimes(2);
+  });
 });
