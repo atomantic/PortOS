@@ -10,6 +10,7 @@ import useMusicVideoKickoff from '../../../hooks/useMusicVideoKickoff.js';
 import useAutonomousMusicVideo from '../../../hooks/useAutonomousMusicVideo.js';
 import useDrawerTab from '../../../hooks/useDrawerTab.js';
 import { aiSkipLabel } from '../../../hooks/useMusicVideoTreatment.js';
+import { ownWrite } from '../../../services/socketWriteOrigin.js';
 import { autoArrangeScenes } from '../../../lib/beatGrid.js';
 import { AUTONOMOUS_VIEWABLE_STAGES } from '../../../lib/musicVideoAutonomous.js';
 
@@ -28,6 +29,7 @@ function autopilotBlocker(project) {
  */
 export default function usePlanStageWiring({
   selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+  applyEdit, reloadOpenProject,
 }) {
   const [arranging, setArranging] = useState(false);
   const [planning, setPlanning] = useState(false);
@@ -108,6 +110,9 @@ export default function usePlanStageWiring({
   // Optimistically applies the whole arrangement to the local board, then
   // persists each scene sequentially (the per-project load-modify-save can't
   // drop a write that way). Silent PATCHes — the catch owns the only error toast.
+  // Each PATCH is this tab's own write and its edit result is patched in: one
+  // change broadcast per shot used to reload the whole project per shot (#16210).
+  // A failure part-way reloads once, so the board shows what was saved.
   const handleAutoArrange = () => {
     if (!selected?.audioAnalysis) return;
     const scenes = selected.scenes || [];
@@ -121,6 +126,7 @@ export default function usePlanStageWiring({
     // optimistic board back to match the server-side partial state — otherwise the
     // local board shows the complete arrangement over a partial persist until reload.
     const snapshot = selected;
+    const projectId = selected.id;
     replaceProject({
       ...selected,
       scenes: scenes.map((s) => {
@@ -132,18 +138,19 @@ export default function usePlanStageWiring({
     (async () => {
       for (const a of arrangement) {
         // Sequential by design — see the comment above (avoids a load-modify-save race).
-        await updateMusicVideoScene(
-          selected.id, a.sceneId,
+        const { edit } = await updateMusicVideoScene(
+          projectId, a.sceneId,
           { startSec: a.startSec, endSec: a.endSec, beatAligned: a.beatAligned },
-          { silent: true },
+          ownWrite(),
         );
+        applyEdit(projectId, edit);
       }
     })()
       .then(() => toast.success(`Auto-arranged ${arrangement.length} scene${arrangement.length === 1 ? '' : 's'} by energy`))
       .catch((err) => {
-        // Revert the optimistic board to the snapshot so it doesn't show the full
-        // arrangement over a server-side partial write.
+        // Revert the optimistic board, then read what the server kept of the partial write.
         replaceProject(snapshot);
+        void reloadOpenProject(projectId);
         toast.error(err?.message || 'Auto-arrange failed');
       })
       .finally(() => setArranging(false));

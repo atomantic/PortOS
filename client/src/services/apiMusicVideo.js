@@ -818,6 +818,8 @@ export const applyMusicVideoAudioTiming = (id, data, options = {}) => request(`/
 
 // Human-reviewed production planning and proof. These never accept approval state in a project PATCH.
 export const getMusicVideoProductionReview = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, options);
+// `{ readiness }` alone, for a board holding the project without it.
+export const getMusicVideoProductionReadiness = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/readiness`, options);
 export const checkMusicVideoOverlayText = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/text-check`, { method: 'POST', ...options });
 export const reverifyMusicVideoAlignment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review/alignment`, { method: 'POST', body: JSON.stringify(body), ...options });
 export const saveMusicVideoProductionDraft = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/production-review`, { method: 'PUT', body: JSON.stringify(body), ...options });
