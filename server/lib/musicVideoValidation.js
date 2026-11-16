@@ -2439,6 +2439,7 @@ const musicVideoClipCardSchema = z.object({
   wholeLine: z.boolean().optional(),
   ltxReferences: z.boolean().optional(),
   startFrameLayout: z.boolean().optional(),
+  frameRoute: z.enum(['reference', 'image']).optional(),
   expectedClipReferenceFiles: z.array(galleryImageName).max(16).optional(),
   expectedClipReferenceLabels: z.array(z.string().max(200)).max(16).optional(),
 }).strict();

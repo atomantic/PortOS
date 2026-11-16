@@ -412,7 +412,9 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
   const higgsfieldModel = backend === VIDEO_GEN_MODE.HIGGSFIELD ? getHiggsfieldVideoModel(body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL) : null;
   const clipReferenceModel = falModel || runwayModel || higgsfieldModel;
-  const useClipReferences = Boolean((clipReferenceModel?.referenceImages || higgsfieldModel?.maxReferenceImages) && !(higgsfieldModel && body.referenceImageFiles?.length) && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
+  // A shot set to frameRoute 'image' renders plain image-to-video from its frame, leaving the sheets out.
+  const frameOnly = higgsfieldModel && body.musicVideo?.frameRoute === 'image';
+  const useClipReferences = Boolean(!frameOnly && (clipReferenceModel?.referenceImages || higgsfieldModel?.maxReferenceImages) && !(higgsfieldModel && body.referenceImageFiles?.length) && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
       (higgsfieldModel ? Infinity : musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath })), { excludePath: sourceImagePath })

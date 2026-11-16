@@ -70,6 +70,7 @@ function clipTag(project, scene, input, extra = {}) {
     ...(typeof card.songAudio === 'boolean' && !isPerformanceScene(scene) ? { songAudio: card.songAudio } : {}),
     ...(card.wholeLine && isPerformanceScene(scene) ? { wholeLine: true } : {}),
     ...(card.startFrameLayout ? { startFrameLayout: true } : {}),
+    ...(card.frameRoute ? { frameRoute: card.frameRoute } : {}),
     ...(input.tier ? { tier: input.tier } : {}),
     ...extra,
   };
