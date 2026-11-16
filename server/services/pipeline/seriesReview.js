@@ -804,6 +804,4 @@ export function startSeriesFixRun(seriesId, options = {}) {
 
 export const attachFixClient = (seriesId, res) => fixRunner.attachClient(seriesId, res);
 export const isSeriesFixActive = (seriesId) => fixRunner.isActive(seriesId);
-export const cancelSeriesFix = (seriesId) => fixRunner.cancel(seriesId);
-
 export const __testing = { runs: runner.runs, fixRuns: fixRunner.runs };

@@ -205,23 +205,4 @@ router.get('/:id/runs', asyncHandler(async (req, res) => {
   res.json(await svc.listRuns(req.params.id));
 }));
 
-// Bulk lock/unlock every variation in a category bucket. Powers the
-// per-bucket "Lock all / Unlock all" affordance on the variations grid.
-// Omit `category` in the body to apply to every variation in every bucket;
-// pass `includeSheets: true` to also flip composite sheets in the same call.
-const setVariationsLockAllSchema = z.object({
-  locked: z.boolean(),
-  category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX).nullable().optional(),
-  includeSheets: z.boolean().optional(),
-});
-router.patch('/:id/variations/lock-all', asyncHandler(async (req, res) => {
-  const body = validateRequest(setVariationsLockAllSchema, req.body ?? {});
-  const result = await svc.setVariationsLockAll(req.params.id, {
-    categoryKey: body.category || null,
-    locked: body.locked,
-    includeSheets: body.includeSheets === true,
-  }).catch((err) => { throw mapServiceError(err); });
-  res.json(result);
-}));
-
 export default router;

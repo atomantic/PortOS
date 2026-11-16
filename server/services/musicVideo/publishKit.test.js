@@ -552,13 +552,6 @@ describe('publishing kit copy (#9281)', () => {
     await expect(kit.draftPublishKitCopy(id, {}, { platforms: {}, history: {}, runner: runner('{}') })).rejects.toMatchObject({ status: 409, code: 'PUBLISH_NO_PLATFORMS' });
   });
 
-  it('only selects a thumbnail the kit built', async () => {
-    const { id } = await projects.createProject({ name: 'Example Song' });
-    await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: { thumbnails: ['a.jpg', 'b.jpg'], thumbnail: 'a.jpg' } } }));
-    expect((await kit.selectPublishKitThumbnail(id, 'b.jpg')).project.publishKit.thumbnail).toBe('b.jpg');
-    await expect(kit.selectPublishKitThumbnail(id, 'elsewhere.jpg')).rejects.toMatchObject({ status: 422 });
-  });
-
   it('skips platforms per release in copy drafts while keeping their saved copy', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     await kit.updatePublishKitCopy(id, { linkedin: { post: 'Saved LinkedIn' }, skippedTargets: ['linkedin', 'linkedin'] });

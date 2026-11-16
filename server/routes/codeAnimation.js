@@ -18,7 +18,6 @@
  *   POST /api/code-animation/projects/:id/stage-runs/:runId/cancel   stop an active run
  *   GET  /api/code-animation/projects/:id/acceptance      accepted output + freshness + run comparison
  *   POST /api/code-animation/projects/:id/accepted-output promote a passing run's video
- *   GET  /api/code-animation/accepted-assets              accepted shorts for downstream tools
  */
 
 import { Router } from 'express';
@@ -52,7 +51,7 @@ import { exportCodeAnimationPackage } from '../services/codeAnimation/package.js
 import { readThreeVendor } from '../services/codeAnimation/threeVendor.js';
 import { codeAnimationPackageSchema, summarizeCodeAnimationPackage } from '../lib/codeAnimationPackage.js';
 import { codeAnimationProjectSchema, codeAnimationProjectPatchSchema, codeAnimationStageRunSchema } from '../lib/codeAnimationProjects.js';
-import { acceptProductionOutput, getProductionAcceptance, listAcceptedAssets } from '../services/codeAnimation/acceptance.js';
+import { acceptProductionOutput, getProductionAcceptance } from '../services/codeAnimation/acceptance.js';
 import { startProductionStageRun, cancelProductionStageRun } from '../services/codeAnimation/stages.js';
 import {
   createProductionProject, getProductionProject, patchProductionProject,
@@ -290,9 +289,6 @@ router.post('/projects/:id/stage-runs', asyncHandler(async (req, res) => {
 router.post('/projects/:id/stage-runs/:runId/cancel', asyncHandler(async (req, res) => {
   const { id, runId } = validateRequest(z.object({ id: z.string().uuid(), runId: z.string().uuid() }).strict(), req.params);
   res.json(cancelProductionStageRun(id, runId));
-}));
-router.get('/accepted-assets', asyncHandler(async (req, res) => {
-  res.json(await listAcceptedAssets(projectPage(req.query)));
 }));
 router.get('/projects/:id/acceptance', asyncHandler(async (req, res) => {
   const { id } = validateRequest(exportParamsSchema, req.params);

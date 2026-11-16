@@ -41,7 +41,6 @@ import {
   updateBoard,
   deleteBoard,
   addBoardItem,
-  backfillGalleryPrompts,
   updateBoardItem,
   removeBoardItem,
   linkPinterestBoard,
@@ -165,14 +164,6 @@ const composePromptSchema = z.object({
   model: z.string().trim().max(256).optional(),
   effort: z.string().trim().max(64).optional(),
 }).strict();
-// Copy gallery generation prompts onto pins that lack any prompt, so the board
-// analyze step doesn't re-run vision on them. Resolves to the updated board.
-router.post('/:id/backfill-prompts', asyncHandler(async (req, res) => {
-  const board = await backfillGalleryPrompts(req.params.id);
-  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(board);
-}));
-
 // Background analyze job: prompt-from-media over un-analyzed pins, then compose
 // the board style. Survives the page unmounting; progress follows the
 // `mood-board:analyze` socket event and GET restores it on return.

@@ -316,10 +316,6 @@ router.get('/series/:id/review/fix/status', (req, res) => {
   res.json({ active: seriesReview.isSeriesFixActive(req.params.id) });
 });
 
-router.post('/series/:id/review/fix/cancel', asyncHandler(async (req, res) => {
-  res.json({ canceled: seriesReview.cancelSeriesFix(req.params.id) });
-}));
-
 // ---------------------------------------------------------------------------
 // Editorial checks (#1284) — registry-driven editorial review.
 // ---------------------------------------------------------------------------

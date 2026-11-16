@@ -22,7 +22,6 @@ import {
   creativeDirectorPlanStepActionSchema,
   creativeDirectorDirectiveSchema,
   creativeDirectorSceneUpdateSchema,
-  creativeDirectorAutoCastSuggestSchema,
   creativeDirectorAutoCastApplySchema,
   creativeDirectorProjectQuerySchema,
   isPaginationRequested,
@@ -40,7 +39,7 @@ import {
   updatePlanStep,
   updateScene,
 } from '../services/creativeDirector/local.js';
-import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
+import { applyAutoCastToProject } from '../services/creativeDirector/autoCast.js';
 import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
 import { startCreativeDirectorProject, advanceAfterSceneSettled } from '../services/creativeDirector/completionHook.js';
@@ -152,16 +151,6 @@ router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectCreateSchema, req.body);
   const project = await createProject(data);
   res.status(201).json(project);
-}));
-
-// Autonomous auto-cast (#1810) — preview only: given a free-text brief, return the
-// catalog ingredients the director would propose (hybrid FTS + pgvector search),
-// without mutating anything. Registered before `/:id/auto-cast` so the literal
-// path can't be shadowed by the param route.
-router.post('/auto-cast/suggest', asyncHandler(async (req, res) => {
-  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastSuggestSchema, req.body);
-  const hits = await suggestCastForBrief({ brief, types, limit });
-  res.json({ suggestions: hits.map(toSuggestionView).filter(Boolean) });
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

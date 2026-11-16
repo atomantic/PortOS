@@ -351,33 +351,3 @@ describe('buildCustomModelEntry', () => {
     expect(entry).toMatchObject({ runner: 'qwen', pipelineClass: 'QwenImagePipeline' });
   });
 });
-
-describe('searchHuggingfaceModels', () => {
-  it('builds the search URL and maps rows', async () => {
-    let calledUrl = null;
-    const fetchImpl = async (url) => {
-      calledUrl = url;
-      return {
-        ok: true,
-        text: async () => JSON.stringify([
-          { id: 'org/a', likes: 5, downloads: 100, pipeline_tag: 'text-to-image' },
-          { modelId: 'org/b', pipeline_tag: 'text-to-video' },
-          { likes: 1 }, // no id → dropped
-        ]),
-      };
-    };
-    const rows = await searchHuggingfaceModels('ltx', { pipeline: 'text-to-video', limit: 5, fetchImpl });
-    expect(calledUrl).toContain('search=ltx');
-    expect(calledUrl).toContain('pipeline_tag=text-to-video');
-    expect(calledUrl).toContain('limit=5');
-    expect(rows).toEqual([
-      { id: 'org/a', likes: 5, downloads: 100, pipeline_tag: 'text-to-image' },
-      { id: 'org/b', likes: 0, downloads: 0, pipeline_tag: 'text-to-video' },
-    ]);
-  });
-
-  it('throws on a non-ok response', async () => {
-    const fetchImpl = async () => ({ ok: false, status: 503, text: async () => '' });
-    await expect(searchHuggingfaceModels('x', { fetchImpl })).rejects.toThrow(/search failed/i);
-  });
-});

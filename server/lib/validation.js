@@ -2926,12 +2926,6 @@ export const htmlCompositionRenderSchema = z.object({
   .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack || value.audioUpload)), 'A proof is silent; omit synthesizeMusic, musicTrack and audioUpload')
   .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
 
-// GET /api/html-composition/beats — a Music-library filename, same shape as
-// htmlCompositionRenderSchema's musicTrack but required (this endpoint exists
-// only to measure one).
-export const htmlCompositionBeatsQuerySchema = z.object({
-  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
-}).strict();
 
 // Public renders stay capped at 120s. A music-video owner passes a higher
 // ceiling (the song length, hard-capped by the caller at 900s) and gets the

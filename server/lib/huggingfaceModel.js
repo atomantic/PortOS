@@ -27,44 +27,10 @@ import { ServerError } from './errorHandler.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { readResponseJson } from './readResponseJson.js';
 import {
-  HF_API,
   looksLikeLtxVideo,
   modelClassificationBlob,
   modelSiblingFilenames,
 } from './huggingfaceLora.js';
-
-// Search the HF Hub for candidate base-model repos matching a free-text query.
-// Backs the manager UI's "search HuggingFace" box (mirrors the LoRA installer's
-// GET /search). Returns lightweight `{ id, likes, downloads, pipeline_tag }`
-// rows — the caller adds one by pasting its id into the add flow, which does
-// the full classify/refuse pass. `pipeline` scopes to `text-to-image` /
-// `text-to-video` etc. when provided. fetchImpl is injectable for tests.
-// A stalled Hub must fail the search, not leave the "add a model" picker spinning.
-const HF_SEARCH_TIMEOUT_MS = 10_000;
-
-export const searchHuggingfaceModels = async (query, { pipeline, limit = 12, fetchImpl = fetch } = {}) => {
-  const params = new URLSearchParams();
-  const search = typeof query === 'string' ? query.trim() : '';
-  if (search) params.set('search', search);
-  if (pipeline) params.set('pipeline_tag', pipeline);
-  params.set('limit', String(Math.max(1, Math.min(50, limit))));
-  params.set('sort', 'downloads');
-  const res = await fetchImpl(`${HF_API}?${params.toString()}`, {
-    headers: { Accept: 'application/json' },
-    signal: AbortSignal.timeout(HF_SEARCH_TIMEOUT_MS),
-  });
-  if (!res.ok) {
-    throw new ServerError(`HuggingFace search failed: ${res.status}`, { status: 502, code: 'HF_SEARCH_FAILED' });
-  }
-  const rows = await readResponseJson(res, { fallback: [] });
-  const list = Array.isArray(rows) ? rows : [];
-  return list.map((r) => ({
-    id: r?.id || r?.modelId || null,
-    likes: Number.isFinite(r?.likes) ? r.likes : 0,
-    downloads: Number.isFinite(r?.downloads) ? r.downloads : 0,
-    pipeline_tag: typeof r?.pipeline_tag === 'string' ? r.pipeline_tag : null,
-  })).filter((r) => r.id);
-};
 
 // Video runtimes a user MAY target when adding a model. Both load MLX /
 // diffusers `.safetensors`:

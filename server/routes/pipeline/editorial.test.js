@@ -70,7 +70,6 @@ vi.mock('../../services/pipeline/seriesReview.js', () => ({
   startSeriesFixRun: (...a) => startSeriesFixRun(...a),
   attachFixClient: vi.fn(() => false),
   isSeriesFixActive: vi.fn(() => false),
-  cancelSeriesFix: vi.fn(() => true),
 }));
 
 const editorialRoutes = (await import('./editorial.js')).default;

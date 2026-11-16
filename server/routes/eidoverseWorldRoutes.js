@@ -9,9 +9,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  eidoverseWorldAugmentSchema,
   eidoverseWorldConfigPatchSchema,
-  eidoverseWorldSaySchema,
   validateRequest,
 } from '../lib/validation.js';
 import {
@@ -50,12 +48,9 @@ import {
 } from '../services/eidoverseControllerRuntime.js';
 import { ensureInstanceId } from '../services/instanceIdentity.js';
 import {
-  augmentEidoverseWorld,
-  ensureEidoverseWorldPresence,
   getEidoverseWorldProjectionStatus,
   getEidoverseWorldStatus,
   projectEidoverseWorld,
-  sayInEidoverseWorld,
   updateEidoverseWorldConfig,
 } from '../services/eidoverseWorld.js';
 
@@ -81,31 +76,11 @@ router.put('/config', asyncHandler(async (req, res) => {
   res.json({ success: true, ...(await updateEidoverseWorldConfig(patch)) });
 }));
 
-// POST /api/eidoverse/world/presence — establish the persistent CoS agent
-// presence without requiring a browser tab to remain open.
-router.post('/presence', asyncHandler(async (_req, res) => {
-  res.json(await ensureEidoverseWorldPresence());
-}));
-
 // POST /api/eidoverse/world/project — refresh the world from live PortOS
 // resources using the saved recipe. This is deterministic and makes no AI
 // provider call.
 router.post('/project', asyncHandler(async (_req, res) => {
   res.json(await projectEidoverseWorld());
-}));
-
-// POST /api/eidoverse/world/augment — apply bounded, allowlisted world verbs
-// for manual or CoS-authored augmentation.
-router.post('/augment', asyncHandler(async (req, res) => {
-  const { operations } = validateRequest(eidoverseWorldAugmentSchema, req.body || {});
-  res.json(await augmentEidoverseWorld(operations));
-}));
-
-// POST /api/eidoverse/world/say — persist a PortOS/CoS message in the world
-// chat through the same authoritative world protocol.
-router.post('/say', asyncHandler(async (req, res) => {
-  const { text } = validateRequest(eidoverseWorldSaySchema, req.body || {});
-  res.json(await sayInEidoverseWorld(text));
 }));
 
 // --- Foundations: the local-vs-baseline ownership ledger (#7455) ---------

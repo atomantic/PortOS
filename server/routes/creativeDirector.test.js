@@ -583,31 +583,6 @@ describe('creativeDirector routes', () => {
     });
   });
 
-  describe('POST /auto-cast/suggest (#1810)', () => {
-    it('400s when brief is missing', async () => {
-      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({});
-      expect(r.status).toBe(400);
-      expect(autoCast.suggestCastForBrief).not.toHaveBeenCalled();
-    });
-
-    it('returns slimmed suggestions for a brief (no full ingredient leak)', async () => {
-      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({ brief: 'rain noir' });
-      expect(r.status).toBe(200);
-      expect(autoCast.suggestCastForBrief).toHaveBeenCalledWith({ brief: 'rain noir', types: undefined, limit: undefined });
-      expect(r.body.suggestions).toEqual([
-        { ingredientId: 'c1', name: 'Mara', type: 'character', score: 0.5, searchMethod: 'hybrid' },
-      ]);
-      expect(r.body.suggestions[0]).not.toHaveProperty('payload');
-    });
-
-    it('is not shadowed by the /:id param route', async () => {
-      // /auto-cast/suggest must hit the literal handler, not POST /:id/auto-cast
-      const r = await request(app).post('/api/creative-director/auto-cast/suggest').send({ brief: 'x' });
-      expect(r.status).toBe(200);
-      expect(autoCast.applyAutoCastToProject).not.toHaveBeenCalled();
-    });
-  });
-
   describe('POST /:id/auto-cast (#1810)', () => {
     it('applies auto-cast to the project and returns the result', async () => {
       autoCast.applyAutoCastToProject.mockResolvedValue({

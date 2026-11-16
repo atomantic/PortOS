@@ -166,7 +166,6 @@ const UNVALIDATED_QUERY_BASELINE = [
   'routes/catalog.js GET /ingredients/:id',
   'routes/catalog.js GET /scraps',
   'routes/catalog.js GET /sync',
-  'routes/codeAnimation.js GET /accepted-assets',
   'routes/codeAnimation.js GET /projects',
   'routes/codeAnimation.js GET /projects/:id/history',
   'routes/cosInsightRoutes.js GET /activity-calendar',

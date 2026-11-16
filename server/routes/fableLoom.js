@@ -51,7 +51,6 @@ import { analyzeEpisodeGraph } from '../lib/fableLoomGraph.js';
 import { analyzeSeriesStoryOutlines } from '../lib/fableLoomOutline.js';
 import {
   inspectEpisodeProductionReadiness,
-  inspectNodeProductionReadiness,
 } from '../lib/fableLoomPlayback.js';
 import { getUniverse } from '../services/universeBuilder.js';
 import {
@@ -272,15 +271,6 @@ router.get('/:id/episodes/:episodeId/validate', asyncHandler(async (req, res) =>
   });
 }));
 
-router.get('/:id/episodes/:episodeId/nodes/:nodeId/readiness', asyncHandler(async (req, res) => {
-  const loom = await getLoom(req.params.id);
-  const episode = loom?.episodes.find((e) => e.id === req.params.episodeId);
-  const node = episode?.nodes.find((n) => n.id === req.params.nodeId);
-  if (!loom || !episode || !node) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
-  const universe = loom.universeId ? await getUniverse(loom.universeId).catch(() => null) : null;
-  res.json(inspectNodeProductionReadiness(node, { universe, loom }));
-}));
-
 // --- Nodes ------------------------------------------------------------------
 
 router.post('/:id/episodes/:episodeId/nodes', asyncHandler(async (req, res) => {
@@ -463,14 +453,6 @@ router.post('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req
 
 router.get('/:id/episodes/:episodeId/production/batch', asyncHandler(async (req, res) => {
   res.json({ run: getLatestEpisodeProductionBatch(req.params.id, req.params.episodeId) });
-}));
-
-router.get('/:id/episodes/:episodeId/production/batch/:runId', asyncHandler(async (req, res) => {
-  const run = getEpisodeProductionBatch(req.params.runId);
-  if (!run || run.loomId !== req.params.id || run.episodeId !== req.params.episodeId) {
-    throw new ServerError('Batch production run not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(run);
 }));
 
 router.post('/:id/episodes/:episodeId/production/batch/:runId/cancel', asyncHandler(async (req, res) => {

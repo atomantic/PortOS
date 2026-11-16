@@ -130,4 +130,3 @@ export async function metalBufferExecutionSignature({ model, encoder, runtimeInf
 
 let profiles;
 export const getMetalBufferProfiles = () => profiles ??= _createMetalBufferProfiles({ file: join(PATHS.data, 'cache', 'video-gen', 'metal-buffer-profiles.json') });
-export const clearMetalBufferProfiles = () => getMetalBufferProfiles().clear();

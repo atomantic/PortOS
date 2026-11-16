@@ -34,10 +34,9 @@ describe('/api/mortalloom', () => {
     expect(res.body.error).toEqual(expect.any(String));
   });
 
-  it('serves status and the App Store link without importing', async () => {
+  it('serves status without importing', async () => {
     getStatus.mockResolvedValue({ available: false });
     expect((await request(app).get('/api/mortalloom/status')).body).toEqual({ available: false });
-    expect((await request(app).get('/api/mortalloom/app-store')).body).toEqual({ url: 'https://apps.apple.com/app/id0000000000' });
     expect(importToPortOS).not.toHaveBeenCalled();
   });
 });

@@ -916,7 +916,6 @@ export const musicVideoDocumentFileQuerySchema = z.object({
   draft: z.literal('1').optional(),
 }).strict();
 
-export const musicVideoDocumentDraftQuerySchema = z.object({ draft: z.literal('1').optional() }).strict();
 export const musicVideoDocumentCandidateSchema = z.object({
   directory: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
 }).strict();
@@ -1323,7 +1322,6 @@ export const musicVideoPromotionPlanSchema = z.object({
 }).strict();
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
 
-export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
 // with the title and artist tag, or a fresh source image from a backend.

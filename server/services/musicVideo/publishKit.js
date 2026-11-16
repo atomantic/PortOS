@@ -283,16 +283,6 @@ export async function capturePublishKitFrame(projectId, atSec) {
   return result;
 }
 
-/** Choose the thumbnail the release uses (one the build cut). */
-export async function selectPublishKitThumbnail(projectId, filename) {
-  await requireProject(projectId);
-  return mutateProjectRecord(projectId, (current) => {
-    const kit = projectPublishKit(current);
-    if (!(kit.thumbnails || []).includes(filename)) throw kitError(422, 'VALIDATION_ERROR', 'That thumbnail is not one this kit built');
-    return { project: { ...current, publishKit: { ...kit, thumbnail: filename } } };
-  });
-}
-
 /** Merge edited copy fields per platform (only known platforms and string/array fields). */
 export async function updatePublishKitCopy(projectId, patch, deps = {}) {
   await requireProject(projectId);

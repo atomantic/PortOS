@@ -163,7 +163,6 @@ describe('media installer operator authority (#9513)', () => {
   it('keeps status aliases read-only and contained rendering separate from installation', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
     for (const path of [
-      '/api/music/setup/runtime-status?runtime=example',
       '/api/music/setup/runtime-install?runtime=example',
       '/api/video-gen/setup/runtime-status?runtime=example',
       '/api/video-gen/setup/runtime-install?runtime=example',

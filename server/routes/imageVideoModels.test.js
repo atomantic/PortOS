@@ -30,7 +30,6 @@ vi.mock('../lib/mediaModels.js', () => ({
 vi.mock('../lib/huggingfaceModel.js', () => ({
   ADDABLE_VIDEO_RUNTIMES: ['mlx_video', 'ltx2'],
   ADDABLE_IMAGE_RUNNERS: ['flux2', 'z-image', 'ernie', 'hidream', 'qwen'],
-  searchHuggingfaceModels: vi.fn(async (query) => [{ id: `org/${query}`, likes: 1, downloads: 2, pipeline_tag: 'text-to-image' }]),
 }));
 
 vi.mock('../services/cosTaskStore.js', () => ({ addTask: vi.fn(async () => ({ id: 'task-support', status: 'pending' })) }));
@@ -105,14 +104,6 @@ describe('GET /registry', () => {
         modelIds: ['minimax_h3_8bit'],
       }),
     ]));
-  });
-});
-
-describe('GET /search', () => {
-  it('returns mapped HF search rows', async () => {
-    const res = await request(makeApp()).get('/api/image-video/models/search?query=ltx&pipeline=text-to-video');
-    expect(res.status).toBe(200);
-    expect(res.body.items[0].id).toBe('org/ltx');
   });
 });
 

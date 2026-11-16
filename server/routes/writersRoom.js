@@ -41,8 +41,12 @@ import {
   runAnalysis, listAnalyses, getAnalysis, persistSceneImage,
 } from '../services/writersRoom/evaluator.js';
 import {
-  startPolish, attachClient as attachPolishClient, cancelPolish, isPolishActive,
-  listSnapshots, getSnapshot, revertToSnapshot,
+  startPolish,
+  attachClient as attachPolishClient,
+  cancelPolish,
+  isPolishActive,
+  listSnapshots,
+  revertToSnapshot,
 } from '../services/writersRoom/polish.js';
 import { getSyncedReview } from '../services/writersRoom/syncedReview.js';
 import {
@@ -249,10 +253,6 @@ router.get('/works/:id/polish/status', asyncHandler(async (req, res) => {
 
 router.get('/works/:id/polish/snapshots', asyncHandler(async (req, res) => {
   res.json(await listSnapshots(req.params.id));
-}));
-
-router.get('/works/:id/polish/snapshots/:snapshotId', asyncHandler(async (req, res) => {
-  res.json(await getSnapshot(req.params.id, req.params.snapshotId));
 }));
 
 router.post('/works/:id/polish/revert', asyncHandler(async (req, res) => {
