@@ -9,10 +9,15 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-annotations-') }));
 afterAll(cleanupTempDataRoots);
 
+// Annotations are keyed by the local instance id; the identity store persists outside the temp
+// root, so stub it rather than mint a real identity.
+vi.mock('../services/instanceIdentity.js', () => ({
+  UNKNOWN_INSTANCE_ID: 'unknown',
+  getInstanceId: async () => 'instance-local',
+  getSelf: async () => ({ instanceId: 'instance-local', name: 'Local' }),
+}));
+
 const { default: mediaAnnotationsRoutes } = await import('./mediaAnnotations.js');
-const { ensureSelf } = await import('../services/instanceIdentity.js');
-// Annotations are keyed by the local instance id, which a fresh data root has not minted yet.
-await ensureSelf();
 
 // With an io on the app, the error middleware also raises errorEvents 'error',
 // which throws on an EventEmitter with no listener; the server registers one at boot.
