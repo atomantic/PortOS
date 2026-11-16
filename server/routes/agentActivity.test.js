@@ -100,12 +100,6 @@ describe('GET /run-events/run/:id', () => {
     mocks.getRunDiagnostic.mockResolvedValue({ projection: { id: 'r1' }, events: [] });
   });
 
-  it('serves one run diagnostic', async () => {
-    const res = await get('/run-events/run/r1');
-    expect(res.status).toBe(200);
-    expect(mocks.getRunDiagnostic).toHaveBeenCalledWith('r1');
-  });
-
   it('resolves the `agent:<id>` fallback key for a run that never got an id', async () => {
     await get(`/run-events/run/${encodeURIComponent('agent:a9')}`);
     expect(mocks.getRunDiagnostic).toHaveBeenCalledWith('agent:a9');

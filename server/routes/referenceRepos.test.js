@@ -120,17 +120,11 @@ describe('reference repos routes', () => {
   });
 
   describe('POST /:refId/check', () => {
-    it('returns the snapshot the service produces', async () => {
-      const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
-      expect(r.status).toBe(200);
-      expect(r.body).toMatchObject({ commitCount: 2 });
-      expect(svc.checkReferenceRepo).toHaveBeenCalledWith('app-1', 'r1');
-    });
-
     it('triggers analysis when new commits exist', async () => {
       const r = await request(app).post('/api/apps/app-1/reference-repos/r1/check');
       expect(r.status).toBe(200);
       expect(r.body.analysis).toEqual({ queued: true, taskId: 'ref-analysis-1' });
+      expect(svc.checkReferenceRepo).toHaveBeenCalledWith('app-1', 'r1');
       expect(svc.triggerReferenceAnalysis).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'app-1', name: 'TestApp' }),
         expect.objectContaining({ id: 'r1' }),

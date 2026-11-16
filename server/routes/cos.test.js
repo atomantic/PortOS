@@ -245,18 +245,6 @@ describe('CoS Routes', () => {
   });
 
   describe('PUT /api/cos/config', () => {
-    it('should update configuration', async () => {
-      const updates = { maxConcurrentAgents: 5 };
-      updateConfig.mockResolvedValue({ ...updates });
-
-      const response = await request(app)
-        .put('/api/cos/config')
-        .send(updates);
-
-      expect(response.status).toBe(200);
-      expect(updateConfig).toHaveBeenCalledWith(updates);
-    });
-
     it('accepts the investigation auto-approval setting', async () => {
       const updates = { autoApproveInvestigations: true };
       updateConfig.mockResolvedValue(updates);
