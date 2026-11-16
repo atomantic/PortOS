@@ -6,6 +6,7 @@
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { isFilmLookNeutral } from './filmLook.js';
 import { musicVideoOverscan } from './musicVideoFilmLook.js';
+import { activeShotColorMatch } from './shotColorMatch.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 
@@ -275,7 +276,7 @@ const compositionRef = (project, startSec, endSec) => {
 // Video-level inputs the final render reads (filmLookFinish, shotSegments title card, ending parts, cameras,
 // overscan, sound bed, lyric overlay). Each joins only when set so a project without them keeps its evidence.
 // Left out on purpose: `videoSettings` (read only when generating takes, not by the render) and a shot's
-// `colorMatch` field (the render reads the selected take's correction instead).
+// `colorMatch` field (the render reads the selected take's correction, tracked by `colorMatchRef`).
 const finishInputs = (project) => Object.fromEntries([
   ['filmLook', project.filmLook && !isFilmLookNeutral(project.filmLook) ? project.filmLook : null],
   ['titleCard', project.titleCard || null],
@@ -286,6 +287,11 @@ const finishInputs = (project) => Object.fromEntries([
   ['lyricOverlayEnabled', project.lyricOverlayEnabled === false ? false : null],
   ['soundBed', project.soundBed || null],
 ].filter(([, value]) => value !== null));
+// The correction the render applies to a shot (selected take's match, camera doNotMatch, flash stills) is its own
+// reference, not part of `layerRef`: it is recorded on every shot, so a later match or a disable flips the render,
+// and evidence captured before this reference existed simply has none and is not compared, staying current.
+const colorMatchRef = (project, scene) => ({ role: 'colorMatch', sceneId: scene.sceneId, assetId: scene.sceneId,
+  revision: checksum(activeShotColorMatch(project, scene)) });
 const finishRef = (project) => ({ role: 'finish', assetId: 'project', revision: checksum(finishInputs(project)) });
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({
@@ -299,7 +305,7 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   const references = [songRef(project)];
   for (const scene of project.scenes || []) {
     if (sceneIds ? !sceneIds.includes(scene.sceneId) : !intersects(scene, startSec, endSec)) continue;
-    references.push(layerRef(scene));
+    references.push(layerRef(scene), colorMatchRef(project, scene));
     const role = scene.visualLayer === 'still' ? 'plate' : ['card', 'code'].includes(scene.visualLayer) ? null : 'clip';
     if (!role) continue;
     references.push(assetRef(scene, role));
@@ -353,6 +359,7 @@ function createDependencyReader(project) {
     if (!references) sceneReferences.set(scene, references = new Map());
     if (!references.has(ref.role)) references.set(ref.role, slots[ref.role] ? assetRef(scene, ref.role)
       : ref.role === 'layer' ? layerRef(scene)
+        : ref.role === 'colorMatch' ? colorMatchRef(project, scene)
         : ref.role === 'clipReferences' ? captureClipReferenceDependency(project, scene) : null);
     return references.get(ref.role);
   };
@@ -367,7 +374,7 @@ function dependencyChanges(dependencies, readCurrent) {
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
     if (!current || current.assetId !== ref.assetId || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
   }
   return changes;

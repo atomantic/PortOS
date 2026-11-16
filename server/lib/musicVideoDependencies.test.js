@@ -226,6 +226,48 @@ it('keeps evidence captured before the change current on an untouched project', 
   expect(presentMusicVideoDependencies({ ...project, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState.reasons).toContain('Composition changed');
 });
 
+// #16443: the render applies the selected take's color correction, so it is evidence of its own.
+const matched = (overrides = {}) => {
+  const project = projectFixture();
+  project.scenes[0].takes = [{ kind: 'image', assetId: 'image-0.png', colorMatch: {
+    enabled: true, strength: 1, correction: { black: 0.02, white: 1.1, gamma: 1, balanceR: 1, balanceB: 1, saturation: 1 }, ...overrides } }];
+  return project;
+};
+
+it.each([
+  ['re-solved correction', (p) => { p.scenes[0].takes[0].colorMatch.correction.white = 1.2; }],
+  ['disabled match', (p) => { p.scenes[0].takes[0].colorMatch.enabled = false; }],
+  ['zero strength', (p) => { p.scenes[0].takes[0].colorMatch.strength = 0; }],
+  ['camera doNotMatch', (p) => { p.cameras = [{ id: 'A', doNotMatch: true }]; p.scenes[0].shotSheet = { cameraId: 'A' }; }],
+])('marks a recorded render stale when a shot color match has a %s', (_name, mutate) => {
+  const state = renderState(mutate, matched());
+  expect(state.status).toBe('stale');
+  expect(state.reasons).toContain('Shot color match changed');
+});
+
+it('marks a render stale when a shot gains a color match, and keeps it current when the match is untouched', () => {
+  const gained = renderState((p) => { Object.assign(p.scenes[0], matched().scenes[0]); });
+  expect(gained.status).toBe('stale');
+  expect(gained.reasons).toContain('Shot color match changed');
+  expect(renderState(() => {}, matched()).status).toBe('current');
+});
+
+it('keeps a shot with no active color match current when only an inactive match is edited', () => {
+  const state = renderState((p) => { p.scenes[0].takes[0].colorMatch.correction.white = 1.3; }, matched({ enabled: false }));
+  expect(state.status).toBe('current');
+});
+
+it('keeps evidence captured before the color-match reference current, even with an active match', () => {
+  const project = matched();
+  const fresh = captureMusicVideoEvidence(project, { clipFrames: false });
+  const legacy = { ...fresh, references: fresh.references.filter((ref) => ref.role !== 'colorMatch') };
+  expect(legacy.references.length).toBeLessThan(fresh.references.length);
+  const stateOf = (p) => presentMusicVideoDependencies({ ...p, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState;
+  expect(stateOf(project).status).toBe('current');
+  project.scenes[0].startSec = 1;
+  expect(stateOf(project).reasons).toContain('Shot timing or composition layer changed');
+});
+
 it('never stores the legacy comparison revision on captured evidence', () => {
   const composition = captureMusicVideoEvidence(projectFixture()).references.find((ref) => ref.role === 'composition');
   expect(composition).not.toHaveProperty('legacyRevision');
