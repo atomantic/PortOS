@@ -263,6 +263,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
       data.musicVideo = { ...tag, castInputs: { ...tag.castInputs,
         guides: tag.castInputs.guides.filter((file) => sent.has(file)),
         sheets: tag.castInputs.sheets.filter((sheet) => sent.has(sheet.imageId)),
+        ...(Array.isArray(tag.castInputs.characters) ? { characters: tag.castInputs.characters.filter((entry) => sent.has(entry.imageId)) } : {}),
       } };
     }
   }

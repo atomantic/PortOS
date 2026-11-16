@@ -1328,6 +1328,9 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     ) && take.dependencyState?.status === 'stale')).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
     if (staleFrames) make += ` · ${formatCount(staleFrames)} ${staleFrames === 1 ? 'frame' : 'frames'} out of date`;
+    // #16473: the server's advice by code, one item per shot.
+    const olderCharacters = (readiness?.storyboard?.adviceItems || []).filter((item) => item.code === 'character-reference-changed').length;
+    if (olderCharacters) make += ` · ${formatCount(olderCharacters)} from an older character reference`;
   } else if (mode === 'blender' && project.blenderShots?.total) {
     const film = project.blenderShots;
     make = `${formatCount(film.finalReady)} of ${formatCount(film.total)} finals done`;

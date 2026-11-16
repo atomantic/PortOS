@@ -11,6 +11,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { musicVideoBriefAllowsVideo } from '../../lib/musicVideoMediumPlan.js';
 import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideoActionContract.js';
 import { captureClipReferenceDependency, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { clipCastInputs } from '../../lib/musicVideoCharacterReferenceAge.js';
 import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
@@ -105,6 +106,11 @@ function captureDependencies({ body, params, scene, prepared, project }) {
   params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null, endImageId);
   if (body.mode === 'ic-ingredients-25') params.musicVideoDependencies.references.push(captureClipReferenceDependency(project, scene));
   if (prepared.audio) params.musicVideoDependencies.references.push(...prepared.audio.audioDependencies.references);
+  // The character references this clip is sent (#16473), so its take can say when one changed after it.
+  // A clip sent no reference images carries none; its look comes from its start frame.
+  const castInputs = clipCastInputs(project, scene, [...(params.referenceImagePaths || []), ...(params.icReferencePaths || [])]
+    .filter((path) => typeof path === 'string').map((path) => basename(path)));
+  if (castInputs) params.musicVideoCastInputs = castInputs;
 }
 
 /**

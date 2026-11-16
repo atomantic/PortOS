@@ -123,6 +123,30 @@ describe('useMusicVideoTakes decisions', () => {
     expect(board.current().referenceImageId).toBeNull();
   });
 
+  // Uniquely catches "Still matches" for an older character reference (#16473) having no control of its own: the
+  // button would not show it is saving, and a second press would send a second request.
+  it('holds a character-reference acceptance on its own control until the server answers', async () => {
+    const warning = { code: 'character-reference-changed', reasons: ['Character reference changed after this render: Ada'], characters: [], revision: 'rev-1' };
+    const flagged = { ...takeA, characterReferenceState: warning };
+    const board = boardScene({ sceneId: 's1', referenceImageId: 'a.png', takes: [flagged] });
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: board.applyScenePatch }));
+    const reply = deferred();
+    reviewMusicVideoSceneTake.mockClear();
+    reviewMusicVideoSceneTake.mockReturnValueOnce(reply.promise);
+    const review = { acceptCharacterReferences: { revision: 'rev-1' } };
+    let saving;
+    act(() => { saving = result.current.reviewTake(board.current(), flagged, review); });
+    expect(board.current().takes[0].characterReferenceState).toEqual(warning);
+    expect(result.current.pending.has(takeControl.acceptCharacters(board.current(), flagged))).toBe(true);
+    act(() => { result.current.reviewTake(board.current(), flagged, review); });
+    await vi.waitFor(() => expect(reviewMusicVideoSceneTake).toHaveBeenCalledTimes(1));
+    expect(reviewMusicVideoSceneTake.mock.calls[0][3]).toEqual(review);
+    reply.resolve({ sceneId: 's1', referenceImageId: 'a.png', takes: [takeA] });
+    await act(() => saving);
+    expect(reviewMusicVideoSceneTake).toHaveBeenCalledTimes(1);
+    expect(result.current.pending.has(takeControl.acceptCharacters(board.current(), flagged))).toBe(false);
+  });
+
 });
 
 describe('useMusicVideoTakes rejectUnusedTakes', () => {

@@ -32,6 +32,20 @@ function uniqueStrings(values, max) {
   return out;
 }
 
+const MAX_CHARACTER_INPUTS = 64;
+
+/** The character references among those a submit actually sent, as `{ id, imageId }` (#16473). */
+export function characterInputsFromReferences(references) {
+  const out = [];
+  for (const ref of references || []) {
+    if (ref?.role !== 'character' || typeof ref.id !== 'string' || !ref.id || typeof ref.imageId !== 'string' || !ref.imageId) continue;
+    if (out.some((kept) => kept.id === ref.id)) continue;
+    out.push({ id: ref.id.slice(0, 128), imageId: ref.imageId.slice(0, 256) });
+    if (out.length === MAX_CHARACTER_INPUTS) break;
+  }
+  return out;
+}
+
 /** The cast guides and Cast & Sets sheets among the references a frame submit actually sent. */
 export function castInputsFromReferences(scene, references) {
   const guides = [];
@@ -49,6 +63,8 @@ export function castInputsFromReferences(scene, references) {
     ingredientId: ingredientId ? ingredientId.slice(0, 200) : null,
     guides: guides.slice(0, MAX_CAST_INPUTS),
     sheets: sheets.slice(0, MAX_CAST_INPUTS),
+    // Every character reference sent, any source (#16473): what musicVideoCharacterReferenceAge compares.
+    characters: characterInputsFromReferences(references),
   };
 }
 
@@ -66,7 +82,9 @@ export function musicVideoCastInputsRecord(value) {
     if (sheets.length === MAX_CAST_INPUTS) break;
   }
   const ingredientId = typeof value.ingredientId === 'string' && value.ingredientId ? value.ingredientId.slice(0, 200) : null;
-  return { ingredientId, guides: uniqueStrings(value.guides, MAX_CAST_INPUTS), sheets };
+  // `characters` stays absent on a record made before it existed, so that take is read from its sheets alone.
+  return { ingredientId, guides: uniqueStrings(value.guides, MAX_CAST_INPUTS), sheets,
+    ...(Array.isArray(value.characters) ? { characters: characterInputsFromReferences(value.characters.map((entry) => ({ ...entry, role: 'character' }))) } : {}) };
 }
 
 /**

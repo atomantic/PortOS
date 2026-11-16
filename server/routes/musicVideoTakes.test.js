@@ -512,6 +512,108 @@ describe("a shot's own still and the frame evidence its clips render from (#1598
   });
 });
 
+describe('shots rendered from an older character reference (#16473)', () => {
+  const ADA = { id: 'cs-protagonist', kind: 'character', role: 'protagonist', name: 'Ada' };
+  const sheet = (imageId) => ({ id: 'mvr-cs-character', imageId, role: 'character', label: 'Ada — character sheet', condition: true, use: 'reference' });
+  // What a frame submit records when it sent Ada's sheet (or, with null, no character reference at all).
+  const sentWith = (imageId) => ({ ingredientId: null, guides: [], sheets: imageId ? [{ id: 'mvr-cs-character', imageId }] : [],
+    characters: imageId ? [{ id: 'mvr-cs-character', imageId }] : [] });
+  const setCast = (references, images = {}) => projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+    concept: { ...current.concept, subjects: [ADA] },
+    castAndSets: { status: 'approved', direction: { protagonist: { name: 'Ada' } }, images },
+    visualSpec: { ...current.visualSpec, references } } }));
+  const editScene = (sceneId, change) => projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current,
+    scenes: current.scenes.map((scene) => (scene.sceneId === sceneId ? change(scene) : scene)) } }));
+  const read = async () => (await request(app).get(base())).body;
+  const takeIn = (body, sceneId, assetId) => body.scenes.find((scene) => scene.sceneId === sceneId).takes.find((take) => take.assetId === assetId);
+  const warningOf = (body, sceneId, assetId) => takeIn(body, sceneId, assetId).characterReferenceState || null;
+  const review = (sceneId, takeId, body) => request(app).patch(`${base()}/scenes/${sceneId}/takes/${takeId}`).send(body);
+
+  // Shot A shows Ada; shot B's sheet lists nobody. Ada's sheet is sent to both, as the protagonist's always is.
+  const twoShots = async () => {
+    for (const name of ['a-frame.png', 'b-frame.png']) seedImage(name);
+    seedVideoHistory([{ id: 'clip-a' }]);
+    await editScene(sceneB.sceneId, (scene) => ({ ...scene, shotSheet: { characters: [] } }));
+    await setCast([sheet('ada-v1.png')]);
+    const frame = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-frame.png', source: 'generated', castInputs: sentWith('ada-v1.png') });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a', source: 'generated', sourceImageId: 'a-frame.png' });
+    await addTake(sceneB.sceneId, { kind: 'image', assetId: 'b-frame.png', source: 'generated', castInputs: sentWith('ada-v1.png') });
+    return frame.body.take;
+  };
+
+  // Uniquely catches a replaced sheet leaving shots unflagged, flagging a shot without characters or one rendered
+  // from the current sheet, a clip not inheriting its frame's warning, or the warning blocking anything.
+  it('flags the frame and its clip after the sheet is replaced, never a shot without characters, and never as a gate', async () => {
+    await twoShots();
+    let body = await read();
+    expect([warningOf(body, sceneA.sceneId, 'a-frame.png'), warningOf(body, sceneA.sceneId, 'clip-a'), warningOf(body, sceneB.sceneId, 'b-frame.png')])
+      .toEqual([null, null, null]);
+    expect(body.productionReadiness.storyboard.adviceItems).toEqual([]);
+
+    await setCast([sheet('ada-v2.png')]);
+    body = await read();
+    expect(warningOf(body, sceneA.sceneId, 'a-frame.png')).toMatchObject({ code: 'character-reference-changed',
+      characters: [{ subjectId: 'cs-protagonist', name: 'Ada' }], reasons: ['Character reference changed after this render: Ada'] });
+    expect(warningOf(body, sceneA.sceneId, 'clip-a')).toMatchObject({ code: 'character-reference-changed', inherited: true });
+    expect(warningOf(body, sceneB.sceneId, 'b-frame.png')).toBeNull();
+    // The same list an agent reads: one advice item per shot, by code, and never a readiness problem.
+    const { storyboard } = body.productionReadiness;
+    expect(storyboard.adviceItems).toEqual([expect.objectContaining({ code: 'character-reference-changed', sceneId: sceneA.sceneId })]);
+    expect(storyboard.problemItems.some((item) => item.code === 'character-reference-changed')).toBe(false);
+    // A warning, not a gate: the frame and its clip stay current, so selection and renders are unaffected.
+    expect([takeIn(body, sceneA.sceneId, 'a-frame.png').dependencyState?.status, takeIn(body, sceneA.sceneId, 'clip-a').dependencyState?.status])
+      .not.toContain('stale');
+  });
+
+  // Uniquely catches a reference added for a character the frame had no reference for leaving it unflagged.
+  it('flags a frame rendered with no reference once its character gets one', async () => {
+    seedImage('a-frame.png');
+    await setCast([]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'a-frame.png', source: 'generated', castInputs: sentWith(null) });
+    expect(warningOf(await read(), sceneA.sceneId, 'a-frame.png')).toBeNull();
+    await setCast([sheet('ada-v1.png')]);
+    expect(warningOf(await read(), sceneA.sceneId, 'a-frame.png')).toMatchObject({ code: 'character-reference-changed' });
+  });
+
+  // Uniquely catches a take with no recorded inputs being flagged without a recorded change time, or a newer take being flagged.
+  it('falls back to the sheet image time for a frame that recorded no inputs, and only when that time is known', async () => {
+    for (const name of ['old.png', 'new.png']) seedImage(name);
+    const sheetAt = '2026-06-01T00:00:00.000Z';
+    await setCast([sheet('ada-v1.png')]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'old.png', source: 'generated' });
+    const newer = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'new.png', source: 'generated' });
+    await editScene(sceneA.sceneId, (scene) => ({ ...scene, takes: scene.takes.map((take) => ({ ...take,
+      createdAt: take.assetId === 'old.png' ? '2026-05-01T00:00:00.000Z' : '2026-07-01T00:00:00.000Z' })) }));
+    // The sheet's image time is not recorded: neither take can be judged, so neither is flagged.
+    expect(warningOf(await read(), sceneA.sceneId, 'old.png')).toBeNull();
+    await setCast([sheet('ada-v1.png')], { character: { status: 'done', imageId: 'ada-v1.png', updatedAt: sheetAt } });
+    expect(warningOf(await read(), sceneA.sceneId, 'old.png')).toMatchObject({ code: 'character-reference-changed' });
+    expect((await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${newer.body.take.takeId}/select`)).status).toBe(200);
+    expect(warningOf(await read(), sceneA.sceneId, 'new.png')).toBeNull();
+  });
+
+  // Uniquely catches "Still matches" not surviving a reload, accepting a stale revision, or silencing a later change.
+  it('keeps a "Still matches" for the reference it accepted, and warns again when that reference changes', async () => {
+    const frame = await twoShots();
+    await setCast([sheet('ada-v2.png')]);
+    const { revision } = warningOf(await read(), sceneA.sceneId, 'a-frame.png');
+    race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
+    expect((await review(sceneA.sceneId, frame.takeId, { acceptCharacterReferences: { revision: 'an-older-revision' } })).status).toBe(409);
+    const accepted = await review(sceneA.sceneId, frame.takeId, { acceptCharacterReferences: { revision } });
+    expect(accepted.status).toBe(200);
+    // The reply is what the board shows: the first press already clears the frame and the clip made from it.
+    const replied = (assetId) => accepted.body.takes.find((take) => take.assetId === assetId).characterReferenceState || null;
+    expect([replied('a-frame.png'), replied('clip-a')]).toEqual([null, null]);
+    const body = await read();
+    expect([warningOf(body, sceneA.sceneId, 'a-frame.png'), warningOf(body, sceneA.sceneId, 'clip-a')]).toEqual([null, null]);
+    expect(takeIn(body, sceneA.sceneId, 'a-frame.png').characterReferenceAcceptance).toMatchObject({ revision, reviewer: { kind: 'local' } });
+    expect(body.productionReadiness.storyboard.adviceItems).toEqual([]);
+
+    await setCast([sheet('ada-v3.png')]);
+    expect(warningOf(await read(), sceneA.sceneId, 'a-frame.png')).toMatchObject({ code: 'character-reference-changed' });
+  });
+});
+
 describe('a director can change legacy locked shots', () => {
   it('selects a new still and edits its prompt without losing the selected clip or prior takes', async () => {
     for (const name of ['a-1.png', 'a-2.png', 'floor.png']) seedImage(name);

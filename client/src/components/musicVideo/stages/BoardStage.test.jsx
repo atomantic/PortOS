@@ -58,6 +58,24 @@ describe('BoardStage scene filter', () => {
     expect(screen.getAllByText('Frame out of date').length).toBeGreaterThan(0);
   });
 
+  // Uniquely catches the board missing the server's older-character-reference code (#16473) in its count,
+  // its filter or its chip, including on a selected clip.
+  it('counts and filters shots rendered from an older character reference, by the server code', () => {
+    const warning = { code: 'character-reference-changed', reasons: ['Character reference changed after this render: Ada'], characters: [{ subjectId: 'a', name: 'Ada' }], revision: 'r1' };
+    const olderFrame = scene(1, { takes: [{ kind: 'image', assetId: 'f.png', characterReferenceState: warning }] });
+    const olderClip = scene(3, { takes: [{ kind: 'video', assetId: 'v', characterReferenceState: { ...warning, inherited: true } }] });
+    // An unselected take with the warning does not flag its shot.
+    const unselected = scene(2, { takes: [{ kind: 'image', assetId: 'other.png', characterReferenceState: warning }] });
+    renderBoard(board([olderFrame, unselected, olderClip]), '/?scenes=older-character');
+    expect(screen.getByRole('button', { name: 'Older character reference (2)' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getAllByText('Shot 1 · Part 1').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Shot 3 · Part 3').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Shot 2 · Part 2')).toBeNull();
+    expect(screen.getAllByText('Older character reference').length).toBeGreaterThan(0);
+    // Advice, not a stale frame: the frame filter does not count it.
+    expect(screen.getByRole('button', { name: 'Frame out of date (0)' })).toBeTruthy();
+  });
+
   it('shows chips and counts, and lists only affected scenes from ?scenes=missing', () => {
     renderBoard(board(scenes), '/?scenes=missing');
     expect(screen.getByRole('button', { name: 'Needs attention (1)' })).toBeTruthy();

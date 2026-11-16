@@ -966,7 +966,8 @@ export async function useCastAndSetsImage(projectId, { key, imageId }) {
     if (!resolveGalleryImage(imageId)) throw new ServerError('The selected gallery image is missing', { status: 404, code: 'NOT_FOUND' });
     const old = stage.images[key];
     const revision = stage.revision + 1;
-    const image = { ...old, imageId, status: 'done', jobId: null, error: null, edit: null,
+    // `updatedAt` is when this slot took its image: a frame rendered before it did not use it (#16473).
+    const image = { ...old, imageId, status: 'done', jobId: null, error: null, edit: null, updatedAt: new Date().toISOString(),
       inspection: null, inspectionAcknowledgement: null, submittedRevision: revision,
       submittedPrompt: null, promptAdditions: [], submittedPromptTruncated: false,
       submittedReferences: [], submittedReferencesTruncated: false,

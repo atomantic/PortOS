@@ -118,10 +118,12 @@ export const takeControl = {
   status: (scene, take, status) => `status:${status}:${scene.sceneId}:${take.takeId}`,
   acknowledge: (scene, take) => `acknowledge:${scene.sceneId}:${take.takeId}`,
   confirm: (scene, take) => `confirm:${scene.sceneId}:${take.takeId}`,
+  acceptCharacters: (scene, take) => `accept-characters:${scene.sceneId}:${take.takeId}`,
   mark: (take) => `mark:${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`,
   rejectUnused: (scene) => `reject-unused:${scene.sceneId}`,
 };
 /** The control a review waits on, or null for a note alone. */
 export const reviewTakeControl = (scene, take, review) => (review.acknowledgeRenderQuality ? takeControl.acknowledge(scene, take)
   : review.confirmFrame ? takeControl.confirm(scene, take)
+    : review.acceptCharacterReferences ? takeControl.acceptCharacters(scene, take)
     : review.status ? takeControl.status(scene, take, review.status) : null);

@@ -26,6 +26,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
 import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { musicVideoTakeCharacterReferenceState } from '../../lib/musicVideoCharacterReferenceAge.js';
 import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
 import { isMusicVideoRenderTier } from '../../lib/musicVideoRenderTier.js';
 import { randomUUID } from 'crypto';
@@ -60,7 +61,8 @@ const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]
 function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, sequence = null, extend = null, tier = null, now }) {
   const sequenceRecord = kind === 'video' ? sequenceTakeRecord(sequence) : null;
   const extendRecord = kind === 'video' ? extendTakeRecord(extend) : null;
-  const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
+  // A clip records the character references it was sent too (#16473).
+  const recordedCastInputs = TAKE_SLOT[kind] ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
     kind,
@@ -368,8 +370,16 @@ export function swapSceneFrames(project, sceneId) {
   return { project: replaceScene(project, idx, next), scene: next };
 }
 
-export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, confirmFrame, reviewer }) {
+export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, confirmFrame, acceptCharacterReferences, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  // "Still matches" for an older character reference (#16473) binds to the revision the warning showed:
+  // a reference that changed again since needs looking at again.
+  if (acceptCharacterReferences) {
+    const state = musicVideoTakeCharacterReferenceState(project, { ...scene, takes }, take);
+    if (!reviewer || !state || state.revision !== acceptCharacterReferences.revision) {
+      throw new ServerError('The character references changed. Look at this take again before keeping it.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+    }
+  }
   // The director confirms the selected still still matches the shot as it now reads (#15982): its frame evidence is
   // re-stamped against the current prompt, camera, place, cast and references, without making a new picture.
   if (confirmFrame) {
@@ -394,6 +404,7 @@ export function reviewSceneTake(project, sceneId, takeId, { status, note, acknow
       frameDependencies: captureImageFrameDependencies(project, scene, { slot: take.kind === 'endImage' ? 'end' : 'start' }),
       frameConfirmation: { reviewer, at: new Date().toISOString() },
     } : {}),
+    ...(acceptCharacterReferences ? { characterReferenceAcceptance: { revision: acceptCharacterReferences.revision, reviewer, at: new Date().toISOString() } } : {}),
     ...(status !== undefined ? { status } : {}),
     ...(note !== undefined ? { note: note && note.trim() ? note.trim().slice(0, 1000) : null } : {}),
   };

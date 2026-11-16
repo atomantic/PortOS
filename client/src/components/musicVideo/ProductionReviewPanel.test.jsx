@@ -501,6 +501,24 @@ describe('storyboard camera notes (#10589)', () => {
   });
 });
 
+// Uniquely catches the older-character-reference advice (#16473) going missing from review, being grouped by its
+// sentence rather than its code, or blocking approval.
+describe('shots rendered from an older character reference (#16473)', () => {
+  it('counts the advice items by code under the storyboard without blocking approval', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: [], camera: { notes: [] }, adviceItems: [
+      { code: 'character-reference-changed', message: 'Opening: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+      { code: 'character-reference-changed', message: 'Chorus: clip rendered from an older character reference (Ada).', sceneId: 's2' },
+      { code: 'some-other-advice', message: 'Opening: frame rendered from an older character reference (lookalike text).', sceneId: 's3' },
+    ] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const note = screen.getByRole('note', { name: 'Older character references' });
+    expect(within(note).getByText(/^2 shots rendered from an older character reference/)).toBeTruthy();
+    expect(within(note).getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve storyboard' }).disabled).toBe(false);
+  });
+});
+
 describe('Board scenes planned without draft shots', () => {
   it('counts and lists them in the storyboard approval card with the rows the server derived', () => {
     const planned = { ...project, scenes: [

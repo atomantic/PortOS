@@ -1549,17 +1549,21 @@ function joinScenes(project, idx, { keep, backend }) {
  * `updatedAt`, so a tombstone beats an older live copy and can't be resurrected.
  */
 /**
- * An older peer rebuilds takes from an explicit field list and drops
- * `castInputs`. Copy it back onto a take that peer still sends, before newest
- * `updatedAt` wins, so the loss is not written back. A take the peer omitted
- * entirely stays omitted. A body that includes the field keeps its own value.
+ * An older peer rebuilds takes from an explicit field list and drops the take
+ * fields it predates: `castInputs` and a "Still matches" for an older character
+ * reference (`characterReferenceAcceptance`, #16473). Copy each back onto a take
+ * that peer still sends, before newest `updatedAt` wins, so the loss is not
+ * written back. A take the peer omitted entirely stays omitted. A body that
+ * includes a field keeps its own value.
  */
-function preserveOmittedTakeCastInputs(local, remote) {
+const PEER_PRESERVED_TAKE_FIELDS = ['castInputs', 'characterReferenceAcceptance'];
+function preserveOmittedTakeFields(local, remote) {
   const kept = new Map();
   for (const scene of local?.scenes || []) {
     if (!scene?.sceneId || !Array.isArray(scene.takes)) continue;
     for (const take of scene.takes) {
-      if (take?.takeId && Object.hasOwn(take, 'castInputs')) kept.set(`${scene.sceneId}\0${take.takeId}`, take.castInputs);
+      const fields = take?.takeId ? PEER_PRESERVED_TAKE_FIELDS.filter((field) => Object.hasOwn(take, field)) : [];
+      if (fields.length) kept.set(`${scene.sceneId}\0${take.takeId}`, Object.fromEntries(fields.map((field) => [field, take[field]])));
     }
   }
   if (!kept.size || !Array.isArray(remote.scenes)) return remote;
@@ -1568,9 +1572,11 @@ function preserveOmittedTakeCastInputs(local, remote) {
     if (!scene?.sceneId || !Array.isArray(scene.takes)) return scene;
     let takesChanged = false;
     const takes = scene.takes.map((take) => {
-      if (!take?.takeId || Object.hasOwn(take, 'castInputs') || !kept.has(`${scene.sceneId}\0${take.takeId}`)) return take;
+      const local = take?.takeId ? kept.get(`${scene.sceneId}\0${take.takeId}`) : null;
+      const missing = local ? Object.keys(local).filter((field) => !Object.hasOwn(take, field)) : [];
+      if (!missing.length) return take;
       takesChanged = true;
-      return { ...take, castInputs: structuredClone(kept.get(`${scene.sceneId}\0${take.takeId}`)) };
+      return { ...take, ...Object.fromEntries(missing.map((field) => [field, structuredClone(local[field])])) };
     });
     if (!takesChanged) return scene;
     scenesChanged = true;
@@ -1627,7 +1633,7 @@ export function mergeProjectRecord(local, remoteRaw) {
       ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
     };
   }
-  remote = preserveOmittedTakeCastInputs(local, remote);
+  remote = preserveOmittedTakeFields(local, remote);
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

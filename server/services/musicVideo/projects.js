@@ -819,9 +819,13 @@ export async function swapProjectSceneFrames(id, sceneId, { edit: answerEdit = f
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answerEdit = false } = {}) {
-  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit);
+  // A catalog project's character references come from its check-in, which only the full write resolves,
+  // so accepting them is checked there whether or not the caller wants an edit result (#16473).
+  const accepting = Boolean(review.acceptCharacterReferences);
+  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit || accepting);
   // The edit result's copy of the shot is presented as GET presents it (catalog check-in included).
   if (answerEdit) return { scene: edit.scenes.find((entry) => entry.sceneId === sceneId) || scene, edit };
+  if (accepting) return edit.scenes.find((entry) => entry.sceneId === sceneId) || scene;
   // A scene-only write presents takes against the stored record. A confirmation's reply is what the
   // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
   if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;

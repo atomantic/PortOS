@@ -237,11 +237,12 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     'Failed to continue from the previous shot',
   );
 
-  // A render-quality acknowledgement or frame confirmation is checked by the server, so only status and note go first.
+  // A render-quality acknowledgement, frame confirmation or character-reference acceptance is checked by the server,
+  // so only status and note go first.
   const reviewTake = (scene, take, review) => runTakeOp(
     (projectId) => reviewMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, review, own()),
     'Failed to update take',
-    review.acknowledgeRenderQuality || review.confirmFrame ? { control: reviewTakeControl(scene, take, review) } : {
+    review.acknowledgeRenderQuality || review.confirmFrame || review.acceptCharacterReferences ? { control: reviewTakeControl(scene, take, review) } : {
       sceneId: scene.sceneId,
       control: reviewTakeControl(scene, take, review),
       optimistic: (projectId) => applyScenePatch?.(projectId, scene.sceneId, (current) => reviewTakePatch(current, take, review)),

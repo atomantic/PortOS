@@ -9,6 +9,7 @@ import { musicVideoOverscan } from './musicVideoFilmLook.js';
 import { activeShotColorMatch } from './shotColorMatch.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
+import { presentCharacterReferenceStates } from './musicVideoCharacterReferenceAge.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -466,7 +467,11 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
     current: captureMusicVideoEvidence(project) }), shots, evidence, estimate };
 }
 
-/** Bounded projection for readers: retain verdicts/assets, expose their validity separately. */
+/**
+ * Bounded projection for readers: retain verdicts/assets, expose their validity separately.
+ * A selected take's `characterReferenceState` (#16473) is advice beside `dependencyState`, never part of it,
+ * so an older character reference never refuses a render, an approval or a selection.
+ */
 export function presentMusicVideoDependencies(project) {
   if (!project) return project;
   const readCurrent = createDependencyReader(project);
@@ -475,7 +480,7 @@ export function presentMusicVideoDependencies(project) {
     return { status: changes.length ? (changes[0].role === 'unknown' ? 'unknown' : 'stale') : 'current',
       reasons: [...new Set(changes.map((change) => change.reason))] };
   };
-  return { ...project,
+  return presentCharacterReferenceStates({ ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
     ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
     scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => {
@@ -493,7 +498,7 @@ export function presentMusicVideoDependencies(project) {
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,
       ...(attempt.review ? { review: { ...attempt.review, dependencyState: state(attempt.review.dependencies) } } : {}),
     })) })) } : {}),
-  };
+  });
 }
 
 

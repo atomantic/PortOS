@@ -57,6 +57,20 @@ describe('LTX clip reference snapshot', () => {
       expect.objectContaining({ role: 'clipReferences', untrackedCastGuides: false }),
     ]));
   });
+
+  // Uniquely catches a reference-driven clip not recording the character references it was sent (#16473),
+  // or a clip sent none recording an empty list it would be judged by.
+  it('records the character references a clip was sent, and none for a clip sent no reference images', async () => {
+    const input = request();
+    await applyMusicVideoSubmissionGuards(input);
+    expect(input.params.musicVideoCastInputs).toEqual({ ingredientId: null, guides: [], sheets: [], characters: [{ id: 'ref-a', imageId: 'a.png' }] });
+    const plain = request();
+    plain.body.mode = 'image';
+    plain.body.musicVideo = { projectId: 'project', sceneId: 'shot' };
+    plain.params = { prompt: 'A rider turns' };
+    await applyMusicVideoSubmissionGuards(plain);
+    expect(plain.params).not.toHaveProperty('musicVideoCastInputs');
+  });
 });
 
 
