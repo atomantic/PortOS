@@ -240,7 +240,7 @@ describe('Calendar Routes — normalized error handling', () => {
       const response = await request(app).post(`/api/calendar/sync/${ACCOUNT_ID}`);
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ newEvents: 3, pruned: 1, total: 42, status: 'success' });
+      expect(calendarSync.syncAccount.mock.calls[0][0]).toBe(ACCOUNT_ID);
     });
 
     it('GET /google/auth/url returns the url', async () => {

@@ -83,6 +83,7 @@ import { tryReadFile } from '../../lib/fileUtils.js'
 import { resolveAgentProviderPin } from '../appTaskProviderPin.js'
 import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js'
 import { join } from 'path'
+import { ensureForgeReachable } from '../github.js';
 
 /**
  * Resolve the per-app LI execution context shared by both hooks: effective
@@ -269,7 +270,6 @@ export async function buildTaskInput({ app } = {}) {
   // forge, so running the reasoner now would burn a provider call on a proposal
   // we could neither dedup nor file. Skip with the probe's single log line.
   if (filer === 'forge' && forgeCli === 'gh') {
-    const { ensureForgeReachable } = await import('../github.js')
     // Probed against the app's OWN forge API host, not gh's
     // default: a bare probe would skip a healthy GitHub Enterprise app whenever
     // github.com is unreachable, and run one whose enterprise host is down.

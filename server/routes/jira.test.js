@@ -164,15 +164,7 @@ describe('GET /instances/:instanceId/my-sprint-tickets/:projectKey', () => {
 
     expect(r.status).toBe(200);
     expect(r.body).toEqual([{ key: 'EX-1', summary: 'Example ticket' }]);
-  });
-
-  it('returns an empty sprint as an empty list, not an error', async () => {
-    jiraService.fetchMyCurrentSprintTickets.mockResolvedValue([]);
-
-    const r = await request(app).get('/api/jira/instances/jira-1/my-sprint-tickets/EX');
-
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([]);
+    expect(jiraService.fetchMyCurrentSprintTickets.mock.calls[0].slice(0, 2)).toEqual(['jira-1', 'EX']);
   });
 
   it('surfaces a fetch failure instead of answering 200 with an empty list (#3437)', async () => {

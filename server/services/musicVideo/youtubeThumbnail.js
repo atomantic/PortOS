@@ -45,6 +45,7 @@ import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
+import { getSettings } from '../settings.js';
 
 export const MAX_THUMBNAIL_TESTS = 3;
 const MAX_GENERATED = 12;
@@ -58,7 +59,7 @@ const MADE_FIELDS = ['filename', 'source', 'title', 'focusX', 'focusY', 'letteri
 const madeOf = (thumb) => Object.fromEntries(MADE_FIELDS.filter((k) => thumb[k] !== undefined).map((k) => [k, thumb[k]]));
 
 const defaults = {
-  getSettings: async () => (await import('../settings.js')).getSettings(),
+  getSettings: async () => getSettings(),
   defaultRoute: defaultImageRoute,
   imageParams: async (settings, route, common) => (await import('./castAndSetsService.js')).imageJobParams(settings, route, common),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),

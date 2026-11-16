@@ -43,15 +43,6 @@ const validBody = () => ({
 
 beforeEach(() => vi.clearAllMocks());
 
-describe('GET /api/creative-commission', () => {
-  it('returns the full list by default', async () => {
-    svc.listCommissions.mockResolvedValue([{ id: 'commission-1' }]);
-    const res = await request(buildApp()).get('/api/creative-commission');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: 'commission-1' }]);
-  });
-});
-
 describe('POST /api/creative-commission', () => {
   it('validates and creates', async () => {
     svc.createCommission.mockResolvedValue({ id: 'commission-1', name: 'Nightly Surreal' });

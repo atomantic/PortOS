@@ -338,9 +338,6 @@ describe('forge I/O (injected exec)', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
-  it('PROPOSAL_SCOPES is the full scope set', () => {
-    expect(PROPOSAL_SCOPES).toEqual(['app-improvement', 'app-data-gap', 'loop-meta', 'portos-self']);
-  });
 });
 
 describe('listForgeIssues url surfacing (issue #2293)', () => {

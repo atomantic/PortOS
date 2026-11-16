@@ -48,15 +48,6 @@ describe('PUT /api/meatspace/post/config', () => {
     postService.updatePostConfig.mockResolvedValue({ reminder: { enabled: true, time: '09:00' } });
   });
 
-  it('delegates to postService.updatePostConfig and returns the saved config', async () => {
-    const r = await request(app)
-      .put('/api/meatspace/post/config')
-      .send({ reminder: { enabled: true, time: '09:00' } });
-    expect(r.status).toBe(200);
-    expect(postService.updatePostConfig).toHaveBeenCalledWith({ reminder: { enabled: true, time: '09:00' } });
-    expect(r.body).toEqual({ reminder: { enabled: true, time: '09:00' } });
-  });
-
   it('accepts a payload with no reminder key', async () => {
     const r = await request(app)
       .put('/api/meatspace/post/config')

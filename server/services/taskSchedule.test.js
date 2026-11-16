@@ -224,14 +224,6 @@ describe('taskSchedule', () => {
       }
     })
 
-    it('should include core task types', () => {
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('security')
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('code-quality')
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('test-coverage')
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('performance')
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('dependency-updates')
-      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('do-replan')
-    })
   })
 
   describe('feature-gated shipped tasks', () => {

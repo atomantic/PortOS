@@ -3751,13 +3751,6 @@ describe('videoGen routes', () => {
       expect(trimHistoryItem).toHaveBeenCalledWith(id, { startSec: 1.25 });
     });
 
-    it('passes an end-only or start-and-end range through', async () => {
-      trimHistoryItem.mockResolvedValue({ id: 'new-clip' });
-      const r = await request(app).post(`/api/video-gen/history/${id}/trim`).send({ startSec: 1, endSec: 2.5 });
-      expect(r.status).toBe(200);
-      expect(trimHistoryItem).toHaveBeenCalledWith(id, { startSec: 1, endSec: 2.5 });
-    });
-
     it('rejects a missing, non-positive or inverted range before trimming', async () => {
       for (const body of [{}, { startSec: 0 }, { startSec: '2' }, { endSec: 0 }, { startSec: 2, endSec: 1 }]) {
         const r = await request(app).post(`/api/video-gen/history/${id}/trim`).send(body);

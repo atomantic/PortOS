@@ -34,6 +34,7 @@ import { musicVideoEvents } from './events.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
+import { getSettings } from '../settings.js';
 
 const MAX_GENERATED = 12;
 const LIVE_JOB = new Set(['queued', 'running', 'canceling']);
@@ -44,7 +45,7 @@ const SOURCE_PX = 1024;
 
 const defaults = {
   compose: composeCoverArt,
-  getSettings: async () => (await import('../settings.js')).getSettings(),
+  getSettings: async () => getSettings(),
   getPlatforms: async () => (await import('./publish/platforms.js')).getPublishPlatforms(),
   enqueue: async (job) => (await import('../mediaJobQueue/index.js')).enqueueJob(job),
   defaultRoute: async (settings) => defaultImageRoute(settings),

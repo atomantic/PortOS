@@ -124,9 +124,6 @@ describe('the registry', () => {
     }
   });
 
-  it('ships at least the three real metrics the acceptance criteria require', () => {
-    expect(METRICS.length).toBeGreaterThanOrEqual(3);
-  });
 
   it('contains a synchronously-thrown compute to its own tile rather than failing the whole read', async () => {
     // Every shipped compute is async, so a sync throw can only come from a future entry

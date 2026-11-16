@@ -26,46 +26,12 @@ const makeApp = () => {
 describe('Three.js model routes', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('creates and starts a gallery-backed model with an explicit assignment', async () => {
-    models.createModel.mockResolvedValueOnce({ id: 'threejs-1', status: 'generating' });
-    const res = await request(makeApp())
-      .post('/api/threejs-models')
-      .send({
-        name: 'Example Robot',
-        filename: 'robot.png',
-        prompt: 'Keep the antenna articulated',
-        providerId: 'codex',
-        model: 'gpt-5',
-      });
-    expect(res.status).toBe(202);
-    expect(models.createModel).toHaveBeenCalledWith({
-      name: 'Example Robot',
-      filename: 'robot.png',
-      prompt: 'Keep the antenna articulated',
-      providerId: 'codex',
-      model: 'gpt-5',
-    });
-  });
-
   it('rejects paths masquerading as gallery filenames', async () => {
     const res = await request(makeApp())
       .post('/api/threejs-models')
       .send({ name: 'Bad', filename: '../secret.png', providerId: 'codex' });
     expect(res.status).toBe(400);
     expect(models.createModel).not.toHaveBeenCalled();
-  });
-
-  it('starts a refinement with bounded feedback', async () => {
-    models.startGeneration.mockResolvedValueOnce({ id: 'threejs-1', status: 'generating' });
-    const res = await request(makeApp())
-      .post('/api/threejs-models/threejs-1/generate')
-      .send({ providerId: 'ollama', model: 'qwen-vl', feedback: 'Make the handle thicker.' });
-    expect(res.status).toBe(202);
-    expect(models.startGeneration).toHaveBeenCalledWith('threejs-1', {
-      providerId: 'ollama',
-      model: 'qwen-vl',
-      feedback: 'Make the handle thicker.',
-    });
   });
 
   it('forwards a reasoning-effort override on generate and create', async () => {

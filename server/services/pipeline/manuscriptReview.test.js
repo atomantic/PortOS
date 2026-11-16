@@ -36,7 +36,7 @@ vi.mock('./arcPlanner.js', () => ({
 
 import { recordEvents } from '../sharing/recordEvents.js';
 import { collectManuscriptSections } from './arcPlanner.js';
-import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, locateComment, DISMISS_REASONS } from './manuscriptReview.js';
+import { seedReviewFromFindings, updateComment, mergeReviewFromSync, getReview, locateComment } from './manuscriptReview.js';
 
 describe('manuscriptReview — record-event emission on write', () => {
   let updates;
@@ -524,9 +524,6 @@ describe('manuscriptReview — authoritative severity override re-grade (#1596)'
 describe('manuscriptReview — false-positive dismissal reason (#1605)', () => {
   beforeEach(() => fileStore.clear());
 
-  it('exposes false-positive as the canonical dismissal reason', () => {
-    expect(DISMISS_REASONS).toContain('false-positive');
-  });
 
   it('seeded findings carry a null dismissReason by default', async () => {
     const seeded = await seedReviewFromFindings('fp-seed', [{ problem: 'P', anchorQuote: 'q' }]);

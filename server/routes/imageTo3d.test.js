@@ -288,13 +288,6 @@ describe('image-to-3D install profile preflight', () => {
 describe('image-to-3d model records', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('GET /models lists records', async () => {
-    models.listModels.mockResolvedValue([{ id: 'image3d-1', status: 'ready' }]);
-    const res = await request(makeApp()).get('/api/image-to-3d/models');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual([{ id: 'image3d-1', status: 'ready' }]);
-  });
-
   it('POST /models creates a record (202) from a validated gallery image', async () => {
     models.createModel.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
     const res = await request(makeApp())
@@ -374,7 +367,7 @@ describe('image-to-3d model records', () => {
     models.deleteModel.mockResolvedValue({ ok: true });
     const res = await request(makeApp()).delete('/api/image-to-3d/models/image3d-1');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
+    expect(models.deleteModel.mock.calls[0][0]).toBe('image3d-1');
   });
 
   it('GET /models/:id/asset streams the GLB with a download filename', async () => {

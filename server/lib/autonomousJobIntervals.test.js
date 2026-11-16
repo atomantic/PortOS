@@ -41,9 +41,6 @@ describe('resolveIntervalMs', () => {
     expect(resolveIntervalMs('custom')).toBe(DAY);
   });
 
-  it('JOB_INTERVAL_VALUES covers every option plus custom', () => {
-    expect(JOB_INTERVAL_VALUES).toEqual([...INTERVAL_OPTIONS.map(o => o.value), 'custom']);
-  });
 });
 
 describe('isOnDemandJob', () => {

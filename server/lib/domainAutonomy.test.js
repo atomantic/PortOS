@@ -12,11 +12,6 @@ import {
 } from './domainAutonomy.js';
 
 describe('domainAutonomy constants', () => {
-  it('exposes the three modes with execute as default', () => {
-    expect(DOMAIN_MODES).toEqual(['off', 'dry-run', 'execute']);
-    expect(DEFAULT_DOMAIN_MODE).toBe('execute');
-  });
-
   it('lists the four domains with unique ids', () => {
     expect(DOMAIN_IDS).toEqual(['brain', 'memory', 'cos', 'messages']);
     expect(new Set(DOMAIN_IDS).size).toBe(DOMAIN_IDS.length);

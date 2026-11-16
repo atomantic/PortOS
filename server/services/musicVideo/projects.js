@@ -22,8 +22,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  * sweep. The soft-delete fields were already on the record, so this was additive.
  */
 
-import { setSceneLastFailure } from './takes.js';
-import { droppedTakeAssets, fileMusicVideoMedia, assertNewMediaSelections } from './mediaPool.js';
+import { droppedTakeAssets, fileMusicVideoMedia, assertNewMediaSelections, markPoolAssets, projectTakeAssets } from './mediaPool.js';
 import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
@@ -134,6 +133,8 @@ import { getTrack, updateTrack } from '../tracks/index.js';
 import { parseLyricCues } from './timedText.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { randomUUID } from 'crypto';
+import { setSceneLastFailure, appendSceneTakes as appendTakes, appendTakesAcrossScenes as appendTakesAcross, selectSceneTake as selectTake, rejectUnusedTakes, swapSceneFrames, reviewSceneTake as reviewTake, plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } from './takes.js';
+import { plateFrameRole } from '../../lib/musicVideoPlateEvidence.js';
 
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
@@ -673,7 +674,6 @@ async function takeDecisionWrite(id, transform, answerEdit) {
  * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
  */
 export async function markMediaPoolAssets(id, keys, mark, options = {}, { edit: answerEdit = false } = {}) {
-  const { markPoolAssets } = await import('./mediaPool.js');
   let resultChanges = [];
   const { project, scenes, edit } = await takeDecisionWrite(id, (current) => {
     const outcome = markPoolAssets(current, keys, mark, options);
@@ -688,9 +688,8 @@ export async function markMediaPoolAssets(id, keys, mark, options = {}, { edit: 
 // slot only while the slot is empty, unless `replaceSelection` names a still
 // re-render (takes.js).
 export async function appendSceneTakes(id, sceneId, inputs, { edit: answerEdit = false } = {}) {
-  const { appendSceneTakes: append } = await import('./takes.js');
   const source = inputs.some(input => input.source === 'generated') ? 'generation-completion' : null;
-  const transform = current => append(current, sceneId, inputs);
+  const transform = current => appendTakes(current, sceneId, inputs);
   if (!answerEdit) {
     const outcome = await mutateProjectRecord(id, transform, { source });
     await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
@@ -709,15 +708,14 @@ export async function appendSceneTakes(id, sceneId, inputs, { edit: answerEdit =
  * result covers the whole change. Returns `{ scene, edit }`.
  */
 export async function startSceneFromFrame(id, sceneId, { imageId, prompt, keepStillAsEnd = false }) {
-  const { appendSceneTakes: append, selectSceneTake: select } = await import('./takes.js');
   const { outcome, edit } = await editWrite(id, (current) => {
     const scene = current.scenes?.find(entry => entry.sceneId === sceneId);
     const plannedStill = keepStillAsEnd && scene?.referenceImageId && scene.referenceImageId !== imageId ? scene.referenceImageId : null;
-    let result = append(current, sceneId, [
+    let result = appendTakes(current, sceneId, [
       { kind: 'image', assetId: imageId, source: 'generated', provider: 'portos', prompt },
       ...(plannedStill ? [{ kind: 'endImage', assetId: plannedStill, source: 'imported', provider: 'portos' }] : []),
     ]);
-    for (const take of result.appended) result = { ...select(result.project, sceneId, take.takeId), appended: result.appended };
+    for (const take of result.appended) result = { ...selectTake(result.project, sceneId, take.takeId), appended: result.appended };
     return result;
   }, { source: 'generation-completion' });
   await fileAppendedTakes(outcome.project, outcome.appended.map(take => ({ sceneId, take })));
@@ -742,16 +740,14 @@ export async function recordSceneFailure(id, sceneId, failure) {
 
 /** Append takes across scenes in one write (handoff import): `{ project, appended }`. */
 export async function appendTakesAcrossScenes(id, items) {
-  const { appendTakesAcrossScenes: append } = await import('./takes.js');
-  const result = await mutateProjectRecord(id, current => append(current, items));
+  const result = await mutateProjectRecord(id, current => appendTakesAcross(current, items));
   await fileAppendedTakes(result.project, result.appended.filter(Boolean));
   return result;
 }
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
 export async function selectSceneTake(id, sceneId, takeId, options = {}, { edit: answerEdit = false } = {}) {
-  const { selectSceneTake: select } = await import('./takes.js');
-  const { scene, edit } = await takeDecisionWrite(id, (current) => select(current, sceneId, takeId, options), answerEdit);
+  const { scene, edit } = await takeDecisionWrite(id, (current) => selectTake(current, sceneId, takeId, options), answerEdit);
   return answerEdit ? { scene, edit } : scene;
 }
 
@@ -765,9 +761,7 @@ export async function selectSceneTake(id, sceneId, takeId, options = {}, { edit:
  * Returns `{ scene, edit }`: the updated scene and the edit result (editResult.js).
  */
 export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAssetId = null }) {
-  const [{ appendSceneTakes: append, selectSceneTake: select }, { projectTakeAssets }, { authoredFramePrompt }] = await Promise.all([
-    import('./takes.js'), import('./mediaPool.js'), import('./handoff.js'),
-  ]);
+  const { authoredFramePrompt } = await import('./handoff.js');
   // A still off the floor has no take left to name its prompt; its image sidecar still does.
   const placedStill = kind === 'video' ? withAssetId : assetId;
   const sidecarPrompt = placedStill
@@ -787,8 +781,8 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
     const inputs = kind === 'endImage'
       ? [input('endImage', assetId)]
       : [...(still ? [input('image', still)] : []), ...(clip ? [input('video', clip)] : [])];
-    let outcome = append(current, sceneId, inputs);
-    for (const take of outcome.appended) outcome = { ...select(outcome.project, sceneId, take.takeId), appended: outcome.appended };
+    let outcome = appendTakes(current, sceneId, inputs);
+    for (const take of outcome.appended) outcome = { ...selectTake(outcome.project, sceneId, take.takeId), appended: outcome.appended };
     // The placed still's frame prompt comes with it, so the start or end prompt matches the picture. Re-placing the
     // shot's own selected still (to pair it with a clip) changes no picture: rewriting the prompt then would only
     // invalidate that still's frame evidence and every clip made from it (#15982).
@@ -809,21 +803,18 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
 
 /** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
 export async function rejectUnusedSceneTakes(id, sceneId, { edit: answerEdit = false } = {}) {
-  const { rejectUnusedTakes } = await import('./takes.js');
   const { scene, rejected, edit } = await takeDecisionWrite(id, (current) => rejectUnusedTakes(current, sceneId), answerEdit);
   return { scene, rejected, ...(edit ? { edit } : {}) };
 }
 
 /** Swap a shot's start and end frames (and their prompts). Returns the scene. */
 export async function swapProjectSceneFrames(id, sceneId, { edit: answerEdit = false } = {}) {
-  const { swapSceneFrames } = await import('./takes.js');
   const { scene, edit } = await takeDecisionWrite(id, (current) => swapSceneFrames(current, sceneId), answerEdit);
   return answerEdit ? { scene, edit } : scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answerEdit = false } = {}) {
-  const { reviewSceneTake: reviewTake } = await import('./takes.js');
   const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit);
   // The edit result's copy of the shot is presented as GET presents it (catalog check-in included).
   if (answerEdit) return { scene: edit.scenes.find((entry) => entry.sceneId === sceneId) || scene, edit };
@@ -842,8 +833,6 @@ export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answe
  * Its evidence carries a manual run id, so a production run still reviews for itself.
  */
 export async function checkSceneTakePlate(id, sceneId, takeId, { edit: answerEdit = false } = {}) {
-  const { plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
-  const { plateFrameRole } = await import('../../lib/musicVideoPlateEvidence.js');
   const project = await getProject(id);
   if (!project) throw new ServerError('Music video project not found', { status: 404, code: 'NOT_FOUND' });
   const { scene, take } = plateCheckTake(project, sceneId, takeId);
