@@ -103,6 +103,23 @@ it('previews the Grok shot with the duration and frame the card will submit', as
   }), { silent: true }));
 });
 
+it('holds the video prompt preview until the clip view shows (#16314)', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+  const bare = { sceneId: 's1', startSec: 0, endSec: 8, prompt: 'A person waves', takes: [] };
+  const props = { project: { id: 'mv-1', scenes: [bare] }, index: 0, expanded: true,
+    lipSyncBackend: 'grok', falVideoSettings: { backend: 'grok', grokDuration: 6 }, onEditLocal: vi.fn(), onSave: vi.fn() };
+  const { rerender } = render(<SceneCard scene={bare} {...props} />);
+  // The shot opens on its frames; a still arriving there builds the Grok preview request but the clip panel is hidden.
+  rerender(<SceneCard scene={{ ...bare, referenceImageId: 'still.png' }} {...props} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+  expect(previewVideoPrompt).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: /^(Picture|Clip)$/ }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(700); });
+  expect(previewVideoPrompt).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});
+
 describe('code shot (#10297)', () => {
   it('offers no frame or clip generation for a code shot in a layered composition', () => {
     const scene = { sceneId: 's1', visualLayer: 'code', startSec: 0, endSec: 5, takes: [] };
