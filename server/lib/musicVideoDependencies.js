@@ -4,6 +4,8 @@
  * Versioned take/evidence provenance, dependency comparisons and bounded selective-repair previews.
  */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
+import { isFilmLookNeutral } from './filmLook.js';
+import { musicVideoOverscan } from './musicVideoFilmLook.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 
@@ -45,6 +47,9 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.endFrameOff === true ? [['endFrameOff', true]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
+    // Per-shot lyric treatment and camera assignment (documentRender, applyCameraCutDefaults) change the render; unset keeps evidence.
+    .concat(['lyricSize', 'textZone', 'lyricText'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    .concat(scene.shotSheet?.cameraId ? [['shotSheetCameraId', scene.shotSheet.cameraId]] : [])
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
     .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
@@ -253,14 +258,35 @@ export function captureTakeDependencies(scene, sourceImageId = scene?.referenceI
 
 const intersects = (scene, startSec, endSec) => !(typeof scene.startSec === 'number' && typeof scene.endSec === 'number')
   || (scene.startSec < endSec && scene.endSec > startSec);
+// A chosen production medium changes the render; a project without one keeps its evidence.
+const compositionRevision = (project, composition) => checksum({ mediaMode: project.mediaMode || null, composition,
+  ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}),
+  ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) });
+// Only the text cues inside the window join the revision. `legacyRevision` is what evidence captured before
+// #16397 stored (the whole cue list under a phantom empty `cues` key); it is compared, never stored.
 const compositionRef = (project, startSec, endSec) => {
   const composition = project.composition || null;
-  const value = composition ? { ...composition,
-    cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
-  } : null;
-  return { role: 'composition', assetId: 'composition', // A chosen production medium changes the render; a project without one keeps its evidence.
-  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}), ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
+  const value = composition && Array.isArray(composition.textCues)
+    ? { ...composition, textCues: composition.textCues.filter((cue) => intersects(cue, startSec, endSec)) } : composition;
+  return { role: 'composition', assetId: 'composition', revision: compositionRevision(project, value),
+    legacyRevision: compositionRevision(project, composition ? { ...composition, cues: [] } : null), startSec, endSec };
 };
+
+// Video-level inputs the final render reads (filmLookFinish, shotSegments title card, ending parts, cameras,
+// overscan, sound bed, lyric overlay). Each joins only when set so a project without them keeps its evidence.
+// Left out on purpose: `videoSettings` (read only when generating takes, not by the render) and a shot's
+// `colorMatch` field (the render reads the selected take's correction instead).
+const finishInputs = (project) => Object.fromEntries([
+  ['filmLook', project.filmLook && !isFilmLookNeutral(project.filmLook) ? project.filmLook : null],
+  ['titleCard', project.titleCard || null],
+  ['creditsOutro', project.creditsOutro || null],
+  ['statsOutro', project.statsOutro || null],
+  ['cameras', project.cameras?.length ? project.cameras : null],
+  ['overscan', musicVideoOverscan(project) || null],
+  ['lyricOverlayEnabled', project.lyricOverlayEnabled === false ? false : null],
+  ['soundBed', project.soundBed || null],
+].filter(([, value]) => value !== null));
+const finishRef = (project) => ({ role: 'finish', assetId: 'project', revision: checksum(finishInputs(project)) });
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({
   trackId: project.trackId ?? null, uploadedAudioFilename: project.uploadedAudioFilename ?? null,
@@ -287,7 +313,8 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   if (composition) {
     const sceneSet = (project.scenes || []).filter((scene) => intersects(scene, startSec, endSec)).map((scene) => scene.sceneId).sort();
     references.push({ role: 'window', assetId: 'scene-set', startSec, endSec, sceneIds: sceneSet, revision: checksum(sceneSet) });
-    references.push(compositionRef(project, startSec, endSec));
+    const { legacyRevision, ...composed } = compositionRef(project, startSec, endSec);
+    references.push(composed, finishRef(project));
   }
   return snapshot(references);
 }
@@ -297,11 +324,13 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
 // objects can be mutated in place between reads, including before a save.
 function createDependencyReader(project) {
   let song;
+  let finish;
   let scenesById;
   const sceneReferences = new Map();
   const windows = new Map();
   return (ref) => {
     if (ref.role === 'song') return song ??= songRef(project);
+    if (ref.role === 'finish') return finish ??= finishRef(project);
     if (ref.role === 'window' || ref.role === 'composition') {
       let byEnd = windows.get(ref.startSec);
       if (!byEnd) windows.set(ref.startSec, byEnd = new Map());
@@ -337,8 +366,8 @@ function dependencyChanges(dependencies, readCurrent) {
     ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
-    if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
+    if (!current || current.assetId !== ref.assetId || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
   }
   return changes;

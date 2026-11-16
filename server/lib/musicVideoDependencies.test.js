@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as checksums from './snapshotChecksum.js';
 import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies, restampLegacyFrameCasts } from './musicVideoDependencies.js';
+import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -8,7 +9,7 @@ afterEach(() => vi.restoreAllMocks());
 const projectFixture = () => ({
   id: 'mv-synthetic',
   lyricCues: [{ id: 'cue', text: 'Synthetic lyric', startSec: 0, endSec: 10 }],
-  composition: { cues: [{ startSec: 0, endSec: 5, text: 'First' }, { startSec: 5, endSec: 10, text: 'Second' }] },
+  composition: { mode: 'composed', textCues: [{ startSec: 0, endSec: 5, text: 'First' }, { startSec: 5, endSec: 10, text: 'Second' }] },
   scenes: [0, 1].map(i => ({ sceneId: `scene-${i}`, startSec: i * 5, endSec: i * 5 + 5,
     visualLayer: 'still', referenceImageId: `image-${i}.png`, takes: [] })),
 });
@@ -160,7 +161,7 @@ it('lists thirty rewritten shots as stale frames from one read', () => {
 it('keeps distinct rendered windows independent when caching composition and scene-set references', () => {
   const project = projectFixture();
   project.excerpts = [0, 5].map(startSec => ({ dependencies: captureMusicVideoEvidence(project, { startSec, endSec: startSec + 5 }) }));
-  project.composition.cues[0].text = 'Revised first window';
+  project.composition.textCues[0].text = 'Revised first window';
 
   const changed = presentMusicVideoDependencies(project);
   expect(changed.excerpts.map(excerpt => excerpt.dependencyState.status)).toEqual(['stale', 'current']);
@@ -168,6 +169,66 @@ it('keeps distinct rendered windows independent when caching composition and sce
 
   project.scenes[0].endSec = 6;
   expect(presentMusicVideoDependencies(project).excerpts.map(excerpt => excerpt.dependencyState.status)).toEqual(['stale', 'stale']);
+});
+
+// #16397: video-level and per-shot render inputs flip a recorded render, and evidence captured before stays current.
+const renderState = (mutate, project = projectFixture()) => {
+  const evidence = captureMusicVideoEvidence(project, { clipFrames: false });
+  const changed = structuredClone(project);
+  mutate(changed);
+  return presentMusicVideoDependencies({ ...changed, renderHistoryId: 'final', renderDependencies: evidence }).renderDependencyState;
+};
+
+it('keeps a recorded render current when nothing changed', () => {
+  expect(renderState(() => {}).status).toBe('current');
+});
+
+it.each([
+  ['filmLook', (p) => { p.filmLook = { defocus: 0.5 }; }],
+  ['titleCard', (p) => { p.titleCard = { enabled: true, title: 'X' }; }],
+  ['creditsOutro', (p) => { p.creditsOutro = { enabled: true }; }],
+  ['statsOutro', (p) => { p.statsOutro = { enabled: true }; }],
+  ['cameras', (p) => { p.cameras = [{ id: 'A' }]; }],
+  ['overscan', (p) => { p.overscan = 0.1; }],
+  ['lyricOverlayEnabled', (p) => { p.lyricOverlayEnabled = false; }],
+  ['soundBed', (p) => { p.soundBed = { filename: 'bed.wav' }; }],
+])('marks a recorded render stale when project %s changes', (_name, mutate) => {
+  const state = renderState(mutate);
+  expect(state.status).toBe('stale');
+  expect(state.reasons.join(' ')).toMatch(/Video finish settings/);
+});
+
+it.each([
+  ['lyricSize', (p) => { p.scenes[0].lyricSize = 'large'; }],
+  ['textZone', (p) => { p.scenes[0].textZone = 'top'; }],
+  ['lyricText', (p) => { p.scenes[0].lyricText = 'other words'; }],
+  ['shotSheet.cameraId', (p) => { p.scenes[0].shotSheet = { cameraId: 'A' }; }],
+])('marks a recorded render stale when shot %s changes', (_name, mutate) => {
+  const state = renderState(mutate);
+  expect(state.status).toBe('stale');
+  expect(state.reasons).toContain('Shot timing or composition layer changed');
+});
+
+it('does not read fields no render consumer reads (videoSettings, shot colorMatch)', () => {
+  expect(renderState((p) => { p.videoSettings = { aspect: '9:16' }; }).status).toBe('current');
+  expect(renderState((p) => { p.scenes[0].colorMatch = { enabled: true }; }).status).toBe('current');
+});
+
+it('keeps evidence captured before the change current on an untouched project', () => {
+  const project = projectFixture();
+  const fresh = captureMusicVideoEvidence(project, { clipFrames: false });
+  // Pre-change evidence: no finish reference and the whole cue list under a phantom empty `cues` key.
+  const legacyRevision = canonicalSnapshotChecksum({ mediaMode: null, composition: { ...project.composition, cues: [] } });
+  const legacy = { ...fresh, references: fresh.references.filter((ref) => ref.role !== 'finish')
+    .map((ref) => (ref.role === 'composition' ? { ...ref, revision: legacyRevision } : ref)) };
+  expect(presentMusicVideoDependencies({ ...project, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState.status).toBe('current');
+  project.composition.textCues[0].text = 'Edited';
+  expect(presentMusicVideoDependencies({ ...project, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState.reasons).toContain('Composition changed');
+});
+
+it('never stores the legacy comparison revision on captured evidence', () => {
+  const composition = captureMusicVideoEvidence(projectFixture()).references.find((ref) => ref.role === 'composition');
+  expect(composition).not.toHaveProperty('legacyRevision');
 });
 
 // #16274: a catalog project's check-in is resolved on read and never stored, so the cast fingerprint
