@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-const mocks = vi.hoisted(() => ({ getFallbackChain: vi.fn(), saveFallbackChain: vi.fn() }));
-vi.mock('../services/providerFallbackChain.js', () => mocks);
+// Real fallback-chain service (settings.json) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-provider-fallbacks-routes-') }));
+afterAll(cleanupTempDataRoots);
 
 const routes = (await import('./providerFallbacks.js')).default;
 const app = express();
@@ -12,21 +15,19 @@ app.use(express.json());
 app.use('/api/provider-fallbacks', routes);
 app.use(errorMiddleware);
 
-beforeEach(() => vi.clearAllMocks());
-
 describe('provider fallback list routes', () => {
-  it('saves an ordered list that repeats a preset with different models', async () => {
+  it('saves an ordered list that repeats a preset with different models and reads it back', async () => {
     const entries = [{ providerId: 'codex', model: 'm1', effort: 'max' }, { providerId: 'codex', model: 'm2' }, { providerId: 'agy' }];
-    mocks.saveFallbackChain.mockResolvedValue(entries);
     const res = await request(app).put('/api/provider-fallbacks').send({ entries });
     expect(res.status).toBe(200);
-    expect(mocks.saveFallbackChain).toHaveBeenCalledWith({ entries });
     expect(res.body.entries).toEqual(entries);
+    expect((await request(app).get('/api/provider-fallbacks')).body.entries).toEqual(entries);
   });
 
-  it('rejects a malformed provider reference before it reaches the store', async () => {
+  it('rejects a malformed provider reference without touching the saved list', async () => {
+    const before = (await request(app).get('/api/provider-fallbacks')).body.entries;
     const res = await request(app).put('/api/provider-fallbacks').send({ entries: [{ providerId: 'Not A Preset!' }] });
     expect(res.status).toBe(400);
-    expect(mocks.saveFallbackChain).not.toHaveBeenCalled();
+    expect((await request(app).get('/api/provider-fallbacks')).body.entries).toEqual(before);
   });
 });
