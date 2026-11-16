@@ -24,7 +24,8 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
   async function saveAll(projects) {
     await ensureDir(dirname(file));
     const prepared = logic.beforeSave ? projects.map((project) => logic.beforeSave(project)) : projects;
-    await atomicWrite(file, prepared);
+    // `toStored` encodes only the bytes on disk (#16210); callers keep the record `afterLoad` reads back.
+    await atomicWrite(file, logic.toStored ? prepared.map((project) => logic.toStored(project)) : prepared);
     return prepared;
   }
 
