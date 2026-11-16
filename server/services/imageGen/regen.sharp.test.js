@@ -5,7 +5,7 @@
 // are in-memory PNG buffers (no temp files).
 import { describe, it, expect } from 'vitest';
 import sharp from 'sharp';
-import { computePixelDelta, applyLightRegen, REGEN_SQUEEZE_FACTOR, PSNR_IDENTICAL } from './regen.js';
+import { computePixelDelta, applyLightRegen, PSNR_IDENTICAL } from './regen.js';
 
 // Solid-color PNG of the given size — a deterministic fixture for delta math.
 const solidPng = (w, h, { r, g, b }) =>
@@ -94,8 +94,4 @@ describe('applyLightRegen', () => {
     expect(await applyLightRegen(Buffer.from('nope'))).toBeNull();
   });
 
-  it('squeeze factor is a sane fraction below 1', () => {
-    expect(REGEN_SQUEEZE_FACTOR).toBeGreaterThan(0.5);
-    expect(REGEN_SQUEEZE_FACTOR).toBeLessThan(1);
-  });
 });

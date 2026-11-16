@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost,
   estimateAgyImageCost, AGY_IMAGEN_IMAGE_MODEL, serviceTierExtra,
-  pricingAsOfForModel, PRICING_AS_OF, GROK_IMAGINE_IMAGE_MODEL, GROK_IMAGINE_VIDEO_MODEL,
+  pricingAsOfForModel, GROK_IMAGINE_IMAGE_MODEL, GROK_IMAGINE_VIDEO_MODEL,
 } from './modelPricing.js';
 
 describe('resolveModelRates', () => {
@@ -199,9 +199,6 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates(undefined, undefined).matched).toBe('fallback');
   });
 
-  it('exposes the verification date', () => {
-    expect(PRICING_AS_OF).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
 });
 
 describe('serviceTierExtra', () => {

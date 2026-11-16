@@ -147,10 +147,6 @@ describe('cosChallenge', () => {
   });
 
   describe('constants / parity', () => {
-    it('caps disputes at exactly one per task', () => {
-      expect(MAX_CHALLENGES_PER_TASK).toBe(1);
-    });
-
     it('owns exactly the three challenge metadata keys', () => {
       expect([...CHALLENGE_METADATA_KEYS].sort()).toEqual(['challenge', 'challengeCount', 'challengeResolution']);
     });

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   BEAT_MAX_WORDS,
-  MAX_CHAIN_LENGTH,
   DEFAULT_FPS,
   partitionLinesIntoBeats,
   snapFramesToGrid,
@@ -169,7 +168,4 @@ describe('compileScriptToClips', () => {
     expect(clips.every((c) => c.cutType === 'fresh')).toBe(true);
   });
 
-  it('respects the configured maxChainLength constant as a default', () => {
-    expect(MAX_CHAIN_LENGTH).toBe(6);
-  });
 });

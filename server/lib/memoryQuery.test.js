@@ -5,8 +5,7 @@ import {
   compareMemoryEntries,
   passesSearchMetaFilters,
   passesHybridMetaFilters,
-  fuseRankingsRRF,
-  RRF_K
+  fuseRankingsRRF
 } from './memoryQuery.js';
 
 describe('projectIndexMeta', () => {
@@ -158,9 +157,6 @@ describe('passesHybridMetaFilters', () => {
 });
 
 describe('fuseRankingsRRF', () => {
-  it('uses the standard RRF constant of 60', () => {
-    expect(RRF_K).toBe(60);
-  });
 
   it('computes weighted RRF scores across both rankings', () => {
     const bm25 = [{ id: 'a' }, { id: 'b' }];

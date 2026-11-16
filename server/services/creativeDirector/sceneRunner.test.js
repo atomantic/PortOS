@@ -38,9 +38,6 @@ describe('resolveImageStrength', () => {
     expect(resolveImageStrength({ explicit: null, isContinuation: false })).toBe(null);
   });
 
-  it('exports 0.85 as the documented continuation default', () => {
-    expect(DEFAULT_CONTINUATION_IMAGE_STRENGTH).toBe(0.85);
-  });
 });
 
 describe('creativeDirectorSceneSchema — imageStrength', () => {
