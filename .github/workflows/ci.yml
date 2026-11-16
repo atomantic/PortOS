@@ -82,6 +82,9 @@ jobs:
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
       node_minimum: ${{ steps.node-minimum.outputs.run }}
+      # The DB job's `services:` image cannot run a script, so it reads the
+      # reference docker-compose.yml pins through this job's output.
+      db_image: ${{ steps.db-image.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,6 +118,10 @@ jobs:
       # request.
       - name: Check relative imports match the tracked path case
         run: node scripts/ci-impact-diagnostics.js import-case -- node scripts/check-import-case.js
+
+      - name: Resolve the pinned database image
+        id: db-image
+        run: echo "image=$(node scripts/lib/dbImage.js)" >> "$GITHUB_OUTPUT"
 
       - name: Select affected test surfaces
         id: plan
@@ -528,7 +535,7 @@ jobs:
       contents: read
     services:
       postgres:
-        image: pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd
+        image: ${{ needs.impact.outputs.db_image }}
         env:
           POSTGRES_USER: portos
           POSTGRES_PASSWORD: portos

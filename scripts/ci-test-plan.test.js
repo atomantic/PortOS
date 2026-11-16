@@ -2528,7 +2528,7 @@ describe('path-gated single-purpose jobs', () => {
 
 // Database maintenance sources select the DB job by path.
 it.each(['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
-  'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js'])
+  'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js', 'docker-compose.yml'])
 ('selects the DB job for %s', source => {
   expect(buildCiTestPlan([source], { trackedFiles: [source], clientDependencies: [] }).db).toBe(true);
 });

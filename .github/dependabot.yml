@@ -51,9 +51,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
   # Image digest bumps are the only fix for a runtime-image advisory
-  # (docs/GITHUB_ACTIONS.md, "Runtime image security"). The pgvector pin also
-  # lives in scripts/lib/dbImage.js and ci.yml; scripts/dbImageDigestPin.test.js
-  # fails the bump PR until a maintainer moves those with it.
+  # (docs/GITHUB_ACTIONS.md, "Runtime image security"). The pgvector digest
+  # lives only in docker-compose.yml; dbImage.js and ci.yml derive it from there.
   - package-ecosystem: docker-compose
     directory: /
     schedule:

@@ -1296,9 +1296,8 @@ successor run".
 Generates an SBOM (syft) and a vulnerability scan (grype, OS packages and
 language dependencies) for the pinned runtime recipes that the npm/Python
 audits cannot see (#15656). It is separate from `ci.yml`, is **not** part of
-`CI Gate`, and never blocks an unrelated PR on a new upstream advisory. Native
-audio build/boot results (`supercollider-live`) stay functional evidence; this
-workflow is the security inventory.
+`CI Gate`, and never blocks an unrelated PR on a new upstream advisory. It is
+the security inventory; `supercollider-live` stays functional evidence.
 
 | Target | Subject | Architectures |
 | --- | --- | --- |
@@ -1313,8 +1312,7 @@ fails the run. Each run uploads `runtime-image-security-<target>-<arch>`
 `grype-db-status.json`, `findings.json` and `provenance.json` (image ref, image
 ID and repo digests, recipe path and hash, commit, run, architecture, syft/grype
 versions, vulnerability DB identity). Scanner binaries are pinned by version and
-archive SHA-256 and actions by commit SHA. The vulnerability DB is the one
-moving input, so it is recorded rather than pinned.
+archive SHA-256, actions by commit SHA; the vulnerability DB is recorded, not pinned.
 
 Triggers: weekly, `workflow_dispatch`, and pull requests touching
 `docker-compose.yml`, `docker/`, the helper script or the supercollider runtime
@@ -1328,19 +1326,17 @@ state; findings are reported, not gated. The run fails on exactly three things:
   from the scan of the newest digest of the pinned tag, so bumping the pin removes
   it. The failure names the image and the digest to adopt.
 
-Pull request runs report an actionable finding without failing. The newest-digest
-comparison exists for `pgvector`, the one target pinned as `repo:tag@digest`;
-`supercollider` and `eidoverse-rapier` have no registry digest to compare against,
-so their findings are always reported only. A finding that is unfixed upstream, or
-fixed but not yet in the newest digest, is a report line, never a failure: there is
-no PortOS action that clears it, and a per-advisory review ledger only recorded
-that fact (it was retired in #16425).
+Pull request runs report an actionable finding without failing. Only `pgvector`,
+pinned as `repo:tag@digest`, has a newest digest to compare against;
+`supercollider` and `eidoverse-rapier` findings are always reported only. A finding that is unfixed upstream, or
+fixed but not yet in the newest digest, is a report line, never a failure: no PortOS
+action clears it (the review ledger that recorded this was retired in #16425).
 
-The fix path is a digest bump. `.github/dependabot.yml` has weekly `docker-compose`
-(`/`) and `docker` (`/docker/*`) entries that propose newer pins. The pgvector pin
-also lives in `scripts/lib/dbImage.js` and `ci.yml`; `scripts/dbImageDigestPin.test.js`
-fails a bump PR until those move with it. Do not move the Debian snapshot or an
-image digest merely to silence a scanner.
+The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
+(`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
+in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
+`scripts/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
+snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
 `deno.json`/`deno.lock` build context are built from the independent
@@ -1351,8 +1347,8 @@ never counts as a pass. Closing it needs the pinned parent digest and lock from
 that project's build.
 
 The scheduled `dependency-updates` task reads the latest default-branch run of
-this workflow and its artifacts, and reports a missing, scanner-failed, older-than-14-days,
-stale-recipe or `unavailable` target as a coverage gap instead of a clean result.
+this workflow and its artifacts, and reports a missing, scanner-failed, over-14-days-old,
+stale-recipe or `unavailable` target as a coverage gap, not a clean result.
 
 ## Release Workflow (`release.yml`)
 
