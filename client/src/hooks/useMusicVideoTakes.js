@@ -108,7 +108,16 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     runningRef.current += 1;
     optimistic?.(projectId);
     const run = chainRef.current.then(() => work(projectId));
-    chainRef.current = run.then((scene) => { runningRef.current -= 1; queue(sceneId, -1); if (scene) applyScene(projectId, scene); return true; })
+    chainRef.current = run.then((scene) => {
+      // A reply that carries the edit result also corrects readiness and the neighbours' take staleness. Its
+      // copy of the shots predates any decision still queued behind this one, so then only this shot is patched.
+      const alone = runningRef.current === 1;
+      runningRef.current -= 1;
+      queue(sceneId, -1);
+      if (scene?.edit && applyEdit && alone) applyEdit(projectId, scene.edit);
+      else if (scene) applyScene(projectId, scene);
+      return true;
+    })
       .catch((err) => {
         runningRef.current -= 1;
         queue(sceneId, -1);
@@ -240,6 +249,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
       .then((result) => {
         // A later mark still queued answers with fresher marks; this reply keeps only its shots.
         const later = (queuedRef.current.get(MARKS_QUEUE) || 0) > 1;
+        if (result.edit && applyEdit && runningRef.current === 1) { applyEdit(projectId, result.edit); return null; }
         applyPoolMarks(projectId, later ? { scenes: result.scenes } : result);
         return null;
       }),
