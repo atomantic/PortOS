@@ -5,8 +5,9 @@ import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import ModelInputPreview from '../media/ModelInputPreview.jsx';
 
 /** The actual image backend's prompt preview, including its wrappers and style additions.
- * References are resolved on the server from the shot, the same way the frame render is (#15583). */
-export default function SceneFramePromptPreview({ project, scene, slot, referenceImageId = null, instruction = null, includeReferences = true }) {
+ * References are resolved on the server from the shot, the same way the frame render is (#15583).
+ * `enabled` false (its panel is hidden) sends no preview request until the panel shows (#16306). */
+export default function SceneFramePromptPreview({ project, scene, slot, referenceImageId = null, instruction = null, includeReferences = true, enabled = true }) {
   const prompt = instruction ?? authoredFramePromptText(scene, slot);
   const preview = useModelInputPreview(previewImagePrompt, {
     prompt, ...musicVideoFrameGenSize(project),
@@ -17,6 +18,6 @@ export default function SceneFramePromptPreview({ project, scene, slot, referenc
       ...(instruction !== null ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       ...(!includeReferences ? { includeReferences: false } : {}),
     },
-  });
+  }, { enabled });
   return <ModelInputPreview prompt={prompt} preview={preview} />;
 }

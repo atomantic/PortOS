@@ -10,6 +10,7 @@ vi.mock('../services/socket.js', () => ({ default: { id: 'socket-example' } }));
 
 import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes } from '../services/apiMusicVideo.js';
 import useMusicVideoTakes from './useMusicVideoTakes.js';
+import { takeControl } from '../lib/musicVideoTakes.js';
 
 // A held reply: resolve it when the test says the server answered.
 const deferred = () => {
@@ -135,5 +136,26 @@ describe('useMusicVideoTakes rejectUnusedTakes', () => {
     const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
     await act(() => result.current.rejectUnusedTakes(scene));
     expect(applyEdit).toHaveBeenCalledWith('mv-1', edit);
+  });
+
+  // Uniquely catches #16306: a second press during a slow reply sending a second request, or the control
+  // never leaving its pending state, after either answer.
+  it('holds the pressed control pending until its reply and ignores a second press meanwhile', async () => {
+    const scene = { sceneId: 's1', takes: [] };
+    const reply = deferred();
+    rejectUnusedMusicVideoSceneTakes.mockReset().mockReturnValueOnce(reply.promise).mockRejectedValueOnce(new Error('Refused'));
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: vi.fn() }));
+    let first;
+    let second;
+    act(() => { first = result.current.rejectUnusedTakes(scene); second = result.current.rejectUnusedTakes(scene); });
+    expect(result.current.pending.has(takeControl.rejectUnused(scene))).toBe(true);
+    expect(await second).toBe(false);
+    reply.resolve({ scene, rejected: 1 });
+    await act(() => first);
+    expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(1);
+    expect(result.current.pending.size).toBe(0);
+    await act(() => result.current.rejectUnusedTakes(scene));
+    expect(rejectUnusedMusicVideoSceneTakes).toHaveBeenCalledTimes(2);
+    expect(result.current.pending.size).toBe(0);
   });
 });

@@ -572,6 +572,7 @@ export default function ProjectWorkspace({
           onClose={() => setContactSheetOpen(false)}
           project={selected}
           busy={takes.busy}
+          saving={takes.pending}
           onSelectTake={takes.selectTake}
           onReviewTake={takes.reviewTake}
           onOpenPreview={openPreview}

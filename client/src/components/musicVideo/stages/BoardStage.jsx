@@ -373,6 +373,7 @@ export default function BoardStage({ board }) {
               onContinueVideo={sceneMedia.continueSceneVideo}
               onOpenPreview={board.openPreview}
               takeBusy={takes.busy}
+              pendingTakes={takes.pending}
               onSelectTake={takes.selectTake}
               onReviewTake={takes.reviewTake}
               onRejectUnusedTakes={takes.rejectUnusedTakes}
