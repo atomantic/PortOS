@@ -25,7 +25,7 @@ import {
 } from '../../services/pipeline/visualStages.js';
 import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
-import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE } from '../../services/pipeline/comicPdf.js';
+import { buildComicPdf } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
 import { mapServiceError } from './shared.js';
 
@@ -129,7 +129,7 @@ router.post('/series/:id/seasons/:seasonId/back-cover/render', makeCoverRenderHa
 // 409 with ERR_NO_RENDERED_ISSUES when no issue has any rendered page yet.
 router.get('/series/:id/seasons/:seasonId/volume.pdf', asyncHandler(async (req, res) => {
   const query = validateRequest(pipelinePdfQuerySchema, req.query);
-  const size = PAGE_SIZES[query.size] ? query.size : DEFAULT_PAGE_SIZE;
+  const size = query.size;
   const includeColophon = query.colophon !== 'skip';
   const { bytes, filename } = await buildVolumePdf(req.params.id, req.params.seasonId, {
     size, includeColophon,
@@ -184,7 +184,7 @@ router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHa
 // (us-letter|a4|tabloid). 409 when the issue has no rendered cover/pages.
 router.get('/issues/:id/comic.pdf', asyncHandler(async (req, res) => {
   const query = validateRequest(pipelinePdfQuerySchema, req.query);
-  const size = PAGE_SIZES[query.size] ? query.size : DEFAULT_PAGE_SIZE;
+  const size = query.size;
   const includeCover = query.cover !== 'skip';
   const includeBackCover = query.backCover !== 'skip';
   const includeColophon = query.colophon !== 'skip';
