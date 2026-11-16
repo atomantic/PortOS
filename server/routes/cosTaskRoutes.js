@@ -415,7 +415,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`
       : `claim next ${workTrackerLabel(claim.tracker)} item`;
     shape = {
-      description: `${workflow.label} for ${appObj.name} — ${scope} and ship a PR`,
+      description: `${workflow.label} for ${appObj.name} — ${scope} and ship it`,
       // The claim body is the agent's PROMPT, not a human note (#4153) — see
       // server/lib/cosTaskPrompt.js for the field split.
       prompt: claim.prompt,

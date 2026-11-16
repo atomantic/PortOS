@@ -101,7 +101,7 @@ export const SLASHDO_WORKFLOWS = Object.freeze([
     command: 'next',
     detail: 'claim an unclaimed item, do the work in its own worktree, ship a PR',
     label: 'Next',
-    description: "Claim the next unclaimed work item (per the app's Work Tracker) and ship a PR",
+    description: "Claim the next unclaimed work item (per the app's Work Tracker) and ship it",
     icon: '🎯',
     templateName: 'Ship Next Issue',
     settings: WORKFLOW_OWNS_ITS_OWN_GIT,

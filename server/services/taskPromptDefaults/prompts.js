@@ -3998,7 +3998,7 @@ export function composeClaimIssuePrompt({ forge = 'github', target = null, prCom
   const policy = prCompletion === 'draft' ? 'draft (leave open)' : prCompletion;
   const intro = `[Claim Issue: {appName}] ${pinned ? `Selected ${github ? 'GitHub' : 'GitLab'} issue #${target}` : `Select an open ${github ? 'GitHub' : 'GitLab'} issue`}
 
-Effective PR completion policy: ${policy}. Execute preparation and current-need checks, epic handling if needed, claim, implementation, validation, publication, and ${leaveOpen ? 'human handoff' : 'confirmed merge and supported retirement'} in that order. All edits happen in the claim worktree.`;
+Effective PR completion policy: ${policy}. Execute preparation and current-need checks, epic handling if needed, claim, implementation, validation, publication, and ${leaveOpen ? 'human handoff' : 'confirmed merge and supported retirement'} in that order${leaveOpen ? '' : ', repeating implementation through merge one PR per slice until the issue is resolved'}. All edits happen in the claim worktree.`;
   const selectionExit = pinned
     ? 'For a collision, failed lookup, ineligible target or completed epic, stop this run; never select another unrelated issue. An eligible child of the selected epic is the sole exception.'
     : 'For an ineligible candidate or collision, resume the queue selection. Stop when no eligible work remains.';

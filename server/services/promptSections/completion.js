@@ -729,6 +729,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
       '',
     ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
+    ...(!prStaysOpen ? ['**A merged slice is not the end of the claim.** While the claimed issue still has scope left, start its next slice in this same run and keep going until the issue closes. Report `incomplete` only when something actually stops you (a failure, a limit, an unmet prerequisite), never to leave remaining scope for a later run.'] : []),
     ...(resumeOverride ? ['When the relaunch section above applies, finish this task\'s existing claim in the worktree named there.'] : []),
     '',
     ...(!isMergeOnGreen ? [
@@ -738,7 +739,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     'For a successful claim, signal completion only after the prompt\'s prescribed PR/MR and cleanup steps are complete. For a clean no-work, blocked, or review-stuck exit, follow the prompt\'s prescribed leave-open/cleanup path first.'
   ];
   if (isTui && sentinelPath) {
-    lines.push('', 'When that path is complete, write the completion sentinel and stop:', '', ...buildSentinelWriteSteps(1, sentinelPath, '   ## PR/MR\n   <PR or MR URL, or explain the clean exit>'));
+    lines.push('', 'When that path is complete, write the completion sentinel and stop:', '', ...buildSentinelWriteSteps(1, sentinelPath, '   ## PR/MR\n   <every PR or MR URL this run shipped, or explain the clean exit>'));
   } else {
     lines.push('', 'After the prompt\'s prescribed final step, exit so PortOS can record the completed claim.');
   }
