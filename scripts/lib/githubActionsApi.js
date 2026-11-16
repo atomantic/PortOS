@@ -149,9 +149,9 @@ export const jobFailed = (job) => FAILING_CONCLUSIONS.has(job?.conclusion)
 /**
  * One culprit as both reporting surfaces render it, shared so the Checks-tab
  * annotation and the gate summary can't describe the same failure differently.
- * @param {{name: string, steps: string[]}} job
+ * @param {{name: string, steps: string[], reason?: string}} job a `reason` replaces the failed-step list
  */
-export const formatFailedJob = ({ name, steps }) => `${name} — failed step: ${steps.join(', ')}`;
+export const formatFailedJob = ({ name, steps, reason }) => (reason ? `${name} — ${reason}` : `${name} — failed step: ${steps.join(', ')}`);
 
 /** CI runs about fifteen jobs; one page names them all. */
 const RUN_JOBS_PER_PAGE = 100;
@@ -187,4 +187,41 @@ export async function fetchJobsWithFailedSteps(fetchImpl, target) {
       }]
       : [];
   });
+}
+
+/**
+ * Best-effort verdict on every job of a finished run, for callers that must tell
+ * "something broke" from "GitHub never ran a job".
+ *
+ * - `failed`: jobs with a failed step or a failure/timed_out conclusion, and jobs
+ *   cancelled AFTER they started (a job-level timeout or a lost runner: the
+ *   steps list is non-empty), each carrying a `reason` when no step failed.
+ * - `neverStarted`: jobs cancelled with no steps at all, i.e. the hosted runner
+ *   was never acquired ("The job was not acquired by Runner ... even after
+ *   multiple attempts"). That is capacity, not a defect in the tested commit.
+ *
+ * `null` means "could not be read".
+ *
+ * @returns {Promise<{failed: Array<{name: string, steps: string[], reason?: string}>, neverStarted: string[]}|null>}
+ */
+export async function fetchRunJobOutcomes(fetchImpl, target) {
+  const { repoPath, runId, token, timeoutMs } = target || {};
+  if (typeof fetchImpl !== 'function' || !repoPath || !/^\d+$/.test(String(runId)) || !token) return null;
+  const body = await githubJson(fetchImpl, `${repoPath}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PER_PAGE}`, token, { timeoutMs });
+  if (!Array.isArray(body?.jobs)) return null;
+  const failed = [];
+  const neverStarted = [];
+  for (const job of body.jobs) {
+    const name = safeWorkflowText(job?.name, 'unnamed job');
+    const steps = failedSteps(job).map((step) => safeWorkflowText(step?.name, 'unnamed step'));
+    if (steps.length) failed.push({ name, steps });
+    else if (job?.conclusion === 'timed_out') failed.push({ name, steps, reason: 'timed out' });
+    else if (job?.conclusion === 'failure') failed.push({ name, steps, reason: 'failed without a failed step' });
+    else if (job?.conclusion === 'cancelled') {
+      if (Array.isArray(job.steps) && job.steps.length) {
+        failed.push({ name, steps, reason: 'cancelled after it started (a job timeout or a lost runner)' });
+      } else neverStarted.push(name);
+    }
+  }
+  return { failed, neverStarted };
 }
