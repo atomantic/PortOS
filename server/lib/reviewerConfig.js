@@ -176,8 +176,8 @@ export function reviewerCliBinary(reviewer) {
 /**
  * Render a reviewer slug for an agent prompt as the command it must actually run, keeping the slug
  * visible so the text still lines up with the configured reviewer list and slashdo's
- * `--review-with` token. `antigravity` → ``​`agy` (the `antigravity` reviewer)``; every other
- * reviewer, whose binary equals its slug, → ``​`codex` `` with no redundant restatement.
+ * `--review-with` token. `antigravity` → `` `agy` (the `antigravity` reviewer)``; every other
+ * reviewer, whose binary equals its slug, → `` `codex` `` with no redundant restatement.
  * @param {string} reviewer - reviewer slug
  * @returns {string} markdown fragment
  */
