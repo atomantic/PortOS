@@ -6,7 +6,7 @@ import { withRetiredDataAccess } from '../lib/retiredLoraTraining.js';
  * any more. What remains is the store (verified at boot so retained records
  * keep loading across upgrades) and `updateDataset`, which the surviving-trainer
  * observer in `loraTraining/` uses to flip a retained dataset's status when an
- * outstanding run finishes or its adapter is deleted. Data Maintenance removes
+ * outstanding run finishes or its adapter is deleted. The retired-training-data delete on the LoRAs page removes
  * the directory itself.
  *
  * Storage: `file-primary` — machine-local, never federated, backed up in full.

@@ -17,6 +17,7 @@ import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
 import DownloadPreflightConfirm from '../components/models/DownloadPreflightConfirm.jsx';
+import RetiredTrainingData from '../components/models/RetiredTrainingData';
 import Banner from '../components/ui/Banner';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import ProgressBar from '../components/ui/ProgressBar';
@@ -661,6 +662,8 @@ export default function Loras() {
           )}
         </div>
       )}
+
+      {view === VIEW_INSTALLED && <RetiredTrainingData />}
 
       {/* Both overlays stay OUTSIDE the view gate: an install started in
           Discover can still hit a 401 (or finish its preflight) after the user
@@ -1681,17 +1684,15 @@ function LoraCard({ lora, onDelete, onMeasured, deleting, deleteConfirm }) {
           </span>
         </div>
 
-        {/* Trained-in-PortOS lineage: character chip links back to the
-            retained training artifacts in Data Maintenance. */}
+        {/* Trained-in-PortOS lineage. */}
         {lora.source === 'trained' && lora.character && (
           <div className="mb-2">
-            <Link
-              to="/settings/data-maintenance"
-              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-port-success/15 text-port-success border border-port-success/30 hover:bg-port-success/25"
-              title="Trained in PortOS — inspect retained training artifacts in Data Maintenance"
+            <span
+              className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full bg-port-success/15 text-port-success border border-port-success/30"
+              title="Trained in PortOS"
             >
               <Sparkles size={11} /> Character: {lora.character.name}
-            </Link>
+            </span>
           </div>
         )}
 

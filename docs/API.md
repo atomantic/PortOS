@@ -195,7 +195,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/story-builder` | Story Builder |
 | `/api/loras` | Supported inference adapter management |
 | `/api/lora-datasets`, `/api/lora-training` | `/api/lora-training` keeps read, cancel and checkpoint operations; launch, resume and every `/api/lora-datasets` request return 410 `LORA_TRAINING_RETIRED` |
-| `/api/data-maintenance` | Operator-authorized retired-data inventory, fresh preview and confirmed allowlisted removal; see [Data Maintenance](DATA_MAINTENANCE.md) |
+| `/api/data-maintenance` | Operator-authorized retired-data inventory and `DELETE /:operationId` removal of an allowlisted directory; see [Data Maintenance](DATA_MAINTENANCE.md) |
 | `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |
 | `/api/rounds` | Rounds (music + Morse training) |

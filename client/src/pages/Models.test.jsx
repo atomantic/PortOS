@@ -72,7 +72,6 @@ const renderAt = (path) => render(
     <Routes>
       <Route path="/models/performance/results/:assessmentKey" element={<Models fixedTab="performance" />} />
       <Route path="/models/performance/:view" element={<Models fixedTab="performance" />} />
-      <Route path="/settings/data-maintenance" element={<div>Retired training maintenance</div>} />
       <Route path="/models/:tab" element={<Models />} />
       <Route path="/models/:tab/:recordId" element={<Models />} />
       <Route path="/models/decision-classifiers/jev/:taskView" element={<Models fixedTab="decision-classifiers" fixedRecordId="jev" />} />
@@ -211,9 +210,9 @@ describe('Models — tab drill-downs', () => {
     expect(screen.getByRole('tab', { name: view === 'library' ? 'Model Library' : 'Abuse Guard' })).toHaveAttribute('aria-selected', 'true');
   });
 
-  it.each(['/models/training', '/models/training/dataset-abc'])('redirects retired deep link %s to maintenance', async path => {
+  it.each(['/models/training', '/models/training/dataset-abc'])('redirects retired deep link %s to the LoRAs page', async path => {
     renderAt(path);
-    expect(await screen.findByText('Retired training maintenance')).toBeInTheDocument();
+    expect(await screen.findByText('loras panel')).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: 'Training' })).toBeNull();
   });
 
