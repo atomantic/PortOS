@@ -1,93 +1,71 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterAll, describe, it, expect, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorEvents, errorMiddleware } from '../lib/errorHandler.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
-// Stub the service so we assert the route's request → svc-call → response
-// wiring (incl. 400/404 mapping) without touching the real file-backed store.
-const stubs = {
-  getSketch: vi.fn(),
-  getSketchPng: vi.fn(),
-  saveSketch: vi.fn(),
-};
-
-vi.mock('../services/mediaSketches.js', async () => {
-  const actual = await vi.importActual('../services/mediaSketches.js');
-  return {
-    ...actual,
-    getSketch: (...a) => stubs.getSketch(...a),
-    getSketchPng: (...a) => stubs.getSketchPng(...a),
-    saveSketch: (...a) => stubs.saveSketch(...a),
-  };
-});
+// Real mediaSketches service (sidecar JSON + PNG files) over a temp data root.
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-media-sketches-') }));
+afterAll(cleanupTempDataRoots);
 
 const router = (await import('./mediaSketches.js')).default;
 
-function makeApp() {
-  const app = express();
-  app.use(express.json({ limit: '55mb' }));
-  app.use('/api/media/sketches', router);
-  app.use(errorMiddleware);
-  return app;
-}
+// With an io on the app the error middleware raises errorEvents 'error'; the server registers a listener at boot.
+errorEvents.on('error', () => {});
+const io = { emit: vi.fn() };
+const app = express();
+app.set('io', io);
+app.use(express.json({ limit: '55mb' }));
+app.use('/api/media/sketches', router);
+app.use(errorMiddleware);
 
-const KEY = encodeURIComponent('image:foo.png');
-const sampleStrokes = [{ mode: 'draw', color: '#ef4444', size: 6, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }];
+const url = (key, suffix = '') => `/api/media/sketches/${encodeURIComponent(key)}${suffix}`;
+const strokes = [{ mode: 'draw', color: '#ef4444', size: 6, points: [{ x: 1, y: 2 }, { x: 3, y: 4 }] }];
+// 1x1 transparent PNG
+const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
 describe('mediaSketches routes', () => {
-  beforeEach(() => vi.clearAllMocks());
+  it('persists a save so it reads back, broadcasts it, and serves the flattened PNG', async () => {
+    const key = 'image:foo.png';
+    expect((await request(app).get(url(key))).body.sketch).toBeNull();
+    expect((await request(app).get(url(key, '/png'))).status).toBe(404);
 
-  it('GET /:key returns the sketch projection', async () => {
-    stubs.getSketch.mockResolvedValue({ key: 'image:foo.png', width: 10, height: 10, strokes: sampleStrokes, updatedAt: 'now', hasPng: true });
-    const r = await request(makeApp()).get(`/api/media/sketches/${KEY}`);
-    expect(r.status).toBe(200);
-    expect(r.body.sketch.strokes).toHaveLength(1);
-    expect(stubs.getSketch).toHaveBeenCalledWith('image:foo.png');
+    const saved = await request(app).put(url(key)).send({ width: 100, height: 80, strokes, png: `data:image/png;base64,${PNG_B64}` });
+    expect(saved.status).toBe(200);
+    expect(saved.body.sketch).toMatchObject({ key, width: 100, height: 80, hasPng: true });
+    expect(io.emit).toHaveBeenCalledWith('media:sketch:updated', { key, sketch: saved.body.sketch });
+
+    const read = await request(app).get(url(key));
+    expect(read.body.sketch).toEqual(saved.body.sketch);
+    expect(read.body.sketch.strokes).toHaveLength(1);
+
+    const png = await request(app).get(url(key, '/png'));
+    expect(png.status).toBe(200);
+    expect(png.headers['content-type']).toContain('image/png');
   });
 
-  it('GET /:key returns sketch:null when none saved', async () => {
-    stubs.getSketch.mockResolvedValue(null);
-    const r = await request(makeApp()).get(`/api/media/sketches/${KEY}`);
-    expect(r.status).toBe(200);
-    expect(r.body.sketch).toBeNull();
+  it('removes the sidecar when a re-save carries no strokes', async () => {
+    const key = 'image:erased.png';
+    await request(app).put(url(key)).send({ width: 10, height: 10, strokes });
+    const cleared = await request(app).put(url(key)).send({ width: 10, height: 10, strokes: [] });
+    expect(cleared.status).toBe(200);
+    expect((await request(app).get(url(key))).body.sketch).toBeNull();
   });
 
-  it('PUT /:key round-trips a save and echoes the stored sketch', async () => {
-    const stored = { key: 'image:foo.png', width: 100, height: 80, strokes: sampleStrokes, updatedAt: 'now', hasPng: false };
-    stubs.saveSketch.mockResolvedValue(stored);
-    const r = await request(makeApp())
-      .put(`/api/media/sketches/${KEY}`)
-      .send({ width: 100, height: 80, strokes: sampleStrokes });
-    expect(r.status).toBe(200);
-    expect(r.body.key).toBe('image:foo.png');
-    expect(r.body.sketch).toEqual(stored);
-    expect(stubs.saveSketch).toHaveBeenCalledWith('image:foo.png', expect.objectContaining({ width: 100, height: 80 }));
+  it('refuses a malformed payload, a video key and an invalid key without persisting anything', async () => {
+    const key = 'image:bad.png';
+    expect((await request(app).put(url(key)).send({ width: 100 })).status).toBe(400);
+    expect((await request(app).put(url('video:clip.mp4')).send({ width: 10, height: 10, strokes })).status).toBe(400);
+    expect((await request(app).get(url('not-a-key'))).status).toBe(400);
+    expect((await request(app).get(url(key))).body.sketch).toBeNull();
   });
 
-  it('PUT /:key 400s on a malformed payload before hitting the service', async () => {
-    const r = await request(makeApp())
-      .put(`/api/media/sketches/${KEY}`)
-      .send({ width: 100 }); // missing height + strokes
-    expect(r.status).toBe(400);
-    expect(stubs.saveSketch).not.toHaveBeenCalled();
-  });
-
-  it('GET /:key/png streams the flattened bytes', async () => {
-    stubs.getSketchPng.mockResolvedValue(Buffer.from('png-bytes'));
-    const r = await request(makeApp()).get(`/api/media/sketches/${KEY}/png`);
-    expect(r.status).toBe(200);
-    expect(r.headers['content-type']).toContain('image/png');
-  });
-
-  it('GET /:key/png 404s when no export exists', async () => {
-    stubs.getSketchPng.mockResolvedValue(null);
-    const r = await request(makeApp()).get(`/api/media/sketches/${KEY}/png`);
-    expect(r.status).toBe(404);
-  });
-
-  it('POST / mints a fresh blank-canvas sketch key (phase 3)', async () => {
-    const r = await request(makeApp()).post('/api/media/sketches');
-    expect(r.status).toBe(201);
-    expect(r.body.key).toMatch(/^sketch:[a-f0-9-]{36}$/);
+  it('mints a blank-canvas key that can be saved and read back', async () => {
+    const minted = await request(app).post('/api/media/sketches');
+    expect(minted.status).toBe(201);
+    expect(minted.body.key).toMatch(/^sketch:[a-f0-9-]{36}$/);
+    await request(app).put(url(minted.body.key)).send({ width: 5, height: 5, strokes });
+    expect((await request(app).get(url(minted.body.key))).body.sketch.strokes).toHaveLength(1);
   });
 });
