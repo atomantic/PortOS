@@ -32,6 +32,9 @@ import { resolveBlenderExecution } from './execution.js';
 import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
 import { admittedRenderMap } from '../renderActivity.js';
 import { stopRun } from '../runner.js';
+import { runPromptThroughProvider } from '../promptRunner.js';
+import { getProviderById } from '../providers.js';
+import { extractAnimationHtml } from './prompt.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];
@@ -227,9 +230,7 @@ const reviewPrompt = ({ manifest, artifacts }) => [
 
 /** The explicit vision route: the project's own saved authoring settings, images attached, no fallback unless the user allowed it. */
 async function reviewViaAuthoringRoute({ project, manifest, artifacts, signal, timeoutMs }) {
-  const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }] = await Promise.all([
-    import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'),
-  ]);
+  const { preflightProductionProject, _recordEffectiveRoute } = await import('./preflight.js');
   const preflight = await preflightProductionProject(project.id);
   if (!preflight.resolved || preflight.problems.length) {
     throw new ServerError(`The authoring route is not ready: ${preflight.problems.join(' ') || 'select a provider'}`, { status: 409, code: 'CODE_ANIMATION_AUTHORING_UNAVAILABLE' });
@@ -323,9 +324,7 @@ const repairPrompt = ({ manifest, files, entryPath, findings }) => [
 async function repairViaAuthoringRoute({ project, manifest, files, entryPath, findings, signal, timeoutMs }) {
   signal.throwIfAborted();
   const deadline = Date.now() + timeoutMs;
-  const [{ preflightProductionProject, _recordEffectiveRoute }, { runPromptThroughProvider }, { getProviderById }, { extractAnimationHtml }] = await Promise.all([
-    import('./preflight.js'), import('../promptRunner.js'), import('../providers.js'), import('./prompt.js'),
-  ]);
+  const { preflightProductionProject, _recordEffectiveRoute } = await import('./preflight.js');
   const preflight = await preflightProductionProject(project.id);
   if (!preflight.resolved || preflight.problems.length) {
     throw new ServerError(`The authoring route is not ready: ${preflight.problems.join(' ') || 'select a provider'}`, { status: 409, code: 'CODE_ANIMATION_AUTHORING_UNAVAILABLE' });

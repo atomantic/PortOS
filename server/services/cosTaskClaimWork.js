@@ -43,6 +43,7 @@ import {
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
 import { resolveAppWorkTracker, trackerToClaimTaskType, resolveAppForgeTarget, forgeCliForTracker, workTrackerLabel as trackerLabel } from '../lib/workTracker.js';
+import { listProviders } from './providers.js';
 
 // `normalizeClaimReviewers` moved to server/lib/reviewerConfig.js (#4770, #5702): the
 // prompt builder needs the same copilot guard when it re-resolves reviewers off
@@ -131,7 +132,7 @@ export async function resolveAppClaimReviewers(app) {
     // A settings read failure means "no configured defaults", never a failed
     // lookup: the task metadata layer wins over them anyway.
     getCodeReviewDefaults().catch(() => null),
-    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    Promise.resolve().then(() => listProviders()).catch(() => [])
   ]);
   const prCompletion = metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
   return {
@@ -195,7 +196,7 @@ export async function buildClaimWorkTask(app, {
     resolveAppWorkTracker(app),
     resolveClaimWorkMetadata(app),
     getCodeReviewDefaults().catch(() => null),
-    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    Promise.resolve().then(() => listProviders()).catch(() => [])
   ]);
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
   const targetRef = normalizeWorkItemRef(target);

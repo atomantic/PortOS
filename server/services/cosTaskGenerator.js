@@ -106,6 +106,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from './preflightTaskCard.js';
 import { checkGhHealth } from './github.js';
 import { detectActionableWork } from './perpetualWork.js';
+import { listProviders } from './providers.js';
 /**
  * Persist a `blocked` status on a task that has hit the max-total-spawns
  * ceiling. Unconditional: the caller has already established `exceedsMaxSpawns`.
@@ -1713,7 +1714,7 @@ export async function generateSelfImprovementTaskForType(taskType, state, option
   if (description.includes('{reviewers}')) {
     const [codeReviewDefaults, providers] = await Promise.all([
       getCodeReviewDefaults().catch(() => null),
-      import('./providers.js').then(m => m.listProviders()).catch(() => [])
+      Promise.resolve().then(() => listProviders()).catch(() => [])
     ]);
     const reviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
     Object.assign(metadata, reviewerConfigMetadata(reviewers));

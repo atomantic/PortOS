@@ -64,6 +64,8 @@ import { safeChildProcessOptions } from './processEnv.js';
 import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { classifyWriterQuiescence, reserveDatabaseWriter } from './databaseWriterRegistry.js';
+import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
+import { PATHS } from './paths.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -684,9 +686,6 @@ export async function spawnDetached(bin, args = [], options = {}) {
  * that receipt before recovery (see databaseMaintenanceTransfer.js).
  */
 export async function spawnDatabaseMaintenanceWorker(id, token) {
-  const [{ createDatabaseMaintenanceJournal }, { PATHS }] = await Promise.all([
-    import('./databaseMaintenanceJournal.js'), import('./paths.js'),
-  ]);
   const journal = createDatabaseMaintenanceJournal();
   const controlDir = journal.reserveCoordinatorWorker(id, token);
   return spawnDetachedWithReservation(process.execPath,

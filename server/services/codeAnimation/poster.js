@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto';
 import { rm } from 'fs/promises';
 import { emitCodeAnimationChanged } from '../socket.js';
 import { getCodeAnimationJobRecord, isCodeAnimationJobId, readCodeAnimationHtml, saveCodeAnimationPoster } from './jobStore.js';
+import { stageCodeAnimationPage } from '../generatedPreview/codeAnimationPage.js';
+import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
 
 const POSTER_WIDTH = 640;
 const POSTER_TIMEOUT_MS = 45_000;
@@ -50,11 +52,7 @@ async function capture(id) {
   const job = await getCodeAnimationJobRecord(id);
   if (job?.status !== 'completed') return false;
   const html = await readCodeAnimationHtml(id);
-  const [{ stageCodeAnimationPage }, { openComposition }, { PREVIEW_PAGE_CSP }] = await Promise.all([
-    import('../generatedPreview/codeAnimationPage.js'),
-    import('../htmlComposition/browser.js'),
-    import('../../lib/generatedPreviewSandbox.js'),
-  ]);
+  const { openComposition } = await import('../htmlComposition/browser.js');
   const staged = await stageCodeAnimationPage(`poster-${randomUUID()}`, html);
   let page;
   try {

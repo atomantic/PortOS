@@ -6,6 +6,7 @@ import { expandHome, safeJSONParse } from '../lib/fileUtils.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
 import { listWorktrees } from './worktreeManager.js';
+import { getInstanceId } from './instanceIdentity.js';
 
 const unverified = reason => ({ status: 'unverified', reason });
 const sameRepo = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
@@ -34,9 +35,7 @@ async function selectedIssues(task, agent, context) {
   if (number) return [number];
   if (task.metadata?.claimTarget || !agent.metadata?.claimSelection
     || agent.metadata?.claimReleasedBranches?.length) return null;
-  const [{ claimSelectionIssues }, { getInstanceId }] = await Promise.all([
-    import('./cosClaimSelection.js'), import('./instanceIdentity.js'),
-  ]);
+  const { claimSelectionIssues } = await import('./cosClaimSelection.js');
   return claimSelectionIssues(agent, task, { ...context, instanceId: await getInstanceId() });
 }
 

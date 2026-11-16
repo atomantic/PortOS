@@ -35,6 +35,8 @@ import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { projectPublishKit, releaseKitFiles } from './publishKit.js';
 import { getSettings } from '../settings.js';
+import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
+import { RENDER_TARGET } from '../../lib/renderTargets.js';
 
 const MAX_GENERATED = 12;
 const LIVE_JOB = new Set(['queued', 'running', 'canceling']);
@@ -66,9 +68,7 @@ export function __setCoverArtDepsForTests(overrides) { deps = { ...defaults, ...
  * that backend cannot take a queued job or its cloud toggle is off.
  */
 export async function defaultImageRoute(settings) {
-  const [{ resolveRenderTargetConfig }, { QUEUEABLE_IMAGE_MODES }, { RENDER_TARGET }] = await Promise.all([
-    import('../imageGen/cloudProviderConfig.js'), import('../../lib/generationModes.js'), import('../../lib/renderTargets.js'),
-  ]);
+  const { resolveRenderTargetConfig } = await import('../imageGen/cloudProviderConfig.js');
   const resolved = resolveRenderTargetConfig(settings, RENDER_TARGET.MUSIC_VIDEO, { usableInstallFallback: true });
   if (!QUEUEABLE_IMAGE_MODES.includes(resolved.mode) || (resolved.cloud && !resolved.cloud.enabled)) return null;
   return { mode: resolved.mode, model: null };

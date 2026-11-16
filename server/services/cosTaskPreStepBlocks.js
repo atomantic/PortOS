@@ -46,6 +46,7 @@ import {
 } from './cosTaskPrompts.js';
 import { resolveAppWorkTracker, githubApiHost } from '../lib/workTracker.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
+import { listProviders } from './providers.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
 // must carry the host parsed from this checkout's origin for GitHub Enterprise.
@@ -1128,7 +1129,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // receive it without needing a new placeholder.
   const [codeReviewDefaults, providers] = await Promise.all([
     getCodeReviewDefaults().catch(() => null),
-    import('./providers.js').then(m => m.listProviders()).catch(() => [])
+    Promise.resolve().then(() => listProviders()).catch(() => [])
   ]);
   const claimReviewers = resolveClaimReviewerConfig(metadata, codeReviewDefaults, codeReviewDefaults?.reviewers, providers);
   const rendersReviewers = /\{reviewers\}/.test(promptTemplate);

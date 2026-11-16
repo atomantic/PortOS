@@ -78,7 +78,7 @@ import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
 import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
-import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
+import { getTextEncoderRepo, isHfRepoId, getVideoModels } from '../lib/mediaModels.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights, listIcLoraRemixModes,
   icLoraWeightCandidates, findCachedIcLoraWeight, icLoraWeightKey, icLoraProbesExactFile,
@@ -114,6 +114,7 @@ import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
 import { GOOGLE_VIDEO_MODEL_IDS } from '../lib/googleVideoModels.js';
+import { getProject } from '../services/musicVideo/projects.js';
 
 const router = Router();
 
@@ -1138,9 +1139,8 @@ const overnightBodySchema = z.object({
 
 router.post('/overnight', asyncHandler(async (req, res) => {
   const { projectId, sceneIds, modelIds, startAt, stopBy } = validateRequest(overnightBodySchema, req.body ?? {});
-  const [{ getProject }, { musicVideoClipReferences }, { getVideoModels }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
-    import('../services/musicVideo/projects.js'), import('../services/musicVideo/clipCastReferences.js'),
-    import('../lib/mediaModels.js'), import('../services/musicVideo/overnightRenders.js'),
+  const [{ musicVideoClipReferences }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
+    import('../services/musicVideo/clipCastReferences.js'), import('../services/musicVideo/overnightRenders.js'),
   ]);
   const project = await getProject(projectId);
   if (!project) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });

@@ -14,6 +14,7 @@ import { getPendingTaskIds } from './cosTaskStore.js';
 import { getStatus } from './cos.js';
 import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
 import { activeAgents, spawningTasks } from './agentState.js';
+import { isPersistentMindTurnRunning } from './persistentMindSupervisor.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
@@ -29,7 +30,7 @@ export async function getObservedUpdateActivity() {
   const attempt = fn => Promise.resolve().then(fn).catch(() => null);
   const [capacity, models, mind, runs, backup, runner] = await Promise.all([
     attempt(() => getQueueCapacity()), attempt(() => getActiveModelOperationCount()),
-    attempt(() => import('./persistentMindSupervisor.js').then(m => m.isPersistentMindTurnRunning())),
+    attempt(() => isPersistentMindTurnRunning()),
     attempt(() => importRunner().then(m => m.getActiveRunCount())),
     attempt(() => importBackup().then(m => m.isBackupInProgress())),
     attempt(() => import('./cosRunnerClient.js').then(m => m.getActiveAgentsFromRunner({ timeoutMs: 1500 }))),

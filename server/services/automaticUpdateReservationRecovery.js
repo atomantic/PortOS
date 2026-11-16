@@ -2,6 +2,8 @@
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { assertInactiveActivity, isOrdinaryAgentRecord, reconcileWaitingUpdate } from './maintenanceReservationDisposition.js';
 import { recordedMediaChildIds } from '../lib/mediaRecoveryActivity.js';
+import { assertNoObservedReservationProcesses, snapshotMaintenanceProcesses } from './maintenanceProcessInventory.js';
+import { PATHS } from '../lib/paths.js';
 
 const topazChecks = new Map();
 
@@ -13,9 +15,9 @@ export async function checkActivity(update, operations) {
     const outcome = await resumeDatabaseRestore();
     if (outcome.status !== 'ok') throw new Error('Database restore recovery is still active or incomplete.');
   }
-  const [{ getSystemActivity }, { getActiveAgentsFromRunner }, { getAgentRecord }, { getMediaRecoveryActivity, listJobs }, { isSoleDeferredUpdateAppOperation }, { assertNoObservedReservationProcesses, snapshotMaintenanceProcesses }, { assertNoScopedLegacyProcesses, getProcessWorkingDirectories }, { PATHS }] = await Promise.all([
+  const [{ getSystemActivity }, { getActiveAgentsFromRunner }, { getAgentRecord }, { getMediaRecoveryActivity, listJobs }, { isSoleDeferredUpdateAppOperation }, { assertNoScopedLegacyProcesses, getProcessWorkingDirectories }] = await Promise.all([
     import('./activeProcessing.js'), import('./cosRunnerClient.js'), import('./cosAgentLifecycle.js'), import('./mediaJobQueue/index.js'), import('./appOperations.js'),
-    import('./maintenanceProcessInventory.js'), import('./maintenanceScopedProcesses.js'), import('../lib/paths.js'),
+    import('./maintenanceScopedProcesses.js'),
   ]);
   const runnerOps = operations.filter(op => op.kind === 'runner');
   const agentOps = operations.filter(op => op.kind === 'agent');

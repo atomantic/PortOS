@@ -202,6 +202,8 @@ import { listProjects } from './creativeDirector/local.js';
 import { isFileBackend } from '../lib/pgFileFacade.js';
 import { checkHealth, ensureSchema } from '../lib/db.js';
 import { initializeMessageDrafts } from './messageDrafts.js';
+import { isInstanceFeatureEnabled } from './instanceFeatures.js';
+import { initImageOriginStamping } from './imageGen/imageRecords.js';
 
 /**
  * Pre-route boot. Everything a route handler may depend on being ready the
@@ -478,8 +480,8 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Docker containment (#12844): sweep containers/volumes a crash or restart
   // left behind — only when the user turned the feature on, so a fresh install
   // makes no Docker call at boot.
-  Promise.all([import('./instanceFeatures.js'), import('./dockerContainment.js')])
-    .then(async ([{ isInstanceFeatureEnabled }, { reconcileDockerContainment }]) => {
+  import('./dockerContainment.js')
+    .then(async ({ reconcileDockerContainment }) => {
       if (await isInstanceFeatureEnabled('docker-containment')) await reconcileDockerContainment({ enabled: true, reason: 'boot' });
     })
     .catch(err => logBootstrapFailure('⚠️ Docker containment boot reconcile deferred', err));
@@ -1103,8 +1105,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
           .then(({ initMediaHolders }) => initMediaHolders())
           .catch((err) => logBootstrapFailure('❌ Media release queue init failed', err));
         // Gallery renders record this machine as their origin, which remote delete targets.
-        void import('./imageGen/imageRecords.js')
-          .then(({ initImageOriginStamping }) => initImageOriginStamping())
+        void Promise.resolve().then(() => initImageOriginStamping())
           .catch((err) => logBootstrapFailure('❌ Image origin stamping init failed', err));
       },
       // Brain digests/reviews call an AI provider, so the scheduler arms only

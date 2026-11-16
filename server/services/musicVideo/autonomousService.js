@@ -105,6 +105,7 @@ import { applyProjectPatch } from './projectsLogic.js';
 import { openAttemptRevisionId } from './autoReview.js';
 import { getTrack } from '../tracks/index.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
+import { supportsSourceAudioWindow } from '../federatedMedia/sourceAudio.js';
 
 const PROCESS_ID = `proc-${randomUUID()}`;
 const inflight = new Map();
@@ -163,8 +164,7 @@ const defaults = {
   // A gallery image (a Cast & Sets plate, a production still) the orchestrator looks at.
   // Can this local video model take a shot's song window (an LTX a2v model)?
   localVideoTakesSongAudio: async (modelId) => {
-    const [{ resolveVideoModelSelection }, { supportsSourceAudioWindow }] = await Promise.all([
-      import('../videoGen/modelSelection.js'), import('../federatedMedia/sourceAudio.js')]);
+    const { resolveVideoModelSelection } = await import('../videoGen/modelSelection.js');
     return supportsSourceAudioWindow((await resolveVideoModelSelection(modelId || undefined)).model);
   },
   galleryImagePath: async (filename) => resolveGalleryImage(filename),

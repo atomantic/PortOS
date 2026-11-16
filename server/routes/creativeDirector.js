@@ -48,8 +48,11 @@ import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.j
 import { stopProject } from '../services/creativeDirector/stopProject.js';
 import { resolveCreativeDirectorProjectCommand } from '../services/creativeDirector/projectCommands.js';
 
-import { getCommissionPlanError } from '../services/creative/toolRegistry.js';
+import { getCommissionPlanError, getAllCreativeToolMetadata } from '../services/creative/toolRegistry.js';
 import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAdvance.js';
+import { getCreativeAutonomyMode } from '../lib/domainAutonomy.js';
+import { getDomainBudgetStatus } from '../services/domainUsage.js';
+import { loadState } from '../services/cosState.js';
 const router = Router();
 
 function assertVideoDispatchAvailable(project) {
@@ -87,15 +90,6 @@ router.get('/', asyncHandler(async (req, res) => {
 // the gate would block (over budget). Registered before `/:id` so the literal
 // path can't be shadowed by the param route. Pure read — no LLM, no mutation.
 router.get('/tools', asyncHandler(async (_req, res) => {
-  // Dynamic-imported (like the /plan advance-loop nudge below) so the heavy tool
-  // graph + cos state modules aren't pulled at route module-load — keeps the
-  // route unit test fast and free of those services' import-time side effects.
-  const [{ getAllCreativeToolMetadata }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }, { loadState }] = await Promise.all([
-    import('../services/creative/toolRegistry.js'),
-    import('../lib/domainAutonomy.js'),
-    import('../services/domainUsage.js'),
-    import('../services/cosState.js'),
-  ]);
   const state = await loadState().catch(() => ({ config: {} }));
   const mode = getCreativeAutonomyMode(state.config);
   const budget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true, exceeded: null }));
