@@ -1,30 +1,14 @@
 /**
- * Post-completion repo-state expectations for CoS worktree agents — the pure half.
- *
- * Cleanup (`services/agentWorktreeCleanup.js`) reports only the steps it TRIED
- * and failed. A run whose steps were never attempted finishes with zero warnings
- * and still leaves debris: an agent that owns its own PR workflow merges the PR
- * itself, so cleanup stands down (`skipMerge`, `PR_CREATION.NEVER`) and nothing
- * checks whether the branch and worktree actually went away.
- *
- * This module answers "what should the repo look like now" and "which observed
- * facts contradict that". No I/O — the probing and remediation live in
- * `services/agentRepoStateVerification.js`.
- *
- * Deliberately narrow: ONE agent's branch, right after that agent completed. The
- * periodic whole-repo sweep is `services/branchReconcile.js`.
+  * Post-completion repo-state expectations for CoS worktree agents, the pure half: "what should the repo look like now" and "which observed facts contradict that".
+  *
+  * Cleanup (`services/agentWorktreeCleanup.js`) reports only steps it TRIED and failed, so an agent owning its own PR workflow (cleanup stands down: `skipMerge`, `PR_CREATION.NEVER`) can leave debris with zero warnings. No I/O (probing and remediation: `services/agentRepoStateVerification.js`). Deliberately narrow: ONE agent's branch right after it completed; the periodic whole-repo sweep is `services/branchReconcile.js`.
  */
 
 import { PR_COMPLETIONS } from './prDisposition.js';
 
 /**
- * Divergences worth reporting, in the order they are reported.
- *
- * There is deliberately no "the agent never opened a PR" code: `verifyPrClaim`
- * (services/agentFinalization.js) already owns that question on every completion
- * path, is forge-agnostic, and carries the `branchProvenEmpty` carve-out (#3358) —
- * a run that found the work already done ships nothing and must not be told to
- * open a PR for an empty branch.
+ * Divergences worth reporting, in order. There is no "the agent never opened a PR" code: `verifyPrClaim` (services/agentFinalization.js) owns that on every path, is forge-agnostic, and carries the
+ * `branchProvenEmpty` carve-out (#3358: a run that found the work done must not be told to open a PR for an empty branch).
  */
 export const REPO_STATE_ISSUES = Object.freeze({
   WORKTREE_PRESENT: 'worktree-present',
@@ -34,10 +18,7 @@ export const REPO_STATE_ISSUES = Object.freeze({
   PR_UNMERGED: 'pr-unmerged',
 });
 
-/**
- * Why a run was not audited. Returned rather than logged, so "nothing happened"
- * is never ambiguous between "checked and clean" and "never checked".
- */
+/** Why a run was not audited, returned rather than logged so "checked and clean" is never ambiguous with "never checked". */
 export const REPO_STATE_SKIPS = Object.freeze({
   DISABLED: 'verification-disabled',
   NOT_WORKTREE: 'not-a-worktree-run',
@@ -47,36 +28,16 @@ export const REPO_STATE_SKIPS = Object.freeze({
   CLEANUP_WARNED: 'cleanup-already-warned',
   FOLLOW_UP_PENDING: 'follow-up-pending',
   MISSING_CONTEXT: 'missing-branch-or-workspace',
-  // Both set by the service half. A gate this audit depends on could not be read
-  // (the app record, the task queue) — fail CLOSED, because reading "we could not
-  // ask" as "nobody owns this branch" or as "the app left the audit on" is how a
-  // transient file-read failure files recovery work against a branch a follow-up
-  // owns, or against an app that opted out.
+  // Set by the service half: a gate this audit depends on (app record, task queue) could not be read. Fail CLOSED: reading "could not ask" as "nobody owns this branch" or "audit on" would file recovery work against a follow-up's branch or an app that opted out.
   GATE_UNREADABLE: 'gate-unreadable',
-  // At least one probe that could have produced a finding was unreadable, and
-  // nothing diverged in what WAS readable. Not the same as clean: a firewalled
-  // host must not be logged as a verified repo.
+  // A probe that could have produced a finding was unreadable and nothing diverged in what WAS readable: not clean (a firewalled host must not log as a verified repo).
   PROBE_INCOMPLETE: 'probe-incomplete',
 });
 
 /**
- * Should this run be audited, and under which of the two end-state shapes?
- *
- * Returns two facts rather than one flag per check: `staysOpen` (the PR is a
- * human's to land, so its branch must survive) and `prExpected`. Every check is
- * derived from those in `classifyRepoStateIssues` — an earlier version carried
- * six `expect*` booleans, three of which were the same expression.
- *
- * The two skips worth spelling out:
- *
- * - **A failed run is never audited.** Its branch and worktree are PRESERVED on
- *   purpose by merge-evidence retention and `resolveResumePointer` so the task's
- *   retry resumes rather than restarts. Auditing it would report the resume
- *   pointer as a leak.
- * - **A pending owner defers the audit.** A review-loop follow-up or a pr-watcher
- *   pending merge lands this branch next, so it is *supposed* to still exist.
- *   `FOLLOW_UP_PENDING` is tested last because answering it costs two file reads;
- *   every free gate above it runs first.
+ * Should this run be audited, and under which end-state shape? Returns `staysOpen` (the PR is a human's to land, so its branch survives) and `prExpected`; every check derives from those in `classifyRepoStateIssues`.
+ * A failed run is never audited (its branch/worktree are PRESERVED by merge-evidence retention and `resolveResumePointer` so a retry resumes). A pending owner (review-loop follow-up, pr-watcher pending merge) defers the audit:
+ * `FOLLOW_UP_PENDING` is tested last because answering costs two file reads.
  *
  * @param {object} params
  * @param {boolean} params.enabled - the app's `verifyRepoStateOnCompletion` setting
@@ -121,21 +82,15 @@ export function resolveRepoStateExpectation({
   return {
     verify: true,
     skipReason: null,
-    // `leave-open` is a deliberate hand-off: the PR stays open and its branch must
-    // stay with it, local and remote. The worktree is still expected to be gone —
-    // nothing about handing a PR to a human needs a checkout.
+    // `leave-open` is a deliberate hand-off: the PR and its branch (local and remote) stay; the worktree is still expected gone.
     staysOpen: leaveOpen || prCompletion === PR_COMPLETIONS.LEAVE_OPEN,
     prExpected,
   };
 }
 
 /**
- * Which observed facts contradict the expectation.
- *
- * Every observation is tri-state (`true` / `false` / `null`): `null` means "could
- * not determine" — git unreachable, `gh` firewalled, a non-GitHub forge. A `null`
- * NEVER produces an issue, because reading "we could not ask" as "it's still
- * there" would file a recovery task on every network hiccup.
+ * Which observed facts contradict the expectation. Every observation is tri-state (`true` / `false` / `null`): `null` (git unreachable, `gh` firewalled, non-GitHub forge) NEVER produces an issue,
+ * since reading "could not ask" as "still there" would file a recovery task on every network hiccup.
  *
  * @param {ReturnType<typeof resolveRepoStateExpectation>} expectation
  * @param {object} observed
@@ -150,8 +105,7 @@ export function resolveRepoStateExpectation({
 export function classifyRepoStateIssues(expectation, observed = {}) {
   if (!expectation?.verify) return [];
   const branch = observed.branchName || 'the agent branch';
-  // Enabling forge auto-merge does not own failure recovery or local cleanup.
-  // Explicit server receipts are checked by the caller's pending-owner gate.
+  // Forge auto-merge does not own failure recovery or local cleanup; explicit server receipts are checked by the caller's pending-owner gate.
   const branchShouldBeGone = !expectation.staysOpen;
   const issues = [];
 
@@ -190,9 +144,8 @@ export function classifyRepoStateIssues(expectation, observed = {}) {
 }
 
 /**
- * True when the app's per-app setting leaves the audit on. Unset means ON: the
- * audit only reports on a run the completion path already believed was finished,
- * and an install that never hears about a leaked branch accumulates them silently.
+ * True when the app's per-app setting leaves the audit on. Unset means ON: the audit only reports on a run already believed finished, and an install never hearing about leaked branches accumulates them.
+ *
  *
  * @param {object|null} app - managed app record (null for a task with no app)
  * @returns {boolean}

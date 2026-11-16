@@ -1,25 +1,11 @@
 /**
- * Quota-burn configuration — shape, defaults, and normalization.
+ * Quota-burn configuration: shape, defaults, and normalization.
  *
- * Quota-burn is ONE machine-local loop that lives in PortOS itself, not a
- * per-managed-app scheduled CoS task type (it used to be the latter; migration
- * 221 moves installs over). The work it dispatches may still target a managed
- * app — an `agent-prompt` burn job names the app it runs in — but the schedule,
- * the provider-family windows, and the ordered job list are all install-level
- * config held here.
+ * Quota-burn is ONE machine-local loop in PortOS itself (not a per-managed-app task type); schedule, provider-family windows and the ordered job list are install-level config held here.
+ * Pure module: no storage, no provider I/O, so the route validator, store, runner and client share one vocabulary. `quotaBurnStore.js` persists it; `quotaBurnRunner.js` executes it.
  *
- * Pure module: shape + normalization only, no storage and no provider I/O, so
- * the route validator, the store, the runner, and the client can all agree on
- * one vocabulary. `server/services/quotaBurnStore.js` persists it;
- * `server/services/quotaBurnRunner.js` executes it.
- *
- * Normalization is TOTAL and never throws: every read path (config file written
- * by an older PortOS, a migrated per-app override, a PUT body) funnels through
- * `normalizeQuotaBurnConfig`, which fills every family key and drops anything
- * it cannot make sense of. Absent is never confused with "off" — a family the
- * user has not configured materializes with `enabled: false`, and an unknown
- * job type is DROPPED rather than silently coerced to a different one (running
- * the wrong burn job spends real quota on work nobody asked for).
+ * Normalization is TOTAL and never throws: every read path funnels through `normalizeQuotaBurnConfig`, which fills every family key and drops what it cannot make sense of.
+ * Absent is never "off" (an unconfigured family materializes with `enabled: false`), and an unknown job type is DROPPED, never coerced (the wrong burn job spends real quota).
  */
 
 import { isPlainObject } from './objects.js';
@@ -36,35 +22,19 @@ import { trimTo } from './textUtils.js';
 export const QUOTA_BURN_FAMILIES = Object.freeze(['claude', 'codex', 'agy', 'grok']);
 
 /**
- * How a burn task queued by the RETIRED executor opened: `[Quota burn: <family>] …`.
- *
- * Nothing mints this any more — a burn is dispatched through canonical task
- * generation and carries `metadata.quotaBurnFamily` from the start (#6381). It
- * survives as a parser only, for migration 225, which back-fills that metadata
- * onto tasks queued before the stamp existed and has nothing else to read them
- * by. Reword it and the migration silently becomes a no-op, leaving exactly the
- * stranded tasks it exists to rescue.
+ * How a burn task queued by the RETIRED executor opened: `[Quota burn: <family>] …`. Kept as a parser only, for migration 225, which back-fills
+ * `metadata.quotaBurnFamily` onto old tasks; rewording it silently turns that migration into a no-op.
  */
 export const QUOTA_BURN_TASK_PREFIX = '[Quota burn: ';
 
-/**
- * The family id in a burn-task description, or null when it isn't one. Only the
- * migration needs this — a live task carries `metadata.quotaBurnFamily` — so it
- * deliberately requires the exact minted shape rather than sniffing loosely.
- */
+/** The family id in a burn-task description, or null. Migration-only: requires the exact minted shape rather than sniffing loosely. */
 export function quotaBurnFamilyOfDescription(description) {
   if (typeof description !== 'string' || !description.startsWith(QUOTA_BURN_TASK_PREFIX)) return null;
   const family = description.slice(QUOTA_BURN_TASK_PREFIX.length).split(']')[0].trim();
   return QUOTA_BURN_FAMILIES.includes(family) ? family : null;
 }
 
-/**
- * The completion-ledger key for one job: `<familyId>:<jobId>`.
- *
- * Job ids are only unique within a family (they are minted from a clock), so the
- * family has to be part of the key or a `run once` job in one plan would mark
- * its namesake in another as already spent.
- */
+/** The completion-ledger key for one job: `<familyId>:<jobId>`. Job ids are only unique within a family, so the family must be in the key. */
 export const quotaBurnJobKey = (familyId, jobId) => `${familyId}:${jobId}`;
 
 // `maxDispatchesPerWindow` "no cap" sentinel (the default). Lives in a leaf
@@ -73,15 +43,8 @@ export { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quota
 import { QUOTA_BURN_UNLIMITED_DISPATCHES, isUnlimitedDispatchCap } from './quotaBurnDispatchCap.js';
 
 /**
- * Every numeric/length bound in the plan, in ONE place.
- *
- * Three consumers read these and must agree: the normalizer below (which
- * CLAMPS, so an older on-disk plan still loads), `quotaBurnValidation.js`
- * (which REJECTS with a 400, so a bad request is not silently reshaped), and
- * the job catalog's param descriptors (which the client renders as `min`/`max`
- * on the input). When they were three sets of literals, raising a cap in one
- * meant the PUT 400'd on a plan the normalizer would happily have accepted —
- * a split-brain invisible from inside any single file.
+ * Every numeric/length bound in the plan, in ONE place. The normalizer (CLAMPS), `quotaBurnValidation.js` (REJECTS with 400) and the job catalog's param descriptors
+ * (client `min`/`max`) must agree, or a PUT 400s on a plan the normalizer would accept.
  */
 export const QUOTA_BURN_BOUNDS = Object.freeze({
   checkIntervalMinutes: { min: 5, max: 720, default: 30 },
@@ -94,30 +57,15 @@ export const QUOTA_BURN_BOUNDS = Object.freeze({
   jobsPerFamily: { max: 25 },
   idLength: { max: 64 },
   labelLength: { max: 120 },
-  // Sized for the longest thing a param actually holds: an audit preset's work
-  // prompt. At 8000 the largest shipped preset rendered to 7999 — one character
-  // of headroom — so the next sentence added to the shared audit contract would
-  // have been silently sliced off the END of every stored preset job, taking the
-  // "change no code" and redaction rules with it and leaving nothing on screen
-  // saying so. The cap exists to bound a runaway paste, not to fit the presets.
+  // Sized for the longest param (an audit preset's work prompt) with headroom: a too-tight cap silently slices the END of stored preset jobs. It bounds a runaway paste, not the presets.
   paramLength: { max: 16000 },
 });
 const BOUNDS = QUOTA_BURN_BOUNDS;
 
 /**
- * LEGACY burn job types — a COMPATIBILITY INPUT, frozen.
- *
- * A step's work is now named by a scheduled-task reference
- * (`quotaBurnTaskRef.js`), not by a quota-only job type. This enum, the catalog
- * below, and `quotaBurnPresets.js` stay readable so a plan written before the
- * reference model still loads and migration (#6381) can convert it — they are no
- * longer the canonical definition of new work, and nothing new belongs in them.
- * A new burn action ships as an on-demand SCHEDULED task and is referenced.
- *
- * `agent-prompt` was the original behavior (spawn a CoS agent in a managed app
- * with a copied prompt); the other two are PROGRAMMATIC jobs PortOS performs
- * itself with no agent in the loop. Migration 359 converts all three
- * (`lib/quotaBurnLegacyConversion.js`); none of them has an executor any more.
+ * LEGACY burn job types: a frozen COMPATIBILITY INPUT. A step's work is now a scheduled-task reference (`quotaBurnTaskRef.js`); this enum, the catalog below and
+ * `quotaBurnPresets.js` stay readable so an old plan loads and migration 359 (`lib/quotaBurnLegacyConversion.js`) can convert it. Nothing new belongs in them;
+ * a new burn action ships as an on-demand SCHEDULED task and is referenced. `agent-prompt` spawned a CoS agent in a managed app; the other two were PROGRAMMATIC jobs.
  */
 export const QUOTA_BURN_JOB_TYPE = Object.freeze({
   AGENT_PROMPT: 'agent-prompt',
@@ -126,14 +74,7 @@ export const QUOTA_BURN_JOB_TYPE = Object.freeze({
 });
 export const QUOTA_BURN_JOB_TYPES = Object.freeze(Object.values(QUOTA_BURN_JOB_TYPE));
 
-/**
- * LEGACY catalog, frozen alongside `QUOTA_BURN_JOB_TYPE` above.
- *
- * Rendered by the config page so the job picker can describe each type
- * without the client re-encoding what a job does. `params` names the per-job
- * fields the runner reads — the client builds its form from this list, so a new
- * job type needs no client change beyond a field renderer for a novel kind.
- */
+/** LEGACY catalog, frozen with `QUOTA_BURN_JOB_TYPE`: lets the config page describe each type; `params` is the field list the client builds its form from. */
 export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
   {
     id: QUOTA_BURN_JOB_TYPE.AGENT_PROMPT,
@@ -146,19 +87,9 @@ export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
       { key: 'useWorktree', kind: 'boolean', label: 'Run in a worktree', default: true },
       { key: 'openPR', kind: 'boolean', label: 'Open a PR', default: true },
       { key: 'simplify', kind: 'boolean', label: 'Run /simplify', default: true },
-      // The two "this job does not land code" postures, which are NOT the same:
-      //
-      // `noCodeOutput` — the deliverable is something the agent DOES during the
-      //   run (files an issue, calls an endpoint). It needs no branch and no
-      //   isolation because it writes nothing, so it runs in the app's checkout
-      //   as-is; the prompt drops every commit/push/PR instruction.
-      // `discardWorktree` — the job DOES want a scratch checkout (it builds, it
-      //   runs tests, it edits to reason) but nothing it produces may land.
-      //   Without it, worktree + no PR means AUTO-MERGE onto the source
-      //   workspace's default branch (agentWorktreeCleanup.js).
-      //
-      // Either one forces `openPR`/`simplify` off in the job runner — both
-      // presuppose a diff to ship.
+      // Two distinct "does not land code" postures. `noCodeOutput`: the deliverable is something the agent DOES (files an issue, calls an endpoint); no branch or isolation, runs in the app's
+      // checkout, prompt drops commit/push/PR steps. `discardWorktree`: wants a scratch checkout (builds, tests) but nothing may land; without it, worktree + no PR means AUTO-MERGE
+      // (agentWorktreeCleanup.js). Either forces `openPR`/`simplify` off.
       { key: 'noCodeOutput', kind: 'boolean', label: 'No code output (files issues / calls an API)', default: false },
       { key: 'discardWorktree', kind: 'boolean', label: 'Discard the worktree (nothing lands)', default: false },
     ]),
@@ -171,9 +102,7 @@ export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
     params: Object.freeze([
       { key: 'universeId', kind: 'universe', label: 'Universe', default: 'all', emptyLabel: 'All universes', emptyValue: 'all' },
       { key: 'scope', kind: 'enum', label: 'Entries', options: BIBLE_DESCRIBE_SCOPES, default: 'all' },
-      // `full` is the default because the job exists for the sheet, not the
-      // one-line description: a cast member with a description and nothing else
-      // still renders inconsistently from panel to panel.
+      // `full` is the default: a cast member with only a description still renders inconsistently across panels.
       { key: 'depth', kind: 'enum', label: 'Depth', options: BIBLE_DESCRIBE_DEPTHS, default: 'full' },
       { key: 'maxEntries', kind: 'number', label: 'Max entries per run', min: BOUNDS.maxEntries.min, max: BOUNDS.maxEntries.max, default: BOUNDS.maxEntries.default },
     ]),
@@ -188,10 +117,7 @@ export const QUOTA_BURN_JOB_CATALOG = Object.freeze([
       { key: 'scope', kind: 'enum', label: 'Entries', options: ['all', 'variations', 'canon', 'sheets'], default: 'all' },
       { key: 'maxEntries', kind: 'number', label: 'Max entries per run', min: BOUNDS.maxEntries.min, max: BOUNDS.maxEntries.max, default: BOUNDS.maxEntries.default },
       { key: 'mode', kind: 'imageMode', label: 'Render backend', default: null, emptyLabel: 'Match the burning provider', emptyValue: '' },
-      // Opt-IN, and default `false`, so an existing plan keeps rendering exactly
-      // the backlog it rendered yesterday. Turning it on pairs this job with the
-      // describe job above: canon entries that are still blank wait for a
-      // description instead of spending image quota on a generic render.
+      // Opt-IN (default false) so existing plans keep their backlog; on, canon entries still blank wait for a description instead of spending image quota on a generic render.
       { key: 'requireDescribed', kind: 'boolean', label: 'Skip canon entries that have no description yet', default: false },
     ]),
   },
@@ -208,12 +134,8 @@ const clamp = ({ min, max, default: fallback }, value) => {
 const clampInt = (bounds, value) => Math.round(clamp(bounds, value));
 
 /**
- * The dispatch cap can't go straight through `clampInt`: its sentinel sits
- * BELOW its own minimum, so the generic clamp would fold -1 back up to 1 and
- * silently reinstate a cap of one burn per window. Any negative reads as
- * unlimited; a real cap still clamps into 1–50 (so a legacy 0 keeps landing on
- * 1 rather than meaning "never burn", which is what disabling the family is
- * for).
+ * The dispatch cap can't use `clampInt`: its sentinel sits BELOW its minimum, so -1 would fold up to 1. Any negative reads as unlimited; a real cap clamps into 1-50
+ * (a legacy 0 lands on 1; disabling the family is how to say "never burn").
  */
 const clampDispatchCap = (value) => {
   const num = Number(value);
@@ -227,47 +149,22 @@ const nullableString = (value, max) => {
 };
 
 /**
- * A step's run `params` stay free-form on purpose — each task type owns its own
- * contract, and the handler validates the keys it actually reads. What is
- * enforced is that it's a plain object of JSON-ish scalars, so a hand-edited
- * config file can't smuggle a prototype or a nested blob into it. The rule
- * itself lives in `quotaBurnTaskRef.js` so the overrides bag applies the same
- * one; the BOUND stays here, with every other bound.
+ * A step's run `params` stay free-form (each task type owns its contract) but must be a plain object of JSON-ish scalars so a hand-edited file can't smuggle a
+ * prototype or nested blob. The rule lives in `quotaBurnTaskRef.js` (shared with the overrides bag); the BOUND stays here.
  */
 const normalizeParams = (raw) => normalizeQuotaBurnParams(raw, BOUNDS.paramLength.max);
 
 /**
- * Normalize one burn STEP.
+ * Normalize one burn STEP. A step names its work either by a `taskRef` (scheduled task the user owns, plus per-invocation `overrides`) or a legacy `jobType`
+ * (copied prompt in a params bag). The two are kept strictly apart: a legacy step LOADS but normalizes to unavailable with a migration reason, and is never rewritten
+ * into a reference here (guessing which task a hand-edited prompt meant would strand edits or duplicate an automation; the conversion service owns that).
  *
- * A step names its work in one of two ways, and normalization keeps them
- * strictly apart rather than translating between them:
+ * Returns `null` for a payload naming NEITHER; the caller drops it, since a step running the wrong work spends real quota.
+ * `index` seeds a stable id for steps written before ids existed.
  *
- *  - a `taskRef` — the current model: a reference to a scheduled task the user
- *    already owns, plus per-invocation `overrides`;
- *  - a legacy `jobType` — a copied prompt in a free-form params bag. It still
- *    LOADS (an install upgrading across the reference model must not lose its
- *    plan), but it normalizes to unavailable with a migration reason. It is
- *    never rewritten into a reference here: guessing which scheduled task a
- *    hand-edited prompt meant would either strand the user's edits or duplicate
- *    an automation, so #6381's conversion service owns that, once.
- *
- * Returns `null` for a payload that names NEITHER — the caller drops it rather
- * than substituting a default: a step that runs the wrong work spends real
- * subscription quota on something the user never asked for, which is strictly
- * worse than the step disappearing from the list.
- *
- * `index` seeds a stable id for a step written before ids existed (or by a
- * hand-edited file), so the client's list keys and the run ledger have
- * something to key on.
- *
- * **Overrides and their compat mirrors.** `overrides` is the canonical home for
- * provider / model / effort / params, but the shipped editor still reads and
- * writes them at the TOP level (it moves to `overrides` in #6382), so both are
- * emitted and kept in lockstep here. The tie-break is presence, not truthiness:
- * a payload that CARRIES a top-level key wins with it — including when the user
- * just cleared it to `null` — and only a payload with no top-level key at all
- * falls through to `overrides`. Reading truthiness instead would resurrect the
- * stale override every time the editor cleared a pinned model.
+ * Overrides and compat mirrors: `overrides` is the canonical home for provider/model/effort/params, but the shipped editor still reads and writes them at the TOP level
+ * (moves in #6382), so both are emitted in lockstep. Tie-break is presence, not truthiness: a payload CARRYING a top-level key wins (even a cleared `null`);
+ * truthiness would resurrect the stale override each time the editor cleared a pinned model.
  */
 export function normalizeQuotaBurnJob(raw, index = 0) {
   if (!isPlainObject(raw)) return null;
@@ -296,26 +193,18 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
     enabled: raw.enabled !== false,
     label: trimTo(raw.label, BOUNDS.labelLength.max),
     taskRef,
-    // Only a legacy step keeps a `jobType`; a reference step reports null so no
-    // reader can mistake a stale field for the step's identity.
+    // Only a legacy step keeps a `jobType`, so no reader mistakes a stale field for a reference step's identity.
     jobType: taskRef ? null : legacyType,
     overrides,
-    // Derived, never trusted from the payload: what the CATALOG says right now
-    // is stamped by `resolveQuotaBurnStepAvailability`, which normalization (a
-    // pure function with no store access) cannot ask. The one verdict decidable
-    // from the payload alone is the un-migrated legacy step.
+    // Derived, never trusted from the payload; only the un-migrated legacy verdict is decidable here (catalog availability is stamped by `resolveQuotaBurnStepAvailability`).
     unavailable: taskRef ? null : {
       code: QUOTA_BURN_UNAVAILABLE.LEGACY_UNMIGRATED,
       reason: `legacy "${legacyType}" step is waiting to be migrated to a scheduled task`,
     },
-    // Opt-IN, and absent reads as `false`, so every plan written before this
-    // field existed keeps repeating exactly as it did. See `jobIsSpent`.
+    // Opt-IN; absent reads as `false`. See `jobIsSpent`.
     runOnce: raw.runOnce === true,
     ...(raw.drain === true ? { drain: true } : {}),
-    // Compat mirrors of `overrides` for the shipped editor and the legacy
-    // executor. Derived on every read (normalization is total), so they cannot
-    // drift from the canonical bag the way two independently-written fields
-    // would. Removed with the editor rewrite in #6382.
+    // Compat mirrors of `overrides` for the shipped editor and legacy executor, derived on every read so they can't drift. Removed with #6382.
     model: overrides.model,
     providerId: overrides.providerId,
     effort: overrides.effort,
@@ -325,30 +214,15 @@ export function normalizeQuotaBurnJob(raw, index = 0) {
 }
 
 /**
- * Whether a `run once` job has already had its one dispatch.
- *
- * A plan is an ordered ROTATION the runner walks until a quota gate closes
- * (`quotaBurnRunner.js#rotatePlanAfter`), which is right for standing work
- * ("audit performance") and wrong for one-shot work ("write the missing README")
- * — the latter was simply re-done every lap. `runOnce` marks the second kind:
- * once `quotaBurnCompletions.js` has recorded a dispatch for it, it drops out of
- * the rotation until the user re-arms it from the page.
- *
- * Held in a separate machine-local ledger rather than as a flag on the job so
- * the plan the user edits stays a statement of intent, and so a config PUT that
- * replaces the `jobs` array (which is how every reorder and edit saves) can't
- * silently resurrect a job that already ran.
+ * Whether a `run once` job has already had its one dispatch. A plan is a ROTATION the runner walks until a quota gate closes (`quotaBurnRunner.js#rotatePlanAfter`);
+ * `runOnce` marks one-shot work that drops out once `quotaBurnCompletions.js` records a dispatch, until the user re-arms it.
+ * Held in a separate machine-local ledger so a config PUT replacing `jobs` can't resurrect a job that already ran.
  */
 export function jobIsSpent(job, familyId, completions = {}) {
   return job?.runOnce === true && Boolean(completions?.[quotaBurnJobKey(familyId, job.id)]);
 }
 
-/**
- * Normalize one provider family's burn plan. Bounds mirror the pre-#3179
- * per-app sanitizer so a migrated config keeps its meaning: reset window up to
- * a week, reserve 0–100%, and 1–50 dispatches per window (or -1 for no cap,
- * which is the default).
- */
+/** Normalize one family's burn plan: reset window up to a week, reserve 0-100%, 1-50 dispatches per window (or -1 for no cap, the default). */
 export function normalizeQuotaBurnFamily(raw) {
   const value = isPlainObject(raw) ? raw : {};
   const jobs = (Array.isArray(value.jobs) ? value.jobs : [])
@@ -366,50 +240,29 @@ export function normalizeQuotaBurnFamily(raw) {
   };
 }
 
-/**
- * Normalize a whole config. Every known family key is materialized (disabled by
- * default) so the page can render a complete card set and the runner never has
- * to distinguish "absent" from "off" at read time. Unknown family keys are
- * dropped — a card id the quota adapters don't produce could never be selected.
- */
+/** Normalize a whole config: every known family key is materialized (disabled by default) so no reader distinguishes "absent" from "off"; unknown family keys are dropped. */
 export function normalizeQuotaBurnConfig(raw) {
   const value = isPlainObject(raw) ? raw : {};
   const families = isPlainObject(value.families) ? value.families : {};
   return {
     enabled: value.enabled === true,
     checkIntervalMinutes: clampInt(BOUNDS.checkIntervalMinutes, value.checkIntervalMinutes),
-    // Each family carries its own `id`. Every consumer needs it (selection sorts
-    // and keys on it, the runner logs it, a job pins its render backend to it),
-    // and stamping it here is what lets them read `config.families[x]` straight
-    // instead of re-attaching `{ id, ...normalize(...) }` at four call sites.
+    // Each family carries its own `id` so consumers read `config.families[x]` directly.
     families: Object.fromEntries(
       QUOTA_BURN_FAMILIES.map((id) => [id, { id, ...normalizeQuotaBurnFamily(families[id]) }]),
     ),
   };
 }
 
-/**
- * Whether a family is SET UP to burn: enabled, with at least one enabled job. An
- * enabled family with an empty job list is a half-finished setup, not a burn
- * plan — treating it as actionable would spawn a candidate the runner then has
- * to discard, which shows up as a confusing "selected, then skipped" cycle in
- * the run log.
- */
+/** Whether a family is SET UP to burn: enabled with at least one enabled job (an empty plan would spawn a candidate the runner then discards). */
 export function familyIsConfigured(family) {
   return family?.enabled === true && (family.jobs || []).some((job) => job?.enabled !== false);
 }
 
 /**
- * Whether a family has anything the runner could dispatch RIGHT NOW: configured,
- * and not every enabled job already spent as a one-shot. A plan made entirely of
- * `run once` work stops being runnable the moment its last step has run.
- *
- * Deliberately a second named predicate rather than an optional second argument
- * on `familyIsConfigured`. The two questions have different answers and callers
- * want different ones — "you configured nothing" needs a job added while "your
- * plan is finished" needs a Re-arm — and an arity-overloaded predicate is a trap
- * with `some`/`filter`/`map`, which pass the INDEX as the second argument and
- * would silently make `completions` a number.
+ * Whether a family has anything dispatchable RIGHT NOW: configured, and not every enabled job already spent as a one-shot.
+ * A separate predicate rather than an optional arg on `familyIsConfigured`: the answers differ ("add a job" vs "Re-arm"), and an arity-overloaded predicate breaks
+ * under `some`/`filter`/`map`, which pass the INDEX second and would make `completions` a number.
  */
 export function familyHasRunnableJobs(family, completions = {}) {
   return familyIsConfigured(family)

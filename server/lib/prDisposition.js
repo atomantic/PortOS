@@ -6,24 +6,11 @@
 import { PORTOS_APP_ID } from './appIdentity.js';
 import { isFalsyMeta, isTruthyMeta } from './metadataFlags.js';
 /**
- * PR disposition for CoS agent tasks — how a pull request completes.
+ * PR disposition for CoS agent tasks: how a pull request completes. The default is that *something* lands it (the review-loop follow-up when a Review Loop is configured, otherwise a merge
+ * follow-up or the agent's own completion workflow on green CI); a PR nobody merges is a leaked branch.
  *
- * The default is that *something* lands it: the review-loop follow-up when a
- * Review Loop is configured, a merge follow-up (or the agent's own completion
- * workflow) on green CI when it isn't. A PR nobody merges is a leaked branch.
- *
- * The exception is a task that deliberately hands its PR to a human AND records
- * that hand-off somewhere PortOS can't update afterwards. `jira-sprint-manager`
- * is the case that exists today: its prompt transitions the ticket to "In
- * Review", so merging the PR behind the board's back would leave the work merged
- * and the ticket permanently in review — and nothing in the completion path
- * knows the ticket key to transition it to Done.
- *
- * This lives in `lib/` because both halves of the decision need it: the prompt
- * builder (agent-owned PR flows, where the agent merges) and the worktree
- * cleanup (PortOS-owned PR flows, where a follow-up agent merges). A predicate
- * that only one half consults produces exactly the split-brain it's meant to
- * prevent.
+ * The exception is a task that hands its PR to a human AND records that hand-off where PortOS can't update it (`jira-sprint-manager` moves the ticket to "In Review"; merging behind the board's
+ * back would leave it in review forever). Lives in `lib/` because both the prompt builder (agent merges) and worktree cleanup (a follow-up agent merges) need it; one consulting half would split-brain.
  */
 
 export const PR_COMPLETIONS = Object.freeze({
@@ -38,26 +25,18 @@ export const PR_COMPLETION_VALUES = Object.freeze(Object.values(PR_COMPLETIONS))
 
 const PR_COMPLETION_SET = new Set(PR_COMPLETION_VALUES);
 
-// New PR tasks default to PortOS-coordinated review and automatic merge. Stored
-// task records retain their legacy resolution below; app defaults never rewrite
-// a run's pinned policy. GitHub native auto-merge is the separate
-// `useAutoMerge` choice (resolveUseAutoMerge).
+// New PR tasks default to PortOS-coordinated review and automatic merge; stored task records keep their legacy resolution and app defaults never rewrite a run's pinned policy.
+// GitHub native auto-merge is the separate `useAutoMerge` choice (resolveUseAutoMerge).
 export const DEFAULT_PR_COMPLETION = PR_COMPLETIONS.REVIEW_THEN_MERGE;
 
 export function resolveAppPrCompletion(app, metadata = {}) {
   if (PR_COMPLETION_SET.has(app?.defaultPrCompletion)) return app.defaultPrCompletion;
-  // An explicitly configured legacy review toggle retains its behavior. Only
-  // genuinely missing settings acquire the new reviewed auto-merge default.
+  // An explicit legacy review toggle keeps its behavior; only missing settings get the new default.
   if ([true, false, 'true', 'false'].includes(metadata?.reviewLoop)) return resolvePrCompletion(metadata);
   return DEFAULT_PR_COMPLETION;
 }
 
-/**
- * Whether an agent that merges its own PR should enable GitHub native
- * auto-merge once review requirements pass, instead of waiting out CI and
- * merging by hand. A task's explicit choice wins, then the app's `useAutoMerge`
- * setting; unset defaults ON only for PortOS itself.
- */
+/** Whether an agent that merges its own PR should enable GitHub native auto-merge once review passes. Task choice wins, then the app's `useAutoMerge`; unset defaults ON only for PortOS itself. */
 export function resolveUseAutoMerge(app, metadata = {}) {
   if (isTruthyMeta(metadata?.useAutoMerge)) return true;
   if (isFalsyMeta(metadata?.useAutoMerge)) return false;
@@ -66,27 +45,11 @@ export function resolveUseAutoMerge(app, metadata = {}) {
 }
 
 /**
- * WHO performs the code review an action triggers — orthogonal to
- * `PR_COMPLETIONS` above, which decides whether a review happens at all.
- *
- * - `delegated` — the historical shape. The agent running the action is an
- *   ORCHESTRATOR: it spawns the install's Code Review Defaults roster (or a
- *   per-run override) as separate reviewer processes, collects their findings,
- *   and applies them. Several models, several invocations, the most coverage.
- * - `self` — one agent. The provider the action runs on reviews the change
- *   itself and no reviewer CLI is spawned. Cheaper and faster, and the right
- *   answer when the top-level provider is already the model you wanted the
- *   review from; the orchestration layer was pure overhead in that case.
- *
- * Deliberately a mode rather than "an empty reviewer roster": an empty roster
- * already means *no review at all* (`spawnReviewLoopFollowUp`'s merge-only
- * path), and collapsing "nobody reviews this" into "I review this myself" would
- * make the two indistinguishable at every layer downstream.
- *
- * Lives here, beside `PR_COMPLETIONS`, because both halves of the PR lifecycle
- * read it: the routes that queue an action and the prompt sections that tell the
- * agent what it is responsible for. This module imports nothing, so the client
- * mirrors the vocabulary by importing it rather than restating it.
+ * WHO performs the code review an action triggers, orthogonal to `PR_COMPLETIONS` (whether a review happens at all).
+ * - `delegated`: the agent is an ORCHESTRATOR that spawns the Code Review Defaults roster (or a per-run override) as separate reviewer processes and applies their findings.
+ * - `self`: the action's own provider reviews the change and no reviewer CLI is spawned (cheaper; right when the top-level provider is the model you wanted).
+ * A mode rather than "an empty roster": an empty roster already means *no review* (`spawnReviewLoopFollowUp`'s merge-only path), and the two must stay distinguishable downstream.
+ * This module imports nothing, so the client mirrors the vocabulary by importing it.
  */
 export const PR_REVIEW_MODES = Object.freeze({
   DELEGATED: 'delegated',
@@ -98,23 +61,12 @@ export const PR_REVIEW_MODE_VALUES = Object.freeze(Object.values(PR_REVIEW_MODES
 /** What an action runs under when the caller names no mode. */
 export const DEFAULT_PR_REVIEW_MODE = PR_REVIEW_MODES.DELEGATED;
 
-/**
- * True when this run's review is the running agent's own job. Written as a
- * predicate so a caller never compares against the string literal — the two
- * spellings that matter (`'self'` and "not delegated") would otherwise drift
- * apart the first time a third mode appears.
- */
+/** True when this run's review is the running agent's own job; a predicate so callers never compare against the `'self'` literal (it would drift when a third mode appears). */
 export const isSelfReviewMode = (mode) => mode === PR_REVIEW_MODES.SELF;
 
 /**
- * Resolve a task's PR completion policy without migrating stored task data.
- *
- * New tasks persist `prCompletion`; legacy records retain their `reviewLoop`
- * bit and resolve to the same behavior they had before this field existed.
- * `openPR` remains the separate decision of whether to create a PR at all.
- *
- * @param {Object|null|undefined} metadata
- * @returns {'review-then-merge'|'merge-on-green'|'leave-open'}
+ * Resolve a task's PR completion policy without migrating stored data: new tasks persist `prCompletion`; legacy records resolve their `reviewLoop` bit to the behavior they always had.
+ * `openPR` stays the separate decision of whether to create a PR at all.
  */
 export function resolvePrCompletion(metadata = {}) {
   if (metadata?.prCompletion === PR_COMPLETIONS.DRAFT) return PR_COMPLETIONS.LEAVE_OPEN;
@@ -124,23 +76,13 @@ export function resolvePrCompletion(metadata = {}) {
     : PR_COMPLETIONS.MERGE_ON_GREEN;
 }
 
-/**
- * Scheduled task types whose prompt hands the PR to a human. Keep this tiny —
- * every entry is a PR a person must remember to merge.
- */
+/** Scheduled task types whose prompt hands the PR to a human. Keep tiny: every entry is a PR a person must remember to merge. */
 export const PR_STAYS_OPEN_TASK_TYPES = Object.freeze(['jira-sprint-manager']);
 
 const PR_STAYS_OPEN_SET = new Set(PR_STAYS_OPEN_TASK_TYPES);
 
 /**
- * True when a task's PR must be left open for a human rather than merged: an
- * exempt task type, or any task carrying a JIRA ticket (the ticket status is the
- * hand-off, and no completion path here can transition it).
- *
- * Reviewers still run when configured — this governs the *merge*, not the review.
- *
- * @param {Object|null} task - the CoS task (or its metadata holder).
- * @returns {boolean}
+ * True when a task's PR must be left open for a human: an exempt task type, or any task carrying a JIRA ticket (the ticket status is the hand-off). Reviewers still run; this governs the *merge*.
  */
 export function leavesPrForHuman(task) {
   const metadata = task?.metadata || {};
@@ -148,11 +90,7 @@ export function leavesPrForHuman(task) {
 }
 
 /**
- * True when the PR stays open for either reason: a human lands it (`leavesPrForHuman`)
- * or the resolved policy is leave-open (draft included). The one verdict callers
- * that do not need to distinguish the two should use.
- * @param {Object|null} task - the CoS task (or its metadata holder).
- * @returns {boolean}
+ * True when the PR stays open for either reason: a human lands it (`leavesPrForHuman`) or the resolved policy is leave-open (draft included).
  */
 export function prStaysOpen(task) {
   return resolvePrCompletion(task?.metadata) === PR_COMPLETIONS.LEAVE_OPEN || leavesPrForHuman(task);
@@ -162,8 +100,6 @@ export function prStaysOpen(task) {
  * True when an operator hold keeps every automated path (merge, handoff, recovery,
  * cleanup review) off this task's PR: `prStaysOpen`, a read-only task, or a review
  * loop told to leave the PR open. Add a new hold signal here, never at a guard.
- * @param {Object|null} task - the CoS task (or its metadata holder).
- * @returns {boolean}
  */
 export function prHeldForOperator(task) {
   return prStaysOpen(task) || isTruthyMeta(task?.metadata?.readOnly) || isTruthyMeta(task?.metadata?.reviewLoopLeaveOpen);
@@ -185,19 +121,10 @@ export function explicitPrCompletion(task) {
 export const PR_MISSING_CATEGORY = 'pr-missing';
 
 /**
- * Who opens the change request for a completing worktree agent (#3733).
- *
- * One tri-state rather than two booleans, because two booleans have an
- * unrepresentable-in-practice pair ("check first, but never create") and a
- * caller has to keep them consistent by hand.
- *
- * - `NEVER`    — the agent owns it and finalize ALREADY verified the claim
- *                (`prExpected`), so a run that reaches cleanup as a success has
- *                a confirmed PR. Also the no-PR-at-all case.
- * - `IF_MISSING` — the agent owns it and finalize did NOT verify (a slashdo-free
- *                harness). Cleanup asks the forge once and creates one only on a
- *                definite "none".
- * - `ALWAYS`   — PortOS owns it (a lean `--bare` session hands the lifecycle back).
+ * Who opens the change request for a completing worktree agent (#3733). One tri-state, since two booleans have an unrepresentable pair ("check first, but never create").
+ * - `NEVER`: the agent owns it and finalize ALREADY verified the claim (`prExpected`); also the no-PR case.
+ * - `IF_MISSING`: the agent owns it and finalize did NOT verify (slashdo-free harness); cleanup asks the forge once and creates only on a definite "none".
+ * - `ALWAYS`: PortOS owns it (a lean `--bare` session hands the lifecycle back).
  */
 export const PR_CREATION = Object.freeze({
   NEVER: 'never',
@@ -206,17 +133,13 @@ export const PR_CREATION = Object.freeze({
 });
 
 /**
- * Resolve `PR_CREATION` for a completing agent — one place, so the three
- * completion paths (runner, TUI spawner, direct-CLI spawner) can't drift into
- * double-firing `gh pr create` or into leaving a branch with no PR.
+ * Resolve `PR_CREATION` for a completing agent, in one place so the three completion paths (runner, TUI spawner, direct-CLI spawner) can't double-fire `gh pr create` or leave a branch with no PR.
  *
  * @param {Object} opts
  * @param {boolean} opts.taskOpenPR - the task asked for a PR at all
  * @param {boolean} opts.agentOpensOwnPr - the prompt told the agent to open it
- * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` for this
- *   run (i.e. `prExpected` was true), so cleanup must not ask a second time
- * @param {boolean} [opts.branchProvenEmpty] - finalize verified an opted-in audit
- *   left no commits and no change request, so cleanup must not create an empty PR
+ * @param {boolean} opts.prClaimVerified - finalize ran `verifyPrClaim` (`prExpected` was true), so cleanup must not ask again
+ * @param {boolean} [opts.branchProvenEmpty] - finalize verified an opted-in audit left no commits and no change request, so cleanup must not create an empty PR
  * @returns {string} a `PR_CREATION` value
  */
 export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified, branchProvenEmpty = false }) {
@@ -226,18 +149,10 @@ export function resolvePrCreation({ taskOpenPR, agentOpensOwnPr, prClaimVerified
 }
 
 /**
- * Did a `verifyPrClaim` result actually come from the forge about a real branch?
- *
- * `{ ok: true }` alone does NOT mean "a PR exists" — it is also what the
- * function returns when there was nothing to verify (`prExpected` false, a
- * failed run, no workspace), when the branch could not be named (detached
- * HEAD → `{ ok: true, branch: null }`), and what the callers substitute when
- * the check itself threw or the run was user-terminated. Every one of those is
- * "we did not ask", and collapsing them into "asked and it's there" is how a
- * branch with no PR gets cleaned up as if it had one.
- *
- * A verified verdict therefore requires BOTH `ok` and a named `branch` — which
- * only the `found` and `branchProvenEmpty` shapes carry.
+ * Did a `verifyPrClaim` result actually come from the forge about a real branch? `{ ok: true }` alone does NOT mean a PR exists: it is also returned when there was nothing to verify
+ * (`prExpected` false, failed run, no workspace), when the branch had no name (detached HEAD), and as the callers' substitute when the check threw or the run was terminated.
+ * Collapsing "we did not ask" into "it's there" gets a branch with no PR cleaned up as if it had one, so a verified verdict requires BOTH `ok` and a named `branch`
+ * (only the `found` and `branchProvenEmpty` shapes carry it).
  *
  * @param {{ok?: boolean, branch?: string|null}|null|undefined} prVerdict
  * @returns {boolean}

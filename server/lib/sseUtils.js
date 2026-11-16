@@ -118,37 +118,15 @@ export const closeJobAfterDelay = (jobs, jobId, delay = SSE_CLEANUP_DELAY_MS, ex
   }, delay);
 };
 
-// Shared "this job died" finalizer for the media-generation backends
-// (imageGen/{agy,codex,grok,fal}.js, videoGen/{grok,fal,reactor}.js). Each used to
-// carry a private ~10-line `finalizeError` doing the same eight things —
-// idempotency guard, clear the active-slot map, stamp `job.status = 'error'`,
-// drop from `activeJobs`, log, broadcast an SSE error frame, emit `failed`,
-// and `closeJobAfterDelay` — which had drifted (#6830): the video backends
-// picked up a `force` escape hatch (fa3796650) for a throw that lands AFTER
-// `job.status` is already stamped 'complete' (finalizeGeneratedVideo/the
-// image copy-and-clean tail failing during their own post-processing), and
-// the three image backends never did, so that same failure silently hit the
-// idempotency guard's no-op instead of ever reaching the client or the queue.
+// Shared "this job died" finalizer for the media-generation backends (imageGen/{agy,codex,grok,fal}.js, videoGen/{grok,fal,reactor}.js): idempotency guard, clear the active-slot map,
+// stamp `job.status = 'error'`, drop from `activeJobs`, log, broadcast an SSE error frame, emit `failed`, and `closeJobAfterDelay` (#6830: private copies had drifted).
 //
-// `activeSlots` is the per-jobId "who owns this render" map — `activeProcs`
-// for the CLI-spawn backends (agy/codex/imageGen-grok/videoGen-grok, keyed by
-// the child process) or `activeRequests` for the REST-poll backends (fal,
-// reactor). The returned finalizer takes `slotOwner` per call: pass the
-// current owner (the `proc`/request entry) to clear the slot only when it
-// still belongs to THIS job — a late finalize from a cancelled/stale run must
-// not wipe a newer job's active slot — or pass `null` for a backend whose
-// slot map has no owner identity to compare, which deletes unconditionally
-// (fal/reactor's pre-factory behavior).
+// `activeSlots` is the per-jobId "who owns this render" map (`activeProcs` for CLI-spawn backends, `activeRequests` for REST-poll ones). The finalizer takes `slotOwner` per call:
+// pass the current owner to clear the slot only when it still belongs to THIS job (a late finalize from a cancelled run must not wipe a newer job's slot), or `null` for a backend
+// whose slot map has no owner identity (deletes unconditionally).
 //
-// `failedPayload(jobId, reason)` builds the `events.emit('failed', …)` body.
-// It defaults to the video shape (`{ generationId, error }`); the image
-// backends override it to add the `mode` field their event bus carries
-// (read by `imageGenQuota.js`'s per-provider outcome recorder).
-//
-// The returned function also carries a `.canceled(job, jobId, slotOwner?)`
-// convenience — `fal.js` and `reactor.js` each defined an identical
-// `finalizeCanceled = (job, jobId) => finalize(job, jobId, null, 'Canceled',
-// { force: true })` wrapper; this puts that one place instead of two.
+// `failedPayload(jobId, reason)` builds the `events.emit('failed', …)` body; it defaults to the video shape (`{ generationId, error }`), and image backends add `mode`
+// (read by `imageGenQuota.js`). The returned function also carries `.canceled(job, jobId, slotOwner?)`, a `force: true` 'Canceled' wrapper for fal/reactor.
 export const createJobFailureFinalizer = ({
   jobs, activeJobs, activeSlots, label, events,
   failedPayload = (jobId, reason) => ({ generationId: jobId, error: reason }),
@@ -177,42 +155,19 @@ export const createJobFailureFinalizer = ({
 };
 
 // ---------------------------------------------------------------------------
-// createSseRunner — shared batch-runner lifecycle for the pipeline runners.
+// createSseRunner: shared batch-runner lifecycle for the pipeline runners (manuscript completeness, editorial analysis, editorial checks): a `runs` Map keyed by seriesId,
+// `scheduleCleanup` lingering a finished run for terminal-frame replay (identity-guarded so a restart isn't clobbered), `attachClient`/`cancel`/`isActive`, and a `start` that
+// guards a duplicate in-flight run, mints a runId + AbortController, and drives the work in a fire-and-forget IIFE whose catch/finally emit `error` and schedule cleanup.
 // ---------------------------------------------------------------------------
 //
-// The manuscript-completeness, editorial-analysis, and editorial-checks runners
-// each kept a near-identical ~100-LOC block: a `runs` Map keyed by seriesId, a
-// `scheduleCleanup` that lingers a finished run for terminal-frame replay (with
-// an identity guard so a restart isn't clobbered by the old run's timer), an
-// `attachClient`/`cancel`/`isActive` trio, and a `start` that guards against a
-// duplicate in-flight run, mints a runId + AbortController, and drives the work
-// inside a fire-and-forget IIFE whose catch/finally emit `error` and schedule
-// cleanup. This factory owns all of that so a fix to the replay/cancel/cleanup
-// semantics can't drift between the three callers.
-//
-// The caller supplies only the per-run `work({ runId, signal, record, broadcast })`
-// async function — it owns its own `start`/`complete`/`canceled` frames and any
-// seeding; the factory owns the `error` frame, `finished` flag, and cleanup.
-// (A caller whose error frame carries extra fields — e.g. `stepId`/`op`, or a
-// status side-effect like the auto-runner's `updateIssue('needs-review')` — keeps
-// its own try/catch inside `work` and swallows, so the factory's generic catch is
-// only the safety net for an unexpected throw.)
-//
+// The caller supplies only `work({ runId, signal, record, broadcast })`, which owns its `start`/`complete`/`canceled` frames and seeding; the factory owns the `error` frame, `finished`
+// flag and cleanup. A caller whose error frame carries extra fields (or a status side-effect) keeps its own try/catch inside `work`; the factory's catch is the safety net.
 // `logLabel` is interpolated into the failure log (`❌ <logLabel> failed — …`).
 //
-// `start(key, work, { sig, meta })` supports OPTIONAL signature-based coalescing
-// for callers (e.g. storyBuilderRunner) that key a single map slot to work whose
-// identity depends on more than the key. When `sig` is passed, a second kickoff
-// while a run is in flight coalesces only if the signatures match; a DIFFERENT
-// signature returns `{ alreadyRunning: true, conflict: true, ...meta }` (the live
-// run's `meta`, e.g. `{ op }`) so the caller can refuse to bind onto unrelated
-// work. Omit `sig` (the default) and any in-flight run coalesces unconditionally.
-//
-// A caller's `work` may stamp `record.phase` (a short label) so `listActive` can
-// report the latest phase to a client that attaches mid-run.
-//
-// Returns `{ runs, isActive, attachClient, listActive, cancel, start }`. `runs` is exposed
-// so a module can re-export it as `__testing.runs`.
+// `start(key, work, { sig, meta })` optionally coalesces by signature: with `sig`, a second kickoff coalesces only if signatures match; a DIFFERENT one returns
+// `{ alreadyRunning: true, conflict: true, ...meta }` (the live run's `meta`, e.g. `{ op }`) so the caller won't bind onto unrelated work. Without `sig`, any in-flight run coalesces.
+// `work` may stamp `record.phase` so `listActive` can report it to a client attaching mid-run.
+// Returns `{ runs, isActive, attachClient, listActive, cancel, start }`; `runs` is exposed so a module can re-export it as `__testing.runs`.
 export function createSseRunner({ logLabel = 'sse run' } = {}) {
   // runs: Map<key, { runId, clients[], lastPayload, cancelRequested, finished, cleanupTimer, startedAt, abort, sig, meta }>
   // A finished run lingers in the map for SSE_CLEANUP_DELAY_MS so late-attaching

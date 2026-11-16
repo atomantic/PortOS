@@ -1,35 +1,19 @@
-/**
- *  Canonical install/source roots and path construction helpers.
- *
- * Canonical source/install `PATHS`, `dataPath`, and home-directory expansion.
- */
+/** Canonical source/install `PATHS`, `dataPath`, and home-directory expansion. */
 import { homedir } from 'os';
 import { join } from 'path';
 import { resolveCodeRootForModule, resolveInstallRoot } from './dataRoot.js';
 
-// The executing checkout's root (where THIS file physically lives). Code/source
-// paths — the repo root for git ops, `lib/slashdo` — must stay anchored here so
-// they always point at the checkout that loaded the code.
+// The executing checkout's root: code/source paths (repo root for git ops, `lib/slashdo`) stay anchored here so they point at the checkout that loaded the code.
 const CODE_ROOT = resolveCodeRootForModule(import.meta.url);
 
-// The install root that holds the runtime `data/` tree. Prefer an explicit
-// PORTOS_DATA_ROOT env var over the executing-file location so a process booted
-// from inside a CoS agent git worktree resolves `data/` to the real install
-// instead of the worktree's empty checkout (#1947). Falls back to CODE_ROOT
-// when the env var is unset (the two coincide for a normal install). Only
-// `data/*` paths follow this — source/git paths stay on CODE_ROOT.
+// The install root holding the runtime `data/` tree. An explicit PORTOS_DATA_ROOT outranks the executing-file location so a process booted from a CoS agent git worktree resolves `data/` to the real install (#1947);
+// falls back to CODE_ROOT otherwise. Only `data/*` paths follow this.
 const INSTALL_ROOT = resolveInstallRoot(CODE_ROOT);
 
-/**
- * Base directories relative to project root
- */
+/** Base directories relative to project root */
 export const PATHS = {
   root: CODE_ROOT,
-  // The data-bearing install root (parent of `data/`). Equals `root` for a
-  // normal install; diverges only when PORTOS_DATA_ROOT pins a different tree
-  // (worktree boot, #1947). Use this — not `root` — for anything anchored to
-  // the `data/` tree but living one level above it (e.g. the migration ledger
-  // `data/migrations.applied.json`), so its reader agrees with where boot wrote it.
+  // The data-bearing install root (parent of `data/`): equals `root` normally, diverges when PORTOS_DATA_ROOT pins a different tree (#1947). Use it, not `root`, for anything one level above `data/` (e.g. `data/migrations.applied.json`).
   installRoot: INSTALL_ROOT,
   data: join(INSTALL_ROOT, 'data'),
   cos: join(INSTALL_ROOT, 'data/cos'),
@@ -59,121 +43,60 @@ export const PATHS = {
   decisions: join(INSTALL_ROOT, 'data/cos/decisions'),
   telegram: join(INSTALL_ROOT, 'data/telegram'),
   templates: join(INSTALL_ROOT, 'data/prompts/templates'),
-  // Visual template assets (e.g. the character reference-sheet layout PNG used
-  // as the init-image anchor by the universe-builder character sheet renderer).
-  // Distinct from `templates` above, which is the legacy prompt-template dir.
-  // Files here are shipped via data.reference/templates/ on first install.
+  // Visual template assets (e.g. the character reference-sheet layout PNG used as the init-image anchor). Distinct from the legacy prompt-template `templates` dir; shipped via data.reference/templates/.
   visualTemplates: join(INSTALL_ROOT, 'data/templates'),
   settings: join(INSTALL_ROOT, 'data/settings'),
   tools: join(INSTALL_ROOT, 'data/tools'),
   images: join(INSTALL_ROOT, 'data/images'),
-  // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of
-  // `images/` rather than a subdir so the gallery's flat `.png` enumeration
-  // never surfaces them, and so a future per-render cleanup pass can drop
-  // the whole dir without touching the gallery.
+  // Uploaded multi-reference inputs for FLUX.2 multi-ref edits: a sibling of `images/` so the gallery's flat `.png` enumeration never surfaces them.
   imageRefs: join(INSTALL_ROOT, 'data/image-refs'),
-  // Ephemeral working dir for the Image Cleaner's GPU FLUX round-trip (issue
-  // #2264). The sync-cleaned init bytes and the finished render land here as
-  // `<jobId>-init.png` / `<jobId>-result.png` so the cleaner can render WITHOUT
-  // writing a gallery file + sidecar (the default is not to keep the result).
-  // A sibling of `images/` — never surfaced by the gallery's flat `.png`
-  // enumeration; swept by imageCleanTmpGc.js on an age gate. Not federated.
+  // Ephemeral working dir for the Image Cleaner's GPU FLUX round-trip (#2264): `<jobId>-init.png` / `<jobId>-result.png`, so the cleaner renders WITHOUT writing a gallery file + sidecar. A sibling of `images/`; swept by imageCleanTmpGc.js on an age gate; not federated.
   imageCleanTmp: join(INSTALL_ROOT, 'data/image-clean-tmp'),
-  // PROVIDER-side staging for conditioning images an allowlisted peer uploaded
-  // ahead of a federated render (ADR
-  // docs/decisions/2026-08-22-federated-media-input-assets.md rule 1). Files are
-  // named `<callerHash>-<sha256>.<ext>` and swept on a TTL.
-  //
-  // Deliberately its own root rather than a corner of `images/` or `uploads/`:
-  // these are ANOTHER machine's bytes, held briefly to run one job. Under
-  // `images/` the gallery would enumerate them and the sync layer would federate
-  // them onward (the failure this repo already hit once with temp files in
-  // data/images). Excluded from backups for the same reason — restoring a peer's
-  // half-hour-old init image is worth nothing.
+  // PROVIDER-side staging for conditioning images an allowlisted peer uploaded ahead of a federated render (ADR docs/decisions/2026-08-22-federated-media-input-assets.md rule 1), named `<callerHash>-<sha256>.<ext>` and swept on a TTL.
+  // Its own root, not a corner of `images/` or `uploads/`: these are ANOTHER machine's bytes held briefly for one job, and under `images/` the gallery would enumerate them and sync would federate them onward
+  // (a failure already hit with temp files in data/images). Excluded from backups for the same reason.
   federatedMediaInbox: join(INSTALL_ROOT, 'data/federated-media-inbox'),
   loras: join(INSTALL_ROOT, 'data/loras'),
-  // Per-character LoRA training datasets (collectionStore layout:
-  // lora-datasets/<id>/index.json + lora-datasets/<id>/images/*.png).
-  // Machine-local like `loras/` — datasets never federate.
+  // Per-character LoRA training datasets (collectionStore layout: lora-datasets/<id>/index.json + images/*.png); machine-local like `loras/`, never federated.
   loraDatasets: join(INSTALL_ROOT, 'data/lora-datasets'),
   rapidReaderLibrary: join(INSTALL_ROOT, 'data/rapid-reader-library'),
-  // LoRA training run artifacts (checkpoints/samples/cache per run). Run
-  // RECORDS live in Postgres (lora_training_runs); only artifacts live here.
+  // LoRA training run artifacts (checkpoints/samples/cache); run RECORDS live in Postgres (lora_training_runs).
   trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),
-  // Character voice-profile metadata lives in PostgreSQL; this directory holds
-  // the local benchmark WAVs and future engine artifacts referenced by it.
-  // It deliberately stays machine-local and is included in normal data backups.
+  // Character voice-profile metadata lives in PostgreSQL; this holds local benchmark WAVs and future engine artifacts. Machine-local, included in normal data backups.
   voiceProfiles: join(INSTALL_ROOT, 'data/voice-profiles'),
   videos: join(INSTALL_ROOT, 'data/videos'),
   models: join(INSTALL_ROOT, 'data/models'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
-  // Music Video cover lettering (#10345): typefaces the director uploaded (.ttf/.otf/.woff2)
-  // plus their index. Machine-local; included in normal data backups.
+  // Music Video cover lettering (#10345): director-uploaded typefaces (.ttf/.otf/.woff2) plus their index. Machine-local; in normal backups.
   coverFonts: join(INSTALL_ROOT, 'data/cover-fonts'),
   imageThumbnails: join(INSTALL_ROOT, 'data/image-thumbnails'),
-  // Sprite Manager (issue #2895): per-record asset trees
-  // (sprites/<id>/{reference,walk,runs,runtime,atlas}/...). Records live in
-  // Postgres (sprite_records); only binary artifacts + manifests live here.
+  // Sprite Manager (#2895): per-record asset trees (sprites/<id>/{reference,walk,runs,runtime,atlas}/...); records live in Postgres (sprite_records).
   sprites: join(INSTALL_ROOT, 'data/sprites'),
-  // Image-to-3D (issue #2952): per-record GLB meshes rendered locally by a
-  // target (TRELLIS.2 today), stored as image-to-3d/<id>/model.glb. Records
-  // live in Postgres (image_to_3d_models); only the binary GLB lives here.
+  // Image-to-3D (#2952): per-record GLB meshes (image-to-3d/<id>/model.glb); records live in Postgres (image_to_3d_models).
   imageTo3d: join(INSTALL_ROOT, 'data/image-to-3d'),
-  // Persisted audio renders (voice-over lines). Kept distinct from
-  // the in-memory voice-agent synthesis path in services/voice/ — that path
-  // streams WAV over Socket.IO without ever touching disk.
+  // Persisted audio renders (voice-over lines), distinct from the in-memory voice-agent synthesis path (services/voice/, which streams over Socket.IO).
   audio: join(INSTALL_ROOT, 'data/audio'),
-  // Uploaded + (eventually) generated background music tracks. Separate from
-  // `audio/` so the user can browse + reuse a track across issues without
-  // walking through the VO-line filenames.
+  // Uploaded + generated background music tracks, separate from `audio/` so a track is reusable across issues.
   music: join(INSTALL_ROOT, 'data/music'),
-  // Extracted assets from third-party imports (ChatGPT export images/audio/
-  // PDFs). Served read-only at `/data/brain-imports/...` so the Memory
-  // conversation viewer can render inline `![](url)` images and asset links.
-  // Flat per-source dir keyed by the asset's globally-unique id, so the same
-  // asset referenced from multiple conversations is stored once. The transcript
-  // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
-  // served — only this assets subtree is.
+  // Extracted assets from third-party imports (ChatGPT export images/audio/PDFs), served read-only at `/data/brain-imports/...` so the Memory conversation viewer renders inline assets. Flat per-source dir keyed by the
+  // globally-unique asset id (one copy however many conversations reference it); the transcript archive JSON lives at data/brain/imports/<source>/ and is NOT served.
   brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
-  // SongBook attachment BYTES (PDF sheet music, images, MIDI). Machine-local —
-  // only the metadata syncs inside the brain `songs` record; peers lacking a
-  // file render "not on this machine". Covered by backup via data/brain/.
+  // SongBook attachment BYTES (PDF sheet music, images, MIDI): machine-local, only metadata syncs in the brain `songs` record (peers lacking a file render "not on this machine"). Backed up via data/brain/.
   brainSongbook: join(INSTALL_ROOT, 'data/brain/songbook'),
-  // Beeper attachment BYTES (#37) — content-addressed as
-  // `<sha256[0..2]>/<sha256>.<ext>`, mirrored lazily on first human view and
-  // bounded by `settings.beeper.attachmentBudgetGb`. Machine-local and never
-  // federated, like every other Beeper mirror row; excluded from backups by
-  // default (overridable) because it is re-fetchable from Beeper for as long
-  // as the source network still holds the media, and the mirror renders the
-  // reference when it does not.
+  // Beeper attachment BYTES (#37), content-addressed `<sha256[0..2]>/<sha256>.<ext>`, mirrored lazily on first human view and bounded by `settings.beeper.attachmentBudgetGb`. Machine-local, never federated;
+  // excluded from backups by default (overridable) since re-fetchable from Beeper while the source network holds the media.
   beeperAttachments: join(INSTALL_ROOT, 'data/beeper/attachments'),
   slashdo: join(CODE_ROOT, 'lib/slashdo'),
-  // Fully-resolved slashdo command bodies written for CoS agents to READ on
-  // demand instead of receiving them pasted into the prompt (issue #3110).
-  // Derived cache, never authored: regenerated on first use each process, safe
-  // to delete. Anchored to INSTALL_ROOT (not CODE_ROOT) because the pointer
-  // handed to an agent must name a path that exists on the running install.
+  // Fully-resolved slashdo command bodies for CoS agents to READ on demand instead of pasted into the prompt (#3110). Derived cache, safe to delete; anchored to INSTALL_ROOT (not CODE_ROOT) because the pointer given to an agent must name a path on the running install.
   slashdoResolved: join(INSTALL_ROOT, 'data/cos/slashdo-resolved')
 };
 
-/**
- * Get a path relative to the data directory.
- *
- * @param {...string} segments - Path segments to join
- * @returns {string} Full path under data directory
- *
- * @example
- * const filePath = dataPath('cos', 'state.json');
- * // Returns: /path/to/project/data/cos/state.json
- */
+/** Get a path under the data directory: `dataPath('cos', 'state.json')` → `<project>/data/cos/state.json`. */
 export function dataPath(...segments) {
   return join(PATHS.data, ...segments);
 }
 
-// `path.join(homedir(), '/.foo')` discards the homedir prefix because of
-// the leading slash, so strip the leading `~/` (or `~\` on Windows) before
-// joining. Only expands a leading `~` — embedded `~` chars in path segments
-// (e.g. `iCloud~md~obsidian`) are preserved.
+// `path.join(homedir(), '/.foo')` discards the homedir prefix because of the leading slash, so strip a leading `~/` (or `~\\` on Windows) before joining. Only a leading `~` expands (`iCloud~md~obsidian` is preserved).
 export function expandHome(p) {
   if (typeof p !== 'string' || !p) return p;
   if (p === '~') return homedir();

@@ -1,15 +1,8 @@
 /**
- * Shared test helpers: `request()` HTTP harness, fetch `Response` mocks, `startLoopbackServer`, a
- * server-source scanner for guard suites, and cross-platform path/python helpers.
+ * Shared test helpers: HTTP request harness, fetch `Response` mocks, loopback server, source scanner and cross-platform helpers.
  *
- * Shared test helpers: HTTP request harness, fetch-Response mocks, the
- * server-source scanner used by the whole-tree guard suites, and the three
- * cross-platform helpers (`posixPath`, `resolveTestPython`, `pinPlatform`) that
- * keep path-, interpreter- and platform-sensitive suites running on Windows as
- * well as POSIX.
- *
- * fetch-based replacement for supertest — creates a real HTTP server on a
- * random port, makes a single request, then shuts the server down.
+ * Shared test helpers: fetch-based `request()` HTTP harness (replaces supertest), fetch `Response` mocks, `startLoopbackServer`, the server-source scanner for whole-tree
+ * guard suites, and cross-platform helpers (`posixPath`, `resolveTestPython`, `pinPlatform`).
  */
 
 import { createServer } from 'http';
@@ -37,12 +30,7 @@ function closeServer(server) {
   return new Promise((resolve, reject) => server.close(err => err ? reject(err) : resolve()));
 }
 
-/**
- * Start a real loopback HTTP server for tests that need to drive an actual
- * socket (raw disconnect via `httpRequest(...).destroy()`, SSE streaming) —
- * scenarios `request()`'s fetch-based harness can't model because it always
- * runs a request to completion. Reject on a listen error instead of hanging.
- */
+/** Start a real loopback HTTP server for tests that need an actual socket (raw disconnect, SSE streaming); rejects on a listen error instead of hanging. */
 export function startLoopbackServer(app) {
   return new Promise((resolve, reject) => {
     const server = createServer(app);
@@ -150,13 +138,10 @@ export function request(app) {
 }
 
 /**
- * Mock a fetch `Response` whose body is read via `.text()` — the read path used
- * by `readResponseJson` and every fetch-based client. Use this for the common
- * case of a JSON body: pass the value, it's serialized into `text()`.
- *
+ * Mock a fetch `Response` whose JSON body is read via `.text()` (the path `readResponseJson` uses):
  *   fetchWithTimeout.mockResolvedValue(mockJsonResponse({ value: [] }));
  *
- * @param {*} body - serialized into the response body via JSON.stringify
+ * @param {*} body - serialized via JSON.stringify
  * @param {{ ok?: boolean, status?: number }} [opts]
  */
 export function mockJsonResponse(body, { ok = true, status = 200, contentType = 'application/json' } = {}) {
@@ -171,10 +156,7 @@ export function mockJsonResponse(body, { ok = true, status = 200, contentType = 
 }
 
 /**
- * Mock a fetch `Response` with a raw-string body read via `.text()` — for
- * non-JSON / HTML / blank bodies (the masquerade cases) and error text.
- *
- *   fetchWithTimeout.mockResolvedValue(mockTextResponse('<html>502</html>'));
+ * Mock a fetch `Response` with a raw-string `.text()` body (non-JSON / HTML / blank / error text):
  *   fetchWithTimeout.mockResolvedValue(mockTextResponse('boom', { ok: false, status: 500 }));
  *
  * @param {string} [body] - returned verbatim by `text()`
@@ -194,33 +176,15 @@ export function mockTextResponse(body = '', { ok = true, status = 200, contentTy
 const SOURCE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
 /**
- * Every non-test source file under `server/` (`.js`, `.mjs`, `.cjs`), as
- * server-relative paths.
- *
- * Shared by the source-scanning guard suites — `spawnCwd.test.js` (every
- * cwd-passing spawn pins PWD, #3193), `cliChildEnv.test.js` (every AI-CLI
- * spawn composes its env through the shared builder, #3194), and
- * `childProcess.guards.test.js` (every spawn routes through the shared
- * wrapper, #5678). Those guards deliberately overlap, so they must agree on
- * what "a source file" is: a change to the ignore rules here (a new
- * extension, a skipped directory) has to apply to all of them, or one guard
- * silently stops covering files the others still check. A `.js`-only walk
- * missed the operator scripts under `server/scripts/`, which are `.mjs`
- * (#7953).
+ * Every non-test source file under `server/` (`.js`, `.mjs`, `.cjs`) as server-relative paths. Shared by the source-scanning guard suites (`spawnCwd`, `cliChildEnv`,
+ * `childProcess.guards`), which overlap on purpose and so must agree on what "a source file" is; a `.js`-only walk missed the `.mjs` operator scripts.
  *
  * @param {string} [dir] - directory to walk (defaults to the `server/` root)
  * @returns {string[]} paths relative to `server/`, e.g. `services/runner.js`
  */
 export function collectServerSources(dir = SERVER_DIR) {
-  // A directory can vanish BETWEEN the readdir that named it and the recursion
-  // into it: vitest runs suites concurrently in one process, and sibling suites
-  // create-and-remove scratch directories under `server/` (aiToolkit's
-  // `providers.test.js` cycles `server/test-data/` in beforeEach/afterEach). The
-  // walk hitting that window threw ENOENT and failed whichever guard suite was
-  // mid-scan — a flake that reproduces roughly one run in three and depends on
-  // shard ordering, so it lands in CI and not locally. A directory that is gone
-  // holds no sources to check, so skipping it is the honest answer, not a
-  // papered-over error.
+  // A directory can vanish BETWEEN the readdir that named it and the recursion (sibling suites create and remove scratch dirs under `server/`, e.g. `test-data/`),
+  // which threw ENOENT as a shard-order-dependent flake. A gone directory holds no sources, so skip it.
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -234,13 +198,8 @@ export function collectServerSources(dir = SERVER_DIR) {
     if (entry.isDirectory()) return collectServerSources(abs);
     const ext = SOURCE_EXTENSIONS.find((e) => entry.name.endsWith(e));
     if (!ext || entry.name.endsWith(`.test${ext}`)) return [];
-    // POSIX separators always. These relative paths are IDENTIFIERS, not paths
-    // to open: guard suites compare them against literals like
-    // 'cos-runner/index.js' and list them in EXEMPT/DELEGATES tables. On
-    // Windows `relative()` yields 'cos-runner\index.js', so every one of those
-    // comparisons missed — the guards reported both "the scan no longer finds
-    // these" for live files AND "these spawn without pinning PWD" for exempt
-    // ones. readServerSource joins them back, and Windows accepts '/' there.
+    // POSIX separators always: these paths are IDENTIFIERS compared against literals and EXEMPT/DELEGATES tables, and Windows `relative()` would yield backslashes.
+    // readServerSource joins them back; Windows accepts '/'.
     return [relative(SERVER_DIR, abs).split('\\').join('/')];
   });
 }
@@ -251,26 +210,14 @@ export function readServerSource(rel) {
 }
 
 /**
- * Walk `client/src/` and return every source file, relative to that root.
- *
- * The client counterpart of `collectServerSources`, for the guards that must
- * cover BOTH sides of a server/client mirror — `textUtils.test.js`'s
- * "no private escapeRegExp" scan is the first, since the escape's client copies
- * are exactly what a `server/`-only walk could never see.
- *
- * Two deliberate differences from the server walk:
- *   - `.jsx` counts. Half the client tree is components, and the escape was
- *     re-inlined in two of them — a `.js`-only walk would report a clean tree.
- *   - `*.test.js` is INCLUDED. The server walk skips tests because the guard
- *     that reads it lives in `server/` and would flag itself; a client test has
- *     no such exemption to claim, and one of the re-inlined copies this closes
- *     lived in a client test file.
+ * Walk `client/src/` and return every source file relative to that root: the client counterpart of `collectServerSources`, for guards covering BOTH sides of a mirror.
+ * Differences from the server walk: `.jsx` counts (half the client tree), and `*.test.js` is INCLUDED (the server walk skips tests only because its own guard lives there).
  *
  * @param {string} [dir] - directory to walk (defaults to `client/src/`)
  * @returns {string[]} paths relative to `client/src/`, e.g. `lib/scenePrompt.js`
  */
 export function collectClientSources(dir = CLIENT_SRC_DIR) {
-  // Same vanishing-directory tolerance as the server walk — see the note there.
+  // Same vanishing-directory tolerance as the server walk.
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -283,8 +230,7 @@ export function collectClientSources(dir = CLIENT_SRC_DIR) {
     const abs = join(dir, entry.name);
     if (entry.isDirectory()) return collectClientSources(abs);
     if (!entry.name.endsWith('.js') && !entry.name.endsWith('.jsx')) return [];
-    // POSIX separators always — these are IDENTIFIERS compared against literals
-    // in guard tables, not paths to open. See `collectServerSources`.
+    // POSIX separators always (identifiers, not paths to open); see `collectServerSources`.
     return [relative(CLIENT_SRC_DIR, abs).split('\\').join('/')];
   });
 }
@@ -295,21 +241,12 @@ export function readClientSource(rel) {
 }
 
 /**
- * Normalize a path for comparison against a POSIX-spelled literal.
- *
- * The overwhelmingly common Windows test failure is an assertion that names a
- * path as `'/some/path'` while the code under test built it with `path.join`,
- * which emits `\` there. Normalizing the RECEIVED value keeps the readable
- * literal meaningful on both platforms; it is a no-op on POSIX.
- *
- * Use it on what the code returned, never on the expectation — a normalized
- * expectation would also hide a genuinely wrong path.
+ * Normalize a path for comparison against a POSIX-spelled literal (`path.join` emits `\` on Windows). Apply it to the RECEIVED value, never the expectation
+ * (that would hide a genuinely wrong path); a no-op on POSIX.
  */
 export const posixPath = (value) => String(value).split('\\').join('/');
 
-// Save the own descriptor, define the pinned value, and hand back a restore
-// that reinstates exactly what was there. Shared by the two pins below so the
-// descriptor dance has one definition.
+// Save the own descriptor, define the pinned value, return a restore that reinstates exactly what was there.
 const pinProcessProperty = (name) => (value) => {
   const original = Object.getOwnPropertyDescriptor(process, name);
   Object.defineProperty(process, name, { value, configurable: true });
@@ -320,90 +257,42 @@ const pinProcessProperty = (name) => (value) => {
 };
 
 /**
- * Pin `process.platform` for a test, and return the restore.
- *
+ * Pin `process.platform` for a test, and return the restore:
  *   const restore = pinPlatform('darwin');
  *   try { … } finally { restore(); }
  *
- *   // describe-scope pinning
- *   let restorePlatform = () => {};
- *   beforeEach(() => { restorePlatform = pinPlatform('linux'); });
- *   afterEach(() => restorePlatform());
+ * **Never pin before importing a module that loads a native addon**: those pick their prebuilt binary from `process.platform` at load time
+ * (pinning `'darwin'` ahead of a `sharp` import breaks the run on Linux). Pin inside the test or a `beforeEach`, never at module scope above a static import or before an `await import(…)` of such a module.
  *
- * **Never pin before importing a module that loads a native addon.** Those pick
- * their prebuilt binary from `process.platform` at load time, so pinning
- * `'darwin'` ahead of a `sharp` import sends it looking for a `darwin-x64`
- * binary and breaks the whole run on Linux (cost a CI round-trip in #4082).
- * Pin inside the test — or inside a `beforeEach` — never at module scope above
- * a static import, and never before an `await import(…)` of such a module.
- *
- * The restore reinstates the ORIGINAL descriptor, so a suite that pins a value
- * over Node's own accessor leaves the accessor behind, not a frozen snapshot of
- * whatever it read. When `process` carried no own `platform` descriptor, the
- * restore deletes the pinned one rather than fabricating a value.
+ * The restore reinstates the ORIGINAL descriptor (or deletes the pin when `process` had no own `platform` descriptor).
  *
  * @param {string} value - the platform to report, e.g. `'darwin'` / `'win32'`
- * @returns {() => void} restore — idempotent, safe to call from `afterEach`
+ * @returns {() => void} restore, idempotent, safe to call from `afterEach`
  */
 export const pinPlatform = pinProcessProperty('platform');
 
-/**
- * `pinPlatform`'s companion for `process.arch`.
- *
- * Pinning the platform alone is not enough to stand in for an Apple Silicon
- * host: `isAppleSilicon()` reads BOTH, so a darwin pin on an x64 runner still
- * evaluates as Intel and every `requiresAppleSilicon` model reads unavailable.
- * A test that means "on an Apple Silicon Mac" has to pin the pair.
- */
+/** `pinPlatform`'s companion for `process.arch`: `isAppleSilicon()` reads BOTH, so a test meaning "on an Apple Silicon Mac" must pin the pair. */
 export const pinArch = pinProcessProperty('arch');
 
 /**
- * Budget for a vitest test that shells out to a real Python interpreter.
- *
- * Pass it as `it()`'s third argument (`it('…', () => { … }, PY_TEST_TIMEOUT_MS)`)
- * on every case that spawns one. Such a test's wall time tracks how loaded the
- * machine is, not anything the assertion controls: a case that runs in ~4s alone
- * crosses the global 10s `testTimeout` on a contended worker during a full-suite
- * run. Stating the budget where the cost actually is beats loosening the global
- * default, which is deliberately tight so it still catches genuinely hung async
- * work across the rest of the tree.
+ * Budget for a vitest test that shells out to a real Python interpreter; pass as `it()`'s third argument. Wall time tracks machine load, so state the budget here
+ * rather than loosening the deliberately tight global `testTimeout`.
  */
 export const PY_TEST_TIMEOUT_MS = 120_000;
 
 /**
- * Budget for the Python subprocess itself — pass it as `execFileSync`'s
- * `timeout` at every site that spawns an interpreter.
- *
- * Deliberately BELOW `PY_TEST_TIMEOUT_MS` so an actually-hung interpreter trips
- * this guard first and fails with the spawn's own ETIMEDOUT (naming the command)
- * instead of a bare vitest timeout that says only that the test ran long. A
- * subprocess allowance above the vitest budget is dead intent — vitest always
- * wins — so the two must stay nested in this order.
+ * Budget for the Python subprocess itself (`execFileSync`'s `timeout`). Deliberately BELOW `PY_TEST_TIMEOUT_MS` so a hung interpreter fails with the spawn's own ETIMEDOUT
+ * naming the command, not a bare vitest timeout.
  */
 export const PY_SUBPROCESS_TIMEOUT_MS = 90_000;
 
 /**
- * Resolve a Python interpreter that actually RUNS, or `null` when there is
- * none — for suites that shell out to one of PortOS's `.py` scripts. Pair it
- * with `describe.skipIf(!resolveTestPython())`.
+ * Resolve a Python interpreter that actually RUNS, or `null` when none does, for suites that shell out to PortOS's `.py` scripts (pair with `describe.skipIf(!resolveTestPython())`).
+ * A name on PATH is not enough on Windows (the Microsoft Store ALIAS STUB exists but exits non-zero, and `py` can point at an uninstalled version), so each candidate is probed
+ * by executing something trivial. PortOS's own venvs (`setup:image` / `setup:video`, under `~/.portos`) are searched before concluding there is none,
+ * so these suites don't silently skip on machines that exercise the scripts.
  *
- * Trusting a name on PATH is not enough on Windows: a machine with no
- * Store-installed Python still has `python` on PATH as a Microsoft Store ALIAS
- * STUB, which exists, exits non-zero, and prints "Python was not found". A
- * `where`-style check passes on that stub and every case then fails with an
- * opaque "Command failed" — so each candidate is probed by executing something
- * trivial. The `py` launcher gets the same treatment: it is the standard
- * Windows entry point but is itself a shim that can point at an uninstalled
- * version.
- *
- * PortOS also provisions its OWN interpreters (`setup:image` / `setup:video`
- * build venvs under `~/.portos`), so a machine can be fully set up for
- * image/video gen while the bare `python` name is still a stub. Those are
- * searched before concluding there is no interpreter — otherwise these suites
- * silently skip on exactly the machines that exercise the scripts they cover.
- *
- * `PORTOS_TEST_PYTHON` overrides the whole search. `modules` keeps only
- * interpreters that can import each named module (e.g. `['numpy']`).
+ * `PORTOS_TEST_PYTHON` overrides the search. `modules` keeps only interpreters that can import each named module (e.g. `['numpy']`).
  *
  * @param {{ modules?: string[] }} [options]
  * @returns {string|null} a runnable interpreter path/name, or null
@@ -436,13 +325,8 @@ export function resolveTestPython({ modules = [] } = {}) {
 }
 
 /**
- * Fail the CI job — rather than silently skip — when `lib/slashdo` was
- * expected to be initialized but isn't (issue #6263). ci.yml sets
- * `CI_EXPECT_SLASHDO_SUBMODULE` on the "Run server tests" step whenever the
- * impact planner selected slashdo's bundled adapter contracts; a missing
- * submodule there means the "Initialize slashdo submodule" step failed. With
- * the env var unset — a local or intentionally minimal checkout — this is a
- * no-op and the caller's own skip/early-return applies instead.
+ * Fail the CI job, rather than silently skip, when `lib/slashdo` was expected to be initialized but isn't: ci.yml sets `CI_EXPECT_SLASHDO_SUBMODULE` when the impact
+ * planner selected slashdo's adapter contracts. With it unset (local/minimal checkout) this is a no-op.
  */
 export function requireSlashdoSubmoduleInCi(hasSubmodule) {
   if (process.env.CI_EXPECT_SLASHDO_SUBMODULE === 'true' && !hasSubmodule) {
