@@ -127,7 +127,7 @@ process. Nothing in-memory survives that. The world chat cursor lives in a
 is per-peer content-change detection for a background sweep, also in memory.
 
 So observing **stamps a marker** — `data/eidoverse/observation.json`, covered
-in [STORAGE.md](../STORAGE.md). That is the stigmergic half of the slice: the
+in the storage header of [`eidoverseObservationLedger.js`](../../server/services/eidoverseObservationLedger.js). That is the stigmergic half of the slice: the
 trail a mind leaves is what makes the next observation's `changes` mean
 anything. It also means `eidoverse.observe` is **not idempotent**, and that it
 is declared `sideEffect: 'write'` even though a mind reads it like a read.
@@ -236,7 +236,7 @@ with this build’s older constant, so the signal survives the pass that reads i
 rather than being erased by it.
 
 **Storage** is `data/eidoverse/controllers.json` — `file-primary` and machine
-local, never federated (`docs/STORAGE.md`). A controller crosses to a peer only
+local, never federated (`server/services/eidoverseControllerRuntime.js`). A controller crosses to a peer only
 as the *body* of a promoted foundation, which carries no install.
 
 **Delivery evidence (#10818).** Both the common list and semantic inspect

@@ -1,3 +1,11 @@
+/**
+ * Identity goal and longevity store — normalization and serialized file writes.
+ *
+ * Storage: `file-primary` (`data/digital-twin/goals.json`, mirrored to MortalLoom) —
+ * federated through the dataSync `goals` category. Progress entries may carry an
+ * optional daily-review `sourceKey`; mutations replace only matching entries, and
+ * legacy entries get no backfill because their provenance cannot be assigned safely.
+ */
 import { meatspaceEvents } from '../meatspaceEvents.js';
 import { dashboardEvents } from '../dashboardEvents.js';
 import { join } from 'path';

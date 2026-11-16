@@ -1,6 +1,14 @@
 /**
  * Receiver-local durable consumption. A record is neither a grant nor launch
  * authorization; the receiver verifies authority, ownership and adapter evidence.
+ *
+ * Storage: `db-primary` (`peer_execution_operations`, `peer_execution_generation_floors`) —
+ * receiver-local, never federated. Replay/idempotency evidence: consumption is unique on
+ * receiver/sender/request UUID, and bindings, receipts and monotonic floors are kept permanently (no TTL,
+ * pruning or cascade), so PostgreSQL backup must cover them. Active records cap at 32.
+ * Restore: a PostgreSQL restore captures these records before replay and reconciles them before
+ * generic restore release (including proven rollback); it never replays a committed dump to recover
+ * execution records. Filesystem restore preserves the execution files and `workflow-maintenance/`.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';

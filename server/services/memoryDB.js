@@ -5,6 +5,15 @@
  * for vector similarity search and tsvector for full-text search.
  *
  * Same exported interface as memory.js so routes/consumers don't change.
+ *
+ * Storage: `db-primary` — `memories` federate through memory sync (`sync_feed`);
+ * `memory_links` and `memories.last_review` stay machine-local. Review outcomes are bounded,
+ * never bump content versions or importance/access counts, and commit atomically with any
+ * learned lesson, whose immutable `review_origin` provenance general inputs cannot set.
+ * `memory_versions` history (cascading FK; a row trigger snapshots semantic-field changes
+ * only) stays machine-local too: memory sync keeps current-row last-writer-wins, a sender
+ * includes its version only for a receiver requesting `PORTOS_SCHEMA_VERSIONS.memoryHistory`,
+ * and received counters never replace local ones.
  */
 
 import { ServerError } from '../lib/errorHandler.js';

@@ -2,11 +2,12 @@ import { selectPersistentMindContextEvents } from '../lib/persistentMindContextE
 /**
  * The persistent mind's decision journal — store and extraction.
  *
- * Machine-local, beside the rollup cache, for the same reason the rollups are:
- * the journal quotes one human's private conversation, so the machine-local
- * privacy ADR keeps it off the federation layer entirely — no
- * `PORTOS_SCHEMA_VERSIONS` entry, no sync cursor, no tombstone. An absent file
- * is the correct empty state, so no `data.reference/` seed and no migration.
+ * Storage: `file-primary` — machine-local, never federated: the journal quotes
+ * one human's private conversation, so the machine-local privacy ADR keeps it off
+ * the federation layer (no `PORTOS_SCHEMA_VERSIONS` entry, sync cursor or
+ * tombstone). An absent file is the correct empty state, so no seed or migration.
+ * Bounded at 500 entries, shedding settled history first; retirement is a status
+ * transition, never a deletion. The `history` cleanup scope clears it.
  *
  * A corrupt or unreadable store fails CLOSED rather than becoming `[]`: the
  * journal is the only record of what the mind still owes the user once the raw

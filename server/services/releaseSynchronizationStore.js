@@ -1,5 +1,11 @@
 /** Publication ownership is db-primary and machine-local, never federated.
  * The JSON adapter exists only for the supported dev/test escape hatch.
+ *
+ * Storage: `db-primary` — machine-local, never federated. `cos_release_synchronizations`
+ * is execution/ownership state keyed by the forge-verified publication identity; the
+ * continuation stays pinned to the producing instance. Additive schema creates the empty
+ * table (no seed or input migration); the database backup covers it. Neither history
+ * eviction nor task success releases an identity or verifies synchronization.
  */
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';

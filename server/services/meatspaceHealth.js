@@ -4,6 +4,10 @@
  * Blood tests, body composition, epigenetic tests, and eyes CRUD.
  * When MortalLoom iCloud sync is enabled, reads and writes are mirrored
  * to the shared MortalLoom.json; otherwise local PortOS data files are used.
+ *
+ * Storage: `file-primary` (`data/meatspace/`) — federated through the dataSync
+ * `meatspace` category. Kept file-backed to preserve the MortalLoom iCloud/file
+ * sync and keep sensitive health records out of the app DB.
  */
 
 import { invalidateMeatspace } from './meatspaceEvents.js';

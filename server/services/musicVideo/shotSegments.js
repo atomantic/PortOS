@@ -21,6 +21,10 @@
  * The final render renders what is missing, joins the segments by stream copy
  * and lays the song under them once. Segments live under data/ per project
  * and are machine-local (excluded from backups, regenerable).
+ *
+ * Storage: `ephemeral-file` — machine-local, never federated. Content-addressed
+ * by everything that reaches their pixels, so a stale segment is never reused;
+ * dropped with the project and pruned when a final render publishes.
  */
 
 import { createHash, randomUUID } from 'crypto';

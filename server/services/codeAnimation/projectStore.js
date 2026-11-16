@@ -1,4 +1,11 @@
-/** PostgreSQL owns projects, source revision lineage and import-run records. */
+/**
+ * PostgreSQL owns projects, source revision lineage and import-run records.
+ *
+ * Storage: `db-primary` — machine-local, never federated (settings, IDs, paths, run IDs).
+ * Source/asset bytes are write-once files under `data/code-animations/projects/<id>/revisions/`;
+ * each import stages into its own UUID destination so a failed run never replaces accepted
+ * source. Installed empty without a seed; dump plus filesystem backup cover it.
+ */
 import { randomUUID } from 'crypto';
 import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';

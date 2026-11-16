@@ -19,6 +19,11 @@ import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
  * project's peer-sync asset manifest; the folder is covered by the rsync
  * snapshot backup like the rest of data/music-video/.
  *
+ * Storage: `asset-file-db-indexed` — immutable version folders, pointer on the
+ * record. The pointer never federates, so a peer keeps its own and refuses to
+ * render without one. Renders stage a job-private copy under
+ * `data/music-video-song-renders/{jobId}/`, swept at boot and excluded from backups.
+ *
  * Imports refuse symlinks, special files, traversal names and oversized trees
  * rather than rewriting them, so a document can never reach outside its folder.
  */

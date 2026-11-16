@@ -5,6 +5,11 @@
  * History page grid-views. This module owns the read/write primitives; the
  * generation and post-processing modules load/save through these primitives;
  * local.js re-exports them as part of the stable provider surface.
+ *
+ * Storage: `asset-file-db-indexed` — rows federate through the `videoHistory`
+ * snapshot category (union merge); bytes stay under `data/videos/` and
+ * `data/video-thumbnails/`. This file is authoritative; the `media_assets` table
+ * (mediaAssetIndex) is only a derived, queryable mirror keyed `video:<jobId>`.
  */
 
 import { join } from 'path';

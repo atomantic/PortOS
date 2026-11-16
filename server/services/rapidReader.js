@@ -1,3 +1,10 @@
+/**
+ * Rapid Reader's Accelerando source: fetched on request, cached locally and shelved.
+ *
+ * Storage: `ephemeral-file` — `data/cache/accelerando.html`, machine-local, never
+ * federated, bundled or backed up: a copy of a separately licensed remote work
+ * that can be re-downloaded or purged (Data Manager `cache`) without data loss.
+ */
 import { join } from 'node:path';
 import { PATHS, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';

@@ -1,4 +1,11 @@
-/** Reviewed quick-edit references: a job-bound copy and its durable ownership record. */
+/**
+ * Reviewed quick-edit references: a job-bound copy and its durable ownership record.
+ *
+ * Storage: `file-primary` (`data/image-refs/` snapshot + ownership JSON) — local execution evidence,
+ * backed up; ownership records never federate, while a federated render sends the reviewed bytes over the
+ * digest-verified conditioning-asset channel. Kept while dispatch/settlement is uncertain and collected
+ * only with settlement proof (`reviewedReferenceGc.js`); mismatched records are preserved, not adopted.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile, mkdir, lstat, link } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';

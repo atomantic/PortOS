@@ -1,4 +1,11 @@
-/** Machine-local, proven-successful Metal buffer policies. No render content is stored. */
+/**
+ * Machine-local, proven-successful Metal buffer policies. No render content is stored.
+ *
+ * Storage: `ephemeral-file` — `data/cache/video-gen/metal-buffer-profiles.json`,
+ * never federated. Only SHA-256 execution-profile signatures and recovery times
+ * (128 entries, 24h TTL); an unreadable or unknown-version cache disables reuse,
+ * never renders. No seed or migration; `/cache/` is already excluded from backups.
+ */
 import { createHash } from 'node:crypto';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, dirname } from 'node:path';

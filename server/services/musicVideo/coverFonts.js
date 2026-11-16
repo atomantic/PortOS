@@ -15,6 +15,11 @@
  * font: a probe string must measure differently from a missing family. That
  * probe also yields the font's measured average advance (`width`), which the
  * layout uses in place of a built-in face's hard-coded one.
+ *
+ * Storage: `file-primary` (`data/cover-fonts/` font files + `fonts.json` index) —
+ * machine-local, never federated: a font is a licensed binary chosen for this
+ * install and rendering depends on this machine's font system. No relations or
+ * search, so not in the DB; included in normal data backups.
  */
 import { createHash } from 'crypto';
 import { copyFile, readFile, rm, stat, mkdir } from 'fs/promises';

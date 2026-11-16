@@ -12,6 +12,10 @@
  * route write can still overlap. `writeUserTypes` is whole-slice authoritative,
  * so it runs in one transaction (upsert everything in the list + delete any row
  * whose id left the list) — a partial apply can't leave the table half-updated.
+ *
+ * Storage: `db-primary` — federated via the catalog sync `catalogTypes` envelope block
+ * (LWW on `updated_at`, `deleted_at` tombstones), so type evolution versions and syncs
+ * alongside the catalog data it governs.
  */
 
 import { query, withTransaction } from '../../lib/db.js';

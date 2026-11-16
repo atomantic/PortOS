@@ -51,6 +51,8 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [REMOTE_DESKTOP.md](./REMOTE_DESKTOP.md) | PortDeck VNC broker security, host setup, and session flow |
 | [FEDERATED_MEDIA_PROVIDERS.md](./FEDERATED_MEDIA_PROVIDERS.md) | Authenticated, capacity-aware peer audio provider wire contract and setup |
 | [STORAGE.md](./STORAGE.md) | Storage classification contract — PostgreSQL vs filesystem, new-data-store checklist |
+| [STORAGE_RECOVERY.md](./STORAGE_RECOVERY.md) | Operator recovery: workflow maintenance journal and reservations, legacy creative import retry, catalog rewrite window, Codex image usage backfill |
+| [DATABASE_MAINTENANCE.md](./DATABASE_MAINTENANCE.md) | Database maintenance journal: Docker ↔ native cutover lifecycle, offline transfer, verified restart, recovery commands |
 | [BACKUP.md](./BACKUP.md) | Filesystem snapshots + PostgreSQL dumps: what is backed up, anchored excludes and tiers, restore semantics, retention, scheduling |
 | [BACKUP_RUNBOOKS.md](./BACKUP_RUNBOOKS.md) | Operator runbooks: database backend migration, older-snapshot restore, in-server store restores, maintenance admission |
 | [BACKUP_PUBLICATION_ADMISSION.md](./BACKUP_PUBLICATION_ADMISSION.md) | Shared admission lease between the server and `portos-cos`, how snapshot and restore cuts drain in-flight asset publications, and the consistency contract for changing assets |

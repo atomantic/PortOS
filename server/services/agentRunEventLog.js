@@ -1,12 +1,13 @@
 /**
  * CoS run event ledger — machine-local, append-only, bounded.
  *
- * Storage class `ephemeral-file` (see `docs/STORAGE.md`): the durable record of
+ * Storage: `ephemeral-file` — machine-local, never federated. The durable record of
  * a run is still `data/runs/{id}/metadata.json`; this file is the ordered trace
  * of how that record got where it is. It is **intentionally machine-local and
  * never federated** — every line describes a process on this box, so a peer's
  * copy would describe nothing that exists there. No sync cursor, no tombstone,
- * no `PORTOS_SCHEMA_VERSIONS` entry.
+ * no `PORTOS_SCHEMA_VERSIONS` entry. Payloads are redacted before append, and
+ * both pairs are backed up with the rest of `data/cos/`.
  *
  * On disk:
  *   data/cos/run-events.jsonl    — active generation

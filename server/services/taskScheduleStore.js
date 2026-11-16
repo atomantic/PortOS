@@ -1,4 +1,11 @@
-/** Persisted task schedule state and prompt-default compatibility upgrades. */
+/**
+ * Persisted task schedule state and prompt-default compatibility upgrades.
+ *
+ * Storage: `file-primary` (`branchReconcileOutcome.retired` in `data/cos/task-schedule.json`) —
+ * machine-local, never federated. Bounded display history (≤20 rows) that never authorizes cleanup or
+ * gates completion; legacy receipt maps and obligations are normalized away under the schedule queue
+ * while their inventory observations are kept.
+ */
 
 import { dashboardEvents } from './dashboardEvents.js';
 import { existsSync } from 'fs';

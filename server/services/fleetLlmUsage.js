@@ -21,10 +21,12 @@
  *     correctly against traffic from last week, and a peer deleted today still
  *     shows its address rather than vanishing from the history.
  *
- * Nothing here is federated. This records which machines connected to THIS
- * host; it is network and identity information about the user's own devices,
- * and it stays in the local `data/` file alongside the rest of the host's
- * machine-local deployment state (`docs/STORAGE.md`).
+ * Storage: `file-primary` (`data/fleet-host-usage.json`) — machine-local, never
+ * federated. It records which machines connected to THIS host (network and
+ * identity information about the user's own devices); a bounded counter document
+ * with no relations, holding no prompt/response content and no stored peer names.
+ * Schema v1; any other version is refused rather than half-read, so no seed or
+ * migration (no file means start counting). Rsync backups include it.
  */
 
 import { dataPath } from '../lib/paths.js';

@@ -4,6 +4,11 @@
  * The manifest references immutable sprite atlas versions and music-library
  * bytes by SHA-256. Recompiling identical inputs returns the current pointer
  * without writing a new version.
+ *
+ * Storage: `asset-file-db-indexed` — machine-local. Manifests are immutable
+ * `data/games/{id}/manifests/game-assets-v{N}.json` files; the `games` DB record
+ * owns the current pointer and history. Both halves are backed up (Postgres dump
+ * for the record, rsync snapshot for manifests and referenced media).
  */
 
 import { join } from 'path';

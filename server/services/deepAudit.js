@@ -1,5 +1,12 @@
 import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
-/** Machine-local, DB-primary coverage evidence. No timers or provider calls. */
+/**
+ * Machine-local, DB-primary coverage evidence. No timers or provider calls.
+ *
+ * Storage: `db-primary` — machine-local, never federated (no sync cursor or tombstones).
+ * `deep_audit_ledgers` holds structured JSONB evidence under row locks, covered by the
+ * PostgreSQL dump; additive schema needs no seed. Agent checkpoint JSON under
+ * `data/cos/deep-audit-checkpoints/` is a retained recovery input; imported DB receipts win.
+ */
 import { join } from 'path';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { execGit } from '../lib/execGit.js';

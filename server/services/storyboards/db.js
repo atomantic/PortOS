@@ -2,6 +2,11 @@
  * PostgreSQL leaf I/O for storyboards. The full sanitized record lives in
  * `data` JSONB; name/universe_id/updated_at are mirrored for the list sort and
  * universe filter, and the tombstone pair keeps a later federation additive.
+ *
+ * Storage: `db-primary` — federated as record kind `storyboard` / category `storyboards`
+ * (version-gated, whole-board LWW on `updatedAt`, tombstone deletes, gallery takes on the
+ * push asset manifest). db-primary because productions link boards by id. Rows hold image
+ * filenames and sketch keys, never bytes; `sketch:` sidecars and in-flight runs stay local.
  */
 
 import { query } from '../../lib/db.js';

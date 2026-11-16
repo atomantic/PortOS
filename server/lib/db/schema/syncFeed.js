@@ -34,6 +34,10 @@
 //
 // The db-migration `009-commit-ordered-sync-feed.js` backfills rows that
 // predate the feed.
+//
+// Storage: `db-primary` — machine-local bookkeeping, never federated itself; only the
+// rows it points at federate. Positions are drawn at COMMIT so a late-committing
+// transaction can never land below a cursor a peer already passed.
 
 export const SYNC_FEED_POSITION_BASE = '1000000000000000';
 

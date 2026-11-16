@@ -38,6 +38,11 @@
  * writes are all keyed and deduped (touchpoints on `beeper:<YYYY-MM-DD>`), and
  * they all re-run on the next sweep because the cursor never moved.
  *
+ * Storage: `db-primary` — machine-local, never federated. `beeper_reconcile_cursors`
+ * keeps a per-account rotating reconcile checkpoint (≤20 stored messages refetched per
+ * sweep) that survives restart, cascades on account delete and is covered by the
+ * PostgreSQL backup; additive schema upgrades installs without a seed.
+ *
  * No AI provider call happens anywhere on this path — ingestion is
  * deterministic — so AGENTS.md's "No cold-bootstrap LLM calls" does not gate
  * it, exactly as `imessageScheduler.js` records for the same shape.

@@ -12,6 +12,11 @@
  * project's peer-sync asset manifest (the metadata is wire-local, see
  * devArtifacts.js).
  *
+ * Storage: `asset-file-db-indexed` — never federated: immutable version files,
+ * metadata on the project record's wire-local `devArtifacts[]`. Versions are
+ * never overwritten and deletes are soft, so cloned metadata keeps valid
+ * pointers; both halves are backed up (Postgres dump + rsync snapshot).
+ *
  * Every path read back from a record is re-resolved and checked to sit inside
  * `data/music-video/`, so a hand-edited record cannot point the file route at
  * an arbitrary file.

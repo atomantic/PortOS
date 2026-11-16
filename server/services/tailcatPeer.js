@@ -11,6 +11,10 @@
  * forwards file for restart and retry; never log the full value, never put it on
  * the peer record that clients or peers can scrape, never return it from an API
  * response, and never ship it in docs/tests.
+ *
+ * Storage: `file-primary` (`data/tailcat-forwards.json`) — machine-local, never
+ * federated: rows hold bearer `tc…` capabilities. A row is written before the
+ * forward starts so a failed add stays retryable.
  */
 
 import { randomUUID } from 'node:crypto';

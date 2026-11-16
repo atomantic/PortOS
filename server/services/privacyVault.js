@@ -1,7 +1,11 @@
 /**
  * Privacy Vault — encrypted-at-rest PII records (issue #2140, epic #2138).
  *
- * db-primary Postgres per docs/STORAGE.md: one row per identity fact in
+ * Storage: `db-primary` — machine-local, never federated: the pull path carries no peer
+ * identity, plaintext `masked_value` would leak a fingerprint, and a shared key widens the
+ * blast radius to every peer.
+ *
+ * One row per identity fact in
  * `privacy_vault_records` (dedicated columns — the records are relational and
  * queried by type), consent audit rows in `privacy_consents`. Machine-local:
  * NO federation, NO tombstones. This is a product GUARANTEE, not a deferred

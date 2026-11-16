@@ -1,3 +1,12 @@
+/**
+ * FableLoom portable export jobs: job status, temporary media snapshots and the derived ZIP.
+ *
+ * Storage: `ephemeral-file` — `data/cache/fableloom-exports/<jobId>/`, never
+ * federated; the authored loom stays db-primary. Regenerable keyed downloads:
+ * 24h expiry, at most four retained artifacts, one package at a time, and a
+ * restart fails interrupted jobs instead of resuming them. No seed/migration;
+ * the anchored `/cache/` backup exclusion applies.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';

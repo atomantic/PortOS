@@ -7,9 +7,11 @@ import { atomicWrite, PATHS, rmGuarded } from '../lib/fileUtils.js';
 
 /**
  * Verified Codex rollout projections, one gzip file per source: counters, hashed
- * identity, model and cwd, keyed by a hash of the source path. `ephemeral-file` in
- * docs/STORAGE.md: machine-local, never synced, excluded from backup by `/cache/`.
- * Loss or damage only means a cold rescan, so every failure here reads as a miss.
+ * identity, model and cwd, keyed by a hash of the source path.
+ *
+ * Storage: `ephemeral-file` (`data/cache/codex-usage-inventory/`) — machine-local, never federated,
+ * excluded from backup by `/cache/`; capped at 256 MiB, oldest sources first. No transcript prose or
+ * source path. Loss or damage only means a cold rescan, so every failure here reads as a miss.
  * One file per source lets the API server and the backfill worker thread share it
  * through atomic renames, and lets a pass load one session at a time.
  */

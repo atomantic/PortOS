@@ -12,15 +12,11 @@
  * detection for a background sweep, per-peer and also in memory. Neither
  * survives a wake boundary, which is exactly the boundary this has to cross.
  *
- * Storage is `data/eidoverse/observation.json` — `file-primary` and MACHINE
- * LOCAL, the same class as `foundations.json` and `controllers.json` beside it
- * (`docs/STORAGE.md`). It never federates: a marker is a record of what THIS
- * install's mind has looked at, which is the install's own behavior, and the
- * machine-local privacy ADR keeps that off the federation layer. There is no
- * `data.reference/` seed and no migration is owed — an absent file IS the
- * "never observed" state every install starts from, and that state is
- * deliberately distinguishable from an empty one: a first observation reports
- * `firstObservation: true` rather than declaring a months-old world new.
+ * Storage: `file-primary` (`data/eidoverse/observation.json`) — machine-local,
+ * never federated: it records this install's own mind's behavior (machine-local
+ * privacy ADR). No `data.reference/` seed or migration — an absent file (or one
+ * from a newer PortOS) is the "never observed" state, distinct from an empty one:
+ * a first observation reports `firstObservation: true`.
  */
 
 import { join } from 'node:path';

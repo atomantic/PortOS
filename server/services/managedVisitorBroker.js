@@ -1,3 +1,12 @@
+/**
+ * Loopback visitor broker for managed apps: credential digests, allowlists and ephemeral admissions.
+ *
+ * Storage: `file-primary` (`data/managed-visitor-credentials.json`) — machine-local,
+ * never federated. Bounded credential digests (no plaintext), exact individual/world
+ * allowlists and expiries; no relations, sync cursors or tombstones. Empty schema-1
+ * seed for new installs; backups retain it. Admissions are memory-only and never
+ * resume on startup.
+ */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';

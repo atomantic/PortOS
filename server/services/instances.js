@@ -6,6 +6,9 @@
  * (instanceId/name) and the data/instances.json file I/O + mutex live in
  * services/instanceIdentity.js; this module is a consumer of that leaf.
  * Data persists to data/instances.json.
+ *
+ * Storage: `file-primary` — machine-local peer registry. Per-peer `mediaDeleteAllowed`
+ * (default true; only an explicit false refuses, via `peerMayDeleteMedia`) is machine-local.
  */
 
 import net from 'net';

@@ -9,8 +9,11 @@
  * the local copy is absent (`streamHostedAsset`, wired in assetMounts.js). Every
  * existing `<img src="/data/images/x.png">` therefore renders unchanged.
  *
- * Machine-local (`file-primary`, docs/STORAGE.md): it describes where THIS
- * machine fetches bytes from, so it never federates. A local file always wins —
+ * Storage: `file-primary` — machine-local, never federated: it describes where
+ * THIS machine fetches bytes from. Rsync-backed-up; no seed or migration (an
+ * absent file is an empty index).
+ *
+ * A local file always wins —
  * once bytes exist on disk (copied, generated, or "Copy locally") the entry is
  * ignored and pruned lazily.
  */

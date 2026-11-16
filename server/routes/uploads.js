@@ -1,6 +1,9 @@
 /**
  * Generic File Uploads API Routes
  * Handles file uploads to data/uploads directory
+ *
+ * Storage: `ephemeral-file` — machine-local upload staging, never federated.
+ * Staged files are transient inputs; only job references to them belong in the DB.
  */
 
 import { Router } from 'express';

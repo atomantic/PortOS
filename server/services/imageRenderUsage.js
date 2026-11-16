@@ -1,3 +1,11 @@
+/**
+ * Codex image render accounting: immutable per-output receipts grouped by Codex session.
+ * 
+ * Storage: `file-primary` (`data/image-render-usage/<sha256>.json`) — machine-local accounting log,
+ * rsync-backed-up, never federated. Receipts publish via exclusive hard link so live completion and
+ * backfill never double-count; a damaged receipt fails the read. Hashed identities only, no prompts or
+ * image bytes; absent until the first receipt, so no seed or migration.
+ */
 import { createHash, randomUUID } from 'node:crypto';
 import { link, open, readFile, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

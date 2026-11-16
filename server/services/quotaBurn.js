@@ -15,6 +15,9 @@
  * a quota-read error, or a card that declares itself unburnable all mean "do not
  * dispatch". Burning is opt-in spending of the user's own subscription — a
  * guess in the permissive direction costs them real quota.
+ *
+ * Storage: `ephemeral-file` (`data/cos/quota-burn-dispatches.json`) — machine-local,
+ * never federated. Per-window dispatch counts, self-pruning at 30 days; safe to delete.
  */
 
 import { join } from 'path';

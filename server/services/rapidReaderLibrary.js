@@ -1,3 +1,10 @@
+/**
+ * Rapid Reader shelf: user-curated prose entries, one record directory each.
+ *
+ * Storage: `file-primary` — `data/rapid-reader-library/{id}/index.json`,
+ * machine-local, never federated, included in filesystem backups. No relationship
+ * graph or full-text search requirement justifies Postgres.
+ */
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { ServerError } from '../lib/errorHandler.js';

@@ -1,6 +1,11 @@
 /**
  * PostgreSQL leaf I/O for Game records. The full sanitized record is stored in
  * JSONB; app_id/name/updated_at are mirrored for the common list/filter paths.
+ *
+ * Storage: `db-primary` — machine-local, never federated (no sync cursor or tombstone; hard
+ * deletes), because app registration, sprite atlases and music bytes are machine-local.
+ * Compiled manifests are immutable SHA-256-addressed files under `data/games/{id}/manifests/`;
+ * the record holds only their pointers and hashes.
  */
 
 import { query } from '../../lib/db.js';

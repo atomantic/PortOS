@@ -5,6 +5,10 @@
  * existing managed-browser boundary used by youtubeSync. The snapshot is local
  * to this install and contains only bounded display metadata plus source URLs;
  * video bytes are fetched only after the user explicitly starts a download.
+ *
+ * Storage: `file-primary` (`data/youtube/playlists.json`) — machine-local, never
+ * federated: a bounded cache of scraped metadata, not a Brain record. No sync
+ * cursor or tombstone.
  */
 import { dataPath, ensureDir, atomicWrite, readJSONFile, sleep } from '../lib/fileUtils.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';

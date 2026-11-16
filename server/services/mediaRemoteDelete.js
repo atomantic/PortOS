@@ -10,7 +10,11 @@
  * tombstone path a peer's own delete frame takes. An unreachable owner leaves
  * the command in `data/media-delete-queue.json`, drained on `peer:online`.
  * A row no registered peer can own is deleted here like a local one.
- * The queue describes this machine's own work and never federates.
+ *
+ * Storage: `file-primary` — `data/media-delete-queue.json`, machine-local, never
+ * federated: a bounded record of THIS machine's pending work. Entries drop after
+ * 30 days, on peer removal, or when the row is re-created; an absent file is an
+ * empty queue, so no seed or migration.
  */
 import { join } from 'path';
 import { PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';

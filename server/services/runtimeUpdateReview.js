@@ -1,4 +1,11 @@
-/** Machine-local, cached observations for the Review Hub's software updates. */
+/**
+ * Machine-local, cached observations for the Review Hub's software updates.
+ *
+ * Storage: `ephemeral-file` — machine-local, never federated or seeded.
+ * `data/cache/runtime-update-review.json` holds regenerable Node/pm2/harness update
+ * observations that keep the last known action across a restart or failed check;
+ * it carries no executable paths and the local update monitor refreshes it.
+ */
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';

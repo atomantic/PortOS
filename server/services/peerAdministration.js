@@ -2,6 +2,11 @@
  * Bounded peer administration planning. No executor is imported or registered.
  * Grants authorize planning-v1 only; execution needs a separately reviewed
  * maintenance lease, durable operation ledger and a new operator grant scope.
+ *
+ * Storage: `file-primary` (`data/peer-admin-grants.json`) — machine-local, never federated.
+ * Bounded authority config (≤300 exact peer/action slots, opaque IDs, a pair-binding digest, never raw
+ * credentials); absent means no grants and malformed/future schemas fail closed. Preflights and plan
+ * receipts are expiring in-memory diagnostics only; nothing can run or be recovered from them.
  */
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile, statfs } from 'node:fs/promises';

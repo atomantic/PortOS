@@ -1,4 +1,11 @@
-/** Private static assessments: deterministic source input and report-only output. */
+/**
+ * Private static assessments: deterministic source input and report-only output.
+ *
+ * Storage: no store of its own — report prose reuses the Review Hub item store and
+ * source/transcripts the CoS agent archives, both excluded from peer federation
+ * (socket notifications carry no prose). The source inventory stays in run memory,
+ * so an interrupted run needs a new assessment; sandbox homes are removed after.
+ */
 import { execGit } from '../lib/execGit.js';
 import { scrubSecretTokens, scrubSecretTokensDeep } from '../lib/secretText.js';
 import { privateSecurityReportSchema } from '../lib/privateSecurityPolicy.js';

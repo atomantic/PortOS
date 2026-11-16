@@ -357,7 +357,7 @@ export const eidoverseFoundationRecordSchema = z.object({
   // `foundationFromInheritedCandidate()`. Absent entirely on a record written
   // before this field existed, which reads back as `null` through this same
   // default — an additive nullable field on the machine-local ledger, so no
-  // migration is owed (`docs/STORAGE.md`'s entry for `foundations.json`).
+  // migration is owed (see the storage header in `server/services/eidoverseFoundationLedger.js`).
   inheritance: foundationInheritanceEdgeSchema.nullable().default(null),
   // `null` on everything authored from nothing. Set on a record this install
   // authored by building on a peer's inherited foundation (#7631), and copied
@@ -876,7 +876,7 @@ export function foundationFromInheritedCandidate({ candidate, requiredDisturbanc
  * — as an ORDERED, read-only projection over fields the record already
  * persists. No new storage: a ledger written before this function existed
  * still projects a correct lineage the instant it is read, which is what lets
- * `docs/STORAGE.md`'s "no migration owed" hold for this change too.
+ * the ledger's "no migration owed" storage note (`server/services/eidoverseFoundationLedger.js`) hold here too.
  *
  * @param {object|null} record
  * @returns {Array<{ type: string, at: string, [key: string]: unknown }>}

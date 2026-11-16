@@ -11,6 +11,12 @@
  * to sit inside the workspace with no symlink on the way, so neither a request
  * nor a link an authored script left behind can aim a read, write or delete
  * outside it. Reads and path math only: nothing here runs a process.
+ *
+ * Storage: `asset-file-db-indexed` — machine-local files; `src/` is durable and
+ * backed up, `renders/` is regenerable and excluded from backups. The project
+ * record keeps only small wire-local settings; render state, staleness, cuts and
+ * job history are read from disk or memory, never stored on it. A clone copies
+ * `src/`, `manifest.json` and `song.json`, never `renders/`.
  */
 import { lstat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';

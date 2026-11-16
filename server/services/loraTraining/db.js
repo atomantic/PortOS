@@ -6,6 +6,9 @@
  * are never read back). Mirrors the `creative_director_projects` adapter
  * pattern.
  *
+ * Storage: `db-primary` — machine-local, never federated. Run artifacts live under
+ * `data/training-runs/<runId>/`, with checkpoints/cache excluded from backup.
+ *
  * Within a single run, `updateRun` has overlapping callers — the debounced
  * progress-mirror flush (checkpoint/sample array appends) races the
  * status/startedAt/completedAt writes. A bare read-modify-write would let a

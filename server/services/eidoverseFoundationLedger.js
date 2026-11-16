@@ -35,15 +35,13 @@
  * is the same proposal-versus-consequence separation #7454 gave the
  * construction tools, applied to promotion.
  *
- * Storage is `data/eidoverse/foundations.json` — `file-primary` and MACHINE
- * LOCAL, the same class as `portos-world.json` beside it (`docs/STORAGE.md`).
- * PortOS never federates this file: the only thing authorized to leave the
- * install is a packaged candidate envelope, and even that leaves only once
- * somebody promotes the foundation — `listPromotedFoundationCandidates()`
- * below is the whole of what a peer can ever read
- * (`services/sharing/peerEidoverseFoundationSync.js`). There is no `data.reference/` seed — an absent file is
- * an empty ledger, which is the correct state for every install that has never
- * authored or inherited a foundation, so no migration is owed.
+ * Storage: `file-primary` (`data/eidoverse/foundations.json`) — machine-local,
+ * never federated as records: only a promoted foundation's packaged candidate
+ * envelope (`listPromotedFoundationCandidates()`, served by
+ * `services/sharing/peerEidoverseFoundationSync.js`, version-gated as
+ * `eidoverseFoundations`) leaves the install, never the `style` layer. Inherited
+ * records live under disjoint `peer:<origin>:<id>` keys. No `data.reference/` seed
+ * or migration: an absent file is the empty ledger and additions are nullable.
  *
  * **Withdrawal is a first-class act, and it propagates (#7632).** Promotion used
  * to be one-way: a peer that pulled a foundation kept that copy forever, because

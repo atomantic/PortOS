@@ -11,6 +11,11 @@
  * (calendar_account_id / calendar_event_id). There is no sync hook here by design;
  * adding one is a conscious act (revisit the ADR + the guard in
  * sharing/peerSync.test.js).
+ *
+ * Storage: `db-primary` — machine-local, never federated (no `sync_sequence`, peer-sync kind
+ * or `dataSync` category). Person deletes are a 30-day recovery window: the daily
+ * `tribePurge` sweep hard-deletes expired tombstones with their cascades and expires
+ * `tribe_*` `record_audit` snapshots, since those copy third-party contact details.
  */
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';

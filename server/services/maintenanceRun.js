@@ -43,9 +43,9 @@ import { isLegacyDeepAudit, deepAuditProof, EXTENDED_AUDIT_WORKFLOW } from '../l
  * and the interval; neither dispatches anything on an install with no running
  * run, and a fresh install has none.
  *
- * Storage: `data/cos/maintenance-runs.json`, machine-local and `ephemeral-file`
- * — a capped list of run records, newest first. No `data.reference/` seed: an
- * absent file is "no runs yet".
+ * Storage: `ephemeral-file` (`data/cos/maintenance-runs.json`) — machine-local,
+ * never federated: steps name this machine's task types and managed apps. A capped
+ * list, newest first; deleting it only forgets progress. No `data.reference/` seed.
  */
 
 import { join } from 'path';

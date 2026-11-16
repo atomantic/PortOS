@@ -3,6 +3,10 @@
  *
  * The full record lives in data JSONB. Name/status/timestamps/deleted are
  * mirrored columns for list queries and audit triggers.
+ *
+ * Storage: `db-primary` — machine-local, not federated yet; soft-delete columns let
+ * federation be added without a record-shape migration. Image bytes stay in `data/images/`
+ * and Three.js source is derived from the stored spec, never persisted separately.
  */
 
 import { modelLifecycleEvents } from '../modelLifecycleEvents.js';

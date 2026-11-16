@@ -13,6 +13,12 @@
  * (`darwinAgentSupervisor.py`) writes the same reservation → started → settled
  * records. Reservations and receipts stay local and outlive agent-history
  * compaction; missing proof always retains the hold.
+ *
+ * Storage: `file-primary` (`data/cos/process-settlement/<agent-id>/`) — machine-local, never federated.
+ * Execution evidence kept independently of agent history; launch specs may hold private arguments and
+ * never reach status projections or forge artifacts.
+ * Storage: `ephemeral-file` (`data/cos/process-supervisors/`) — compiled native helpers; only the current
+ * server process's compiler result is reused.
  */
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';

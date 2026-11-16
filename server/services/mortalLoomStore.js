@@ -6,6 +6,10 @@
  * server and the MortalLoom iOS/macOS app read/write the same MortalLoom.json
  * in the app's iCloud ubiquity container, so adding data on either side shows
  * up on the other after iCloud sync completes.
+ *
+ * Storage: `file-primary` — syncs through iCloud with the MortalLoom app, never
+ * through PortOS federation. The file must stay a file to preserve that sync
+ * boundary, which PortOS does not own.
  */
 
 import { dashboardEvents } from './dashboardEvents.js';

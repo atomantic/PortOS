@@ -12,6 +12,12 @@
  * Evidence lives in `data/supercollider/runtime-evidence.json`: machine-local,
  * re-derivable by re-running setup, and bound to the local image id — a copy
  * restored onto another machine reads as stale there rather than as ready.
+ *
+ * Storage: `ephemeral-file` (`data/supercollider/`: the evidence cache, per-run
+ * `jobs/` scratch, 24-hour `previews/`) — machine-local, never federated. Setup
+ * re-derives it, so backups exclude `/supercollider/` and Data Manager may purge
+ * it; a saved preview is copied into the music library with `codeProvenance` on
+ * the track render, so no durable take depends on this directory.
  */
 
 import { lstat, mkdir, readdir, readFile, rm, writeFile, chmod } from 'fs/promises';
