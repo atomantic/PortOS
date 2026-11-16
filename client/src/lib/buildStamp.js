@@ -1,36 +1,20 @@
 /**
- * Pure comparison between the BUNDLE this browser loaded and the SERVER build it
- * is talking to (#4694).
+ * Pure comparison of the BUNDLE this browser loaded against the SERVER build (#4694).
  *
- * The failure this catches: the dashboard is served from a `client/dist` built
- * from one commit while `portos-server` was restarted from a different checkout
- * at a different commit. Both halves look perfectly healthy, so a UI change that
- * "isn't working" can be a UI that was never rebuilt. Why `version` can't answer
- * this, and how it differs from the bundle-hash check: see the module header of
- * `server/lib/buildIdentity.js`.
+ * Catches a `client/dist` built from one commit while the server
+ * runs another. Why `version` can't answer this: see `server/lib/buildIdentity.js`.
  */
 
 /**
- * The `__BUILD_STAMP__` Vite define, or null where it does not exist (vitest,
- * or any consumer rendered without the bundler).
- *
- * Read through `typeof` — a bare reference to an undefined define throws a
- * ReferenceError at module load rather than degrading. Resolved once at module
- * scope so the value has a stable identity: it is a compile-time constant, and
- * re-evaluating the define per render would hand a fresh object to every
- * `useMemo`/`React.memo` dependency list that ever includes it.
+ * The `__BUILD_STAMP__` Vite define, or null without the bundler (vitest). Read via
+ * `typeof` since a bare undefined define throws at load; resolved once for a stable identity.
  */
 export const BUNDLE_STAMP = typeof __BUILD_STAMP__ === 'undefined' ? null : __BUILD_STAMP__;
 
 /**
- * The build id the server stamped into the served index.html, or null.
- *
- * Null means the page did NOT come from a built `client/dist` — i.e. `npm run
- * dev`, where Vite serves its own index.html and the server never injects the
- * meta tag. That is the single gate for trusting `BUNDLE_STAMP` at all: the
- * Vite define is frozen when the dev server starts, so under HMR it reports the
- * commit you started at while serving code from every commit since. Anything
- * that displays or compares the bundle stamp must check this first.
+ * The build id the server stamped into the served index.html, or null under
+ * `npm run dev` (no meta tag injected). The gate for trusting `BUNDLE_STAMP`: the
+ * Vite define is frozen at dev-server start, so under HMR it is stale.
  */
 export const SERVED_BUILD_ID = (() => {
   if (typeof document === 'undefined') return null;
@@ -38,15 +22,10 @@ export const SERVED_BUILD_ID = (() => {
   return el ? el.getAttribute('content') : null;
 })();
 
-/** The bundle stamp only when it can be trusted — see `SERVED_BUILD_ID`. */
+/** The bundle stamp only when trusted (see `SERVED_BUILD_ID`). */
 export const TRUSTED_BUNDLE_STAMP = SERVED_BUILD_ID ? BUNDLE_STAMP : null;
 
-/**
- * Trim a stamp field to a usable value, or null. Both halves of the feature emit
- * `null` for "not known", so this only has to reject blanks and non-strings —
- * never a placeholder string, which would swallow a branch that genuinely
- * carries that name.
- */
+/** Trim a stamp field to a usable value or null; never maps a placeholder string, which would swallow a real branch name. */
 function normalizeStamp(value) {
   if (typeof value !== 'string') return null;
   return value.trim() || null;
@@ -67,61 +46,39 @@ export function compareBuildStamps(bundle, server) {
   const bundleCommit = normalizeCommit(bundle?.commit);
   const serverCommit = normalizeCommit(server?.shortCommit) ?? normalizeCommit(server?.commit);
 
-  // Absent on either side is `unknown` — never `match` (which would claim a
-  // verification nobody performed) and never `mismatch` (which would cry wolf
-  // on every source-tarball install).
+  // Absent on either side is `unknown`: `match` would claim unperformed verification, `mismatch` cry wolf.
   if (!bundleCommit || !serverCommit) {
     return { state: 'unknown', bundleCommit, serverCommit };
   }
 
-  // Prefix comparison, not equality: the bundle carries a 7-char commit while
-  // the server may only have sent the full sha, and those are never equal.
+  // Prefix comparison: the bundle carries a 7-char commit, the server may send the full sha.
   const same = bundleCommit.startsWith(serverCommit) || serverCommit.startsWith(bundleCommit);
   return { state: same ? 'match' : 'mismatch', bundleCommit, serverCommit };
 }
 
-/**
- * One-line human summary of a build — `abc1234 · main · uncommitted changes`.
- * Returns null when there is nothing worth rendering, so a caller can drop the
- * row entirely instead of printing a line of em-dashes.
- */
+/** One-line summary (`abc1234 · main · uncommitted changes`), or null so callers can drop the row. */
 export function describeBuild({ commit, branch, dirty } = {}) {
   const parts = [];
   const shortCommit = normalizeStamp(commit);
   if (shortCommit) parts.push(shortCommit.slice(0, 7));
   const cleanBranch = normalizeStamp(branch);
   if (cleanBranch) parts.push(cleanBranch);
-  // Only `true` earns a badge: `null` means the check itself did not run, and
-  // rendering that as "clean" would be a claim we cannot make. The server's
-  // `dirty` is a boot-time snapshot, so the caller labels it as such.
+  // Only `true` earns a badge: `null` means the check did not run. `dirty` is a boot-time snapshot.
   if (dirty === true) parts.push('uncommitted changes');
   return parts.length > 0 ? parts.join(' · ') : null;
 }
 
 /**
- * Decide what the server's build signals mean for THIS tab (#4694).
- *
- * Two different staleness problems, with different remedies — conflating them
- * tells the user to do something that cannot work:
- *
- *   `'reload'` — the bundle on disk moved since this tab loaded. Reloading picks
- *     up the new one.
- *   `'drift'`  — this tab IS current with the dist on disk, but that dist was
- *     built from a different commit than the server is running. Reloading alone
- *     re-serves the same stale dist; it needs a rebuild (then a reload) or a
- *     server restart.
+ * Decide what the server's build signals mean for THIS tab (#4694):
+ *   `'reload'` — the bundle on disk moved since this tab loaded; reload fixes it.
+ *   `'drift'`  — this tab is current with dist, but dist was built from a different
+ *     commit than the server runs; needs a rebuild or server restart.
  *   `null`     — nothing to say.
  *
- * The two signals arrive by different routes — the bundle hash is pushed on the
- * `build:id` socket frame, while the commit is fetched from
- * `GET /api/system/build`, because the socket path reaches peer relays and the
- * commit must stay machine-local (see services/socket.js). So this takes a
- * merged view rather than one frame.
- *
- * `embeddedBuildId` is null under `npm run dev` (Vite serves its own
- * index.html, so the server never injects the meta tag). That gates BOTH checks:
- * in dev there is no dist to be stale, and the Vite define is frozen at
- * dev-server start, so a drift check there would fire the moment you commit.
+ * The signals arrive separately: the bundle hash on the `build:id` socket frame, the
+ * commit from `GET /api/system/build` (machine-local; see services/socket.js).
+ * `embeddedBuildId` is null under `npm run dev`, which gates both checks (no dist
+ * to be stale; the Vite define is frozen at start).
  *
  * @returns {'reload'|'drift'|null}
  */
@@ -133,12 +90,9 @@ export function resolveBuildFrame({ buildId, commit } = {}, { embeddedBuildId, b
 
 /**
  * The stateful half of the drift check: merge the two signals as they arrive,
- * decide once per kind, and clear a toast when its problem goes away.
- *
- * A factory taking its effects as arguments, rather than reaching for the socket
- * and the toast module directly, so the dispatch logic is testable — the module
- * that wires it opens a real Socket.IO connection at import and cannot be loaded
- * in a unit test.
+ * decide once per kind, and clear a toast when its problem goes away. A factory
+ * with injected effects because the wiring module opens a real Socket.IO
+ * connection at import and can't load in a unit test.
  *
  * @param {object} deps
  * @param {string|null} deps.embeddedBuildId - see `SERVED_BUILD_ID`
@@ -153,10 +107,7 @@ export function createBuildDriftWatcher({ embeddedBuildId, fetchIdentity, onShow
   const evaluate = () => {
     const action = resolveBuildFrame(signals, { embeddedBuildId });
 
-    // Both notices are sticky, and the drift one has no button (a bare reload
-    // cannot fix it). Clearing on the signal that says the problem is gone is
-    // the only way they come down — otherwise one keeps asserting a mismatch
-    // that no longer exists for the rest of the tab's life.
+    // Both notices are sticky; clearing on the "problem gone" signal is the only way they come down.
     for (const kind of ['reload', 'drift']) {
       if (kind !== action && shown[kind]) {
         shown[kind] = false;
@@ -176,15 +127,9 @@ export function createBuildDriftWatcher({ embeddedBuildId, fetchIdentity, onShow
       evaluate();
     },
     /**
-     * Re-read the server's commit. Called on every (re)connect, because a server
-     * restart is one of the remedies and the reconnect is where we learn the
-     * drift is gone.
-     *
-     * Clears the previous commit FIRST: it belongs to the server we were talking
-     * to before. Keeping it while the fetch is in flight would judge the new
-     * server by the old one's commit — and if the fetch fails outright (an older
-     * server with no such route), a stale commit would have the toast asserting
-     * drift against a server that no longer exists.
+     * Re-read the server's commit on every (re)connect (a restart is a remedy).
+     * Clears the previous commit FIRST so a slow or failed fetch (older server, no
+     * route) never judges the new server by the old one's commit.
      */
     async refreshIdentity() {
       signals.commit = null;
