@@ -376,16 +376,6 @@ router.get('/post/training/stats', asyncHandler(async (req, res) => {
   res.json(stats);
 }));
 
-/**
- * GET /api/meatspace/post/training/entries
- * Recent training entries
- */
-router.get('/post/training/entries', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(validateRequest(postLimitQuerySchema, req.query), { defaultLimit: 20, maxLimit: 100 });
-  const entries = await trainingService.getTrainingEntries(limit);
-  res.json(entries);
-}));
-
 // =============================================================================
 // POST - Morse Trainer Progress
 // =============================================================================

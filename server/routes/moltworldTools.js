@@ -8,7 +8,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, moltworldJoinSchema, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema, moltworldQueueFailBodySchema } from '../lib/validation.js';
+import { validateRequest, moltworldBuildSchema, moltworldExploreSchema, moltworldThinkSchema, moltworldSaySchema, moltworldQueueAddSchema, moltworldQueueFailBodySchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -44,37 +44,6 @@ async function getClientAndAgent(accountId, agentId) {
   );
   return { client, agent, account };
 }
-
-// POST /join — Move agent in the world (also heartbeat)
-router.post('/join', asyncHandler(async (req, res) => {
-  const data = validateRequest(moltworldJoinSchema, req.body);
-
-  console.log(`🌍 POST /api/agents/tools/moltworld/join account=${data.accountId}`);
-
-  const { client, account } = await getClientAndAgent(data.accountId, data.agentId);
-  const result = await client.joinWorld({
-    name: account.credentials.username,
-    x: data.x ?? 0,
-    y: data.y ?? 0,
-    thinking: data.thinking,
-    say: data.say,
-    sayTo: data.sayTo
-  });
-
-  await platformAccounts.recordActivity(data.accountId);
-  if (data.agentId) {
-    await agentActivity.logActivity({
-      agentId: data.agentId,
-      accountId: data.accountId,
-      action: 'mw_heartbeat',
-      params: { x: data.x, y: data.y, thinking: data.thinking, say: data.say },
-      status: 'completed',
-      result: { agents: result?.agents?.length || 0, messages: result?.messages?.length || 0 },
-      timestamp: new Date().toISOString()
-    });
-  }
-  res.json(result);
-}));
 
 // POST /build — Place or remove blocks
 router.post('/build', asyncHandler(async (req, res) => {
@@ -207,17 +176,6 @@ router.get('/status', asyncHandler(async (req, res) => {
   ]);
 
   res.json({ profile, balance });
-}));
-
-// GET /balance — SIM token balance
-router.get('/balance', asyncHandler(async (req, res) => {
-  const { accountId } = validateRequest(accountQuerySchema, req.query);
-
-  console.log(`💰 GET /api/agents/tools/moltworld/balance account=${accountId}`);
-
-  const { client } = await getClientAndAgent(accountId);
-  const result = await client.getBalance();
-  res.json(result);
 }));
 
 // GET /rate-limits — Rate limit status

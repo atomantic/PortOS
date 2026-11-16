@@ -8,7 +8,6 @@ vi.mock('../services/identity.js', async (importOriginal) => ({
   setBirthDate: vi.fn(),
   createGoal: vi.fn(),
   deleteGoal: vi.fn(),
-  getGoalCalendarEvents: vi.fn(),
 }));
 vi.mock('../services/goalCalendarScheduler.js', () => ({
   scheduleTimeBlocks: vi.fn(), removeScheduledEvents: vi.fn(), rescheduleTimeBlocks: vi.fn(),
@@ -55,12 +54,4 @@ describe('/api/digital-twin/identity goals', () => {
     expect((await request(app).delete(`${BASE}/goals/g1`)).status).toBe(204);
   });
 
-  it('passes the calendar window through and refuses a repeated bound', async () => {
-    identityService.getGoalCalendarEvents.mockResolvedValue([]);
-    await request(app).get(`${BASE}/goals/g1/calendar-events?startDate=2026-01-01&endDate=2026-01-31`);
-    expect(identityService.getGoalCalendarEvents).toHaveBeenCalledWith('g1', '2026-01-01', '2026-01-31');
-
-    const bad = await request(app).get(`${BASE}/goals/g1/calendar-events?startDate=a&startDate=b`);
-    expect(bad.status).toBe(400);
-  });
 });

@@ -190,11 +190,4 @@ router.put('/forward-types', asyncHandler(async (req, res) => {
   res.json({ success: true, forwardTypes });
 }));
 
-// POST /api/telegram/bridge/reload — reload bridge config from MCP plugin files
-router.post('/bridge/reload', asyncHandler(async (req, res) => {
-  await telegramBridge.reload();
-  const status = telegramBridge.getStatus();
-  res.json(status);
-}));
-
 export default router;

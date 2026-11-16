@@ -36,9 +36,9 @@ const mounts = [
 beforeEach(() => { vi.clearAllMocks(); auth.enabled = false; });
 
 describe('Moltworld routers behind the default-deny gate (#16114)', () => {
-  it('still joins the world and connects the socket for a local operator and a delegated agent session', async () => {
+  it('still explores the world and connects the socket for a local operator and a delegated agent session', async () => {
     await expectAuthorizedWorkflows({ auth, mounts, workflows: [
-      ['post', `${base}/join`, { accountId: 'example-account' }, effects.joinWorld, 200],
+      ['post', `${base}/explore`, { accountId: 'example-account' }, effects.joinWorld, 200],
       ['post', `${base}/ws/connect`, { accountId: 'example-account' }, effects.connect, 200],
     ] });
   });

@@ -64,20 +64,6 @@ function computeFreeRanges(occupiedPorts, start, end) {
 }
 
 /**
- * Check if specific ports are available
- */
-export async function checkPortsAvailable(ports) {
-  const scan = await scanPorts();
-  const results = {};
-
-  for (const port of ports) {
-    results[port] = !scan.allOccupied.includes(port);
-  }
-
-  return results;
-}
-
-/**
  * Allocate N ports, preferring the managed band and overflowing just past it.
  * Skips listeners, ports reserved by registered apps, and browser-blocked ports.
  */

@@ -38,16 +38,6 @@ describe('X routes', () => {
     x.listAccounts.mockResolvedValue([]);
   });
 
-  it('exposes the supervised read/write capabilities', async () => {
-    const response = await request(app).get('/api/x/capabilities');
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      readTransport: 'managed-browser',
-      automaticPublishing: false,
-      writes: ['draft', 'manual-compose-handoff'],
-    });
-  });
-
   it('normalizes an @ handle and does not accept an arbitrary username', async () => {
     x.createAccount.mockResolvedValue({ id: '00000000-0000-4000-8000-000000000001', username: 'example_user' });
     const created = await request(app).post('/api/x/accounts').send({ label: 'Example', username: '@Example_User' });

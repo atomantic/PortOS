@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { getAppById } from '../services/apps.js';
 import { resolvePm2HomeForProcess } from '../services/appProcessStatus.js';
 import * as pm2Service from '../services/pm2.js';
 import { spawnPm2 } from '../services/pm2.js';
@@ -84,24 +83,6 @@ router.get('/:processName', asyncHandler(async (req, res) => {
   req.on('close', () => {
     logProcess.kill('SIGTERM');
   });
-}));
-
-// GET /api/logs/app/:appId - Get logs for all processes of an app
-router.get('/app/:appId', asyncHandler(async (req, res) => {
-  const app = await getAppById(req.params.appId);
-
-  if (!app) {
-    throw new ServerError('App not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  const { lines } = validateRequest(logsQuerySchema, req.query);
-  const results = {};
-
-  for (const processName of app.pm2ProcessNames || []) {
-    results[processName] = await pm2Service.getLogs(processName, lines, app.pm2Home);
-  }
-
-  res.json({ app: app.name, processes: results });
 }));
 
 export default router;

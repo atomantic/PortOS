@@ -19,7 +19,6 @@ vi.mock('../services/tribe.js', () => ({
   deletePerson: vi.fn(),
   listTouchpoints: vi.fn(),
   createTouchpoint: vi.fn(),
-  createCalendarTouchpoint: vi.fn(),
   listMemoryLinks: vi.fn(),
   linkMemory: vi.fn(),
   unlinkMemory: vi.fn(),
@@ -162,21 +161,6 @@ describe('Tribe Routes', () => {
 
     expect(response.status).toBe(400);
     expect(tribe.createTouchpoint).not.toHaveBeenCalled();
-  });
-
-  it('creates touchpoints from calendar events', async () => {
-    tribe.createCalendarTouchpoint.mockResolvedValue({
-      id: 'touch-2',
-      personId: PERSON_ID,
-      source: 'calendar',
-    });
-
-    const response = await request(app)
-      .post(`/api/tribe/people/${PERSON_ID}/touchpoints/calendar`)
-      .send({ accountId: ACCOUNT_ID, eventId: 'cal-event-1', summary: 'Synced over lunch' });
-
-    expect(response.status).toBe(201);
-    expect(tribe.createCalendarTouchpoint.mock.calls[0][0]).toBe(PERSON_ID);
   });
 
   it('links and unlinks brain memories for a person', async () => {

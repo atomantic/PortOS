@@ -356,14 +356,3 @@ export function sendInteract(toAgentId, payload) {
     }).catch(err => console.warn(`⚠️ Activity log failed: ${err.message}`));
   }
 }
-
-/**
- * Request nearby agents list
- */
-export function sendNearby(radius) {
-  send({
-    type: 'nearby',
-    agentId: currentMoltworldAgentId,
-    ...(radius ? { radius } : {})
-  });
-}

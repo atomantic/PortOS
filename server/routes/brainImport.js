@@ -8,7 +8,6 @@
  * which also ingests image / voice-audio / PDF assets).
  *
  * Endpoints:
- *   GET  /api/brain/import/sources            List available import sources
  *   POST /api/brain/import/chatgpt/preview    Validate + summarize a parsed JSON payload
  *   POST /api/brain/import/chatgpt            Run a JSON-payload import
  *   POST /api/brain/import/chatgpt/zip        Stream-upload + import a full export ZIP
@@ -26,27 +25,6 @@ import { parseExport, stripPreview, importConversations, readArchivedConversatio
 import { importChatgptZip } from '../services/chatgptZipImport.js';
 
 const router = Router();
-
-const SOURCES = [
-  {
-    id: 'chatgpt',
-    label: 'ChatGPT',
-    status: 'available',
-    description: 'Import every conversation — and the images, voice clips, and files — from your ChatGPT data export.',
-    fileExpected: 'the export .zip (or conversations.json)',
-    helpUrl: 'https://help.openai.com/en/articles/7260999-how-do-i-export-my-chatgpt-history-and-data',
-    instructions: [
-      'Open chatgpt.com → Settings → Data Controls → Export data → Confirm export.',
-      'OpenAI emails you a download link within a few minutes (link expires in 24h).',
-      'Download the ZIP.',
-      'Upload the whole .zip here — PortOS extracts your conversations and their images/voice/files for you.'
-    ]
-  }
-];
-
-router.get('/sources', asyncHandler(async (_req, res) => {
-  res.json({ sources: SOURCES });
-}));
 
 const previewSchema = z.object({
   data: z.unknown()

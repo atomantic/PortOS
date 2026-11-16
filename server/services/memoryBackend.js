@@ -218,11 +218,6 @@ export async function getTags() {
   return b.getTags();
 }
 
-export async function getRelatedMemories(id, limit) {
-  const b = await getBackend();
-  return b.getRelatedMemories(id, limit);
-}
-
 // `options.sourceIds` (internal): absent → the full CoS graph; an array (even
 // empty) → only nodes/edges inside that memory-id scope (#10953).
 export async function getGraphData(options) {

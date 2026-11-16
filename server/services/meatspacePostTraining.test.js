@@ -26,7 +26,6 @@ import {
   submitTrainingEntry,
   submitTrainingRun,
   getTrainingStats,
-  getTrainingEntries,
 } from './meatspacePostTraining.js';
 import { generateFlanker } from './meatspacePostCognitive.js';
 
@@ -406,38 +405,5 @@ describe('getTrainingStats — re-derived day keys after a timezone change (issu
       vi.useRealTimers();
       settingsState.current = { timezone: 'UTC' };
     }
-  });
-});
-
-describe('getTrainingEntries', () => {
-  it('re-derives each displayed entry date in the current timezone (issue #4168)', async () => {
-    settingsState.current = { timezone: 'UTC' };
-    readJSONFile.mockResolvedValue({
-      entries: [{ id: 'a', date: '2026-07-16', timestamp: '2026-07-17T05:30:00.000Z' }],
-    });
-    const entries = await getTrainingEntries(10);
-    expect(entries[0].date).toBe('2026-07-17');
-  });
-
-  it('returns entries in reverse order (most recent first)', async () => {
-    readJSONFile.mockResolvedValue({
-      entries: [
-        { id: 'a', date: '2024-01-01' },
-        { id: 'b', date: '2024-01-02' },
-        { id: 'c', date: '2024-01-03' },
-      ]
-    });
-
-    const entries = await getTrainingEntries(10);
-    expect(entries.map(e => e.id)).toEqual(['c', 'b', 'a']);
-  });
-
-  it('respects limit', async () => {
-    readJSONFile.mockResolvedValue({
-      entries: Array.from({ length: 50 }, (_, i) => ({ id: `e${i}`, date: '2024-01-01' }))
-    });
-
-    const entries = await getTrainingEntries(5);
-    expect(entries).toHaveLength(5);
   });
 });

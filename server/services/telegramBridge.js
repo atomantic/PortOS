@@ -173,18 +173,6 @@ export function getStatus() {
   };
 }
 
-/**
- * Reload config from MCP plugin files (called when user changes MCP config externally)
- */
-export async function reload() {
-  if (!isActive) return;
-  const newChatId = await loadChatId();
-  if (newChatId && newChatId !== chatId) {
-    chatId = newChatId;
-    console.log(`📱 TG Bridge: chat ID updated to ${chatId}`);
-  }
-}
-
 // Cached forward types (set by the route handler)
 let cachedForwardTypes = null;
 

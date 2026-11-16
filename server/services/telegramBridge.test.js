@@ -63,7 +63,6 @@ const {
   cleanup,
   sendMessage,
   getStatus,
-  reload,
   updateCachedForwardTypes
 } = await import('./telegramBridge.js');
 
@@ -263,26 +262,6 @@ describe('telegramBridge service', () => {
 
       const blocked = await sendMessage('one too many');
       expect(blocked).toEqual({ success: false, error: 'Rate limit exceeded' });
-    });
-  });
-
-  describe('reload', () => {
-    it('no-ops when the bridge is not active', async () => {
-      // Seed a different chat id but don't init — reload should silently do nothing.
-      fileStore.set(ACCESS_FILE, JSON.stringify({ allowFrom: [999] }));
-      await reload();
-      expect(getStatus().chatId).toBeNull();
-    });
-
-    it('swaps the chat id when access.json changes while active', async () => {
-      seedCredentials();
-      vi.stubGlobal('fetch', mockTelegramFetch());
-      await init();
-      expect(getStatus().chatId).toBe(CHAT_ID);
-
-      fileStore.set(ACCESS_FILE, JSON.stringify({ allowFrom: [987] }));
-      await reload();
-      expect(getStatus().chatId).toBe(987);
     });
   });
 

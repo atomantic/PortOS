@@ -11,7 +11,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: execGitMock,
 // remove.
 vi.mock('../lib/gitStaleLock.js', () => ({ clearStaleGitLock: vi.fn(() => null) }));
 
-import { ensureLatest, pull, syncBranch } from './git.js';
+import { ensureLatest, syncBranch } from './git.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 
 const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
@@ -25,41 +25,12 @@ beforeEach(() => {
   clearStaleGitLock.mockReturnValue(null);
 });
 
-// `pull`, `syncBranch`, and `ensureLatest` — the rest of the pull/fetch/rebase
+// `syncBranch` and `ensureLatest` — the rest of the pull/fetch/rebase
 // family `updateSubmodule` already covers (git.submodules.test.js) and
 // `updateDefaultBranch` covers (git.updateDefaultBranch.test.js). A killed git
 // process leaves a shared ref/index lock that wedges every worktree of the
 // repo forever, so each of these clears an abandoned lock but never
 // auto-retries a non-idempotent command (#7513).
-
-describe('pull', () => {
-  it('pulls with rebase and autostash, returning the combined output', async () => {
-    execGitMock.mockResolvedValue(ok('Already up to date.\n'));
-
-    const result = await pull('/repo');
-
-    expect(result).toEqual({ success: true, output: 'Already up to date.\n' });
-    expect(execGitMock).toHaveBeenCalledWith(['pull', '--rebase', '--autostash'], '/repo');
-  });
-
-  it('clears an abandoned lock without retrying the pull', async () => {
-    const lockError = new Error("fatal: Unable to create '/repo/.git/index.lock': File exists");
-    execGitMock.mockRejectedValue(lockError);
-    clearStaleGitLock.mockReturnValue('/repo/.git/index.lock');
-
-    await expect(pull('/repo')).rejects.toThrow(/Cleared an abandoned git lock.*index\.lock/);
-    expect(clearStaleGitLock).toHaveBeenCalledWith(lockError.message);
-    expect(execGitMock).toHaveBeenCalledTimes(1);
-  });
-
-  it('surfaces the original failure unchanged when the lock is too young to clear', async () => {
-    const lockError = new Error("fatal: Unable to create '/repo/.git/index.lock': File exists");
-    execGitMock.mockRejectedValue(lockError);
-
-    await expect(pull('/repo')).rejects.toThrow(/Unable to create/);
-    expect(execGitMock).toHaveBeenCalledTimes(1);
-  });
-});
 
 describe('syncBranch', () => {
   it('pulls with rebase then pushes', async () => {
