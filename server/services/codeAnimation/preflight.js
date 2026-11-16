@@ -8,6 +8,7 @@ import { isCompositeProviderId } from '../../lib/providerRef.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { isVisionCapableCodexTuiProvider } from '../../lib/codex.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { resolveEffectiveModel } from '../promptRunner.js';
 
 const substitutionOf = requested => requested?.substitution === 'allowed' ? 'allowed' : 'pinned';
 
@@ -64,7 +65,6 @@ export async function preflightProductionProject(id) {
   }
   // Use the runner's own model resolution, including saved argv pins. Loading
   // this helper does not create a run or call a provider.
-  const { resolveEffectiveModel } = await import('../promptRunner.js');
   const model = resolveEffectiveModel(provider, requested.model);
   const harness = harnessForProvider(provider)?.id ?? null;
   const mode = providerRouteMode(provider);

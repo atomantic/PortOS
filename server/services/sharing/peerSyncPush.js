@@ -51,6 +51,7 @@ import {
   ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
+import { getCatalogBundleForRef } from '../catalogDB.js';
 
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -921,7 +922,6 @@ export async function buildPushPayload(sub, sourceInstanceId) {
 async function buildCatalogBundleForRef(refKind, refId) {
   const { getBackendName } = await import('../memoryBackend.js');
   if (getBackendName() !== 'postgres') return null;
-  const { getCatalogBundleForRef } = await import('../catalogDB.js');
   const bundle = await getCatalogBundleForRef(refKind, refId).catch((err) => {
     console.log(`⚠️ peerSync: catalog bundle for ${refKind}/${refId} failed: ${err.message}`);
     return null;

@@ -171,6 +171,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       const runtime = listVideoModels().find((model) => model.id === modelId)?.runtime ?? null;
       await resolveVideoLoras(loraFilenames.map((filename) => ({ filename })), { runtime });
     }
+    // Kept dynamic: statically loading generateVideo pulls renderArgs, which breaks suites that partially mock videoGen/runtimes.js.
     const { localVideoSentPrompt } = await import('./generateVideo.js');
     return { backend, ...(await localVideoSentPrompt({
       prompt: body.prompt, negativePrompt: body.negativePrompt, loraFilenames, promptAdditions,

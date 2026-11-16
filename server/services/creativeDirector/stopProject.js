@@ -36,7 +36,7 @@
  * store's change bus) — every step is individually caught and no path throws out.
  */
 
-import { getProject, updateProject, updateRun, updateScene, updatePlanStep } from './local.js';
+import { getProject, updateProject, updateRun, updateScene, updatePlanStep, mutateVideoProject } from './local.js';
 import { RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
 
@@ -217,7 +217,6 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   }
 
   if (project.workspace === 'video') {
-    const { mutateVideoProject } = await import('./local.js');
     await mutateVideoProject(projectId, current => ({ project: { ...current, videoExecution: { ...current.videoExecution,
       attempts: (current.videoExecution?.attempts || []).map(attempt => !['clip', 'audio'].includes(attempt.kind) && ['running', 'submitting'].includes(attempt.status) ? { ...attempt, status: 'failed' } : attempt),
     } }, result: true }));

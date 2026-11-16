@@ -38,7 +38,7 @@ import { isTruthyMeta, isFalsyMeta, protectedAgentIds } from './agentState.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import * as git from './git.js';
 import { detectConflicts } from './taskConflict.js';
-import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies } from './worktreeManager.js';
+import { PINNED_HEAD_MOVED, createWorktree, adoptWorktree, findAdoptableWorktreeForBranch, isBranchCheckedOutElsewhereError, listWorktrees, releaseIdleSiblingNextHolder, releaseOwnerlessForeignHolder, unlinkWorktreeDependencies, mergeBaseIntoFeatureWorktree } from './worktreeManager.js';
 import { resolveSpawnCwd, usesCreativeDirectorScratchCwd, creativeDirectorScratchCwd } from '../lib/spawnCwd.js';
 import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch } from '../lib/taskTargetBranch.js';
@@ -790,7 +790,6 @@ async function adoptFeatureAgentWorktree(task) {
   const faWorktreePath = join(PATHS.cos, 'feature-agents', fa.id, 'worktree');
   if (!existsSync(faWorktreePath)) return null;
   if (fa.git.autoMergeBase) {
-    const { mergeBaseIntoFeatureWorktree } = await import('./worktreeManager.js');
     await mergeBaseIntoFeatureWorktree(fa.id, fa.git.baseBranch).catch(err => {
       emitLog('warn', `🌳 Feature agent base merge failed: ${err.message}`, { featureAgentId: fa.id });
     });

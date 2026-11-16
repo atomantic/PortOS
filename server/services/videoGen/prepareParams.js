@@ -83,6 +83,7 @@ import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
+import { resolveVideoLoras } from './renderArgs.js';
 
 // A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
 const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
@@ -137,7 +138,6 @@ async function validateMiniMaxH3SpeedParams(model, params) {
     height: params.height ?? model.defaultHeight,
   }) : null;
   if (params.loras?.length) {
-    const { resolveVideoLoras } = await import('./renderArgs.js');
     const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
     await validate(await resolveVideoLoras(params.loras, { runtime: model.runtime }), profile);
   }

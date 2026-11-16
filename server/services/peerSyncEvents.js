@@ -14,6 +14,7 @@ import { mergeMediaTombstones } from './mediaTombstones.js';
 import { getHistoryItem } from './videoGen/history.js';
 import { listHostedEntries } from './peerHostedMedia.js';
 import { stripMachineLocalFields } from './peerSyncEventBus.js';
+import { admitPeerImageTombstones } from './imageGen/imageRecords.js';
 
 const ignored = (label, reason) => {
   console.log(`⏭️ Peer sync event from ${label} ignored: ${reason}`);
@@ -53,7 +54,6 @@ async function applyVideoDelete(peer, event, label) {
 // only deletes travel as frames; a new image reaches peers on their next sweep.
 // The admission rule and the delete are the manifest path's (imageRecords.js).
 async function applyImageDelete(peer, event, label) {
-  const { admitPeerImageTombstones } = await import('./imageGen/imageRecords.js');
   const { removed, recorded, refused } = await admitPeerImageTombstones(peer, [event.tombstone], {
     via: 'event', eventOriginInstanceId: event.originInstanceId,
   });

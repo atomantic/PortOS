@@ -50,6 +50,8 @@ import {
   CODE_ANIMATION_RENDERERS,
   CODE_ANIMATION_RESOLUTIONS,
 } from './prompt.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
+import { getProviderById } from '../providers.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
 const resolveUploadImage = makePathResolver(() => PATHS.uploads, { extensions: IMAGE_EXTENSIONS });
@@ -312,7 +314,6 @@ export async function generateCodeAnimationBrief(input) {
   if (!input.universeId && !input.seedIdea && !concept && !title) {
     throw new ServerError('Pick a universe or describe a starting idea to write a brief from', { status: 400, code: 'BRIEF_INPUT_REQUIRED' });
   }
-  const { assertProvider, resolveProviderAndModel, runPromptThroughProvider } = await import('../promptRunner.js');
   const { buildCodeAnimationBriefPrompt, extractBriefIdea } = await import('./brief.js');
   // Resolving the provider and loading the universe are independent — only the
   // board depends on which universe came back. No image slots: the brief is
@@ -509,7 +510,6 @@ async function runGeneration({ provider, model, effort, prompt, referencePaths }
  * request), then runs the model in the background and returns the job.
  */
 export async function startCodeAnimationGeneration(input) {
-  const { getProviderById } = await import('../providers.js');
   const provider = await getProviderById(input.providerId);
   if (!provider || provider.enabled === false) {
     throw new ServerError('Choose an enabled AI provider', { status: 400, code: 'PROVIDER_UNAVAILABLE' });

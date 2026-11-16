@@ -30,6 +30,7 @@ import {
   isTaskOutputPayload as isIssueWatcherPayload,
   processTaskOutput as processIssueWatcherOutput,
 } from './issueWatcher.js';
+import { writePublicReviewInputSnapshot } from './modelAbuseGuard.js';
 
 const HEAD_SHA_RE = /^[a-f0-9]{40}$/i;
 const MAX_REASON_CHARS = 2_000;
@@ -271,7 +272,6 @@ export async function runPrReviewerSecurityPreflight(taskType, app, metadata, ta
   }
 
   const { listExternalOpenPullRequests, runPrReviewerSecurityScan, securityScanFingerprint } = await import('./prReviewerSecurity.js');
-  const { writePublicReviewInputSnapshot } = await import('./modelAbuseGuard.js');
   await step('list-prs', targetPullRequest ? { detail: `Scoped to pull request #${targetPullRequest}` } : undefined);
   let target = await listExternalOpenPullRequests(app);
   if (!target.ok) {

@@ -31,6 +31,7 @@ import { renderViaMediaQueue, sampleFilm } from './stageRender.js';
 import { resolveBlenderExecution } from './execution.js';
 import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
 import { admittedRenderMap } from '../renderActivity.js';
+import { stopRun } from '../runner.js';
 
 export const STAGE_RUN_KIND = 'production-stages';
 const STYLE_POINTS = [0.1, 0.5, 0.9];
@@ -238,7 +239,6 @@ async function reviewViaAuthoringRoute({ project, manifest, artifacts, signal, t
   }
   const provider = await getProviderById(preflight.resolved.providerId);
   const prompt = reviewPrompt({ manifest, artifacts });
-  const { stopRun } = await import('../runner.js');
   let providerRunId = null;
   const stopProvider = () => { if (providerRunId) stopRun(providerRunId).catch(() => { /* best-effort cancel */ }); };
   signal?.addEventListener('abort', stopProvider, { once: true });
@@ -332,7 +332,6 @@ async function repairViaAuthoringRoute({ project, manifest, files, entryPath, fi
   }
   const provider = await getProviderById(preflight.resolved.providerId);
   const prompt = repairPrompt({ manifest, files, entryPath, findings });
-  const { stopRun } = await import('../runner.js');
   const ownedRuns = new Set();
   const stopping = new Map();
   const stopProvider = id => {

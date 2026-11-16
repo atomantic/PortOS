@@ -22,6 +22,7 @@ import {
   shouldDiagnoseFableLoomEditorial,
 } from './editorialSelfImprove.js';
 import { trimTo } from '../../lib/textUtils.js';
+import { analyzeSeriesStoryOutlines } from '../../lib/fableLoomOutline.js';
 
 export const FABLELOOM_EDITORIAL_AUTOPILOT_LIMITS = Object.freeze({
   DEFAULT_ROUNDS: 3,
@@ -312,7 +313,6 @@ async function runRound(run, guidance) {
 // drafting any episode, and never expand a teleplay or approve production here.
 async function runPlanning(run) {
   const { reviewSeriesPlan, feedbackSeriesPlan, generateEpisodeOutline, reviewEpisodeOutline, validateEpisodeOutline } = await import('./weave.js');
-  const { analyzeSeriesStoryOutlines } = await import('../../lib/fableLoomOutline.js');
   const options = routeOptions(run);
   const initial = await requireLoomForRun(run.loomId);
   if (run.cancelRequested) return finishCanceled(run);

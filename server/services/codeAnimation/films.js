@@ -8,7 +8,7 @@ import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { createFilmSchema, patchFilmSchema, filmAudioSchema } from '../../lib/codeAnimationFilms.js';
-import { blenderRefusal } from '../film/workspace.js';
+import { blenderRefusal, assertInsideWithoutSymlinks } from '../film/workspace.js';
 import { emitCodeAnimationChanged, emitCodeAnimationFilm } from '../socket.js';
 import * as store from './projectStore.js';
 
@@ -137,7 +137,6 @@ export function filmSnapshotOwner(owner, project) {
 async function mutateFilmWithSong(id, change) {
   const owner = await codeAnimationFilmOwner(id);
   const { writeBlenderSong } = await import('../film/song.js');
-  const { assertInsideWithoutSymlinks } = await import('../film/workspace.js');
   await assertInsideWithoutSymlinks(owner.workspaceDir, join(owner.workspaceDir, 'song.json'));
   let wroteSong = false;
   try {

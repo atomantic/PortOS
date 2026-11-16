@@ -28,7 +28,7 @@ import { expandHome, dataPath, atomicWrite } from '../lib/fileUtils.js';
 import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCursorState.js';
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
-import { shortSummary, localDayKey } from './humanActivity.js';
+import { shortSummary, localDayKey, recordEvents } from './humanActivity.js';
 import { getSettings } from './settings.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
 import { readBlocklist, withImessagePrivacyLock } from './imessagePrivacy.js';
@@ -423,7 +423,6 @@ async function doRunSync() {
   }
 
   const timezone = await getUserTimezone();
-  const { recordEvents } = await import('./humanActivity.js');
   const tribe = await import('./tribe.js');
   // Dynamic import avoids a circular static edge with imessageManage (which
   // pulls getStatus from this module for the manager stats endpoint) (#2413).

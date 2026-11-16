@@ -17,7 +17,7 @@
 
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
-import { getIssue, updateIssue, isStageReady } from './issues.js';
+import { getIssue, updateIssue, isStageReady, listIssues } from './issues.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
 // Shared SSE run-lifecycle: a `runs` map keyed by issueId, plus the
@@ -188,7 +188,6 @@ async function runStageIfNeeded(issueId, stageId, options, broadcast) {
  * Mirrors writers-room/evaluator.js#recoverStuckAnalyses.
  */
 export async function recoverStuckAutoRuns() {
-  const { listIssues } = await import('./issues.js');
   const all = await listIssues().catch(() => []);
   const stuck = all.filter((i) => i.status === 'running');
   if (stuck.length === 0) return 0;
