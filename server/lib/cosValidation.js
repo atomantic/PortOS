@@ -10,7 +10,6 @@
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { auditWorkflow } from './auditWorkflow.js';
 import { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
-export { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
 /**
  * Chief-of-Staff (CoS) Zod schemas (split out of validation.js, issue #1831).
  *
@@ -68,7 +67,6 @@ import {
 
 export { scheduleExecutionFieldsSchema } from './scheduleExecutionFieldsValidation.js';
 
-export { TASK_DATA_INPUT_DEFINITIONS, TASK_DATA_INPUT_IDS } from './taskDataInputCatalog.js';
 // Transitional shim: the reviewer vocabulary lives in reviewerConfig.js but is
 // still reachable from every existing `cosValidation.js` / `validation.js` import.
 export * from './reviewerConfig.js';
@@ -981,7 +979,6 @@ export const RELEASE_OPTION_KEYS = ['finishInFlight', 'mergeDependencyUpdates', 
 // DEPFREE_MODES in lib/auditCatalog.js, beside the prompt block that renders
 // it); re-exported here so the validation barrel stays the one import for
 // task-metadata vocabularies.
-export { DEPFREE_MODES, DEFAULT_DEPFREE_MODE } from './auditCatalog.js';
 
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly', 'claimFlow',

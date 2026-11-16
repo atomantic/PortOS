@@ -863,11 +863,6 @@ export function _resetMtplxServerStateForTests({
   relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
 }
 
-// Test hook for pinning
-export function _setMtplxKeepLoadedOverrideForTests(val) {
-  onDemand.setKeepLoadedOverrideForTests(val);
-}
-
 // =============================================================================
 // IDLE STOP + LAZY START
 // =============================================================================

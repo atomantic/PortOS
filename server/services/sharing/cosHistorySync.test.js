@@ -44,9 +44,8 @@ vi.mock('../cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockRes
 
 import {
   buildCosHistoryManifest,
-  diffCosHistoryManifestAgainstLocal,
-  syncCosHistoryFromPeer,
 } from './peerSync.js';
+import { diffCosHistoryManifestAgainstLocal, syncCosHistoryFromPeer } from './peerCosSync.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { addAgentArchivesToIndex } from '../cosAgentIndex.js';

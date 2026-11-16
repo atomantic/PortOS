@@ -97,6 +97,3 @@ export const queueGameWrite = (id, fn) => queueRecordWrite(id, fn);
 
 export const verifySchemaVersion = async () => (await facade.getBackend()).verify();
 
-export function _resetGamesBackend() {
-  facade.reset();
-}

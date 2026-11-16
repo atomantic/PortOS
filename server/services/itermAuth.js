@@ -47,8 +47,6 @@ export async function detectItermInstall({ now = Date.now() } = {}) {
   return installMemo.value;
 }
 
-export const __resetItermInstallMemo = () => { installMemo = null; };
-
 const runAppleScript = async (script) => {
   const { stdout } = await execFileAsync('osascript', ['-e', script], { timeout: PROBE_TIMEOUT_MS });
   return stdout.trim();

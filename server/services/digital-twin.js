@@ -90,8 +90,6 @@ export {
 export {
   buildAvatarBio,
   polishAvatarBio,
-  AVATAR_BIO_LENGTHS,
-  DEFAULT_AVATAR_BIO_LENGTH
 } from './digital-twin-avatar-bio.js';
 
 export {
@@ -119,13 +117,11 @@ export {
 
 export {
   compareSpokenWrittenStyle,
-  parseStyleComparison
 } from './digital-twin-style-comparison.js';
 
 export {
   analyzeIdentityImage,
   saveIdentityImageDocument,
-  parseIdentityImage
 } from './digital-twin-image-identity.js';
 
 export {

@@ -39,13 +39,8 @@ import {
 import { ensureTailcatInstalled, primeDerpMapCache } from './tailcatRuntime.js';
 import { isValidTcAddress, redactTcAddress, redactTailcatDiagnostics } from '../lib/tailcatAddress.js';
 
-// Compatibility for existing callers; shared implementations live with their owners.
-export { MIN_TAILCAT_VERSION } from '../lib/tailcatVersion.js';
-export {
-  listCandidateTailcatBins, readTailcatBinaryVersion, detectTailcat, findTooOldTailcat,
-  manualInstallHint, listTailcatInstallers, ensureTailcatInstalled, derpMapCachePath, primeDerpMapCache,
-} from './tailcatRuntime.js';
-export { isValidTcAddress, redactTcAddress, redactTailcatDiagnostics } from '../lib/tailcatAddress.js';
+// Shared implementations live with their owners (tailcatAddress.js).
+export { isValidTcAddress } from '../lib/tailcatAddress.js';
 
 const FORWARDS_FILE = dataPath('tailcat-forwards.json');
 const FORWARD_READY_MS = 8_000;

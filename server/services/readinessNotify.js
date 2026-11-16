@@ -15,7 +15,7 @@
 import { cancelPendingReadiness, noteReadinessChanged, readinessSubscribers as subscribers } from './readinessSignal.js';
 
 // Writers import the leaf directly; these re-exports keep the observer's API whole.
-export { noteReadinessChanged, READINESS_COALESCE_MS } from './readinessSignal.js';
+export { READINESS_COALESCE_MS } from './readinessSignal.js';
 
 const previous = new Map();
 let observerTimer = null;

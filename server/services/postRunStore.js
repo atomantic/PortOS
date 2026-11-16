@@ -176,6 +176,3 @@ export async function saveStoredTrainingRun(run) {
   return (await backend()).saveTrainingRun(run);
 }
 
-export function _resetPostRunBackend() {
-  facade.reset();
-}

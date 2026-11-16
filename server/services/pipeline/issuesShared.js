@@ -18,7 +18,6 @@
  * data/pipeline-issues/{id}/index.json (PG-backed via the store facade).
  */
 
-export { assertValidIssueId } from '../../lib/pipelineIds.js';
 
 import { getIssuesStore, stripRunHistoryFromIssue } from './issuesStore/store.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';

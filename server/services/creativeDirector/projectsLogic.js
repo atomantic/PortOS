@@ -27,7 +27,6 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { isStr } from '../../lib/textUtils.js';
 
 // Preserve the existing validation export for callers on the project-store surface.
-export { validateVideoShot } from '../../lib/creativeDirectorVideoCompiler.js';
 
 export { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 

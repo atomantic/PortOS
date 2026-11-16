@@ -204,11 +204,6 @@ const usageCache = createStaleWhileRevalidate({
   isComplete: (data) => data.limits.length > 0,
 });
 
-/** Test-only: drop the cached reading so a suite isn't order-dependent. */
-export function __resetClaudeCodeUsageCache() {
-  usageCache.clear();
-}
-
 /**
  * Spawn the Claude Code CLI in print mode, feed `/usage` on stdin, and resolve
  * with the buffered stdout. Rejects on spawn error, timeout, or non-zero exit

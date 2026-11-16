@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { POLLUTING_KEYS } from './objects.js';
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { createDeepAuditCoverage, partitionDeepAuditGroup, isDeepAuditContractUpgrade } from './deepAuditCoverage.js';
-export { DEEP_AUDIT_SCENARIOS } from './deepAuditCoverage.js';
 
 export const DEEP_AUDIT_VERSION = 1;
 export const DEEP_AUDIT_CONTRACT_VERSION = 3;

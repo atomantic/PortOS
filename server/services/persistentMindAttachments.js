@@ -35,7 +35,6 @@ import {
   PENDING_ATTACHMENT_MARKER_PATTERN,
 } from '../lib/persistentMindAttachmentOwnership.js';
 
-export { PENDING_ATTACHMENT_MARKER_PREFIX, PENDING_ATTACHMENT_MARKER_PATTERN } from '../lib/persistentMindAttachmentOwnership.js';
 
 const nowIso = () => new Date().toISOString();
 

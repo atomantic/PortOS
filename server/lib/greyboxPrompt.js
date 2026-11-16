@@ -21,7 +21,6 @@ import { GREYBOX_LIMITS, GREYBOX_SCHEMA_VERSION, greyboxSceneSchema } from './gr
 import { GREYBOX_ASPECTS, GREYBOX_PRACTICAL_LIGHTS } from './greyboxVocabulary.js';
 import { extractJson } from './jsonExtract.js';
 
-export { GREYBOX_INSTRUCTION_MAX } from './greyboxVocabulary.js';
 
 /** The scene contract and authoring rules, sent ahead of the user's words. */
 export function greyboxContractInstructions() {

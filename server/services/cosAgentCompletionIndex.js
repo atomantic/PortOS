@@ -28,7 +28,7 @@ import {
   sameCompletionProjection,
 } from '../lib/cosAgentCompletionOrder.js';
 
-export { COMPLETION_ORDER_VERSION, projectArchivedAgent } from '../lib/cosAgentCompletionOrder.js';
+export { projectArchivedAgent } from '../lib/cosAgentCompletionOrder.js';
 
 /** Relative to `data/cos/agents/`; also the path the backfill migration writes. */
 export const COMPLETION_ORDER_FILENAME = 'index.order.json';

@@ -15,7 +15,7 @@ import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
 import { activeReviewerGroupIndex, isReviewerConfigFault } from './reviewerHealth.js';
-export { REVIEWER_CONFIG_FAULT_CODES, isReviewerConfigFault } from './reviewerHealth.js';
+export { isReviewerConfigFault } from './reviewerHealth.js';
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
 // Copilot review; `claude`/`antigravity`/`codex`/`grok`/`cursor`/`opencode`/`kimi`

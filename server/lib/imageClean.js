@@ -25,7 +25,6 @@ import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { tryReadFile, safeJSONParse, atomicWrite, detectImageFormat } from './fileUtils.js';
 
-export { resolveCleanersFromConfig } from './imageCleanDefaults.js';
 
 // There is intentionally no decoded-byte cap. The HTTP route streams raw bytes
 // through `express.raw({ limit })`, so the transport itself is the (generous)

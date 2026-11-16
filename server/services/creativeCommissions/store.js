@@ -548,12 +548,6 @@ export function commissionStore() {
   return _facade;
 }
 
-/** Reset the memoized facade — test seam only. */
-export function _resetCommissionStore() {
-  _facade = null;
-  _facadeDir = null;
-}
-
 /**
  * Assert a schedule composes into a cron the scheduler will honor. Throws
  * ERR_VALIDATION otherwise (surfaced as HTTP 400). Kept here — not in the Zod

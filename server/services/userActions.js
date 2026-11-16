@@ -393,7 +393,3 @@ export async function listUserActions(options = {}) {
   return backend.list(filters);
 }
 
-/** Test seam — drop the memoized backend selection so a suite can re-select. */
-export function _resetUserActionsBackend() {
-  facade.reset();
-}

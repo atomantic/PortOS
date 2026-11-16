@@ -14,7 +14,7 @@ import { isBlockedIngestHost } from '../lib/catalogValidation.js';
 import crypto from 'crypto';
 import { loadData, withData, UNKNOWN_INSTANCE_ID, getInstanceId, getSelf } from './instanceIdentity.js';
 import { DEFAULT_SYNC_CATEGORIES, hasOptedInCategory, resolveEffectiveCategories, allSyncCategoriesOn } from '../lib/instanceSyncCategories.js';
-export { DEFAULT_SYNC_CATEGORIES, DEFAULT_ON_SYNC_CATEGORIES, isDefaultOnCategory, resolveEffectiveCategories, allSyncCategoriesOn } from '../lib/instanceSyncCategories.js';
+export { DEFAULT_SYNC_CATEGORIES, resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { instanceEvents } from './instanceEvents.js';

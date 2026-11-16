@@ -106,28 +106,6 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from './preflightTaskCard.js';
 import { checkGhHealth } from './github.js';
 import { detectActionableWork } from './perpetualWork.js';
-// Back-compat shim — these five were public here before the pre-step layer moved
-// to its own module, so a deep import of this file keeps resolving them.
-export {
-  applyPerpetualDrainCap,
-  resolveIssueAuthorFilterBlock,
-  resolveIssueExcludeLabelsBlock,
-  resolveReconcileDrainGate,
-  resolveSwarmBlock,
-} from './cosTaskPreStepBlocks.js';
-
-export {
-  buildClaimOverrideContextBlock,
-  buildLocalReviewerInstructions,
-  buildPrefetchedIssueContextBlock,
-  buildTargetWorkItemBlock,
-  normalizeWorkItemRef,
-} from './cosTaskPrompts.js';
-
-// `buildSecurityScanPipelineOutput` was public here before the pr-reviewer
-// security preflight moved beside the rest of that pipeline's contract.
-export { buildSecurityScanPipelineOutput } from './prReviewerPipeline.js';
-
 /**
  * Persist a `blocked` status on a task that has hit the max-total-spawns
  * ceiling. Unconditional: the caller has already established `exceedsMaxSpawns`.

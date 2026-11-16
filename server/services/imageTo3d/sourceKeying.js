@@ -69,17 +69,6 @@ import {
   KEY_MAX_KEYED_RATIO,
 } from './sourceKeyingKernel.js';
 
-export {
-  detectSolidBorderColor,
-  keySolidBackground,
-  KEY_TOLERANCE,
-  KEY_TIGHT_TOLERANCE,
-  KEY_MIN_BORDER_COVERAGE,
-  KEY_SOFT_BAND,
-  KEY_MIN_KEYED_RATIO,
-  KEY_MAX_KEYED_RATIO,
-} from './sourceKeyingKernel.js';
-
 /** Sources above this pixel count skip Node-side keying entirely: the raw
  * decode plus the flood/queue/output buffers scale at ~20 bytes per pixel
  * (a 96 MP gallery image would hold >1 GB and stall the event loop), while

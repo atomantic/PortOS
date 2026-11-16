@@ -20,11 +20,9 @@ import { emitRecordUpdated } from '../sharing/recordEvents.js';
 // Store accessors re-exported for existing importers (routes, seriesReview,
 // editorialScore, readerPanel, sync receive paths, tests).
 export {
-  COMMENT_STATUSES,
   DISMISS_REASONS,
   SCHEMA_VERSION,
   getReview,
-  getComment,
   updateComment,
   mergeReviewFromSync,
   locateComment,

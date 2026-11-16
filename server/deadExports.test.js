@@ -105,6 +105,161 @@ function trackedFilesFrom(root) {
     .map(file => [file, readFileSync(join(root, file), 'utf8')]);
 }
 
+// --- Re-export shims and test hooks (#16230) -------------------------------
+// `export { x } from './y.js'` in a non-barrel module is a shim: it stays only
+// while some production file imports `x` through it. `_`-prefixed exports are
+// test hooks: they stay only while some other file references them. Both scans
+// are word-level, so a namespace or dynamic importer that spells the name still
+// counts as a caller; a name no regex can decide belongs in an allowlist with
+// its reason.
+const SPECIFIER = /(?:\bfrom|\bimport\(|\bmock\(|\bdoMock\(|\bimportActual\(|\brequire\()\s*['"](\.[^'"]+)['"]/g;
+const STAR_EXPORT = /export\s*\*\s*from\s*['"](\.[^'"]+)['"]/g;
+const REEXPORT = /export\s*\{([^}]*)\}\s*from\s*['"][^'"]+['"]/g;
+const HOOK_DECLARATION = /^export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+(_[\w$]*)/gm;
+const HOOK_SCOPE = /^server\/(?:services|lib)\/(?!aiToolkit\/)[^]*\.js$/;
+const isTestFile = file => /\.test\.[cm]?[jt]sx?$/.test(file);
+
+// Test-only importers through a shim, and musicVideo names kept out of this
+// slice to avoid colliding with concurrent music-video work. Shrink-only: the
+// guard fails on an entry that is no longer an offender, so delete entries as
+// importers are repointed at the declaring module.
+const SHIM_TEST_ONLY_IMPORTERS = 'test-only importers through the shim; repoint them at the declaring module and drop the re-export';
+const SHIM_MUSIC_VIDEO_DEFERRED = 'music-video tree deferred from the first #16230 slice to avoid concurrent-edit collisions';
+const REEXPORT_ALLOWLIST = new Map(Object.entries({
+  'server/services/musicVideo/blender/state.js': ['BLENDER_NEEDS_TRUSTED_LOCAL'],
+  'server/services/musicVideo/coverArtCompose.js': ['COVER_ART_SIZE', 'COVER_DESIGN_OPTIONS', 'DEFAULT_COVER_DESIGN', 'YOUTUBE_THUMBNAIL_SIZE', 'coverOverlaySvg'],
+  'server/services/musicVideo/documentRender.js': ['DOCUMENT_RENDER_FPS'],
+  'server/services/musicVideo/projectsLogic.js': ['sanitizeProjectForSync', 'mirrorTimestamp'],
+  'server/services/musicVideo/renderCleanup.js': ['withRenderCleanupReservation'],
+}).flatMap(([file, names]) => names.map(name => [`${file}:${name}`, SHIM_MUSIC_VIDEO_DEFERRED])));
+for (const [file, names] of Object.entries({
+  'server/services/videoGen/generateVideo.js': ['computeFflfLtx2PixelBudget', 'computeFflfSafeFrames', 'resolveT2vTwoStageOverride', 'icLoraArgs', 'ltx25TextEncoderArgs'],
+  'server/lib/untrustedContent.js': ['UNTRUSTED_CONTENT_SOURCES'],
+  'server/lib/vllmQwenProvision.js': ['parseEnvContents', 'upsertEnvLine'],
+  'server/services/agentErrorAnalysis.js': ['INVESTIGATION_CIRCUIT_WINDOW_MS', 'INVESTIGATION_CIRCUIT_MAX_CREATIONS', '__resetInvestigationCircuit'],
+  'server/services/agentWorkspacePrep.js': ['resolveTaskExistingBranch'],
+  'server/services/catalogDB.js': ['CATALOG_REVISION_RETENTION'],
+  'server/services/creativeDirector/local.js': ['trimRuns'],
+  'server/services/creativeDirector/projectsLogic.js': ['sanitizeProjectForSync'],
+  'server/services/digital-twin.js': ['ENRICHMENT_CATEGORIES', 'SCALE_QUESTIONS', 'saveMeta', 'updateMeta', 'exportSoul', 'getSoulForPrompt', 'getSoulStatus'],
+  'server/services/eidoverseWorldSources.js': ['eidoversePeerId'],
+  'server/services/huggingFaceCatalog.js': ['fetchRepoPublishedDates'],
+  'server/services/identity.js': ['extractSleepMarkers', 'extractCaffeineMarkers', 'extractLongevityMarkers', 'extractCardiovascularMarkers', 'computeLifeExpectancy', 'computeChronotype', 'computeRecommendations', 'computeGoalUrgency'],
+  'server/services/meatspacePostDrillCache.js': ['CACHEABLE_TYPES'],
+  'server/services/mtplxServerManager.js': ['mtplxCachedModelIds'],
+  'server/services/persistentMindSupervisor.js': ['cleanupPersistentMindAttachments'],
+  'server/services/persistentMindWorkspacePreflight.js': ['satisfiesVersionRequirement'],
+  'server/services/pipeline/editorial/checkRunner.js': ['effectiveCheckSources'],
+  'server/services/readinessNotify.js': ['READINESS_COALESCE_MS'],
+  'server/services/sprites/walkPostprocess.js': ['WALK_FRAME_COUNT', 'walkPhaseLabels'],
+  'server/services/stageRunner.js': ['withLocalConcurrencyGate', 'LOCAL_LLM_MAX_CONCURRENCY'],
+  'server/services/taskLearning/store.js': ['EXECUTION_EFFORT_NONE'],
+  'server/services/taskPromptDefaults.js': ['UNPERSISTED_PROMPT_KEYS'],
+  'server/services/taskSchedule.js': ['isRefillRequest', 'isUserOriginRequest', 'DEFAULT_BRANCHES_PER_AGENT', 'MANAGED_APP_TARGET_TASK_TYPES', 'MANAGED_AGENT_OPTIONS', 'PERPETUAL_DRAIN_DISPATCH_CAP', 'TASK_TYPE_DESCRIPTIONS', 'TASK_TYPE_INVOCATION', 'TASK_TYPE_PROMPT_INFO', 'getTaskTypePromptInfo', 'PROGRAMMATIC_SCHEDULED_TASK_TYPES', 'FAILURE_BACKOFF_BASE_MS', 'FAILURE_BACKOFF_CAP_MS', 'FAILURE_PARK_THRESHOLD', 'clearTaskTypeFailurePark', 'computeFailureBackoffMs'],
+  'server/services/voice/proactiveSpeech.js': ['parseHHMM'],
+})) {
+  for (const name of names) REEXPORT_ALLOWLIST.set(`${file}:${name}`, SHIM_TEST_ONLY_IMPORTERS);
+}
+
+function stripComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+// Tests are most of the tree's bytes and only ever matter as referrers of an
+// underscore hook (a test importer never keeps a re-export alive), so a test
+// file is reduced to its `_`-prefixed words.
+function codeFiles(root = ROOT) {
+  return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, maxBuffer: GIT_MAX_BUFFER })
+    .toString('utf8').split('\0').filter(file => /^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file) && existsSync(join(root, file)))
+    .map(file => {
+      const source = readFileSync(join(root, file), 'utf8');
+      return [file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source];
+    });
+}
+
+// Lazy on purpose: this runs inside the structural-guard time budget, so words
+// are tokenized only for the few files that import a shim, not the whole tree.
+function referenceIndex(files) {
+  const sources = new Map(files);
+  const resolve = (from, specifier) => {
+    const base = join(dirname(from), specifier).split('\\').join('/');
+    return [base, `${base}.js`, `${base}/index.js`].find(candidate => sources.has(candidate));
+  };
+  const add = (map, key, value) => {
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key).add(value);
+  };
+  const underscoreMentions = new Map();
+  const starParents = new Map();
+  const direct = new Map();
+  for (const [file, source] of files) {
+    for (const word of new Set(source.match(/\b_[\w$]*/g) || [])) add(underscoreMentions, word, file);
+    for (const match of source.matchAll(SPECIFIER)) {
+      const target = resolve(file, match[1]);
+      if (target && target !== file) add(direct, target, file);
+    }
+    if (!/export\s*\*\s*from/.test(source)) continue;
+    for (const match of stripComments(source).matchAll(STAR_EXPORT)) {
+      const target = resolve(file, match[1]);
+      if (target) add(starParents, target, file);
+    }
+  }
+  // `export * from './x.js'` re-publishes x's names, so whoever imports the
+  // star-parent imports them through it.
+  const importers = (file, seen = new Set([file])) => {
+    const out = new Set(direct.get(file) || []);
+    for (const parent of starParents.get(file) || []) {
+      if (seen.has(parent)) continue;
+      seen.add(parent);
+      for (const other of importers(parent, seen)) out.add(other);
+    }
+    return out;
+  };
+  const words = new Map();
+  const mentions = (file, name) => {
+    if (!words.has(file)) words.set(file, new Set(sources.get(file).match(WORD) || []));
+    return words.get(file).has(name);
+  };
+  return { importers, mentions, underscoreMentions };
+}
+
+function exportedNames(clause) {
+  return clause.split(',').map(part => part.trim()).filter(Boolean)
+    .map(part => part.split(/\s+as\s+/).pop().trim());
+}
+
+function callerlessReExports(files, index = referenceIndex(files)) {
+  const offenders = [];
+  for (const [file, source] of files) {
+    if (!HOOK_SCOPE.test(file) || isTestFile(file) || /(^|\/)index\.js$/.test(file) || !source.includes('} from')) continue;
+    const reExports = [...stripComments(source).matchAll(REEXPORT)];
+    if (!reExports.length) continue;
+    const callers = [...index.importers(file)].filter(other => other !== file && !isTestFile(other));
+    for (const match of reExports) {
+      for (const name of exportedNames(match[1])) {
+        if (!callers.some(other => index.mentions(other, name))) offenders.push(`${file}:${name}`);
+      }
+    }
+  }
+  return offenders;
+}
+
+function unreferencedTestHooks(files, index = referenceIndex(files)) {
+  const offenders = [];
+  for (const [file, source] of files) {
+    if (!HOOK_SCOPE.test(file) || isTestFile(file) || !/export[^\n]*\b_|\b_[\w$]*\b[^\n]*\n?}/.test(source) && !source.includes('_')) continue;
+    const code = stripComments(source);
+    const names = [...code.matchAll(HOOK_DECLARATION)].map(match => match[1]);
+    for (const match of code.matchAll(/export\s*\{([^}]*)\}(?!\s*from)/g)) {
+      names.push(...exportedNames(match[1]).filter(name => name.startsWith('_')));
+    }
+    for (const name of names) {
+      if (![...(index.underscoreMentions.get(name) || [])].some(other => other !== file)) offenders.push(`${file}:${name}`);
+    }
+  }
+  return offenders;
+}
+
 describe('server dead exports', () => {
   it('detects a caller-less exported function and ignores a live export', () => {
     const files = new Map([
@@ -179,5 +334,45 @@ describe('server dead exports', () => {
     const candidates = addedExportNames();
     const orphans = candidates.size > 0 ? deadExports(trackedFiles(), candidates) : [];
     expect(orphans).toEqual([]);
+  });
+  it('flags a caller-less re-export and keeps one a production file imports', () => {
+    const files = [
+      ['server/services/shim.js', "export { used, orphan, onlyTested } from './impl.js';\n"],
+      ['server/services/impl.js', 'export const used = 1;\nexport const orphan = 2;\nexport const onlyTested = 3;\n'],
+      ['server/routes/caller.js', "import { used } from '../services/shim.js';\nused;\n"],
+      ['server/services/shim.test.js', "import { onlyTested } from './shim.js';\nonlyTested;\n"],
+    ];
+    expect(callerlessReExports(files)).toEqual(['server/services/shim.js:orphan', 'server/services/shim.js:onlyTested']);
+  });
+
+  it('ignores a re-export name that only appears in a comment or another module', () => {
+    const files = [
+      ['server/services/shim.js', "// export { ghost } from './impl.js';\nexport { real } from './impl.js';\n"],
+      ['server/routes/other.js', "import { real } from '../services/impl.js';\nreal;\n"],
+    ];
+    expect(callerlessReExports(files)).toEqual(['server/services/shim.js:real']);
+  });
+
+  it('flags an unreferenced underscore test hook and keeps one a test references', () => {
+    const files = [
+      ['server/services/store.js', 'export function _resetStore() {}\nexport const __resetCache = () => {};\nexport function _resetUsed() {}\n'],
+      ['server/services/store.test.js', "import { _resetUsed } from './store.js';\n_resetUsed();\n"],
+    ];
+    expect(unreferencedTestHooks(files)).toEqual(['server/services/store.js:_resetStore', 'server/services/store.js:__resetCache']);
+  });
+
+  it('flags an unreferenced underscore name in an export list', () => {
+    const files = [['server/lib/seam.js', 'function _seam() {}\nexport { _seam };\n']];
+    expect(unreferencedTestHooks(files)).toEqual(['server/lib/seam.js:_seam']);
+  });
+
+  it('keeps server re-exports used and test hooks referenced', () => {
+    const files = codeFiles();
+    const index = referenceIndex(files);
+    const reExports = callerlessReExports(files, index);
+    expect(reExports.filter(entry => !REEXPORT_ALLOWLIST.has(entry))).toEqual([]);
+    // Shrink-only: an allowlisted entry that no longer offends must be deleted.
+    expect([...REEXPORT_ALLOWLIST.keys()].filter(entry => !reExports.includes(entry))).toEqual([]);
+    expect(unreferencedTestHooks(files, index)).toEqual([]);
   });
 });

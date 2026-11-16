@@ -23,8 +23,6 @@ export const setAIToolkit = setAIToolkitInstance;
 // running a refresh.
 export {
   isOllamaBackedProvider,
-  canRefreshModels,
-  ollamaRefreshGroupKey,
 } from '../lib/aiToolkit/providers.js';
 
 export async function getAllProviders() {

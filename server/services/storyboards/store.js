@@ -91,6 +91,3 @@ export const listTombstoneIdsBefore = async (beforeMs) => (await facade.getBacke
 
 export const queueStoryboardWrite = (id, fn) => queueRecordWrite(id, fn);
 
-export function _resetStoryboardBackend() {
-  facade.reset();
-}

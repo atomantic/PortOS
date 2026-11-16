@@ -52,7 +52,6 @@ export const resetFfmpegCache = () => {
   encoderCapabilityCache.clear();
   testPlatformCandidates = null;
 };
-export const __resetFfmpegCache = resetFfmpegCache;
 export const _probeEncoderCapability = (...args) => probeEncoderCapability(...args);
 export const _enumerateFfmpegCandidates = () => enumerateFfmpegCandidates();
 

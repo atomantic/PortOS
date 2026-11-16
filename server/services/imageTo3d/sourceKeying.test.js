@@ -4,13 +4,12 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import sharp from 'sharp';
 import {
-  detectSolidBorderColor,
   hasMeaningfulAlpha,
-  keySolidBackground,
   KEYING_CACHE_VERSION,
   prepareSourceImage,
   subjectFrameLayout,
 } from './sourceKeying.js';
+import { detectSolidBorderColor, keySolidBackground } from './sourceKeyingKernel.js';
 import { sha256File } from '../../lib/fileUtils.js';
 
 // Build a raw RGBA buffer from a painter function (x, y) => [r, g, b, a?].
