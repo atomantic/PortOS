@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mockNoPeerSync, mockNoPeers } from '../../lib/mockPathsDataRoot.js';
 
 // arcPlanner.js loads the pipeline + universe graph transitively; stub the
-// peer-fan-out + filesystem the way the main arcPlanner suite does so this
+// peer-fan-out + filesystem the way the per-leaf arcPlanner suites do so this
 // pure import-shape test stays hermetic.
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
