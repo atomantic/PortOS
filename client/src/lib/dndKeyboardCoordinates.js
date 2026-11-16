@@ -13,6 +13,7 @@ import { closestCenter, rectIntersection } from '@dnd-kit/core';
 /**
  * dnd-kit's default collision detection for pointer drags, `closestCenter` for keyboard ones. A keyboard drag needs `closestCenter` (the getters move the drag to a zone's centre; with `rectIntersection` a destination smaller
  * than the dragged item still resolves to no target). Applying it to POINTER drags too is the tempting version but a behavior change: it always finds a nearest target, so a drop over empty space would file into the closest zone.
+ * @param {object} args dnd-kit collision-detection arguments
  */
 export function keyboardAwareCollisionDetection(args) {
   return args.pointerCoordinates ? rectIntersection(args) : closestCenter(args);

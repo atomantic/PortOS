@@ -86,6 +86,10 @@ export function isEditableTarget(el) {
  * - OS auto-repeat (`ignoreRepeat`); a handler tracking press/release itself passes `false`.
  * - An open `aria-modal` dialog (`enabledInDialog`); a surface INSIDE the dialog opts back in.
  * @param {KeyboardEvent} event
+ * @param {object}  [options]
+ * @param {boolean} [options.enabledInDialog=false] act even while a dialog is open
+ * @param {boolean} [options.ignoreRepeat=true]     drop OS auto-repeat keydowns
+ * @param {boolean} [options.allowChords=false]     act on ⌘/Ctrl/Alt chords too
  * @returns {boolean} true when the handler must stand down
  */
 export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRepeat = true, allowChords = false } = {}) {

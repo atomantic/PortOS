@@ -50,6 +50,8 @@ export function supportsArQuickLook() {
 /**
  * Serialize a loaded scene to USDZ bytes. The exporter module is imported lazily (~35 KB plus a zip library, needed by this one action); `vite.chunkGroups.js` folds `three` into `vendor-three`,
  * so the deferral keeps it off other routes. The scene is the drei cache's own object graph: read, never mutated or disposed.
+ * @param {import('three').Object3D} scene
+ * @param {{ maxTextureSize?: number }} [options]
  * @returns {Promise<ArrayBuffer>}
  */
 export async function exportSceneToUsdz(scene, { maxTextureSize = AR_MAX_TEXTURE_SIZE } = {}) {

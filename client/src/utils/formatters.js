@@ -113,6 +113,7 @@ export function formatDate(dateStr) {
  * @param {string|number|Date|null} value - ISO timestamp, `YYYY-MM-DD`, epoch ms, or Date
  * @param {string} [fallback=''] - Rendered for missing/invalid input
  * @returns {string} Formatted numeric date
+ * Never write `new Date(x).toLocaleDateString()` inline; pick the helper for the shape you want, and do not re-define formatters inside components.
  */
 export function formatDateNumeric(value, fallback = '') {
   return localized('date', value, undefined, fallback);
@@ -232,6 +233,7 @@ export function formatHourOfDay(hour, { style = 'long', fallback = '—' } = {})
 
 /**
  * Format a duration in milliseconds as a human-readable string
+ * @param {number} ms - Duration in milliseconds
  * @returns {string|null} Formatted duration (e.g., "500ms", "1.5s", "2.0m")
  */
 export function formatRuntime(ms) {
@@ -305,6 +307,7 @@ export function timeUntil(dateStr, fallback = 'now') {
 
 /**
  * Compact decimal count: 950 → "950", 1200 → "1.2K", 3400000 → "3.4M".
+ * @param {number} n - Count to abbreviate
  * @returns {string} Abbreviated count
  */
 export function formatCompactCount(n) {
@@ -408,7 +411,9 @@ export function formatPercent(value, { decimals = 1, fallback = '—' } = {}) {
  * `signed` keeps the minus OUTSIDE the dollar sign (`-$5.00`); `trimWhole` drops `.00` on a round typed price;
  * amounts past a thousand are grouped; `compact` abbreviates (`$9.4K`) for chart axes.
  *
- * @param {number} value - Dollar amount (nullish renders $0.00; a non-finite non-nullish value renders `fallback`, never "$0.00")
+ * @param {number} value - Dollar amount (nullish renders as $0.00; a non-nullish
+ *   value that fails to parse as a finite number — NaN, a broken calc — renders
+ *   `fallback` instead, so a computation failure never masquerades as "$0.00")
  * @param {{ signed?: boolean, trimWhole?: boolean, compact?: boolean, fallback?: string, maximumFractionDigits?: number }} [options]
  * @returns {string} e.g. "$12.34", "-$5.00", "$200"
  */
@@ -427,6 +432,8 @@ export function formatUsd(value, { signed = false, trimWhole = false, compact = 
 
 /**
  * Format bytes as a human-readable string
+ * @param {number} bytes - Size in bytes
+ * @param {number} decimals - Number of decimal places
  * @returns {string} Formatted size (e.g., "1.5 KB", "2.3 MB", "4.2 TB")
  */
 export function formatBytes(bytes, decimals = 1) {
@@ -578,6 +585,7 @@ export function parseTimeoutMs(raw) {
 
 /**
  * Format a duration in milliseconds; buckets down from days ("2d 3h") rather than an unbounded hour count.
+ * @param {number} ms - Duration in milliseconds
  * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m", "2d 3h")
  */
 export function formatDurationMs(ms) {
@@ -722,6 +730,8 @@ export function recommendedRamGb(sizeBytes, sizeStr) {
 /**
  * Clamp a numeric value `n` into the inclusive range `[min, max]`.
  * @param {number} n - Value to clamp
+ * @param {number} min - Lower bound
+ * @param {number} max - Upper bound
  * @returns {number} Clamped value
  */
 export function clamp(n, min, max) {

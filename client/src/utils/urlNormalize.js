@@ -12,11 +12,13 @@ const DOMAIN_PATTERN = /^\S+\.\S+$/;
 /**
  * True when a stored/user value is an explicit http(s) URL, the only scheme safe to render as a link (rejects javascript:/data: so a stored URL can't smuggle a script into an href).
  * Alias of `isSafeHref` from `client/src/lib/isSafeHref.js` (mirrors `server/lib/isSafeHref.js`), kept so existing importers don't change.
+ * @param {string} url
  */
 export const isHttpUrl = isSafeHref;
 
 /**
  * True only for a syntactically valid HTTPS URL, for provider-issued browser handoffs where a local process response must never become a script URL in the PortOS page.
+ * @param {string} url
  */
 export const isHttpsUrl = (url) =>
   typeof url === 'string' && URL.canParse(url) && new URL(url).protocol === 'https:';
@@ -24,6 +26,8 @@ export const isHttpsUrl = (url) =>
 /**
  * Extract a TikTok video id from a share/watch URL so a reference renders TikTok's iframe Embed Player instead of loading embed.js; null for anything else (plain link).
  * The host is ANCHORED so look-alikes (nottiktok.com, evil.com/#tiktok.com/…) don't match: `tiktok.com` must follow start, `//`, or a subdomain dot.
+ * @param {string} url
+ * @returns {string|null}
  */
 export const tiktokVideoId = (url) => {
   const m = /(?:^|\/\/|\.)tiktok\.com\/(?:@[\w.-]+\/video|v|embed(?:\/v2)?|player\/v1)\/(\d+)/.exec(url || '');
@@ -32,11 +36,13 @@ export const tiktokVideoId = (url) => {
 
 /**
  * The TikTok Embed Player URL for a video id (from `tiktokVideoId`).
+ * @param {string} id
  */
 export const tiktokEmbedSrc = (id) => `https://www.tiktok.com/player/v1/${id}`;
 
 /**
  * Detect whether a raw string is a URL/link rather than free text (mirrors QuickBrainCapture): an explicit scheme (http/https/git@) OR a domain-like single token (`foo.bar`).
+ * @param {string} raw
  */
 export function isUrl(raw) {
   const trimmed = (raw ?? '').trim();
@@ -46,6 +52,7 @@ export function isUrl(raw) {
 
 /**
  * Normalize a user-entered URL by prepending `https://` when no scheme is present; tunable to match each historical call site.
+ * @param {string} raw
  * @param {object} [options]
  * @param {boolean} [options.allowGit=true]   Treat `git@…` as already-normalized.
  * @param {boolean} [options.requireDot=false] Only prepend (else return null)
