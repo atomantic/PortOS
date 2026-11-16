@@ -243,7 +243,7 @@ export const layeredIntelligenceConfigSchema = z.object({
   model: z.string().nullable().optional(),
   sources: z.object({
     // One optional toggle per built-in Layer-1 source; the ordered key list (and
-    // what each source means) lives in layeredIntelligenceSources.js.
+    // what each source means) lives in layeredIntelligenceSourceKeys.js.
     ...Object.fromEntries(LAYERED_INTELLIGENCE_SOURCE_KEYS.map(key => [key, z.boolean().optional()])),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display

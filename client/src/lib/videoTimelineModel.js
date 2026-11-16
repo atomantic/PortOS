@@ -26,7 +26,7 @@ import {
   resolveAudioSpan,
 } from '../../../server/lib/videoTimelineSourceSpans.js';
 
-export { fitFades } from '../../../server/lib/videoTimelineFades.js';
+
 export { historySourceDuration };
 
 // Query for GET /api/video-gen/history that returns every clip as stat-free,

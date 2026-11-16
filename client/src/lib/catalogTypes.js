@@ -6,7 +6,7 @@
  * the server entries, so `label` / `badgeColor` / the primary-content key and
  * label / the snippet fallback chain / `editableListFields` (and its
  * `BIBLE_LIMITS`-derived caps) have exactly one definition and cannot drift.
- * `RELATION_KINDS`, `MEDIA_KINDS`, `canonicalTagKey`, `payloadSnippet` and
+ * `RELATION_KINDS`, `canonicalTagKey`, `payloadSnippet` and
  * `USER_TYPE_FIELD_KINDS` are re-exported outright.
  *
  * What stays here is presentation the server has no use for: the grouped
@@ -21,18 +21,7 @@
  */
 import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catalogTypes.js';
 
-export {
-  catalogReferenceRole,
-  FAMILY_RELATION_KINDS,
-  isFamilyRelationKind,
-  MEDIA_KINDS,
-  RELATION_KINDS,
-  USER_TYPE_FIELD_KINDS,
-  canonicalTagKey,
-  getMediaKind,
-  getRelationKind,
-  payloadSnippet,
-} from '../../../server/lib/catalogTypes.js';
+export { catalogReferenceRole, FAMILY_RELATION_KINDS, isFamilyRelationKind, RELATION_KINDS, USER_TYPE_FIELD_KINDS, canonicalTagKey, getRelationKind, payloadSnippet } from '../../../server/lib/catalogTypes.js';
 
 // Per-type detail-editor field list. Each entry is `[key, label, kind]` where
 // `kind` is 'text' (single line) or 'textarea' (multi-line). The light types

@@ -1,7 +1,5 @@
 /**
- * Re-export of `server/lib/editorial/letteringDensity.js` — `analyzeComicLettering` /
- * `panelLetteringMetrics` / `overflowSeverity` / `sanitizeLetteringThresholds` /
- * `DEFAULT_LETTERING_THRESHOLDS`.
+ * Re-export of `server/lib/editorial/letteringDensity.js` — `analyzeComicLettering`.
  *
  * Powers the comic-script stage's INLINE per-page warnings (#1313) from the same code the
  * authoritative `comic.lettering-density` check runs.
@@ -14,11 +12,4 @@
  * imported rather than copied so the two runtimes cannot drift. The file stays
  * so every `lib/letteringDensity` import path in the client is unchanged.
  */
-export {
-  DEFAULT_LETTERING_THRESHOLDS,
-  LETTERING_SEVERITIES,
-  analyzeComicLettering,
-  overflowSeverity,
-  panelLetteringMetrics,
-  sanitizeLetteringThresholds,
-} from '../../../server/lib/editorial/letteringDensity.js';
+export { analyzeComicLettering } from '../../../server/lib/editorial/letteringDensity.js';

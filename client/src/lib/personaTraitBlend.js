@@ -2,7 +2,7 @@
  * Re-export of `server/lib/personaTraitBlend.js`.
  *
  * Digital-twin persona trait-blending (M34 P7) — `describeTraitAdjustments` /
- * `renderTraitBlendDirective` / `BIG_FIVE_LEAN` for the Personas UI preview.
+ * `BIG_FIVE_LEAN` for the Personas UI preview.
  */
 
 /**
@@ -12,15 +12,4 @@
  * imported rather than copied so the two runtimes cannot drift. The file stays
  * so every `lib/personaTraitBlend` import path in the client is unchanged.
  */
-export {
-  BIG_FIVE_DELTA_MAX,
-  BIG_FIVE_DELTA_MIN,
-  BIG_FIVE_LEAN,
-  COMM_DELTA_MAX,
-  COMM_DELTA_MIN,
-  EMOJI_USAGE_VALUES,
-  blendCommunicationProfile,
-  describeTraitAdjustments,
-  hasTraitAdjustments,
-  renderTraitBlendDirective,
-} from '../../../server/lib/personaTraitBlend.js';
+export { BIG_FIVE_DELTA_MAX, BIG_FIVE_DELTA_MIN, BIG_FIVE_LEAN, COMM_DELTA_MAX, COMM_DELTA_MIN, EMOJI_USAGE_VALUES, describeTraitAdjustments } from '../../../server/lib/personaTraitBlend.js';

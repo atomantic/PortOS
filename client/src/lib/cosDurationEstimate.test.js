@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { executionDurationKey as serverExecutionDurationKey } from '../../../server/lib/executionDurationKey.js';
-import { executionDurationKey, estimateCosDuration } from './cosDurationEstimate.js';
+import { estimateCosDuration } from './cosDurationEstimate.js';
 
 const taskType = 'self-improve:release-check';
 const task = { taskType: 'scheduled', description: '[self-improvement] release-check - verify the release' };
@@ -12,7 +12,6 @@ describe('persisted execution-duration key compatibility', () => {
   ])('reads existing history for effort %s with the unchanged server key', (effort, expectedKey) => {
     const identity = { taskType, providerId: 'claude', model: 'opus', effort };
     expect(serverExecutionDurationKey(identity)).toBe(expectedKey);
-    expect(executionDurationKey(identity)).toBe(expectedKey);
     const durations = {
       _byExecution: { [expectedKey]: { avgDurationMs: 60_000, completed: 3 } },
       [taskType]: { avgDurationMs: 300_000, completed: 20 }

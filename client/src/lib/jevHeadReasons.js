@@ -9,8 +9,4 @@
  * into the browser bundle.
  */
 
-export {
-  JEV_HEAD_BLOCKER_REASONS,
-  JEV_HEAD_BLOCKER_FALLBACK,
-  jevHeadBlockerLabel,
-} from '../../../server/lib/jevHeadReasons.js';
+export { jevHeadBlockerLabel } from '../../../server/lib/jevHeadReasons.js';

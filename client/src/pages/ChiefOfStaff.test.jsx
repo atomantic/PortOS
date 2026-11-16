@@ -97,7 +97,7 @@ vi.mock('../components/cos/tabs/MindTab', () => ({
 }));
 
 const { default: ChiefOfStaff, SPEAKING_MS, LAZY_AVATARS, INLINE_RENDERED_AVATAR_STYLES } = await import('./ChiefOfStaff');
-const { AVATAR_STYLE_IDS } = await import('../lib/avatarStyles');
+const { AVATAR_STYLE_IDS } = await import('../../../server/lib/avatarStyles.js');
 
 const config = {
   avatarStyle: 'svg',

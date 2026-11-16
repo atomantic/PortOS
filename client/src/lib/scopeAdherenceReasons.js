@@ -8,8 +8,4 @@
  * imports of its own, so it is safe to pull into the browser bundle.
  */
 
-export {
-  SCOPE_ADHERENCE_REASONS,
-  SCOPE_ADHERENCE_REASON_FALLBACK,
-  scopeAdherenceReasonLabel,
-} from '../../../server/lib/scopeAdherenceReasons.js';
+export { scopeAdherenceReasonLabel } from '../../../server/lib/scopeAdherenceReasons.js';

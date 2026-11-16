@@ -38,7 +38,7 @@ vi.mock('../components/ui/Toast', () => {
 });
 
 import * as api from '../services/api';
-import { MAINTENANCE_TASK_ORDER } from '../lib/quotaBurnTasks';
+import { MAINTENANCE_TASK_ORDER } from '../../../server/lib/maintenanceSequence.js';
 
 const NO_OVERRIDES = { providerId: null, model: null, effort: null, params: {} };
 
