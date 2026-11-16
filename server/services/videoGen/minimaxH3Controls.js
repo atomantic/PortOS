@@ -1,26 +1,18 @@
 /**
- * MiniMax H3's non-mode control gate — the knobs H3 fixes in the model itself
- * rather than exposing to the caller.
+ * MiniMax H3's non-mode control gate: the knobs H3 fixes in the model itself.
  *
- * Companion to `modeContract.js`, which owns the mode/source rules and
- * explicitly leaves "H3's fps / negative-prompt / tiling / frame-grid checks"
- * to their call sites. There are TWO such call sites — the enqueue boundary
+ * Companion to `modeContract.js`, which leaves H3's fps / negative-prompt /
+ * tiling / frame-grid checks to call sites. Both the enqueue boundary
  * (`prepareParams.js`, which must clean up staged uploads before it throws) and
- * the render boundary (`local.js#buildMiniMaxH3Args`) — and they carried
- * near-identical copies of all five checks. That is the same shape that had
- * already drifted once before #3736 collapsed the mode gates, so the checks
- * live here and both boundaries call in.
+ * the render boundary (`local.js#buildMiniMaxH3Args`) call in here.
  *
  * Returns a ServerError to throw, or null when every control is legal, so a
- * caller with teardown to run (`await cleanupStaged()`) can do it before
- * throwing. Same convention as `videoModeContractError`.
+ * caller with teardown to run can do it before throwing (same convention as
+ * `videoModeContractError`).
  *
- * Covers every H3 runtime. The controls are facts about the checkpoint — 24
- * fps, joint video+audio, CFG-distilled, a 17n+5 frame grid — so the MLX port
- * and the diffusers CUDA path enforce the identical set. The one thing that
- * genuinely differs is the legal frame WINDOW (diffusers requires the snapped
- * duration to land in 5-15 s where the MLX port accepts 4-15 s), so the grid
- * check reads the entry's own `frameOptions` rather than a hardcoded range.
+ * Covers every H3 runtime: 24 fps, joint video+audio, CFG-distilled, a 17n+5
+ * frame grid. The legal frame WINDOW differs (diffusers 5-15 s, MLX 4-15 s), so
+ * the grid check reads the entry's own `frameOptions` rather than a constant.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
@@ -28,12 +20,9 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 const h3Error = (message, code) => new ServerError(message, { status: 400, code });
 
-// The canonical coercion, matching `routes/videoGen.js`. The route's schema
-// types this field as `z.union([z.boolean(), z.literal('true'), z.literal('false')])`
-// and every internal producer passes a real boolean, so `true | false | 'true' |
-// 'false' | undefined` is the whole input space — and `'false'` is why a plain
-// truthiness check is wrong (`Boolean('false')` is true, which would read an
-// explicit opt-OUT as an opt-in).
+// Canonical coercion, matching `routes/videoGen.js`: input is `true | false |
+// 'true' | 'false' | undefined`, and `Boolean('false')` is true, so a plain
+// truthiness check would read an explicit opt-OUT as an opt-in.
 
 /**
  * @param {object} opts

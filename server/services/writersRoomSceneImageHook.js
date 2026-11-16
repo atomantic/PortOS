@@ -1,28 +1,20 @@
 /**
  * Writers-Room scene-image attach hook (issue #1363).
  *
- * Subscribes to mediaJobEvents and, for each completed image job that carries
- * `params.writersRoom`, files the rendered filename onto that work's analysis
+ * Subscribes to mediaJobEvents and, for each completed image job carrying
+ * `params.writersRoom`, files the rendered filename onto the work's analysis
  * snapshot (`sceneImages[sceneId]`) and mirrors it into the work's auto-
- * collection — server-side, independent of any mounted client. This is the
- * durable counterpart to SceneCard / LiveRenderPanel's old generate-then-attach
- * round-trip: a long-running local/Codex render that completes after the user
- * navigated away, refreshed, or moved their cursor still lands on the snapshot
- * (previously the image reached the gallery but the analysis link was lost).
+ * collection, server-side and independent of any mounted client, so a long
+ * render finishing after the user navigated away still lands.
  *
  * Only the async local/Codex lanes ride the media-job queue this hook listens
- * to. The synchronous external SD-API lane returns its filename inline and
- * attaches via the `scene-image` route directly — same split the catalog hook
- * (#1359) documents.
+ * to; the synchronous external SD-API lane attaches via the `scene-image` route.
  *
- * On a successful attach the hook emits `writersRoomEvents` 'scene-image', which
- * socket.js bridges to the client so the storyboard boards update reactively.
- *
- * The shared completion-hook scaffold (tag-decode, per-analysis serialization,
- * the newest-render-wins guard, best-effort error handling, idempotent init/
- * reset) lives in `createMediaJobImageHook` (#1791) — this file is just the
- * writers-room-specific config. Mounted once at server boot from server/index.js
- * (after the media job queue is running).
+ * On success it emits `writersRoomEvents` 'scene-image', which socket.js bridges
+ * to the client. The shared scaffold (tag-decode, per-analysis serialization,
+ * newest-render-wins, idempotent init/reset) is `createMediaJobImageHook`
+ * (#1791); this file is the writers-room config. Mounted once at boot from
+ * server/index.js after the media job queue is running.
  */
 
 import { createMediaJobImageHook } from './mediaJobImageHook.js';
@@ -30,14 +22,12 @@ import { persistSceneImage } from './writersRoom/evaluator.js';
 import { writersRoomEvents } from './writersRoomEvents.js';
 import { effectiveJobPrompt } from '../lib/federatedMediaWire.js';
 
-// The render filename is `${jobId}.png`; prefer the job id, fall back to
-// stripping the extension so the attach records a stable jobId either way.
+// The render filename is `${jobId}.png`; fall back to stripping the extension for a stable jobId.
 const deriveJobId = (job, filename) =>
   (typeof job.id === 'string' && job.id ? job.id : filename.replace(/\.png$/, ''));
-// The gen prompt IS the scene prompt (buildScenePrompt output), so record it on
-// the attach without the tag having to carry a duplicate copy. A federated
-// render blanks top-level `prompt` to fail closed on a downgrade (#4683), so
-// read through to the marker rather than saving the scene an empty prompt.
+// The gen prompt IS the scene prompt, so record it without the tag carrying a copy.
+// A federated render blanks top-level `prompt` to fail closed (#4683), so read
+// through to the marker.
 const derivePrompt = (job) => effectiveJobPrompt(job);
 
 const hook = createMediaJobImageHook({
@@ -47,13 +37,10 @@ const hook = createMediaJobImageHook({
   identify: (tag) => (tag?.workId && tag.analysisId && tag.sceneId
     ? { workId: tag.workId, analysisId: tag.analysisId, sceneId: tag.sceneId }
     : null),
-  // Serialize per analysis FILE (workId:analysisId): two scene renders for the
-  // same analysis completing close together would otherwise both
-  // load→modify→save the one `sceneImages` map and the later write would clobber
-  // the earlier scene's entry. Different analyses (and works) attach concurrently.
+  // Serialize per analysis FILE (workId:analysisId): concurrent scene renders would
+  // otherwise load→modify→save the one `sceneImages` map and clobber each other.
   serializeKey: ({ workId, analysisId }) => `${workId}:${analysisId}`,
-  // Newest-render-wins per scene frame so an older render that completes after a
-  // newer regenerate can't overwrite the newer storyboard frame (#1791).
+  // Newest-render-wins per scene frame so an older render can't overwrite a newer one (#1791).
   sceneKey: ({ workId, analysisId, sceneId }) => `${workId}:${analysisId}:${sceneId}`,
   describe: ({ workId, sceneId }) => `${workId}/${sceneId}`,
   attach: ({ workId, analysisId, sceneId, filename, job }) =>
@@ -61,8 +48,7 @@ const hook = createMediaJobImageHook({
       sceneId, filename, jobId: deriveJobId(job, filename), prompt: derivePrompt(job),
     }),
   onAttached: ({ workId, analysisId, sceneId, filename, job }, result) => {
-    // persistSceneImage normally returns { analysis, collectionId }; only emit
-    // when the snapshot actually came back so the client merges a real entry.
+    // Emit only when the snapshot actually came back so the client merges a real entry.
     if (!result?.analysis) return;
     const image = result.analysis.sceneImages?.[sceneId]
       || { filename, jobId: deriveJobId(job, filename), prompt: derivePrompt(job) };
@@ -75,5 +61,5 @@ export function initWritersRoomSceneImageHook() {
   hook.init();
 }
 
-// Test-only reset so suites that re-init can do so cleanly.
+// Test-only reset.
 export const __testing = hook.__testing;

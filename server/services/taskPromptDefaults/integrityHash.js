@@ -2,18 +2,10 @@
  * Hashing for the prompt-default integrity snapshot, and the snapshot itself.
  *
  * `integrity.snapshot.json` holds an md5 per current default body, the
- * PROMPT_VERSIONS map, and — under PREVIOUS_DEFAULT_PROMPTS — the md5 of every
- * default a key has ever shipped and since replaced. Three readers share this
- * module so they can never disagree about how a body is hashed:
- *
- *   - shippedPrompts.js recognizes a stored prompt as a retired default by
- *     hashing it against that history (the cross-install auto-upgrade contract,
- *     AGENTS.md "Distribution model");
- *   - taskPromptDefaults.test.js asserts the current bodies and versions still
- *     match the snapshot;
- *   - scripts/regen-prompt-integrity-snapshot.js advances the snapshot after a
- *     body edit, bumping the version and retiring the outgoing hash onto the
- *     history (advancePromptIntegritySnapshot below).
+ * PROMPT_VERSIONS map, and under PREVIOUS_DEFAULT_PROMPTS the md5 of every
+ * replaced default. Shared by shippedPrompts.js (recognizes a retired default;
+ * AGENTS.md "Distribution model"), taskPromptDefaults.test.js, and
+ * scripts/regen-prompt-integrity-snapshot.js so they agree on how a body is hashed.
  *
  * Not re-exported from ../taskPromptDefaults.js: that barrel is the prompt
  * DATA leaf, and this is the snapshot's tooling.
@@ -28,45 +20,26 @@ import { TASK_TYPE_RENAMES } from '../../lib/scheduledTaskTypes.js';
 export const PROMPT_INTEGRITY_SNAPSHOT_PATH = join(dirname(fileURLToPath(import.meta.url)), 'integrity.snapshot.json');
 
 // `require`, not `readFileSync`: ../taskPromptDefaults.js is reached by ~80
-// server suites, dozens of which `vi.mock('fs')` wholesale for their own
-// reasons, and a module-load read through the mocked module would fail every
-// one of them. Node's CJS loader parses the JSON natively, outside any ESM mock
-// layer — and, like the rest of the repo (lib/promptSystemStages.js), this
-// avoids JSON import attributes. The result is the shared require cache:
-// callers read it, never mutate it.
+// server suites, dozens of which `vi.mock('fs')`, and a mocked module-load read
+// would fail them all. Node's CJS loader sits outside the ESM mock layer and
+// avoids JSON import attributes. Shared require cache: never mutate.
 const require = createRequire(import.meta.url);
 export const readPromptIntegritySnapshot = () => require(PROMPT_INTEGRITY_SNAPSHOT_PATH);
 
 const API_URL_PLACEHOLDER = '{{PORTOS_API_URL}}';
 
-// Prompt bodies embed the install's API origin two different ways:
-//
-//   1. Current defaults interpolate PORTOS_API_URL at module load, so the body
-//      text varies with PORTOS_API_URL / PORTOS_HOST / PORT.
-//   2. Retired defaults from before the genericization hardcode
-//      `http://localhost:5555` — the origin that WAS the default when they
-//      shipped. Those bytes are frozen history and never change again, so the
-//      literal is pinned here rather than derived from PORTS.API.
-//
-// Both collapse to the same placeholder so a body hashes identically on every
-// install — which is also what lets a stored retired body match whichever
-// origin it was rendered with. Normalizing only (1) made the snapshot
-// reproducible solely on a machine whose PORTOS_API_URL happened to equal the
-// legacy origin: anywhere else — a custom PORTOS_HOST, or simply a shell with
-// PORT set, as inside a CoS agent — the bodies carrying the literal hashed
-// differently and the integrity test failed while nothing had actually drifted
-// (issue #3359).
+// Prompt bodies embed the API origin two ways: current defaults interpolate
+// PORTOS_API_URL (varies with PORTOS_API_URL / PORTOS_HOST / PORT); retired
+// defaults hardcode `http://localhost:5555`, frozen history pinned here rather
+// than derived from PORTS.API. Both collapse to one placeholder so a body hashes
+// identically on every install and a stored retired body matches whichever
+// origin it was rendered with (#3359).
 const LEGACY_API_ORIGIN = 'http://localhost:5555';
 
-// Prompt history follows a scheduled task when its public task key is renamed
-// (TASK_TYPE_RENAMES), so installs carrying the old persisted prompt body still
-// recognize it as shipped after the task config is migrated.
-
-// Longest first: the two origins can overlap — `PORTOS_API_URL=http://localhost`
-// (port 80) is a prefix of the legacy literal, and replacing it first would turn
+// Longest first: the origins can overlap (`PORTOS_API_URL=http://localhost` is a
+// prefix of the legacy literal); replacing the shorter first would turn
 // `http://localhost:5555` into `{{PORTOS_API_URL}}:5555`, which the legacy pass
-// can then no longer match. Replacing the longer candidate first leaves only
-// standalone occurrences of the shorter one.
+// can no longer match.
 export const normalizePromptForHash = (body, apiUrl = PORTOS_API_URL) => (
   [apiUrl, LEGACY_API_ORIGIN]
     .filter(Boolean)
@@ -101,20 +74,15 @@ export const buildPromptIntegritySnapshot = ({
  * Advance a committed snapshot to the current source — the regen tool's core,
  * and the only writer of PROMPT_VERSIONS and the history lists.
  *
- * The snapshot is the source of version numbers (versions.js re-exports them),
- * so authors never pick a bump: for each versioned key whose body hash changed,
- * the version rises by one and the committed CURRENT hash — the default every
- * un-customized install is still holding — is retired onto that key's history.
- * Recognition is by construction: no paste, nothing to mis-copy. Versions only
- * ever rise here; the guard test compares against the base snapshot to catch a
- * hand edit that lowers one (every install stamped at the higher number would
- * read the next real bump as `storedVersion < current` false and never get it).
+ * For each versioned key whose body hash changed, the version rises by one and
+ * the committed CURRENT hash (what un-customized installs hold) is retired onto
+ * that key's history. Versions only ever rise here; the guard test compares
+ * against the base snapshot to catch a hand edit that lowers one (installs
+ * stamped at the higher number would never get the next real bump).
  *
- * A body with no committed hash is new: it starts at v1 unless the key is on
- * `UNPERSISTED_PROMPT_KEYS` (pipeline stage bodies and the manual claim body are
- * read live and never persisted, so their hash simply follows the source and
- * they carry no version or history). Nothing unversioned is ever stored, so the
- * history of a key that is no longer versioned is dropped.
+ * A body with no committed hash is new: v1 unless the key is on
+ * `UNPERSISTED_PROMPT_KEYS` (read live, never persisted, no version or history).
+ * The history of a key that is no longer versioned is dropped.
  */
 export const advancePromptIntegritySnapshot = (committed, defaults) => {
   const unpersisted = new Set(defaults.UNPERSISTED_PROMPT_KEYS ?? []);

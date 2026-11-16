@@ -7,21 +7,11 @@ import { ServerError } from '../lib/errorHandler.js';
 import * as tracks from './tracks/index.js';
 
 /**
- * Make `filename` the active audio AND record it in the render history so an
- * uploaded/attached take shows up as a card alongside generated ones. An
- * uploaded render has no engine/model, so the active gen-metadata is cleared
- * (keeps the read-only badges honest); `take` carries what IS known about it —
- * provenance, the prompt/lyrics it was made from, its probed duration.
- * Re-attaching a file already in the history just re-selects it (no duplicate
- * card).
- *
- * Re-reads the track by id (the caller validated existence earlier) so the
- * append builds on the FRESHEST persisted history: a render added to this track
- * between the caller's initial load and now — a long generation finishing, or a
- * parallel upload, both of which can span the file-import window — isn't dropped
- * by writing back a stale renders array. (The sub-millisecond getTrack→
- * updateTrack window is a single-user request race we don't lock against per the
- * trust model.)
+ * Make `filename` the active audio and record it in the render history. An
+ * uploaded render has no engine/model, so active gen-metadata is cleared; `take`
+ * carries provenance, prompt/lyrics and probed duration. Re-attaching a file
+ * already in history just re-selects it. Re-reads the track so the append builds
+ * on the freshest persisted renders, not the caller's stale array.
  */
 export async function attachAudioAsRender(trackId, filename, take = {}) {
   const track = await tracks.getTrack(trackId);

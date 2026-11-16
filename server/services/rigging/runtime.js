@@ -1,23 +1,13 @@
 /**
- * Character rigging — Blender-module runtime resolution and probe.
+ * Character rigging: Blender-module runtime resolution and probe.
  *
- * The rigging lane needs Blender's Python module (`bpy`) importable from a dedicated
- * interpreter. It gets its own conda environment for the same reason the image-to-3D
- * CUDA lanes each get one (`trellis2`, `pixal3d`): `bpy` pins an exact CPython minor
- * and drags a large native tree with it, so sharing an env with another heavy lane
- * would let one lane's upgrade silently break the other.
- *
- * Everything here is PURE or INJECTABLE — `exists`, `env` and `execFileImpl` are all
- * parameters — so the resolver and the probe classifier are unit-testable on a host
- * with no Blender install at all. Only the caller that passes no overrides touches the
- * real machine, and it does so on request (never from `server/index.js` boot).
- *
- * The probe deliberately does a REAL `import`, not `importlib.util.find_spec` the way
- * `imageTo3d/laneRunner.js#probePythonModules` does. A half-provisioned env — the
- * interpreter created, the wheel half-unpacked or built against the wrong CPython — has
- * a resolvable spec and an unimportable module. That is exactly the failure this lane
- * must NAME rather than report as ready, so it is worth the seconds a real import costs
- * (the readiness caller memoizes the answer so it is not paid per request).
+ * `bpy` needs its own conda env (like the image-to-3D CUDA lanes) because it pins one CPython
+ * minor and a large native tree. Everything here is PURE or INJECTABLE (`exists`, `env`,
+ * `execFileImpl`), so tests need no Blender; only the no-override caller touches the machine,
+ * on request, never at boot. The probe does a REAL `import`, not `find_spec`
+ * (`imageTo3d/laneRunner.js#probePythonModules`): a half-provisioned env has a resolvable spec
+ * and an unimportable module, which this lane must NAME, not report ready. The readiness
+ * caller memoizes the cost.
  */
 
 import { existsSync } from 'node:fs';
@@ -28,10 +18,8 @@ import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { isAppleSilicon } from '../../lib/platform.js';
 
 /**
- * The install descriptor. `moduleVersion` is a hard PIN, not a floor: `bpy` wheels are
- * published per Blender release against one CPython minor, and an unpinned install
- * resolves to whichever pairing PyPI happens to serve — which is how an env ends up
- * with an interpreter that cannot import the module it just installed.
+ * The install descriptor. `moduleVersion` is a hard PIN: `bpy` wheels pair one Blender release
+ * with one CPython minor, and an unpinned install can yield an env that cannot import it.
  */
 export const RIGGING_RUNTIME = Object.freeze({
   condaEnv: 'rigging',
@@ -44,16 +32,13 @@ export const RIGGING_RUNTIME = Object.freeze({
 export const RIGGING_MODULE_REQUIREMENT = `${RIGGING_RUNTIME.module}==${RIGGING_RUNTIME.moduleVersion}`;
 
 /**
- * The one command that provisions the env. Surfaced verbatim in the Settings card so
- * the remedy the UI prints and the remedy this module resolves against cannot drift.
+ * The one command that provisions the env, printed verbatim in Settings so the UI remedy cannot drift.
  */
 export const RIGGING_INSTALL_COMMAND = 'python3 scripts/setup-rigging.py';
 
 /**
- * Can this host run the rigging runtime at all? macOS on Apple Silicon and Linux are
- * the supported pairings; an Intel Mac and Windows are not (the conda-env resolver in
- * `condaEnv.js` only knows POSIX `bin/python` layouts, and the lane's downstream
- * tooling follows). Pure — platform/arch are injectable.
+ * Can this host run the rigging runtime? macOS on Apple Silicon and Linux; not Intel Mac or
+ * Windows (`condaEnv.js` only knows POSIX `bin/python` layouts). Pure; platform/arch injectable.
  *
  * @param {{platform?: string, arch?: string, probe?: () => boolean}} [opts]
  * @returns {boolean}
@@ -65,8 +50,7 @@ export function isRiggingPlatformSupported({ platform = process.platform, arch, 
 
 /**
  * Prefer the reviewed private prefix; retain named Conda discovery for existing installs.
- * `exists`/`env` are injectable exactly as `resolveCondaEnvPython` makes them, so this
- * resolves deterministically in tests with no conda on the machine.
+ * `exists`/`env` are injectable so tests need no conda.
  *
  * @param {{exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv, home?: string}} [opts]
  * @returns {string|null}
@@ -78,10 +62,8 @@ export function resolveRiggingPython({ exists = existsSync, env, home = homedir(
 }
 
 /**
- * The probe one-liner. It catches the import failure ITSELF and still exits 0, printing
- * `{"ok": false, …}`. That is what lets the classifier below tell "python ran and the
- * module would not import" apart from "the interpreter could not be run at all" — two
- * states a non-zero exit would collapse into one (AGENTS.md sentinel rule).
+ * The probe one-liner. It catches the import failure ITSELF and exits 0 with `{"ok": false, …}`,
+ * so the classifier can tell "module would not import" from "interpreter could not run" (sentinel rule).
  */
 export const BLENDER_MODULE_PROBE_SOURCE = [
   'import json',
@@ -106,12 +88,8 @@ const parseProbeJson = (stdout) => {
 };
 
 /**
- * Classify one probe run.
- *
- * Child-process boundary outside the request lifecycle, so every failure path RESOLVES
- * — and, as in `probePythonModules`, the JSON parse happens after the callback settles:
- * a throw inside an `execFile` callback escapes the enclosing promise and reaches the
- * event loop, crashing the process instead of degrading the probe.
+ * Classify one probe run. Every failure path RESOLVES, and the JSON parse happens after the
+ * callback settles: a throw inside an `execFile` callback would crash the process.
  *
  * @param {{python: string|null, execFileImpl?: Function, timeoutMs?: number}} [opts]
  * @returns {Promise<{status: 'ok'|'unimportable'|'probe-failed', version?: string|null, error?: string|null}>}

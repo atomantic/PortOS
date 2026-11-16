@@ -1,20 +1,7 @@
 /**
- * Shell image drop — hand a photo to whatever is running in a shell session (a
- * live `claude` / `codex` TUI, or a bare prompt).
- *
- * Agent CLIs read images off disk, so the way to actually get a photo in front of
- * one is to put the file's absolute path into its prompt. This module owns that
- * translation: it persists the uploaded bytes, then bracket-pastes
- * `<message>\n<absolute path>` into the session so the agent sees one input event.
- *
- * The path never leaves the server — the API answers with the stored filename
- * only, so a response can't leak the install layout.
- *
- * Storage is `PATHS.screenshots`, the existing "user-supplied image an AI reads
- * off disk" bucket (shared with the vision-test and universe-describe paths, and
- * already archivable/deletable via dataManager). Because it IS shared, the name
- * is uniquified here: a phone camera roll hands out the same `IMG_0001.jpg` over
- * and over, and a second drop must not overwrite bytes the agent hasn't read yet.
+ * Shell image drop: persist an uploaded photo and bracket-paste `<message>\n<absolute path>`
+ * into a shell session (agent CLIs read images off disk). Responses carry only the stored
+ * filename. The shared `PATHS.screenshots` bucket needs uniquified names (repeated `IMG_0001.jpg`).
  */
 
 import { PATHS, saveImageUpload, unlinkGuarded } from '../lib/fileUtils.js';
@@ -24,12 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getSession, pasteToSession } from './shell.js';
 
 /**
- * Compose the text pasted into the session.
- *
- * The message comes first and the path lands on its own line, so a model reads it
- * as "here's the ask, here's the file". Paths containing whitespace are
- * single-quoted (POSIX-escaped): the filename can't contain whitespace after
- * `sanitizeFilename`, but the install root can.
+ * Compose the pasted text: message first, path on its own line, single-quoted if it contains whitespace.
  *
  * @param {string} imagePath - absolute path to the saved image
  * @param {string} [message] - optional accompanying message
@@ -44,16 +26,12 @@ export function buildImageDropText(imagePath, message = '') {
 }
 
 /**
- * Save an uploaded image and paste it (plus an optional message) into a live
- * shell session.
- *
- * The session is checked BEFORE the bytes are written so a stale session id
- * doesn't leave an orphan file on disk.
+ * Save an uploaded image and paste it (plus an optional message) into a live shell session.
+ * The session is checked BEFORE the bytes are written so a stale id leaves no orphan file.
  *
  * @param {object} params
  * @param {string} params.sessionId - target shell session
- * @param {string} params.filename - client-supplied name (used for the stored
- *   name's readable suffix only; the extension comes from the bytes)
+ * @param {string} params.filename - client-supplied name (readable suffix only)
  * @param {string} params.data - base64-encoded image bytes
  * @param {string} [params.message] - message to send alongside the image
  * @returns {Promise<{ sessionId: string, filename: string }>} the STORED filename
@@ -70,10 +48,7 @@ export async function dropImageIntoShellSession({ sessionId, filename, data, mes
     data,
   }, { maxBytes: MAX_SCREENSHOT_BYTES });
 
-  // Re-check liveness: the PTY can exit while the bytes are being written. Drop
-  // the file we just wrote — nothing will ever read it, and this bucket is shared
-  // with the screenshot uploads, so an orphan here is indistinguishable from a
-  // real one. Best-effort: a failed unlink must not mask the 404.
+  // The PTY can exit during the write: drop the orphan (shared bucket). A failed unlink must not mask the 404.
   if (!pasteToSession(sessionId, buildImageDropText(saved.filePath, message), { label: 'image drop' })) {
     await unlinkGuarded(saved.filePath).catch(() => {});
     throw new ServerError('Session not found', { status: 404, code: 'NOT_FOUND' });

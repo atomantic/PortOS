@@ -24,10 +24,9 @@ export const UPSCALE_SCALE = 2;
 // The registry key of the adapter the generative method fuses (#6508).
 export const LTX_UPSCALE_WEIGHT_KEY = 'pixel-upscale';
 
-// The BYOV runtime that carries the generative method on each host class.
-// macOS runs the MLX pipeline (#6512); every other platform with a CUDA card
-// runs the distilled CUDA runner (#6513). A host with neither has no generative
-// backend at all, which the plan reports rather than discovering at render time.
+// The BYOV runtime carrying the generative method per host class: MLX on macOS
+// (#6512), the distilled CUDA runner elsewhere with a CUDA card (#6513). A host
+// with neither has no generative backend, which the plan reports up front.
 export const LTX_UPSCALE_RUNTIME_BY_PLATFORM = Object.freeze({
   darwin: 'ltx25',
   win32: 'ltx25_cuda',
@@ -39,11 +38,9 @@ export const ltxUpscaleRuntimeId = (platform = process.platform) => (
 );
 
 // The base checkpoint each generative backend renders against. #6511 keeps the
-// model out of the REQUEST on purpose — the adapter was trained against one
-// LTX-2.5 checkpoint, so letting a user pick another would condition an upscale
-// on weights it was never trained for. It is still a dependency that has to be
-// LOCATED, so the runtime names its own pin here and the dispatch resolves it
-// cache-only, exactly like every other pinned LTX entry (generateVideo.js).
+// model out of the REQUEST: the adapter was trained against one LTX-2.5
+// checkpoint. The runtime names its own pin and dispatch resolves it cache-only
+// like every other pinned LTX entry (generateVideo.js).
 export const LTX_UPSCALE_BASE_MODEL_BY_RUNTIME = Object.freeze({
   ltx25: 'ltx25_mlx_q8',
   ltx25_cuda: 'ltx25_cuda_distilled',
@@ -54,17 +51,11 @@ export const ltxUpscaleBaseModelId = (runtime) => (
 );
 
 // The LTX-2.5 grid, mirrored from `scripts/_upscale_contract.py`: output
-// dimensions must be divisible by 64 and the frame count must satisfy
-// `frames % 8 == 1` with a floor of 9.
-//
-// #6512 established the rule on both backends from the runtimes and Lightricks'
-// own IC-LoRA recipe rather than the gated card. The upscaler is the standard
-// single-stage IC-LoRA pass at the OUTPUT size with the source as a reference
-// at half of it; the video VAE compresses spatially by 32, so for the reference
-// to land on that grid at exactly the (padded) source's own size — rather than
-// being resampled before it conditions anything — the output must divide by
-// 2 × 32. Temporal compression is 8 and the IC reference encoder needs a
-// (1 + 8k)-frame input, which is the frame rule.
+// dimensions divisible by 64 and `frames % 8 == 1` with a floor of 9.
+// The upscaler is a single-stage IC-LoRA pass at the OUTPUT size with the source
+// as a reference at half of it. The video VAE compresses spatially by 32, so the
+// output must divide by 2 × 32 for the reference to land on-grid unresampled;
+// temporal compression is 8 and the IC encoder needs a (1 + 8k)-frame input.
 export const LTX_GRID = Object.freeze({
   spatialMultiple: 64,
   frameModulus: 8,
@@ -84,20 +75,16 @@ export const alignFrameCount = (frames, grid = LTX_GRID) => {
 };
 
 /**
- * What the generative method would have to do to a source before it fits the
- * model grid, stated as an explicit plan rather than applied silently.
+ * What the generative method must do to a source before it fits the model grid,
+ * stated as an explicit plan rather than applied silently.
  *
- * #6502 forbids hidden cropping and hidden duration loss, so this ALWAYS pads
- * and never trims: extra pixels on the right/bottom and extra frames on the
- * tail are recoverable (the caller crops the padding back off the output),
- * whereas a crop or a trim destroys source content the user never agreed to
- * lose. `trimFrames` is reported so the contract can carry a trim if a future
- * backend ever needs one, and is 0 on every path today.
+ * #6502 forbids hidden cropping and duration loss, so this ALWAYS pads (right/
+ * bottom pixels, tail frames; the caller crops the padding off the output) and
+ * never trims. `trimFrames` is 0 on every path today.
  *
  * Padding is computed on the SOURCE axis (so the disclosure can say "848 →
- * 864") and the target is the padded source scaled by `UPSCALE_SCALE`. Because
- * the scale is 2 and the grid multiple is 64, a source axis conforms exactly
- * when it is divisible by 32.
+ * 864"); the target is the padded source scaled by `UPSCALE_SCALE`. With scale 2
+ * and grid multiple 64, a source axis conforms exactly when divisible by 32.
  */
 export const planLtxAlignment = ({ width, height, frameCount } = {}, grid = LTX_GRID) => {
   const sourceMultiple = grid.spatialMultiple / UPSCALE_SCALE;
@@ -113,9 +100,7 @@ export const planLtxAlignment = ({ width, height, frameCount } = {}, grid = LTX_
   const padHeight = knownHeight === null ? null : paddedHeight - knownHeight;
   const padFrames = knownFrames === null ? null : paddedFrames - knownFrames;
 
-  // "Conforming" is only assertable when every axis was measurable. An
-  // unmeasured axis is `null` (unknown), never a silent 0 — a caller must not
-  // read "no padding needed" out of a probe that failed.
+  // An unmeasured axis is `null`, never a silent 0: a failed probe must not read as "no padding needed".
   const measured = [padWidth, padHeight, padFrames];
   const conforming = measured.every((n) => n !== null) ? measured.every((n) => n === 0) : null;
 
@@ -131,9 +116,7 @@ export const planLtxAlignment = ({ width, height, frameCount } = {}, grid = LTX_
   };
 };
 
-// Target dimensions the method produces. Lanczos scales the source verbatim;
-// the generative method scales the PADDED source, because that is what the
-// model actually renders.
+// Lanczos scales the source verbatim; the generative method scales the PADDED source.
 export const planTargetDimensions = ({ method, width, height, frameCount, alignment }) => {
   const scaleAxis = (n) => (Number.isFinite(n) && n > 0 ? Math.round(n) * UPSCALE_SCALE : null);
   if (method !== 'ltx') {
@@ -154,24 +137,17 @@ export const planTargetDimensions = ({ method, width, height, frameCount, alignm
  * Provenance an upscaled history entry records (#6509 item 4).
  *
  * A video-history row is a plain JSON object with no sanitizer, so these are a
- * documented contract rather than a schema. Every upscale method writes the
- * full list; the generative dispatch slice (#6511) fills the model-specific
- * ones that Lanczos leaves null:
+ * documented contract. Every upscale method writes the full list; the
+ * generative dispatch (#6511) fills the model-specific ones Lanczos leaves null:
  *
  *  - `upscaledFrom`   — source history id. Also the ALREADY_UPSCALED guard.
  *  - `upscaleMethod`  — `'lanczos' | 'ltx'`.
  *  - `width`/`height` — the ACTUAL output dimensions, measured from the file
- *                       where the method can produce something other than 2x
- *                       the source (a padded generative render).
- *  - `fps`            — output frame rate.
- *  - `numFrames`      — output frame count.
- *  - `duration`       — output duration in seconds.
- *  - `seed`           — the generative render's seed, so the pass is
- *                       reproducible. Lanczos is deterministic and has no seed
- *                       of its own, so it writes none; read `upscaleMethod`
- *                       rather than the presence of this key to tell the two
- *                       apart, because an upscaled row also inherits the SOURCE
- *                       render's fields.
+ *                       (a padded generative render is not 2x the source).
+ *  - `fps`, `numFrames`, `duration` — output frame rate, frame count, seconds.
+ *  - `seed`           — the generative render's seed. Lanczos writes none; tell
+ *                       the methods apart by `upscaleMethod`, not this key, since
+ *                       an upscaled row also inherits the SOURCE render's fields.
  *  - `upscaleRuntime` — BYOV runtime id that rendered it (`ltx25` /
  *                       `ltx25_cuda`), or `'ffmpeg'` for Lanczos.
  *  - `renderStartedAt`/`renderMs` — measured wall-clock render time (#5878).
@@ -190,10 +166,8 @@ export const UPSCALE_PROVENANCE_FIELDS = Object.freeze([
   'renderMs',
 ]);
 
-// The subset of the contract the Lanczos pass writes ITSELF, rather than
-// inheriting from the source row it spreads. Asserted against a real Lanczos
-// entry, so dropping one of these from the row builder fails a test instead of
-// quietly producing a row #6511's readers cannot tell apart from a legacy one.
+// The subset of the contract the Lanczos pass writes ITSELF rather than inheriting
+// from the source row; a test asserts it so dropping one fails loudly.
 export const LANCZOS_PROVENANCE_FIELDS = Object.freeze([
   'upscaledFrom',
   'upscaleMethod',
@@ -204,26 +178,20 @@ export const LANCZOS_PROVENANCE_FIELDS = Object.freeze([
   'renderMs',
 ]);
 
-// The runtime id Lanczos records — it is an ffmpeg filter pass, not a BYOV
-// runtime, and naming it explicitly keeps `upscaleRuntime` non-null on every
-// upscaled row.
+// The runtime id Lanczos records (an ffmpeg pass, not a BYOV runtime), keeping
+// `upscaleRuntime` non-null on every upscaled row.
 export const LANCZOS_RUNTIME_ID = 'ffmpeg';
 
-// The media-job kind the generative pass is dispatched as (#6511). It is its
-// OWN kind rather than a `video` mode so the local-only rule is structural: the
-// federation layer's kind maps (`REMOTE_MEDIA_MODULES`, `ROUTABLE_MEDIA_KINDS`,
-// `KNOWN_MEDIA_KINDS`) are closed lists that do not contain it, so a source clip
-// can never be offered to a peer without someone adding it to one of them.
+// The media-job kind the generative pass is dispatched as (#6511). Its OWN kind,
+// not a `video` mode, so the local-only rule is structural: the federation kind
+// maps (`REMOTE_MEDIA_MODULES`, `ROUTABLE_MEDIA_KINDS`, `KNOWN_MEDIA_KINDS`) are
+// closed lists that do not contain it.
 export const LTX_UPSCALE_JOB_KIND = 'video-upscale';
 
 /**
  * Why this source cannot be aligned to the model grid, or `null` when it can.
- *
- * #6502 forbids silent cropping and silent duration loss, so an alignment plan
- * is only usable when every axis was measurable and the plan pads rather than
- * trims. Both refusals are stated as a reason the caller can show, and both
- * happen BEFORE the job is queued — a multi-minute GPU render that ends in a
- * shorter clip than the user submitted is exactly what this prevents.
+ * Refused BEFORE the job is queued (#6502 forbids silent cropping and duration
+ * loss): the plan must have every axis measurable and pad rather than trim.
  */
 export const ltxAlignmentBlocker = (alignment) => {
   if (!alignment) return 'The source could not be measured, so the model grid alignment is unknown.';
@@ -238,17 +206,13 @@ export const ltxAlignmentBlocker = (alignment) => {
   return null;
 };
 
-// Whether the aligned source differs from the source at all. `false` means the
-// render can read the ORIGINAL clip as its IC reference — no padded temp copy,
-// and nothing to crop back off the output.
+// `false` means the render can read the ORIGINAL clip as its IC reference: no
+// padded temp copy, nothing to crop back off.
 export const ltxAlignmentIsNoop = (alignment) => (
   ltxAlignmentBlocker(alignment) === null
   && alignment.padWidth === 0 && alignment.padHeight === 0 && alignment.padFrames === 0
 );
 
-// The provenance the generative pass writes ITSELF. Unlike Lanczos — which
-// inherits fps/numFrames/duration/seed from the source row it spreads — a
-// generative render measures its own output and rolls its own seed, so it owns
-// the whole contract. Asserted against a real ltx entry so dropping one fails a
-// test rather than shipping a row a reader cannot tell apart from a legacy one.
+// The provenance the generative pass writes ITSELF: it measures its own output
+// and rolls its own seed, so unlike Lanczos it owns the whole contract.
 export const LTX_PROVENANCE_FIELDS = UPSCALE_PROVENANCE_FIELDS;

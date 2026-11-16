@@ -1,25 +1,15 @@
 /**
- * Shared yt-dlp audio-download core.
+ * Shared yt-dlp audio-download core (#1945, reused by reference-audio #2120).
  *
- * Extracted from the YouTube track import (#1945) so a second consumer — the
- * round reference-audio "Download from URL" convenience (#2120) — can reuse the
- * hard part (yt-dlp arg construction, `--progress-template` machine-readable
- * progress parsing, cancel-aware exit classification, temp-file cleanup) rather
- * than duplicating ~120 lines of subtle yt-dlp knowledge. The spawn, marker
- * parsing and exit classification it shares with the video core live in
+ * One yt-dlp invocation does the whole job (`-x --audio-format mp3`, pointed at
+ * our ffmpeg via --ffmpeg-location; yt-dlp shells out to ffmpeg itself). Spawn,
+ * marker parsing and exit classification shared with the video core live in
  * ytdlpRun.js; this module owns the audio argv and the temp-file lifecycle.
  *
- * A single yt-dlp invocation does the whole job (`-x --audio-format mp3`,
- * pointed at our discovered ffmpeg via --ffmpeg-location) — yt-dlp already
- * shells out to ffmpeg for the audio conversion internally, so a second pass
- * would just re-decode.
- *
- * The core is deliberately SSE-agnostic: it takes an `onProgress` callback and
- * a `registerProcess` hook, and RETURNS an outcome. The caller owns the job
- * map, SSE broadcasting, terminal frames, and post-processing (where the
- * produced file lands). URL validation is the caller's job too — the track
- * import allows only YouTube URLs, the reference import allows any public
- * http(s) URL (SSRF-guarded) — so the core never sees an unvetted URL.
+ * SSE-agnostic: takes `onProgress` and `registerProcess` hooks and RETURNS an
+ * outcome. The caller owns the job map, SSE, terminal frames, post-processing
+ * and URL validation (track import: YouTube only; reference import: any
+ * SSRF-guarded public http(s) URL), so the core never sees an unvetted URL.
  */
 
 import { existsSync } from 'fs';
@@ -33,9 +23,8 @@ import { runYtDlp, ytdlpMarkerArgs, describeYtDlpFailure } from './ytdlpRun.js';
 
 /**
  * Locate yt-dlp + ffmpeg, throwing an actionable ServerError if either is
- * missing. Call this at kickoff (before returning a jobId) so a missing binary
- * surfaces as a real HTTP error instead of an SSE frame nobody's attached to
- * yet. Independent lookups run concurrently.
+ * missing. Call at kickoff (before returning a jobId) so a missing binary is a
+ * real HTTP error, not an SSE frame nobody's attached to yet.
  */
 export async function resolveYtDlpBinaries() {
   const [ytDlp, ffmpeg] = await Promise.all([findYtDlp(), findFfmpeg()]);
@@ -45,10 +34,9 @@ export async function resolveYtDlpBinaries() {
 }
 
 /**
- * A cancelled/failed run may leave behind yt-dlp's PRE-extraction download
- * (native extension — .webm/.m4a/etc., only renamed to our known `.mp3`
- * AFTER a successful postprocess step), so cleanup can't just unlink one
- * known path — glob every temp file this job's prefix touched.
+ * A cancelled/failed run may leave yt-dlp's PRE-extraction download (native
+ * extension, renamed to `.mp3` only after a successful postprocess), so glob every
+ * temp file this job's prefix touched instead of unlinking one known path.
  */
 export async function cleanupYtDlpTemp(tempPrefix) {
   const dir = tmpdir();
@@ -68,19 +56,17 @@ export async function cleanupYtDlpTemp(tempPrefix) {
  * @param {string}   opts.tempPrefix     Unique per-job temp filename prefix (no dir).
  * @param {number}   opts.maxBytes       `--max-filesize` cap.
  * @param {number}   opts.maxDurationSec `--match-filters duration<=` cap.
- * @param {function} opts.onProgress     ({ percent, stage }) => void — SSE-agnostic.
+ * @param {function} opts.onProgress     ({ percent, stage }) => void
  * @param {function} opts.registerProcess (proc|null) => void — lets the caller wire cancel.
  * @returns {Promise<{ outcome:'complete'|'canceled'|'failed', outPath?:string, title?:string, reason?:string }>}
  *
- * Never throws for a yt-dlp runtime failure (returns `failed` + `reason`); the
- * caller decides how to surface it. Cleans temp files on `canceled`/`failed`;
- * on `complete` the caller owns `outPath` (moves it, then it's gone).
+ * Never throws for a yt-dlp runtime failure (returns `failed` + `reason`). Cleans
+ * temp files on `canceled`/`failed`; on `complete` the caller owns `outPath`.
  */
 export async function downloadAudioToTempMp3({
   url, ytDlp, ffmpeg, tempPrefix, maxBytes, maxDurationSec, onProgress, registerProcess,
 }) {
-  // -x --audio-format mp3 forces the final container to mp3 regardless of the
-  // source's native audio codec, so the output path is known up front.
+  // -x --audio-format mp3 forces the container, so the output path is known up front.
   const tempBase = join(tmpdir(), tempPrefix);
   const outPath = `${tempBase}.mp3`;
 
@@ -90,9 +76,7 @@ export async function downloadAudioToTempMp3({
     '--no-playlist',
     '--ffmpeg-location', dirname(ffmpeg),
     ...ytdlpMarkerArgs('extracting'),
-    // Bound resource use — without these, a long video or a livestream/archive
-    // URL downloads and transcodes unbounded, eating disk in tmpdir() and CPU
-    // with no cap.
+    // Bound resource use: a long video or livestream would otherwise download and transcode unbounded.
     '--max-filesize', String(maxBytes),
     '--match-filters', `duration <= ${maxDurationSec}`,
     '-o', `${tempBase}.%(ext)s`,
@@ -106,12 +90,9 @@ export async function downloadAudioToTempMp3({
     return { outcome: 'canceled' };
   }
   if (exit.code !== 0 || !existsSync(outPath)) {
-    // A --match-filters/--max-filesize rejection exits 0 with no output file
-    // (yt-dlp treats a filtered-out video as "nothing to do", not an error) —
-    // `--print`'s suppression of normal reporting (see ytdlpRun) means the
-    // specific reason often never reaches our stdout/stderr parsing, so name the
-    // two known bounds. Only those bounds are ours: describeYtDlpFailure owns
-    // the prose and appends whatever yt-dlp did print, which outranks the guess.
+    // A --match-filters/--max-filesize rejection exits 0 with no output file, and
+    // `--print` (see ytdlpRun) hides the reason, so name the two known bounds.
+    // describeYtDlpFailure owns the prose; what yt-dlp printed outranks the guess.
     const reason = exit.code === 0
       ? describeYtDlpFailure(exit.code, exit.output, {
         url,

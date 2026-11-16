@@ -1,36 +1,28 @@
 /**
  * Story Builder — SSE runner for step generate / refine.
  *
- * `generateStep` / `refineStep` in storyBuilder.js are a single LLM call plus a
- * record persist. Run synchronously they block the HTTP request — a long
- * arc-overview leaves the button spinning with no signal. This runner mirrors
- * the pipeline auto-runner (server/services/pipeline/autoRunner.js): the POST
- * kicks the work off in the background and returns immediately; progress and
- * the terminal result land on attached SSE clients.
- *
- * SSE: a single in-memory `runs` map keyed by `${sessionId}::${stepId}` so two
- * different steps can stream concurrently while a second click on the same step
- * coalesces onto the in-flight run. Late-connecting clients receive the last
- * broadcast frame via attachSseClient's replay grace window in lib/sseUtils.js.
+ * The POST kicks `generateStep` / `refineStep` off in the background (mirroring
+ * server/services/pipeline/autoRunner.js) and returns immediately; progress and
+ * the terminal result land on attached SSE clients. Runs are keyed by
+ * `${sessionId}::${stepId}`: different steps stream concurrently, a second click
+ * on the same step coalesces. Late clients get the last frame via the replay
+ * grace window in lib/sseUtils.js.
  *
  * Frame shapes (consumed by client/src/hooks/useStoryStepRuns.jsx):
  *   { type: 'start',    runId, stepId, op }
  *   { type: 'progress', label, phase }        // phase labels during the run
  *   { type: 'complete', runId, stepId, op, changes, rationale, providerId, model }
  *   { type: 'error',    runId, stepId, op, error }
- * The completed content lives in the universe/series records — the client
- * refetches the session view on `complete` rather than carrying the payload in
- * the frame (matches the pipeline auto-run's refetch-on-terminal pattern).
+ * The completed content lives in the universe/series records; the client
+ * refetches on `complete` instead of carrying the payload in the frame.
  */
 
 import { createSseRunner } from '../lib/sseUtils.js';
 import { generateStep, refineStep } from './storyBuilder.js';
 
-// Shared SSE run-lifecycle keyed by `${sessionId}::${stepId}`. This runner uses
-// the factory's OPTIONAL signature-based coalescing (a `refine` of a different
-// target is different work and must not bind onto an in-flight `generate`), and
-// keeps its own error frame inside `work` (it carries `stepId`/`op`), so the
-// factory's generic catch is only the safety net.
+// Uses the factory's OPTIONAL signature-based coalescing, and keeps its own
+// error frame inside `work` (it carries `stepId`/`op`); the factory's catch is
+// only the safety net.
 const runner = createSseRunner({ logLabel: 'story-builder' });
 
 const runKey = (sessionId, stepId) => `${sessionId}::${stepId}`;
@@ -43,11 +35,9 @@ export function attachClient(sessionId, stepId, res) {
   return runner.attachClient(runKey(sessionId, stepId), res);
 }
 
-// Bounded discovery projection of a session's in-flight step runs, for a client
-// that lost its run slot (full reload, second tab). Read-only: it inspects the
-// in-memory run map and never starts provider work. Deliberately omits the
-// request signature, feedback text, clients and abort controller — only the
-// identity a client needs to re-attach to the existing progress stream.
+// Bounded, read-only projection of a session's in-flight runs so a client that
+// lost its slot can re-attach. Deliberately omits the signature, feedback text,
+// clients and abort controller.
 export function listActiveStepRuns(sessionId) {
   const prefix = runKey(sessionId, '');
   return runner.listActive(prefix).map(({ key, runId, startedAt, phase, meta }) => ({
@@ -61,41 +51,30 @@ export function listActiveStepRuns(sessionId) {
 }
 
 /**
- * Kick off a step generate (op: 'generate') or refine (op: 'refine') for a
- * session. Returns the runId immediately; progress lands via SSE. Re-calling
- * while a run is in flight for the same step resolves to the existing runId.
- *
- * `options` is forwarded verbatim to generateStep/refineStep (providerId,
- * model, fromDownstream for generate; feedback, entryId, providerId, model for
- * refine) plus an `onProgress` callback the conductor uses to emit phase frames.
+ * Kick off a step generate or refine for a session. Returns the runId
+ * immediately; progress lands via SSE. `options` is forwarded verbatim to
+ * generateStep/refineStep plus an `onProgress` callback for phase frames.
  */
-// Identity of a kickoff request: what work it would actually do. Two clicks
-// with the same signature run the same work, so the second can safely attach to
-// the first's in-flight run; a different signature would do different work, so
-// it must NOT bind onto the running one (else its success handler fires off
-// another request's terminal frame — e.g. refining character B while character
-// A's refine is in flight would toast "Refined B" for A's run).
+// Identity of a kickoff: same signature = same work, so a second click may attach
+// to the in-flight run. A different signature must NOT bind onto it, or its
+// success handler would fire off another request's terminal frame (refining B
+// would toast "Refined B" for A's run).
 const requestSig = (op, { entryId, feedback, fromDownstream } = {}) =>
   JSON.stringify({ op, entryId: entryId ?? null, feedback: feedback ?? null, fromDownstream: !!fromDownstream });
 
 export function startStepRun(sessionId, stepId, { op = 'generate', ...options } = {}) {
   const key = runKey(sessionId, stepId);
   const sig = requestSig(op, options);
-  // The factory coalesces a second click onto the in-flight run only when the
-  // signatures match (a reload mid-run re-attaching to its own request). A
-  // different signature (different op, or a refine of a different target/note)
-  // does different work, so it reports `conflict` + the live run's `op` (via
-  // `meta`) instead — the client then refuses to bind its success handler to the
-  // running request's frame. A finished run lingering in the replay grace window
-  // does NOT block: the factory starts a fresh run that replaces it.
+  // A matching signature coalesces onto the in-flight run; a different one
+  // reports `conflict` + the live run's `op` (via `meta`) so the client won't
+  // bind to the running request's frame. A finished run in the replay grace
+  // window does NOT block: the factory starts a fresh run.
   return runner.start(key, async ({ runId, broadcast, record }) => {
     broadcast({ type: 'start', runId, stepId, op });
-    // Best-effort phase emitter handed to the conductor; an onProgress throw
-    // must never break the run.
+    // Best-effort: an onProgress throw must never break the run.
     const onProgress = (frame) => {
       try {
-        // Latest phase label, so a client that attaches mid-run (reload / second
-        // tab) can be told what the run is doing via listActiveStepRuns.
+        // Latest phase label for clients attaching mid-run (listActiveStepRuns).
         if (typeof frame?.label === 'string' && frame.label) record.phase = frame.label.slice(0, 200);
         broadcast({ type: 'progress', runId, ...frame });
       } catch (err) {
@@ -103,8 +82,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
       }
     };
 
-    // Own the error frame here (and swallow) so the factory's generic catch
-    // doesn't double-emit; this frame carries `stepId`/`op` the client reads.
+    // Own the error frame here (and swallow) so the factory's catch doesn't double-emit.
     try {
       const result = op === 'refine'
         ? await refineStep(sessionId, stepId, { ...options, onProgress })
@@ -114,8 +92,7 @@ export function startStepRun(sessionId, stepId, { op = 'generate', ...options } 
         runId,
         stepId,
         op,
-        // Surface the refine attribution the client toast + UI read; generate
-        // returns these only on some steps, so guard each.
+        // Refine attribution for the client; generate returns these only on some steps.
         changes: Array.isArray(result?.changes) ? result.changes : undefined,
         rationale: typeof result?.rationale === 'string' ? result.rationale : undefined,
         providerId: result?.providerId,

@@ -2,30 +2,20 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Sprite local-render completion hook (#4876).
  *
- * The local lane queues ONE media job per animation clip and then has to be
- * told when it settles. Awaiting that in the request that started it — a promise
- * held in the enqueueing process — cannot survive the thing it most needs to
- * survive: a restart. `initMediaJobQueue` re-enqueues jobs that were merely
- * `queued` at shutdown, so a per-call awaiter meant an H3 render could run for
- * HOURS after the restart, write its MP4, and have nothing file it — the run sat
- * at `rendering` (blocking regeneration the whole time) and then reported itself
- * interrupted, burning the render the user waited for.
+ * The local lane queues ONE media job per animation clip. A per-call awaiter
+ * cannot survive a restart (`initMediaJobQueue` re-enqueues `queued` jobs, so an
+ * H3 render could finish hours later with nothing to file it), so this hook holds
+ * NO in-memory state: it decodes each job from its persisted
+ * `params.spriteAnimation` tag, like `mediaJobImageHook` and
+ * `universeBuilderCollectionHook`. Both halves are needed:
  *
- * So this hook holds NO in-memory state about in-flight work. It decodes each
- * job from its own persisted `params.spriteAnimation` tag, exactly like the
- * other durable media-job hooks (`mediaJobImageHook`, `universeBuilderCollectionHook`).
- * Two halves, and both are needed:
- *
- *  1. A live subscription to every TERMINAL event, so a job that settles while
- *     this process is up is filed immediately.
+ *  1. A live subscription to every TERMINAL event.
  *  2. A boot reconcile, because a job that settled while the process was DOWN
- *     emits nothing — it is simply sitting in the restored archive. Without this
- *     pass those runs would only ever be resolved by the walk lane's wall-clock
- *     backstop (a day later, as an error), and never at all on the track lane.
+ *     emits nothing; without it only the walk lane's wall-clock backstop (as an
+ *     error) would resolve it, and nothing on the track lane.
  *
- * It listens for `failed`/`canceled` as well as `completed` on purpose: the
- * attach treats "no clip on disk" as a terminal, user-visible error, so routing
- * every outcome through it is what guarantees a run always leaves `rendering`.
+ * `failed`/`canceled` are handled too: the attach treats "no clip on disk" as a
+ * terminal user-visible error, so every outcome leaves `rendering`.
  */
 
 import { join } from 'path';
@@ -53,30 +43,20 @@ const decodeSpriteAnimationJob = (job) => {
 };
 
 /**
- * Stage the clip (when there is one) and run the track's attach.
+ * Stage the clip (when there is one) and run the track's attach, the single place
+ * a run leaves `rendering`. The outcome is decided by WHAT IS ON DISK, not the
+ * job's status, so a render interrupted after writing its MP4 is still recovered
+ * and a clip-less job converges on an honest error.
  *
- * The attach is the single place a run leaves `rendering`, on either outcome:
- * it packages the clip into a candidate when the MP4 is there, and writes a
- * terminal error naming the Render Queue when it is not. So the outcome is
- * decided by WHAT IS ON DISK, not by the job's status — which is what lets a
- * render interrupted after it wrote its MP4 still be recovered, and makes a
- * genuinely failed or clip-less job converge on the same honest error.
+ * Staging and attach run INSIDE the per-record write tail: the clip lands where
+ * Reprocess reads, and a racing copy would hand ffmpeg a truncated MP4.
  *
- * Both the staging and the attach run INSIDE the per-record write tail: the
- * clip lands at the same path a user-triggered Reprocess reads, and a copy racing
- * that read would hand ffmpeg a truncated MP4 and error a previously-good run.
- *
- * The whole settle also holds backup admission (#9982): the staged clip, the
- * decoded frames and manifest, and the run record that names them are one
- * publication, and a snapshot copying the sprite directory halfway through would
- * capture a run record whose frames it copied earlier. The lease is taken BEFORE
- * the tail, and synchronously, because this runs as a completion listener: the
- * queue's fan-out contract requires the lease to be held before the first await,
- * so a cut already draining for the job's own completion also waits for this
- * filing. No sprite workflow takes the lease while holding the tail, so the
- * order cannot deadlock; one that does later must take the lease first too.
- * A settle queued behind a long Reprocess holds its lease while it waits, which
- * can stretch a cut's drain by that wait.
+ * The settle also holds backup admission (#9982): clip, frames, manifest and run
+ * record are one publication. The lease is taken BEFORE the tail and
+ * synchronously (the queue's fan-out contract requires it before the first await,
+ * so a cut draining for the job's completion waits for this filing). No sprite
+ * workflow takes the lease while holding the tail; one that does must take it
+ * first. A settle queued behind a long Reprocess can stretch a cut's drain.
  */
 async function settleSpriteAnimationJob(job) {
   const decoded = decodeSpriteAnimationJob(job);
@@ -86,21 +66,15 @@ async function settleSpriteAnimationJob(job) {
   const runRel = runRelPath(runId);
   const videoAbs = join(spriteDir(recordId), runRel, 'generated', SOURCE_CLIP_NAME);
   return withBackupAssetPublication(() => withAnimationWriteTail(recordId, async () => {
-    // Settle a run ONCE. Neither attach looks at `run.status` — they guard only
-    // frozen evidence (a finalized set, an approved run) — so re-entering here
-    // for a run that is already `candidate` would re-stage the clip and re-run
-    // the whole postprocess: minutes of frame decoding, and a manifest restamped
-    // with TODAY's anchor for a clip rendered from a previous one. That is not
-    // hypothetical, because the boot pass sweeps the archive unconditionally and
-    // a job outlives the run it filed by the archive's whole TTL.
+    // Settle a run ONCE: neither attach checks `run.status`, so re-entering for a
+    // `candidate` run would re-stage and re-postprocess it (minutes of decoding,
+    // manifest restamped with today's anchor). The boot sweep re-sees every
+    // archived job, so this guard is load-bearing.
     //
-    // The ONE exception is a Render Queue retry: it re-enqueues the same params
-    // (tag included) under a NEW job id, so its completion lands on a run this
-    // hook already filed as `error`. Skipping that would waste the multi-hour
-    // render the user explicitly asked for. A different job id is exactly what
-    // separates it from the boot sweep re-seeing the job that PRODUCED the
-    // error — so the new id is stamped on the run before the attach, and a later
-    // sweep of that same job then reads as already-filed.
+    // The exception is a Render Queue retry: same params under a NEW job id,
+    // landing on a run filed as `error`. A different job id separates it from the
+    // sweep re-seeing the job that PRODUCED the error, so the new id is stamped
+    // before the attach and a later sweep of that job reads as already-filed.
     const recordPath = join(spriteDir(recordId), runRel, RUN_RECORD_NAME);
     const record = await readJSONFile(recordPath, null, { strict: true });
     const isRetryOfFiledRun = record?.status === 'error'
@@ -110,14 +84,10 @@ async function settleSpriteAnimationJob(job) {
       console.log(`🎞️ ${label} retried as job ${job.id.slice(0, 8)} — re-filing the run`);
       await atomicWrite(recordPath, { ...record, jobId: job.id });
     }
-    // Try to stage the clip for a FAILED job too, not just a completed one. The
-    // queue stamps `interrupted by restart` on anything that was running when
-    // the process died — and the H3 child may well have written its final MP4
-    // before that happened, since the job only flips to `completed` once the
-    // queue persists the runner's event. Skipping collection there would file an
-    // error over a render that exists and orphan the clip under data/videos.
-    // `canceled` is excluded on purpose: a user who stopped a render must not
-    // get a candidate out of it, even if the file happened to land.
+    // Stage the clip for a FAILED job too: a job interrupted by restart may have
+    // written its final MP4 first, and skipping would file an error over an
+    // existing render and orphan the clip. `canceled` is excluded on purpose: a
+    // stopped render must not yield a candidate.
     if (job.status === 'canceled') {
       console.log(`🎞️ ${label} local render canceled — filing the run as errored`);
     } else {
@@ -133,12 +103,9 @@ async function settleSpriteAnimationJob(job) {
 let terminalHandler = null;
 
 /**
- * Reconcile jobs that reached a terminal state while this process was down.
- *
- * An unconditional sweep of the restored archive — every already-filed job in it
- * is a no-op, because `settleSpriteAnimationJob` refuses any run that is not
- * still `rendering`. That is what keeps this pass safe to run on every boot for
- * the archive's whole retention window.
+ * Reconcile jobs that reached a terminal state while this process was down. An
+ * unconditional sweep of the restored archive, safe on every boot because
+ * `settleSpriteAnimationJob` refuses any run not still `rendering`.
  */
 async function reconcileSettledSpriteJobs() {
   const jobs = listJobs({ kind: 'video', owner: 'sprites' })
@@ -150,8 +117,7 @@ async function reconcileSettledSpriteJobs() {
   const pending = jobs.map(job => ({ job, permit: maintenance.recoverOwned('settlement', `sprite:${job.id}`) }));
   let settled = 0;
   for (const { job, permit } of pending) {
-    // Serialized on purpose: these share the per-record write tail anyway, and a
-    // boot sweep has no reason to contend with the requests now arriving.
+    // Serialized on purpose: no reason to contend with arriving requests.
     await permit.run(() => settleSpriteAnimationJob(job)).then(() => { settled += 1; }).catch((err) => {
       permit.markUnsettled();
       console.error(`❌ sprite local render boot reconcile failed for job ${job.id.slice(0, 8)}: ${err?.message || err}`);
@@ -161,10 +127,7 @@ async function reconcileSettledSpriteJobs() {
   return settled;
 }
 
-/**
- * Mount the hook. Idempotent — a double init would otherwise file every
- * completed clip twice.
- */
+/** Mount the hook. Idempotent: a double init would file every clip twice. */
 export function initSpriteLocalAnimationHook() {
   if (terminalHandler) return;
   terminalHandler = (job) => {

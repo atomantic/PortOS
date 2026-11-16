@@ -1,22 +1,11 @@
 /**
  * Safety-kind classifier (#2440)
  *
- * A safety axis ORTHOGONAL to confidence scoring. Confidence gates purely on a
- * task type's historical success rate; safety-kind gates on whether the work is
- * outward-facing / irreversible — publishing content that goes live, federating
- * records to sync peers, pushing PRs to an external/upstream repo, or
- * releasing/deploying. Outward-facing work always needs the single PortOS user's
- * sign-off regardless of how high the success rate is: a 100% score can't undo a
- * published post or a record already fanned out to peers. ("Escalate to human"
- * here means surface to the one PortOS user — the single-user trust model still
- * applies.)
- *
- * Internal, reversible work (analysis, refactor, code-review, dependency audits,
- * same-repo improvement PRs the user can just close) keeps the pure success-rate
- * gate. Reversible is the DEFAULT, so existing CoS auto-approval behavior is
- * unchanged unless a task carries an explicit outward-facing signal.
- *
- * Pure, deterministic (same input → same output), and side-effect free.
+ * A safety axis ORTHOGONAL to confidence scoring: outward-facing / irreversible
+ * work (publishing, federating to peers, external PRs, releases) always needs the
+ * PortOS user's sign-off however high the success rate, since a 100% score can't
+ * undo a published post. Internal reversible work keeps the success-rate gate;
+ * reversible is the DEFAULT. Pure and deterministic.
  */
 
 import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
@@ -24,30 +13,21 @@ import { currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 /** Reversible internal work — retains today's confidence success-rate gate. */
 export const REVERSIBLE_SAFETY_KIND = 'reversible';
 
-/**
- * Outward-facing / irreversible kinds. This is the default set that always
- * requires human approval (issue #2440 acceptance #4). Tunable per install via
- * `config.safetyKindApproval.alwaysApproveKinds`.
- */
+/** Outward-facing kinds that always require approval; tunable via `config.safetyKindApproval.alwaysApproveKinds`. */
 export const OUTWARD_SAFETY_KINDS = Object.freeze(['content', 'publish', 'federation', 'external-pr']);
 export const DEFAULT_ALWAYS_APPROVE_KINDS = Object.freeze([...OUTWARD_SAFETY_KINDS]);
 
 const OUTWARD_KIND_SET = new Set(OUTWARD_SAFETY_KINDS);
 
 /**
- * Ordered keyword signatures — first match wins. Matched against a lowercased
- * haystack of the task-type key plus description/analysis hints. Kept
- * conservative and biased toward requiring approval: a false positive merely
- * asks the user to review a task that may not have needed it (safe direction);
- * a false negative would auto-approve genuinely outward work (the dangerous one
- * this feature exists to prevent).
+ * Ordered keyword signatures, first match wins, over a lowercased haystack of
+ * the task-type key plus hints. Biased toward requiring approval: a false
+ * positive costs a review, a false negative auto-approves outward work.
  *
- * Bare `\brelease\b` is intentionally NOT a publish signal. It matched the old
- * `release-check` coordinator and `pre-release` (a check, not a ship). Shipping
- * names still match via `\bpublish\b` (`publish-release`) or the explicit
- * `cut/create/ship/do-release` forms below — except the scheduled `do-release`
- * task itself (under either name): the operator configured it, and its
- * Run Now or cadence is the consent, exactly as it was under its old name.
+ * Bare `\brelease\b` is intentionally NOT a publish signal (it matches
+ * `pre-release`, a check); shipping names match via `\bpublish\b` or the explicit
+ * `cut/create/ship/do-release` forms. The scheduled `do-release` task itself is
+ * exempt: operator configuration or Run Now is the consent.
  */
 const KIND_SIGNATURES = [
   { kind: 'federation', re: /federat|peer[-\s]?sync|sync[-\s]?peer|fan[-\s]?out[-\s]?record/ },
@@ -62,10 +42,8 @@ const isScheduledReleaseTaskType = (key) => typeof key === 'string'
 const normalizeKind = (k) => (typeof k === 'string' ? k.trim().toLowerCase() : '');
 
 /**
- * Classify a task's safety kind from its task-type key and metadata.
- *
- * Priority order: explicit `metadata.safetyKind` / `metadata.outwardFacing`
- * override → boolean capability hints → the scheduled release task → keyword
+ * Classify a task's safety kind. Priority: explicit `metadata.safetyKind` /
+ * `outwardFacing` → capability hints → scheduled release task → keyword
  * signatures → reversible default.
  *
  * @param {{ taskTypeKey?: string, metadata?: object }} [input]
@@ -74,7 +52,7 @@ const normalizeKind = (k) => (typeof k === 'string' ? k.trim().toLowerCase() : '
 export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
   const meta = metadata && typeof metadata === 'object' ? metadata : {};
 
-  // 1) Explicit override wins — a producer that knows the work's kind says so.
+  // 1) Explicit override wins.
   const explicit = normalizeKind(meta.safetyKind);
   if (explicit) {
     return {
@@ -90,7 +68,7 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
     return { kind: REVERSIBLE_SAFETY_KIND, outwardFacing: false, reason: 'explicit metadata.outwardFacing=false' };
   }
 
-  // 2) Boolean capability hints a task builder can set when it knows the shape.
+  // 2) Capability hints.
   if (meta.federatesRecords === true || meta.publishesToPeers === true) {
     return { kind: 'federation', outwardFacing: true, reason: 'metadata capability: federation' };
   }
@@ -101,13 +79,13 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
     return { kind: 'external-pr', outwardFacing: true, reason: 'metadata capability: external PR' };
   }
 
-  // 3) The operator-configured scheduled release coordinator keeps the
-  //    confidence gate — its prompt title would otherwise match `do-release`.
+  // 3) The scheduled release coordinator keeps the confidence gate (its prompt
+  //    title would otherwise match `do-release`).
   if ([taskTypeKey, meta.analysisType, meta.selfImprovementType].some(isScheduledReleaseTaskType)) {
     return { kind: REVERSIBLE_SAFETY_KIND, outwardFacing: false, reason: 'operator-configured scheduled release task' };
   }
 
-  // 4) Keyword signatures over the task-type key + free-form description hints.
+  // 4) Keyword signatures.
   const haystack = [taskTypeKey, meta.analysisType, meta.selfImprovementType, meta.taskDescription]
     .filter((s) => typeof s === 'string' && s)
     .join(' ')
@@ -120,19 +98,15 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
     }
   }
 
-  // 5) Default — reversible internal work; keeps the success-rate gate.
+  // 5) Default: reversible.
   return { kind: REVERSIBLE_SAFETY_KIND, outwardFacing: false, reason: 'no outward signal — reversible internal work' };
 }
 
 /**
- * Should a task of this safety kind be forced to human approval, regardless of
- * confidence tier? Reads the `config.safetyKindApproval` slice.
- *
- * The `alwaysApproveKinds` list is the final authority: a kind that is
- * outward-facing per `classifySafetyKind` but absent from the list (or with the
- * gate disabled) is NOT forced here and falls through to the confidence gate —
- * so tuning the list also tempers explicit `metadata.safetyKind` / `outwardFacing`
- * classifications, by design.
+ * Should this safety kind be forced to human approval regardless of confidence?
+ * Reads `config.safetyKindApproval`. `alwaysApproveKinds` is the final authority:
+ * an outward kind absent from it (or with the gate disabled) falls through to the
+ * confidence gate, so tuning the list also tempers explicit classifications.
  *
  * @param {string} kind - a safety kind from classifySafetyKind()
  * @param {{ enabled?: boolean, alwaysApproveKinds?: string[] }} [config]

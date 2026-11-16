@@ -1,15 +1,12 @@
 /**
  * fal.ai clip frames at the project's aspect.
  *
- * Most fal image-to-video and audio-driven routes (OmniHuman, Hailuo-02, Kling)
- * take no aspect parameter: the output canvas follows the start frame. A square
- * still therefore became a 1080x1080 lip-sync clip that pillarboxes in a 16:9
- * music video. A Music Video clip names its project's aspect as `frameAspect`,
- * and the start and end frames are cropped to it here, in memory, just before
- * upload. The gallery image stays untouched, so the take still records the
- * frame the director picked. A frame within the shared tolerance uploads
- * byte-for-byte; anything else is attention-cropped (a close-up keeps its face)
- * to the largest rectangle of that ratio, never upscaled.
+ * Most fal image-to-video routes take no aspect parameter (the canvas follows
+ * the start frame), so a Music Video clip names its project's aspect as
+ * `frameAspect` and the start/end frames are cropped to it in memory just
+ * before upload. The gallery image is untouched. A frame within the shared
+ * tolerance uploads byte-for-byte; anything else is attention-cropped to the
+ * largest rectangle of that ratio, never upscaled.
  */
 import sharp from 'sharp';
 import { fileToDataUri } from '../falQueue.js';
