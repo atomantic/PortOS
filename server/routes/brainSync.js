@@ -30,11 +30,8 @@ const authorizeBrainPull = async (req, route) => {
 
 /**
  * POST /api/brain/bridge-sync
- * Sync all brain data to CoS memory system (generates embeddings).
- * Body: { refresh?: boolean } — refresh:true re-embeds already-mapped records
- * to heal memory entries that diverged before the per-record sync:applied
- * signal existed (issue #1080).
- * (Renamed from /sync to avoid conflict with federation sync)
+ * Sync all brain data to CoS memory (generates embeddings). Body: { refresh?: boolean };
+ * refresh:true re-embeds already-mapped records to heal diverged memory entries.
  */
 router.post('/bridge-sync', asyncHandler(async (req, res) => {
   const { refresh, onlyMissing } = validateRequest(brainBridgeSyncSchema, req.body ?? {});
@@ -67,9 +64,8 @@ router.get('/sync', asyncHandler(async (req, res) => {
 
 /**
  * GET /api/brain/reconcile/checksum
- * Anti-entropy checksum over ALL brain records (incl. tombstones) — #1077.
- * A peer fetches this after draining the delta log; on a mismatch it pulls the
- * full snapshot below. Lightweight (one hash) so it's cheap to poll each cycle.
+ * Anti-entropy checksum over ALL brain records (incl. tombstones); a mismatch makes the peer
+ * pull the snapshot below.
  */
 router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
   await authorizeBrainPull(req, 'brain checksum');
@@ -79,8 +75,7 @@ router.get('/reconcile/checksum', asyncHandler(async (req, res) => {
 
 /**
  * GET /api/brain/reconcile/snapshot
- * Full brain snapshot (raw record map incl. tombstones + checksum) for a peer
- * to LWW-merge. Brain has no per-record push pipeline, so this is unscoped —
+ * Full snapshot (raw record map incl. tombstones + checksum) for a peer to LWW-merge; unscoped,
  * the receiver applies it idempotently via applyRemoteRecord.
  */
 router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
@@ -91,33 +86,20 @@ router.get('/reconcile/snapshot', asyncHandler(async (req, res) => {
 
 /**
  * GET /api/brain/reconcile/manifest
- * Per-record parity manifest for a peer's audit run — #4519. One row per record
- * per entity type, `{ id, updatedAt, deleted }`, tombstones included. Ids and
- * LWW clocks ONLY: no record bodies, no names, so a peer auditing parity never
- * pulls brain content it wouldn't otherwise receive. Far cheaper than
- * /reconcile/snapshot, which older peers fall back to.
+ * Per-record parity manifest `{ id, updatedAt, deleted }` incl. tombstones. Ids and LWW clocks
+ * ONLY, no record bodies; far cheaper than /reconcile/snapshot, which older peers fall back to.
  */
 router.get('/reconcile/manifest', asyncHandler(async (req, res) => {
   await authorizeBrainPull(req, 'brain manifest');
   res.json(await brainParity.buildBrainManifest());
 }));
 
-/**
- * GET /api/brain/reconcile/parity
- * The last stored parity report per peer, keyed by peer instanceId. Reads a
- * local file — no peer I/O — so the Instances page can render parity state on
- * load without fanning out to every peer.
- */
+/** GET /api/brain/reconcile/parity — last stored parity report per peer instanceId (local file, no peer I/O). */
 router.get('/reconcile/parity', asyncHandler(async (_req, res) => {
   res.json({ reports: await brainParity.getBrainParityReports() });
 }));
 
-/**
- * POST /api/brain/reconcile/parity
- * Run a record-level parity audit. Body `{ peerId? }` — one peer, or every
- * federating peer when omitted. Distinct from the sync cycle by design: a
- * routine sync must never pay for a full manifest exchange.
- */
+/** POST /api/brain/reconcile/parity — record-level audit of `{ peerId? }` or every federating peer; kept apart from the sync cycle so routine sync never pays for a manifest exchange. */
 router.post('/reconcile/parity', asyncHandler(async (req, res) => {
   const { peerId } = validateRequest(brainParityCheckSchema, req.body ?? {});
   res.json(await brainParity.runBrainParityCheck({ peerId }));

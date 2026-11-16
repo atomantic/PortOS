@@ -1,28 +1,13 @@
 /**
  * Creative Director — boot-time recovery.
  *
- * Server restarts (deploys, watchers, OOM kills) abort any in-flight render
- * and tear down the in-memory listeners that runSceneRender attaches. Without
- * recovery the project sits in `rendering` / `stitching` forever — its scene
- * status fields point at jobs that the queue already reclassified as
- * 'failed (interrupted by restart)' but nothing fires advanceAfterSceneSettled
- * to push the project forward.
- *
- * On boot, after the media-job queue reloads its persisted state, we:
- *   1. Find every project that's mid-flight (status in planning/rendering/
- *      stitching).
- *   2. Reset any scenes stuck in `rendering` or `evaluating` back to `pending`
- *      — their listeners are gone, the render is dead, the only sane next
- *      action is to redo them.
- *   3. Mark any persisted `runs[]` row in `running` state as failed —
- *      the agent task behind it died with the previous process. Without
- *      this, advanceAfterSceneSettled's persisted-runs guard (which treats
- *      any non-terminal `treatment` run as "another worker is on it")
- *      would silently refuse to enqueue a replacement and the project
- *      would stay stuck in `planning` forever.
- *   4. Call `advanceAfterSceneSettled` to resume each project. It picks up
- *      from wherever the project stopped: re-renders pending scenes, fires a
- *      fresh evaluate task, runs the stitch, etc.
+ * A restart aborts in-flight renders and drops runSceneRender's listeners, leaving
+ * projects in `rendering` / `stitching` forever. After the media-job queue reloads, for
+ * each mid-flight project (planning/rendering/stitching) we:
+ *   1. Reset scenes stuck in `rendering` / `evaluating` to `pending`.
+ *   2. Fail persisted `running` runs[] rows: advanceAfterSceneSettled's guard treats
+ *      any non-terminal run as "another worker is on it" and would refuse to resume.
+ *   3. Call `advanceAfterSceneSettled` to resume from wherever the project stopped.
  */
 
 import { listProjects, updateScene, updatePlanStep, updateProject } from './local.js';
@@ -30,47 +15,29 @@ import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { inflightRuns, ownedLiveJobs, retireRuns } from './stopProject.js';
 import { logFailureWithStack } from '../../lib/failureLogging.js';
 
-// Boot-time coordination: cos.start() (entered from cos.init() when
-// alwaysOn/autoStart is configured) calls resetOrphanedTasks(), which
-// would respawn stale CD treatment/evaluate tasks BEFORE
-// recoverInFlightProjects() has had a chance to retire them via retireRuns.
-// Two concurrent agents would then race on the same project. Expose a
-// promise that cos.start() awaits before its resetOrphanedTasks call,
-// so the order is always:
-//   1. recoverInFlightProjects retires stale CD tasks (status='completed').
-//   2. resetOrphanedTasks runs and finds nothing CD-related to respawn.
+// cos.start() awaits this before resetOrphanedTasks(), which would otherwise respawn
+// stale CD tasks before recoverInFlightProjects() retires them (two agents, one project).
 let resolveRecoveryDone;
 export const cdRecoveryDone = new Promise((resolve) => {
   resolveRecoveryDone = resolve;
 });
 
-// Projects that should be auto-advanced on boot — the user expects them to
-// keep running.
+// Auto-advanced on boot: the user expects them to keep running.
 const RECOVERABLE_STATUSES = new Set(['planning', 'rendering', 'stitching']);
-// Projects whose stale state still needs cleanup but should NOT auto-advance
-// on boot. `paused` is here because the user pressed Pause; we still need to
-// wipe the dead in-flight state behind the pause so Resume picks up cleanly,
-// but we don't want to fire a fresh agent task before the user clicks
-// Resume themselves.
+// Stale state is cleaned but not auto-advanced: `paused` means the user pressed Pause.
 const CLEANUP_ONLY_STATUSES = new Set(['paused']);
 const STUCK_SCENE_STATUSES = new Set(['rendering', 'evaluating']);
 
 export async function recoverInFlightProjects() {
-  // Stamp the recovery start so we can distinguish boot-snapshot jobs
-  // (queued by the dead worker before restart, must be canceled) from
-  // jobs the user enqueued AFTER recovery began (e.g. clicked Resume
-  // mid-recovery — the new job must NOT be canceled as an "orphan").
-  // recoverInFlightProjects runs fire-and-forget from index.js and the
-  // user can interact during that window.
+  // Stamp the start: boot-snapshot jobs are canceled, but jobs the user enqueues AFTER
+  // recovery began (this runs fire-and-forget) must not be.
   const recoveryStartedAt = Date.now();
   const projects = await listProjects();
   const needsCleanup = projects.filter(
     (p) => RECOVERABLE_STATUSES.has(p.status) || CLEANUP_ONLY_STATUSES.has(p.status),
   );
   if (!needsCleanup.length) {
-    // Must resolve the gate even on the no-op path or cos.start's
-    // resetOrphanedTasks await would sit on its 60s timeout for nothing
-    // every daemon start/auto-start.
+    // Resolve the gate on the no-op path too, or cos.start waits out its 60s timeout.
     resolveRecoveryDone();
     return { resumed: 0 };
   }
@@ -87,15 +54,10 @@ export async function recoverInFlightProjects() {
       await reconcileVideoExecution(project.id, { restarting: true });
       continue;
     }
-    // Another machine's run state (mergeProjectRecord): resuming it would start
-    // its planner here, and resetting its steps would push back over the
-    // sender's live run.
+    // Another machine's run state (mergeProjectRecord): resuming would start its planner here.
     if (project.peerReplica) continue;
-    // CDO Phase 2 (#2184): a directive-driven project's plan steps stuck in
-    // `running` lost their in-memory dispatch/job listener when the process
-    // died — reset them to `pending` so the advance loop re-dispatches. (Their
-    // stale `plan-step` run rows are reaped by the staleRuns pass below, same as
-    // treatment/evaluate runs.)
+    // CDO Phase 2 (#2184): plan steps stuck in `running` lost their listener; reset to
+    // `pending` for re-dispatch (their `plan-step` run rows are reaped by staleRuns below).
     const planSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
     const stuckPlanSteps = planSteps.filter((s) => s.status === 'running');
     for (const step of stuckPlanSteps) {
@@ -109,10 +71,7 @@ export async function recoverInFlightProjects() {
     const scenes = project.treatment?.scenes || [];
     const stuck = scenes.filter((s) => STUCK_SCENE_STATUSES.has(s.status));
     for (const scene of stuck) {
-      // Paused projects with a completed render (renderedJobId set) retain their
-      // `evaluating` status so completionHook's resume path can re-fire the
-      // evaluator against the existing clip instead of forcing a full re-render.
-      // Resetting these to `pending` would discard the already-rendered video.
+      // A paused project's finished render keeps `evaluating` so resume re-evaluates the existing clip.
       if (project.status === 'paused' && scene.renderedJobId) continue;
       await updateScene(project.id, scene.sceneId, { status: 'pending' })
         .catch((e) => console.log(`⚠️ CD recovery: reset scene ${scene.sceneId} of ${project.id} failed: ${e.message}`));
@@ -123,14 +82,9 @@ export async function recoverInFlightProjects() {
     if (resetCount) {
       console.log(`🔄 CD recovery: ${project.id} reset ${resetCount} stuck scene(s) to pending`);
     }
-    // Reap stale `running` agent-run rows AND retire the underlying CoS task.
-    // The agent task behind each run died with the previous process, but
-    // cos.js#resetOrphanedTasks would otherwise see `in_progress` task rows on
-    // boot and respawn them — racing the fresh treatment/evaluate task this
-    // recovery path will cause to enqueue. `retireRuns` owns that contract (the
-    // `'internal'` taskType and the supported terminal status are load-bearing —
-    // its comments carry the why); we only supply the audit stamp. Nothing can be
-    // alive to kill here: this runs at boot, in a process that just started.
+    // Reap stale `running` runs AND retire their CoS tasks: resetOrphanedTasks would
+    // otherwise respawn them, racing the fresh task recovery enqueues. `retireRuns` owns
+    // that contract; nothing can be alive to kill, since this runs at boot.
     const staleRuns = inflightRuns(project).filter((r) => r.status === 'running');
     if (staleRuns.length) {
       await retireRuns(project.id, {
@@ -140,36 +94,12 @@ export async function recoverInFlightProjects() {
       });
       console.log(`🔄 CD recovery: ${project.id} reaped ${staleRuns.length} stale running run(s)`);
     }
-    // Cancel any media-queue jobs owned by this project that
-    // initMediaJobQueue() restored from disk. Two reasons: (1) For paused
-    // projects the user explicitly stopped, the queued render shouldn't
-    // burn GPU on resume. (2) For recovering projects (planning/rendering/
-    // stitching) the recovery path resets their scenes to `pending` and
-    // advance() will enqueue a fresh render — leaving the prior job alive
-    // would race two completions for the same `cd:<projectId>:<sceneId>`
-    // owner.
-    //
-    // We must cancel BOTH queued AND running, not just queued. The queue
-    // worker is started by initMediaJobQueue() (see server/index.js boot
-    // order) and dequeues restored jobs immediately — by the time this
-    // recovery path runs, what was `queued` on disk may already have
-    // transitioned to `running` in memory. Cancelling running CD jobs
-    // here SIGTERMs the gen process so the freshly-enqueued render
-    // doesn't have to compete for GPU memory with a doomed sibling.
-    // (Jobs reclassified `failed (interrupted by restart)` by the queue's
-    // own boot recovery are already terminal and listJobs returns them
-    // archived — they won't match either filter.)
-    //
-    // Filter to jobs queued BEFORE recovery started — recoverInFlightProjects
-    // runs fire-and-forget from index.js, so the user can have already
-    // clicked Resume on a paused project and enqueued a fresh render
-    // while we're iterating projects here. queuedAt > recoveryStartedAt
-    // means it's a brand-new user-initiated job, not a stale snapshot
-    // entry, and canceling it would silently kill the user's action.
-    // Match BOTH owner conventions: the scene loop tags renders `cd:<id>:<sceneId>`;
-    // a Phase-2 plan render step tags media jobs `creative-director:<id>` (the
-    // registry's resolveOwner). Both must be canceled so the reset step's fresh
-    // dispatch doesn't race a doomed sibling for the same output.
+    // Cancel media-queue jobs this project owns that initMediaJobQueue() restored, so a
+    // doomed render neither burns GPU nor races the fresh render for the same owner.
+    // Cancel BOTH queued AND running: the queue worker dequeues restored jobs at once, so
+    // a disk-`queued` job may already be `running`. Only jobs queued BEFORE recovery
+    // started: recovery is fire-and-forget, so a later queuedAt is the user's own
+    // Resume and must not be canceled. (Jobs the queue already marked failed are terminal.)
     const orphaned = ownedLiveJobs(listJobs(), project.id)
       .filter((j) => {
         const qa = new Date(j.queuedAt || 0).getTime();
@@ -182,26 +112,17 @@ export async function recoverInFlightProjects() {
     if (orphaned.length) {
       console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned job(s) (mix of queued + already-dequeued, all from pre-recovery snapshot)`);
     }
-    // Only auto-advance projects the user expects to still be running.
-    // `paused` projects skip this — the cleanup above is enough to make a
-    // future Resume click work.
+    // Only auto-advance projects the user expects to be running; `paused` ones just needed the cleanup.
     if (RECOVERABLE_STATUSES.has(project.status)) {
-      // CDO Phase 2 (#2184): a directive-driven project resumes through the
-      // generalized plan advance loop (deriveNextPlanAction re-derives the next
-      // step from the reset plan). Legacy video projects stay on the scene loop.
+      // CDO Phase 2 (#2184): a directive-driven project resumes via the plan advance loop; legacy video projects use the scene loop.
       if (project.directive) {
         advanceAfterPlanStepSettled(project.id)
           .catch((e) => logFailureWithStack(`❌ CD recovery: plan advance for ${project.id} failed`, e));
         resumed += 1;
         continue;
       }
-      // Special case: a project that was mid-stitch when the server died
-      // still has status='stitching'. advanceAfterSceneSettled exits
-      // early when it sees that status (its stitch dedup guard), so it
-      // would never re-fire runStitch. Flip back to 'rendering' so the
-      // function re-evaluates from scratch — it'll find all scenes
-      // accepted, no inflight, no finalVideoId, and call runStitch
-      // (which sets status back to 'stitching' itself before starting).
+      // A mid-stitch project still has status='stitching', which advanceAfterSceneSettled's
+      // dedup guard exits on; flip to 'rendering' so it re-evaluates and re-fires runStitch.
       if (project.status === 'stitching' && !project.finalVideoId) {
         await updateProject(project.id, { status: 'rendering' })
           .catch((e) => console.log(`⚠️ CD recovery: reset stitching→rendering for ${project.id} failed: ${e.message}`));
@@ -216,9 +137,7 @@ export async function recoverInFlightProjects() {
   return { resumed };
 }
 
-// Test/resume helper: callers that don't run recoverInFlightProjects (unit
-// tests, scripts) should still resolve the gate so any await on
-// cdRecoveryDone in cos.init doesn't hang forever. Idempotent.
+// Resolves the gate for callers that never run recoverInFlightProjects (tests, scripts). Idempotent.
 export function markRecoveryDone() {
   resolveRecoveryDone();
 }

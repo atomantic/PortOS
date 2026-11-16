@@ -180,12 +180,9 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
     request,
     inputAssets,
   });
-    // ADR docs/decisions/2026-08-20-federated-visual-prompts.md, rule 5: a STANDING route must
-    // refuse a non-tailnet peer. It exports every future prompt with nobody reviewing, and
-    // peerFetch's rejectUnauthorized:false leaves a plain-LAN or non-.ts.net peer
-    // unauthenticated, so an impostor could read the prompt from the request body.
-    // Interactive routing is unchanged. Checked AFTER prepareRemoteMediaJob so the peer record
-    // is the registry's, not one reconstructed from the route.
+    // ADR docs/decisions/2026-08-20-federated-visual-prompts.md rule 5: a STANDING route must
+    // refuse a non-tailnet peer (it exports every future prompt unreviewed over an
+    // unauthenticated hop). Checked AFTER prepareRemoteMediaJob so the peer is the registry's.
   if (!isTailnetPeer(peer)) {
     throw new ServerError(
       `Unattended ${kind} routing requires a Tailscale peer — "${peer.name || peer.id}" is reachable outside the tailnet, `
@@ -205,25 +202,20 @@ export async function resolveDefaultMediaRoute({ kind, params }) {
 }
 
 /**
- * Local params that only mean something to a LOCAL dispatch. Dropping them mirrors the
- * generate routes: backend selectors would otherwise ride into a job no local backend runs,
- * and a rollback to a build that cannot read `remoteMedia` must fail closed rather than
- * re-render the job locally.
- *
- * Destination tags (`creativeDirectorSceneImage`, `musicVideo`, `catalogAttach`, …) stay:
- * their completion hooks fire off the finished filename and work for a federated render.
+ * Local params meaningful only to a LOCAL dispatch: dropped like the generate routes do,
+ * and so a rollback to a build that cannot read `remoteMedia` fails closed rather than
+ * re-rendering locally. Destination tags (`catalogAttach`, `musicVideo`, …) stay: their
+ * completion hooks work for a federated render.
  */
 const LOCAL_ONLY_ROUTED_PARAMS = Object.freeze([
   'mode', 'cloudModel', 'backend', 'pythonPath',
   'mediaProviderPeerId', 'mediaProviderEngine',
 ]);
 
-// Post-processing passes over the produced FILE, not the render. The wire cannot request
-// them and the remote executor does not re-apply them after download, so a routed job comes
-// back without them. Dropped with a log rather than rejected (unlike `disableAudio`):
-// dropping a denoise pass still returns the requested image, just less clean, and
-// `cleanC2PA` defaults to true for cloud modes the user never opted into. Re-applying
-// consumer-side after download is the real fix.
+// Post-processing passes over the produced FILE: the wire cannot request them and the
+// remote executor does not re-apply them after download. Dropped with a log rather than
+// rejected (a denoise pass missing still returns the requested image, and `cleanC2PA`
+// defaults to true for cloud modes the user never opted into).
 const DROPPED_POST_PROCESSING = Object.freeze(['cleanC2PA', 'denoise']);
 
 /**
@@ -252,14 +244,9 @@ export function routedJobParams(params, { request, remoteMedia }) {
 }
 
 /**
- * THE enqueue entry point for unattended media work.
- *
- * Every autonomous render (Creative Director planner tool, scene runner, first-pass
- * portraits and frames) must go through here, not `enqueueJob` directly, or a configured
- * route applies to some of a project's renders and not others (half on the peer's model,
- * half local, shots mismatched with no explanation).
- *
- * Signature-compatible with `enqueueJob`.
+ * THE enqueue entry point for unattended media work (signature-compatible with
+ * `enqueueJob`). Every autonomous render must go through here, or a configured route
+ * applies to some of a project's renders and not others.
  *
  * @param {object} args
  * @param {'image'|'video'|'audio'} args.kind

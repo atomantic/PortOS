@@ -1,36 +1,22 @@
 /**
  * Which provider/model a scheduled app task actually spawns its agent on.
  *
- * Two pins can name one: the task's global Schedule pin, and the app's own
- * per-app override (`taskTypeOverrides[<taskType>].providerId` / `.model`). The
- * per-app pin is the more specific choice, so it wins — for EVERY task type
- * (#4783), not only the one whose `buildTaskInput` hook happened to read it.
+ * The global Schedule pin and the app's per-app override
+ * (`taskTypeOverrides[<taskType>].providerId` / `.model`) can both name one; the
+ * more specific per-app pin wins, for EVERY task type (#4783).
  *
- * The constraint both pins answer to is the HARNESS BOUNDARY: an `api`-type
- * provider (Ollama / LM Studio / kimi over HTTP) returns plain text with no
- * file-writing tool harness, so a CoS agent task pinned to one can never do the
- * work. `agentProviderResolution` already refuses such a task at spawn, but by
- * then the run is a permanent failure the user has to notice and clear — and for
- * layered-intelligence (whose per-app pin migration 184 populated verbatim,
- * ollama entries included) it wedged the task instead. Catching it HERE lets an
- * api-typed per-app pin fall back to the task's Schedule pin, which is the
- * self-heal LI shipped, generalized: every task type spawns an agent that needs a
- * harness, so the constraint was never LI's.
- *
- * The walk, in one place so the generic generator path and LI's hook cannot drift:
+ * HARNESS BOUNDARY: an `api`-type provider has no file-writing tool harness, so a
+ * task pinned to one can never do the work; catching it HERE (rather than at
+ * spawn, a permanent failure) lets an api-typed per-app pin fall back to the
+ * Schedule pin. The walk, in one place so the generator path and LI's hook agree:
  *
  *   per-app pin → (api-typed? adopt the Schedule pin instead) → Schedule pin →
  *   the install's default coding agent
  *
- * Deliberately NOT expressed on `lib/llmRoutePin.js` (#4793). Both of that
- * module's rules are synchronous and decide on the pin VALUES alone; this walk is
- * async and decides on a provider's resolved TYPE, healing an api-typed pin onto
- * the next layer — a branch neither rule has a place for. It also carries two
- * semantics the shared rules deliberately do not: the Schedule pin is a lazy
- * thunk read at most once (so a resolving per-app pin never pays for it), and the
- * model falls through with `??` rather than `||`, so an explicitly-blank per-app
- * model stays blank instead of inheriting the Schedule pin's. Migrating would
- * change both.
+ * NOT expressed on `lib/llmRoutePin.js` (#4793): its rules are synchronous and
+ * decide on pin VALUES; this walk is async, decides on resolved TYPE, reads the
+ * Schedule pin as a lazy thunk at most once, and uses `??` so an explicitly-blank
+ * per-app model stays blank.
  */
 
 const NOT_AGENT_CAPABLE = 'provider-not-agent-capable';
@@ -47,10 +33,9 @@ const NOT_AGENT_CAPABLE = 'provider-not-agent-capable';
  * @param {string}   args.appName          App name, for the same log line.
  * @param {function} [args.getProviderType] Injectable `(id) => Promise<type|null>` seam for tests.
  * @returns {Promise<{ providerId: string|null, model: string|null, healedFrom: string|null, skipReason: string|null }>}
- *   `skipReason` is `'provider-not-agent-capable'` when NOTHING resolvable has a harness. Callers
- *   that can decline to generate (LI) gate on it; the generic path leaves the Schedule pin alone so
- *   `agentProviderResolution` reports its actionable permanent error rather than silently rerouting
- *   the run onto a provider the user never chose.
+ *   `skipReason` is `'provider-not-agent-capable'` when NOTHING resolvable has a harness. LI gates
+ *   on it; the generic path leaves the Schedule pin alone so `agentProviderResolution` reports its
+ *   error rather than silently rerouting onto a provider the user never chose.
  */
 export async function resolveAgentProviderPin({ appPin, readSchedulePin, taskType, appName, getProviderType } = {}) {
   const typeOf = getProviderType || (async (id) => {
@@ -60,7 +45,6 @@ export async function resolveAgentProviderPin({ appPin, readSchedulePin, taskTyp
   });
   const providerTypeOf = async (id) => (id ? typeOf(id) : null);
 
-  // Read the Schedule pin at most once, and only when a branch below needs it.
   let schedulePinPromise = null;
   const schedulePin = () => {
     if (!schedulePinPromise) schedulePinPromise = Promise.resolve(readSchedulePin()).catch(() => null);
@@ -76,30 +60,24 @@ export async function resolveAgentProviderPin({ appPin, readSchedulePin, taskTyp
     const pin = await schedulePin();
     const pinId = pin?.providerId || null;
     const pinType = await providerTypeOf(pinId);
-    // Adopt the Schedule pin only when it RESOLVES to a real non-api provider.
-    // `pinType` is null for an unresolvable id (deleted / renamed / typo'd pin) —
-    // treating that as "not api" would re-wedge the task on a doomed provider
-    // under a misleading "healed" line, so require a positively-known type.
+    // Require a positively-known type: `pinType` is null for an unresolvable id,
+    // and treating that as "not api" would re-wedge the task on a doomed provider.
     if (pinId && pinType && pinType !== 'api') {
       healedFrom = providerId;
       providerId = pinId;
-      // Adopt the pin's model too — provider+model are a matched pair the user set
-      // together, and an api provider's model name may not be valid for a CLI/TUI one.
+      // Provider+model are a matched pair; an api model name may not suit a CLI/TUI provider.
       model = pin?.model ?? null;
       type = pinType;
     }
   } else if (!providerId) {
-    // No per-app provider → the Schedule pin IS the resolved choice; resolving it
-    // here (rather than leaving that leg to the caller) keeps this the single
-    // source of truth for what the agent runs on. No pin at all leaves
-    // `providerId` null, which inherits the install's default coding agent.
+    // No per-app provider → the Schedule pin IS the resolved choice. No pin at all
+    // leaves `providerId` null, inheriting the install's default coding agent.
     const pin = await schedulePin();
     const pinId = pin?.providerId || null;
     if (pinId) {
       providerId = pinId;
       type = await providerTypeOf(pinId);
-      // Keep an explicit per-app model when the user set one (a model pinned
-      // without a provider); only fall back to the pin's model when there is none.
+      // An explicit per-app model (pinned without a provider) wins over the pin's.
       model = appPin?.model ?? pin?.model ?? null;
     }
   }

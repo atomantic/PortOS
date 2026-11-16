@@ -1,36 +1,9 @@
 /**
- * Character Signal Context (#2676, epic #2672)
- *
- * ONE read per domain stat, shared by every surface `getCharacter()` derives on read.
- *
- * The Character sheet now derives two things from the same domain stats: the per-domain
- * `skills` (#2674) and the `metrics` grid (#2676). Most of the signals below feed BOTH —
- * Wordsmith and `recordsCreated` are the same three reads, Mentalist and `postStreakDays` are
- * the same two, and so on. Letting each registry call the getters itself would have doubled
- * the fan-out of a route the OpenWorld HUD polls every 15s, so the reads moved here and both
- * registries now take a `read` function instead of importing the getters directly.
- *
- * **Per-request, never module-level.** `createSignalContext()` mints a fresh cache per
- * `getCharacter()` call. A module-level cache would be a correctness bug, not an
- * optimization: these stats change as the user uses PortOS, and a sheet that never notices
- * the session you just logged is worse than a slow one.
- *
- * **Failures propagate; they are not classified here.** A reader that rejects makes `read()`
- * reject with the same error, and the *consumer* decides what that means (both registries
- * turn it into an explicit `unavailable`, never a fake 0 — see `readSkill` / `readMetric`).
- * This module stays a cache, not a policy. A failed read is cached like any other, so a
- * downed Postgres is hit once per request rather than once per skill AND once per metric
- * that reads it.
- *
- * **Every reader must be able to report failure (#2726).** That propagation is only worth
- * anything if the readers actually reject when they can't read. The DB-backed ones always
- * did (a failed `query()` throws), but the file-backed four bottom out in `readJSONFile`,
- * which returns its default on *every* read error — so an unreadable file arrived here
- * indistinguishable from an empty one and scored a real-looking 0. They now pass
- * `{ strict: true }`, which throws on a present-but-unreadable/corrupt file while still
- * treating a genuinely absent one (ENOENT) as the trustworthy empty it is. This is the ONLY
- * place that opts in: every other caller of those getters keeps the swallow-and-default
- * behavior, which is correct for a UI that should degrade rather than break.
+ * Character Signal Context: ONE read per domain stat, shared by the `skills` and `metrics` registries
+ * (they take a `read` function so the OpenWorld HUD's 15s poll isn't doubled).
+ * Per-request, never module-level: stats change as the user uses PortOS.
+ * Failures propagate; the consumer turns a rejection into `unavailable`, never a fake 0.
+ * Readers must be able to report failure (#2726): file-backed ones pass `{ strict: true }` (ENOENT stays a trustworthy empty).
  */
 
 import { countUniverses } from './universeBuilder.js';
@@ -46,19 +19,9 @@ import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { getUserTimezone, userLocalToday } from './userTimezone.js';
 
 /**
- * Every domain stat the derived Character surfaces are allowed to read, keyed by signal id.
- * Adding a signal here is the ONLY way to add a read — a registry that reaches for a getter
- * directly re-opens the duplicate-read hole this module exists to close.
- *
- * These are tallies or already-aggregated summaries, never listings: `countUniverses` /
- * `countWorks` / `countMemories` / `countAssets` are `COUNT(*)`s (#2729), so no consumer can
- * accidentally materialize every record just to read a `.length`. `loggingStats`'
- * `activeDayKeys` is the one bounded exception — a de-duplicated day key per ACTIVE DAY, not
- * per record — because a day-set union has no aggregate form (#4120).
- *
- * The file-backed readers pass `{ strict: true }` — see the header. Keep it on any reader
- * added here whose source can swallow a read error, or the signal silently becomes a lie
- * the consumers have no way to detect.
+ * Every domain stat the derived Character surfaces may read, keyed by signal id. Tallies or aggregates,
+ * never listings (#2729); `activeDayKeys` is the one bounded exception (#4120). Keep `{ strict: true }`
+ * on any reader whose source can swallow a read error, or the signal silently becomes a lie.
  */
 export const SIGNAL_READERS = {
   universeCount: () => countUniverses(),
@@ -67,37 +30,19 @@ export const SIGNAL_READERS = {
   postSessions: () => getPostSessions(undefined, undefined, { strict: true }),
   postTraining: () => getAllTrainingEntries({ strict: true }),
   postEnabled: () => isInstanceFeatureEnabled('post'),
-  // Today's `YYYY-MM-DD` in the USER's configured timezone — the same day boundary
-  // meatspacePost.js anchors its streaks to. Deriving "today" from the server's local clock
-  // instead would let the Character sheet's POST streak disagree with the Progress page's by
-  // a day for any user whose configured timezone isn't the server's.
+  // Today's `YYYY-MM-DD` in the USER's configured timezone, the same boundary meatspacePost.js anchors streaks to.
   postToday: () => userLocalToday(),
-  // The user's IANA timezone itself, for consumers that must re-key a stored INSTANT to the
-  // user's day rather than just compare against today (`daysActive` and `postStreakDays` — see
-  // `server/lib/activeDays.js` and `server/lib/postStreak.js`). Same settings read `postToday`
-  // bottoms out in, so keeping it as its own signal costs one extra `getSettings()` per request
-  // and keeps the day-boundary decision in ONE place instead of forking a second "which day is
-  // this?" implementation.
+  // The user's IANA timezone, for consumers that re-key a stored INSTANT to the user's day
+  // (`daysActive`, `postStreakDays`); keeps the day-boundary decision in ONE place.
   userTimezone: () => getUserTimezone(),
-  // `withActiveDayKeys` (#4120): the raw union of stored health-log day keys, which the
-  // cross-domain `daysActive` metric unions with POST's days. Opt-in at the service so the
-  // polled dashboard endpoint doesn't ship an ever-growing key list it never reads.
+  // `withActiveDayKeys` (#4120): raw union of health-log day keys for the cross-domain `daysActive` metric; opt-in so the polled endpoint doesn't ship a growing list it never reads.
   loggingStats: () => getLoggingStats({ strict: true, withActiveDayKeys: true }),
   goals: () => getGoals({ strict: true }),
   memoryCount: () => countMemories({}),
   assetCount: () => countAssets(),
 };
 
-/**
- * Mint a read-once context. Returns `read(signalId)` → a promise of that signal's value,
- * resolving the underlying getter at most once no matter how many skills/metrics ask.
- *
- * Throws synchronously on an unknown signal id. That is deliberate rather than a rejection:
- * a rejection would be caught by the caller's `unavailable` classification and a typo'd id
- * would masquerade as "this domain is down" forever. The registry suites drive every
- * skill/metric through a fully-stubbed context and assert nothing comes back unavailable,
- * which turns such a typo into a red test instead of a silent lie.
- */
+/** Mint a read-once context: `read(signalId)` resolves each getter at most once. Throws synchronously on an unknown id so a typo can't masquerade as "domain is down". */
 export function createSignalContext() {
   const cache = new Map();
 
@@ -105,11 +50,8 @@ export function createSignalContext() {
     const reader = SIGNAL_READERS[signalId];
     if (!reader) throw new Error(`Unknown character signal: ${signalId}`);
 
-    // `Promise.resolve().then(reader)` rather than `reader()`: it normalizes a getter that
-    // throws SYNCHRONOUSLY into a rejection, so a consumer's `.catch()`-based unavailable
-    // classification always sees it instead of the throw escaping `read()` and rejecting the
-    // whole GET. A settled promise re-delivers its value (or re-throws its error) to every
-    // later awaiter, so caching the promise is all the memoization either case needs.
+    // `Promise.resolve().then(reader)` turns a SYNCHRONOUS throw into a rejection so the consumer's
+    // `.catch()`-based unavailable classification always sees it. A settled promise re-delivers to every later awaiter.
     if (!cache.has(signalId)) cache.set(signalId, Promise.resolve().then(reader));
 
     return cache.get(signalId);

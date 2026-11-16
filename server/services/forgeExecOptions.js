@@ -13,21 +13,12 @@ import { resolveForgeForRepo } from './forgeAuth.js';
 
 /**
  * The `{ cwd, env }` overlay for running `gh` against `repoPath` as the account
- * that repo actually needs, rather than whichever login gh's mutable `hosts.yml`
- * currently calls active.
- *
- * This is the shape every polling job that reads a MANAGED APP's repo must use.
- * Without it, an app whose repo lives under a different GitHub account than the
- * ambient login permanently 404s on a private repo (`Could not resolve to a
- * Repository` is GitHub's no-access 404), once per scheduler tick, forever —
- * #7540. It bites even with no `forgeAccount` pinned, because
- * `resolveForgeForRepo` already owner-matches against the locally logged-in
- * accounts; the explicit pin then covers the rest.
+ * that repo needs, not gh's mutable active login (without it, a repo under a
+ * different account 404s every tick, #7540).
  *
  * An unresolvable origin keeps the ambient env. Credential failures propagate:
  * an unavailable pin must never turn into execution as the active account.
- * `customEnv` is null when nothing was overlaid, so a caller can pass the
- * overlay to `ensureForgeReachable` only when there is one.
+ * `customEnv` is null when nothing was overlaid.
  *
  * @param {string|null} repoPath - Repo (or worktree) root; null/absent = ambient
  * @param {object} [opts]
