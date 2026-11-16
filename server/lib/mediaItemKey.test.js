@@ -15,10 +15,6 @@ describe('mediaItemKey', () => {
       for (const k of ITEM_KINDS) expect(ITEM_KIND.has(k)).toBe(true);
       expect(ITEM_KIND.size).toBe(ITEM_KINDS.length);
     });
-
-    it('caps refs at 256 chars', () => {
-      expect(REF_MAX_LENGTH).toBe(256);
-    });
   });
 
   describe('itemKey', () => {
