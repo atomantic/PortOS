@@ -2391,8 +2391,10 @@ describe('desiredEndState', () => {
       const instruction = desiredEndState(state, {});
       expect(instruction).toContain('gh pr checks <num> --required');
       expect(instruction).not.toContain('--auto --merge');
-      expect(instruction).toContain('mergeHandoffMinQueuedRuns');
-      expect(instruction).toContain('Unknown backlog, refused handoff');
+      expect(instruction).not.toContain('mergeHandoffMinQueuedRuns');
+      const withThreshold = desiredEndState(state, {}, { mergeHandoff: true });
+      expect(withThreshold).toContain('mergeHandoffMinQueuedRuns');
+      expect(withThreshold).toContain('Unknown backlog, refused handoff');
     }
   });
 

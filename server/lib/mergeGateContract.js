@@ -131,9 +131,20 @@ export function hasHealthyAutoMergeRequest(pr, now = Date.now()) {
   });
 }
 
-/** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
-export function buildAutoMergeHandoffInstructions(prRef, { review = true } = {}) {
-  return `**Own delivery through completion:** By default stay responsible for ${prRef} through all required CI${review ? ', review' : ''}, confirmed MERGED and safe cleanup. GitHub auto-merge enabled is not completion and does not transfer failure recovery or cleanup. Early finish is allowed only with an explicit persisted PortOS pending-merge receipt for the exact published${review ? '/reviewed' : ''} head, accepted after the server observes the configured CI backlog threshold. The app setting \`mergeHandoffMinQueuedRuns\` is opt-in: absent/null means keep ownership; no threshold is inferred from elapsed time. Unknown backlog, refused handoff or failed receipt persistence means continue in-session. The receipt owns CI failure recovery, changed heads, merge confirmation and preserved cleanup across restarts. Report its receipt ID and PR/head as pending, never merged; preserve the checkout and issue until the successor confirms completion. Intentional leave-open policies remain unchanged. Native GitHub auto-merge is allowed when the provider accepts it; continue observing the exact PR until MERGED. A refused optional PortOS handoff does not add a merge-certification requirement.`;
+/**
+ * The pending-merge handoff is opt-in per app: the server refuses it unless the
+ * app sets a positive integer `mergeHandoffMinQueuedRuns` (cosMergeHandoff.js),
+ * so prompts mention it only when that threshold is set.
+ */
+export const isMergeHandoffEnabled = (threshold) => Number.isSafeInteger(threshold) && threshold > 0;
+
+/** Shared GitHub delivery contract for inline, review-follow-up and recovery prompts. */
+export function buildAutoMergeHandoffInstructions(prRef, { review = true, mergeHandoff = false } = {}) {
+  const handoff = mergeHandoff
+    ? ` Early finish is allowed only with an explicit persisted PortOS pending-merge receipt for the exact published${review ? '/reviewed' : ''} head, accepted after the server observes the configured CI backlog threshold. The app setting \`mergeHandoffMinQueuedRuns\` is opt-in: absent/null means keep ownership; no threshold is inferred from elapsed time. Unknown backlog, refused handoff or failed receipt persistence means continue in-session. The receipt owns CI failure recovery, changed heads, merge confirmation and preserved cleanup across restarts. Report its receipt ID and PR/head as pending, never merged; preserve the checkout and issue until the successor confirms completion. Intentional leave-open policies remain unchanged.`
+    : '';
+  const tail = mergeHandoff ? ' A refused optional PortOS handoff does not add a merge-certification requirement.' : '';
+  return `**Own delivery through completion:** By default stay responsible for ${prRef} through all required CI${review ? ', review' : ''}, confirmed MERGED and safe cleanup. GitHub auto-merge enabled is not completion and does not transfer failure recovery or cleanup.${handoff} Native GitHub auto-merge is allowed when the provider accepts it; continue observing the exact PR until MERGED.${tail}`;
 }
 
 /** Shared delivery and cleanup contract for every managed checkout delivery prompt. */

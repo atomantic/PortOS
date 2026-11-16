@@ -681,18 +681,18 @@ export const AUTO_MERGE_SECTION = [
   'Auto-merge enabled is pending, not delivered. Keep watching CI on that head until the PR reports MERGED, then finish cleanup and completion as usual. If a check fails, run `gh pr merge <PR_URL> --disable-auto` before pushing a fix so an unreviewed head cannot merge, fix and push as the CI steps describe, repeat any review the new head requires, then enable auto-merge again for the new head. If GitHub refuses auto-merge (disabled for the repository, or no protected checks), merge normally after CI passes. GitLab, leave-open and draft policies ignore this section.',
 ].join('\n');
 
-export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false } = {}) {
-  const section = buildMergeAdmissionBody(agentId, { review });
+export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false, mergeHandoff = false } = {}) {
+  const section = buildMergeAdmissionBody(agentId, { review, mergeHandoff });
   return autoMerge ? `${section}\n\n${AUTO_MERGE_SECTION}` : section;
 }
 
-function buildMergeAdmissionBody(agentId, { review }) {
+function buildMergeAdmissionBody(agentId, { review, mergeHandoff }) {
   if (!agentId) return [
     '## Hosting-provider merge authority',
     'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
   ].join('\n');
   return [
-    ...buildPendingMergeHandoffLines(agentId, { review }), '',
+    ...(mergeHandoff ? [...buildPendingMergeHandoffLines(agentId, { review }), ''] : []),
     '## Hosting-provider merge authority',
     `This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`,
     'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
@@ -703,7 +703,7 @@ function buildMergeAdmissionBody(agentId, { review }) {
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false, workflowScope = null } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false, workflowScope = null, mergeHandoff = false } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -718,7 +718,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
       'For that workflow-scope handoff, write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Grant workflow scope through the supported GitHub authorization flow before delivery resumes"]}. Name the PR and missing scope in reason. A generic blocked/incomplete outcome without this recovery mode is treated as machine-recoverable and wastes automatic retry/spawn budget on the same permission boundary. Never refresh credentials or retry the denied merge yourself.',
       '',
     ] : []),
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge }), ''] : []),
+    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen, mergeHandoff }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge, mergeHandoff }), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
@@ -827,7 +827,7 @@ export function worktreeCommitGuidance({ isTui, mode = null, canTypeSlashCommand
  * `prCompletion` selects the review gate or CI-only merge gate. Leave-open
  * callers do not invoke this helper.
  */
-function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewPolicy, forgeCli = 'gh', mergeAdmission = false }) {
+function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE, reviewPolicy, forgeCli = 'gh', mergeAdmission = false, mergeHandoff = false }) {
   const { reviewers, optionalReviewers, reviewStopMode } = reviewPolicy;
   const usernames = normalizeReviewUsernames(reviewPolicy.forgeReviewerUsernames);
   const mergeGateForge = forgeCli === 'glab' ? 'gitlab' : 'github';
@@ -836,7 +836,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
   // isn't known when this prompt is written, hence the placeholder.
   if (prCompletion === PR_COMPLETIONS.MERGE_ON_GREEN) {
     // Under merge admission `/do:pr` runs with --no-merge, so no saved default merges it.
-    const gate = buildCiMergeGateSteps(startStep, { prRef: '"<PR_URL>"', forge: 'unknown', ...(mergeAdmission ? { alreadyMergedHint: '' } : {}) });
+    const gate = buildCiMergeGateSteps(startStep, { prRef: '"<PR_URL>"', forge: 'unknown', mergeHandoff, ...(mergeAdmission ? { alreadyMergedHint: '' } : {}) });
     return {
       lines: [
         '   **No review loop is configured for this task, so nothing and nobody else will merge this PR** — `/do:pr` opens it and exits. Capture the PR URL it printed, then:',
@@ -881,6 +881,7 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
     prRef: '"<PR_URL>"',
     forge: mergeGateForge,
     alreadyMergedHint: '',
+    mergeHandoff,
     localReviewers,
     localReviewRequired,
     reviewRecheckReviewers: reviewNames,
@@ -961,7 +962,7 @@ function localReviewCompletionInstruction(localReviewRequired = true) {
  * this IS a Claude session, so `/simplify` and `/do:pr` are both safe to emit
  * without a second provider check.
  */
-export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false }) {
+export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, simplifyEnabled, sentinelPath, mode = COMPLETION_MODES.TUI, rendersInlinePrLifecycle = false, portosMergesBranch = false, branchName = null, baseBranch = null, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false, mergeHandoff = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE;
   const prStaysOpen = humanLandsPr || policyLeavesOpen;
@@ -1010,7 +1011,7 @@ export function buildTuiCompletionSection({ willOpenPR, prCompletion = PR_COMPLE
   // alone when it doesn't (nothing else merges a no-review-loop PR). The one
   // exception is a PR a human lands (JIRA-tracked; see lib/prDisposition.js).
   const merge = (willOpenPR && !prStaysOpen)
-    ? buildPostPRMergeSteps(3, { prCompletion, reviewPolicy, forgeCli, mergeAdmission })
+    ? buildPostPRMergeSteps(3, { prCompletion, reviewPolicy, forgeCli, mergeAdmission, mergeHandoff })
     : { lines: prStaysOpen && willOpenPR ? [LEAVE_PR_OPEN_STEP(3, humanLandsPr)] : [], nextStep: prStaysOpen && willOpenPR ? 4 : 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1321,7 +1322,7 @@ export function inlinePrLifecycleSection(task, opts) {
  */
 export function buildInlineReviewLoopSection({
   taskId, branchName, runsReviewLoop, leaveOpen, localAgentLoopBody, localAgentLoopBodyPath = null, writesSentinel = false,
-  reviewPolicy, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, reviewerPositions = [], forgeCli = 'gh', workflowStep,
+  reviewPolicy, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, reviewerPositions = [], forgeCli = 'gh', workflowStep, mergeHandoff = false,
 }) {
   // Where control goes after the merge. A TUI run still owes PortOS its
   // `.agent-done` sentinel — telling it to "exit" here is how a finished merge
@@ -1339,7 +1340,7 @@ export function buildInlineReviewLoopSection({
     // exactly as the merge-only follow-up gets.
     reviewLoopMergeOnly: !runsReviewLoop,
     sourceTaskId: taskId || 'unknown',
-  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli, inlineWorkflowStep: workflowStep, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, reviewerPositions });
+  }, { verbose: false, localAgentLoopBody, localAgentLoopBodyPath, inlineExitStep, forgeCli, inlineWorkflowStep: workflowStep, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, reviewerPositions, mergeHandoff });
 }
 
 /**
@@ -1356,7 +1357,7 @@ export function buildInlineReviewLoopSection({
  * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
  * `willOpenPR` — the caller already resolved those into `mode`.
  */
-export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false }) {
+export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false, mergeHandoff = false }) {
   const policyLeavesOpen = prCompletion === PR_COMPLETIONS.LEAVE_OPEN;
   const runsReviewLoop = postPrReview ?? (prCompletion === PR_COMPLETIONS.REVIEW_THEN_MERGE);
   const prStaysOpen = humanLandsPr || policyLeavesOpen;
@@ -1390,7 +1391,7 @@ export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompleti
     if (prStaysOpen) {
       lines.push(LEAVE_PR_OPEN_STEP(step, humanLandsPr));
     } else {
-      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewPolicy, forgeCli, mergeAdmission });
+      const merge = buildPostPRMergeSteps(step, { prCompletion, reviewPolicy, forgeCli, mergeAdmission, mergeHandoff });
       lines.push(...merge.lines);
     }
     return lines.join('\n');
