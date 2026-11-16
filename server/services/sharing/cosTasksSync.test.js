@@ -48,8 +48,8 @@ vi.mock('../cosTaskStore.js', () => {
 
 import {
   buildCosTasksPayload,
-  syncCosTasksFromPeer,
 } from './peerSync.js';
+import { syncCosTasksFromPeer } from './peerCosSync.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';

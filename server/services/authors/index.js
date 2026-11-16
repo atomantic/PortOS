@@ -32,7 +32,7 @@ export {
 // DB, but a route can call in before that gate runs ensureSchema() — the selector
 // runs it (idempotently) on the PG path, so the authors table is created on first
 // use either way.
-const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({
+const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
   label: 'Authors',
   loadFileBackend: () => import('./file.js'),
   loadDbBackend: () => import('./db.js'),
@@ -42,11 +42,6 @@ const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelecto
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getAuthorsBackendName() {
   return getBackendName();
-}
-
-/** Test seam — drop the memoized backend so a suite can re-select. */
-export function _resetAuthorsBackend() {
-  reset();
 }
 
 export async function listAuthors(options = {}) {

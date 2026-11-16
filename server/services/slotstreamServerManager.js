@@ -472,11 +472,6 @@ export function _resetSlotstreamServerStateForTests({
   relaunchPollMs = Number.isFinite(relaunchPoll) ? relaunchPoll : 1000;
 }
 
-// Test hook for pinning
-export function _setSlotstreamKeepLoadedOverrideForTests(val) {
-  onDemand.setKeepLoadedOverrideForTests(val);
-}
-
 /**
  * The launch line last saved on the Slotstream card, for a lazy start to
  * replay — including the `memoryGb` override, the one field the shared

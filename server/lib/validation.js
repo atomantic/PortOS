@@ -12,7 +12,6 @@ import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLora
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
 import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
-export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
@@ -1245,7 +1244,7 @@ export const autoUpdateSettingsSchema = z.object({
 // instead of letting it be saved+enabled and then silently dropped by
 // activeSchedules — which would leave the user with an "enabled" schedule that
 // never fires (#2174).
-export { isValidCronExpression, isCronShaped, findCronExpressionError } from './cronValidation.js';
+export { isValidCronExpression, findCronExpressionError } from './cronValidation.js';
 
 export const seriesAutopilotScheduleSchema = z.object({
   seriesId: z.string().min(1).max(64),

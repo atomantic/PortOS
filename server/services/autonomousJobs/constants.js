@@ -24,12 +24,11 @@ export const withLock = createMutex()
 // leaf module.
 export {
   WEEK,
-  ON_DEMAND_INTERVAL,
   INTERVAL_OPTIONS,
   JOB_INTERVAL_VALUES,
   resolveIntervalMs,
-  isOnDemandJob
-} from '../../lib/autonomousJobIntervals.js'
+  isOnDemandJob,
+} from '../../lib/autonomousJobIntervals.js';
 
 // Re-export the time units used across submodules so callers import from one place.
 export { DAY, HOUR }

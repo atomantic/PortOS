@@ -38,10 +38,7 @@ export { getLongevity, deriveLongevity } from './identity/longevity.js';
 
 // Goals
 export {
-  computeGoalFeasibility,
   computeGoalUrgency,
-  computeGoalVelocity,
-  computeTimeTracking,
   getGoals,
   setBirthDate,
   createGoal,
@@ -66,7 +63,7 @@ export {
   organizeGoals,
   applyGoalOrganization,
   checkInGoal,
-  updateGoalProgress
+  updateGoalProgress,
 } from './identity/goals.js';
 
 // Todos

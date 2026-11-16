@@ -431,7 +431,7 @@ export function setCodexParallelLimit(n) {
   return codexParallelLimit;
 }
 
-export function _getParallelLimit(target, maybeMode) {
+function _getParallelLimit(target, maybeMode) {
   const kind = typeof target === 'string' ? target : target?.kind;
   const mode = typeof target === 'string' ? maybeMode : (target?.params?.mode || target?.mode);
   if (kind && mode) {
@@ -444,7 +444,7 @@ export function _getParallelLimit(target, maybeMode) {
   return PARALLEL_LIMIT_DEFAULT;
 }
 
-export function _setParallelLimit(target, modeOrN, maybeN) {
+function _setParallelLimit(target, modeOrN, maybeN) {
   let kind, mode, n;
   if (typeof target === 'string') {
     kind = target;
@@ -495,7 +495,7 @@ export async function refreshCodexParallelLimit() {
   return setCodexParallelLimit(s?.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
 }
 
-export function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
+function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
   const job = typeof target === 'string' ? { kind: target, params: { mode: maybeMode } } : target;
   const configured = getParallelLimit(job);
   const cooldown = getRateLimitCooldown(job, now);
@@ -505,7 +505,7 @@ export function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) 
   return configured;
 }
 
-export function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
+function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
   let job, now;
   if (typeof target === 'string') {
     job = { kind: target, params: { mode: maybeModeOrNow } };
@@ -527,7 +527,7 @@ export function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
   return null;
 }
 
-export function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
+function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
   let job, errorText, payload;
   if (typeof target === 'string') {
     job = { kind: target, params: { mode: errorTextOrMode } };
@@ -578,12 +578,6 @@ export {
 function rateLimitWaitMessage(effectiveLimit, expiresAt) {
   const at = new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   return `Rate-limited (429) — cooling down (limit: ${effectiveLimit}) until ${at}`;
-}
-
-export function __resetRateLimitCooldownsForTest() {
-  rateLimitCooldowns.clear();
-  parallelLimits.clear();
-  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
 }
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
@@ -1092,11 +1086,6 @@ function restoreQuotaCooldowns(raw, now = Date.now()) {
     if (resumeAt > now) quotaCooldowns.set(mode, resumeAt);
   }
   return ok;
-}
-
-/** Test-only reset so a suite cannot leak a cooldown into the next case. */
-export function __resetQuotaCooldownsForTest() {
-  quotaCooldowns.clear();
 }
 
 function captureQueueSnapshot() {

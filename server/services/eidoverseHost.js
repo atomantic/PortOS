@@ -244,7 +244,3 @@ export function mountEidoverseOnServer(app, httpServers = []) {
   }
 }
 
-/** Test helper: replace the process-wide host singleton. */
-export function __setEidoverseHostForTests(host) {
-  eidoverseHost = host;
-}

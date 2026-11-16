@@ -142,12 +142,6 @@ function feedbackStore() {
   return _facade;
 }
 
-/** Reset the memoized facade — test seam only. */
-export function _resetFeedbackStore() {
-  _facade = null;
-  _facadeDir = null;
-}
-
 /**
  * Record (or re-record) a reaction for a commission run. Deterministic id per
  * run (`cfeedback-<runId>`) so re-rating LWW-updates in place — one reaction per

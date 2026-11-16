@@ -78,7 +78,6 @@ import {
   admitPendingUserTasks,
   exceedsMaxSpawns,
   shouldParkUnchangedPerpetualWork,
-  resolveIssueExcludeLabelsBlock,
   isCooldownExemptTask,
   emitOnDemandEmpty,
   applyOnDemandConsent,
@@ -88,11 +87,6 @@ import {
   queueDueInstallWideImprovementTasks,
   prepareManagedAppImprovementTask,
   recordDeferredPerpetualDispatch,
-  normalizeWorkItemRef,
-  buildTargetWorkItemBlock,
-  buildPrefetchedIssueContextBlock,
-  buildClaimOverrideContextBlock,
-  buildLocalReviewerInstructions,
   resolveTaskInputHook,
   resolveUserActionDeliveryBlock,
   applyUserActionDeliveryMode,
@@ -101,7 +95,8 @@ import {
 import { buildJiraTicketTask, buildClaimWorkTask, resolveAppClaimReviewers } from './cosTaskClaimWork.js';
 import * as cosTaskGenerator from './cosTaskGenerator.js';
 import * as cosTaskPreStepBlocks from './cosTaskPreStepBlocks.js';
-import * as prReviewerPipeline from './prReviewerPipeline.js';
+import { resolveIssueExcludeLabelsBlock } from './cosTaskPreStepBlocks.js';
+import { normalizeWorkItemRef, buildTargetWorkItemBlock, buildPrefetchedIssueContextBlock, buildClaimOverrideContextBlock, buildLocalReviewerInstructions } from './cosTaskPrompts.js';
 import { cosEvents } from './cosEvents.js';
 import { DEFAULT_TASK_INTERVALS, getTaskInterval } from './taskSchedule.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
@@ -134,28 +129,6 @@ it('declines an old app-scoped research request before generating a task', async
     { config: {} }
   );
   expect(task).toBeNull();
-});
-
-// The prompt pre-step layer moved to cosTaskPreStepBlocks.js, but these five
-// were PUBLIC here first — other installs and forks carry deep imports of this
-// path, so the re-export has to keep resolving to the same functions.
-describe('back-compat shims for the extracted layers', () => {
-  it.each([
-    'applyPerpetualDrainCap',
-    'resolveIssueAuthorFilterBlock',
-    'resolveIssueExcludeLabelsBlock',
-    'resolveReconcileDrainGate',
-    'resolveSwarmBlock',
-  ])('still resolves %s from cosTaskGenerator.js', (name) => {
-    expect(typeof cosTaskGenerator[name]).toBe('function');
-    expect(cosTaskGenerator[name]).toBe(cosTaskPreStepBlocks[name]);
-  });
-
-  // Same contract for the pr-reviewer stage-0 preflight, which moved beside the
-  // rest of that pipeline's server-side contract in prReviewerPipeline.js.
-  it('still resolves buildSecurityScanPipelineOutput from cosTaskGenerator.js', () => {
-    expect(cosTaskGenerator.buildSecurityScanPipelineOutput).toBe(prReviewerPipeline.buildSecurityScanPipelineOutput);
-  });
 });
 
 describe('claim drain convergence', () => {

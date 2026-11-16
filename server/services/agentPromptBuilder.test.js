@@ -94,8 +94,12 @@ vi.mock('./codeReview.js', () => ({
 }));
 
 import { resolveCompletionMode } from '../lib/agentCompletionMode.js';
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection, getAppWorkspace, getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, getAppWorkspace, UI_AUDIT_RUNTIME_RULE, UI_AUDIT_TASK_TYPES, UNATTENDED_RUN_RULE } from './agentPromptBuilder.js';
 
+import { getAgentInstructionsContext, detectSkillTemplates, loadSkillTemplates } from './promptSections/instructions.js';
+import { reconcileSplitContext } from './promptSections/taskContext.js';
+import { buildCompletionGuidelineBullet } from './promptSections/completion.js';
+import { buildReviewLoopFollowUpSection } from './promptSections/reviewLifecycle.js';
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
