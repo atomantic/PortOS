@@ -5,7 +5,7 @@ import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import ArtGuideDrafter from './ArtGuideDrafter.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
-import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
+import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, problemItemsOf, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -73,10 +73,9 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
 
   // Per-shot storyboard problems arrive one sentence per shot; the card counts them instead (the preview is the review).
   // Open change requests are named in one line (and settled from the step's Feedback row), never repeated as problems.
-  const feedbackSentence = /^Resolve (art|storyboard|proof) feedback for /;
   const shownProblems = stage => {
-    const problems = (ready[stage].problems || []).filter(problem => !feedbackSentence.test(problem));
-    return stage === 'storyboard' ? summarizeStoryboardProblems(problems) : problems;
+    const problems = problemItemsOf(ready[stage]).filter(problem => problem.code !== 'feedback');
+    return (stage === 'storyboard' ? summarizeStoryboardProblems(problems) : problems).map(problem => problem.message);
   };
   // One line under the action buttons saying what approval still needs, or nothing when it can be given.
   const approvalHelp = stage => {

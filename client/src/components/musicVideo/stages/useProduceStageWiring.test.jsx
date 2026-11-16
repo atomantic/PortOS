@@ -34,6 +34,7 @@ import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.j
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
+import { problem, withProblems } from '../../../test/musicVideoProblems.js';
 import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
 
 installMusicVideoPageHooks();
@@ -1166,7 +1167,7 @@ describe('stage checklist and project options', () => {
     const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Chorus', startSec: 0, endSec: 4 }],
       productionReview: { draft: { storyboard: [] }, feedback: [note] },
       productionReadiness: { readyForProduction: false, basis: { storyboard: 'board' }, art: { approved: true, problems: [] },
-        storyboard: { approved: false, problems: [`Resolve storyboard feedback for ${note.target}: ${note.text}`] }, proof: { approved: false, problems: [] } } };
+        storyboard: withProblems({ approved: false }, [problem('feedback', `Resolve storyboard feedback for ${note.target}: ${note.text}`)]), proof: { approved: false, problems: [] } } };
     await openProject(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(within(checklist).queryByText('Lyrics')).toBeNull();
@@ -1187,8 +1188,8 @@ describe('stage checklist and project options', () => {
     const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', order: 1, label: 'Singer', startSec: 4, endSec: 8 }],
       productionReview: { draft: { storyboard: [] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
-        storyboard: { approved: false, problems: ['Review lyric anchors for Singer.'],
-          lyricAnchors: [{ sceneId: 's-b', sung: ['If you think this is slop'], anchored: [] }] }, proof: { approved: false, problems: [] } } };
+        storyboard: withProblems({ approved: false,
+          lyricAnchors: [{ sceneId: 's-b', sung: ['If you think this is slop'], anchored: [] }] }, [problem('lyric-anchors', 'Review lyric anchors for Singer.', 's-b')]), proof: { approved: false, problems: [] } } };
     await openProject(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(checklist).not.toHaveTextContent('need lyric anchors reviewed');
@@ -1205,9 +1206,10 @@ describe('stage checklist and project options', () => {
     const project = { ...PROJECT_ANALYZED, scenes: [{ sceneId: 's-a', order: 0, label: 'Drummer', startSec: 0, endSec: 4 }, { sceneId: 's-b', order: 1, label: 'Singer', startSec: 4.5, endSec: 8 }],
       productionReview: { draft: { storyboard: [] } },
       productionReadiness: { readyForProduction: false, basis: {}, art: { approved: true, problems: [] },
-        storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Singer.'],
+        storyboard: withProblems({ approved: false,
           coverage: [{ sceneId: 's-b', issue: 'gap', startSec: 4, endSec: 4.5 }],
-          incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] }, proof: { approved: false, problems: [] } } };
+          incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] },
+        [problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.'), problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Singer.', 's-b')]), proof: { approved: false, problems: [] } } };
     await openProject(project, 'board');
     const checklist = screen.getByRole('region', { name: 'What this step needs' });
     expect(within(checklist).getByRole('list', { name: 'Shot coverage shots' })).toHaveTextContent('Shot 2Gap of 0.50 s before this shot, 0:04.00–0:04.50');

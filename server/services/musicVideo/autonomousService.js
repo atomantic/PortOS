@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview, approveProductionReview, reverifyProductionAlignment, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback } from './productionReviewService.js';
-import { ALIGNMENT_UNVERIFIED_PROBLEM, alignmentBasisMatches, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { alignmentBasisMatches, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
@@ -1226,7 +1226,7 @@ const STAGES = {
     // with the storyboard's other open problems so one resume can clear them all.
     const storyboard = productionReadiness(project).storyboard;
     if (timingHeld && !storyboard.approved) {
-      const others = storyboard.problems.filter((p) => p !== ALIGNMENT_UNVERIFIED_PROBLEM);
+      const others = storyboard.problemItems.filter((p) => p.code !== 'alignment-unverified').map((p) => p.message);
       throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo([timingHeld, ...others].join(' '), 500));
     }
     // A medium conflict the run could not revise is named, so the director knows what to change.
@@ -2202,7 +2202,7 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   } else if (['blocked', 'stopped'].includes(production.status) && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
     // A run set to approve settled the stop itself and production goes on.
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
-    await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
+    await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: production.stopCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'MUSIC_VIDEO_APPROVAL_REQUIRED' : 'PRODUCTION_PARKED' });
   }
 }
 

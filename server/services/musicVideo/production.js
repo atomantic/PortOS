@@ -871,11 +871,11 @@ export function reserveProductionReview(project, runId, { reviewRunId, attemptN,
 }
 
 /** Stop the run with a status/reason. */
-export function haltProduction(project, runId, { status, reason = null, error = null }, now = new Date().toISOString()) {
+export function haltProduction(project, runId, { status, reason = null, error = null, code = null }, now = new Date().toISOString()) {
   if (!PRODUCTION_STATUSES.includes(status) || status === 'running') throw new Error(`haltProduction: invalid status ${status}`);
   return mutateRun(project, runId, (run) => {
     if (!RESUMABLE.has(run.status)) throw productionError(409, 'PRODUCTION_CLOSED', `This production run is already ${run.status}`);
-    return { status, stopReason: reason, error: error ? trimTo(String(error), MAX_ERROR_LEN) : null };
+    return { status, stopReason: reason, stopCode: code, error: error ? trimTo(String(error), MAX_ERROR_LEN) : null };
   }, now);
 }
 
@@ -928,6 +928,7 @@ export function resumeProductionOnProject(project, runId, { limits, acceptBasis 
       // A stills-only run makes no clip, so it drops any pending clip pilot.
       ...(nextStop ? { pilot: null } : !run.pilot && !run.reviewRunId ? { pilot: { scenes: null } } : {}),
       stopReason: null,
+      stopCode: null,
       error: null,
       ...(run.finalRender?.status === 'failed' || (run.finalRender && run.processId !== processId) ? { finalRender: null } : {}),
       ...(basisChanged && run.authoring ? { documentCheckpoint: null, documentRevision: null, reviewRunId: null, finalRender: null } : {}),

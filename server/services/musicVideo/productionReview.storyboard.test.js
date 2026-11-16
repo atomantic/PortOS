@@ -350,3 +350,18 @@ describe('lyric timing verification basis', () => {
     expect(productionReadiness({ ...legacy, uploadedAudioFilename: 'other.wav' }).alignment.status).toBe('stale');
   });
 });
+
+describe('readiness problem codes', () => {
+  it('tags each problem with a stable code and shot while problems keeps the same sentences', () => {
+    const p = project();
+    const bare = { ...p, scenes: [{ sceneId: 's1', label: 'Verse', startSec: 0, endSec: 4 }], productionReview: { ...p.productionReview, alignmentBasis: null } };
+    const { storyboard } = productionReadiness(bare);
+    expect(storyboard.problems).toEqual([...new Set(storyboard.problemItems.map((i) => i.message))]);
+    const byCode = Object.fromEntries(storyboard.problemItems.map((i) => [i.code, i]));
+    expect(byCode['art-unapproved']).toBeTruthy();
+    expect(byCode['alignment-unverified'].message).toBe('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
+    expect(byCode.coverage).toBeTruthy();
+    expect(byCode['shot-incomplete'].sceneId).toBe('s1');
+    expect(productionReadiness(bare).proof.problemItems.map((i) => i.code)).toContain('proof-needs-storyboard');
+  });
+});
