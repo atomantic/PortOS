@@ -46,6 +46,13 @@ vi.mock('./catalogCheckin.js', async (importOriginal) => {
   return { ...actual, withCatalogCheckin: (...a) => withCatalogCheckin(...a) };
 });
 
+// Stills a test selects without a real gallery file; every other name resolves as it does live.
+const seededImages = new Set();
+vi.mock('../../lib/pathSafety.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveGalleryImage: (name, ...rest) => (seededImages.has(name) ? join(TEST_DATA_ROOT, name) : actual.resolveGalleryImage(name, ...rest)) };
+});
+
 const projects = await import('./projects.js');
 
 function reset() {
@@ -300,6 +307,46 @@ describe('take decisions', () => {
     await projects.updateScene(p.id, scene.sceneId, { prompt: 'Edited' });
     expect(withCatalogCheckin).toHaveBeenCalledTimes(1);
     expect((await projects.getProject(p.id)).scenes[0]).toMatchObject({ prompt: 'Edited', videoHistoryId: 'clip-b' });
+  });
+
+  // Uniquely catches a frame confirmation answering with take states read without the catalog
+  // check-in, which differ from what the next GET shows, so the board needs a second press (#16274).
+  it('answers a frame confirmation with the take states the next read shows', async () => {
+    const { captureImageFrameDependencies } = await import('../../lib/musicVideoDependencies.js');
+    const { musicVideoSceneCastIds } = await import('../../lib/musicVideoConditioning.js');
+    const { canonicalSnapshotChecksum } = await import('../../lib/snapshotChecksum.js');
+    const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' },
+      { id: 'subj-b', kind: 'character', name: 'Ben', ingredientId: 'cat-chr-b' },
+      { id: 'subj-p', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc' }];
+    const checkin = { items: subjects.map(({ id, kind, name, ingredientId }) => ({ subjectId: id, kind, name, ingredientId, images: [] })), problems: [] };
+    const actual = withCatalogCheckin.getMockImplementation();
+    withCatalogCheckin.mockImplementation(async (project) => ({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: checkin } }));
+    for (const name of ['frame-a.png', 'frame-b.png']) seededImages.add(name);
+    const p = await projects.createProject({ name: 'Frame confirmation' });
+    const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const shot = { sceneId, framePrompt: 'A rider at dusk', endFramePrompt: 'The rider gone', referenceImageId: 'frame-a.png', endImageId: 'frame-b.png',
+      frameReferenceIds: ['mvr-linked-0000000000000001'], shotSheet: { characters: ['Ada'], location: 'Harbor' } };
+    const presented = { concept: { subjects }, castAndSets: { source: 'catalog', catalogCheckin: checkin }, scenes: [shot] };
+    // The start frame was made for an earlier prompt; the end frame carries a pre-#16274 cast stamp that
+    // only the check-in can recognise (narrowed to the shot's named cast and place).
+    const startDeps = captureImageFrameDependencies(presented, { ...shot, framePrompt: 'An earlier prompt' });
+    const endDeps = captureImageFrameDependencies(presented, shot, { slot: 'end' });
+    const narrowed = canonicalSnapshotChecksum({ names: ['Ada'], ids: musicVideoSceneCastIds(presented, shot).slice().sort() });
+    endDeps.references = endDeps.references.map((ref) => (ref.role === 'frameCast' ? { ...ref, revision: narrowed } : ref));
+    expect(endDeps).not.toEqual(captureImageFrameDependencies(presented, shot, { slot: 'end' }));
+    await projects.mutateProjectRecord(p.id, (current) => ({ project: { ...current, concept: { subjects },
+      castAndSets: { ...current.castAndSets, source: 'catalog' },
+      scenes: current.scenes.map((scene) => ({ ...scene, ...shot, takes: [
+        { takeId: 't-start', kind: 'image', assetId: 'frame-a.png', status: 'candidate', source: 'generated', frameDependencies: startDeps },
+        { takeId: 't-end', kind: 'endImage', assetId: 'frame-b.png', status: 'candidate', source: 'generated', frameDependencies: endDeps },
+      ] })) } }), { sceneOnly: true });
+    const states = (scene) => scene.takes.map((take) => take.dependencyState?.status);
+    expect(states((await projects.getProject(p.id)).scenes[0])).toEqual(['stale', 'current']);
+
+    const reviewed = await projects.reviewSceneTake(p.id, sceneId, 't-start', { confirmFrame: true, reviewer: { kind: 'local' } });
+    expect(states(reviewed)).toEqual(['current', 'current']);
+    expect(states((await projects.getProject(p.id)).scenes[0])).toEqual(['current', 'current']);
+    withCatalogCheckin.mockImplementation(actual);
   });
 });
 

@@ -5,7 +5,7 @@
  */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from './musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -84,10 +84,29 @@ const frameCameraValue = (scene) => ({
   move: scene?.camera || null,
 });
 const frameLocationValue = (scene) => textOf(scene?.shotSheet?.location) || null;
+const frameCastNames = (scene) => (Array.isArray(scene?.shotSheet?.characters) ? scene.shotSheet.characters : []).map(textOf).filter(Boolean).sort();
+// Stored data only, so capture and check agree whether or not the record carries its catalog check-in (#16274).
 const frameCastValue = (project, scene) => ({
-  names: (Array.isArray(scene?.shotSheet?.characters) ? scene.shotSheet.characters : []).map(textOf).filter(Boolean).sort(),
-  ids: musicVideoSceneCastIds(project, scene).slice().sort(),
+  names: frameCastNames(scene),
+  ids: musicVideoShotSheetCastIds(project, scene).slice().sort(),
 });
+
+/**
+ * Compatibility for `frameCast` stamps made before #16274, which hashed musicVideoSceneCastIds:
+ * narrowed by the catalog check-in when the capturing record carried one, else every linked cast id.
+ * Such a stamp still matches when it equals either form computed from the current data. The names
+ * stay in both, so a shot-sheet cast change is still reported. Any new capture (confirm, render)
+ * stamps the canonical frameCastValue; drop this once stamps from before it no longer matter.
+ */
+function isLegacyFrameCastRevision(project, scene, revision) {
+  const names = frameCastNames(scene);
+  const legacy = (record) => checksum({ names, ids: musicVideoSceneCastIds(record, scene).slice().sort() });
+  if (legacy(project) === revision) return true;
+  const stage = project?.castAndSets;
+  if (!stage?.catalogCheckin) return false;
+  const { catalogCheckin: _presented, ...stored } = stage;
+  return legacy({ ...project, castAndSets: stored }) === revision;
+}
 const frameReferenceValue = (scene) => (Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null);
 const frameRef = (scene, slot, role, value) => ({
   role, sceneId: scene.sceneId, assetId: frameSlot(slot), revision: checksum(value),
@@ -127,7 +146,9 @@ function frameDependencyChanges(project, scene, dependencies) {
   }
   for (const ref of dependencies.references) {
     const current = readFrameReference(project, scene, ref);
-    if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
+    const matches = current && current.assetId === ref.assetId && (current.revision === ref.revision
+      || (ref.role === 'frameCast' && isLegacyFrameCastRevision(project, scene, ref.revision)));
+    if (!matches) {
       changes.push({ ...ref, role: FRAME_ROLES[ref.role] ? ref.role : 'unknown', reason: FRAME_ROLES[ref.role] || FRAME_UNKNOWN });
     }
   }

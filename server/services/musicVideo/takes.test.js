@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
-import { appendSceneTakes, appendTakesAcrossScenes, rejectUnusedTakes, selectSceneTake, swapSceneFrames } from './takes.js';
+import { musicVideoSceneCastIds } from '../../lib/musicVideoConditioning.js';
+import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
+import { appendSceneTakes, appendTakesAcrossScenes, rejectUnusedTakes, reviewSceneTake, selectSceneTake, swapSceneFrames } from './takes.js';
 import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
@@ -248,4 +250,25 @@ describe('sequence takes', () => {
     expect(back.scene).toMatchObject({ videoHistoryId: 'own-a' });
     expect(back.scene).not.toHaveProperty('offsetFrames');
   });
+});
+
+// #16274: a confirmation re-stamps a pre-#16274 cast fingerprint to the canonical one and answers with the take current.
+it('re-stamps a legacy frame cast fingerprint on confirm and answers with the take current', () => {
+  const scene = { sceneId: 's1', framePrompt: 'A rider at dusk', referenceImageId: 'a.png', frameReferenceIds: ['mvr-linked-0000000000000001'],
+    shotSheet: { characters: ['Ada'] } };
+  const item = { id: 'mv-1', castAndSets: { source: 'catalog' }, scenes: [scene],
+    concept: { subjects: [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' },
+      { id: 'subj-b', kind: 'character', name: 'Ben', ingredientId: 'cat-chr-b' }] } };
+  const canonical = captureImageFrameDependencies(item, scene);
+  // The stored record's pre-#16274 form: every linked cast id, since it carries no check-in to narrow by.
+  const unnarrowed = canonicalSnapshotChecksum({ names: ['Ada'], ids: musicVideoSceneCastIds(item, scene).slice().sort() });
+  const legacy = { ...canonical, references: canonical.references.map((ref) => (ref.role === 'frameCast' ? { ...ref, revision: unnarrowed } : ref)) };
+  expect(legacy).not.toEqual(canonical);
+  // The persisted state from an earlier write, which the reply must not echo.
+  item.scenes = [{ ...scene, takes: [{ takeId: 't1', kind: 'image', assetId: 'a.png', status: 'candidate', frameDependencies: legacy,
+    dependencyState: { status: 'stale', reasons: ['Cast changed'] } }] }];
+  const { project: saved, scene: answered } = reviewSceneTake(item, 's1', 't1', { confirmFrame: true, reviewer: { kind: 'local' } });
+  expect(answered.takes[0].frameDependencies).toEqual(canonical);
+  expect(answered.takes[0].dependencyState).toEqual({ status: 'current', reasons: [] });
+  expect(saved.scenes[0].takes[0].dependencyState).toEqual({ status: 'current', reasons: [] });
 });

@@ -494,7 +494,10 @@ describe("a shot's own still and the frame evidence its clips render from (#1598
     const clip = scene.takes.find((take) => take.assetId === 'clip-own');
     race.onRequest = (req) => { req.portosAuthContext = { enabled: false }; };
     expect((await review(clip.takeId, { confirmFrame: true })).status).toBe(400);
-    expect((await review(still.takeId, { confirmFrame: true })).status).toBe(200);
+    const confirmed = await review(still.takeId, { confirmFrame: true });
+    expect(confirmed.status).toBe(200);
+    // The board applies this reply: the first press must already show the frame cleared (#16274).
+    expect([stateOf(confirmed.body, 'own.png'), stateOf(confirmed.body, 'clip-own')]).toEqual(['current', 'current']);
     scene = await sceneOf();
     expect([stateOf(scene, 'own.png'), stateOf(scene, 'clip-own')]).toEqual(['current', 'current']);
     expect(scene.takes.find((take) => take.assetId === 'own.png').frameConfirmation).toMatchObject({ reviewer: { kind: 'local' } });
