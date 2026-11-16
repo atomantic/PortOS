@@ -77,6 +77,8 @@ export async function loadMeatspaceDailyLog({ strict = false, label = 'MeatSpace
  * @param {(log: { entries: object[], lastEntryDate: string|null }) => Promise<any>|any} mutatorFn
  *   Return `null` when the targeted record is absent: that skips the write. Any other
  *   return, including `undefined`, persists.
+ * @param {{ label?: string }} [options]
+ * @returns {Promise<any>} The result of mutatorFn, or the updated log if mutatorFn returns undefined.
  */
 export async function mutateDailyLog(mutatorFn, { label = 'MeatSpace' } = {}) {
   return queueDailyLogWrite(async () => {

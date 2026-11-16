@@ -9,9 +9,13 @@ import { tryReadFile, unlinkGuarded } from '../../lib/fileUtils.js';
 import { describeFrameStats, isDegenerateFrame } from '../../lib/imageFrameStats.js';
 import { describeDegenerateFrame } from './noImageReason.js';
 
-// Returns a user-facing failure string ONLY for a measured degenerate verdict; null for a
-// healthy frame, unmeasurable stats, or a file not on disk (those paths belong to the
-// existing missing-file and `INVALID_IMAGE` handling).
+/**
+ * Returns a user-facing failure string ONLY for a measured degenerate verdict; null for a
+ * healthy frame, unmeasurable stats, or a file not on disk (those paths belong to the
+ * existing missing-file and `INVALID_IMAGE` handling).
+ * @param {string} pngPath absolute path to the frame a provider just wrote
+ * @returns {Promise<string|null>} narrated failure, or null to let it through
+ */
 export async function degenerateFrameReason(pngPath) {
   if (!pngPath) return null;
   // A missing file is not this gate's verdict; providers own the "no image written" path.

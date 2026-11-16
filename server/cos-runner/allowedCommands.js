@@ -20,7 +20,11 @@ export const ALLOWED_COMMANDS = new Set([
   ...EXTRA_ALLOWED_COMMANDS,
 ]);
 
-/** Whether the base name of `command` (path and Windows .exe stripped) is allowlisted. */
+/**
+ * Whether the base name of `command` (path and Windows .exe stripped) is allowlisted.
+ * @param {string} command - The command string to validate (may be a full path).
+ * @returns {boolean} true if the base name is in the allowlist, false otherwise.
+ */
 export function isAllowedCommand(command) {
   if (!command || typeof command !== 'string') return false;
   let baseName = basename(command);

@@ -13,7 +13,10 @@
 
 let startProject = null;
 
-/** Wire the concrete starter. Re-registering the same fn is a no-op; a DIFFERENT one throws. */
+/**
+ * Wire the concrete starter. Re-registering the same fn is a no-op; a DIFFERENT one throws.
+ * @param {(projectId: string) => Promise<unknown>} fn
+ */
 export function registerCreativeDirectorProjectStarter(fn) {
   if (typeof fn !== 'function') {
     throw new Error('registerCreativeDirectorProjectStarter: starter must be a function');
@@ -29,7 +32,11 @@ export function hasCreativeDirectorProjectStarter() {
   return startProject !== null;
 }
 
-/** Start a Creative Director project through the registered starter. */
+/**
+ * Start a Creative Director project through the registered starter.
+ * @param {string} projectId
+ * @returns {Promise<unknown>}
+ */
 export async function requestCreativeDirectorProjectStart(projectId) {
   if (!startProject) {
     throw new Error(`Creative Director project start requested before a starter was registered (project ${projectId})`);

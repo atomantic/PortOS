@@ -14,6 +14,10 @@ export const SPAWN_DEDUP_SKIP = Symbol('spawn-dedup-skip');
  * otherwise the guard is acquired SYNCHRONOUSLY (before any `await` in `fn`) and released in a
  * `finally` only once `fn` settles, so no racer slips in between release and the runner accepting
  * the agent.
+ * @param {Set<string>} spawningTasks - the in-process dedup set
+ * @param {string} taskId
+ * @param {() => Promise<any>} fn - the guarded spawn work
+ * @returns {Promise<any|typeof SPAWN_DEDUP_SKIP>}
  */
 export async function withSpawnDedupGuard(spawningTasks, taskId, fn) {
   assertDatabaseAdmission();
@@ -34,6 +38,9 @@ export const SPAWN_UPDATE_SKIP = Symbol('spawn-update-skip');
  * `git pull` / `npm install` before `pm2 delete`, and an agent started in that window is severed
  * by the restart, so the spawn is a no-op and the task stays queued. The predicate is injected to
  * keep this module free of state and I/O.
+ * @param {() => boolean} isUpdateInProgress - synchronous flag reader
+ * @param {() => Promise<any>} fn - the guarded spawn work
+ * @returns {Promise<any|typeof SPAWN_UPDATE_SKIP>}
  */
 export async function withUpdateInProgressGuard(isUpdateInProgress, fn) {
   if (isUpdateInProgress()) return SPAWN_UPDATE_SKIP;
@@ -43,6 +50,10 @@ export async function withUpdateInProgressGuard(isUpdateInProgress, fn) {
 /**
  * Run `fn`, then delete `key` from `map` in a `finally`, so a throw in any completion step never
  * strands an entry in `runnerAgents` (unbounded growth, misrouted re-emitted completion).
+ * @param {Map<string, any>} map
+ * @param {string} key
+ * @param {() => Promise<any>} fn
+ * @returns {Promise<any>}
  */
 export async function withMapEntryCleanup(map, key, fn) {
   try {

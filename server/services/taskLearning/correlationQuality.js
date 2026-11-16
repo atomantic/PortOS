@@ -25,6 +25,11 @@ export const CORRELATION_QUALITY_THRESHOLD = 0.8;
  * `data`; tolerates a learning.json that predates `correlationWindow`.
  * `predictedRisk` must be computed from history BEFORE this completion (no
  * leakage); `bad` is whether the run failed or missed its declared criteria.
+ * @param {object} data - learning data
+ * @param {{ taskType?:string, tier?:string, predictedRisk:boolean, bad:boolean }} sample
+ *   predictedRisk — did the enriched failure signal flag this run's tier as
+ *   risky, computed from history BEFORE this completion (a genuine prediction,
+ *   not leakage). bad — did the run actually fail or miss its declared criteria.
  */
 export function recordCorrelationSample(data, { taskType, tier, predictedRisk, bad } = {}) {
   if (!data) return data;

@@ -65,6 +65,7 @@ export function deliverableLanded(project, kind, markBefore) {
 /**
  * How many of the MOST RECENT runs of `kind` settled without their deliverable.
  * Stops at the first that delivered or belongs to an already-closed streak. Pure.
+ * @param {Array<object>|undefined} runs
  * @returns {number}
  */
 export function countConsecutiveMissedDeliverables(runs, kind) {
@@ -93,6 +94,8 @@ export function exhaustedDeliverableStreak(runs, kind) {
  * Resume (e.g. after switching model) gets a fresh budget instead of re-pausing
  * at once; the run ledger keeps `deliverableMissing`. Runs in completion hooks,
  * so it never throws out.
+ * @param {string} projectId
+ * @param {Array<object>|undefined} runs
  */
 export async function closeDeliverableStreak(projectId, runs, kind) {
   if (!Array.isArray(runs)) return;

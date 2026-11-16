@@ -49,7 +49,9 @@ function wslPlacementRefusal(found, stack) {
  * @param {() => boolean} stack.isSettled - does anything already answer this?
  * @param {(dir: string) => Promise<unknown>} stack.record - persist the answer
  * @param {(line: string) => void} [stack.emit]
- * @returns {Promise<string|null>} the refusal, or `null` once the directory is settled
+ * @returns {Promise<string|null>} the refusal, or `null` once the directory is
+ *   settled — the same shape as each stack's `*StartBlockedReason`, and read
+ *   back the same way, through that stack's own inspection.
  */
 export async function ensureWslProjectDir({
   envVar,

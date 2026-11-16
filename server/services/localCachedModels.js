@@ -17,6 +17,8 @@ const CACHED_MODEL_PROBES = {
  * The cached-but-unserved model ids for `provider`, or `null` (no cached catalog
  * to add, or unreadable; `[]` means read and empty, a distinction that must not
  * collapse). Local-endpoint test first: a tailnet peer's checkpoints are on that machine.
+ * @param {{id?: string, type?: string, endpoint?: string}|null|undefined} provider
+ * @returns {Promise<string[]|null>}
  */
 export async function localCachedModelIds(provider) {
   if (!isLocalInstanceEndpoint(provider?.endpoint)) return null;
@@ -29,6 +31,8 @@ export async function localCachedModelIds(provider) {
  * Only complete entries are listed (an interrupted pull cannot load). `null` means
  * not MTPLX or unreadable cache, never `[]`. Gated on `describeMtplxRuntime().ready`:
  * on a cold Homebrew wrapper, invoking `mtplx` is a multi-hundred-MB download.
+ * @param {{type?: string, endpoint?: string, mtplxBacked?: boolean}|null} provider
+ * @returns {Promise<string[]|null>}
  */
 export async function mtplxCachedModelIds(provider) {
   // The `mtplxBacked` marker federates: a peer-pointed provider must not get this host's cache.
