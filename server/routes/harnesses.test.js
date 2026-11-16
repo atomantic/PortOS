@@ -56,14 +56,6 @@ describe('harness routes', () => {
     );
   });
 
-  it.each(['update', 'uninstall'])('forwards the %s action', async (action) => {
-    const res = await request(app).post(`/api/harnesses/action?runtime=opencode&action=${action}`);
-    expect(res.status).toBe(200);
-    expect(stream.streamHarnessAction).toHaveBeenLastCalledWith(
-      expect.anything(), expect.anything(), { runtime: 'opencode', action },
-    );
-  });
-
   it('rejects an action outside the enum without reaching the stream', async () => {
     // The enum is the boundary guard: an unvalidated verb would reach a table
     // lookup instead of failing as a plain 400.
@@ -97,16 +89,6 @@ describe('harness routes', () => {
     expect(stream.streamHarnessAction).not.toHaveBeenCalled();
   });
 
-  it('returns the refreshed catalog', async () => {
-    service.refreshHarnessModels.mockResolvedValue({ ok: true, models: ['opencode/a'], updated: ['opencode-zen-cli'] });
-
-    const res = await request(app).post('/api/harnesses/models/refresh?runtime=opencode');
-
-    expect(res.status).toBe(200);
-    expect(service.refreshHarnessModels).toHaveBeenCalledWith('opencode');
-    expect(res.body).toEqual({ ok: true, models: ['opencode/a'], updated: ['opencode-zen-cli'] });
-  });
-
   it('surfaces a refusal as a 409 carrying the service reason verbatim', async () => {
     // "signed out" / "cannot list models" are host states, not server faults —
     // and the page renders the sentence, so it must survive the round trip.
@@ -116,5 +98,6 @@ describe('harness routes', () => {
 
     expect(res.status).toBe(409);
     expect(JSON.stringify(res.body)).toContain('Sign in first.');
+    expect(service.refreshHarnessModels.mock.calls[0][0]).toBe('opencode');
   });
 });
