@@ -784,7 +784,7 @@ export default function SceneCard({
         <div hidden={view !== 'frames'}>
         <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames || (Boolean(onGenerateEndFrame) && plainStill)} plainStill={plainStill} endFrameToggle={layer === 'footage' || endFrameEffect || plainStill} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={sourceWindow ? undefined : onGenerateFrame} onGenerateEndFrame={sourceWindow ? undefined : onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
-          onOpenPreview={onOpenPreview} takeBusy={takeBusy} pendingTakes={pendingTakes} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
+          onOpenPreview={onOpenPreview} shown={view === 'frames'} takeBusy={takeBusy} pendingTakes={pendingTakes} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onCheckTake={onCheckTake} checkingTakes={checkingTakes} onApplyCameos={onApplyCameos} />
