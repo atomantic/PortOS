@@ -14,11 +14,22 @@ describe('timelineShotEffects', () => {
         { atSec: 9, style: 'color-block', lengthSec: 0.5, strength: 0 },
       ],
     });
-    const { start, end, image, markers } = timelineShotEffects(shot);
-    expect(start).toHaveLength(1);
-    expect([end, image]).toEqual([[], null]);
+    const { transitions, cut, image, markers } = timelineShotEffects(shot);
+    expect(transitions).toEqual([{ side: 'in', label: expect.any(String), lengthSec: null }]);
+    expect([cut, image]).toEqual([null, null]);
     expect(markers.map((m) => [m.index, m.t, m.lengthSec, m.off])).toEqual([[1, 11.5, null, false], [2, 14, 0.5, true]]);
     expect(markers[0].repeats).toEqual([12.5, 13.5]);
+  });
+
+  // Uniquely catches a wipe or a hand-over drawn without its length, or on the wrong side of the cut.
+  it('gives a wipe its length and a hand-over its span against the cut', () => {
+    const shot = shotOf({ sceneId: 's1', startSec: 10, endSec: 14, wipeOut: { style: 'iris', lengthSec: 0.5 }, cutEffect: { style: 'dissolve', overlapSec: 1 } });
+    const { transitions, cut } = timelineShotEffects(shot);
+    expect(transitions).toEqual([{ side: 'out', label: expect.any(String), lengthSec: 0.5 }]);
+    expect([cut.startSec, cut.endSec]).toEqual([13, 14]);
+    const fade = timelineShotEffects(shotOf({ ...shot.scene, cutEffect: { style: 'fade-black', overlapSec: 1 } })).cut;
+    expect([fade.startSec, fade.endSec]).toEqual([13.5, 14.5]);
+    expect(timelineShotEffects(shotOf({ ...shot.scene, cutEffect: { style: 'dissolve', enabled: false } })).cut).toBeNull();
   });
 });
 

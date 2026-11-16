@@ -1,12 +1,12 @@
-import { useMemo, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { X, Zap } from 'lucide-react';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
 import { effectTimeAt, glitchesWithMove, timelineShotEffects } from '../../lib/musicVideoTimelineEffects.js';
 
-// A lane narrower than this has no room for its cut effects' names.
-const LABEL_MIN_PX = 120;
+// An effect at least this wide shows its name.
+const LABEL_MIN_PX = 48;
 // A dragged effect is pulled onto a beat or lyric line within this many pixels.
 const SNAP_PX = 6;
 // A press on a marker becomes a drag after moving this far; short of it, it is a tap.
@@ -15,19 +15,74 @@ const DRAG_PX = 3;
 const MARKER_MIN_PX = 8;
 
 /**
- * The timeline's effects track: under each clip, a lane naming the effects
- * over its cuts (start at the left, end at the right; a still's image effect
- * tints the whole lane) with a marker at each in-shot effect, as long as the
- * effect runs, and a dot at each of its repeats.
+ * Each timeline shot's effects by kind (`timelineShotEffects`), and which of
+ * the span kinds the video uses at all, so an unused kind's row can stay out.
+ */
+export function timelineEffectLanes(shots, options) {
+  const lanes = shots.map((shot) => ({ shot, effects: timelineShotEffects(shot, options) }));
+  return {
+    lanes,
+    has: {
+      transitions: lanes.some(({ effects }) => effects.transitions.length > 0),
+      cut: lanes.some(({ effects }) => effects.cut),
+      image: lanes.some(({ effects }) => effects.image),
+    },
+  };
+}
+
+/** A span kind's items on the song's clock: `{ key, sceneId, startSec, endSec, label, name }` (`endSec` null: a moment). */
+function spanItems(lanes, kind, shotName) {
+  return lanes.flatMap(({ shot, effects }) => {
+    const name = shotName ? shotName(shot.scene) : `Shot ${shot.number}`;
+    if (kind === 'transitions') {
+      return effects.transitions.map((fx) => {
+        const cut = fx.side === 'in' ? shot.startSec : shot.endSec;
+        // A wipe runs from the cut into the incoming shot; a glitch sits on the cut itself.
+        return { key: `${shot.sceneId}:${fx.side}`, sceneId: shot.sceneId, startSec: cut, endSec: fx.lengthSec ? cut + fx.lengthSec : null,
+          label: fx.label, name: `${fx.label} ${fx.side === 'in' ? 'into' : 'out of'} ${name}` };
+      });
+    }
+    const fx = effects[kind];
+    return fx ? [{ key: `${shot.sceneId}:${kind}`, sceneId: shot.sceneId, startSec: fx.startSec, endSec: fx.endSec, label: fx.label,
+      name: `${fx.label} ${kind === 'cut' ? 'from' : 'over'} ${name}` }] : [];
+  });
+}
+
+/**
+ * One row of effects that each cover a stretch of the song (`kind`:
+ * `transitions`, the effects over cuts; `cut`, how a shot hands over to the
+ * next; `image`, a still's image effect), each a button that opens its shot's
+ * effect controls (`onSelect(sceneId)`).
+ */
+export function TimelineEffectSpans({ lanes, kind, pxPerSec, shotName, selectedId = null, onSelect }) {
+  return spanItems(lanes, kind, shotName).map((item) => {
+    const width = Math.max(MARKER_MIN_PX, item.endSec == null ? 0 : (item.endSec - item.startSec) * pxPerSec);
+    // A moment (a glitch on a cut) is centered on it.
+    const left = item.endSec == null ? item.startSec * pxPerSec - width / 2 : item.startSec * pxPerSec;
+    const selected = item.sceneId === selectedId;
+    return (
+      <button key={item.key} type="button" onClick={() => onSelect?.(item.sceneId)} aria-pressed={selected} aria-label={item.name} title={item.name}
+        className={`absolute inset-y-0.5 z-10 flex items-center overflow-hidden rounded-sm border bg-port-accent/25 px-0.5 text-left text-[10px] leading-none text-port-text pointer-coarse:min-h-11 ${selected ? 'border-port-accent' : 'border-port-accent/40 hover:border-port-accent'}`}
+        style={{ left, width }}>
+        {width >= LABEL_MIN_PX && <span className="truncate" aria-hidden="true">{item.label}</span>}
+      </button>
+    );
+  });
+}
+
+/**
+ * The in-shot effects row: under each clip a lane (tap it to configure that
+ * shot's effects, again to close them) with a marker at each in-shot effect,
+ * as long as the effect runs, and a dot at each of its repeats; one switched
+ * off is greyed.
  *
- * Tap a lane or a marker to configure that shot's effects (`onSelect(sceneId,
+ * Tapping a marker opens its shot's effect controls (`onSelect(sceneId,
  * toggle)`: a lane tapped again closes them, a marker only ever opens them).
  * With `onEditShot(sceneId, patch)` a marker can be dragged along its shot (it
  * lands on a frame, pulled onto a nearby beat or lyric line) or nudged a frame
  * with the arrow keys; the shot's `glitches` are saved with that one moved.
  */
-export function TimelineEffectsTrack({ shots, pxPerSec, options, shotName, selectedId = null, onSelect, onEditShot = null, snapPoints = [] }) {
-  const lanes = useMemo(() => shots.map((shot) => ({ shot, effects: timelineShotEffects(shot, options) })), [shots, options]);
+export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = null, onSelect, onEditShot = null, snapPoints = [] }) {
   const [drag, setDrag] = useState(null);
   const pointer = useRef(null);
   const move = (shot, marker, atSec) => {
@@ -65,30 +120,15 @@ export function TimelineEffectsTrack({ shots, pxPerSec, options, shotName, selec
     move(shot, marker, effectTimeAt(shot, marker.t + dir * (event.shiftKey ? 1 : 1 / 24)).atSec);
   };
   return (
-    <div role="group" aria-label="Effects" className="relative h-7 border-t border-port-border pointer-coarse:h-12">
+    <>
       {lanes.map(({ shot, effects }) => {
-        const width = Math.max(2, (shot.endSec - shot.startSec) * pxPerSec);
         const name = shotName ? shotName(shot.scene) : `Shot ${shot.number}`;
-        const mid = [...(effects.image ? [effects.image] : []), ...effects.markers.map((marker) => marker.label)];
-        const parts = [
-          effects.start.length ? `start ${effects.start.join(', ')}` : null,
-          mid.length ? `mid-shot ${mid.join(', ')}` : null,
-          effects.end.length ? `end ${effects.end.join(', ')}` : null,
-        ].filter(Boolean);
-        const roomy = width >= LABEL_MIN_PX;
+        const labels = effects.markers.map((marker) => marker.label);
         return (
           <button key={shot.sceneId} type="button" onClick={() => onSelect?.(shot.sceneId, true)} aria-pressed={shot.sceneId === selectedId}
-            aria-label={`Effects of ${name}: ${parts.length ? parts.join('; ') : 'none'}`} title={parts.length ? parts.join(' · ') : 'No effects'}
-            className={`absolute inset-y-0.5 flex items-center justify-between overflow-hidden rounded-sm border text-[10px] leading-none pointer-coarse:min-h-11 ${effects.image ? 'bg-port-accent/15' : ''} ${shot.sceneId === selectedId ? 'border-port-accent' : 'border-transparent hover:border-port-border'}`}
-            style={{ left: shot.startSec * pxPerSec, width }}>
-            {[['start', 'justify-start'], ['end', 'justify-end']].map(([slot, side]) => (
-              <span key={slot} aria-hidden="true" className={`flex min-w-0 items-center gap-0.5 text-port-accent ${side} ${effects[slot].length ? 'max-w-[45%]' : ''}`}>
-                {effects[slot].length > 0 && (roomy
-                  ? <><Zap size={10} className="shrink-0" /><span className="truncate">{effects[slot][0]}</span></>
-                  : <span className="h-3 w-0.5 rounded-full bg-port-accent" />)}
-              </span>
-            ))}
-          </button>
+            aria-label={`In-shot effects of ${name}: ${labels.length ? labels.join(', ') : 'none'}`} title={labels.length ? labels.join(' · ') : 'No in-shot effects'}
+            className={`absolute inset-y-0.5 rounded-sm border pointer-coarse:min-h-11 ${shot.sceneId === selectedId ? 'border-port-accent' : 'border-transparent hover:border-port-border'}`}
+            style={{ left: shot.startSec * pxPerSec, width: Math.max(2, (shot.endSec - shot.startSec) * pxPerSec) }} />
         );
       })}
       {lanes.flatMap(({ shot, effects }) => effects.markers.flatMap((marker) => {
@@ -116,7 +156,7 @@ export function TimelineEffectsTrack({ shots, pxPerSec, options, shotName, selec
           </div>,
         ];
       }))}
-    </div>
+    </>
   );
 }
 
@@ -126,7 +166,7 @@ export function TimelineEffectsTrack({ shots, pxPerSec, options, shotName, selec
  * its in-shot effects. `onChange(patch)` saves the shot's fields.
  */
 export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, onClose }) {
-  // The shot card may be open on the same shot beside this panel: its field ids stay its own.
+  // The shot card may be open on the same shot in the drawer: its field ids stay its own.
   const fieldId = (field) => `mv-timeline-${scene.sceneId}-${field}`;
   const camera = (options.cameras || []).find((entry) => entry?.id && entry.id === scene.shotSheet?.cameraId) || null;
   return (

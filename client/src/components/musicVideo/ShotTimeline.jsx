@@ -10,7 +10,7 @@ import {
 import { effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
-import { TimelineEffectsPanel, TimelineEffectsTrack } from './ShotTimelineEffects.jsx';
+import { TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
 
 const zoomButtonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text hover:border-port-accent disabled:opacity-40 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 // How far inside the right edge the playhead may run before the view follows it.
@@ -24,6 +24,9 @@ const CUT_MIN_CLIP_PX = 56;
 const CUT_SNAP_PX = 6;
 // A mouse press on a clip becomes a reorder drag after moving this far.
 const REORDER_DRAG_PX = 6;
+// Every row is labeled in a column at the left; an effects row is tall enough to tap on a touch screen.
+const ROW_CLS = 'relative border-b border-port-border';
+const FX_ROW_H = 'h-7 pointer-coarse:h-12';
 // A ruler label: minutes and seconds, with tenths only when the labels are closer than a second apart.
 const tickLabel = (t, stepSec) => {
   const m = Math.floor(t / 60);
@@ -59,9 +62,11 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * earlier or later with the toolbar buttons, or any clip dragged onto another
  * with a mouse; a touch drag pans the view instead.
  *
- * With `effectOptions` (`shotEffects`' own options: `{ layered, planned,
- * cameras }`) an effects track sits under the clips, and tapping a shot's lane
- * or one of its effects opens that shot's effect controls under the timeline.
+ * Every row is named in a column at the left. With `effectOptions`
+ * (`shotEffects`' own options: `{ layered, planned, cameras }`) the effects sit
+ * under the clips, one row per kind (transitions over cuts, cut effects, image
+ * effects, in-shot effects), and tapping an effect or a shot's in-shot lane
+ * opens that shot's effect controls under the timeline.
  * `onEditShot(sceneId, patch)` saves them, lets an in-shot effect be dragged
  * along its shot, and adds one at the playhead from the toolbar.
  */
@@ -299,6 +304,26 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     setEffectsOfId(playheadShot.sceneId);
   };
   const nameOf = (shot) => (shotName ? shotName(shot.scene) : `Shot ${shot.number}`);
+  const effectLanes = useMemo(() => (effectOptions ? timelineEffectLanes(shots, effectOptions) : null), [shots, effectOptions]);
+  const selectEffects = (sceneId, toggle) => setEffectsOfId((current) => (toggle && current === sceneId ? null : sceneId));
+  const spanRow = (kind) => (
+    <TimelineEffectSpans lanes={effectLanes.lanes} kind={kind} pxPerSec={pxPerSec} shotName={shotName}
+      selectedId={effectsShot?.sceneId ?? null} onSelect={selectEffects} />
+  );
+  // An effect kind the video never uses keeps no row; in-shot effects always have one, to tap and add to.
+  const effectRows = effectLanes ? [
+    effectLanes.has.transitions && { id: 'transitions', label: 'Transitions', content: spanRow('transitions') },
+    effectLanes.has.cut && { id: 'cut', label: 'Cut effects', content: spanRow('cut') },
+    effectLanes.has.image && { id: 'image', label: 'Image effects', content: spanRow('image') },
+    { id: 'in-shot', label: 'In-shot effects', content: (
+      <TimelineInShotEffects lanes={effectLanes.lanes} pxPerSec={pxPerSec} shotName={shotName} selectedId={effectsShot?.sceneId ?? null}
+        onSelect={selectEffects} onEditShot={onEditShot} snapPoints={snapPoints} />
+    ) },
+  ].filter(Boolean) : [];
+  const rowLabels = [
+    ['Time', 'h-7'], ...(sections.length ? [['Sections', 'h-4']] : []), ['Shots', 'h-14'],
+    ...effectRows.map((row) => [row.label, FX_ROW_H]), ...(cues.length ? [['Lyrics', 'h-5']] : []),
+  ];
 
   const stepSec = rulerStepSec(pxPerSec);
   const ticks = useMemo(() => rulerTicks(durationSec, stepSec), [durationSec, stepSec]);
@@ -346,11 +371,18 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           </button>
         </div>
       </div>
-      <div ref={scrollerRef} data-testid="shot-timeline-scroller" className="relative overflow-x-auto overscroll-x-contain border-t border-port-border bg-port-bg">
+      <div className="flex min-w-0 border-t border-port-border bg-port-bg">
+      {/* Each row's name, beside the row; it stays put while the rows scroll. */}
+      <div aria-hidden="true" className="w-[4.5rem] shrink-0 border-r border-port-border bg-port-card sm:w-24">
+        {rowLabels.map(([label, height]) => (
+          <div key={label} className={`${ROW_CLS} ${height} flex items-center px-1.5 text-[10px] font-medium leading-3 text-port-text-muted`}>{label}</div>
+        ))}
+      </div>
+      <div ref={scrollerRef} data-testid="shot-timeline-scroller" className="relative min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
         <div className="relative" style={{ width: `${widthPx}px` }}>
           {/* The ruler scrubs (touch-none); the tracks under it pan the view. */}
           <div ref={rulerRef} role="slider" tabIndex={0} aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(durationSec)} aria-valuenow={0}
-            className="relative h-7 cursor-pointer touch-none select-none border-b border-port-border"
+            className={`${ROW_CLS} h-7 cursor-pointer touch-none select-none`}
             onPointerDown={onRulerDown} onPointerMove={onRulerMove} onPointerUp={onRulerUp} onPointerCancel={onRulerUp}
             onKeyDown={(event) => {
               const dir = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
@@ -367,7 +399,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
             ))}
           </div>
           {sections.length > 0 && (
-            <div className="relative h-4 border-b border-port-border" aria-hidden="true">
+            <div className={`${ROW_CLS} h-4`} aria-hidden="true">
               {sections.map((section, i) => (
                 <span key={`${section.startSec}-${i}`} className="absolute inset-y-0 border-l border-port-border/70 text-[10px] leading-4 text-port-text-muted"
                   style={{ left: section.startSec * pxPerSec, width: Math.max(2, (section.endSec - section.startSec) * pxPerSec) }}>
@@ -377,7 +409,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
               ))}
             </div>
           )}
-          <div role="group" aria-label="Shots" className="relative h-14">
+          <div role="group" aria-label="Shots" className={`${ROW_CLS} h-14`}>
             {shots.map((shot, index) => {
               const width = Math.max(2, (shot.endSec - shot.startSec) * pxPerSec);
               const moving = reorder?.from === index;
@@ -423,12 +455,11 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
               );
             })}
           </div>
-          {effectOptions && (
-            <TimelineEffectsTrack shots={shots} pxPerSec={pxPerSec} options={effectOptions} shotName={shotName} selectedId={effectsShot?.sceneId ?? null}
-              onSelect={(sceneId, toggle) => setEffectsOfId((current) => (toggle && current === sceneId ? null : sceneId))} onEditShot={onEditShot} snapPoints={snapPoints} />
-          )}
+          {effectRows.map((row) => (
+            <div key={row.id} role="group" aria-label={row.label} className={`${ROW_CLS} ${FX_ROW_H}`}>{row.content}</div>
+          ))}
           {cues.length > 0 && (
-            <div className="relative h-5 border-t border-port-border" aria-hidden="true">
+            <div className={`${ROW_CLS} h-5`} aria-hidden="true">
               {cues.map((cue) => {
                 const width = Math.max(2, (cue.endSec - cue.startSec) * pxPerSec);
                 return (
@@ -443,6 +474,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
           )}
           <div ref={playheadRef} data-testid="shot-timeline-playhead" aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-port-error" />
         </div>
+      </div>
       </div>
       {effectsShot && (
         <TimelineEffectsPanel scene={effectsShot.scene} name={nameOf(effectsShot)} options={effectOptions}

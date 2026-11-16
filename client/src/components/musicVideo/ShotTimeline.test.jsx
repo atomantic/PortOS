@@ -146,9 +146,12 @@ describe('ShotTimeline', () => {
     const withEffects = { ...project, scenes: project.scenes.map((scene) => (scene.sceneId === 's2'
       ? { ...scene, transitionIn: 'light-leak', glitches: [{ atSec: 2, style: 'gate-jump' }, { atSec: 6, style: 'color-block', strength: 0.5 }] } : scene)) };
     render(<ShotTimeline project={withEffects} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}} onEditShot={onEditShot} />);
-    const track = screen.getByRole('group', { name: 'Effects' });
-    expect(within(track).getByRole('button', { name: 'Effects of Shot s1: none' })).toBeInTheDocument();
-    const lane = within(track).getByRole('button', { name: /^Effects of Shot s2: start .+; mid-shot .+, .+$/ });
+    const track = screen.getByRole('group', { name: 'In-shot effects' });
+    expect(within(track).getByRole('button', { name: 'In-shot effects of Shot s1: none' })).toBeInTheDocument();
+    const lane = within(track).getByRole('button', { name: /^In-shot effects of Shot s2: .+, .+$/ });
+    // Each kind of effect has its own labeled row; a kind the video never uses has none.
+    expect(within(screen.getByRole('group', { name: 'Transitions' })).getByRole('button', { name: /into Shot s2$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'Cut effects' })).not.toBeInTheDocument();
     const [first] = within(track).getAllByRole('slider');
     // Shot s2 starts at 0:04, so its effect 2 s in sits at 0:06: 120 px at 20 px a second.
     expect(first.style.left).toBe('120px');
