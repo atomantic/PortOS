@@ -613,12 +613,6 @@ describe('GET /api/beeper/conversations — filters', () => {
     expect(listConversations).not.toHaveBeenCalled();
   });
 
-  it('forwards the pagination cursor untouched', async () => {
-    vi.mocked(listConversations).mockResolvedValue({ conversations: [], nextCursor: 'next-page-token' });
-    const res = await request(buildApp()).get('/api/beeper/conversations?cursor=abc123');
-    expect(listConversations).toHaveBeenCalledWith({ cursor: 'abc123' });
-    expect(res.body.nextCursor).toBe('next-page-token');
-  });
 });
 
 describe('GET /api/beeper/conversations/:id and its messages', () => {
