@@ -43,11 +43,13 @@ import {
 import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
 import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
-import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
+import { startCreativeDirectorProject, advanceAfterSceneSettled } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 import { stopProject } from '../services/creativeDirector/stopProject.js';
 import { resolveCreativeDirectorProjectCommand } from '../services/creativeDirector/projectCommands.js';
 
+import { getCommissionPlanError } from '../services/creative/toolRegistry.js';
+import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAdvance.js';
 const router = Router();
 
 function assertVideoDispatchAvailable(project) {
@@ -300,13 +302,11 @@ router.patch('/:id/plan', asyncHandler(async (req, res) => {
   const plan = validateRequest(creativeDirectorPlanSchema, req.body);
   const project = await getProject(req.params.id);
   if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  const { getCommissionPlanError } = await import('../services/creative/toolRegistry.js');
   const commissionPlanError = getCommissionPlanError(plan, project.directive);
   if (commissionPlanError) {
     throw new ServerError(commissionPlanError, { status: 400, code: 'INVALID_COMMISSION_PLAN' });
   }
   const updated = await setPlan(req.params.id, plan);
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD plan advance failed for ${req.params.id}`, e));
   res.json(updated);
@@ -331,7 +331,6 @@ router.post('/:id/directive', asyncHandler(async (req, res) => {
     ...(parked ? {} : { status: 'planning', failureReason: null }),
   });
   if (!parked) {
-    const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
     advanceAfterPlanStepSettled(req.params.id)
       .catch((e) => logFailureWithStack(`❌ CD directive advance failed for ${req.params.id}`, e));
   }
@@ -347,7 +346,6 @@ router.post('/:id/replan', asyncHandler(async (req, res) => {
   assertVideoDispatchAvailable(project);
   if (!project.directive) throw new ServerError('Project has no directive to re-plan', { status: 400, code: 'NO_DIRECTIVE' });
   const updated = await updateProject(req.params.id, { plan: null, status: 'planning', failureReason: null });
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD replan advance failed for ${req.params.id}`, e));
   res.json(updated);
@@ -376,7 +374,6 @@ router.post('/:id/plan/step/:stepId', asyncHandler(async (req, res) => {
   if (project.status === 'paused') {
     await updateProject(req.params.id, { status: 'rendering', failureReason: null });
   }
-  const { advanceAfterPlanStepSettled } = await import('../services/creativeDirector/planAdvance.js');
   advanceAfterPlanStepSettled(req.params.id)
     .catch((e) => logFailureWithStack(`❌ CD plan step ${action} advance failed for ${req.params.id}`, e));
   res.json(await getProject(req.params.id));
@@ -396,7 +393,6 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   if (data.status === 'accepted' || data.status === 'failed') {
     // Fire-and-forget — agent or user just settled a scene; nudge the
     // orchestrator so the next scene (or stitch) starts.
-    const { advanceAfterSceneSettled } = await import('../services/creativeDirector/completionHook.js');
     advanceAfterSceneSettled(req.params.id).catch((e) => logFailureWithStack(`❌ CD scene advance failed for ${req.params.id}`, e));
   }
   res.json(updated);

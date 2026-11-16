@@ -65,6 +65,7 @@ import {
 import { buildLocalManifest, getPeerIntegrity, isLegacyManifestKind, PEER_MANIFEST_VERSION } from '../services/sharing/integrity.js';
 import { authorizePeerPull, resolveCallerInstanceId } from '../services/sharing/peerPullAuthorization.js';
 
+import { backfillMissingSidecars } from '../services/sharing/sidecarSync.js';
 const router = Router();
 
 const PEER_SYNC_ERROR_STATUS = {
@@ -358,7 +359,6 @@ router.post('/sync-now', asyncHandler(async (req, res) => {
 // sidecar from any peer that has a copy. Delegates to sidecarSync.js.
 router.post('/pull-metadata', asyncHandler(async (req, res) => {
   const { filenames } = validateRequest(peerPullMetadataSchema, req.body || {});
-  const { backfillMissingSidecars } = await import('../services/sharing/sidecarSync.js');
   res.json(await backfillMissingSidecars({ filenames }));
 }));
 

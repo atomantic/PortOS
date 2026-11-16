@@ -11,6 +11,7 @@ import { productionReadiness } from './productionReview.js';
 import { presentProjectCastAndSets } from './castAndSetsService.js';
 import { presentProjectAutonomousRun } from './autonomousService.js';
 
+import { withCatalogCheckin } from './catalogCheckin.js';
 /**
  * What presentation reads off this machine for a record: a Blender film's shot renders on disk and
  * whether the track's audio was replaced under the timing (#14793). Neither depends on the shots.
@@ -50,7 +51,6 @@ export async function presentProjectForRead(project, { catalogCheckinResolved = 
     current = await reconcileInterruptedYoutubeThumbnail(project);
   }
   if (current?.castAndSets?.source === 'catalog' && !(catalogCheckinResolved && current.castAndSets.catalogCheckin)) {
-    const { withCatalogCheckin } = await import('./catalogCheckin.js');
     current = await withCatalogCheckin(current);
   }
   return presentProjectRecord(current, await readPresentationInputs(current));

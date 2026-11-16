@@ -12,7 +12,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../../lib/fileUtils.js';
-import { safeUnder } from '../../../lib/ffmpeg.js';
+import { safeUnder, findFfmpeg, runFfmpegProcess } from '../../../lib/ffmpeg.js';
 import { mutateProjectRecord } from '../projects.js';
 import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
@@ -162,7 +162,6 @@ async function withCovers(target, payload, deps) {
   if (!source) return payload;
   // Composed cover art is already a store-size square.
   if (target === 'distrokid' && payload.cover?.square) return payload;
-  const { findFfmpeg, runFfmpegProcess } = await import('../../../lib/ffmpeg.js');
   // A store rejects a non-square cover, so DistroKid gets no draft rather than the 16:9 frame.
   const uncut = () => {
     if (target === 'distrokid') throw new ServerError('Could not cut the square cover art: ffmpeg is unavailable or failed', { status: 422, code: 'PUBLISH_ASSET_MISSING' });

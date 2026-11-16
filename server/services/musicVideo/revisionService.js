@@ -37,6 +37,8 @@ import {
 } from './revision.js';
 import { chargeAutoReviewGeneration, refundAutoReviewGeneration, runOwningRevision } from './autoReview.js';
 
+import { resolveMasterAudioPath } from './render.js';
+import { findStalePerformanceTakes } from './performanceShot.js';
 /** Open a revision from a reviewed excerpt. Returns `{ project, revision, skippedSceneIds }`. */
 export async function startRevision(projectId, excerptId, input = {}) {
   return mutateProjectRecord(projectId, (current) => startRevisionOnProject(current, excerptId, input));
@@ -163,8 +165,6 @@ async function dependencyImpactFor(project) {
       && scene.takes?.some((take) => take.assetId === scene.videoHistoryId && take.shotInstruction?.audioConditioning))));
   let performanceChanges = [];
   if (performanceScenes.length) {
-    const { resolveMasterAudioPath } = await import('./render.js');
-    const { findStalePerformanceTakes } = await import('./performanceShot.js');
     performanceChanges = await resolveMasterAudioPath(project).then((path) => findStalePerformanceTakes(project, path),
       () => performanceScenes.map((scene) => ({ sceneId: scene.sceneId, reason: 'Current song audio is unavailable; window evidence cannot be verified' })));
   }

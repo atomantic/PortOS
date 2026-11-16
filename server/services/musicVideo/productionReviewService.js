@@ -8,6 +8,8 @@ import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
 import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
 
+import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 const reviewProcessId = randomUUID();
 
 const present = project => ({ project, readiness: productionReadiness(project) });
@@ -207,7 +209,6 @@ export async function approveProductionReview(id, input, { edit: answerEdit = fa
 // Historical guides remain readable. Selecting or approving one validates its
 // immutable bytes under today's policy, including HTML saved before narrowing.
 async function validateGuideSelection(project, selectedId) {
-  const { musicVideoMediaMode } = await import('../../lib/musicVideoMediaPolicy.js');
   const signature = current => {
     const id = selectedId(current);
     const artifact = current.devArtifacts?.find(entry => entry.id === id && !entry.deleted);
@@ -320,7 +321,6 @@ export async function renderProductionProof(id, { startSec, endSec, kind = 'proo
 
 /** An existing, dependency-checked asset pilot becomes a human review candidate. */
 export async function attachProductionPilotProof(id, excerptId) {
-  const { musicVideoDependencyChanges } = await import('../../lib/musicVideoDependencies.js');
   const { project } = await mutateProjectRecord(id, current => {
     const excerpt = current.excerpts?.find(e => e.id === excerptId);
     if (excerpt?.status !== 'complete' || !excerpt.filename || musicVideoDependencyChanges(current, excerpt.dependencies).length) {

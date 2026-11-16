@@ -44,7 +44,7 @@ import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideoTitleCa
 import { projectFrameHold } from './frameHold.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
-import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
+import { buildMusicVideoFfmpegArgs, planMusicVideoRender, isProjectRenderActive } from './render.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { removeCompositionScratch, renderTypographyOverlays, typographyOverlayWindows } from './compositionRender.js';
 import { lyricOverlayDocumentData } from './lyricPlaythrough.js';
@@ -59,6 +59,7 @@ import { musicVideoEvents } from './events.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { trackedRenderMap } from '../renderActivity.js';
 
+import { withProjectMediaMutation } from './projects.js';
 export { SHOT_SEGMENT_DIR, shotSegmentDir };
 // Bump when a segment's encode changes in a way its key cannot see.
 export const SHOT_SEGMENT_VERSION = 1;
@@ -587,7 +588,6 @@ async function staleSegmentFiles(plan, { startedAtMs = Infinity, unusedLooks = f
 
 export async function pruneSegments(plan, { reserved = false, current = false, ...options } = {}) {
   if (current) {
-    const { withProjectMediaMutation } = await import('./projects.js');
     return withProjectMediaMutation(async () => {
       const { plan: latest } = await planForLooks(plan.project.id);
       return latest && !latest.error ? pruneSegments(latest, { reserved, ...options }) : 0;
@@ -632,7 +632,6 @@ export async function getSegmentCleanup(projectId, options) {
 }
 
 export async function cleanupShotSegments(projectId, { unusedLooks = false, reserved = false } = {}, options) {
-  const { withProjectMediaMutation } = await import('./projects.js');
   const cleanup = () => withProjectMediaMutation(async () => {
     assertSegmentCleanupIdle(projectId);
     const { project, plan: planned } = await planForLooks(projectId, options);
@@ -911,7 +910,6 @@ export async function listFilmLooks(projectId, options) {
 /** Delete one cached look's files over the current takes, and forget it. */
 export async function deleteFilmLook(projectId, lookId, options) {
   return withRenderCleanupReservation(projectId, async () => {
-    const { isProjectRenderActive } = await import('./render.js');
     if (isProjectRenderActive(projectId)) throw new ServerError('Wait for the final render to finish before deleting a look.', { status: 409, code: 'RENDER_IN_PROGRESS' });
     assertSegmentCleanupIdle(projectId);
     return deleteFilmLookFiles(projectId, lookId, options);
@@ -1019,9 +1017,7 @@ async function cleanupAfterShot(projectId, sceneId = null) {
   return shotCleanupWrites(projectId, async () => {
     const pending = pendingShotCleanup.get(projectId);
     if (!pending?.size) return;
-    const { isProjectRenderActive } = await import('./render.js');
     if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
-    const { withProjectMediaMutation } = await import('./projects.js');
     await withProjectMediaMutation(async () => {
       if (isProjectRenderActive(projectId) || segmentCleanupBusy(projectId)) return;
       await withRenderCleanupReservation(projectId, async () => {

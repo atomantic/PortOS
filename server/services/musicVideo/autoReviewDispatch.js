@@ -28,6 +28,7 @@ import { dispatchProductionStep } from './productionDispatch.js';
 import { loadPoolEnv, routeUnavailableReason, sceneRequirement } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 
+import { resolveVideoMode } from '../videoGen/modes.js';
 const unavailable = (reason) => ({ reason });
 
 /** The frame route a standalone run renders on: the project's image pin, then the MUSIC_VIDEO target, then the install default. */
@@ -57,7 +58,6 @@ async function clipRoute(project, env) {
   if (pin.backend === 'local' && pin.generationMode === 'audioReactive') {
     return unavailable('This project renders clips in the audio-reactive lane, which only the board can submit — switch the video renderer, or generate this clip on the board');
   }
-  const { resolveVideoMode } = await import('../videoGen/modes.js');
   const mode = pin.backend || resolveVideoMode(null, env.settings, { target: RENDER_TARGET.MUSIC_VIDEO });
   return { route: { kind: 'video', mode, model: mode === 'local' ? pin.modelId || null : null } };
 }

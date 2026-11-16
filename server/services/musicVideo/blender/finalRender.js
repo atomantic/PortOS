@@ -19,6 +19,7 @@ import { assembleBlenderVideo } from './assemble.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';
 
+import { mutateProjectRecord } from '../projects.js';
 /** The final render's plan; refuses (409) until every shot has a complete, current final render. */
 export async function prepareBlenderFinal(project) {
   return planBlenderFinal(await readBlenderFilm(project));
@@ -52,7 +53,6 @@ export async function encodeBlenderFinal({ plan, project, projectId, jobId, audi
  * shot rendered since has left it behind (renderIndex.js `blenderFilmReadState`).
  */
 export async function recordBlenderFinal({ projectId, jobId, encoded }) {
-  const { mutateProjectRecord } = await import('../projects.js');
   await mutateProjectRecord(projectId, (current) => ({
     project: { ...current, blender: { ...normalizeBlenderRecord(current.blender), final: { jobId, signature: encoded.signature } } },
   }));

@@ -25,8 +25,8 @@ import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
 import * as agentDrafts from '../services/agentDrafts.js';
 import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agentContentGenerator.js';
-import { findRelevantPosts } from '../services/agentFeedFilter.js';
-import { createMoltbookClient } from '../integrations/moltbook/index.js';
+import { findRelevantPosts, findReplyOpportunities } from '../services/agentFeedFilter.js';
+import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
 import { collectPublishedPosts } from '../services/agentPublished.js';
 import { sleep } from '../lib/fileUtils.js';
 
@@ -166,8 +166,6 @@ router.post('/engage', asyncHandler(async (req, res) => {
   }
 
   // Import executeEngage pattern inline to avoid circular deps
-  const { findReplyOpportunities } = await import('../services/agentFeedFilter.js');
-  const { checkRateLimit } = await import('../integrations/moltbook/index.js');
 
   const relevantPosts = await findRelevantPosts(client, agent, {
     sort: 'hot',
@@ -402,7 +400,6 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
   if (data.maxReplies > 0) {
     await assertMoltbookCommentProvider(engagementConfig?.providerId);
   }
-  const { checkRateLimit, isAccountSuspended } = await import('../integrations/moltbook/index.js');
 
   const agentUsername = account.credentials.username;
 

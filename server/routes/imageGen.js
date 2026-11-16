@@ -68,6 +68,8 @@ import { attachNodeImage } from '../services/fableLoom/records.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
+import { attachGeneratedMedia } from '../services/catalogDB.js';
+import { catalogEvents } from '../services/catalogEvents.js';
 const router = Router();
 
 router.get('/runway-models', asyncHandler(async (_req, res) => {
@@ -773,8 +775,6 @@ export async function executeImageGenerate(req, data, files = {}) {
     );
   }
   if (params.catalogAttach && result?.filename) {
-    const { attachGeneratedMedia } = await import('../services/catalogDB.js');
-    const { catalogEvents } = await import('../services/catalogEvents.js');
     await attachGeneratedMedia(params.catalogAttach.ingredientId, result.filename, {
       kind: params.catalogAttach.kind || 'reference',
     }).catch(() => {});

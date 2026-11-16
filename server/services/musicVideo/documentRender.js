@@ -56,6 +56,7 @@ import { buildSongDocument } from './codeTimeline.js';
 import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
 import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 
+import { safeUnder, findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, probeVideoGeometry, edgeFadeFilter } from '../../lib/ffmpeg.js';
 export { documentRenderClock, documentSongDuration } from './documentTiming.js';
 // The frame each project aspect renders at (the composition browser's sizes).
 export const DOCUMENT_FRAME_SIZES = Object.freeze({
@@ -138,7 +139,6 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
   assertMusicVideoMediaSelections(project);
   const byId = new Map((Array.isArray(history) ? history : []).map((entry) => [entry.id, entry]));
   const out = new Map();
-  const { safeUnder } = await import('../../lib/ffmpeg.js');
   for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
     if (!scene?.sceneId) continue;
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
@@ -395,7 +395,6 @@ async function stageDocumentData(compositionDir, data, media, signal) {
       // Documents seek output seconds themselves. Retime the staged copy so
       // existing/custom documents need no new playback contract.
       if (existsSync(target)) throw new ServerError(`The composition document ships ${scene.media.src}, a name PortOS writes at render time`, { status: 422, code: 'COMPOSITION_DOCUMENT_INVALID' });
-      const { findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS } = await import('../../lib/ffmpeg.js');
       const bin = await findFfmpeg();
       if (!bin) throw new Error('ffmpeg not found on PATH');
       const filters = [
@@ -432,7 +431,6 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   // and names those shots; renders keep refusing so a final never drops them.
   const plan = await prepareDocumentRender(project, { requireSelectedEffects: false });
   const unsupportedEffects = await unsupportedDocumentEffects(project);
-  const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { loadHistory } = await import('../videoGen/history.js');
@@ -593,7 +591,6 @@ async function assertLyricsFitSocialBand(page, { startSec, durationSec }) {
 export async function encodeDocumentComposition({
   project, plan, jobId, audioPath, soundBed = null, outputPath, signal, onProgress, windowStart = null, windowEnd = null, fade = false, collectFootageVisibility = false,
 }) {
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry, edgeFadeFilter } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
@@ -752,7 +749,6 @@ const PROBE_PAINTED = `new Promise((resolve) => {
  */
 export async function probeDocumentText({ project, jobId, signal, sampleTimes, onSample, onProgress }) {
   const plan = await prepareDocumentRender(project);
-  const { probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { stageMusicVideoComposition } = await import('../htmlComposition/index.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { loadHistory } = await import('../videoGen/history.js');
