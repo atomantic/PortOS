@@ -205,8 +205,11 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 }));
 
 // === Draft Routes ===
+const draftListQuerySchema = z.object({ accountId: z.string().optional(), status: z.string().optional() });
+const testTokenQuerySchema = z.object({ top: z.string().optional() });
+
 router.get('/drafts', asyncHandler(async (req, res) => {
-  const { accountId, status } = req.query;
+  const { accountId, status } = validateRequest(draftListQuerySchema, req.query);
   if (accountId && !UUID_RE.test(accountId)) {
     throw new ServerError('Invalid accountId format', { status: 400 });
   }
@@ -473,6 +476,7 @@ router.get('/debug/token-status', asyncHandler(async (req, res) => {
 
 router.post('/debug/test-token', asyncHandler(async (req, res) => {
   const { provider = 'outlook' } = validateRequest(messageTokenProviderBodySchema, req.body ?? {});
+  const { top } = validateRequest(testTokenQuerySchema, req.query);
   const tokenResult = await getToken(provider);
   if (tokenResult.error) {
     throw new ServerError(tokenResult.message || tokenResult.error, {
@@ -491,7 +495,7 @@ router.post('/debug/test-token', asyncHandler(async (req, res) => {
     scopes: decoded.scp || decoded.roles || 'unknown'
   };
 
-  const apiResult = await testApi(provider, tokenResult.token, parseInt(req.query?.top, 10) || 5);
+  const apiResult = await testApi(provider, tokenResult.token, parseInt(top, 10) || 5);
 
   // Trim the raw Graph/Outlook response to a status summary — message bodies and
   // recipient lists have no business in a token-connectivity check response.

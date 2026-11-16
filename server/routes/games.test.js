@@ -261,3 +261,12 @@ describe('Game routes', () => {
     expect(response.body.code).toBe('NOT_FOUND');
   });
 });
+
+describe('Game list query validation', () => {
+  it('GET / 400s on a repeated pagination key and never lists games', async () => {
+    vi.clearAllMocks();
+    const response = await request(makeApp()).get('/api/games?offset=1&offset=2');
+    expect(response.status).toBe(400);
+    expect(games.listGames).not.toHaveBeenCalled();
+  });
+});

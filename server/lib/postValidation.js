@@ -668,6 +668,12 @@ export const morseLevelUpdateSchema = z.object({
 // PROGRESS DASHBOARD QUERY (issue #2091)
 // =============================================================================
 
+// Scalar-only query strings for the lenient meatspace POST reads: the handlers keep their own
+// parse/clamp (garbage falls back to the default), so only a repeated key (array) is refused.
+export const postDaysQuerySchema = z.object({ days: z.string().optional() });
+export const postLimitQuerySchema = z.object({ limit: z.string().optional(), offset: z.string().optional() });
+export const postSessionRangeQuerySchema = z.object({ from: z.string().optional(), to: z.string().optional() });
+
 // GET /post/progress query params. `days` clamps like /post/stats: a NaN /
 // missing value falls back to the 90-day default, a value >365 is clamped, and
 // <=0 means all-time (0). `bucket` is forward-compat (only day buckets today).

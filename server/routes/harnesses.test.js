@@ -101,3 +101,26 @@ describe('harness routes', () => {
     expect(service.refreshHarnessModels.mock.calls[0][0]).toBe('opencode');
   });
 });
+
+describe('harness query validation', () => {
+  it('GET / 400s on a repeated fresh key and never lists harnesses', async () => {
+    service.listHarnesses.mockClear();
+    const res = await request(makeApp()).get('/api/harnesses?fresh=1&fresh=0');
+    expect(res.status).toBe(400);
+    expect(service.listHarnesses).not.toHaveBeenCalled();
+  });
+
+  it('POST /action 400s when runtime is missing and never streams', async () => {
+    stream.streamHarnessAction.mockClear();
+    const res = await request(makeApp()).post('/api/harnesses/action?action=update');
+    expect(res.status).toBe(400);
+    expect(stream.streamHarnessAction).not.toHaveBeenCalled();
+  });
+
+  it('POST /models/refresh 400s when runtime is repeated and never refreshes', async () => {
+    service.refreshHarnessModels.mockClear();
+    const res = await request(makeApp()).post('/api/harnesses/models/refresh?runtime=a&runtime=b');
+    expect(res.status).toBe(400);
+    expect(service.refreshHarnessModels).not.toHaveBeenCalled();
+  });
+});

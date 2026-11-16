@@ -2150,6 +2150,13 @@ export const messageInboxQuerySchema = z.object({
   offset: z.string().optional()
 });
 
+// `?limit=&offset=` for list endpoints: scalars only (a repeated key becomes an array in Express).
+// Value leniency (garbage falls back to the default page) stays in parsePagination.
+export const paginationQuerySchema = z.object({
+  limit: z.string().optional(),
+  offset: z.string().optional()
+});
+
 /**
  * Did the caller explicitly ask for pagination? True when either `limit` or
  * `offset` is present in the query string. Lets a list endpoint stay

@@ -24,6 +24,7 @@ import {
   moodBoardGenerateSchema,
   isPaginationRequested,
   paginateArray,
+  paginationQuerySchema,
 } from '../lib/validation.js';
 import { moodBoardCombineSchema } from '../lib/moodBoardValidation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
@@ -71,11 +72,12 @@ router.get('/:id/generate', asyncHandler(async (req, res) => {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const boards = await listBoards();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(boards);
   }
-  res.json(paginateArray(boards, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(boards, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Registered ahead of `/:id` so the literal path is not read as a board id.

@@ -387,6 +387,8 @@ router.get('/config', (_req, res) => {
   res.json({ arcRoles: [...ARC_ROLES] });
 });
 
+const recentIssuesQuerySchema = z.object({ limit: z.string().optional() });
+
 // Recent issues across all series — used by the sidebar's dynamic Pipeline
 // child list. Routes through `listRecentIssues` which sorts the FULL issue
 // set by `updatedAt` desc before applying limit; `listIssues` would
@@ -400,7 +402,7 @@ router.get('/issues/recent', asyncHandler(async (req, res) => {
   // listRecentIssues coerce.
   const [issues, series] = await Promise.all([
     // Fetch only the fields this endpoint returns, with the limit in SQL.
-    issuesSvc.listRecentIssues({ limit: req.query.limit, withHistory: false, summary: true }),
+    issuesSvc.listRecentIssues({ limit: validateRequest(recentIssuesQuerySchema, req.query).limit, withHistory: false, summary: true }),
     seriesSvc.listSeries(),
   ]);
   const seriesById = new Map(series.map((s) => [s.id, s.name]));

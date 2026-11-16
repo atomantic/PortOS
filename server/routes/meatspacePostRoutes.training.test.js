@@ -64,3 +64,21 @@ describe('POST /api/meatspace/post/training/runs (#4441)', () => {
     expect(trainingService.submitTrainingRun).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/meatspace/post/training reads', () => {
+  it('stats 400s on a repeated days key and never reads stats', async () => {
+    const res = await request(makeApp()).get('/api/meatspace/post/training/stats?days=7&days=30');
+    expect(res.status).toBe(400);
+    expect(trainingService.getTrainingStats).not.toHaveBeenCalled();
+  });
+
+  it('entries 400s on a repeated limit key and clamps a lone one to 100', async () => {
+    const bad = await request(makeApp()).get('/api/meatspace/post/training/entries?limit=1&limit=2');
+    expect(bad.status).toBe(400);
+    expect(trainingService.getTrainingEntries).not.toHaveBeenCalled();
+    trainingService.getTrainingEntries.mockResolvedValue([]);
+    const ok = await request(makeApp()).get('/api/meatspace/post/training/entries?limit=999');
+    expect(ok.status).toBe(200);
+    expect(trainingService.getTrainingEntries).toHaveBeenCalledWith(100);
+  });
+});

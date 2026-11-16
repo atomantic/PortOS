@@ -282,6 +282,20 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
     expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: 'instance-aaaa' });
   });
 
+  it('refuses a repeated originInstanceId on every foundation :id route before the ledger is reached', async () => {
+    const path = '/api/eidoverse/world/foundations/tide-beacon';
+    const query = '?originInstanceId=instance-aaaa&originInstanceId=instance-bbbb';
+    const responses = [
+      await request(makeApp()).get(path + query),
+      await request(makeApp()).delete(path + query),
+      await request(makeApp()).post(path + '/adopt' + query),
+    ];
+    expect(responses.map((r) => r.status)).toEqual([400, 400, 400]);
+    expect(mocks.getFoundationByRef).not.toHaveBeenCalled();
+    expect(mocks.deleteFoundation).not.toHaveBeenCalled();
+    expect(mocks.adoptFoundation).not.toHaveBeenCalled();
+  });
+
   it('rejects a malformed origin before it can be assembled into a storage key', async () => {
     const res = await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=not%20an%20id');
 

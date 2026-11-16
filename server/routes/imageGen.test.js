@@ -517,6 +517,13 @@ describe('Image Gen Routes', () => {
   });
 
   describe('GET /api/image-gen/status', () => {
+    it('400s on an over-long modelId and never probes the backend', async () => {
+      imageGen.checkConnection.mockClear();
+      const response = await request(app).get('/api/image-gen/status?modelId=' + 'x'.repeat(65));
+      expect(response.status).toBe(400);
+      expect(imageGen.checkConnection).not.toHaveBeenCalled();
+    });
+
     it('should return connection status', async () => {
       imageGen.checkConnection.mockResolvedValue({ connected: true, model: 'flux-v1' });
 
@@ -2454,6 +2461,11 @@ describe('Image Gen Routes', () => {
 
   // SynthID-defeat regen (issue #912).
   describe('GET /api/image-gen/regen/availability', () => {
+    it('400s on a repeated filename key', async () => {
+      const response = await request(app).get('/api/image-gen/regen/availability?filename=a.png&filename=b.png');
+      expect(response.status).toBe(400);
+    });
+
     it('reports the local FLUX backend as available when the venv is healthy', async () => {
       // isFlux2VenvHealthy is mocked to true and the real model registry
       // carries FLUX.2 models, so a flux-venv model resolves.

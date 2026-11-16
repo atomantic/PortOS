@@ -85,8 +85,10 @@ const requireMusicEngine = (runtime) => {
   return engine;
 };
 
+const runtimeQuerySchema = z.object({ runtime: z.string().optional() });
+
 const sendRuntimeStatus = async (req, res) => {
-  const runtime = String(req.query?.runtime || '');
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   const engine = requireMusicEngine(runtime);
   res.json({
     runtime: engine.id,
@@ -107,7 +109,7 @@ router.get('/setup/runtime-install', asyncHandler(sendRuntimeStatus));
 const runtimeInstallInFlight = new Map();
 
 router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
-  const runtime = String(req.query?.runtime || '');
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   // Validate before flushing SSE headers so callers receive the standard
   // { error, code, timestamp } response for a bad runtime.
   const engine = requireMusicEngine(runtime);

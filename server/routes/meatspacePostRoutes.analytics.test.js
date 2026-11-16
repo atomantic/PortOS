@@ -69,6 +69,27 @@ describe('GET /api/meatspace/post/stats', () => {
   });
 });
 
+describe('meatspace post query validation (repeated keys are refused)', () => {
+  it('GET /post/stats 400s on a repeated days key and never reads stats', async () => {
+    vi.clearAllMocks();
+    const res = await request(makeApp()).get('/api/meatspace/post/stats?days=7&days=30');
+    expect(res.status).toBe(400);
+    expect(getPostStats).not.toHaveBeenCalled();
+  });
+
+  it('GET /post/recommendations 400s on a repeated limit key and never computes', async () => {
+    vi.clearAllMocks();
+    const res = await request(makeApp()).get('/api/meatspace/post/recommendations?limit=1&limit=2');
+    expect(res.status).toBe(400);
+    expect(getPostRecommendations).not.toHaveBeenCalled();
+  });
+
+  it('GET /post/sessions 400s on a repeated from key', async () => {
+    const res = await request(makeApp()).get('/api/meatspace/post/sessions?from=2026-01-01&from=2026-02-01');
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('GET /api/meatspace/post/recommendations', () => {
   let app;
   beforeEach(() => {

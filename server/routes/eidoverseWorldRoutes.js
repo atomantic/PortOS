@@ -17,6 +17,7 @@ import {
 import {
   eidoverseFoundationIdParamSchema,
   eidoverseFoundationInputSchema,
+  eidoverseFoundationQuerySchema,
   eidoverseFoundationTargetSchema,
 } from '../lib/eidoverseFoundations.js';
 import {
@@ -180,9 +181,10 @@ router.post('/foundations/:id/withdraw', asyncHandler(async (req, res) => {
 // local record WITHDRAWS it first, so the most natural gesture an author makes
 // ("remove this") can never orphan a peer's copy beyond recall.
 router.delete('/foundations/:id', asyncHandler(async (req, res) => {
+  const query = validateRequest(eidoverseFoundationQuerySchema, req.query);
   const { id, originInstanceId } = validateRequest(eidoverseFoundationTargetSchema, {
     id: req.params.id,
-    ...(req.query?.originInstanceId === undefined ? {} : { originInstanceId: req.query.originInstanceId }),
+    ...(query.originInstanceId === undefined ? {} : { originInstanceId: query.originInstanceId }),
   });
   const result = await deleteEidoverseFoundation(id, { originInstanceId });
   if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
@@ -198,7 +200,8 @@ router.delete('/foundations/:id', asyncHandler(async (req, res) => {
 // the disambiguator rather than a widened id that would make the internal
 // `peer:` namespace user-typeable.
 router.get('/foundations/:id', asyncHandler(async (req, res) => {
-  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(req.query.originInstanceId ? { originInstanceId: req.query.originInstanceId } : {}) });
+  const query = validateRequest(eidoverseFoundationQuerySchema, req.query);
+  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(query.originInstanceId ? { originInstanceId: query.originInstanceId } : {}) });
   const foundation = await getEidoverseFoundationByRef(ref);
   if (!foundation) throw new ServerError('Foundation not found', { status: 404 });
   res.json(foundation);
@@ -212,7 +215,8 @@ router.get('/foundations/:id', asyncHandler(async (req, res) => {
 // carrying its reasons — "this kind has no interpreter here" is the honest
 // answer, not a request error.
 router.post('/foundations/:id/adopt', asyncHandler(async (req, res) => {
-  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(req.query.originInstanceId ? { originInstanceId: req.query.originInstanceId } : {}) });
+  const query = validateRequest(eidoverseFoundationQuerySchema, req.query);
+  const ref = validateRequest(eidoverseFoundationTargetSchema, { id: req.params.id, ...(query.originInstanceId ? { originInstanceId: query.originInstanceId } : {}) });
   const result = await adoptEidoverseFoundation(ref, { installedBy: 'user' });
   if (result.outcome === 'unknown-foundation') throw new ServerError('Foundation not found', { status: 404 });
   res.json({ ...result, install: result.install ? summarizeControllerInstall(result.install, { includeState: true }) : null });

@@ -143,4 +143,10 @@ describe('mediaCollections routes — GET / pagination', () => {
     expect(page.body).toMatchObject({ total, limit: 2, offset: 1 });
     expect(page.body.items.map((c) => c.id)).toEqual(bare.body.slice(1, 3).map((c) => c.id));
   });
+
+  it('400s on a repeated pagination key', async () => {
+    const res = await api('get', '?limit=1&limit=2');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
 });

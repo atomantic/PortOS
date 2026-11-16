@@ -589,6 +589,12 @@ describe('music routes', () => {
     expect(ready.body.venvPath).toBe('/v/ace/bin/python3');
   });
 
+  it('POST /setup/runtime-install 400s on a repeated runtime key without spawning', async () => {
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=acestep&runtime=minimax-music3');
+    expect(r.status).toBe(400);
+    expect(setup.spawn).not.toHaveBeenCalled();
+  });
+
   it('GET /setup/runtime-install reports status without spawning', async () => {
     gen.ready = true;
     const r = await request(app).get('/api/music/setup/runtime-install?runtime=acestep');
