@@ -107,6 +107,6 @@ version, marker, hash block and provenance comment stays byte-identical.
    cutoff used.
 
 Profile-specific notes: [MLX video locks](MLX_VIDEO_LOCKS.md),
-[AudioLDM2 CUDA](AUDIOLDM2_CUDA.md#regenerating-locks),
+[CUDA runtime locks](RUNTIME_LOCKS.md),
 [ACE-Step 1.5 CUDA](ACESTEP15_CUDA.md), [Pixal3D Metal](PIXAL3D_MPS.md) and
 [TRELLIS.2 Metal](TRELLIS2_METAL.md).

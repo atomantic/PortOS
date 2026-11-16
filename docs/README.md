@@ -20,6 +20,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [DEMUCS_RUNTIME.md](./DEMUCS_RUNTIME.md) | Vocal separation hash locks, source-build contract, supported interpreters and validation limits |
 | [RIGGING_RUNTIME.md](./RIGGING_RUNTIME.md) | Blender rigging interpreter artifacts, wheel locks, provisioning and validation limits |
 | [PYTHON_RUNTIME_REFRESH.md](./PYTHON_RUNTIME_REFRESH.md) | Held-back Python runtime pins and the selective lock-regeneration procedure |
+| [RUNTIME_LOCKS.md](./RUNTIME_LOCKS.md) | Shared lock-regeneration script, OSV audit and fresh-install readiness evidence for the Windows/Linux CUDA runtimes |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) | MuScriptor Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
