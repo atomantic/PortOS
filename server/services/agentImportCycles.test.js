@@ -298,7 +298,7 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
         // A RENAMED export (`a as b`) has a
         // public name that exists nowhere but the facade, so the facade is its
         // only legitimate source. Registering it is what stops a barrel from
-        // re-exporting the alias and slipping past a map keyed on `terminateAgent`.
+        // re-exporting the alias and slipping past a map keyed on `killAgent`.
         if (exposedAs !== declared) allow(exposedAs, FACADE);
       }
     }
