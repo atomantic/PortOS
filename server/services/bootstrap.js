@@ -200,7 +200,7 @@ import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
 import { listProjects } from './creativeDirector/local.js';
 import { isFileBackend } from '../lib/pgFileFacade.js';
-import { checkHealth, ensureSchema, close } from '../lib/db.js';
+import { checkHealth, ensureSchema } from '../lib/db.js';
 import { initializeMessageDrafts } from './messageDrafts.js';
 
 /**
@@ -1399,6 +1399,8 @@ export const registerShutdownHandlers = ({ io, httpServer, localHttpServer }) =>
     await scheduledEventsDrained;
     await catalogFilingFlushed;
     timing.mark('dbPool');
+    // Kept dynamic: bootstrap.shutdown.test.js runs this handler in a vm with module loading injected.
+    const { close } = await import('../lib/db.js');
     if (typeof close === 'function') {
       // Bound the DB pool close: pool.end() waits for every checked-out client to
       // be released, so one hung/leaked connection (e.g. a LISTEN channel) would
