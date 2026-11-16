@@ -1,43 +1,17 @@
 /**
- * Layered Intelligence execution-FAILURE taxonomy + classifier (#2764 §1).
+ * Layered Intelligence execution-FAILURE taxonomy + classifier (#2764 §1): WHY a handed-off
+ * proposal failed (planning / execution / testing / context / scope), complementing the
+ * binary success rate in `computeExecutionByDomain`.
  *
- * `computeExecutionByDomain` / `computeProposalExecutionAwareness` (#2765) answer
- * *how often* LI's own hand-offs succeed per domain — a binary success/failure
- * rate. They do not answer *why* an execution failed. Today the outcome store's
- * `executionOutcome` slot holds only `'success'` / `'failure'`, so when the
- * reasoner is told "LI implemented 0% of its loop-meta proposals" it learns the
- * gap exists but nothing about its shape — planning? a regression? missing repo
- * context? — which is exactly the signal needed to decide whether to narrow a
- * proposal, defer it, or route it elsewhere.
+ * Pure, no I/O, no LLM call: derived from the failure signal task-learning already computed
+ * (`errorCategory` plus the validation-authoritative `validationPassed`), so it adds no provider
+ * round-trip. A LEAF module (imports nothing from the LI graph) so `layeredIntelligence.js` and
+ * `layeredIntelligenceOutcomes.js` can both use it without a cycle. Mirrors
+ * `layeredIntelligenceRejections.js` (same three-valued sentinel discipline, same bounded renderer).
  *
- * This module owns the structured vocabulary for that "why" and the deterministic
- * mapping onto it. Pure, no I/O, no LLM call: the classification is derived from
- * the failure signal the task-learning layer ALREADY computed for the run
- * (`errorCategory` from agentErrorAnalysis's pattern sweep, plus the
- * validation-authoritative `validationPassed`), so it adds no provider round-trip
- * (the "no cold-bootstrap LLM calls" policy) and no extra work at the recording
- * site.
- *
- * A LEAF module by design — it imports nothing from the LI graph — so both
- * `layeredIntelligence.js` (which formats the report) and
- * `layeredIntelligenceOutcomes.js` (which persists the classification) can use it
- * without an import cycle. It intentionally mirrors the shape of its sibling
- * `layeredIntelligenceRejections.js` (the proposal-REJECTION taxonomy): same
- * three-valued sentinel discipline, same "diagnosed / unknown / unclassified"
- * split, same bounded prompt-line renderer.
- *
- * SCOPE NOTE. Only NON-ENVIRONMENTAL failures ever reach this classifier: the
- * recording site (`taskLearning/metrics.js`) already nulls the LI execution
- * payload for environmental failures (rate-limit / outage / auth), so a
- * provider-outage category never lands here and never dents a domain's failure
- * shape. The remaining raw categories describe how LI's OWN implementation attempt
- * went wrong — which is what this taxonomy classifies.
- *
- * The tally + top-N-line render engine (the commonest-first sort with a
- * taxonomy-order tie-break, the three-bucket `{entries, unknown, unclassified,
- * diagnosed, total}` discipline, and `normalizeToken`) lives in the shared leaf
- * `lib/taxonomyTally.js` (#2800); this module supplies only the vocabulary, gloss
- * map, and classifier.
+ * Only NON-ENVIRONMENTAL failures reach here: `taskLearning/metrics.js` nulls the LI execution
+ * payload for rate-limit / outage / auth failures. The tally + render engine lives in
+ * `lib/taxonomyTally.js`; this module supplies the vocabulary, gloss map and classifier.
  */
 
 import {
@@ -210,32 +184,6 @@ export function classifyExecutionFailure({ success, errorCategory = null, valida
   return UNKNOWN_EXECUTION_FAILURE;
 }
 
-/**
- * Tally execution-failure categories across every FAILED-execution record. A
- * successful execution has nothing to explain, and a record that was never handed
- * off (executionOutcome null) never executed — neither is counted.
- *
- * Returns `{ entries, unknown, unclassified, diagnosed, total }` — the same shape,
- * and the same three-bucket discipline, as summarizeRejectionReasons:
- *   - `entries`      — `[{ category, count }]` of REAL diagnoses only, commonest first.
- *   - `unknown`      — classified `unknown-failure`: we looked, no signal explained
- *                      it. A MEASURED gap.
- *   - `unclassified` — a failed execution with no valid category stored at all:
- *                      recorded before this field existed, or by a path that passed
- *                      no failure signal. An UNMEASURED gap — a different fact from
- *                      `unknown`, with a different remedy.
- *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
- *   - `total`        — every failed-execution record: the population being diagnosed.
- *                      `total === 0` means, and only means, "no hand-off has failed".
- *
- * `unknown`/`unclassified` stay OUT of `entries` so they can't crowd real diagnoses
- * out of a caller's top-N list — they measure missing data, they are not findings.
- */
-// The shared tally + render engine, bound to the execution-failure taxonomy. The
-// counting rules, commonest-first sort, taxonomy-order tie-break, three-bucket
-// discipline, and top-N-line render live in `lib/taxonomyTally.js` (#2800); this
-// module supplies only the population predicate, the stored-token accessor, the
-// vocabulary/sentinel, the gloss, and the gap wording.
 const executionFailureTally = createTaxonomyTally({
   predicate: (o) => o.executionOutcome === 'failure',
   select: (o) => o.failureCategory,
