@@ -24,14 +24,14 @@ import { songScenes } from '../../lib/musicVideoColdOpen.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { appendSceneTakes, selectSceneTake } from './projects.js';
+import { startSceneFromFrame } from './projects.js';
 import { requireProject } from './requireProject.js';
 
 const refuse = (message, code, status = 409) => new ServerError(message, { status, code });
 
 /**
  * Extract the previous shot's on-screen out-frame and make it `sceneId`'s
- * start frame. Returns `{ scene, frame: { imageId, atSec, fromSceneId } }`.
+ * start frame. Returns `{ scene, frame: { imageId, atSec, fromSceneId }, edit }`; `edit` is the board edit result (editResult.js).
  */
 export async function continueFromPreviousShot(projectId, sceneId, { keepStillAsEnd = false } = {}) {
   const project = await requireProject(projectId);
@@ -96,12 +96,6 @@ export async function continueFromPreviousShot(projectId, sceneId, { keepStillAs
 
 // Select `imageId` as the scene's start frame; with `keepStillAsEnd`, its current start frame becomes its end frame.
 async function startFromFrame(projectId, scene, imageId, { keepStillAsEnd, prompt, frame }) {
-  const plannedStill = keepStillAsEnd && scene.referenceImageId && scene.referenceImageId !== imageId ? scene.referenceImageId : null;
-  const { appended } = await appendSceneTakes(projectId, scene.sceneId, [
-    { kind: 'image', assetId: imageId, source: 'generated', provider: 'portos', prompt },
-    ...(plannedStill ? [{ kind: 'endImage', assetId: plannedStill, source: 'imported', provider: 'portos' }] : []),
-  ]);
-  let updated = await selectSceneTake(projectId, scene.sceneId, appended[0].takeId);
-  if (plannedStill) updated = await selectSceneTake(projectId, scene.sceneId, appended[1].takeId);
-  return { scene: updated, frame };
+  const { scene: updated, edit } = await startSceneFromFrame(projectId, scene.sceneId, { imageId, prompt, keepStillAsEnd });
+  return { scene: updated, frame, edit };
 }

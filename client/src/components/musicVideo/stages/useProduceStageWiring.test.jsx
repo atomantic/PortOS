@@ -1458,6 +1458,45 @@ describe('shot edits apply their reply without a project read', () => {
     expect(reads()).toBe(loaded);
   });
 
+  // Uniquely catches a gallery clip import that keeps only the shot patched, so its broadcast or the next board edit reloads the project.
+  it('imports a gallery clip take from the reply alone', async () => {
+    await asThisTab();
+    const imported = { ...first, videoHistoryId: 'rh-9', takes: [{ takeId: 't1', kind: 'video', assetId: 'rh-9', status: 'candidate' }] };
+    addMusicVideoSceneTake.mockResolvedValueOnce({ scene: imported, take: imported.takes[0], edit: editResult([imported, second], ['s1'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    await openProject(board, 'produce');
+    const loaded = reads();
+    fireEvent.click(await screen.findByRole('button', { name: /^Import clip take$/ }));
+    const dialog = await screen.findByRole('dialog', { name: /Pick a video from your gallery/i });
+    const galleryItem = await within(dialog).findByText('(no prompt)');
+    fireEvent.click(galleryItem.closest('.bg-port-card').querySelector('button'));
+    await waitFor(() => expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', { kind: 'video', assetId: 'rh-9', source: 'imported' }, ownOrigin));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
+  // Uniquely catches a trimmed clip whose two writes leave the board a revision behind: the select's diff would be refused and reload.
+  it('trims a clip from the two replies alone', async () => {
+    await asThisTab();
+    const clipped = { ...first, referenceImageId: 'img1', videoHistoryId: 'h1',
+      takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', sourceImageId: 'img1', status: 'selected', note: null }] };
+    const trimmedTake = { takeId: 't-trim', kind: 'video', assetId: 'h1-trim', source: 'trimmed', provider: null, status: 'candidate', note: null };
+    const added = { ...clipped, takes: [...clipped.takes, trimmedTake] };
+    const selected = { ...clipped, videoHistoryId: 'h1-trim', takes: [{ ...clipped.takes[0], status: 'candidate' }, { ...trimmedTake, status: 'selected' }] };
+    trimVideo.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
+    addMusicVideoSceneTake.mockResolvedValueOnce({ scene: added, take: trimmedTake, edit: editResult([added, second], ['s1'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...selected, edit: { ...editResult([selected, second], ['s1'], { updatedAt: '2026-01-01T00:00:02.000Z' }), baseUpdatedAt: '2026-01-01T00:00:01.000Z' } });
+    await openProject({ ...board, scenes: [clipped, second] }, 'produce');
+    const loaded = reads();
+    const render = within(await screen.findByRole('region', { name: 'Render' }));
+    for (let i = 0; i < 12; i += 1) fireEvent.click(render.getByRole('button', { name: 'Next frame' }));
+    fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', 't-trim', ownOrigin));
+    await pushSocket('music-video:project:changed', { id: 'mv-2', origin: 'tab-socket' });
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
   // Uniquely catches readiness or approval staying as it was before an edit that changed it.
   it('takes readiness from the reply: a reorder that stales the storyboard approval stops asking to re-approve', async () => {
     await asThisTab();

@@ -16,7 +16,9 @@ const router = Router();
 // `feedbackId`), never the whole project: `edit` is the board edit result (services/musicVideo/editResult.js)
 // the open board patches in. API callers that want the whole record read `GET /:id`. Prepare,
 // revise, proof, the text check and a plan import (it saves its source artifact first, so its diff
-// base would be a revision the board never held) still answer with `{ project, readiness }`.
+// base would be a revision the board never held) still answer with `{ project, readiness }`. They
+// span several writes (or a long provider call), so no single before/after diff describes them: the
+// tab reloads once on their change broadcast, which is the deliberate cost of these infrequent actions.
 const EDIT = Object.freeze({ edit: true });
 
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {

@@ -168,10 +168,10 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   for (const imageId of [sourceImageId, ...(inputAssets || []).map((input) => input.assetId)].filter(Boolean)) {
     if (!(await takeAssetExists('image', imageId))) throw new ServerError('Dependency image not found', { status: 400, code: 'TAKE_ASSET_NOT_FOUND' });
   }
-  const { scene, appended } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
+  const { scene, appended, edit } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
-  }]);
-  res.status(201).json({ scene, take: appended[0] });
+  }], { edit: true });
+  res.status(201).json({ scene, take: appended[0], edit });
 }));
 
 // Continuing shot: the previous shot's last on-screen frame becomes this scene's start frame.
@@ -212,7 +212,8 @@ router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) =>
 
 // No body: a vision model checks this frame take against its shot (user-started) → the scene.
 router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
-  res.json(await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId));
+  const { scene, edit } = await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId, { edit: true });
+  res.json({ ...scene, edit });
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(async (req, res) => {

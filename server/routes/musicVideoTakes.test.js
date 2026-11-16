@@ -18,6 +18,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 const race = vi.hoisted(() => ({ beforeDelete: null, beforeSave: null, onRequest: null, ownerAnswer: null }));
@@ -171,9 +172,13 @@ describe('scene takes routes', () => {
     seedImage('check.png');
     const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'check.png' });
     const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    const read = async () => (await request(app).get(base())).body;
+    const before = await read();
     const checked = await request(app).post(url);
     expect(checked.status).toBe(200);
     expect(checked.body.takes[0].plateEvidence).toMatchObject({ assetId: 'check.png', verdict: 'fail' });
+    // The reply's edit result is the saved verdict on the board the tab held, so the tab reads nothing more.
+    expect(applyMusicVideoEdit(before, checked.body.edit)).toEqual(await read());
     expect(checked.body.takes[0].plateEvidence.runId).toMatch(/^manual-/);
     expect(plateCheck.reviewerAsked).toEqual({});
 
