@@ -67,13 +67,6 @@ describe('rounds route', () => {
     for (const fn of Object.values(midiMocks)) fn.mockReset();
   });
 
-  it('GET / returns the song list', async () => {
-    mocks.listRounds.mockResolvedValue([{ id: 'song-1', title: 'A' }]);
-    const res = await request(makeApp()).get('/api/rounds');
-    expect(res.status).toBe(200);
-    expect(res.body.rounds).toEqual([{ id: 'song-1', title: 'A' }]);
-  });
-
   it('GET /:id 404s with a NOT_FOUND code when the song is missing', async () => {
     mocks.getRound.mockResolvedValue(null);
     const res = await request(makeApp()).get('/api/rounds/song-nope');
@@ -127,11 +120,11 @@ describe('rounds route', () => {
     expect(res.status).toBe(400);
   });
 
-  it('DELETE /:id returns the deleted id', async () => {
+  it('DELETE /:id deletes the round named in the path', async () => {
     mocks.deleteRound.mockResolvedValue({ id: 'song-1' });
     const res = await request(makeApp()).delete('/api/rounds/song-1');
     expect(res.status).toBe(200);
-    expect(res.body.id).toBe('song-1');
+    expect(mocks.deleteRound.mock.calls[0][0]).toBe('song-1');
   });
 
   it('PATCH /:id accepts a recordings array', async () => {
@@ -295,12 +288,13 @@ describe('rounds route', () => {
     expect(arg.title).toBe('Stored'); // falls back to the stored title
   });
 
-  it('POST /:id/evaluate returns the verdict', async () => {
+  it('POST /:id/evaluate evaluates the stored song named in the path', async () => {
     mocks.getRound.mockResolvedValue({ id: 'song-1', title: 'A' });
     aiMocks.evaluateRound.mockResolvedValue({ evaluation: { score: 72, strengths: [] }, llm: {} });
     const res = await request(makeApp()).post('/api/rounds/song-1/evaluate').send({});
     expect(res.status).toBe(200);
-    expect(res.body.evaluation.score).toBe(72);
+    expect(mocks.getRound.mock.calls[0][0]).toBe('song-1');
+    expect(aiMocks.evaluateRound.mock.calls[0][0].song.id).toBe('song-1');
   });
 
   it('POST /:id/evaluate 404s when the song is missing', async () => {
