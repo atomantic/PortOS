@@ -1,6 +1,7 @@
 /**
- * Pure comparison between the BUNDLE this browser loaded and the SERVER build it
- * talks to (#4694): catches a `client/dist` built from one commit while the server
+ * Pure comparison of the BUNDLE this browser loaded against the SERVER build (#4694).
+ *
+ * Catches a `client/dist` built from one commit while the server
  * runs another. Why `version` can't answer this: see `server/lib/buildIdentity.js`.
  */
 

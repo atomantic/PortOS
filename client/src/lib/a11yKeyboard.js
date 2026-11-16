@@ -1,8 +1,9 @@
 /**
- * Keyboard-activation helpers: make a non-`<button>` element with `onClick`
- * keyboard-operable (`role="button"`, `tabIndex=0`, Enter/Space handler), plus
- * the shared predicates global key handlers consult before claiming a key.
- * Native `<button>` is preferable; usage: `<div onClick={select} {...clickableProps(select)}>`.
+ * Keyboard-activation helpers for non-`<button>` clickables and global key handlers.
+ *
+ * Makes an element with `onClick` keyboard-operable (`role="button"`, `tabIndex=0`,
+ * Enter/Space handler), plus the shared predicates global key handlers consult
+ * before claiming a key. Native `<button>` is preferable; usage: `<div onClick={select} {...clickableProps(select)}>`.
  */
 
 /**
