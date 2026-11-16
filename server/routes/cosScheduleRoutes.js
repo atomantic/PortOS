@@ -10,22 +10,13 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { logCosScheduleUpdate } from '../services/userActionScheduleLog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTargetBodySchema, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
+import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cosValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';
 import { setMaintenanceRunArchived, updateMaintenanceStep, listMaintenanceRuns, resumeMaintenanceRun, startMaintenanceRun, stopMaintenanceRun } from '../services/maintenanceRun.js';
-
-const templateTaskSchema = z.object({
-  name: z.string().min(1),
-  description: z.string().min(1),
-  category: z.string().optional(),
-  taskType: z.string().optional(),
-  priority: z.string().optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
 
 const scheduleLabelsSchema = z.array(z.string().trim().min(1).max(40)).max(20)
   .transform(labels => [...new Set(labels.map(label => label.toLowerCase()))]);
@@ -268,19 +259,6 @@ router.put('/schedule/task/:taskType', asyncHandler(async (req, res) => {
   res.json({ success: true, taskType, interval: result, status });
 }));
 
-// GET /api/cos/schedule/due - Get all tasks that are due to run
-router.get('/schedule/due', asyncHandler(async (req, res) => {
-  const tasks = await taskSchedule.getDueTasks();
-  res.json({ tasks });
-}));
-
-// GET /api/cos/schedule/due/:appId - Get tasks due for specific app
-router.get('/schedule/due/:appId', asyncHandler(async (req, res) => {
-  const { appId } = req.params;
-  const tasks = await taskSchedule.getDueTasks(appId);
-  res.json({ appId, tasks });
-}));
-
 // POST /api/cos/schedule/trigger - Trigger an on-demand task
 router.post('/schedule/trigger', asyncHandler(async (req, res) => {
   const {
@@ -381,76 +359,5 @@ router.post('/schedule/maintenance-runs/:id/resume', asyncHandler(async (req, re
   if (!resumed) throw new ServerError('Maintenance run not found', { status: 404, code: 'NOT_FOUND' });
   res.json(resumed);
 }));
-
-// GET /api/cos/schedule/on-demand - Get pending on-demand requests
-router.get('/schedule/on-demand', asyncHandler(async (req, res) => {
-  const requests = await taskSchedule.getOnDemandRequests();
-  res.json({ requests });
-}));
-
-// DELETE /api/cos/schedule/on-demand/:requestId - Clear an on-demand request
-router.delete('/schedule/on-demand/:requestId', asyncHandler(async (req, res) => {
-  const { requestId } = req.params;
-  const cleared = await taskSchedule.clearOnDemandRequest(requestId);
-  if (!cleared) {
-    throw new ServerError('Request not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json({ success: true, cleared });
-}));
-
-// POST /api/cos/schedule/reset - Reset execution history for a task type
-router.post('/schedule/reset', asyncHandler(async (req, res) => {
-  const { taskType, appId } = validateRequest(cosScheduleTargetBodySchema, req.body);
-
-  const result = await taskSchedule.resetExecutionHistory(taskType, appId);
-  if (result.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(result);
-}));
-
-// GET /api/cos/schedule/templates - Get all template tasks
-router.get('/schedule/templates', asyncHandler(async (req, res) => {
-  const templates = await taskSchedule.getTemplateTasks();
-  res.json({ templates });
-}));
-
-// POST /api/cos/schedule/templates - Add a template task
-router.post('/schedule/templates', asyncHandler(async (req, res) => {
-  const { name, description, category, taskType, priority, metadata } = validateRequest(templateTaskSchema, req.body);
-
-  const template = await taskSchedule.addTemplateTask({
-    name,
-    description,
-    category,
-    taskType,
-    priority,
-    metadata
-  });
-  res.json({ success: true, template });
-}));
-
-// DELETE /api/cos/schedule/templates/:templateId - Delete a template task
-router.delete('/schedule/templates/:templateId', asyncHandler(async (req, res) => {
-  const { templateId } = req.params;
-  const result = await taskSchedule.deleteTemplateTask(templateId);
-  if (result.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(result);
-}));
-
-// GET /api/cos/schedule/interval-types - Get available interval types
-router.get('/schedule/interval-types', (req, res) => {
-  res.json({
-    types: taskSchedule.INTERVAL_TYPES,
-    descriptions: {
-      'on-demand': 'Only runs when manually triggered',
-      cron: 'Scheduled on a cron expression (minute hour dayOfMonth month dayOfWeek)'
-    },
-    // `perpetual` is an orthogonal flag, not a type — it applies to either.
-    perpetual: 'Drains actionable work back-to-back until none remains. On-demand tasks with autoStart false wait for another explicit trigger; otherwise rechecks on a cadence (its own cron expression when scheduled, else recheckCron / recheckIntervalMs, default daily)'
-  });
-});
 
 export default router;

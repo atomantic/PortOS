@@ -133,13 +133,6 @@ export async function checkChangelog() {
   return { ...newState, newEntries }
 }
 
-/**
- * Get cached changelog state without fetching.
- */
-export async function getCachedChangelog() {
-  return readJSONFile(STATE_FILE, defaultState())
-}
-
 // Exposed for unit tests — the Atom parse is the regex-extractor that replaced
 // a general XML parser on this path (issue #1167).
 export const __testing = { parseAtomFeed, stripHtml, extractVersion }

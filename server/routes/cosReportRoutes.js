@@ -1,12 +1,10 @@
 /**
- * CoS Reports, Briefings, Scripts, Watcher, and Activity Routes
+ * CoS Briefings, Claude changelog and Activity Routes
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cosReports.js';
-import { getScript, listScripts } from '../services/cos.js';
-import * as appActivity from '../services/appActivity.js';
+import { getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, listBriefings } from '../services/cosReports.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -15,14 +13,6 @@ const router = Router();
 
 const dateParamSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD')
-});
-
-// The date is both a date-bucket key and the report's filename, so it must be a
-// bare YYYY-MM-DD day. A full ISO timestamp would match no bucket (and no
-// agent's `completedAt` prefix), silently writing an all-zero report under a
-// filename `listReports`/`getReport` can never round-trip.
-const generateReportSchema = z.object({
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'date must be YYYY-MM-DD').optional(),
 });
 
 // `since` is the client's last-visit marker (ISO-8601). Optional and tolerant:
@@ -36,35 +26,6 @@ const whileAwayQuerySchema = z.object({
     z.string().optional()
   )
 });
-
-// GET /api/cos/reports - List all reports
-router.get('/reports', asyncHandler(async (req, res) => {
-  const reports = await listReports();
-  res.json(reports);
-}));
-
-// GET /api/cos/reports/today - Get today's report
-router.get('/reports/today', asyncHandler(async (req, res) => {
-  const report = await getTodayReport();
-  res.json(report);
-}));
-
-// GET /api/cos/reports/:date - Get report by date
-router.get('/reports/:date', asyncHandler(async (req, res) => {
-  const { date } = validateRequest(dateParamSchema, req.params);
-  const report = await getReport(date);
-  if (!report) {
-    throw new ServerError('Report not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(report);
-}));
-
-// POST /api/cos/reports/generate - Generate report for date
-router.post('/reports/generate', asyncHandler(async (req, res) => {
-  const { date } = validateRequest(generateReportSchema, req.body);
-  const report = await generateReport(date);
-  res.json(report);
-}));
 
 // GET /api/cos/briefings - List all briefings
 router.get('/briefings', asyncHandler(async (req, res) => {
@@ -92,49 +53,6 @@ router.get('/briefings/:date', asyncHandler(async (req, res) => {
 router.get('/claude-changelog', asyncHandler(async (req, res) => {
   const result = await claudeChangelog.checkChangelog();
   res.json(result);
-}));
-
-// GET /api/cos/claude-changelog/cached - Get cached changelog without fetching
-router.get('/claude-changelog/cached', asyncHandler(async (req, res) => {
-  const result = await claudeChangelog.getCachedChangelog();
-  res.json(result);
-}));
-
-// GET /api/cos/scripts - List generated scripts
-router.get('/scripts', asyncHandler(async (req, res) => {
-  const scripts = await listScripts();
-  res.json(scripts);
-}));
-
-// GET /api/cos/scripts/:name - Get script content
-router.get('/scripts/:name', asyncHandler(async (req, res) => {
-  const script = await getScript(req.params.name);
-  if (!script) {
-    throw new ServerError('Script not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(script);
-}));
-
-// GET /api/cos/app-activity - Get per-app activity data
-router.get('/app-activity', asyncHandler(async (req, res) => {
-  const activity = await appActivity.loadAppActivity();
-  res.json(activity);
-}));
-
-// GET /api/cos/app-activity/:appId - Get activity for specific app
-router.get('/app-activity/:appId', asyncHandler(async (req, res) => {
-  const activity = await appActivity.getAppActivityById(req.params.appId);
-  if (!activity) {
-    res.json({ appId: req.params.appId, activity: null, message: 'No activity recorded for this app' });
-    return;
-  }
-  res.json({ appId: req.params.appId, activity });
-}));
-
-// POST /api/cos/app-activity/:appId/clear-cooldown - Clear cooldown for an app
-router.post('/app-activity/:appId/clear-cooldown', asyncHandler(async (req, res) => {
-  const result = await appActivity.clearAppCooldown(req.params.appId);
-  res.json({ success: true, appId: req.params.appId, activity: result });
 }));
 
 // GET /api/cos/activity/today - Get today's activity summary

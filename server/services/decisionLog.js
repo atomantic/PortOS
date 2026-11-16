@@ -215,39 +215,6 @@ export async function getDecisionSummary() {
 }
 
 /**
- * Get patterns in decisions (for insights)
- */
-export async function getDecisionPatterns() {
-  const data = await loadDecisions();
-
-  // Analyze task types that are frequently skipped
-  const skippedTasks = {};
-  const switchedFrom = {};
-
-  for (const d of data.decisions) {
-    if (d.type === DECISION_TYPES.TASK_SKIPPED && d.context?.taskType) {
-      skippedTasks[d.context.taskType] = (skippedTasks[d.context.taskType] || 0) + 1;
-    }
-    if (d.type === DECISION_TYPES.TASK_SWITCHED && d.context?.fromTask) {
-      switchedFrom[d.context.fromTask] = (switchedFrom[d.context.fromTask] || 0) + 1;
-    }
-  }
-
-  // Find most skipped tasks
-  const frequentlySkipped = Object.entries(skippedTasks)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([taskType, count]) => ({ taskType, count }));
-
-  return {
-    frequentlySkipped,
-    totalSkips: Object.values(skippedTasks).reduce((a, b) => a + b, 0),
-    totalSwitches: Object.values(switchedFrom).reduce((a, b) => a + b, 0),
-    stats: data.stats
-  };
-}
-
-/**
  * Clear old decisions (keep last N days)
  */
 export async function cleanupOldDecisions(daysToKeep = 7) {
@@ -272,7 +239,6 @@ export default {
   recordDecision,
   getRecentDecisions,
   getDecisionSummary,
-  getDecisionPatterns,
   cleanupOldDecisions,
   DECISION_TYPES
 };

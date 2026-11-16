@@ -1249,14 +1249,6 @@ export async function getAgentPrompt(agentId) {
   return { prompt, bytes: Buffer.byteLength(prompt) };
 }
 
-// Terminate an agent (will be handled by spawner)
-export async function terminateAgent(agentId) {
-  // Emit event to kill the process FIRST
-  cosEvents.emit('agent:terminate', agentId);
-  // The spawner will handle marking the agent as completed after termination
-  return { success: true, agentId };
-}
-
 // `pauseAgent` / `killAgent` / `getAgentProcessStats` moved to
 // `agentOrchestrator.js` (#3450). They lived here as deferred-import forwarders
 // into the process layer, which this STATE layer cannot import statically

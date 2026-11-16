@@ -76,7 +76,6 @@ export { INTERVAL_TYPES, ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 export { DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES, SELF_IMPROVEMENT_TASK_TYPES, getTaskTypeInvocation, requiresManagedAppTarget, requiresInstallWideTarget, isProgrammaticScheduledTaskType, stripManagedAgentOptionsFromOverride } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
 export { recordTaskTypeFailure, recordTaskTypeSuccess } from './taskScheduleBackoff.js';
-export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
 
 // Settings whose edit is not an "I've addressed the cause" signal, so saving
 // one leaves a failure-parked task parked (see the unpark block below).

@@ -57,11 +57,4 @@ describe('CoS Workflow Routes', () => {
     });
   });
 
-  describe('GET /api/cos/workflow/stages', () => {
-    it('returns the canonical stage list', async () => {
-      const response = await request(app).get('/api/cos/workflow/stages');
-      expect(response.status).toBe(200);
-      expect(response.body.stages.map(s => s.id)).toEqual(['plan', 'build']);
-    });
-  });
 });

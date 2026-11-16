@@ -2,19 +2,14 @@
  * Task Learning — metrics aggregation
  *
  * Records completed tasks into the learning store and rebuilds derived
- * aggregates (per-tier metrics, success-only duration stats) from the
+ * aggregates (per-tier metrics) from the
  * authoritative sources. This is the "write" side of the learning data:
  * everything here mutates and persists `learning.json`.
  */
 
-import { existsSync } from 'fs';
-import { readdir } from 'fs/promises';
-import { join } from 'path';
 import {
   withLock,
-  AGENTS_DIR,
   emitLog,
-  tryReadFile,
   calculateDurationETA,
   extractTaskType,
   loadLearningData,
@@ -34,13 +29,11 @@ import {
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
 import { isSkipLearningVerdict, toValidationVerdict } from '../../lib/learningVerdict.js';
-import { mapWithConcurrency } from '../../lib/mapWithConcurrency.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
 // trends (provider/model/tier correlation) without a full agent-archive scan.
 const MAX_SIGNATURE_SAMPLES = 10;
-const ARCHIVE_READ_CONCURRENCY = 20;
 
 // ENVIRONMENTAL_ERROR_CATEGORIES lives in store.js (the leaf module) so both
 // this recorder and routing.js can consume it without deepening the existing
@@ -886,168 +879,5 @@ export async function recalculateModelTierMetrics() {
   }
 
   return { recalculated: changes.length > 0, changes };
-  });
-}
-
-/**
- * Rebuild success-only duration stats from the agent archive.
- * Scans all completed agent metadata to recalculate avgDurationMs, maxDurationMs, and p80DurationMs
- * using only successful agent durations (failed agents often run long in error loops and skew ETAs).
- *
- * Also rebuilds `byTaskTypeExecution` (issue #8001) from the SAME archive pass, so the two
- * dimensions can never disagree about the same runs after a recalc (issue #8010). This REPLACES
- * the map wholesale rather than merging into it — consistent with how this recalc always
- * replaces the derived aggregate it rebuilds — using the shared `executionDurationKey` /
- * `foldDurationOutcome` the live recorder uses, so the rebuilt shape can't drift from the
- * recorded one. `saveLearningData` applies the existing stale-prune + `EXECUTION_BUCKET_CAP`
- * sweep to the replaced map on the way out, same as it does for a live write.
- */
-export async function recalculateDurationStats() {
-  return withLock(async () => {
-  const data = await loadLearningData();
-
-  // Reset success-only duration fields
-  for (const metrics of Object.values(data.byTaskType)) {
-    metrics.successDurationMs = 0;
-    metrics.successMaxDurationMs = 0;
-  }
-  data.totals.successDurationMs = 0;
-  data.totals.successMaxDurationMs = 0;
-
-  const byTaskTypeExecution = {};
-
-  let agentCount = 0;
-  let successCount = 0;
-
-  if (existsSync(AGENTS_DIR)) {
-    const dateDirs = (await readdir(AGENTS_DIR, { withFileTypes: true }))
-      .filter(d => d.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d.name));
-
-    // Collect all metadata paths asynchronously, then cap reads so a large
-    // archive cannot exhaust file descriptors or spike memory.
-    const metaPaths = [];
-    for (const dateDir of dateDirs) {
-      const datePath = join(AGENTS_DIR, dateDir.name);
-      const agentDirs = (await readdir(datePath, { withFileTypes: true }))
-        .filter(d => d.isDirectory());
-      for (const agentDir of agentDirs) {
-        metaPaths.push(join(datePath, agentDir.name, 'metadata.json'));
-      }
-    }
-
-    const results = await mapWithConcurrency(
-      metaPaths,
-      ARCHIVE_READ_CONCURRENCY,
-      (path) => tryReadFile(path)
-    );
-
-    for (const raw of results) {
-      if (!raw) continue;
-      const meta = JSON.parse(raw);
-      agentCount++;
-
-      const duration = meta.result?.duration || 0;
-      // Validation-authoritative outcome (issue #2344), consistent with the live
-      // recordTaskCompletion path: an archived clean-exit run that missed its
-      // declared criterion is NOT a success (excluded from success-only ETAs),
-      // and a commit-found run is a success even on a non-zero exit. Falls back to
-      // the raw exit-code success for records that predate validationPassed.
-      // NOTE (#2696): the coordinator commit-criterion exemption is deliberately NOT
-      // applied here. This rebuild re-derives success-only DURATIONS from archives but
-      // does not rebuild the `succeeded` COUNTS, and totals.successDurationMs (below) is
-      // summed unconditionally. Overriding a coordinator's fossil validationPassed:false
-      // to an exit-code success here would add its duration to totals while migration 198
-      // had already removed its count — inflating the totals ETA. A post-fix coordinator
-      // run carries validationPassed:null (finalize returns null) and is already counted
-      // correctly; a pre-fix fossil is left excluded so durations stay consistent with the
-      // purged counts. The residual archives-vs-counts skew of this manual rebuild predates
-      // #2696 and is ETA-cosmetic.
-      const vp = meta.result?.validationPassed;
-      // The skip sentinel is checked BEFORE the exit-code fallback (#4107). This
-      // rebuild re-derives durations straight off the archive rather than through
-      // recordTaskCompletion, so without this an archived run the live path had
-      // already declined to record — the hook aborted before evaluating it — would
-      // come back in through the same exit-code fallback the sentinel exists to
-      // bypass, banking its duration into the success-only ETAs.
-      if (isSkipLearningVerdict(vp)) continue;
-      const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
-      const taskType = extractTaskType({
-        description: meta.metadata?.taskDescription,
-        metadata: meta.metadata,
-        taskType: meta.metadata?.taskType
-      });
-
-      // Execution-scoped bucket (issue #8001/#8010): folds every non-environmental
-      // completion — success OR fail, any duration — mirroring the live
-      // `recordExecutionDuration` call, which is NOT gated on success/duration>0 the
-      // way the success-only byTaskType recalc below is. Applies the SAME
-      // environmental-failure gate (#2618) the live recorder uses so an archived
-      // outage never dents this dimension either.
-      const errorCategory = meta.result?.errorAnalysis?.category || null;
-      const errorOrigin = meta.result?.errorAnalysis?.origin ?? null;
-      if (!shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin)) {
-        const executionKey = executionDurationKey({
-          taskType,
-          providerId: meta.metadata?.providerId,
-          model: meta.metadata?.model,
-          effort: meta.metadata?.effort ?? null
-        });
-        if (executionKey) {
-          if (!byTaskTypeExecution[executionKey]) byTaskTypeExecution[executionKey] = emptyDurationBucket();
-          foldDurationOutcome(byTaskTypeExecution[executionKey], {
-            success: outcomeSuccess,
-            duration,
-            at: meta.completedAt
-          });
-        }
-      }
-
-      if (!outcomeSuccess || duration <= 0) continue;
-
-      successCount++;
-
-      if (data.byTaskType[taskType]) {
-        data.byTaskType[taskType].successDurationMs += duration;
-        data.byTaskType[taskType].successMaxDurationMs = Math.max(
-          data.byTaskType[taskType].successMaxDurationMs, duration
-        );
-      }
-
-      data.totals.successDurationMs += duration;
-      data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs, duration);
-    }
-  }
-
-  // Recalculate avgDurationMs, maxDurationMs, and p80DurationMs using the helper
-  for (const metrics of Object.values(data.byTaskType)) {
-    if ((metrics.succeeded || 0) > 0 && metrics.successDurationMs > 0) {
-      Object.assign(metrics, calculateDurationETA(metrics));
-    }
-  }
-
-  if ((data.totals.succeeded || 0) > 0 && data.totals.successDurationMs > 0) {
-    Object.assign(data.totals, calculateDurationETA(data.totals));
-  }
-
-  data.byTaskTypeExecution = byTaskTypeExecution;
-
-  await saveLearningData(data);
-
-  emitLog('info', `📚 Recalculated duration stats from ${agentCount} agents (${successCount} successful)`, {
-    agentCount, successCount,
-    newAvgMs: data.totals.avgDurationMs,
-    newP80Ms: data.totals.p80DurationMs
-  }, '[TaskLearning]');
-
-  return {
-    recalculated: true,
-    agentsScanned: agentCount,
-    successfulAgents: successCount,
-    newTotals: {
-      avgDurationMs: data.totals.avgDurationMs,
-      p80DurationMs: data.totals.p80DurationMs,
-      maxDurationMs: data.totals.maxDurationMs
-    }
-  };
   });
 }

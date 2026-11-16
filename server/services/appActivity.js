@@ -187,13 +187,6 @@ export async function markAppReviewCompleted(appId, issuesFound = 0, issuesFixed
 }
 
 /**
- * Clear cooldown for an app (manual override)
- */
-export async function clearAppCooldown(appId) {
-  return updateAppActivity(appId, { cooldownUntil: null });
-}
-
-/**
  * Clear `activeAgentId` entries that reference agents no longer in the live agent set.
  *
  * Called at daemon startup. Without this, an idle-review agent that died across a

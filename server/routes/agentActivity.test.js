@@ -169,39 +169,6 @@ describe('activity route validation', () => {
     vi.clearAllMocks();
   });
 
-  describe('POST /cleanup', () => {
-    it('refuses a zero-day window instead of wiping the archive', async () => {
-      const res = await post('/cleanup', { daysToKeep: 0 });
-      expect(res.status).toBe(400);
-      expect(activityMocks.cleanupOldActivity).not.toHaveBeenCalled();
-    });
-
-    it('refuses a negative window, which would reach future-dated files', async () => {
-      expect((await post('/cleanup', { daysToKeep: -5 })).status).toBe(400);
-      expect(activityMocks.cleanupOldActivity).not.toHaveBeenCalled();
-    });
-
-    it('refuses a non-numeric window', async () => {
-      expect((await post('/cleanup', { daysToKeep: 'abc' })).status).toBe(400);
-      expect(activityMocks.cleanupOldActivity).not.toHaveBeenCalled();
-    });
-
-    it('defaults an empty body to the 30-day window', async () => {
-      const res = await post('/cleanup', {});
-      expect(res.status).toBe(200);
-      expect(activityMocks.cleanupOldActivity).toHaveBeenCalledWith(30);
-    });
-
-    it('passes a valid window through as a number', async () => {
-      await post('/cleanup', { daysToKeep: '7' });
-      expect(activityMocks.cleanupOldActivity).toHaveBeenCalledWith(7);
-    });
-
-    it('rejects an unknown body field rather than ignoring it', async () => {
-      expect((await post('/cleanup', { daysToKeep: 30, force: true })).status).toBe(400);
-    });
-  });
-
   describe('GET /', () => {
     it('clamps the list limit server-side', async () => {
       expect((await get('/?limit=999999')).status).toBe(400);

@@ -6,9 +6,7 @@
  * import it back, statically OR via `import(...)`.** Inside the closure, push what the
  * importer wanted into a leaf (`agentState.js`), never a deferred import or a barrel.
  *
- * Only transitions are exported; everything else is a leaf. Two share a name:
- * `cosAgentLifecycle.terminateAgent` only *requests* termination, renamed
- * `requestAgentTermination` here; `agentManagement.terminateAgent` runs the signal sequence.
+ * Only transitions are exported; everything else is a leaf.
  */
 
 export {
@@ -21,8 +19,7 @@ export {
 } from './agentManagement.js';
 
 export {
-  completeAgent,                            // running|paused → completed
-  terminateAgent as requestAgentTermination, // emits `agent:terminate`, returns
+  completeAgent, // running|paused → completed
 } from './cosAgentLifecycle.js';
 
 export { spawnAgentForTask } from './agentLifecycle.js'; // (none) → running

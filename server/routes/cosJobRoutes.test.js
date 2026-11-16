@@ -151,19 +151,6 @@ describe('CoS Job Routes', () => {
     });
   });
 
-  describe('POST /api/cos/jobs/:id/gate-check', () => {
-    it('should check job gate', async () => {
-      checkJobGate.mockResolvedValue({ shouldRun: false, reason: 'not today' });
-      hasGate.mockReturnValue(true);
-
-      const response = await request(app).post('/api/cos/jobs/j1/gate-check');
-
-      expect(response.status).toBe(200);
-      expect(response.body.hasGate).toBe(true);
-      expect(response.body.shouldRun).toBe(false);
-    });
-  });
-
   describe('GET /api/cos/jobs/:id', () => {
     it('should return a single job', async () => {
       autonomousJobs.getJob.mockResolvedValue({ id: 'j1', name: 'Review' });

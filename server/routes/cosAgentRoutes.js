@@ -257,14 +257,6 @@ router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/cos/agents/:id/terminate - Request termination (graceful SIGTERM, then SIGKILL)
-// This only emits `agent:terminate` and returns immediately; the spawner's
-// handler runs the actual SIGTERM/SIGKILL sequence.
-router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
-  const result = await agentOrchestrator.requestAgentTermination(req.params.id);
-  res.json(result);
-}));
-
 // POST /api/cos/agents/:id/pause - Stop process, preserve task/worktree for later resume
 // pauseAgent throws a ServerError — 404 when the agent is missing, 500 when the
 // runner/persist step fails — so no result-shape string-matching here.

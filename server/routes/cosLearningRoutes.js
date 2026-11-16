@@ -160,25 +160,11 @@ router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) 
   res.json(recommendations);
 }));
 
-// POST /api/cos/learning/recalculate-durations - Rebuild success-only duration stats from agent archive
-router.post('/learning/recalculate-durations', asyncHandler(async (req, res) => {
-  const result = await taskLearning.recalculateDurationStats();
-  res.json({ success: true, ...result });
-}));
-
 // GET /api/cos/learning/confidence - Get confidence levels for all task types
 router.get('/learning/confidence', asyncHandler(async (req, res) => {
   const state = await loadState();
   const thresholds = state.config?.confidenceAutoApproval ?? {};
   const confidence = await taskLearning.getConfidenceLevels(thresholds);
-  res.json(confidence);
-}));
-
-// GET /api/cos/learning/confidence/:taskType - Get confidence for specific task type
-router.get('/learning/confidence/:taskType', asyncHandler(async (req, res) => {
-  const state = await loadState();
-  const thresholds = state.config?.confidenceAutoApproval ?? {};
-  const confidence = await taskLearning.getTaskTypeConfidence(req.params.taskType, thresholds);
   res.json(confidence);
 }));
 

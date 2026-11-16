@@ -13,7 +13,7 @@ import * as taskLearning from '../services/taskLearning.js';
 import { getActivityCalendar } from '../services/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler } from '../lib/errorHandler.js';
 import { parsePagination, validateRequest } from '../lib/validation.js';
 import { runningAgentsByTaskId, withoutSpawningTasks } from '../lib/cosSpawnWindow.js';
 import { detectIdleLeftoverBranches } from '../services/userActionDetectors.js';
@@ -304,12 +304,6 @@ router.get('/decisions', asyncHandler(async (req, res) => {
 router.get('/decisions/summary', asyncHandler(async (req, res) => {
   const summary = await decisionLog.getDecisionSummary();
   res.json(summary);
-}));
-
-// GET /api/cos/decisions/patterns - Get decision patterns/insights
-router.get('/decisions/patterns', asyncHandler(async (req, res) => {
-  const patterns = await decisionLog.getDecisionPatterns();
-  res.json(patterns);
 }));
 
 export default router;

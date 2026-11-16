@@ -5,7 +5,7 @@
  * and rate limit enforcement. Activity is stored per-agent per-day.
  */
 
-import { readFile, readdir, unlink } from 'fs/promises';
+import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import EventEmitter from 'events';
@@ -16,7 +16,7 @@ const AGENTS_DIR = PATHS.agentPersonalities;
 const ACTIVITY_DIR = join(AGENTS_DIR, 'activity');
 
 // A day file is `<YYYY-MM-DD>.json`. Anything else in an agent directory is not
-// activity and is never read as a day nor unlinked as an expired one.
+// activity and is never read as a day.
 const DAY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
 
 // Each day file is a whole-file JSON read-modify-write. Keyed per agent/day so
@@ -300,63 +300,4 @@ export async function getActivityTimeline(options = {}) {
   }
 
   return activities.slice(0, limit);
-}
-
-// Smallest retention window this function will honour. A caller asking for 0
-// puts the cutoff at now and unlinks the ENTIRE archive; a negative value walks
-// the cutoff into the future and takes today's file with it. Neither is a
-// retention window, so both fall back to the default rather than deleting.
-const MIN_DAYS_TO_KEEP = 1;
-const DEFAULT_DAYS_TO_KEEP = 30;
-
-/**
- * Clean up old activity files (older than N days).
- *
- * The floor lives here and not only at the HTTP boundary because schedulers
- * call this directly.
- */
-export async function cleanupOldActivity(daysToKeep = DEFAULT_DAYS_TO_KEEP) {
-  const days = Number.isInteger(daysToKeep) && daysToKeep >= MIN_DAYS_TO_KEEP
-    ? daysToKeep
-    : DEFAULT_DAYS_TO_KEEP;
-  if (days !== daysToKeep) {
-    console.warn(`⚠️ Ignoring unusable activity retention window ${daysToKeep}; keeping ${days} days`);
-  }
-
-  // Day files are named with the LOCAL date (getDateString), so the cutoff is
-  // compared as a `YYYY-MM-DD` string too. Parsing the name with `new Date()`
-  // would yield UTC midnight and compare it against a local now-with-time —
-  // deleting the boundary day early, and shifting a whole day west of UTC.
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - days);
-  const cutoffDateStr = getDateString(cutoff);
-
-  let deletedCount = 0;
-
-  await ensureActivityDir();
-
-  if (!existsSync(ACTIVITY_DIR)) return deletedCount;
-
-  const entries = await readdir(ACTIVITY_DIR, { withFileTypes: true });
-  const agentDirs = entries.filter(e => e.isDirectory()).map(e => e.name);
-
-  for (const agentId of agentDirs) {
-    const agentDir = join(ACTIVITY_DIR, agentId);
-    const files = await readdir(agentDir);
-
-    for (const file of files) {
-      if (!DAY_FILE_RE.test(file)) continue;
-
-      if (file.slice(0, -5) < cutoffDateStr) {
-        await unlink(join(agentDir, file));
-        deletedCount++;
-      }
-    }
-  }
-
-  if (deletedCount > 0) {
-    console.log(`🧹 Cleaned up ${deletedCount} old activity files`);
-  }
-
-  return deletedCount;
 }
