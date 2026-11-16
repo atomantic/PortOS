@@ -1,5 +1,3 @@
-import { refuseRetiredTraining, TRAINING_RETIRED_MESSAGE, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
-import { maintenance } from '../../lib/maintenanceAdmission.js';
 /**
  * Media Job Queue — lane-aware FIFO for media generation jobs.
  *
@@ -24,35 +22,20 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
  * queue entirely — it's a remote call with no local single-flight
  * constraint to absorb.
  *
- * Persistence: data/media-jobs.json holds queued + running + recently-finished
- * jobs. On boot, local child-process jobs fail as interrupted; detached
- * training and idempotent remote jobs reconcile against their surviving work.
- * Completed/failed/canceled entries older than 24h or beyond the 500-most-
- * recent are pruned to keep the file small.
- *
- * Storage: `ephemeral-file` — machine-local dispatch state, never federated or
- * sent in peer capability/status payloads; covered by the filesystem backup.
- * Admission is durable (a job resolves only once a snapshot holding it is
- * written) and an unreadable snapshot latches persistence off to preserve it.
- * `videoHolds`, `videoExecution(s)` receipts and `durabilityPending` live in
- * this same envelope; job history and lineage are the `db-primary` target.
+ * This file is the public API and the dispatcher (admission, lanes, the job
+ * lifecycle, cancellation). Shared in-memory state lives in queueState.js, lane
+ * limits and cooldowns in limits.js, the snapshot and restore in
+ * persistence.js, and SSE streams in sse.js; their public pieces are
+ * re-exported here, where callers have always found them.
  */
 
-import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
-import { unlink } from 'fs/promises';
-import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
-import { PATHS, readJSONFileStrict, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
-import { SSE_HEADERS } from '../../lib/sseHeaders.js';
-import { holdsBackupAssetPublication, runOutsideBackupAssetPublication, withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { join } from 'path';
+import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
-import {
-  broadcastSse,
-  attachSseClient as attachSse,
-  closeJobAfterDelay,
-  SSE_CLEANUP_DELAY_MS,
-} from '../../lib/sseUtils.js';
+import { broadcastSse } from '../../lib/sseUtils.js';
+import { refuseRetiredTraining, assertRetiredDataAvailable } from '../../lib/retiredLoraTraining.js';
+import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { setVideoExecutionRecorder } from '../videoGen/executionRecorder.js';
 import { imageGenEvents } from '../imageGenEvents.js';
@@ -62,10 +45,8 @@ import { getSettings } from '../settings.js';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from '../../lib/imageGenCapabilities.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
-import { parseQuotaDeferral, formatDeferral } from '../../lib/imageQuotaSignal.js';
-import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES, mediaJobExecutionLane, mediaJobSwimlane } from '../../lib/generationModes.js';
+import { VIDEO_GEN_MODE, CLOUD_VIDEO_GEN_MODES } from '../../lib/generationModes.js';
 import { REMOTE_MEDIA_MODULES, isRemoteMediaJob } from './remoteMediaJob.js';
-import { createVideoHolds } from './videoHolds.js';
 import { importedArchiveRow } from './importedJob.js';
 import {
   canReceiveProgress, canRequestCancellation, claimTerminalOutcome,
@@ -83,6 +64,27 @@ import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
+import {
+  isCloudImageJob, isLocalFinishReplay, jobLane, jobSwimlane, laneLimits, laneTotalLimits,
+  getEffectiveParallelLimit, getRateLimitCooldown, recordRateLimitCooldown, rateLimitWaitMessage,
+  refreshCodexParallelLimit, quotaCooldownResumeAt, recordQuotaCooldown, QUOTA_WAIT_PATTERN, quotaWaitMessage,
+  resetLimitsForTests,
+} from './limits.js';
+import {
+  queue, cloudRunning, remoteRunning, archive, videoHolds, mediaJobEvents, recoveringJobs, terminalOperations,
+  getRunningJob, setRunningJob, findJob, runningJobs, listJobs, trackOperation,
+  trackTerminalOperation, isRemoteReconcile, isTopazUpscale, resetQueueStateForTests,
+} from './queueState.js';
+import {
+  restoredParams, isUnderUploadsRoot, normalizeTempPaths, admitCompletion, stageTerminalTransition,
+  persistTerminalTransition, persist, announceTerminalTransition, releaseStagedUploads, restoreQueueSnapshot, drainMediaJobQueue,
+  isPersistBlocked, hasPendingTransitions, setCompletionRecoveryDeferred, settlePersistChain,
+  resetPersistenceForTests,
+} from './persistence.js';
+import {
+  ensureSseEntry, broadcastTerminalSse, replaceSseEntry, recomputeQueuePositions, makeGenDispatcher,
+  resetSseForTests,
+} from './sse.js';
 
 // The admission contract lives in ./admission.js so producers that cannot
 // import the queue can still recognize a refusal; re-exported where callers
@@ -92,20 +94,24 @@ export {
   partialBatchAdmissionError,
 } from './admission.js';
 
-// Cloud-CLI jobs (Codex/Grok/Agy images, Grok videos) run in the parallel cloud
-// lane — each render shells out to its own external child spending remote
-// quota, so they don't serialize on the MLX runtime the way GPU jobs do. Each
-// provider is its own swim lane (see jobSwimlane) with `codexParallelLimit`
-// slots (settings key `imageGen.codex.parallelLimit`, kept under the codex name
-// for backward compat), so a Codex backlog never holds a Grok render.
-const isCloudImageJob = (j) =>
-  mediaJobExecutionLane({ kind: j.kind, mode: j.params?.mode }) === 'cloud';
 
 // The federated-kind map and its predicate live in ./remoteMediaJob.js so light
 // consumers (sanitizeJob, route handlers) can ask "is this routed?" without
 // pulling the queue in. Re-exported here because that is where callers have
 // always found it.
 export { isRemoteMediaJob };
+export {
+  REMOTE_MEDIA_PARALLEL_LIMIT, CODEX_PARALLEL_MIN, CODEX_PARALLEL_MAX, CODEX_PARALLEL_DEFAULT,
+  PARALLEL_LIMIT_MIN, PARALLEL_LIMIT_MAX, PARALLEL_LIMIT_DEFAULT, RATE_LIMIT_COOLDOWN_MS,
+  clampParallelLimit, getCodexParallelLimit, setCodexParallelLimit, syncParallelLimits, refreshCodexParallelLimit,
+  getParallelLimit, setParallelLimit, getEffectiveParallelLimit, getRateLimitCooldown, recordRateLimitCooldown,
+} from './limits.js';
+export { mediaJobEvents, getRunningJob, listJobs } from './queueState.js';
+export {
+  updateJobResult, resumeMediaJobCompletions, removeArchivedJob, removeFailedCanceledJobs,
+  MEDIA_QUEUE_FLUSH_TIMEOUT_MS, flushMediaJobQueue,
+} from './persistence.js';
+export { attachSseClient } from './sse.js';
 
 const boundedVideoChunks = value => Math.min(8, Math.max(1, Math.trunc(Number(value) || 1)));
 
@@ -114,46 +120,13 @@ const boundedVideoChunks = value => Math.min(8, Math.max(1, Math.trunc(Number(va
 // retain the lane until the owned browser and any publication work settle.
 export const VISUAL_PROFILE_FINISH_TIMEOUT_MS = 3 * 60 * 1000;
 
-const isLocalFinishReplay = (job) => job.kind === 'image' && job.params?.visualProfile && job.params?.visualProfileSource
-  && !job.params?.remoteMedia?.reconcile && job.params?.remotePeerReservation !== true;
 
-// A restored remote submission reconnecting to peer work it already admitted.
-const isRemoteReconcile = (job) => isRemoteMediaJob(job) && job.params?.remoteMedia?.reconcile === true;
 
-const isTopazUpscale = (job) => job.kind === 'video-upscale' && job.params?.mode === 'topaz';
-
-const laneInput = (job) => ({
-  kind: job.kind,
-  mode: job.params?.mode || job.mode,
-  remote: isRemoteMediaJob(job),
-  peerId: job.params?.remoteMedia?.peerId,
-});
-const jobLane = (job) => isLocalFinishReplay(job) ? 'gpu' : mediaJobExecutionLane(laneInput(job));
-// The unit that owns slots and queue positions: one per cloud provider, one per
-// federated peer, one for this machine's accelerator. Work waits only behind
-// work in its own swim lane.
-const jobSwimlane = (job) => isLocalFinishReplay(job) ? 'gpu:local' : mediaJobSwimlane(laneInput(job));
-
-// Boot restoration is the second way a job enters the queue, so it needs the
-// same routed-job normalization enqueueJob applies (#4683). A job written by a
-// build older than that fix still carries the top-level model id a legacy
-// dispatcher would render from; re-normalizing on restore (and letting the boot
-// persist write the safe shape back) means upgrading and then rolling back
-// cannot resurrect a locally-renderable routed job.
-const restoredParams = (job) => (isRemoteMediaJob(job)
-  ? routedJobParams({ params: job.params })
-  : job.params);
 
 // A reservation row whose own reconcile attempt failed again is retried when a
 // later job to the same peer is blocked behind it, but no faster than this.
 const RESERVATION_RECONCILE_RETRY_MS = 30_000;
 
-const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
-const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_PERSISTED_ARCHIVE = 500;
-// Share-bucket re-render records outlive the 24h TTL (they are old by nature) but
-// stay bounded; the oldest imports drop first.
-const MAX_IMPORTED_ARCHIVE = 2000;
 // Defaults (env-overridable). `Number(non-numeric)` → NaN, and
 // `setTimeout(NaN)` fires immediately — that would fail every job at boot
 // if MEDIA_JOB_WATCHDOG_*_MS were set to garbage. Fall back to the default
@@ -183,39 +156,6 @@ const WATCHDOG_TRAINING_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_TRAINING_
 const WATCHDOG_AUDIO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_AUDIO_MS, 10 * 60 * 1000);
 const PROGRESS_PERSIST_DEBOUNCE_MS = 250;
 
-// Returns true if `p` resolves strictly under PATHS.uploads. Shared by
-// safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
-function isUnderUploadsRoot(p) {
-  if (typeof p !== 'string') return false;
-  const uploadsRoot = `${pathResolve(PATHS.uploads)}${PATH_SEP}`;
-  return pathResolve(p).startsWith(uploadsRoot);
-}
-
-// Normalize `uploadedTempPaths` to an array regardless of how it arrived
-// in persisted params. Handles three cases:
-//   - Array  → use as-is (normal path)
-//   - string → wrap in array (legacy/corrupt single-string serialization)
-//   - other  → treat as empty (null, undefined, corrupt non-string)
-function normalizeTempPaths(p) {
-  if (Array.isArray(p)) return p;
-  if (typeof p === 'string' && p.length > 0) return [p];
-  return [];
-}
-
-// Defense-in-depth helper for cleaning up staged multipart uploads. Job
-// params are persisted (and replayed on boot), so a corrupted media-jobs.json
-// or a buggy caller could otherwise feed an arbitrary path into unlink().
-// Confine deletion to PATHS.uploads — the routes (videoGen.js, imageGen.js)
-// always copy multipart uploads into that directory before enqueueing, so
-// any legitimate `uploadedTempPath` is under that root.
-async function safeUnlinkUpload(path) {
-  if (!path || typeof path !== 'string') return;
-  if (!isUnderUploadsRoot(path)) {
-    console.log(`⚠️ mediaJobQueue refused to unlink path outside PATHS.uploads: ${path}`);
-    return;
-  }
-  await unlink(path).catch(() => {});
-}
 
 // 'video-upscale' (#6511) is its OWN kind rather than a 'video' mode so the
 // generative upscale can never be offered to a peer: the federation layer's
@@ -349,16 +289,6 @@ function getGenModuleForJob(job) {
   return (runtime.modules[job.params?.mode] ?? runtime.modules.default)();
 }
 
-// #1332: probe (via loraTraining, which owns the run's on-disk layout) whether
-// a training run's detached trainer survived the restart and is worth
-// re-attaching to. Lazy import avoids a static cycle (loraTraining statically
-// imports this module). Never throws — a missing module / probe error reads as
-// "not reattachable" so the reconcile falls back to the fail path.
-async function jobHasSurvivingTrainer(runId) {
-  const mod = await import('../loraTraining/index.js').catch(() => null);
-  if (!mod?.hasSurvivingTrainer) return false;
-  return mod.hasSurvivingTrainer(runId).catch(() => false);
-}
 
 // Drop the params snapshot of pythonPath; live settings always win for
 // local-Python jobs so a stale persisted snapshot can't poison the spawn.
@@ -385,216 +315,8 @@ async function resolveLiveParams(job, safeParams) {
   safeParams.pythonPath = livePythonPath;
 }
 
-export const mediaJobEvents = new EventEmitter();
-// Boot already wires 11 permanent `completed` hooks (universe-builder, catalog
-// image-attach, writers-room, music-video scene image/video, music bed, sprite
-// references, scene frames, and the comicPages/storyboards/seasonCover filename
-// hooks), which trips Node's default limit of 10 and prints a bogus
-// MaxListenersExceededWarning on every start. These are long-lived subscribers,
-// not a leak; per-job waiters add more on top. Matches the caps the sibling
-// emitters already set (imageGenEvents 200, videoGenEvents 50).
-mediaJobEvents.setMaxListeners(100);
 
-// GPU lane: serialized — `running` holds at most one job. Cloud CLI and remote
-// provider lanes are parallel because neither consumes the local GPU. `queue`
-// preserves submission order across lanes; positions are swim-lane-scoped.
-const queue = [];
-let running = null;
-const cloudRunning = [];
-const remoteRunning = [];
-const archive = [];
-const videoHolds = createVideoHolds();
 
-// One install can route to several peers, while each provider remains the
-// authority on its own capacity. This bound prevents corrupted persisted state
-// from creating unbounded local polling loops without serializing independent
-// peers behind the local GPU lane.
-export const REMOTE_MEDIA_PARALLEL_LIMIT = 20;
-
-export const CODEX_PARALLEL_MIN = 1;
-// Keep counts exactly representable without imposing a provider throughput cap.
-export const CODEX_PARALLEL_MAX = Number.MAX_SAFE_INTEGER;
-export const CODEX_PARALLEL_DEFAULT = 1;
-
-export const PARALLEL_LIMIT_MIN = 1;
-export const PARALLEL_LIMIT_MAX = Number.MAX_SAFE_INTEGER;
-export const PARALLEL_LIMIT_DEFAULT = 1;
-export const RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
-
-let codexParallelLimit = CODEX_PARALLEL_DEFAULT;
-const parallelLimits = new Map();
-const rateLimitCooldowns = new Map();
-
-const clampParallel = (n) => {
-  const x = Number(n);
-  if (!Number.isFinite(x) || x < 1) return CODEX_PARALLEL_DEFAULT;
-  return Math.min(Math.floor(x), CODEX_PARALLEL_MAX);
-};
-export const clampParallelLimit = clampParallel;
-
-export const getCodexParallelLimit = () => codexParallelLimit;
-export function setCodexParallelLimit(n) {
-  codexParallelLimit = clampParallel(n);
-  parallelLimits.set('image:codex', codexParallelLimit);
-  return codexParallelLimit;
-}
-
-function _getParallelLimit(target, maybeMode) {
-  const kind = typeof target === 'string' ? target : target?.kind;
-  const mode = typeof target === 'string' ? maybeMode : (target?.params?.mode || target?.mode);
-  if (kind && mode) {
-    const specific = parallelLimits.get(`${kind}:${mode}`);
-    if (specific !== undefined) return specific;
-  }
-  if (kind === 'image' && mode === 'codex') {
-    return codexParallelLimit;
-  }
-  return PARALLEL_LIMIT_DEFAULT;
-}
-
-function _setParallelLimit(target, modeOrN, maybeN) {
-  let kind, mode, n;
-  if (typeof target === 'string') {
-    kind = target;
-    mode = modeOrN;
-    n = maybeN;
-  } else {
-    kind = target?.kind;
-    mode = target?.mode;
-    n = modeOrN;
-  }
-  const clamped = clampParallel(n);
-  if (kind && mode) {
-    parallelLimits.set(`${kind}:${mode}`, clamped);
-  }
-  if (kind === 'image' && mode === 'codex') {
-    codexParallelLimit = clamped;
-  }
-  return clamped;
-}
-
-const getParallelLimit = _getParallelLimit;
-const setParallelLimit = _setParallelLimit;
-
-export function syncParallelLimits(s) {
-  if (!s) return;
-  const ig = s.imageGen || {};
-  const vg = s.videoGen || {};
-  if (ig.codex?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'codex' }, ig.codex.parallelLimit);
-  if (ig.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'grok' }, ig.grok.parallelLimit);
-  if (vg.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'grok' }, vg.grok.parallelLimit);
-  if (ig.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'gemini' }, ig.gemini.parallelLimit);
-  if (vg.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'gemini' }, vg.gemini.parallelLimit);
-  if (ig.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'fal' }, ig.fal.parallelLimit);
-  if (vg.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'fal' }, vg.fal.parallelLimit);
-  if (ig.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'runway' }, ig.runway.parallelLimit);
-  if (vg.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'runway' }, vg.runway.parallelLimit);
-  if (ig.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'higgsfield' }, ig.higgsfield.parallelLimit);
-  if (vg.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'higgsfield' }, vg.higgsfield.parallelLimit);
-  if (ig.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'google' }, ig.google.parallelLimit);
-  if (vg.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'google' }, vg.google.parallelLimit);
-  if (ig.agy?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'agy' }, ig.agy.parallelLimit);
-  if (vg.reactor?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'reactor' }, vg.reactor.parallelLimit);
-}
-
-export async function refreshCodexParallelLimit() {
-  const s = await getSettings();
-  syncParallelLimits(s);
-  return setCodexParallelLimit(s?.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
-}
-
-function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
-  const job = typeof target === 'string' ? { kind: target, params: { mode: maybeMode } } : target;
-  const configured = getParallelLimit(job);
-  const cooldown = getRateLimitCooldown(job, now);
-  if (cooldown && cooldown.expiresAt > now) {
-    return Math.min(configured, cooldown.effectiveLimit);
-  }
-  return configured;
-}
-
-function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
-  let job, now;
-  if (typeof target === 'string') {
-    job = { kind: target, params: { mode: maybeModeOrNow } };
-    now = typeof maybeNow === 'number' ? maybeNow : Date.now();
-  } else {
-    job = target;
-    now = typeof maybeModeOrNow === 'number' ? maybeModeOrNow : Date.now();
-  }
-  const key = jobSwimlane(job);
-  const cooldown = rateLimitCooldowns.get(key);
-  if (cooldown && cooldown.expiresAt > now) {
-    return {
-      ...cooldown,
-      active: true,
-      penalty: Math.max(0, getParallelLimit(job) - cooldown.effectiveLimit),
-    };
-  }
-  if (cooldown) rateLimitCooldowns.delete(key);
-  return null;
-}
-
-function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
-  let job, errorText, payload;
-  if (typeof target === 'string') {
-    job = { kind: target, params: { mode: errorTextOrMode } };
-    errorText = typeof payloadOrReset === 'string' ? payloadOrReset : 'HTTP 429 Too Many Requests';
-    payload = typeof payloadOrReset === 'object' ? payloadOrReset : (typeof payloadOrReset === 'number' ? { resetsInMs: payloadOrReset, status: 429 } : { status: 429 });
-  } else {
-    job = target;
-    errorText = errorTextOrMode;
-    payload = payloadOrReset || {};
-  }
-  const errStr = String(errorText || payload?.error || payload?.message || '');
-  const status = payload?.status || payload?.statusCode || payload?.upstreamStatus;
-  const is429 = status === 429 || /\b429\b|rate.?limit|too many requests/i.test(errStr);
-  if (!is429) return false;
-
-  const key = jobSwimlane(job);
-  const configured = getParallelLimit(job);
-  const existing = rateLimitCooldowns.get(key);
-  const currentLimit = (existing && existing.expiresAt > now) ? existing.effectiveLimit : configured;
-  // At one slot there is no smaller positive concurrency: hold the lane until
-  // the provider's cooldown expires instead of burning each waiting job.
-  const effectiveLimit = Math.max(0, currentLimit - 1);
-  const deferral = parseQuotaDeferral(errStr);
-  const duration = payload?.resetsInMs || deferral?.resetsInMs || RATE_LIMIT_COOLDOWN_MS;
-  const expiresAt = now + duration;
-
-  rateLimitCooldowns.set(key, {
-    effectiveLimit,
-    expiresAt,
-    cause: errStr.slice(0, 200),
-  });
-  console.log(`⚠️ media-job: ${key} received 429 / rate-limit — lowering effective limit to ${effectiveLimit} for cool-down (${Math.round(duration / 1000)}s)`);
-  return true;
-}
-
-const getEffectiveParallelLimit = _getEffectiveParallelLimit;
-const getRateLimitCooldown = _getRateLimitCooldown;
-const recordRateLimitCooldown = _recordRateLimitCooldown;
-
-export {
-  _getParallelLimit as getParallelLimit,
-  _setParallelLimit as setParallelLimit,
-  _getEffectiveParallelLimit as getEffectiveParallelLimit,
-  _getRateLimitCooldown as getRateLimitCooldown,
-  _recordRateLimitCooldown as recordRateLimitCooldown,
-};
-
-function rateLimitWaitMessage(effectiveLimit, expiresAt) {
-  const at = new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return `Rate-limited (429) — cooling down (limit: ${effectiveLimit}) until ${at}`;
-}
-
-// jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
-// closeJobAfterDelay}. Each entry carries `clients: []` and `lastPayload`,
-// so we can hand it directly to those helpers. Survives the queued→running
-// transition so a client that attached during queue keeps its stream open
-// through the render and final completion. Entries are removed after
-// SSE_CLEANUP_DELAY_MS by closeJobAfterDelay on terminal events.
-const sseJobs = new Map();
 
 let workerStarted = false;
 let workerOperation = null;
@@ -609,64 +331,18 @@ let recoveryInventoryReady = false;
 // stay durably queued for the next process, which restores them untouched.
 let dispatchQuiesced = false;
 export const MEDIA_QUEUE_SHUTTING_DOWN = 'MEDIA_QUEUE_SHUTTING_DOWN';
-const terminalOperations = new Set();
 
 // A started job crosses async pre-dispatch work (live settings, provider module
 // resolution) before its terminal listeners attach and its provider is invoked.
 // Tracked separately so the test drain can wait for that boundary (#9029).
 const dispatchOperations = new Set();
 
-function trackOperation(operations, operation) {
-  const tracked = Promise.resolve(operation);
-  operations.add(tracked);
-  tracked.finally(() => operations.delete(tracked)).catch(() => {});
-  return tracked;
-}
 
-const trackTerminalOperation = (operation) => trackOperation(terminalOperations, operation);
-
-function findJob(jobId) {
-  if (running && running.id === jobId) return running;
-  const codexHit = cloudRunning.find((j) => j.id === jobId);
-  if (codexHit) return codexHit;
-  const remoteHit = remoteRunning.find((j) => j.id === jobId);
-  if (remoteHit) return remoteHit;
-  const inQueue = queue.find((j) => j.id === jobId);
-  if (inQueue) return inQueue;
-  return archive.find((j) => j.id === jobId) || null;
-}
 
 export function getJob(jobId) {
   return findJob(jobId);
 }
 
-// Completion hooks may attach a generated artifact to a domain record after
-// the audio worker has emitted its result. Persist that attachment on the job
-// too so a remounted client can discover the created track without guessing.
-const resultUpdates = new Map();
-export async function updateJobResult(jobId, patch) {
-  if (!patch || typeof patch !== 'object') return false;
-  const prior = resultUpdates.get(jobId) ?? Promise.resolve();
-  const pending = prior.catch(() => {}).then(async () => {
-    const job = findJob(jobId);
-    if (!job) return false;
-    const archiveIndex = archive.indexOf(job);
-    const previous = job.result;
-    const next = { ...(previous || {}), ...patch };
-    job.result = next;
-    try { await persist(); return true; }
-    catch (error) {
-      if (job.result === next) {
-        job.result = previous;
-        if (archiveIndex >= 0 && !archive.includes(job)) archive.splice(Math.min(archiveIndex, archive.length), 0, job);
-      }
-      throw error;
-    }
-  });
-  resultUpdates.set(jobId, pending);
-  try { return await pending; }
-  finally { if (resultUpdates.get(jobId) === pending) resultUpdates.delete(jobId); }
-}
 
 // Await this receipt before spawning a local video child. A rejected snapshot
 // must leave the generator unstarted, rather than lose its random seed on exit.
@@ -754,37 +430,7 @@ const installVideoExecutionRecorder = () => setVideoExecutionRecorder({
   recordExecution: recordVideoExecution, recordDiagnostics: recordVideoExecutionDiagnostics,
 });
 
-export function getRunningJob() {
-  return running;
-}
 
-// One definition of each lane's per-swim-lane slot count, shared by the
-// dispatcher, getQueueCapacity and laneConcurrencyFor so a caller can never read
-// a limit this module has moved. Cloud providers each get `codexParallelLimit`;
-// a federated peer runs one job at a time, and REMOTE_MEDIA_PARALLEL_LIMIT
-// bounds all peers together.
-const laneLimits = () => ({
-  gpu: 1,
-  cloud: codexParallelLimit,
-  remote: 1,
-});
-const laneTotalLimits = () => ({ gpu: 1, cloud: Infinity, remote: REMOTE_MEDIA_PARALLEL_LIMIT });
-
-const runningJobs = () => [...(running ? [running] : []), ...cloudRunning, ...remoteRunning];
-
-// Queue position of every waiting job within its own swim lane: running work in
-// the swim lane holds the first slots, then queued work in submission order.
-function swimlanePositions() {
-  const counts = new Map();
-  const bump = (job) => {
-    const key = jobSwimlane(job);
-    const n = (counts.get(key) || 0) + 1;
-    counts.set(key, n);
-    return n;
-  };
-  runningJobs().forEach(bump);
-  return new Map(queue.map((job) => [job, bump(job)]));
-}
 
 /**
  * How many jobs like `job` run at once here — the slot count of the swim lane
@@ -829,7 +475,7 @@ export function laneConcurrencyFor(job) {
 export function getQueueCapacity() {
   const limits = laneLimits();
   const lanes = {
-    gpu: { running: running ? 1 : 0, queued: 0, limit: 1, limitReason: 'memory-governed' },
+    gpu: { running: getRunningJob() ? 1 : 0, queued: 0, limit: 1, limitReason: 'memory-governed' },
     cloud: { running: cloudRunning.length, queued: 0, limit: limits.cloud },
     remote: { running: remoteRunning.length, queued: 0, limit: laneTotalLimits().remote },
   };
@@ -854,32 +500,17 @@ export function getQueueCapacity() {
       running: lanes.gpu.running + lanes.cloud.running + lanes.remote.running,
       queued: queue.length,
     },
-    runningKind: running?.kind ?? null,
+    runningKind: getRunningJob()?.kind ?? null,
   };
 }
 
-export function listJobs({ status, kind, owner } = {}) {
-  const all = [
-    ...(running ? [running] : []),
-    ...cloudRunning,
-    ...remoteRunning,
-    ...queue,
-    ...archive,
-  ];
-  return all.filter((j) => {
-    if (status && j.status !== status) return false;
-    if (kind && j.kind !== kind) return false;
-    if (owner && j.owner !== owner) return false;
-    return true;
-  });
-}
 
 // The render queue displays every live job and only a short recent failure
 // reel. Select that reel before sanitization; the archive can hold 500 rows.
 export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
   const matches = (job) => (!kind || job.kind === kind) && (!owner || job.owner === owner);
   const live = [
-    ...(running ? [running] : []),
+    ...(getRunningJob() ? [getRunningJob()] : []),
     ...cloudRunning,
     ...remoteRunning,
     ...queue,
@@ -901,539 +532,27 @@ export function listQueueJobs({ kind, owner, limit = 10 } = {}) {
   return [...live, ...uncertainTopaz, ...recent.map(({ job }) => job)];
 }
 
-// Serialize persist() calls through a single chain. atomicWrite rename can
-// finish out-of-order under concurrent calls, so a slow "start" persist
-// landing after a fast "done" persist would regress the on-disk snapshot
-// (e.g. completed→running). Chaining ensures every snapshot reflects the
-// state when each queued write runs, in submission order.
-let persistChain = Promise.resolve();
-// Terminal outcomes stay private until the snapshot containing them succeeds.
-// Recovery commits storage only; it never invokes a generator again.
-const pendingTransitions = new Map();
-// Only a completion publishes durable output. Its commit holds backup admission
-// from staging the terminal row through the hook fan-out, never while rendering
-// or waiting in the queue; failures and cancellations stay unadmitted so a
-// backup never delays them.
-// The output is already rendered, so the commit waits out a whole backup cut
-// rather than stranding a finished job half-terminated.
-const COMPLETION_ADMISSION_MS = 60 * 60 * 1000;
-const admitCompletion = (state, commit) => (state === 'completed'
-  ? withBackupAssetPublication(commit, { timeoutMs: COMPLETION_ADMISSION_MS, onWait: () => console.log('⏸️ media-job completion waiting for the backup to finish') })
-  : commit());
-function stageTerminalTransition(job, apply, acknowledge) {
-  job.terminating = true;
-  const target = { ...job };
-  apply(target);
-  job.durabilityPending = { status: target.status, result: target.result, error: target.error,
-    completedAt: target.completedAt, progress: target.progress, statusMsg: target.statusMsg, videoFailure: target.videoFailure };
-  pendingTransitions.set(job, acknowledge);
-}
-// A momentarily locked destination (concurrent reader, AV scan) clears within
-// milliseconds, so one retry after a short pause can land. ENOSPC, EACCES and
-// a blocked writer cannot, so they surface on the first attempt (#12026).
-const TERMINAL_PERSIST_RETRY_MS = 250;
-const isTransientPersistError = (error) => error?.code === 'EBUSY' || error?.code === 'EAGAIN'
-  || (process.platform === 'win32' && error?.code === 'EPERM');
-async function persistTerminalTransition(job) {
-  const noteFailure = () => {
-    job.persistenceError = true;
-    mediaJobEvents.emit('changed', {});
-  };
-  const storageRecovery = () => new ServerError('Media outcome is awaiting storage recovery; restore writable storage and flush the queue', {
-    status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
-  });
-  try {
-    await persist();
-    return;
-  } catch (error) {
-    noteFailure();
-    if (!isTransientPersistError(error)) throw storageRecovery();
-  }
-  await sleep(TERMINAL_PERSIST_RETRY_MS);
-  try {
-    await persist();
-  } catch (_error) {
-    noteFailure();
-    throw storageRecovery();
-  }
-}
-// Set when the boot read of JOBS_FILE was untrustworthy (#4115). Every persist()
-// writes the FULL in-memory snapshot, so persisting on top of a queue we failed
-// to restore would replace the real jobs file with whatever this process happens
-// to hold — the classic "unreadable read becomes an empty write". Latching the
-// writer off preserves the file for the user to recover or delete. Admission
-// and dispatch stay disabled because no transition can be made durable.
-let persistBlocked = false;
-function notifyQueueChanged() {
-  try { mediaJobEvents.emit('changed', {}); }
-  catch (error) { console.error(`❌ media-job queue change notification failed: ${error.message}`); }
-}
-function queuePersist(operation) {
-  // A blocked writer cannot satisfy admission or transition durability.
-  if (persistBlocked) {
-    notifyQueueChanged();
-    return Promise.reject(new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts'));
-  }
-  // Every queue mutation, including holds, deletion and debounced progress,
-  // converges here. Invalidate after the write settles so readers see the final
-  // in-memory state even when persistence is unavailable.
-  persistChain = persistChain.then(operation, operation).finally(() => {
-    notifyQueueChanged();
-  });
-  return persistChain;
-}
-function persist() {
-  return queuePersist(() => persistImpl());
-}
-async function persistImpl({ onSnapshotWritten, trimArchive = true } = {}) {
-  if (trimArchive) trimArchiveForSnapshot();
-  const snapshot = captureQueueSnapshot();
-  await atomicWrite(JOBS_FILE, snapshot.data);
-  onSnapshotWritten?.();
-  await acknowledgeWrittenTransitions(snapshot.transitions);
-  if (snapshot.hasDeferredCompletion) recoverCompletionsUnderAdmission();
-}
 
-function trimArchiveForSnapshot() {
-  const cutoff = Date.now() - COMPLETED_TTL_MS;
-  const pendingArchive = archive.filter((job) => job.durabilityPending);
-  const retained = (job) => job.params?.remotePeerReservation === true || job.result?.topazUncertain === true || job.result?.topazRecoveryAvailable === true;
-  const isImported = (job) => job.imported === true && !job.durabilityPending && !retained(job);
-  const trimmedArchive = archive.filter(isImported).slice(-MAX_IMPORTED_ARCHIVE)
-    .concat(archive
-      .filter((j) => {
-        const ts = j.completedAt ? new Date(j.completedAt).getTime() : Date.now();
-        return !isImported(j) && !j.durabilityPending && (retained(j) || ts > cutoff);
-      })
-      .filter((job) => !retained(job)).slice(-MAX_PERSISTED_ARCHIVE))
-    .concat(archive.filter((job) => !job.durabilityPending && retained(job)), pendingArchive);
-  // Mutate `archive` in place so subsequent reads see the trim too.
-  archive.length = 0;
-  archive.push(...trimmedArchive);
-}
-
-// Capture the rows and eligible acknowledgements together, before storage yields.
-// Per-backend quota cooldowns: mode → epoch ms the provider said it resets.
-//
-// A subscription image backend answers an exhausted quota with the instant it
-// recovers ("Your quota will reset after 2h26m1s"). Without this, every job
-// queued behind the one that hit the wall dispatches straight into the same
-// 429 and fails within seconds — on 2026-10-17 a single comic run burned ten
-// renders that way, each one a failed slot the user had to notice and re-drive
-// by hand.
-//
-// Keyed by MODE, not by job: the quota belongs to the provider account, so one
-// job's rejection is evidence about every queued job routed to that backend.
-// Queue-level rather than per-job because `captureQueueSnapshot` serializes a
-// fixed field whitelist, so a new per-job field would silently not survive a
-// restart; this rides alongside `videoHolds` in the same snapshot instead.
-const quotaCooldowns = new Map();
-
-/** Remaining cooldown for a job's backend, 0 when it is clear to dispatch. */
-/** The reset instant for a job's backend, or 0 when it is clear to dispatch. */
-function quotaCooldownResumeAt(job, now = Date.now()) {
-  const mode = job?.params?.mode;
-  if (!mode) return 0;
-  const resumeAt = quotaCooldowns.get(mode);
-  if (!resumeAt) return 0;
-  if (resumeAt <= now) {
-    // Expired — drop it so a later failure starts a fresh window rather than
-    // extending a stale one, and so the map cannot grow without bound.
-    quotaCooldowns.delete(mode);
-    return 0;
-  }
-  return resumeAt;
-}
-
-/**
- * Record a cooldown when a failure carries the provider's own reset time.
- * Called from the failed handler for its EVIDENCE only — the job still fails
- * through the normal terminal path, so no lifecycle invariant changes here.
- */
-function recordQuotaCooldown(job, errorText) {
-  const mode = job?.params?.mode;
-  if (!mode) return;
-  const deferral = parseQuotaDeferral(errorText);
-  if (!deferral) return;
-  const existing = quotaCooldowns.get(mode) || 0;
-  // Keep the later instant: a second rejection during the same outage reports a
-  // shorter remaining wait, and taking it would release the queue early.
-  if (deferral.resumeAt <= existing) return;
-  quotaCooldowns.set(mode, deferral.resumeAt);
-  console.log(`⏳ media-job: ${mode} quota exhausted — holding queued ${mode} renders for ${formatDeferral(deferral.resetsInMs)}`);
-}
-
-// Derived from the ABSOLUTE reset so the message is constant for the whole
-// window: a countdown would change every tick and force a full-queue snapshot
-// per held job each time it did.
-const QUOTA_WAIT_PATTERN = /^Waiting for \S+ quota — resumes at /;
-function quotaWaitMessage(mode, resumeAt) {
-  const at = new Date(resumeAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return `Waiting for ${mode} quota — resumes at ${at}`;
-}
-
-/** Snapshot shape: [[mode, resumeAt], ...], dropping anything already expired. */
-function snapshotQuotaCooldowns(now = Date.now()) {
-  return [...quotaCooldowns.entries()].filter(([, resumeAt]) => resumeAt > now);
-}
-
-/**
- * Restore cooldowns across a restart. Returns false on a malformed snapshot so
- * the caller can latch persistence the same way a malformed hold does — but
- * never throws: an unreadable cooldown must not keep the server from booting.
- */
-function restoreQuotaCooldowns(raw, now = Date.now()) {
-  quotaCooldowns.clear();
-  if (raw === undefined || raw === null) return true;
-  if (!Array.isArray(raw)) return false;
-  let ok = true;
-  for (const entry of raw) {
-    if (!Array.isArray(entry) || entry.length !== 2) { ok = false; continue; }
-    const [mode, resumeAt] = entry;
-    if (typeof mode !== 'string' || !mode || !Number.isFinite(resumeAt)) { ok = false; continue; }
-    if (resumeAt > now) quotaCooldowns.set(mode, resumeAt);
-  }
-  return ok;
-}
-
-function captureQueueSnapshot() {
-  const live = [
-    ...(running ? [running] : []),
-    ...cloudRunning,
-    ...remoteRunning,
-    ...queue,
-    ...archive,
-  ];
-  // A completion's terminal row and its `completed` fan-out publish together,
-  // so only a snapshot written inside a backup admission lease commits one. Any
-  // other write (progress, enqueue, the shutdown flush, or one landing after a
-  // completion's own retries gave up) keeps it `running` on disk and leaves it
-  // to an admitted recovery commit, never publishing it in the middle of a cut.
-  const completionAdmitted = !completionRecoveryDeferred && holdsBackupAssetPublication();
-  const canWriteOutcome = (job) => completionAdmitted || job.durabilityPending?.status !== 'completed';
-  const hasDeferredCompletion = [...pendingTransitions.keys()].some((job) => !canWriteOutcome(job));
-  // Strip non-serializable bits.
-  const serializable = live.map((job) => (canWriteOutcome(job) ? { ...job, ...job.durabilityPending } : job)).map(({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs, durabilityPending, imported, referenceImageFilenames, videoExecution, videoExecutions, cancelRequested, visualProfileFinishing }) =>
-    ({ id, kind, owner, status, queuedAt, startedAt, completedAt, params, result, error, position, progress, statusMsg, etaMs,
-      ...((status === 'running' && visualProfileFinishing || kind === 'video-upscale' && params?.mode === 'topaz') && cancelRequested === true ? { cancelRequested: true } : {}),
-      ...(imported === true ? { imported } : {}),
-      ...(Array.isArray(referenceImageFilenames) ? { referenceImageFilenames } : {}),
-      ...(videoExecution ? { videoExecution } : {}),
-      ...(videoExecutions ? { videoExecutions } : {}),
-      ...(status !== 'completed' && durabilityPending?.status === 'completed' ? { durabilityPending } : {}) }),
-  );
-  const transitions = [...pendingTransitions].filter(([job]) => canWriteOutcome(job));
-  return { data: { jobs: serializable, videoHolds: videoHolds.snapshot(), quotaCooldowns: snapshotQuotaCooldowns() }, transitions, hasDeferredCompletion };
-}
-
-async function acknowledgeWrittenTransitions(transitions) {
-  for (const [job, acknowledge] of transitions) {
-    // A replacement staged while storage was pending belongs to a later write.
-    if (pendingTransitions.get(job) !== acknowledge) continue;
-    pendingTransitions.delete(job);
-    Object.assign(job, job.durabilityPending);
-    delete job.durabilityPending;
-    delete job.persistenceError;
-    await acknowledge();
-  }
-}
-
-// Storage is writable again, but a completion is still staged. Commit it from
-// its own admission lease: it waits out an active backup cut, and its attach
-// hooks join the lease from the fan-out. Never awaited inside the persist
-// chain, so a cut draining an admitted write cannot deadlock on it.
-let completionRecovery = null;
-let completionRecoveryDeferred = false;
-
-// Boot restores the queue before wiring domain hooks. Open recovery only after
-// those listeners exist; keeping the receipt private also protects completions
-// from a newly dispatched job during that startup window.
-export function resumeMediaJobCompletions() {
-  completionRecoveryDeferred = false;
-  if ([...pendingTransitions.keys()].some(job => job.durabilityPending?.status === 'completed')) {
-    recoverCompletionsUnderAdmission();
-  }
-}
-
-function recoverCompletionsUnderAdmission() {
-  if (completionRecovery || completionRecoveryDeferred) return;
-  // Tracked as a terminal operation so the shutdown flush drains it (and times
-  // out, reporting failure, if an open cut still holds the commit).
-  completionRecovery = trackTerminalOperation(withBackupAssetPublication(() => persist())
-    .catch((error) => console.error(`❌ media-job completion recovery commit failed: ${error.message}`))
-    .finally(() => { completionRecovery = null; }));
-}
-
-async function announceTerminalTransition(job, onDurable = () => {}) {
-  if (job.params?.videoProduction) {
-    const tag = job.params.videoProduction;
-    const { settleVideoAttempt } = await import('../creativeDirector/videoExecution.js');
-    await settleVideoAttempt(tag.projectId, tag.attemptId, { jobId: job.id, status: job.params.videoProduction.submissionUncertain || (job.status === 'failed' && /timeout|timed out|interrupted/i.test(job.error || '')) ? 'uncertain' : job.status })
-      .catch(error => console.error(`❌ Video receipt could not settle: ${error.message}`));
-  }
-  // Wake the lane finalizer without polling. Some providers emit their
-  // terminal event just before their kickoff promise resolves; the promise
-  // retains that signal until runJob reaches the await below.
-  onDurable();
-  const logPrefix = job.status === 'completed' ? '✅' : job.status === 'canceled' ? '🛑' : '❌';
-  const logSuffix = job.status === 'failed' ? `: ${job.error}` : job.status === 'canceled' ? ' (was running)' : '';
-  const log = job.status === 'failed' ? console.error : console.log;
-  log(`${logPrefix} media-job [${job.id.slice(0, 8)}] ${job.status}${logSuffix}`);
-  const ssePayload =
-    job.status === 'completed' ? { type: 'complete', result: job.result }
-    : job.status === 'canceled' ? { type: 'canceled', reason: job.error }
-    : { type: 'error', error: job.error };
-  const entry = ensureSseEntry(job.id);
-  broadcastSse(entry, ssePayload);
-  closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
-  // Hooks that publish files or rows acquire their own admission; see
-  // runOutsideBackupAssetPublication.
-  runOutsideBackupAssetPublication(() => mediaJobEvents.emit(job.status, job));
-}
-
-// Staged multipart inputs a job owns under data/uploads. safeUnlinkUpload
-// constrains each delete to PATHS.uploads, so a corrupted path never removes a
-// file the job merely referenced. audioFilePath is the same kind of upload.
-async function releaseStagedUploads(params) {
-  await Promise.all([params?.uploadedTempPath, params?.audioFilePath, ...normalizeTempPaths(params?.uploadedTempPaths)]
-    .map(path => safeUnlinkUpload(path)));
-}
-
-// The same training job, flagged to re-attach, when its detached trainer survived.
-const reattachSurvivingTrainer = async j => (j.kind === 'training' && j.params?.runId && await jobHasSurvivingTrainer(j.params.runId)
-  ? { ...j, status: 'queued', params: { ...j.params, reattach: true } } : null);
-
-// What one persisted job becomes after a restart. Applies it to the queue or
-// archive and returns { failedId } / { canceled } / { reattach } for the init
-// body's SSE pre-seed and re-attach ordering. Arm order is load-bearing: a
-// maintenance hold wins over the video-production fail, and remote reconcile
-// (in restoreInterruptedRunningJob) wins over the generic interrupted fail.
-async function restorePersistedJob(persisted) {
-  // An uncertain terminal observer result is not a terminal peer result.
-  // Reconcile the original idempotency key while preserving its peer slot.
-  const j = isRemoteMediaJob(persisted) && persisted.params?.remotePeerReservation === true
-    && ['failed', 'canceled'].includes(persisted.status) ? { ...persisted, status: 'running' } : persisted;
-  if (j.status === 'running' && j.durabilityPending?.status === 'completed') {
-    // This optional receipt is private queue state, not a published result.
-    // Legacy snapshots have no receipt and retain their existing recovery.
-    const receipt = j.durabilityPending;
-    const permit = maintenance.recoverOwned('media', j.id);
-    archive.push(j);
-    stageTerminalTransition(j, target => Object.assign(target, receipt), () => permit.run(async () => {
-      videoHolds.recordTerminal(j);
-      videoHolds.updateQueued(queue);
-      await announceTerminalTransition(j);
-      // A receipt proves completion, not remote executor teardown or input
-      // cleanup. finish deliberately retains any uncertain ownership.
-      await permit.finish();
-    }));
-    return {};
-  }
-  // Never dispatch a queued trainer after upgrade. A verified survivor below
-  // is observed to completion without launching a replacement process.
-  if (j.kind === 'training' && j.status === 'queued' && !j.params?.reattach) {
-    archive.push({ ...j, status: 'canceled', error: TRAINING_RETIRED_MESSAGE, completedAt: new Date().toISOString() });
-    return { failedId: j.id };
-  }
-  const manualUpdate = maintenance.status().hold?.owner === 'manual-update';
-  if (j.status === 'running' && maintenance.held() && !manualUpdate) {
-    maintenance.recoverOwned('media', j.id);
-    const reattach = await reattachSurvivingTrainer(j);
-    if (reattach) {
-      recoveringJobs.add(j.id);
-      return { reattach };
-    }
-    // Preserve uncertain work and staged inputs; no paid replay or orphan
-    // kill is safe merely because the observer process restarted.
-    archive.push({ ...j, params: restoredParams(j) });
-    return {};
-  }
-  // Explicit Video Start grants one process lifetime. Restored jobs wait for
-  // project reconciliation; replaying an unknown paid submit could charge twice.
-  if (j.params?.videoProduction && ['queued', 'running'].includes(j.status)) {
-    archive.push({ ...j, status: 'failed', error: 'Video production paused after restart', completedAt: new Date().toISOString(),
-      params: { ...restoredParams(j), videoProduction: { ...j.params.videoProduction, submissionUncertain: j.status === 'running' } } });
-    return { failedId: j.id };
-  }
-  if (j.status === 'running') return restoreInterruptedRunningJob(j);
-  if (j.status === 'queued') queue.push({ ...j, params: restoredParams(j) });
-  // The archive needs terminal rows too: a rolled-back build restores these rows,
-  // shows them in the Render Queue's recent reel, and its Retry hands the
-  // stored params straight to a local render.
-  else archive.push({ ...j, params: restoredParams(j) });
-  return {};
-}
-
-// A job that was running when the previous process stopped.
-async function restoreInterruptedRunningJob(j) {
-  if (isTopazUpscale(j)) {
-    queue.push({ ...j, status: 'queued', params: { ...j.params, topazRecovery: true } });
-    return {};
-  }
-  // A canceled finish already has its original image. When no remote
-  // reservation remains, no provider needs reconciliation on restart.
-  if (j.kind === 'image' && j.cancelRequested === true && j.params?.visualProfile && j.params?.visualProfileSource
-    && (!isRemoteMediaJob(j) || j.params?.remotePeerReservation !== true)) {
-    const error = 'Canceled during film finishing; original image retained';
-    archive.push({ ...j, status: 'canceled', result: j.params.visualProfileSource, error, completedAt: new Date().toISOString() });
-    void releaseStagedUploads(j.params);
-    return { canceled: { id: j.id, error } };
-  }
-  // A remote provider job survives this process: its local queue id is
-  // also the stable Idempotency-Key. Re-enqueue the same record and let
-  // the remote adapter replay the submission, recover the provider job,
-  // and continue polling (or deliver a persisted cancellation intent).
-  if (isRemoteMediaJob(j)) {
-    maintenance.recoverOwned('media', j.id);
-    const marker = j.params?.remoteMedia;
-    queue.push({
-      ...j,
-      status: 'queued',
-      cancelRequested: marker?.cancelRequested === true,
-      params: restoredParams({
-        ...j,
-        params: {
-          ...j.params,
-          remoteMedia: {
-            ...(marker && typeof marker === 'object' && !Array.isArray(marker) ? marker : {}),
-            reconcile: true,
-          },
-        },
-      }),
-    });
-    console.log(`🔁 media-job [${j.id.slice(0, 8)}] remote ${j.kind} interrupted — re-enqueued for reconciliation`);
-    return {};
-  }
-  // #1332: a LoRA trainer is a detached child (spawnDetached) that can
-  // SURVIVE this restart. If its run still has a live (or just-finished-
-  // but-unprocessed) trainer, re-enqueue the SAME job flagged for
-  // re-attach instead of failing it — runTraining({reattach:true}) tails
-  // the survivor's output and finalizes it, so a run that completed during
-  // the downtime still registers its LoRA. The probe lives in loraTraining
-  // (it owns the run's on-disk layout); lazy-imported to avoid a static
-  // cycle. Falls through to the fail path when nothing survived.
-  const reattach = await reattachSurvivingTrainer(j);
-  if (reattach) {
-    if (maintenance.held()) {
-      maintenance.recoverOwned('media', j.id);
-      recoveringJobs.add(j.id);
-    }
-    console.log(`🔁 media-job [${j.id.slice(0, 8)}] training survived restart — re-enqueued for re-attach`);
-    return { reattach };
-  }
-  if (j.kind === 'video-sharing') {
-    const { cleanupInterruptedSharingCopy } = await import('../musicVideo/sharingCopy.js');
-    await cleanupInterruptedSharingCopy(j.id).catch(err => console.error(`❌ Interrupted sharing copy cleanup failed: ${err.message}`));
-  }
-  archive.push({ ...j, status: 'failed', error: 'interrupted by restart', completedAt: new Date().toISOString() });
-  // The failed job never reaches the worker's cleanup, so its staged uploads would leak.
-  void releaseStagedUploads(j.params);
-  return { failedId: j.id };
-}
 
 export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}) {
   installVideoExecutionRecorder();
   if (initPromise) return initPromise;
-  completionRecoveryDeferred = deferCompletionRecovery;
+  setCompletionRecoveryDeferred(deferCompletionRecovery);
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);
     // Read the codex parallel limit before the worker starts so the first
     // drain tick honors the user's configured value, not the default.
     await refreshCodexParallelLimit().catch(() => {});
-    // Strict (#4115). A swallowed unreadable jobs file boots an empty queue and
-    // the `await persist()` at the end of this init writes that emptiness over
-    // the real snapshot — losing the archive and orphaning every job the reload
-    // below would have reconciled. This init is an awaited step of
-    // `runPostRouteSequence`, where a rejection is FATAL (process.exit), so a
-    // bad permission bit on one snapshot file must not take the server down:
-    // report it, boot an empty queue, and latch persistence off instead.
-    const { ok, value: data } = await readJSONFileStrict(JOBS_FILE, { jobs: [] });
-    if (!ok) {
-      persistBlocked = true;
-      // Name the recovery step: the latch is process-lifetime, so without this
-      // the user has a queue that silently stops surviving restarts and no
-      // indication that repairing or deleting one file restores it.
-      console.error(`❌ media-job queue: ${JOBS_FILE} is present but unreadable — starting empty and NOT persisting so it is preserved; repair or delete it and restart to re-enable persistence`);
-    }
-    if (ok && !Array.isArray(data?.jobs)) {
-      persistBlocked = true;
-      console.error('❌ media-job queue: invalid jobs snapshot — preserving it for recovery');
-    }
-    if (!restoreQuotaCooldowns(data?.quotaCooldowns)) {
-      // Same latch as a malformed hold: preserve the file rather than
-      // overwriting it, but boot normally with no cooldown in force.
-      persistBlocked = true;
-      console.error('❌ media-job queue: invalid quota cooldowns — snapshot preserved and cooldowns cleared; repair the file and restart');
-    }
-    const holdsReadable = videoHolds.restore(data?.videoHolds);
-    if (!holdsReadable) {
-      // A malformed hold must neither kill server boot nor silently release a
-      // batch. Preserve the snapshot under the existing unreadable-file latch.
-      persistBlocked = true;
-      console.error('❌ media-job queue: invalid video holds — snapshot preserved and local video held; repair the holds and restart');
-    }
-    const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
-    const restartedFailedIds = [];
-    const restartedCanceled = [];
-    // #1332: training jobs whose detached trainer survived the restart, to be
-    // re-enqueued (flagged for re-attach) at the FRONT of the queue so they
-    // resume before any new GPU work — collected during the reconcile, unshifted
-    // after it (so the position recompute below sees them).
-    const reattachJobs = [];
-    // Video renders spawn a detached child that survives a pm2 restart, so an
-    // interrupted render may still be alive and holding the GPU. Reap every
-    // orphan under data/videos/.detached (and clean the scratch dirs) BEFORE
-    // freeing lanes below — a job-id keyed reap would miss chained renders,
-    // whose live child lives under a random inner chunk id, not the outer queue
-    // job id. (Training children are handled per-job below: a survivor is
-    // re-attached (#1332), and only a genuinely-dead one is reaped+failed in
-    // initLoraTraining.) This runs before the worker starts, so every dir
-    // present is an orphan from the prior process.
-    // Acknowledged manual updates use normal restart recovery: owned orphan
-    // videos are reaped and interrupted jobs fail honestly; queues survive.
-    const videoReap = maintenance.held() && maintenance.status().hold?.owner !== 'manual-update' ? { reaped: 0 }
-      : await reapAndCleanDetachedDirs(join(PATHS.videos, '.detached')).catch(() => ({ reaped: 0 }));
-    if (videoReap.reaped) console.log(`🧹 reaped ${videoReap.reaped} surviving render(s) on boot`);
-    for (const persisted of persistedJobs) {
-      const { failedId, canceled, reattach } = await restorePersistedJob(persisted);
-      if (failedId) restartedFailedIds.push(failedId);
-      if (canceled) restartedCanceled.push(canceled);
-      if (reattach) reattachJobs.push(reattach);
-    }
-    // Re-attach jobs resume ahead of everything else (they were mid-flight), so
-    // unshift them to the front. At most one (single GPU lane), but spread keeps
-    // their relative order if that ever changes.
-    if (reattachJobs.length) queue.unshift(...reattachJobs);
-    if (!persistBlocked && Array.isArray(data?.jobs)) {
-      const { cleanupOrphanTopazStaging } = await import('../videoGen/topazStaging.js');
-      await cleanupOrphanTopazStaging(listJobs()).catch(() => console.error('❌ Topaz staging cleanup failed; owned files were retained.'));
-    }
-    // The persisted `position` reflects the previous process' queue layout
-    // (which may have included a now-failed running job). Recompute against
-    // the current queue so /api/media-jobs and the initial SSE `queued`
-    // event report accurate slots. Positions are swim-lane-scoped, so a
-    // queued Grok job behind a Codex backlog is restored as position 1.
-    for (const [q, position] of swimlanePositions()) q.position = position;
-    if (persistedJobs.length) {
-      console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
-    }
+    const { restartedFailedIds, restartedCanceled } = await restoreQueueSnapshot();
     await prepareQueuedVideos();
     videoHolds.updateQueued(queue);
     // Pre-seed terminal SSE payloads for each restart-failed job so that any
     // client that reconnects to /:jobId/events after a restart (the route
     // attaches via attachSseClient → attachSse, which replays lastPayload)
     // gets an immediate error event instead of a silent stream.
-    for (const id of restartedFailedIds) {
-      const entry = ensureSseEntry(id);
-      broadcastSse(entry, { type: 'error', error: 'interrupted by restart' });
-      closeJobAfterDelay(sseJobs, id, SSE_CLEANUP_DELAY_MS, entry);
-    }
-    for (const { id, error } of restartedCanceled) {
-      const entry = ensureSseEntry(id);
-      broadcastSse(entry, { type: 'canceled', reason: error });
-      closeJobAfterDelay(sseJobs, id, SSE_CLEANUP_DELAY_MS, entry);
-    }
+    for (const id of restartedFailedIds) broadcastTerminalSse(id, { type: 'error', error: 'interrupted by restart' });
+    for (const { id, error } of restartedCanceled) broadcastTerminalSse(id, { type: 'canceled', reason: error });
     // Pre-seed SSE entries for recovered queued jobs too. Without this, a
     // client reconnecting to /:jobId/events between boot and the worker
     // dequeueing the job would hit attachSseClient's "no sse entry" branch
@@ -1445,7 +564,7 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
       const entry = ensureSseEntry(j.id);
       broadcastSse(entry, { type: 'queued', position: j.position });
     }
-    if (!persistBlocked) {
+    if (!isPersistBlocked()) {
       await persist();
       startWorker();
     }
@@ -1458,9 +577,9 @@ export async function initMediaJobQueue({ deferCompletionRecovery = false } = {}
 // callback can still be publishing after its visible status changed.
 export function getMediaRecoveryActivity() {
   const jobs = listJobs();
-  const pending = pendingTransitions.size > 0 || terminalOperations.size > 0 || dispatchOperations.size > 0
+  const pending = hasPendingTransitions() || terminalOperations.size > 0 || dispatchOperations.size > 0
     || recoveringJobs.size > 0 || jobs.some(mediaRecoveryPending);
-  return { trusted: recoveryInventoryReady && !persistBlocked, pending };
+  return { trusted: recoveryInventoryReady && !isPersistBlocked(), pending };
 }
 
 function startWorker() {
@@ -1503,7 +622,7 @@ function requeueRetainedReservation(entry) {
   recomputeQueuePositions();
   // The old terminal grace timer owns the old subscribers. A new stream for
   // this attempt keeps that timer from evicting reconciliation or its clients.
-  sseJobs.set(id, { clients: [], lastPayload: { type: 'queued', position: reconciled.position } });
+  replaceSseEntry(id, { type: 'queued', position: reconciled.position });
   console.log(`🔁 media-job [${entry.id.slice(0, 8)}] remote ${entry.kind} ended without a terminal peer report — re-enqueued for reconciliation`);
   return true;
 }
@@ -1565,7 +684,7 @@ function startLaneJob(job, { lane }) {
   } else if (lane === 'remote') {
     remoteRunning.push(job);
   } else {
-    running = job;
+    setRunningJob(job);
   }
   recomputeQueuePositions();
   const label = lane === 'cloud'
@@ -1589,7 +708,7 @@ function startLaneJob(job, { lane }) {
       const idx = remoteRunning.indexOf(job);
       if (idx >= 0) remoteRunning.splice(idx, 1);
     } else {
-      running = null;
+      setRunningJob(null);
     }
     // Archive every terminal job (completed / failed / canceled). The 24h
     // TTL prune in persistImpl keeps the file from growing unbounded, and
@@ -1628,10 +747,8 @@ function startLaneJob(job, { lane }) {
           j.error = j.cancelRequested ? 'Canceled' : err instanceof ServerError ? err.message : `runJob threw: ${err.message}`;
           j.completedAt = new Date().toISOString();
         }, () => {
-          const entry = ensureSseEntry(job.id);
-          broadcastSse(entry, job.cancelRequested
+          broadcastTerminalSse(job.id, job.cancelRequested
             ? { type: 'canceled', reason: job.error } : { type: 'error', error: job.error });
-          closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
           mediaJobEvents.emit(job.status, job);
           finalizeLane();
         });
@@ -1678,10 +795,8 @@ async function settleQueuedJob(job, { status, error }) {
         const { cleanupPreparedTopaz } = await import('../videoGen/topazJob.js');
         await cleanupPreparedTopaz(job.params.preparedId);
       }
-      const entry = ensureSseEntry(job.id);
-      broadcastSse(entry, status === 'canceled'
+      broadcastTerminalSse(job.id, status === 'canceled'
         ? { type: 'canceled', reason: error } : { type: 'error', error });
-      closeJobAfterDelay(sseJobs, job.id, SSE_CLEANUP_DELAY_MS, entry);
       mediaJobEvents.emit(status, job);
     })());
   });
@@ -1709,8 +824,6 @@ async function prepareQueuedVideos(jobs = queue.filter((job) => !job.admitting))
   }
 }
 
-// IDs proven by the boot probe to have an existing trainer; request params cannot grant this.
-const recoveringJobs = new Set();
 
 // Quiescing wakes the idle wait even under fake timers, so joining the worker
 // never depends on another clock tick. Preparation already in flight still joins.
@@ -1735,7 +848,7 @@ async function drainLoop() {
     // a full swim lane only skips its own work.
     const totals = laneTotalLimits();
     const laneSlots = {
-      gpu: totals.gpu - Number(Boolean(running)),
+      gpu: totals.gpu - Number(Boolean(getRunningJob())),
       cloud: totals.cloud - cloudRunning.length,
       remote: totals.remote - remoteRunning.length,
     };
@@ -1826,7 +939,7 @@ export function quiesceMediaJobQueue() {
 export async function importArchivedJobs(records) {
   if (!initPromise) throw new Error('Media queue is not initialized; imported jobs cannot be saved');
   await initPromise;
-  if (persistBlocked) throw new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts');
+  if (isPersistBlocked()) throw new Error('Media queue storage is blocked until its snapshot is repaired and the server restarts');
   let added = 0;
   for (const record of Array.isArray(records) ? records : []) {
     const row = importedArchiveRow(record);
@@ -1838,76 +951,8 @@ export async function importArchivedJobs(records) {
   return added;
 }
 
-function canRemoveArchivedJob(job) {
-  return !resultUpdates.has(job.id) && !job.durabilityPending
-    && job.params?.remotePeerReservation !== true && job.result?.topazUncertain !== true;
-}
 
-function closeArchivedJobSse(jobId) {
-  // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
-  // window before dropping the entry — a bare `sseJobs.delete()` here would
-  // leave their HTTP responses dangling because closeJobAfterDelay's pending
-  // timer would find no entry to drain when it fires.
-  const sseEntry = sseJobs.get(jobId);
-  if (sseEntry) {
-    for (const c of sseEntry.clients) c.end();
-    sseJobs.delete(jobId);
-  }
-}
 
-// Drop an eligible archived row after deletion or a successful retry.
-export function removeArchivedJob(jobId) {
-  const idx = archive.findIndex((j) => j.id === jobId);
-  if (idx < 0 || !canRemoveArchivedJob(archive[idx])) return false;
-  archive.splice(idx, 1);
-  closeArchivedJobSse(jobId);
-  persist().catch((e) => console.error(`❌ media-job [${jobId.slice(0, 8)}] mediaJobQueue persist on archive prune failed: ${e.message}`));
-  return true;
-}
-
-export function removeFailedCanceledJobs({ kind }) {
-  if (!['image', 'video', 'video-upscale'].includes(kind)) throw new TypeError('An image, video or video-upscale kind is required');
-  // Remove inside the persistence chain: earlier snapshots must not observe an
-  // uncommitted prune, and later snapshots must wait for success or rollback.
-  return queuePersist(async () => {
-    const matches = archive.map((job, index) => ({ job, index }))
-      .filter(({ job }) => job.kind === kind && (job.status === 'failed' || job.status === 'canceled'));
-    // Production attempts may still need their queue receipt during recovery,
-    // even when the provider submission itself is known to have failed.
-    const removed = matches.filter(({ job }) => canRemoveArchivedJob(job)
-      && job.result?.topazRecoveryAvailable !== true && !job.params?.videoProduction);
-    const skipped = matches.length - removed.length;
-    if (!removed.length) return { deletedIds: [], skipped };
-
-    const removedIds = new Set(removed.map(({ job }) => job.id));
-    for (let i = archive.length - 1; i >= 0; i -= 1) {
-      if (removedIds.has(archive[i].id)) archive.splice(i, 1);
-    }
-    let snapshotWritten = false;
-    let warning;
-    try {
-      await persistImpl({ trimArchive: false, onSnapshotWritten: () => { snapshotWritten = true; } });
-    } catch (error) {
-      if (!snapshotWritten) {
-        for (const { job, index } of removed) {
-          if (!archive.includes(job)) archive.splice(Math.min(index, archive.length), 0, job);
-        }
-        throw new ServerError(`Could not remove jobs from the media queue: ${error.message}`, {
-          status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
-        });
-      }
-      console.error(`❌ media-job queue archive prune saved but another queue update failed: ${error.message}`);
-      warning = 'Another queue update could not finish. Check the queue.';
-    }
-    for (const { job } of removed) closeArchivedJobSse(job.id);
-    return { deletedIds: [...removedIds], skipped, ...(warning ? { warning } : {}) };
-  }).catch((error) => {
-    if (error.code === MEDIA_QUEUE_PERSIST_FAILED) throw error;
-    throw new ServerError(`Could not remove jobs from the media queue: ${error.message}`, {
-      status: 503, code: MEDIA_QUEUE_PERSIST_FAILED,
-    });
-  });
-}
 
 // "Run now" bypass — start a queued cloud-CLI image job immediately
 // even if the lane is at its limit. GPU jobs are rejected (single MLX runtime
@@ -1927,114 +972,7 @@ export function runJobNow(jobId) {
   return { ok: true, status: 'running' };
 }
 
-// Recompute queue positions and notify each waiting SSE client of its new
-// slot. Called whenever the queue layout shifts (job dequeued, finished, or
-// canceled mid-queue). Without the broadcast, a client connected to
-// /:jobId/events would keep showing the position from its original enqueue
-// frame even after the line ahead of it cleared.
-function recomputeQueuePositions() {
-  videoHolds.updateQueued(queue);
-  for (const [q, newPosition] of swimlanePositions()) {
-    if (q.position === newPosition) continue;
-    q.position = newPosition;
-    const entry = sseJobs.get(q.id);
-    if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
-  }
-}
 
-// Filter videoGenEvents/imageGenEvents down to a single jobId and translate
-// them into SSE-wire payloads + queue-status transitions. Returns
-// `{ attach, detach }` so runJob can deterministically clean up listeners
-// even on the throw path.
-//
-// Event shapes (match the underlying gens):
-//   videoGen.progress  → { generationId, progress: number, step?, totalSteps? }
-//   imageGen.progress  → { generationId, progress: number, step?, totalSteps? }
-//   imageGen.progress  → { generationId, currentImage } (preview-only frames)
-// `message` is synthesized from `step` / `totalSteps` so the existing UIs
-// (which display `msg.message` as the status line) keep working through
-// the queue, even though the underlying emitters don't supply one.
-function synthesizeMessage(e, kind) {
-  if (typeof e.step === 'number' && typeof e.totalSteps === 'number' && e.totalSteps > 0) {
-    const verb = MEDIA_JOB_RUNTIME[kind]?.verb ?? 'Generating';
-    return `${verb} step ${e.step}/${e.totalSteps}`;
-  }
-  return undefined;
-}
-// Two finite positive edges, or nothing. A runner that reports no geometry —
-// or a heartbeat-shaped frame with a zero/NaN edge — must produce NO geometry
-// rather than a ratio the client would have to defend against.
-function makeGenDispatcher(emitter, job, handlers) {
-  const onProgress = (e) => {
-    if (e.generationId !== job.id) return;
-    const hasProgress = typeof e.progress === 'number' && Number.isFinite(e.progress);
-    const hasCurrentImage = typeof e.currentImage === 'string' && e.currentImage.length > 0;
-    const message = e.message !== undefined ? e.message : synthesizeMessage(e, job.kind);
-    // Structured step/loss ride along on the wire when the emitter supplies
-    // them (LoRA training does) so the client plots a loss curve and keys
-    // sample thumbnails by step instead of re-parsing the message string.
-    // Additive + presence-guarded — image/video gen omit them, unaffected.
-    // `etaMs` (video gen, #3801) rides along the same way: a history-calibrated
-    // wall-clock estimate for the whole render. Presence-guarded on purpose —
-    // an install with no matching measurement emits no key at all, which the
-    // UI must show as "unknown" rather than as a zero countdown.
-    // `phase` (video gen, #5872) is the runner's own STAGE: id — 'load-model',
-    // 'encode-prompt', 'sampling', 'mux', … The client turns it into a named
-    // render step so a runner that reports no numeric progress for minutes
-    // (FastH3 streams an ~89 GB DiT before its first denoise step) still says
-    // WHAT it is doing rather than showing a motionless 0%.
-    const addFrameFields = (payload) => {
-      if (typeof e.step === 'number') payload.step = e.step;
-      if (typeof e.totalSteps === 'number') payload.totalSteps = e.totalSteps;
-      if (typeof e.loss === 'number') payload.loss = e.loss;
-      if (typeof e.etaMs === 'number') payload.etaMs = e.etaMs;
-      if (typeof e.phase === 'string' && e.phase) payload.phase = e.phase;
-    };
-    if (hasProgress) {
-      const payload = { type: 'progress', progress: e.progress };
-      if (hasCurrentImage) payload.currentImage = e.currentImage;
-      if (message !== undefined) payload.message = message;
-      addFrameFields(payload);
-      handlers.progress(payload);
-      return;
-    }
-    if (hasCurrentImage) {
-      // Preview-only frame (imageGen step thumbnail) — distinct SSE type so
-      // existing consumers can keep their progress-bar value untouched.
-      const payload = { type: 'preview', currentImage: e.currentImage };
-      if (message !== undefined) payload.message = message;
-      addFrameFields(payload);
-      handlers.progress(payload);
-    }
-  };
-  const onStatus = (e) => {
-    // Optional explicit `status` event for gens that want to push a status
-    // line independent of progress. Unused today; here so a future emitter
-    // can call `videoGenEvents.emit('status', { generationId, message })`.
-    if (e.generationId !== job.id) return;
-    if (typeof e.message === 'string' && e.message.length > 0) {
-      const payload = { type: 'status', message: e.message };
-      if (typeof e.phase === 'string' && e.phase) payload.phase = e.phase;
-      handlers.progress(payload);
-    }
-  };
-  const onCompleted = (e) => { if (e.generationId === job.id) handlers.completed(e); };
-  const onFailed = (e) => { if (e.generationId === job.id) handlers.failed(e); };
-  return {
-    attach() {
-      emitter.on('progress', onProgress);
-      emitter.on('status', onStatus);
-      emitter.on('completed', onCompleted);
-      emitter.on('failed', onFailed);
-    },
-    detach() {
-      emitter.off('progress', onProgress);
-      emitter.off('status', onStatus);
-      emitter.off('completed', onCompleted);
-      emitter.off('failed', onFailed);
-    },
-  };
-}
 
 // The dispatch window closes once the provider has been invoked (not settled —
 // a provider kickoff may legitimately stay pending) or the job failed before
@@ -2415,7 +1353,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     ...handlers,
     completed: payload => { observeProviderSettlement(payload); handlers.completed(payload); },
     failed: payload => { observeProviderSettlement(payload); handlers.failed(payload); },
-  });
+  }, runtime?.verb ?? 'Generating');
   dispatcher.attach();
 
   // Thread #2: per-job idle watchdog — fires when the gen has been silent
@@ -2699,7 +1637,7 @@ async function enqueueJobLocked({ kind, params, owner = null }) {
   const id = randomUUID();
   let preparedParams = params;
   if (kind === 'image' && params?.reviewedReferenceDigest) {
-    if (persistBlocked) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
+    if (isPersistBlocked()) throw new ServerError('Reviewed edits require a writable media queue', { status: 503, code: MEDIA_QUEUE_PERSIST_FAILED });
     if (params.initImagePath || !params.referenceImagePaths?.length) {
       throw new ServerError('Reviewed quick edit requires a local reference', { status: 400, code: 'REVIEWED_REFERENCE_UNSUPPORTED' });
     }
@@ -2848,7 +1786,7 @@ export async function cancelJob(jobId) {
     return { ok: true, status: 'canceled' };
   }
   // Cancel-while-running — check every lane.
-  const runningJob = (running?.id === jobId ? running : null)
+  const runningJob = (getRunningJob()?.id === jobId ? getRunningJob() : null)
     ?? cloudRunning.find((j) => j.id === jobId)
     ?? remoteRunning.find((j) => j.id === jobId)
     ?? null;
@@ -2908,89 +1846,7 @@ export async function cancelJob(jobId) {
   return { ok: false, code: 'NOT_FOUND', error: 'Job not found' };
 }
 
-function ensureSseEntry(jobId) {
-  if (!sseJobs.has(jobId)) {
-    // Shape required by lib/sseUtils.js#{broadcastSse,attachSseClient}.
-    sseJobs.set(jobId, { clients: [], lastPayload: null });
-  }
-  return sseJobs.get(jobId);
-}
 
-// Routes call this. Returns false when the jobId is unknown to the queue.
-//
-// Three cases:
-// 1. Live job (queued/running) — sseJobs already has an entry created by
-//    enqueueJob; attach replays lastPayload (queued/started/progress).
-// 2. Terminal job within the SSE_CLEANUP_DELAY_MS grace window — entry is
-//    still around with the terminal lastPayload (complete/error/canceled),
-//    so attach immediately replays + the deferred close ends the stream.
-// 3. Terminal job after the grace window — entry is gone; we synthesize a
-//    one-shot terminal frame from the archived job and end the stream so
-//    a late client doesn't hang on an empty SSE stream forever.
-export function attachSseClient(jobId, res) {
-  const job = findJob(jobId);
-  if (!job) return false;
-  if (sseJobs.has(jobId)) return attachSse(sseJobs, jobId, res);
-  // No SSE entry but the job is still live (queued/running) — the entry was
-  // dropped or never created (e.g. crash recovery). Create one on the fly
-  // and attach so the client receives subsequent progress/terminal events
-  // rather than a synthetic `error` frame for a job that is still running.
-  if (job.status === 'queued' || job.status === 'running') {
-    const entry = ensureSseEntry(jobId);
-    // Seed a heartbeat so the freshly-attached client sees the current
-    // status immediately instead of waiting for the next worker emit.
-    const heartbeat = job.status === 'queued'
-      ? { type: 'queued', position: job.position }
-      : { type: 'started', kind: job.kind };
-    broadcastSse(entry, heartbeat);
-    return attachSse(sseJobs, jobId, res);
-  }
-  // Terminal job whose SSE entry was already cleaned up. Synthesize the
-  // expected terminal payload from the archived state and end immediately.
-  const terminal =
-    job.status === 'completed' ? { type: 'complete', result: job.result }
-    : job.status === 'canceled' ? { type: 'canceled', reason: job.error || 'Canceled' }
-    : { type: 'error', error: job.error || `Job ${job.status}` };
-  res.writeHead(200, SSE_HEADERS);
-  res.write(`data: ${JSON.stringify(terminal)}\n\n`);
-  res.end();
-  return true;
-}
-
-export const MEDIA_QUEUE_FLUSH_TIMEOUT_MS = 2000;
-
-// Join the actual persistence work. A live lane retains its maintenance permit
-// until this completes, even when a separate shutdown caller exhausts its budget.
-async function drainMediaJobQueue() {
-  return (async () => {
-    await persist();
-    while (terminalOperations.size > 0) {
-      await Promise.allSettled([...terminalOperations]);
-    }
-    // The lane finalizer schedules its archive snapshot a few microtasks after
-    // the terminal operation settles; yield so most land ahead of our persist.
-    await Promise.resolve();
-    await persist();
-    // A finalizer that still slipped in behind us wrote a newer snapshot.
-    await persistChain;
-    return { ok: true };
-  })().catch((err) => ({ ok: false, error: err.message }));
-}
-
-// Graceful-shutdown flush (#8325): let in-flight terminal transitions settle,
-// then write one fresh snapshot — it captures the latest in-memory progress,
-// so a debounced progress write still pending in runJob is not lost — and wait
-// for the whole persist chain behind it. Bounded so a stalled disk cannot eat
-// the shutdown budget; never rejects, reporting the outcome instead.
-export async function flushMediaJobQueue({ timeoutMs = MEDIA_QUEUE_FLUSH_TIMEOUT_MS } = {}) {
-  const drain = drainMediaJobQueue();
-  let timer;
-  const timeout = new Promise((resolve) => {
-    timer = setTimeout(() => resolve({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }), timeoutMs);
-    timer.unref?.();
-  });
-  return Promise.race([drain, timeout]).finally(() => clearTimeout(timer));
-}
 
 // Test-only reset hook. Real callers go through enqueueJob/cancelJob.
 export async function __resetForTests() {
@@ -3002,37 +1858,16 @@ export async function __resetForTests() {
   resettingForTests = true;
   for (const abandon of testLifecycleDisposals) abandon();
   await __drainForTests({ settleLanes: true });
-  queue.length = 0;
-  running = null;
-  // `cloudRunning` is a const array — clear it in place rather than reassigning,
-  // which would throw TypeError and break `findJob()` (.find on null).
-  cloudRunning.length = 0;
-  remoteRunning.length = 0;
-  archive.length = 0;
-  pendingTransitions.clear();
-  videoHolds.clear();
-  sseJobs.clear();
-  quotaCooldowns.clear();
-  recoveringJobs.clear();
+  resetQueueStateForTests();
+  resetPersistenceForTests();
+  resetSseForTests();
+  resetLimitsForTests();
   workerStarted = false;
   workerOperation = null;
   dispatchQuiesced = false;
   resettingForTests = false;
   initPromise = null;
   recoveryInventoryReady = false;
-  // Reset the lane limit too — a test that called setCodexParallelLimit(N)
-  // otherwise leaks N into subsequent tests and makes ordering matter.
-  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
-  parallelLimits.clear();
-  rateLimitCooldowns.clear();
-  // Reset the persist chain so a leftover rejection from a previous test's
-  // ENOENT writes doesn't poison subsequent persist() calls.
-  persistChain = Promise.resolve();
-  // Un-latch the persistence block (#4115) — a test that booted on an unreadable
-  // jobs file would otherwise leave every later test's queue unable to persist.
-  persistBlocked = false;
-  completionRecovery = null;
-  completionRecoveryDeferred = false;
 }
 
 // Test-only deterministic settle hook. EventEmitter terminal handlers and
@@ -3047,9 +1882,9 @@ export async function __drainForTests({ settleLanes = false } = {}) {
   while (dispatchOperations.size > 0 || terminalOperations.size > 0 || (settleLanes && laneOperations.size > 0)) {
     await Promise.allSettled([...dispatchOperations, ...terminalOperations, ...(settleLanes ? laneOperations : [])]);
   }
-  await persistChain.catch(() => {});
+  await settlePersistChain();
   // A settled terminal operation can schedule the archive snapshot in the
   // lane-finalizer microtask. Yield once and capture that tail as well.
   await Promise.resolve();
-  await persistChain.catch(() => {});
+  await settlePersistChain();
 }
