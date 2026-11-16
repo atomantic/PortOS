@@ -185,4 +185,37 @@ describe('ShotTimeline', () => {
     expect(onEditShot).toHaveBeenCalledWith('s2', { glitches: [{ atSec: 3, style: 'color-block' }] });
     expect(screen.getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
   });
+
+  // Uniquely catches a dragged end saving the wrong field (or moving the start), and a swap or selection that never replays the moment.
+  it('trims an in-shot effect by its end, swaps its style in place, and loops the preview over it', async () => {
+    const onEditShot = vi.fn();
+    const onPreview = vi.fn();
+    let clock = { t: 0, playing: false };
+    const withEffect = { ...project, scenes: project.scenes.map((scene) => (scene.sceneId === 's2'
+      ? { ...scene, glitches: [{ atSec: 2, style: 'gate-jump', lengthSec: 1 }] } : scene)) };
+    render(<ShotTimeline project={withEffect} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}}
+      onEditShot={onEditShot} onPreview={onPreview} songClock={() => clock} />);
+    // At 20 px a second the 1 s effect at 0:06 runs from 120 px to 140 px; its end drags 20 px (1 s) later.
+    const end = screen.getByRole('slider', { name: /^End of .+ in Shot s2$/ });
+    expect(end.style.left).toBe('140px');
+    fireEvent.pointerDown(end, { clientX: 140, pointerId: 1, button: 0 });
+    fireEvent.pointerMove(end, { clientX: 160, pointerId: 1 });
+    fireEvent.pointerUp(end, { clientX: 160, pointerId: 1 });
+    expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 2, style: 'gate-jump', lengthSec: 2 }] });
+
+    const body = document.querySelector('[data-effect-id="s2:0"]');
+    fireEvent.pointerDown(body, { clientX: 125, pointerId: 2, button: 0 });
+    fireEvent.pointerUp(body, { clientX: 125, pointerId: 2 });
+    // Selecting it plays from just before it.
+    expect(onPreview).toHaveBeenLastCalledWith(5.25);
+    const styles = screen.getByRole('group', { name: 'Style of effect 1' });
+    const other = within(styles).getAllByRole('button', { pressed: false })[0];
+    fireEvent.click(other);
+    expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 2, style: expect.not.stringMatching(/^gate-jump$/), lengthSec: 1 }] });
+    expect(onPreview).toHaveBeenCalledTimes(2);
+    // Playing past the effect (0:06 + 1 s + the lead) jumps back before it.
+    clock = { t: 7.9, playing: true };
+    await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(3));
+    expect(onPreview).toHaveBeenLastCalledWith(5.25);
+  });
 });

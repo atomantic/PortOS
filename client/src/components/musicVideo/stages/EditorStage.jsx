@@ -59,7 +59,8 @@ export default function EditorStage({ board }) {
         onSeek={(t) => board.seekToScene?.({ startSec: t })} onOpenShot={openShot}
         onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
         onReorder={board.locked || orderOwned ? null : reorder}
-        effectOptions={effectOptions} onEditShot={board.locked ? null : editShot} />
+        effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
+        onPreview={(t) => board.seekToScene?.({ startSec: t }, { play: true })} />
       {/* The shot draws its own header (thumbnail, timing, previous / next, close). */}
       <Drawer open={!!activeScene} size="xl" onClose={closeShot} title={activeScene ? shotName(activeScene) : 'Shot'}
         closeLabel="Close shot" showHeader={false}>
