@@ -4,12 +4,12 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import toast from '../components/ui/Toast';
+import toast from '../../ui/Toast';
 import {
   createOutboxEntry, discardOutboxEntry, listOutboxEntries, sendOutboxEntry, reconcileOutboxEntry,
-} from '../services/apiBeeper';
-import useBeeperRealtime from './useBeeperRealtime';
-import useMounted from './useMounted';
+} from '../../../services/apiBeeper';
+import useBeeperRealtime from '../../../hooks/useBeeperRealtime';
+import useMounted from '../../../hooks/useMounted';
 
 /**
  * The Beeper composer's send lifecycle (#36, decided on #8).

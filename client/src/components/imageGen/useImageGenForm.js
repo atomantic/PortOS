@@ -7,12 +7,12 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import useListResource from './useListResource';
-import { getNavPageForPath } from '../../../server/lib/navManifest.js';
-import { appendTriggerWords } from '../lib/loraTriggers';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
-import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
+import useListResource from '../../hooks/useListResource';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+import { appendTriggerWords } from '../../lib/loraTriggers';
+import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
+import { universeStylePreset, withUniverseLabel } from '../../lib/universeStylePreset';
+import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../../lib/runnerFamilies';
 import {
   FAL_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
@@ -24,20 +24,20 @@ import {
   pickI2iMode,
   referenceSlotsFor,
   supportsReferenceStrength,
-} from '../lib/imageGenBackends';
-import { clampImageDimensions } from '../lib/imageGenResolutions';
-import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
-import { isHardwareCompatible } from '../utils/systemCapabilities';
-import { resolveCleanersFromConfig } from '../lib/imageCleaners';
-import useMounted from './useMounted';
-import toast from '../components/ui/Toast';
+} from '../../lib/imageGenBackends';
+import { clampImageDimensions } from '../../lib/imageGenResolutions';
+import { peerModelRequiresInput } from '../../lib/federatedMediaReadiness.js';
+import { isHardwareCompatible } from '../../utils/systemCapabilities';
+import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
+import useMounted from '../../hooks/useMounted';
+import toast from '../ui/Toast';
 import {
   getGalleryImages,
   getImageGenStatus,
   getSettings,
   listImageModels,
   listLorasFull,
-} from '../services/api';
+} from '../../services/api';
 
 const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };

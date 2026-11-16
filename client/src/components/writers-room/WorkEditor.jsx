@@ -61,7 +61,7 @@ import ProseTokenPopover from './ProseTokenPopover';
 import WritersRoomDock from './WritersRoomDock';
 import WorkEditorVersions from './WorkEditorVersions';
 import WorkEditorVoicePanel from './WorkEditorVoicePanel';
-import useImageGenQueue from '../../hooks/useImageGenQueue';
+import useImageGenQueue from './useImageGenQueue';
 import useLiveSuggest from '../../hooks/useLiveSuggest';
 import useSidebarResize from '../../hooks/useSidebarResize';
 import useTokenPopover from '../../hooks/useTokenPopover';

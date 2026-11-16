@@ -27,8 +27,8 @@ vi.mock('../../services/api', () => ({
 }));
 vi.mock('../../lib/downloadBlob', () => downloadMock);
 vi.mock('../ui/Toast', () => ({ default: toastMock }));
-vi.mock('../../hooks/useUniverseDraft', () => ({ default: hookMocks.useUniverseDraft }));
-vi.mock('../../hooks/useUniverseExpand', () => ({ default: hookMocks.useUniverseExpand }));
+vi.mock('./useUniverseDraft', () => ({ default: hookMocks.useUniverseDraft }));
+vi.mock('./useUniverseExpand', () => ({ default: hookMocks.useUniverseExpand }));
 vi.mock('../../hooks/useUniverseGallery', () => ({ default: hookMocks.useUniverseGallery }));
 vi.mock('../../hooks/useUniverseRender', () => ({ default: hookMocks.useUniverseRender }));
 vi.mock('../../hooks/useUniverseTabs', () => ({ default: hookMocks.useUniverseTabs }));

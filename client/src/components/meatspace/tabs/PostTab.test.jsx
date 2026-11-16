@@ -69,7 +69,7 @@ const { MEMORY_ITEM, ELEMENTS_ITEM, getPostRecommendations, POST_SESSION_OVERRID
   POST_SESSION_OVERRIDE: { current: null },
 }));
 
-vi.mock('../../../hooks/usePostSession', () => ({
+vi.mock('../post/usePostSession', () => ({
   usePostSession: () => POST_SESSION_OVERRIDE.current || ({
     state: 'idle',
     drills: [],

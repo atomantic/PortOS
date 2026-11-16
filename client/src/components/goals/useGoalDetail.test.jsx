@@ -18,7 +18,7 @@ const addGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeGoalMilestone = vi.fn(() => Promise.resolve({}));
 const completeMilestoneTask = vi.fn(() => Promise.resolve({}));
 
-vi.mock('../services/api', () => ({
+vi.mock('../../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
   getSettings: (...args) => getSettings(...args),
   getCalendarAccounts: (...args) => getCalendarAccounts(...args),

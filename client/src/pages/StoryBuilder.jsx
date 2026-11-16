@@ -24,7 +24,7 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
-import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from '../hooks/useStoryStepRuns.jsx';
+import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from '../components/storyBuilder/useStoryStepRuns.jsx';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup } from '@testing-library/react';
 
 const handlers = new Map();
-vi.mock('../services/socket', () => ({
+vi.mock('../../services/socket', () => ({
   default: {
     on: (event, fn) => { handlers.set(event, fn); },
     off: (event, fn) => { if (handlers.get(event) === fn) handlers.delete(event); },
@@ -10,9 +10,9 @@ vi.mock('../services/socket', () => ({
   },
 }));
 const getMediaJob = vi.fn();
-vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
-vi.mock('../services/apiImageVideo', () => ({ cancelImageGen: vi.fn() }));
-vi.mock('../components/ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
+vi.mock('../../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
+vi.mock('../../services/apiImageVideo', () => ({ cancelImageGen: vi.fn() }));
+vi.mock('../ui/Toast', () => ({ default: Object.assign(vi.fn(), { error: vi.fn() }) }));
 
 const useImageGenQueue = (await import('./useImageGenQueue.js')).default;
 

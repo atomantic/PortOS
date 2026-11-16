@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Loader } from 'lucide-react';
 import { getPostConfig, getPostRecommendations, getPostSessions, getPostStats } from '../../../services/api';
-import { usePostSession } from '../../../hooks/usePostSession';
+import { usePostSession } from '../post/usePostSession';
 import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import PostSessionLauncher from '../post/PostSessionLauncher';

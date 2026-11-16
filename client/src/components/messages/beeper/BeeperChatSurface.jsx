@@ -11,7 +11,7 @@ import ConnectionStatusDot from '../../ui/ConnectionStatusDot';
 import toast from '../../ui/Toast';
 import useMounted from '../../../hooks/useMounted';
 import { useSocketResource } from '../../../hooks/useSocketResource';
-import useBeeperOutbox from '../../../hooks/useBeeperOutbox';
+import useBeeperOutbox from './useBeeperOutbox';
 import { messagePreviewText } from '../../../lib/beeperMessageBody';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../../lib/safeStorage';
 import { formatClockTime } from '../../../utils/formatters';

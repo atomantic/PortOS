@@ -9,7 +9,7 @@ vi.mock('../../hooks/useInstanceFeatures.js', () => ({
     isFeatureEnabled: (id) => (id === 'iterm' ? state.enabled : false),
   }),
 }));
-vi.mock('../../hooks/useItermSession', () => ({ useItermSession: () => state.hook }));
+vi.mock('./useItermSession', () => ({ useItermSession: () => state.hook }));
 vi.mock('../../services/api', () => ({ getItermStatus: vi.fn(() => new Promise(() => {})) }));
 
 import ItermShellView from './ItermShellView';

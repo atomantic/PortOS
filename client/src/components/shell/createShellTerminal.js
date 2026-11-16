@@ -7,7 +7,7 @@ import { isFocusEscapeKey } from '../../lib/a11yKeyboard';
 export const TERMINAL_SCROLLBACK_LINES = 5000;
 
 // The xterm construction both Shell views share — the PortOS PTY view
-// (hooks/useShellSession.js) and the iTerm2 view (hooks/useItermSession.js) —
+// (useShellSession.js) and the iTerm2 view (useItermSession.js) —
 // so the font stack, theme, links and keyboard-escape rule cannot drift apart.
 
 // Read the active theme's colors off the document and assemble the xterm palette.

@@ -7,26 +7,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
-import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
+import { composeStyledPrompt, stylePromptAdditions } from '../../lib/composeStyledPrompt';
 import {
   FAL_IMAGE_MODEL_IDS, HIGGSFIELD_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS, GOOGLE_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
   isCloudCliMode,
   modeLabel,
-} from '../lib/imageGenBackends';
-import { clampImageEdge } from '../lib/imageGenResolutions';
+} from '../../lib/imageGenBackends';
+import { clampImageEdge } from '../../lib/imageGenResolutions';
 import { useImageGenForm } from './useImageGenForm';
-import { useImageGenGallery } from './useImageGenGallery';
-import { useSocketResource } from './useSocketResource';
-import { useFederatedMediaTarget } from './useFederatedMediaTarget';
-import { useImageGenProgress } from './useImageGenProgress';
-import { useMediaCompletionRefresh } from './useMediaCompletionRefresh';
-import { useMediaJobSse, isMediaRunEnded } from './useMediaJobSse';
-import { useModelDownloadStatus } from './useModelDownloadStatus';
-import { useHfTokenStatus } from './useHfTokenStatus';
-import { useAgyModels } from './useAgyModels';
-import { useModelInputPreview } from './useModelInputPreview';
-import toast from '../components/ui/Toast';
+import { useImageGenGallery } from '../../hooks/useImageGenGallery';
+import { useSocketResource } from '../../hooks/useSocketResource';
+import { useFederatedMediaTarget } from '../../hooks/useFederatedMediaTarget';
+import { useImageGenProgress } from '../../hooks/useImageGenProgress';
+import { useMediaCompletionRefresh } from '../../hooks/useMediaCompletionRefresh';
+import { useMediaJobSse, isMediaRunEnded } from '../../hooks/useMediaJobSse';
+import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus';
+import { useHfTokenStatus } from '../../hooks/useHfTokenStatus';
+import { useAgyModels } from '../../hooks/useAgyModels';
+import { useModelInputPreview } from '../../hooks/useModelInputPreview';
+import toast from '../ui/Toast';
 import {
   buildFormData,
   cancelImageGen,
@@ -39,8 +39,8 @@ import {
   listMediaJobs,
   previewImagePrompt,
   regenerateGalleryImage,
-} from '../services/api';
-import { musicVideoFilingFields } from '../lib/musicVideoFiling';
+} from '../../services/api';
+import { musicVideoFilingFields } from '../../lib/musicVideoFiling';
 
 // The style presets folded into the prompt, recorded beside it on the render (#11317).
 const promptAdditionsField = (presets) => {

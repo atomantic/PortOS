@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import toast from '../components/ui/Toast';
+import toast from '../ui/Toast';
 import {
   createUniverse,
   expandUniverse,
@@ -17,16 +17,16 @@ import {
   WORLD_LOCKABLE_FIELDS,
   ensureInfluences,
   isInfluenceLockField,
-} from '../services/api';
-import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
+} from '../../services/api';
+import { upsertByIdPrepend } from '../../lib/upsertByIdPrepend';
 import {
   extractPreservedFromDraft,
   mergeCanonByName,
   mergeExpandIntoDraft,
-} from '../lib/universeBuilderExpand';
-import { totalVariationCount } from '../lib/universeBuilderCounts';
-import { ensureDraftCategories } from '../lib/universeBuilderShared';
-import { pluralize } from '../lib/textUtils';
+} from '../../lib/universeBuilderExpand';
+import { totalVariationCount } from '../../lib/universeBuilderCounts';
+import { ensureDraftCategories } from '../../lib/universeBuilderShared';
+import { pluralize } from '../../lib/textUtils';
 
 const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => {
   const summary = `Expanded into ${pluralize(variationCount, 'variation')}, ${pluralize(sheetCount, 'board')}, ${pluralize(addedCanonCount, 'new canon entry', 'new canon entries')}`;
