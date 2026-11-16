@@ -3,12 +3,12 @@ import { act, renderHook } from '@testing-library/react';
 
 vi.mock('../services/apiMusicVideo.js', () => ({
   placeMusicVideoPoolItem: vi.fn(), selectMusicVideoSceneTake: vi.fn(), reviewMusicVideoSceneTake: vi.fn(),
-  markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(),
+  markMusicVideoPoolAssets: vi.fn(), getMusicVideoProject: vi.fn(), rejectUnusedMusicVideoSceneTakes: vi.fn(),
 }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../services/socket.js', () => ({ default: { id: 'socket-example' } }));
 
-import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject } from '../services/apiMusicVideo.js';
+import { placeMusicVideoPoolItem, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, getMusicVideoProject, rejectUnusedMusicVideoSceneTakes } from '../services/apiMusicVideo.js';
 import useMusicVideoTakes from './useMusicVideoTakes.js';
 
 // A held reply: resolve it when the test says the server answered.
@@ -121,4 +121,19 @@ describe('useMusicVideoTakes decisions', () => {
     expect(board.current().referenceImageId).toBeNull();
   });
 
+});
+
+describe('useMusicVideoTakes rejectUnusedTakes', () => {
+  // Uniquely catches Reject unused dropping its reply's edit result: the board then keeps the pre-decision
+  // revision, so the next shot edit (Done) is diffed against a record this tab never advanced to.
+  it('hands the reply\'s edit result to the board', async () => {
+    const applyEdit = vi.fn();
+    const applyScenePatch = vi.fn();
+    const scene = { sceneId: 's1', takes: [] };
+    const edit = { updatedAt: '2026-01-02T00:00:00.000Z', baseUpdatedAt: '2026-01-01T00:00:00.000Z', sceneIds: ['s1'], scenes: [] };
+    rejectUnusedMusicVideoSceneTakes.mockResolvedValueOnce({ scene, rejected: 2, edit });
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch, applyEdit }));
+    await act(() => result.current.rejectUnusedTakes(scene));
+    expect(applyEdit).toHaveBeenCalledWith('mv-1', edit);
+  });
 });

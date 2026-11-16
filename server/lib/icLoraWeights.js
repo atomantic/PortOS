@@ -1,85 +1,41 @@
 // IC-LoRA weight registry for the local LTX-2 video runtime (issue #3100).
 //
-// IC-LoRA weight registry for the local LTX-2 remix modes (`IC_LORA_MODES`, `IC_LORA_MODE_VALUES`,
-// `listIcLoraWeights()`, `isIcLoraMode(mode)`, `icLoraSpecForMode(mode)`, `icLoraRepos()`,
-// `icLoraWeightCandidates(spec)`, `findCachedIcLoraWeight(spec)`, `resolveIcLoraWeight(mode)` →
-// `{path,cached,spec}`). Single source of truth mapping each remix mode (`ic-control`, `ic-colorize`,
-// `ic-ingredients`) → its HF repo/filename, reference-count rule, per-weight
-// `referenceDownscaleFactor` (read from the weight's safetensors metadata, never assumed), and input
-// surface (`referenceKind: 'video' | 'image'`). A `requiresPreDownload` spec (Ingredients) suppresses
-// `resolveIcLoraWeight`'s bare-repo-id fallback — the pipeline would `snapshot_download` it, and its
-// candidates are a gated first-party repo plus a ~708 GB aggregate mirror, so the weight must be
-// pre-fetched single-file instead. Also owns the two rules derived from that data:
-// `assertIcReferenceCount(spec,count,fail)` / `describeIcReferenceRange(spec)` and
-// `icResolutionIssue(spec,w,h)` (the output-resolution divisibility its reference encoder imposes).
-// Mirrored to `client/src/lib/videoGenParams.js`; `icLoraWeights.parity.test.js` diffs the two.
+// Single source of truth mapping each remix mode (`ic-control`, `ic-colorize`, `ic-ingredients`) to its HF
+// repo/filename, reference-count rule, per-weight `referenceDownscaleFactor` (read from the weight's
+// safetensors metadata, never assumed) and input surface (`referenceKind`). Also owns
+// `assertIcReferenceCount` / `describeIcReferenceRange` and `icResolutionIssue`. Mirrored to
+// `client/src/lib/videoGenParams.js`; `icLoraWeights.parity.test.js` diffs the two.
 //
-// The `ltx2` runtime already ships `ltx_pipelines_mlx.ic_lora.ICLoraPipeline`
-// — a two-stage pipeline that conditions generation on a *reference video*
-// channel with an IC ("In-Context") LoRA fused into Stage 1. Which capability
-// you get is entirely a function of WHICH IC-LoRA weight is fused, so this
-// module is the single source of truth mapping a PortOS remix mode
-// (`ic-control`, …) to its weight, HF repo, reference-count rule, and the
-// resolution constraint the weight's metadata imposes.
+// Weights are NOT bundled; they ride the same cache-inspect / download / verify / repair surface as the model
+// weights (see routes/videoGen.js). `resolveIcLoraWeight` returns a cached file path, else the HF repo id for
+// ICLoraPipeline._resolve_lora_path to pull itself.
 //
-// Weights are NOT bundled — each is a separate multi-hundred-MB HF pull, so
-// they ride the same cache-inspect / download-SSE / verify / repair surface as
-// the model weights themselves (see routes/videoGen.js). `resolveIcLoraWeight`
-// returns a local cached file path when present and falls back to the HF repo
-// id, which ICLoraPipeline._resolve_lora_path resolves on its own — so a render
-// still works if the user skipped the explicit pre-download (it just stalls
-// silently on the pull instead of showing progress).
-//
-// The repo-id fallback is NOT universally safe: `_resolve_lora_path` implements
-// it as `snapshot_download(repo_id)`, which pulls the ENTIRE repo. That's fine
-// for a single-weight repo (Control, Colorize) and catastrophic for an aggregate
-// mirror — `DeepBeepMeep/LTX-2` carries every LTX weight in one ~708 GB repo. A
-// spec whose chain includes such a repo sets `requiresPreDownload`, and
-// resolveIcLoraWeight then refuses to emit a bare repo id at all (see below).
-//
-// Gating: Control and Colorize are un-gated. Ingredients' official Lightricks
-// repo is gated (`gated: "auto"` — an anonymous resolve returns 401 GatedRepo),
-// so `gated: true` marks it and the mirror provides an un-gated path for users
-// without an HF token.
+// That repo-id fallback is `snapshot_download(repo_id)`, which pulls the ENTIRE repo: fine for a single-weight
+// repo, catastrophic for an aggregate mirror (`DeepBeepMeep/LTX-2` is ~708 GB). A spec whose chain includes
+// such a repo (or a gated one) sets `requiresPreDownload`, and resolveIcLoraWeight then never emits a bare repo
+// id. Ingredients' official repo is `gated: true` (anonymous resolve returns 401); the mirror is its un-gated path.
 
 import { findCachedRepoFile } from './hfCache.js';
 import { readSafetensorsHeader } from './safetensors.js';
 
-// The base model the legacy MLX `ICLoraPipeline` remix path is pinned to.
-// LTX 2.5 Ingredients is offered separately through its guided two-stage path;
-// never fuse its adapter into the 2.3 pipeline, which accepts it without
-// erroring but produces garbage rather than a clean failure.
+// The base model the legacy MLX `ICLoraPipeline` remix path is pinned to. Never fuse an LTX 2.5 adapter into
+// the 2.3 pipeline: it accepts it without erroring and produces garbage.
 export const IC_LORA_REMIX_BASE_MODEL = 'ltx-2.3';
 
-// One entry per registered IC-LoRA weight. `minReferences`/`maxReferences` are
-// the weight's contract: the Python helper receives them as flags (never a
-// second hardcoded table) so this registry stays the single source of truth
-// across both languages.
+// One entry per registered IC-LoRA weight. `minReferences`/`maxReferences` are the weight's contract: the
+// Python helper receives them as flags (never a second hardcoded table).
 //
-// `baseModel` is which LTX release the adapter was trained against, and
-// `mode` is the PortOS remix mode it is offered as — `null` for a weight that
-// is not a remix mode at all (the Pixel Spatial Upscaler is an upscale
-// adapter, reached from the upscale flow rather than the render form). The two
-// fields are INDEPENDENT gates: `listIcLoraRemixModes` requires both.
+// `baseModel` (LTX release the adapter was trained against) and `mode` (PortOS remix mode, `null` for a
+// non-remix weight such as the upscaler) are INDEPENDENT gates: `listIcLoraRemixModes` requires both.
+// `revision` pins the HF commit; `null` means unpinned (the 2.3 weights).
 //
-// `revision` pins the HF commit the weight is fetched and cache-resolved at.
-// `null` means unpinned — the historical behavior for the 2.3 weights, which
-// resolve out of whatever snapshot the install happens to hold.
+// `referenceDownscaleFactor`: the IC encoder divides the reference by it and requires OUTPUT height/width
+// divisible by it, so the route can reject a bad resolution up-front. It is PER-WEIGHT and must be READ from the
+// weight's `__metadata__`, never copied from a sibling: Union-Control ships 2, the Colorizer 1.
 //
-// `referenceDownscaleFactor` is informational (the pipeline reads the real
-// value from the weight's safetensors metadata): the IC encoder divides the
-// reference clip by it, and it requires the OUTPUT height/width to be
-// divisible by that factor — so surfacing it lets the route reject a bad
-// resolution up-front instead of failing deep inside the pipeline. It is
-// PER-WEIGHT and must be READ from the weight's `__metadata__`, never copied
-// from a sibling entry: Union-Control ships 2, the Colorizer ships 1.
-//
-// The MIRRORED fields (label/description/referenceKind/uploadLabel/the counts/
-// the factor) are duplicated in client/src/lib/videoGenParams.js so the form can
-// validate pre-submit; icLoraWeights.parity.test.js diffs the two so a change
-// here can't silently leave the client accepting what the server rejects. That
-// mirror covers REMIX MODES only — a non-remix weight has no form surface, so
-// mirroring it would ship a field the client never reads.
+// MIRRORED fields (label/description/referenceKind/uploadLabel/counts/factor) are duplicated in
+// client/src/lib/videoGenParams.js and diffed by icLoraWeights.parity.test.js. Remix modes only; a non-remix
+// weight has no form surface.
 export const IC_LORA_MODES = Object.freeze({
   control: Object.freeze({
     id: 'control',
@@ -88,12 +44,11 @@ export const IC_LORA_MODES = Object.freeze({
     revision: null,
     label: 'Control',
     description: 'Structure + motion from a control clip',
-    // Drives the panel's upload copy + `accept` filter, so a new mode needs no
-    // component change to describe its own input (see referenceKind).
+    // Drives the panel's upload copy + `accept` filter.
     uploadLabel: 'Upload a control clip (depth / pose / edges)',
     repo: 'Lightricks/LTX-2.3-22b-IC-LoRA-Union-Control',
     filename: 'ltx-2.3-22b-ic-lora-union-control-ref0.5.safetensors',
-    // ~654 MB — used for the download badge's size estimate before the pull.
+    // ~654 MB, for the download badge's size estimate.
     sizeBytes: 654 * 1024 * 1024,
     // Read from the weight's safetensors `__metadata__.reference_downscale_factor`.
     referenceDownscaleFactor: 2,
@@ -109,15 +64,12 @@ export const IC_LORA_MODES = Object.freeze({
     label: 'Colorize',
     description: 'Color restored onto a black-and-white clip',
     uploadLabel: 'Upload a B&W clip to restore',
-    // Community-published (DoctorDiffusion), not Lightricks — un-gated all the
-    // same, so it rides the identical download/verify surface.
+    // Community-published (DoctorDiffusion), un-gated.
     repo: 'DoctorDiffusion/LTX-2.3-IC-LoRA-Colorizer',
     filename: 'LTX-2.3-22b-IC-LoRA-Colorizer-0.9.safetensors',
-    // ~312 MiB (327 MB) — used for the download badge's size estimate.
+    // ~312 MiB, for the download badge's size estimate.
     sizeBytes: 312 * 1024 * 1024,
-    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`,
-    // which is "1" here — the Colorizer conditions on a FULL-resolution reference
-    // rather than Union-Control's halved one, so it imposes no divisibility rule
+    // `__metadata__` says "1": the Colorizer conditions on a FULL-resolution reference, so no divisibility rule
     // (icResolutionIssue short-circuits at factor <= 1). Do not "align" it to 2.
     referenceDownscaleFactor: 1,
     minReferences: 1,
@@ -134,34 +86,23 @@ export const IC_LORA_MODES = Object.freeze({
     uploadLabel: 'Upload a reference still (character / prop / setting)',
     repo: 'Lightricks/LTX-2.3-22b-IC-LoRA-Ingredients',
     filename: 'ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors',
-    // 1_308_778_338 bytes, read from the HF `x-linked-size` header — not a guess.
+    // From the HF `x-linked-size` header.
     sizeBytes: 1_308_778_338,
-    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`
-    // (fetched with an HTTP Range request over the header region, so no 1.3 GB
-    // download was needed to confirm it): "1". Like the Colorizer this weight
-    // conditions on FULL-resolution references and imposes no divisibility rule.
+    // `__metadata__` says "1" (read via HTTP Range over the header): full-resolution references, no divisibility rule.
     referenceDownscaleFactor: 1,
-    // The weight's contract: 2-8 reference stills. A wrong count yields
-    // plausible-looking garbage rather than an error, so it's enforced at every
-    // layer (route, icLoraArgs, and the Python helper via --ic-min/max-references).
+    // 2-8 stills. A wrong count yields plausible-looking garbage, so it is enforced at every layer (route,
+    // icLoraArgs, and the Python helper via --ic-min/max-references).
     minReferences: 2,
     maxReferences: 8,
-    // Images, not clips — Ingredients recomposes a scene from stills. Drives the
-    // panel's `accept` filter and the route's gallery-image resolution.
+    // Stills, not clips; drives the panel's `accept` filter and the route's gallery-image resolution.
     referenceKind: 'image',
-    // The official Lightricks repo is gated (accept the license + supply an HF
-    // token), so surface that in the UI instead of letting the download fail
-    // with a bare 401. The mirror below is the un-gated path.
+    // Official repo is gated (license + HF token); surfaced in the UI instead of a bare 401. The mirror is the un-gated path.
     gated: true,
-    // Un-gated fallback for users without an HF token. This repo is the ~708 GB
-    // `DeepBeepMeep/LTX-2` aggregate mirror, so it may ONLY ever be fetched
-    // single-file (`--only <filename>`) — see requiresPreDownload.
+    // Un-gated fallback: the ~708 GB aggregate mirror, so it may ONLY be fetched single-file (`--only <filename>`).
     mirrorRepo: 'DeepBeepMeep/LTX-2',
     mirrorFilename: 'ltx-2.3-22b-ic-lora-ingredients-0.9.safetensors',
-    // Suppresses resolveIcLoraWeight's bare-repo-id fallback. Handing either
-    // repo id to ICLoraPipeline._resolve_lora_path would `snapshot_download` it:
-    // the official one is gated (401 mid-render) and the mirror is 708 GB. The
-    // user must pre-download the weight through PortOS' single-file path first.
+    // Suppresses resolveIcLoraWeight's bare-repo-id fallback: `snapshot_download` of the gated repo 401s
+    // mid-render and of the mirror pulls 708 GB. The user pre-downloads the single file first.
     requiresPreDownload: true,
   }),
   'ingredients-25': Object.freeze({
@@ -174,7 +115,7 @@ export const IC_LORA_MODES = Object.freeze({
     uploadLabel: 'Choose a character, prop or location reference',
     repo: 'Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients',
     filename: 'ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors',
-    // Measured from the official downloaded safetensors file.
+    // Measured from the official file.
     sizeBytes: 1_308_787_472,
     referenceDownscaleFactor: 1,
     minReferences: 1,
@@ -183,11 +124,8 @@ export const IC_LORA_MODES = Object.freeze({
     gated: true,
     requiresPreDownload: true,
   }),
-  // NOT a remix mode (`mode: null`) and NOT on the remix base model — the
-  // Pixel Spatial Upscaler is a 2x reference-conditioned upscale adapter for
-  // LTX-2.5, reached from the video upscale flow (#6502) rather than the render
-  // form. It is registered here so it rides the one provisioning surface every
-  // other IC weight uses.
+  // NOT a remix mode (`mode: null`) and not on the remix base model: the 2x Pixel Spatial Upscaler adapter for
+  // LTX-2.5, reached from the video upscale flow (#6502). Registered here to share the provisioning surface.
   'pixel-upscale': Object.freeze({
     id: 'pixel-upscale',
     mode: null,
@@ -197,44 +135,29 @@ export const IC_LORA_MODES = Object.freeze({
     uploadLabel: 'Upscale an existing clip',
     repo: 'Lightricks/LTX-2.5-22b-IC-LoRA-Pixel-Spatial-Upscaler',
     filename: 'ltx-2.5-22b-ic-lora-pixel-spatial-upscaler-x2-1.0.safetensors',
-    // Pinned so an install can't silently resolve a different commit's weight
-    // out of an older snapshot. Read from the HF repo metadata on 2026-09-07.
+    // Pinned so an install can't resolve a different commit's weight out of an older snapshot.
     revision: '5863fdef3eaa8b2d69fa22e259a1d75fede215dd',
-    // Exact, from the repo's blob listing — not an estimate. Do not round it.
+    // Exact, from the repo's blob listing. Do not round it.
     sizeBytes: 327_322_640,
-    // Read from the weight's safetensors `__metadata__.reference_downscale_factor`
-    // — "2" — on 2026-09-07, off the file at the pinned revision above
-    // (sha256 984851b769ea2bcb4c9e0a239a7676239e42c6a6001ddc69943b41ff0b283c1d),
-    // on an install that had accepted the license (#6512). The model card
-    // states the same value. The entry was `null` until then precisely because
-    // the file is gated and nothing in this repo could open it; the value here
-    // is the DECLARED one, and `readIcLoraReferenceDownscaleFactor` below still
-    // reads the real file whenever an install holds it, so a re-pinned weight
-    // that changes its factor is measured rather than trusted.
+    // DECLARED factor "2", read from `__metadata__` at the pinned revision (#6512). The entry was `null`
+    // while the file was gated and unopenable. `readIcLoraReferenceDownscaleFactor` still measures the real
+    // file when an install holds it, so a re-pinned weight is measured rather than trusted.
     referenceDownscaleFactor: 2,
-    // The clip being upscaled is the single reference.
     minReferences: 1,
     maxReferences: 1,
     referenceKind: 'video',
-    // Gated: the model card 401s anonymously and the weight needs an accepted
-    // license plus an HF token. There is deliberately NO mirror — #6502 rules
-    // out adopting a third-party release mirror or side-stepping the terms.
+    // Gated (license + HF token). Deliberately NO mirror: #6502 rules out third-party release mirrors.
     gated: true,
-    // Suppresses resolveIcLoraWeight's bare-repo-id fallback: handing a gated
-    // repo id to a pipeline's own resolver produces a 401 deep inside a render
-    // instead of an actionable "download the weight first" error.
+    // Suppresses the bare-repo-id fallback: a gated repo id would 401 deep inside a render.
     requiresPreDownload: true,
   }),
 });
 
-// Every registered spec, in declaration order — the PROVISIONING surface
-// (download / verify / repair / cache probe), which covers weights that are not
-// remix modes. Consumers use this instead of reaching into IC_LORA_MODES
-// directly so the container shape stays private.
+// Every registered spec: the PROVISIONING surface (download / verify / repair / cache probe), including
+// non-remix weights. Keeps the container shape private.
 export const listIcLoraWeights = () => Object.values(IC_LORA_MODES);
 
-// A render mode must name a supported LTX generation; upscale-only weights
-// remain available through the separate provisioning flow.
+// A render mode must name a supported LTX generation.
 const isRemixSpec = (spec) => !!spec?.mode && ['ltx-2.3', 'ltx-2.5'].includes(spec.baseModel);
 
 /** Do not fuse an adapter trained for one model generation into another. */
@@ -252,22 +175,16 @@ export const icLoraFrameIssue = (spec, numFrames) => {
 
 export const listIcLoraRemixModes = () => listIcLoraWeights().filter(isRemixSpec);
 
-// PortOS `mode` values that route to the IC-LoRA pipeline. Every entry is
-// `ic-<id>` so a single prefix test identifies the family, and the route enum
-// stays a closed list derived from the registry (never hand-maintained).
+// PortOS `mode` values that route to the IC-LoRA pipeline; the route enum is derived from the registry.
 export const IC_LORA_MODE_VALUES = Object.freeze(
   listIcLoraRemixModes().map((m) => m.mode),
 );
 
 export const isIcLoraMode = (mode) => typeof mode === 'string' && IC_LORA_MODE_VALUES.includes(mode);
 
-// `ic-control` → the registry entry, or null for anything else. Accepts the
-// bare id (`control`) too so callers that already stripped the prefix work.
-//
-// REMIX MODES ONLY. Every caller is on the render path, where resolving a
-// non-remix weight would let an upscale adapter be fused into the 2.3 remix
-// pipeline. Provisioning callers, which legitimately need the whole registry,
-// use `icLoraSpecByKey` instead.
+// `ic-control` (or bare `control`) -> the registry entry, else null. REMIX MODES ONLY: every caller is on the
+// render path, where an upscale adapter must never be fused into the 2.3 remix pipeline. Provisioning callers
+// use `icLoraSpecByKey`.
 export const icLoraSpecForMode = (mode) => {
   if (typeof mode !== 'string' || !mode) return null;
   const id = mode.startsWith('ic-') ? mode.slice(3) : mode;
@@ -275,15 +192,11 @@ export const icLoraSpecForMode = (mode) => {
   return isRemixSpec(spec) ? spec : null;
 };
 
-// The stable identifier a weight is addressed by outside the render path — the
-// remix mode when it has one, else its registry id. This is what the models
-// status payload reports and what the download/repair routes take as a param,
-// so an existing client URL (`/ic-loras/ic-control/download`) is unchanged.
+// The stable identifier a weight is addressed by outside the render path: its remix mode, else its registry id
+// (keeps `/ic-loras/ic-control/download` URLs unchanged).
 export const icLoraWeightKey = (spec) => (spec ? (spec.mode || spec.id) : null);
 
-// Resolve ANY registered weight by its `icLoraWeightKey`, for the provisioning
-// endpoints. Also accepts a bare registry id so a caller that already stripped
-// the `ic-` prefix works, matching icLoraSpecForMode's tolerance.
+// Resolve ANY registered weight by `icLoraWeightKey` (or bare id), for the provisioning endpoints.
 export const icLoraSpecByKey = (key) => {
   if (typeof key !== 'string' || !key) return null;
   const direct = listIcLoraWeights().find((spec) => icLoraWeightKey(spec) === key);
@@ -292,28 +205,21 @@ export const icLoraSpecByKey = (key) => {
   return IC_LORA_MODES[id] || null;
 };
 
-// Every addressable weight key, for the "expected one of …" error the
-// provisioning routes raise on an unknown param.
+// Every addressable weight key, for the routes' "expected one of" error.
 export const IC_LORA_WEIGHT_KEYS = Object.freeze(listIcLoraWeights().map(icLoraWeightKey));
 
-// Whether this weight must be located by its EXACT (repo, filename, revision)
-// rather than by a repo-wide cache verdict. True for a mirrored spec (the
-// aggregate mirror reports `cached` off any unrelated resident weight) and for
-// a revision-pinned spec (a repo-wide check would happily accept a different
-// commit's snapshot). Both cases also make an unscoped integrity walk wrong.
+// Whether this weight must be located by its EXACT (repo, filename, revision) rather than a repo-wide cache
+// verdict: a mirror reports `cached` off any unrelated resident weight, and a pinned revision must not accept
+// another commit's snapshot. Both also make an unscoped integrity walk wrong.
 export const icLoraProbesExactFile = (spec) => !!(spec && (spec.mirrorRepo || spec.revision || spec.requiresPreDownload));
 
-// Every IC-LoRA HF repo, for the integrity-scan / status surface. The mirror
-// repos are deliberately EXCLUDED: an unscoped integrity scan walks each repo's
-// whole snapshot, and for the 708 GB aggregate mirror that means stat-ing (and
-// under `deep`, hashing) every unrelated weight the user happens to have. The
-// weight we care about there is verified via icLoraWeightCandidates instead.
+// Every IC-LoRA HF repo, for the integrity scan. Mirror repos are EXCLUDED: an unscoped scan would stat (and
+// under `deep`, hash) every unrelated weight in the 708 GB mirror; its weight is verified via
+// icLoraWeightCandidates instead.
 export const icLoraRepos = () => listIcLoraWeights().map((m) => m.repo);
 
-// Every (repo, filename) pair a spec's weight can legitimately come from, in
-// preference order: the official repo first, then the un-gated mirror. Shared by
-// the cache probe and the download endpoint so "where does this weight live?" has
-// exactly one answer.
+// Every (repo, filename) a spec's weight can come from, official repo first, then the un-gated mirror; shared by
+// the cache probe and the download endpoint.
 export const icLoraWeightCandidates = (spec) => {
   if (!spec) return [];
   const candidates = [{
@@ -323,9 +229,7 @@ export const icLoraWeightCandidates = (spec) => {
     candidates.push({
       repo: spec.mirrorRepo,
       filename: spec.mirrorFilename || spec.filename,
-      // The pinned revision belongs to the OFFICIAL repo's history; a mirror is
-      // a different repository whose commits have nothing to do with it, so
-      // pinning it there would resolve nothing. Mirrors stay unpinned.
+      // The pin belongs to the OFFICIAL repo's history; mirrors stay unpinned.
       revision: null,
       mirror: true,
     });
@@ -333,19 +237,15 @@ export const icLoraWeightCandidates = (spec) => {
   return candidates;
 };
 
-// "exactly 1" / "2-8" — the human phrasing of a spec's reference-count rule.
-// Lives here so the route and the arg builder can't word (or bound) it
-// differently, and so the Python helper's flags come from one place.
+// "exactly 1" / "2-8": one wording and bounds for the route, arg builder and Python helper flags.
 export const describeIcReferenceRange = (spec) => (
   spec.minReferences === spec.maxReferences
     ? `exactly ${spec.minReferences}`
     : `${spec.minReferences}-${spec.maxReferences}`
 );
 
-// Throw when `count` violates the weight's reference contract. `fail` builds the
-// caller's error (the route needs a ServerError with its own staging cleanup
-// already done; the worker needs a plain one), so the MESSAGE and the BOUNDS
-// stay single-sourced even though the throw sites differ.
+// Throw when `count` violates the weight's reference contract. `fail` builds the caller's error (the route's
+// ServerError vs the worker's plain one) so message and bounds stay single-sourced.
 export const assertIcReferenceCount = (spec, count, fail) => {
   if (count >= spec.minReferences && count <= spec.maxReferences) return;
   throw fail(
@@ -353,14 +253,9 @@ export const assertIcReferenceCount = (spec, count, fail) => {
   );
 };
 
-// The IC encoder downscales the reference by `referenceDownscaleFactor`, which
-// requires the OUTPUT dimensions to divide evenly by it. Returns a human message
-// when they don't, else null. Mirrored client-side (icResolutionIssue in
-// client/src/lib/videoGenParams.js) so the form can warn before submit.
-// A `null`/absent factor is UNKNOWN, not 1 — a weight whose metadata has not
-// been read. Both resolve to "assert no rule", but they must stay
-// distinguishable: guessing a factor here would either reject valid
-// resolutions or green-light ones the pipeline will refuse deep inside a render.
+// The IC encoder downscales the reference by `referenceDownscaleFactor`, so OUTPUT dimensions must divide
+// evenly by it; returns a human message when they don't, else null. Mirrored client-side. A `null`/absent factor
+// is UNKNOWN, not 1: guessing would reject valid resolutions or pass ones the pipeline refuses mid-render.
 export const icResolutionIssue = (spec, width, height) => {
   const scale = spec?.referenceDownscaleFactor;
   if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 1) return null;
@@ -369,20 +264,11 @@ export const icResolutionIssue = (spec, width, height) => {
 };
 
 /**
- * The reference downscale factor a spec's DOWNLOADED weight actually declares.
+ * The reference downscale factor a spec's DOWNLOADED weight actually declares, read from the same
+ * `__metadata__.reference_downscale_factor` the MLX pipeline reads.
  *
- * `referenceDownscaleFactor` on the registry entry is what was verified when
- * the entry was written (`null` for a weight nobody has opened). This reads
- * the truth off the file an install holds — the same
- * `__metadata__.reference_downscale_factor` the MLX pipeline itself reads
- * (`iclora_utils.read_lora_reference_downscale_factor`) — so the resolution
- * rule can be stated before a render commits to it.
- *
- * Returns `{ factor, measured }`: `measured` is true only when the value came
- * off a real local file. When nothing is cached (or the header is unreadable)
- * it falls back to the registry value, which may itself be `null` — absent and
- * "declared 1" must stay distinguishable, so this never coerces one into the
- * other.
+ * Returns `{ factor, measured }`; `measured` is true only for a value read off a real local file. Otherwise it
+ * falls back to the registry value, which may be `null`; absent and "declared 1" are never coerced together.
  */
 export const readIcLoraReferenceDownscaleFactor = async (spec) => {
   const declared = typeof spec?.referenceDownscaleFactor === 'number' ? spec.referenceDownscaleFactor : null;
@@ -391,27 +277,20 @@ export const readIcLoraReferenceDownscaleFactor = async (spec) => {
   const header = await readSafetensorsHeader(cached.path);
   const raw = header?.__metadata__?.reference_downscale_factor;
   const factor = Number.parseInt(raw, 10);
-  // The key is absent on a weight that imposes no rule, which the pipeline
-  // reads as 1 — so an absent key is a real measurement of "no rule", while an
-  // unreadable header is not a measurement at all.
+  // An absent key is a real measurement of "no rule" (pipeline reads 1); an unreadable header is not.
   if (!header) return { factor: declared, measured: false };
   return Number.isInteger(factor) && factor >= 1
     ? { factor, measured: true }
     : { factor: 1, measured: true };
 };
 
-// Locate a spec's weight in the local HF cache. Walks every candidate (official
-// repo, then the un-gated mirror) and pins the EXACT filename inside the newest
-// snapshot rather than letting the pipeline glob-pick among several
-// `.safetensors` in a multi-weight repo — which for the aggregate mirror would
-// pick an arbitrary unrelated LTX weight. Returns the resolved candidate
-// (`{ path, repo, filename, mirror }`) or null when nothing is cached.
+// Locate a spec's weight in the local HF cache: pins the EXACT filename inside the newest snapshot instead of
+// letting the pipeline glob-pick among a multi-weight repo's `.safetensors`. Returns the resolved candidate
+// (`{ path, repo, filename, mirror }`) or null.
 export const findCachedIcLoraWeight = async (spec) => {
   for (const candidate of icLoraWeightCandidates(spec)) {
-    // findCachedRepoFile, NOT inspectModelCache: the latter recursively walks and
-    // stats every weight in the snapshot, which for the aggregate mirror means
-    // hundreds of GB of unrelated files. This resolves the one filename directly,
-    // inside the PINNED revision's snapshot when the spec pins one.
+    // findCachedRepoFile, NOT inspectModelCache, which stats every weight in the snapshot (hundreds of GB for the
+    // mirror); this resolves one filename, inside the pinned revision when the spec pins one.
     const path = await findCachedRepoFile(candidate.repo, candidate.filename, {
       revision: candidate.revision,
     });
@@ -420,20 +299,13 @@ export const findCachedIcLoraWeight = async (spec) => {
   return null;
 };
 
-// Resolve the weight to hand the Python helper. Prefers a real cached file (via
-// findCachedIcLoraWeight), then falls back to the bare repo id — which
-// ICLoraPipeline._resolve_lora_path downloads itself via `snapshot_download`.
+// Resolve the weight to hand the Python helper: a real cached file, else the bare repo id (downloaded by
+// ICLoraPipeline._resolve_lora_path via `snapshot_download`). The fallback is SUPPRESSED for
+// `requiresPreDownload` specs (gated repo 401s mid-render; mirror is ~708 GB), returning `path: null` so the
+// caller fails fast with "download the weight first".
 //
-// That fallback is SUPPRESSED for a `requiresPreDownload` spec. `snapshot_download`
-// pulls the whole repo, and for Ingredients both candidates make that unacceptable:
-// the official repo is gated (a 401 deep inside the render) and the mirror is the
-// ~708 GB `DeepBeepMeep/LTX-2` aggregate, which would fill the user's disk. Those
-// specs return `path: null` so the caller fails fast with a "download the weight
-// first" error instead.
-//
-// Returns `{ path, cached, spec, repo? }`: `cached` is true only when a real local
-// file was found, so callers can warn the user that an un-cached weight means a
-// silent multi-hundred-MB pull at render time.
+// Returns `{ path, cached, spec, repo? }`; `cached` is true only for a real local file, so callers can warn that
+// an un-cached weight means a silent multi-hundred-MB pull at render time.
 export const resolveIcLoraWeightSpec = async (spec) => {
   if (!spec) return null;
   const cached = await findCachedIcLoraWeight(spec);
@@ -444,7 +316,5 @@ export const resolveIcLoraWeightSpec = async (spec) => {
 
 export const resolveIcLoraWeight = async (mode) => resolveIcLoraWeightSpec(icLoraSpecForMode(mode));
 
-// The provisioning/upscale-flow counterpart: resolves ANY registered weight by
-// its `icLoraWeightKey`, including weights that are not remix modes. Same return
-// shape, so a caller outside the render path reads one contract.
+// The provisioning/upscale-flow counterpart: resolves ANY registered weight (remix or not) by `icLoraWeightKey`.
 export const resolveIcLoraWeightByKey = async (key) => resolveIcLoraWeightSpec(icLoraSpecByKey(key));

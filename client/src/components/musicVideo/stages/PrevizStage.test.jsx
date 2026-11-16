@@ -52,6 +52,13 @@ const project = {
   scenes: [{ sceneId: 's1', startSec: 0, endSec: 4, setReference: { subjectId: 'p-street', greyboxShotId: 'wide' }, shotSheet: { cameraId: 'cam', holder: 'Bo', characters: ['Ana'] } }],
 };
 
+// usePrevizWorld loads the world, then the sets it places, as two chained async loads. Waiting
+// on the first (findBy*) lets the second land after the test, so wait for it and flush.
+async function settleWorldLoads() {
+  await waitFor(() => expect(apiCatalog.listCatalogIngredientsByIds).toHaveBeenCalledWith(['cat-street'], expect.anything()));
+  await act(async () => {});
+}
+
 // Catches the backfill or the per-shot cast picker never reaching the saved project.
 it('builds a cut per shot from the shot list, then saves who is in shot from the chips', async () => {
   const board = { project, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
@@ -97,6 +104,7 @@ it('drafts the timeline over the linked world from the shots, then saves a beat 
   fireEvent.click((await screen.findAllByRole('button', { name: /Example Street, 20:00/ }))[0]);
   fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '90' } });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.timeline.beats[0]).toMatchObject({ startMin: 0, endMin: 90 });
+  await settleWorldLoads();
 });
 
 // Catches shots never getting a moment on the timeline, or the cut's story time edit not saving.
@@ -118,6 +126,7 @@ it('places shots on the timeline and saves a cut\'s story time', async () => {
   const saves = board.saveProjectFields.mock.calls.length;
   fireEvent.change(screen.getByLabelText('On the timeline at'), { target: { value: '19:00' } });
   expect(board.saveProjectFields.mock.calls).toHaveLength(saves);
+  await settleWorldLoads();
 });
 
 // Catches a build that gives no feedback: no busy state while it saves, no summary of what it built after.

@@ -6,28 +6,35 @@
 
 import { Router } from 'express';
 import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { getProductionReview, getProductionReadiness, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoCastAndSetsStartSchema } from '../lib/validation.js';
 
 const router = Router();
 
+// Single-write review actions answer with `{ readiness, edit }` (and their own fields, such as
+// `feedbackId`), never the whole project: `edit` is the board edit result (services/musicVideo/editResult.js)
+// the open board patches in. API callers that want the whole record read `GET /:id`. Prepare,
+// revise, proof, the text check and a plan import (it saves its source artifact first, so its diff
+// base would be a revision the board never held) still answer with `{ project, readiness }`.
+const EDIT = Object.freeze({ edit: true });
+
 router.post('/:id/production-review/feedback', asyncHandler(async (req, res) => {
-  res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body)));
+  res.json(await addProductionFeedback(req.params.id, validateRequest(musicVideoProductionFeedbackSchema, req.body), EDIT));
 }));
 
 router.post('/:id/production-review/feedback/resolve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionFeedbackResolutionSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
-  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }));
+  res.json(await closeProductionFeedback(req.params.id, { feedbackId: input.feedbackId, resolution: input.resolution, reviewer }, EDIT));
 }));
 
 router.post('/:id/production-review/lyric-anchors', asyncHandler(async (req, res) => {
-  res.json(await syncLyricAnchors(req.params.id, validateRequest(musicVideoLyricAnchorSyncSchema, req.body ?? {})));
+  res.json(await syncLyricAnchors(req.params.id, validateRequest(musicVideoLyricAnchorSyncSchema, req.body ?? {}), EDIT));
 }));
 
 router.delete('/:id/production-review/stale-rows', asyncHandler(async (req, res) => {
-  res.json(await removeStaleStoryboardRows(req.params.id));
+  res.json(await removeStaleStoryboardRows(req.params.id, EDIT));
 }));
 
 // An explicit click: the only provider call is the stage's own revision.
@@ -36,7 +43,7 @@ router.post('/:id/production-review/revise', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/production-review/revert', asyncHandler(async (req, res) => {
-  res.json(await revertProductionInput(req.params.id, validateRequest(musicVideoProductionRevertSchema, req.body)));
+  res.json(await revertProductionInput(req.params.id, validateRequest(musicVideoProductionRevertSchema, req.body), EDIT));
 }));
 
 // The overlay text quality pass: render the composition document at its text
@@ -51,11 +58,16 @@ router.get('/:id/production-review', asyncHandler(async (req, res) => {
   res.json(await getProductionReview(req.params.id));
 }));
 
+// Readiness alone, for a board that holds the project without it (#16210): no whole-project reply.
+router.get('/:id/production-review/readiness', asyncHandler(async (req, res) => {
+  res.json(await getProductionReadiness(req.params.id));
+}));
+
 router.post('/:id/production-review/document-shots', asyncHandler(async (req, res) => {
   const { musicVideoDocumentShotsSchema } = await import('../lib/musicVideoValidation.js');
   const input = validateRequest(musicVideoDocumentShotsSchema, req.body);
   const { importDocumentShots } = await import('../services/musicVideo/productionReviewService.js');
-  res.json(await importDocumentShots(req.params.id, input));
+  res.json(await importDocumentShots(req.params.id, input, EDIT));
 }));
 
 router.post('/:id/production-review/import', asyncHandler(async (req, res) => {
@@ -64,11 +76,11 @@ router.post('/:id/production-review/import', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/production-review/shots/:shotId/bind', asyncHandler(async (req, res) => {
-  res.json(await bindProductionShot(req.params.id, req.params.shotId));
+  res.json(await bindProductionShot(req.params.id, req.params.shotId, EDIT));
 }));
 
 router.put('/:id/production-review', asyncHandler(async (req, res) => {
-  res.json(await saveProductionDraft(req.params.id, validateRequest(musicVideoProductionDraftSchema, req.body)));
+  res.json(await saveProductionDraft(req.params.id, validateRequest(musicVideoProductionDraftSchema, req.body), EDIT));
 }));
 
 router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
@@ -81,13 +93,13 @@ router.post('/:id/production-review/alignment', asyncHandler(async (req, res) =>
   const input = validateRequest(musicVideoAlignmentReviewSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
   const { reverifyProductionAlignment } = await import('../services/musicVideo/productionReviewService.js');
-  res.json(await reverifyProductionAlignment(req.params.id, { ...input, reviewer }));
+  res.json(await reverifyProductionAlignment(req.params.id, { ...input, reviewer }, EDIT));
 }));
 
 router.post('/:id/production-review/approve', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoProductionApprovalSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
-  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }));
+  res.json(await approveProductionReview(req.params.id, { stage: input.stage, basis: input.basis, proofReview: input.proofReview, reviewer }, EDIT));
 }));
 
 router.post('/:id/production-review/proof', asyncHandler(async (req, res) => {

@@ -56,8 +56,9 @@ router.post('/:id/upgrade', asyncHandler(async (req, res) => {
 
 router.post('/:id/scenes', asyncHandler(async (req, res) => {
   const data = validateRequest(musicVideoSceneCreateSchema, req.body);
-  const scene = await addProjectScene(req.params.id, data);
-  res.status(201).json(scene);
+  // The reply is the new scene, as before, with the edit result beside its fields.
+  const { scene, edit } = await addProjectScene(req.params.id, data, { edit: true });
+  res.status(201).json({ ...scene, edit });
 }));
 
 router.patch('/:id/scenes/:sceneId', asyncHandler(async (req, res) => {

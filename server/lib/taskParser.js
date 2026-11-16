@@ -8,11 +8,9 @@
  * `UNKNOWN_STATUS_BLOCKED_CATEGORY` — the marker `generateTasksMarkdown` stamps when it REPAIRS an
  * unrepresentable task instead of dropping its row (#7239).
  *
- * The CoS task queues are rows in `cos_tasks` now. This format survives as two
- * things: a task's STORED FORM (`lib/cosTaskRows.js` normalizes every task by
- * round-tripping it through one row, which is why scalar metadata reads back as
- * strings; comments elsewhere that mention a "TASKS.md round-trip" mean that),
- * and the input of db-migration 018, the only code that reads whole task files.
+ * The CoS task queues are rows in `cos_tasks`. This format survives as a task's
+ * STORED FORM (`lib/cosTaskRows.js` round-trips every task through one row, so
+ * scalar metadata reads back as strings) and as the input of db-migration 018.
  *
  * Parses markdown task text with the following format:
  *
@@ -43,16 +41,10 @@
 
 // Canonical prefix lists — add new prefixes here, not in scattered startsWith checks.
 //
-// REGISTERING A PREFIX IS MANDATORY, not cosmetic. An id whose prefix is absent
-// here is rewritten to `task-<id>` the next time the row is read, so a producer
-// that re-derives its own id can never address its record again — and because
-// those reads and writes are deliberately best-effort, they miss SILENTLY. That
-// is how a preflight card (`preflight-`) sat at "Waiting for a free task slot"
-// through an entire pr-reviewer run, then got reaped as interrupted.
-//
-// `self-improve-` is minted by generateSelfImprovementTaskForType for on-demand
-// and install-wide runs. Unregistered, it re-read as `task-self-improve-…`, which
-// the queue saw as a SECOND task and spawned twice (model-comparison-refresh).
+// REGISTERING A PREFIX IS MANDATORY: an id whose prefix is absent here is
+// rewritten to `task-<id>` on the next read, so the producer can no longer
+// address its record (and the queue may see a SECOND task). Those best-effort
+// reads and writes miss SILENTLY.
 const INTERNAL_PREFIXES = ['sys-', 'app-improve-', 'cd-', 'preflight-', 'self-improve-'];
 const ALL_KNOWN_PREFIXES = ['task-', ...INTERNAL_PREFIXES];
 
@@ -80,14 +72,10 @@ export const PRIORITY_VALUES = {
  * The canonical task vocabularies, derived from the two maps above so nothing
  * can re-declare a drifting copy.
  *
- * These exist because `generateTasksMarkdown` can only REPRESENT these values:
- * a status outside the set lands in no section and a priority outside it fails
- * `matchTaskLine`'s regex on the next read. Every stored `cos_tasks` row is
- * normalized through that round-trip, and when TASKS.md was the queue store an
- * unrepresentable value deleted the task and its `metadata.prompt` outright
- * (#7239). Validate against these at every boundary
- * that can set a status or priority — the HTTP schemas (cosValidation.js) and
- * the peer wire schema (peerSyncValidation.js) both read them from here.
+ * `generateTasksMarkdown` can only REPRESENT these values: a status outside the
+ * set lands in no section and a priority outside it fails `matchTaskLine` on the
+ * next read, deleting the task. Validate against these at every boundary that can
+ * set a status or priority (cosValidation.js, peerSyncValidation.js).
  */
 export const TASK_STATUS_VALUES = Object.freeze([...new Set(Object.values(STATUS_MAP))]);
 export const TASK_PRIORITY_VALUES = Object.freeze(Object.keys(PRIORITY_VALUES));
@@ -106,17 +94,12 @@ const REPAIRED_PRIORITY = 'MEDIUM';
 /**
  * Write-side backstop: return a task the markdown format can actually represent.
  *
- * Coerce rather than throw. A peer or an install that already holds a task with
- * an out-of-vocabulary value must be repaired on READ, not made to crash every
- * subsequent task-file write — and a row that cannot be written is a row that is
- * silently deleted, which is the failure this guard exists to stop.
+ * Coerce rather than throw: a task with an out-of-vocabulary value is repaired,
+ * since a row that cannot be written is silently deleted.
  *
- * Never mutates its argument; a representable task is returned as-is, so the
- * common path allocates nothing. Exported because the two places that CONSTRUCT
- * a task (`cosTaskIntake.buildQueuedTask`, `cosTaskStore.updateTask`) run it on
- * the object they are about to persist, so the task they return and emit on
- * `tasks:changed` says exactly what the file says. Applying it here as well keeps
- * it a backstop for rows an older install or a peer already wrote.
+ * Never mutates its argument; a representable task is returned as-is. Exported
+ * because the constructors (`cosTaskIntake.buildQueuedTask`,
+ * `cosTaskStore.updateTask`) run it so what they emit matches what is stored.
  */
 export function toRepresentableTask(task) {
   const statusOk = TASK_STATUS_VALUES.includes(task?.status);
@@ -133,12 +116,9 @@ export function toRepresentableTask(task) {
     status: statusOk ? task.status : REPAIRED_STATUS,
     priority: priorityOk ? task.priority : REPAIRED_PRIORITY,
     priorityValue: priorityOk ? task.priorityValue : PRIORITY_VALUES[REPAIRED_PRIORITY],
-    // A status repair ALWAYS stamps `unknown-status`, never defers to a category
-    // the task already carried: that prior value is arbitrary (it describes some
-    // earlier block, not this one) and a reapable one would let the 14-day
-    // auto-expiry flip the rescued task to `completed` — the exact loss the
-    // exemption in taskBlockCategories.js exists to prevent. The old value is kept
-    // beside it rather than discarded.
+    // A status repair ALWAYS stamps `unknown-status`: a prior category describes
+    // some earlier block, and a reapable one would let the 14-day auto-expiry
+    // complete the rescued task (see taskBlockCategories.js). The old value is kept.
     metadata: statusOk ? (task.metadata || {}) : {
       ...task?.metadata,
       ...(task?.metadata?.blockedCategory ? { priorBlockedCategory: task.metadata.blockedCategory } : {}),
@@ -153,21 +133,12 @@ export function toRepresentableTask(task) {
  * Format: - [ ] #task-001 | HIGH | Description
  * Or with approval flag: - [ ] #sys-001 | HIGH | AUTO | Description
  *
- * The four patterns are tried in order, and the first two are the format as
- * written — a well-formed file never reaches the others, so their behavior is
- * unchanged. The last two are the RECOVERY path (#7239) for a row an older
- * install already wrote, or a hand edit: they accept any priority field and any
- * checkbox character, so the row and its indented metadata (which includes
- * `metadata.prompt`, the whole agent-facing payload) survive to be repaired
- * instead of being dropped along with everything indented under it.
- *
- * Recovery accepts ANY non-pipe priority field, because the boundary that wrote
- * these rows accepted any string — `VERY HIGH`, `123` and `URGENT!` were all
- * reachable through the route before this issue, and a narrower pattern would
- * leave exactly those rows to be deleted by the next write. The cost of that
- * width is that a `- [ ] #id | text | text` SENTENCE inside a legacy multi-line
- * description also matches, so no recovered row is ever auto-approved (#7300) —
- * see the approval flags in `matchTaskLine`.
+ * Patterns are tried in order. The first two are the format as written; the last
+ * two are the RECOVERY path for rows an older install or a hand edit wrote: they
+ * accept any non-pipe priority field and any checkbox character, so the row and
+ * its indented metadata (including `metadata.prompt`) survive to be repaired
+ * instead of dropped. That width also matches prose sentences, so no recovered
+ * row is ever auto-approved (see `matchTaskLine`).
  */
 const TASK_LINE_PATTERNS = [
   { withFlag: true, re: /^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i },
@@ -182,11 +153,9 @@ function matchTaskLine(line) {
     if (!match) continue;
 
     const [, statusChar, id, priority, ...rest] = match;
-    // Lower-cased because the patterns are case-insensitive: a hand-written [X]
-    // means completed, not an unknown marker. A marker that really is unknown
-    // stays as its raw token so toRepresentableTask parks the row as blocked
-    // rather than defaulting it to pending, which would make a hand-edited row
-    // auto-approved and runnable.
+    // Lower-cased so a hand-written [X] means completed. A truly unknown marker
+    // stays raw so toRepresentableTask parks the row as blocked instead of
+    // defaulting it to a runnable pending row.
     const statusKey = `[${statusChar.toLowerCase()}]`;
     const approvalFlag = withFlag ? rest[0].toUpperCase() : null;
     const description = withFlag ? rest[1] : rest[0];
@@ -198,29 +167,16 @@ function matchTaskLine(line) {
       status: STATUS_MAP[statusKey] ?? statusKey,
       priority: priority.trim().toUpperCase(),
       priorityValue: PRIORITY_VALUES[priority.trim().toUpperCase()] || 2,
-      // NO recovered row is auto-approved (#7300). The recovery patterns accept any
-      // non-pipe priority field, which is right for a row the old free-string
-      // boundary really wrote — but it also matches a `- [ ] #id | text | text`
-      // SENTENCE sitting at column 0 inside a legacy multi-line description body,
-      // and a match there mints a task nobody wrote. Handing that to the dequeue is
-      // an agent spawn from prose, so a recovered row is preserved for a human and
-      // withheld from `getAutoApprovedTasks` regardless of its id. This is the same
-      // hold the unknown-checkbox path takes, from the other side of the row.
+      // NO recovered row is auto-approved (#7300): recovery patterns can match a
+      // `- [ ] #id | text | text` SENTENCE inside a legacy multi-line description,
+      // and auto-approving it would spawn an agent from prose. The split is also
+      // ambiguous when the priority field itself held a pipe, so which segment was
+      // the approval flag is a guess. Recovered rows land in the approval queue.
       //
-      // A recovered row of EITHER kind lands in the approval queue, because its
-      // split is ambiguous in a second way — the priority field could itself have
-      // held a pipe ('UR|GENT', 'UR|AUTO' were both reachable), so which segment was
-      // the approval flag is a guess, and that flag gates an agent spawn.
-      //
-      // `approvalRequired` — not `autoApproved: false` alone — is what carries the
-      // hold, because it is the one signal BOTH files can write (`APPROVAL`). The
-      // hold used to be inferred on the user side and evaporate on the next write:
-      // the row healed into a strict row with no flag, and the read after that
-      // parsed it as auto-approved and spawned an agent from what #7300 established
-      // was prose. `autoApproved: false` cannot stand in for it there — every user
-      // task `buildQueuedTask` mints carries that value, so writing a flag for it
-      // would hold the entire user queue. A strict match on either kind is
-      // untouched.
+      // `approvalRequired`, not `autoApproved: false`, carries the hold: it is the
+      // one signal BOTH files can write (`APPROVAL`), and every user task carries
+      // `autoApproved: false`, so flagging on that would hold the whole user queue.
+      // A strict match is untouched.
       approvalRequired: recovery || approvalFlag === 'APPROVAL',
       autoApproved: !recovery && (withFlag ? approvalFlag === 'AUTO' : true),
       description: description.trim(),
@@ -251,17 +207,13 @@ function unescapeNewlines(value) {
       // Fall through to legacy behavior if parsing fails
     }
   }
-  // Self-heal task files a pre-fix install already wrote, where a nullish value
-  // was persisted as the bare word `null` and read back as a TRUTHY string (see
-  // generateTasksMarkdown for what that broke). A genuine string `"null"` now
-  // round-trips through the JSON sentinel, so an unsentineled bare
-  // `null`/`undefined` is unambiguously the nullish value.
+  // A genuine string `"null"` round-trips through the JSON sentinel, so an
+  // unsentineled bare `null`/`undefined` is unambiguously nullish (older installs
+  // persisted nullish values that way).
   if (value === 'null') return null;
   if (value === 'undefined') return undefined;
-  // Legacy fallback for backwards compatibility with pre-sentinel data only.
-  // New values with special characters always use the sentinel prefix (see escapeNewlines),
-  // so this branch only runs on historical data that was escaped with the old method.
-  // Values that were never intended to be newline-escaped won't have \\n sequences.
+  // Legacy pre-sentinel escaping only; new special-character values always use the
+  // sentinel prefix (see escapeNewlines).
   return value.replace(/\\n/g, '\n');
 }
 
@@ -318,12 +270,8 @@ export function parseTasksMarkdown(content) {
   let currentTask = null;
   let currentSection = null;
 
-  // Pre-scan every task line's normalized id so suffix assignment below can
-  // avoid colliding with any *stable, user-authored* id present in the file —
-  // not just ids we've parsed so far. Without this a duplicate could grab
-  // `task-001-dup2` only for a real later `task-001-dup2` to be bumped to
-  // `task-001-dup2-dup2`, needlessly mutating an id the user chose. We rename
-  // the duplicate, never the unique original.
+  // Pre-scan ids so suffix assignment never collides with a later user-authored
+  // id; we rename the duplicate, never the unique original.
   const rawIds = new Set();
   for (const line of lines) {
     if (line.startsWith('- [')) {
@@ -332,14 +280,10 @@ export function parseTasksMarkdown(content) {
     }
   }
 
-  // Push a fully-parsed task, guaranteeing its id is unique across the file.
-  // Duplicate ids corrupt downstream consumers that key on id — most notably
-  // reorderTasks' `new Map(tasks.map(t => [t.id, t]))`, which silently collapses
-  // collisions so only the last duplicate survives the reorder write-back. We
-  // warn and suffix the colliding id (`-dup2`, `-dup3`, …) rather than throw:
-  // throwing would make a single hand-edited or corrupted TASKS.md crash every
-  // read of the CoS task system, whereas suffixing keeps every task alive with a
-  // distinct id. Called once per task, after its metadata lines are attached.
+  // Push a fully-parsed task with a file-unique id: duplicates would collapse in
+  // id-keyed consumers (reorderTasks' Map). Suffix (`-dup2`, …) and warn rather
+  // than throw, so one corrupted file cannot crash every read. Called once per
+  // task, after its metadata lines are attached.
   const pushTask = (task) => {
     if (!task) return;
     if (seenIds.has(task.id)) {
@@ -352,11 +296,8 @@ export function parseTasksMarkdown(content) {
       console.warn(`⚠️ Duplicate task id "${originalId}" in tasks markdown — renamed to "${task.id}"`);
     }
     seenIds.add(task.id);
-    // Repair HERE, not at match time: the row's indented metadata lines are
-    // attached between the two, and one of them can be a `blockedCategory` left
-    // over from an earlier block. Repairing first would let that line overwrite
-    // the `unknown-status` hold the repair just stamped, dropping the rescued
-    // task back into the 14-day auto-expiry it is exempt from.
+    // Repair HERE, not at match time: a later `blockedCategory` metadata line
+    // would otherwise overwrite the `unknown-status` hold the repair stamped.
     tasks.push(toRepresentableTask(task));
   };
 
@@ -419,16 +360,12 @@ export function sortByPriority(tasks) {
 
 /**
  * Last-resort write-side guard: a task row is a ONE-LINE record, so a newline in
- * `description` does not merely look wrong — it re-parses as file structure. The
- * lines after the break are read as the task's own metadata (`  - app: x`
- * re-targets which app the agent runs against) or, for a `- [ ] #id | …` row, as
- * a whole extra auto-approved task the spawner will run, while the description
- * itself is silently truncated to its first line (#7240).
+ * `description` re-parses as file structure (injected metadata such as
+ * `  - app: x`, or a whole extra auto-approved task).
  *
  * Callers normalize first (`cosTaskStore.addTask` / `writeTaskUpdate` re-home the
- * body into the newline-safe `metadata.prompt` / `metadata.context`); this only
- * stops a future writer from reintroducing the corruption, and says so loudly
- * because reaching it means the body was NOT preserved anywhere.
+ * body into `metadata.prompt` / `metadata.context`); reaching this means the body
+ * was NOT preserved anywhere, hence the loud warning.
  */
 function flattenDescription(task) {
   const description = task.description;
@@ -440,27 +377,19 @@ function flattenDescription(task) {
 /**
  * The `| AUTO |` / `| APPROVAL |` segment a task row carries, or `''`.
  *
- * The internal file uses the whole vocabulary: every task that carries an
- * `autoApproved` at all states it, and a held one says APPROVAL.
+ * The internal file uses the whole vocabulary: a task carrying `autoApproved`
+ * states it, and a held one says APPROVAL.
  *
- * The user file carries ONLY the hold. `APPROVAL` when the row is withheld from
- * the unattended spawn (#7300, #7367), nothing otherwise — so an ordinary user
- * row keeps the flagless shape it has always had, and the hold stops being
- * inferred from a recovery match that the very next write erases.
- *
- * Which is why the user side keys on `approvalRequired` and NOT on the
- * internal side's wider `heldBack`: `buildQueuedTask` mints every user task
- * with `autoApproved: false` (only an internal task is ever auto-approved in
- * memory), so writing a flag for that value would hold the entire user queue on
- * its first rewrite.
+ * The user file carries ONLY the hold (`APPROVAL` when withheld from the
+ * unattended spawn), so the hold is never inferred from a recovery match that the
+ * next write erases. It keys on `approvalRequired`, not the internal side's wider
+ * `heldBack`: `buildQueuedTask` mints every user task with `autoApproved: false`,
+ * so flagging that would hold the entire user queue on its first rewrite.
  */
 function approvalFlagSegment(task, includeApprovalFlags) {
   if (!includeApprovalFlags) return task.approvalRequired === true ? ' | APPROVAL' : '';
-  // `autoApproved === false` writes APPROVAL, not AUTO (#7300). A task that says
-  // it is not auto-approved must not be healed into a row the next read dequeues:
-  // APPROVAL is the only flag this format has that survives the round trip as a
-  // hold. An `undefined` autoApproved is NOT that claim — it stays on the old
-  // path so a task that never carried the field keeps its flagless row.
+  // `autoApproved === false` writes APPROVAL: it is the only flag that survives
+  // the round trip as a hold. `undefined` is NOT that claim and stays flagless.
   const heldBack = task.approvalRequired || task.autoApproved === false;
   if (heldBack) return ' | APPROVAL';
   return task.autoApproved !== undefined ? ' | AUTO' : '';
@@ -473,9 +402,8 @@ function approvalFlagSegment(task, includeApprovalFlags) {
  *   hold — see `approvalFlagSegment`.
  */
 export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
-  // Repair BEFORE grouping: groupTasksByStatus buckets only the five known
-  // statuses, so an unrepresentable task would fall out of every bucket and be
-  // written nowhere. Every task handed in gets a row (#7239).
+  // Repair BEFORE grouping: an unrepresentable status falls out of every bucket
+  // and would be written nowhere.
   const grouped = groupTasksByStatus(tasks.map(toRepresentableTask));
   const lines = ['# Tasks', ''];
 
@@ -506,20 +434,11 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
       const approvalFlag = approvalFlagSegment(task, includeApprovalFlags);
       lines.push(`- ${checkbox} #${task.id} | ${task.priority}${approvalFlag} | ${flattenDescription(task)}`);
 
-      // Add metadata (escape newlines in values for single-line storage).
-      // Pass the raw value — escapeNewlines JSON-encodes arrays/objects itself;
-      // pre-stringifying here would flatten them to "a,b" or "[object Object]"
-      // before it ever sees the array/object shape.
-      //
-      // Nullish values are DROPPED rather than written. `String(null)` used to
-      // put the bare word `null` in the file, which re-parsed as the TRUTHY
-      // string `'null'` — so a review-loop follow-up carrying `app: null` came
-      // back as an app id of `'null'`, got blocked with `app-unresolved` before
-      // it started, and the PR it existed to merge was orphaned. Producers
-      // legitimately build metadata with `?? null` placeholders
-      // (spawnReviewLoopFollowUp's `app`, `reviewLoopPRNumber`, …), so this is
-      // the one place that can stop that habit from corrupting task state. An
-      // absent key already means "not set" to every reader.
+      // Pass the raw value: escapeNewlines JSON-encodes arrays/objects itself, and
+      // pre-stringifying would flatten them.
+      // Nullish values are DROPPED: a bare `null` would re-parse as the TRUTHY
+      // string `'null'`, and producers build metadata with `?? null` placeholders.
+      // An absent key already means "not set" to every reader.
       for (const [key, value] of Object.entries(task.metadata)) {
         if (value === null || value === undefined) continue;
         const escapedValue = escapeNewlines(value);

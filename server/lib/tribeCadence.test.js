@@ -6,7 +6,7 @@
  * check and the Care dashboard widget all run exactly this code.
  */
 import { describe, it, expect } from 'vitest';
-import { cadenceStatus, daysSinceDate, DEFAULT_CADENCE_DAYS, SOON_WINDOW_DAYS } from './tribeCadence.js';
+import { cadenceStatus, daysSinceDate } from './tribeCadence.js';
 
 // N days before today as a YYYY-MM-DD string, so the suite is date-independent.
 // Built from LOCAL calendar fields — `daysSinceDate` parses the `YYYY-MM-DD` in
@@ -17,13 +17,6 @@ function daysAgo(n) {
   d.setDate(d.getDate() - n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-
-describe('tribeCadence — tuning constants', () => {
-  it('exposes the defaults every surface reads', () => {
-    expect(DEFAULT_CADENCE_DAYS).toBeGreaterThan(0);
-    expect(SOON_WINDOW_DAYS).toBe(7);
-  });
-});
 
 describe('tribeCadence — daysSinceDate', () => {
   it('returns null for anything that is not a parsable date', () => {

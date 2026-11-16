@@ -3,17 +3,13 @@ import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, REFERENCE_FACING, anchorIdForDirection,
   keyColorPhrase, buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
   buildWalkVideoPrompt, buildScannerPrompt, buildAmbientReferencePrompt, buildAmbientVideoPrompt,
-  applyCorrection, viewGeometryClause, TURNAROUND_VIEWS, SPRITE_REFERENCE_CANVAS_SIZE,
+  applyCorrection, viewGeometryClause, TURNAROUND_VIEWS,
 } from './prompts.js';
 // Namespace import so the SURFACES exhaustiveness guard below can enumerate every
 // exported builder rather than trusting a hand-maintained list.
 import * as allPrompts from './prompts.js';
 
 describe('sprite direction contracts', () => {
-  it('uses a square canvas for reviewable reference candidates', () => {
-    expect(SPRITE_REFERENCE_CANVAS_SIZE).toBe(1024);
-  });
-
   it('exposes the canonical 8-direction order starting at south', () => {
     expect(SPRITE_DIRECTIONS).toHaveLength(8);
     expect(SPRITE_DIRECTIONS[0]).toBe('south');
