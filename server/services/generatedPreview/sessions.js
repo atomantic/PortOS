@@ -16,6 +16,8 @@ import { PREVIEW_PAGE_CSP } from '../../lib/generatedPreviewSandbox.js';
 import { createCooperativePlayback, playbackSchema } from './cooperativePlayback.js';
 import { stageCodeAnimationPage, writeComposition as writeNamedComposition } from './codeAnimationPage.js';
 import { saveRecordingToMediaHistory } from './recordingSave.js';
+import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
+import { makePathResolver } from '../../lib/pathSafety.js';
 
 const MAX_SESSIONS = 3;
 const IDLE_MS = 120_000;
@@ -357,8 +359,6 @@ async function inlineLibraryAudio(url) {
     path = await resolveMusicTrackPath(name);
   } else if (uploadName) {
     name = decodeURIComponent(uploadName);
-    const { makePathResolver } = await import('../../lib/pathSafety.js');
-    const { UPLOAD_AUDIO_EXTENSIONS } = await import('../../lib/mimeTypes.js');
     const resolveUpload = makePathResolver(() => PATHS.uploads, { extensions: UPLOAD_AUDIO_EXTENSIONS });
     path = resolveUpload(name);
   } else {

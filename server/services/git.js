@@ -5,7 +5,7 @@ import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { delimiter, dirname, join, resolve } from 'path';
 import { safeJSONParse, PATHS, sleep, rmGuarded } from '../lib/fileUtils.js';
-import { isGitLockError, listWorktrees } from './worktreeManager.js';
+import { isGitLockError, listWorktrees, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { execGit, execGitSafe } from '../lib/execGit.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { resolveForgeForRepo } from './forgeAuth.js';
@@ -29,6 +29,8 @@ import {
 import { PROTECTED_BRANCHES, validateFilePaths, toLiteralPathspec, assertSafeRef } from '../lib/gitArgs.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { securityScanPRDisclosure } from '../lib/securityScanEvidence.js';
+import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
+import { parseGitRemoteUrl } from '../lib/gitRemote.js';
 
 // Re-export so callers that used to import from services/git.js keep working.
 export { execGit, execGitSafe };
@@ -661,7 +663,6 @@ async function deleteVerifiedMergedHead(dir, merged, { expectedHeadSha, host, pr
   const urls = await execGitSafe(['remote', 'get-url', '--push', '--all', 'origin'], dir);
   const pushUrls = urls.stdout.trim().split('\n').filter(Boolean);
   if (urls.exitCode !== 0 || pushUrls.length !== 1) return retain('push-target-ambiguous');
-  const { parseGitRemoteUrl } = await import('../lib/gitRemote.js');
   const remote = parseGitRemoteUrl(pushUrls[0]);
   if (!remote || remote.host.toLowerCase() !== target.host.toLowerCase()
       || `${remote.owner}/${remote.repo}`.toLowerCase() !== fullName) return retain('push-target-mismatch');
@@ -1619,7 +1620,6 @@ async function deletePinnedLocalBranch(dir, branch, expectedHead) {
   const ref = `refs/heads/${branch}`;
   const observed = await execGitSafe(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true });
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
-  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const assertNoOwner = async () => {
     const agents = await readClaimOwnershipAgents();
     const hold = claimCheckoutOwnerReason({ branchName: branch, holderPath: null, sourceWorkspace: dir, agents });
@@ -1635,7 +1635,6 @@ async function deletePinnedLocalBranch(dir, branch, expectedHead) {
   }
   const head = observed.stdout.trim();
   if (expectedHead && expectedHead !== head) throw new ServerError('Branch head changed', { status: 409, code: 'BRANCH_HEAD_CHANGED' });
-  const { deleteCompletedLocalBranch } = await import('./worktreeManager.js');
   return withClaimOwnershipLock(async () => {
     const beforeMutation = async () => {
       await assertNoOwner();
@@ -2068,7 +2067,6 @@ async function remoteRetirementLocalHold(dir, name) {
 
 async function retireMergedRemoteHead(dir, name, context, { excludeBranches } = {}) {
   const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
-  const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   if (PROTECTED_BRANCHES.includes(name) || name === context.defaultBranch || name === 'HEAD') return { reason: 'protected branch' };
   const ref = `refs/heads/${name}`;

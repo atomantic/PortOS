@@ -14,6 +14,8 @@ import { getAgentRecord } from './cosAgentLifecycle.js';
 import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
 import { getAllTasks, getTaskById, updateTask } from './cosTaskStore.js';
 import { isDeepStrictEqual } from 'node:util';
+import { readAgentsStateForSafetyCheck } from './cosState.js';
+import { getSettingsWithStatus } from './settings.js';
 
 const SHA = /^[a-f0-9]{40}$/;
 const CATEGORY = 'runtime-verification';
@@ -50,7 +52,6 @@ async function integrationEvidence(request) {
 }
 
 async function prerequisiteReason(prerequisite) {
-  const { getSettingsWithStatus } = await import('./settings.js');
   const policy = await getSettingsWithStatus().catch(() => ({ corrupt: true }));
   const update = policy.corrupt ? 'Update policy is unreadable; retain the prerequisite.'
     : policy.settings?.autoUpdate?.enabled === true
@@ -164,7 +165,6 @@ export async function resolveRuntimeVerificationUpdate(task, outcome, agentId) {
 /** Every sweep rechecks boot/forge/dispatch evidence; an unreadable fact holds. */
 export async function sweepRuntimeVerifications() {
   const queues = await getAllTasks();
-  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
   const owners = await readAgentsStateForSafetyCheck();
   if (!owners.trusted) return { resumed: [] };
   const resumed = [];

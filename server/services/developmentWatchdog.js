@@ -7,6 +7,8 @@ import { getDomainMode } from '../lib/domainAutonomy.js';
 import { DEVELOPMENT_ACTIVE_STATUSES, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { safeJSONParse } from '../lib/jsonIo.js';
 import { isUpstreamOwner, UPSTREAM_OWNER } from '../lib/gitRemote.js';
+import { cosEvents } from './cosEvents.js';
+import { execGit } from '../lib/execGit.js';
 
 let scanTail = Promise.resolve();
 const ACTIVE_AGENT_STATUSES = new Set(['running', 'queued', 'finalizing', 'paused']);
@@ -116,7 +118,6 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   const { execGh } = await import('./github.js');
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
-  const { execGit } = await import('../lib/execGit.js');
   const { tracker, target } = await resolveAppForgeTarget(app);
   const row = {
     appId: app.id, repository: target?.fullName || null, complete: false, blockers: [],
@@ -284,7 +285,6 @@ async function dispatch(app, decision) {
     if (!task.duplicate) {
       await recordDeferredPerpetualDispatch(prepared.pendingPerpetualDispatch, taskSchedule);
       await taskSchedule.recordExecution('task:claim-issue', app.id);
-      const { cosEvents } = await import('./cosEvents.js');
       cosEvents.emit('cos:dequeue-requested');
     }
     return { taskId: task.id, duplicate: !!task.duplicate };
