@@ -34,7 +34,9 @@ const source = () => ({ id: 'system-original', taskType: 'internal', status: 'in
 const blocked = () => {
   const task = source();
   const update = resolveUndeliveredTaskUpdate(task, { status: 'incomplete', reason: 'Merged delivery still has unfinished siblings.' }, 'agent-original', time);
-  return { ...task, ...update };
+  // task-recovery-exhausted tasks are deliberately not investigated (#16404); the fixture
+  // stands in for any other investigable blocked category.
+  return { ...task, ...update, metadata: { ...update.metadata, blockedCategory: 'agent-failure' } };
 };
 const releaseApproval = () => {
   const task = blocked();
@@ -126,6 +128,18 @@ describe('blocked system recovery persisted workflow', () => {
     time = Date.parse(state.retryAt) + 1;
     await factory().recover('system-original');
     expect(created).toBe(1);
+  });
+
+  it('never investigates a task that spent its recovery budget and creates no recovery-exhausted investigation', async () => {
+    const task = blocked();
+    task.metadata.blockedCategory = 'task-recovery-exhausted';
+    await write({ user: { tasks: [] }, cos: { tasks: [task] } });
+    await factory().recover('system-original');
+    await factory().sweep();
+    expect(calls).toBe(0);
+    expect(created).toBe(0);
+    expect(analyses.some(a => /recovery-exhausted/.test(a.category))).toBe(false);
+    expect((await read()).cos.tasks.find(row => row.id === 'system-original').metadata.blockedInvestigation).toBeUndefined();
   });
 
   it('keeps an investigator failure with its existing owner and never creates a successor or auto-revives originals', async () => {

@@ -24,8 +24,8 @@ const eligible = task => {
     && m.recoveryOrigin?.subsystem !== 'repository-cleanup'
     && m.taskOutcome?.recovery?.mode !== 'approval'
     && explicitPrCompletion(task) !== PR_COMPLETIONS.LEAVE_OPEN
-    && (!USER_DECISION_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
-    && (!PAUSED_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
+    && !USER_DECISION_BLOCKED_CATEGORIES.has(category)
+    && !PAUSED_BLOCKED_CATEGORIES.has(category)
     && ![category, m.lastErrorCategory].some(value => typeof value === 'string' && humanBoundaries.has(value.toLowerCase()));
 };
 const analysisFor = task => ({
