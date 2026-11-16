@@ -22,7 +22,12 @@ export function parseTailcatVersion(text) {
   return match ? match[1] : null;
 }
 
-/** True when `version` is a parseable semver >= `minimum` (default {@link MIN_TAILCAT_VERSION}). */
+/**
+ * True when `version` is a parseable semver >= `minimum` (default {@link MIN_TAILCAT_VERSION}).
+ *
+ * @param {string|null|undefined} version
+ * @param {string} [minimum]
+ */
 export function isTailcatVersionAtLeast(version, minimum = MIN_TAILCAT_VERSION) {
   if (typeof version !== 'string' || !version) return false;
   if (typeof minimum !== 'string' || !minimum) return false;

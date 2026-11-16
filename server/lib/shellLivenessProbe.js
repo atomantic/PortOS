@@ -9,7 +9,13 @@
 
 import { execFile } from './childProcess.js';
 
-/** Build the file + argv for probing children of `shellPid` (`_shellPid`: hosting shell PID; `platform` defaults to `process.platform`) → `{ file, args }`. */
+/**
+ * Build the file + argv for probing children of `shellPid` (`_shellPid`: hosting shell PID; `platform` defaults to `process.platform`) → `{ file, args }`.
+ *
+ * @param {number} _shellPid - PID of the hosting shell process
+ * @param {string} [platform=process.platform] - OS platform
+ * @returns {{ file: string, args: string[] }}
+ */
 export function buildLivenessProbeCommand(_shellPid, platform = process.platform) {
   if (platform === 'win32') {
     return {
@@ -28,7 +34,13 @@ export function buildLivenessProbeCommand(_shellPid, platform = process.platform
   };
 }
 
-/** Parse the probe's output (lines of PPIDs from `stdout`, for the hosting `shellPid`): true if child process(es) were found. */
+/**
+ * Parse the probe's output (lines of PPIDs from `stdout`, for the hosting `shellPid`): true if child process(es) were found.
+ *
+ * @param {string} stdout - raw stdout from the probe command (lines of PPIDs)
+ * @param {number} shellPid - PID of the hosting shell process
+ * @returns {boolean} true if child process(es) were found
+ */
 export function parseLivenessProbeOutput(stdout, shellPid) {
   if (!stdout || !shellPid) return false;
   return String(stdout)

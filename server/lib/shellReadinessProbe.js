@@ -7,6 +7,13 @@
  */
 import { detectShellFlavor } from './shellCd.js';
 
+/**
+ * @param {string} nonce - unique per-probe token (opaque; not shell-quoted, so
+ *   callers must keep it to a safe charset, e.g. hex)
+ * @param {string} [shell] - the session's shell binary; see detectShellFlavor
+ * @returns {string|null} a single command line with no trailing terminator,
+ *   or `null` when this dialect has no safe split-literal probe
+ */
 export function buildReadinessProbe(nonce, shell) {
   switch (detectShellFlavor(shell)) {
     case 'cmd': return null;

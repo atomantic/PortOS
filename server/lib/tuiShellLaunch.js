@@ -17,8 +17,12 @@ import { composeProviderEnv } from './cliChildEnv.js';
 import { applyCredentialBootstrap } from './credentialBootstrap.js';
 
 /**
- * @param {object|null|undefined} provider - a RAW provider record (unredacted `envVars`, never a client-sanitized one whose secrets are `'***'`)
- * @returns {{commandLine: string, env: object}|null} null when the provider isn't a TUI or resolves no launch command ("not launchable" is one case for callers).
+ *
+ * @param {object|null|undefined} provider - a RAW provider record (unredacted
+ *   `envVars` — never a client-sanitized one, whose secrets are `'***'`)
+ * @returns {{commandLine: string, env: object}|null} null when the provider is
+ *   not a TUI or resolves no launch command, so callers can treat "not
+ *   launchable" as one case rather than checking two conditions apiece.
  */
 export function buildTuiShellLaunch(provider) {
   if (provider?.type !== PROVIDER_TYPES.TUI) return null;

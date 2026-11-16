@@ -18,8 +18,12 @@ const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
  * Decode the XML/HTML entities in a string.
  *
  * @param {string} str - Raw text that may contain entity references.
- * @param {Object<string,string>} [extraEntities] - Extra named-entity map (without `&`/`;`) merged over the predefined five, for feed-specific entities while sharing numeric-ref and double-decode handling.
- * @returns {string} Decoded string. Non-strings and entity-free input are returned unchanged.
+ * @param {Object<string,string>} [extraEntities] - Optional extra named-entity
+ *   map (without the surrounding `&`/`;`), merged on top of the predefined five.
+ *   Lets callers decode feed-specific entities such as `{ nbsp: ' ', zwnj: '' }`
+ *   while sharing the numeric-reference and double-decode handling.
+ * @returns {string} Decoded string. Non-strings and entity-free input are
+ *   returned unchanged.
  */
 export function decodeXmlEntities(str, extraEntities) {
   if (typeof str !== 'string' || str.indexOf('&') === -1) return str;

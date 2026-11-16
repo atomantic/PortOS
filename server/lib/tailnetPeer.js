@@ -24,8 +24,10 @@ function isCgnatV4(address) {
 }
 
 /**
+ *
  * @param {object} peer - Registered peer record (`host` and/or `address`).
- * @returns {boolean} True only when the peer is positively recognized as a tailnet host.
+ * @returns {boolean} True only when the peer is positively recognized as a
+ *   tailnet host.
  */
 export function isTailnetPeer(peer) {
   const host = trimmed(peer?.host);
@@ -33,7 +35,6 @@ export function isTailnetPeer(peer) {
   if (host) return MAGIC_DNS.test(host);
   const address = trimmed(peer?.address);
   if (!address) return false;
-  // Strip brackets from a literal IPv6 address (`[fd7a:…]`).
   const bare = address.replace(/^\[|\]$/g, '');
   return MAGIC_DNS.test(bare) || isCgnatV4(bare) || TAILSCALE_ULA.test(bare);
 }

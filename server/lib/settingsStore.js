@@ -9,10 +9,13 @@ import { createFileWriteQueue } from './fileWriteQueue.js';
 import { isPlainObject } from './objects.js';
 
 /**
+ *
  * @template T
  * @param {string | (() => string)} filePath - Settings file, or a resolver for it.
  * @param {T} defaults - Shipped defaults (flat object); the stored file is merged over it.
- * @param {{ normalize?: (settings: T) => T }} [options] `normalize` runs on every read after the defaults merge (repairs a hand-edited value that would corrupt a consumer).
+ * @param {{ normalize?: (settings: T) => T }} [options]
+ *   `normalize` runs on every read after the defaults merge — the place to
+ *   repair a hand-edited value that would otherwise corrupt a consumer.
  * @returns {{ get: () => Promise<T>, update: (patch?: Partial<T>) => Promise<T>, path: () => string }}
  */
 export function createSettingsStore(filePath, defaults, { normalize = null } = {}) {

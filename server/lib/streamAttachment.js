@@ -20,13 +20,18 @@ function teardown(stream) {
  * pre-stream failures (the common case: the file vanished after the readiness check) get the JSON envelope, mid-stream failures tear the socket down (sendErrorResponse no-ops once headers are sent).
  *
  * @param {import('express').Response} res
- * @param {import('stream').Readable} stream - piped to res; may expose an `abort()` used to tear down an upstream child process on disconnect.
+ * @param {import('stream').Readable} stream - piped to res; may expose an
+ *   `abort()` used to tear down an upstream child process on disconnect.
  * @param {object} opts
  * @param {string} opts.filename - offered to the browser as the download name.
  * @param {string} opts.contentType
- * @param {import('./errorHandler.js').ServerError} opts.failure - returned when the stream fails before any bytes are written.
+ * @param {import('./errorHandler.js').ServerError} opts.failure - the error
+ *   returned when the stream fails before any bytes are written.
  * @param {string} opts.label - short subject for the warning log.
- * @param {'attachment'|'inline'} [opts.disposition] - defaults to `attachment`; `inline` for a format the OS handler should open in place (USDZ / AR Quick Look: Safari won't engage Quick Look on an `attachment` response).
+ * @param {'attachment'|'inline'} [opts.disposition] - defaults to `attachment`.
+ *   Pass `inline` for a format whose whole point is that the OS handler opens it
+ *   in place rather than landing in Downloads (USDZ / AR Quick Look): Safari will
+ *   not engage Quick Look on an `attachment` response.
  */
 export function streamAttachment(res, stream, {
   filename, contentType, failure, label, disposition = 'attachment',
