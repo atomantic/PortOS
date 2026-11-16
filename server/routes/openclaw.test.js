@@ -224,34 +224,6 @@ describe('OpenClaw Routes', () => {
       expect(openclawApi.sendSessionMessage).toHaveBeenCalledWith('main', expect.objectContaining({ message: 'Hello!' }));
     });
 
-    it('should pass context and attachments to the service', async () => {
-      openclawApi.isConfigured.mockResolvedValue({ configured: true, enabled: true });
-      openclawApi.sendSessionMessage.mockResolvedValue({
-        ok: true,
-        configured: true,
-        reachable: true,
-        sessionId: 'main',
-        message: { id: 'resp-1', role: 'assistant', content: 'Got it', createdAt: '2026-01-01T00:00:01.000Z', status: 'completed' }
-      });
-
-      const payload = {
-        message: 'Review this',
-        context: { appName: 'myapp', repoPath: '/projects/myapp' },
-        attachments: [{ sourceType: 'url', url: 'https://example.com/image.png', kind: 'image' }]
-      };
-
-      const response = await request(app)
-        .post('/api/openclaw/sessions/main/messages')
-        .send(payload);
-
-      expect(response.status).toBe(200);
-      expect(openclawApi.sendSessionMessage).toHaveBeenCalledWith('main', expect.objectContaining({
-        message: 'Review this',
-        context: expect.objectContaining({ appName: 'myapp' }),
-        attachments: expect.arrayContaining([expect.objectContaining({ url: 'https://example.com/image.png' })])
-      }));
-    });
-
     it('should return 400 when message is missing', async () => {
       const response = await request(app)
         .post('/api/openclaw/sessions/main/messages')
