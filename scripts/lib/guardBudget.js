@@ -20,6 +20,24 @@ export function overBudgetGuards(fileDurations) {
     .sort((a, b) => b.durationMs - a.durationMs);
 }
 
+/**
+ * Split guards over budget in the stage into those an isolated serial re-run
+ * clears and those still over (#16279). A guard missing from the re-run
+ * readings (the re-run failed or recorded nothing) stays over, so an
+ * unverified retry never excuses a slow guard.
+ * Returns `{ cleared, stillOver }`, each `{ file, durationMs, isolatedMs, budgetMs }`.
+ */
+export function settleOverBudget(over, isolatedDurations) {
+  const cleared = [];
+  const stillOver = [];
+  for (const entry of over) {
+    const isolatedMs = isolatedDurations?.[entry.file];
+    const row = { ...entry, isolatedMs: typeof isolatedMs === 'number' ? isolatedMs : null };
+    (row.isolatedMs !== null && row.isolatedMs <= entry.budgetMs ? cleared : stillOver).push(row);
+  }
+  return { cleared, stillOver };
+}
+
 /** Durations the test runner wrote for a guard stage; empty when it ran nothing or the file is unreadable. */
 export function readGuardDurations(path) {
   try {

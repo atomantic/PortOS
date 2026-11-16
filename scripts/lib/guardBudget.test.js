@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
-import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations } from './guardBudget.js';
+import { GUARD_BUDGET_MS, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './guardBudget.js';
 
 describe('guard budget', () => {
   it('names each guard over budget, slowest first', () => {
@@ -23,6 +23,18 @@ describe('guard budget', () => {
     expect(hostTooBusyForBudget({ load: 20, cores: 8 })).toBe(true);
     expect(hostTooBusyForBudget({ load: 8, cores: 8 })).toBe(false);
     expect(hostTooBusyForBudget({ load: 0, cores: 8 })).toBe(false);
+  });
+
+  it('clears a guard an isolated re-run fits in budget and keeps one still over', () => {
+    const over = overBudgetGuards({ 'a.test.js': 5000, 'b.test.js': 4000, 'c.test.js': 4500 });
+    const { cleared, stillOver } = settleOverBudget(over, { 'a.test.js': 900, 'b.test.js': GUARD_BUDGET_MS + 1 });
+    expect(cleared.map(({ file }) => file)).toEqual(['a.test.js']);
+    expect(cleared[0]).toMatchObject({ durationMs: 5000, isolatedMs: 900 });
+    // b is over in both; c has no isolated reading, so it is never excused.
+    expect(stillOver.map(({ file, durationMs, isolatedMs }) => [file, durationMs, isolatedMs])).toEqual([
+      ['c.test.js', 4500, null],
+      ['b.test.js', 4000, GUARD_BUDGET_MS + 1],
+    ]);
   });
 
   it('reads runner durations and treats a missing or malformed file as empty', () => {

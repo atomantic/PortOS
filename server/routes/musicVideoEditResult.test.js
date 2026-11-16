@@ -24,6 +24,8 @@ const { productionReviewBasis } = await import('../services/musicVideo/productio
 
 const app = express();
 app.use(express.json());
+// A frame confirmation names its reviewer; with no instance password that is the local operator.
+app.use((req, _res, next) => { req.portosAuthContext = { enabled: false }; next(); });
 app.use('/api/music-video', router);
 app.use(errorMiddleware);
 
@@ -146,5 +148,60 @@ describe('board edit replies carry what a reload would show', () => {
     await request(app).patch(`${base()}/scenes/b`).send({ prompt: 'From somewhere else' });
     recordEvents.off('updated', listen);
     expect(seen).toEqual(['socket-example', null]);
+  });
+});
+
+// #16270 / #16275: take decisions answer with the same edit result, so the board takes their
+// read-time effects from the reply and the next shot edit's diff applies on the revision it shows.
+describe('take decision replies carry what a reload would show', () => {
+  const takeOf = (body, sceneId, assetId) => body.scenes.find((scene) => scene.sceneId === sceneId).takes.find((take) => take.assetId === assetId);
+
+  it('select, reject, restore, note, reject unused, swap frames and a bad mark each fold into the reloaded board', async () => {
+    const spare = takeOf(await read(), 'b', 'spare.png');
+    const selected = await expectReloadParity(() => request(app).post(`${base()}/scenes/b/takes/${spare.takeId}/select`).send({}));
+    expect(selected.reply.referenceImageId).toBe('spare.png');
+    // The clip made from the old still went stale with the new selection, and the reply says so.
+    expect(selected.reply.edit.scenes.find((scene) => scene.sceneId === 'b').takes.find((take) => take.assetId === 'clip-b').dependencyState.status).toBe('stale');
+    const old = takeOf(selected.after, 'b', 'b.png');
+    await expectReloadParity(() => request(app).patch(`${base()}/scenes/b/takes/${old.takeId}`).send({ status: 'rejected' }));
+    await expectReloadParity(() => request(app).patch(`${base()}/scenes/b/takes/${old.takeId}`).send({ status: 'candidate', note: 'Keep for later' }));
+    const unused = await expectReloadParity(() => request(app).post(`${base()}/scenes/b/takes/reject-unused`).send());
+    expect(unused.reply).toMatchObject({ rejected: 1, scene: { sceneId: 'b' } });
+    expect(takeOf(unused.after, 'b', 'b.png').status).toBe('rejected');
+    await request(app).post(`${base()}/scenes/c/takes`).send({ kind: 'endImage', assetId: 'spare.png', source: 'imported' });
+    const swapped = await expectReloadParity(() => request(app).post(`${base()}/scenes/c/swap-frames`).send());
+    expect(swapped.reply).toMatchObject({ referenceImageId: 'spare.png', endImageId: 'c.png' });
+    const marked = await expectReloadParity(() => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'video', assetId: 'clip-a' }], mark: 'bad' }));
+    expect(marked.reply.assetMarks).toMatchObject({ 'video:clip-a': expect.anything() });
+  });
+
+  // Uniquely catches a shot edit after a take decision whose reply cannot apply on the board the
+  // decision's reply left (a stale `takes` array or a base revision the board never saw).
+  it('reject unused then Done: the Done reply applies on the board the rejection left, with the takes still rejected', async () => {
+    const board = await read();
+    const rejected = await request(app).post(`${base()}/scenes/b/takes/reject-unused`).send();
+    const afterReject = applyMusicVideoEdit(board, rejected.body.edit);
+    expect(takeOf(afterReject, 'b', 'spare.png').status).toBe('rejected');
+    const done = await request(app).patch(`${base()}/scenes/b`).send({ shotSheet: { checked: true } });
+    expect(done.body.edit.baseUpdatedAt).toBe(afterReject.updatedAt);
+    const afterDone = applyMusicVideoEdit(afterReject, done.body.edit);
+    expect(afterDone).toEqual(await read());
+    expect(takeOf(afterDone, 'b', 'spare.png').status).toBe('rejected');
+  });
+
+  it('Still matches then Done: the confirmed frame stays current through the Done reply', async () => {
+    await request(app).patch(`${base()}/scenes/a`).send({ framePrompt: 'Frame a, described as drawn' });
+    const board = await read();
+    const still = takeOf(board, 'a', 'a.png');
+    expect(still.dependencyState.status).toBe('stale');
+    const confirmed = await request(app).patch(`${base()}/scenes/a/takes/${still.takeId}`).send({ confirmFrame: true });
+    expect(confirmed.status).toBe(200);
+    const afterConfirm = applyMusicVideoEdit(board, confirmed.body.edit);
+    expect(afterConfirm).toEqual(await read());
+    expect(takeOf(afterConfirm, 'a', 'a.png').dependencyState.status).toBe('current');
+    const done = await request(app).patch(`${base()}/scenes/a`).send({ shotSheet: { checked: true } });
+    const afterDone = applyMusicVideoEdit(afterConfirm, done.body.edit);
+    expect(afterDone).toEqual(await read());
+    expect(takeOf(afterDone, 'a', 'a.png').dependencyState.status).toBe('current');
   });
 });

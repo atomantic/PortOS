@@ -260,6 +260,8 @@ export default function useProduceStageWiring({
         saveProjectFields({ composition });
       },
       editSceneLocal,
+      // A shot change a route already saved: patched in without marking the fields as typed and unsaved.
+      applySavedScene: (sceneId, patch) => patchScene(selected.id, sceneId, patch),
       saveScene,
       setSceneDone,
       approveFinal,

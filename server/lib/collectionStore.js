@@ -11,48 +11,25 @@
  *     └── <id-2>/
  *         └── index.json
  *
- * Replaces the legacy "one big JSON file per type" pattern (where every write
- * rewrites the whole file and every load parses every record) once a
- * collection has outgrown it. See `data/runs/` for the proven prior-art shape
- * this generalizes.
+ * Replaces the legacy "one big JSON file per type" pattern once a collection
+ * has outgrown it (prior art: `data/runs/`).
  *
- * The `config` slot — type-level shared state (convention):
- *   The type index's `config` object holds cross-record state that belongs to
- *   the collection as a whole rather than to any single record — the things
- *   that would otherwise need their own sidecar file. The convention is
- *   grounded in the first real consumer (universeBuilder, see migration 034),
- *   which keeps a capped `config.runs[]` history log alongside its per-universe
- *   records. The agreed shape (see the `TypeIndexConfig` typedef below):
+ * The `config` slot: the type index's `config` object holds cross-record state
+ * that belongs to the collection as a whole (see the `TypeIndexConfig` typedef).
+ * `runs?: []` is the established append-mostly history log, capped by its
+ * consumer (universeBuilder keeps 200); consumers MAY add keys, documented next to
+ * the owner. Values should be objects or arrays so the merge stays predictable.
  *
- *     config: {
- *       runs?: [],   // append-mostly cross-record history/audit log,
- *                    //   capped by the consumer (universeBuilder caps
- *                    //   at the last 200) — the established slot
- *       …            // consumers MAY add their own keys; document the
- *                    //   shape next to the consumer that owns it
- *     }
+ *   Merge: `saveTypeIndex({ config })` shallow-merges at the TOP level of
+ *   `config`, so a patch setting `runs` REPLACES the whole array. A
+ *   read-modify-write of an array slot must load, mutate a copy and write the
+ *   full replacement (see `recordRun` in universeBuilder).
  *
- *   `runs` is the only slot with a shipped consumer today. Treat the slot as
- *   open-but-conventional: each key's value should be an object or array so
- *   the shallow-merge semantics below stay predictable.
- *
- *   Merge semantics: `saveTypeIndex({ config })` shallow-merges at the TOP
- *   level of `config` — `{ ...current.config, ...patch.config }`. A patch that
- *   sets `runs` REPLACES the whole `runs` array; it does NOT deep-merge into
- *   it. So a read-modify-write of an array (or nested-object) slot must load
- *   the current value, mutate a copy, and write the full replacement (see
- *   `recordRun` in universeBuilder). The merge is one level deep only.
- *
- *   Write-fence: `config`-slot writes all share ONE file (`index.json`) across
- *   every record in the type, so a read→modify→write cycle on a slot must run
- *   inside `queueTypeIndexWrite(fn)` to avoid clobbering a concurrent edit.
- *   `recordRun` is the canonical example: it loads the index, appends to
- *   `runs`, caps, and writes — all inside the type-index queue. Use
- *   `saveTypeIndex` for a simple patch (it queues internally); reach for
- *   `queueTypeIndexWrite` directly only when the read and the write must be
- *   fenced together. `defaultTypeIndexConfig` seeds the slot on a fresh type
- *   index (and on any read where `config` is missing or not a plain object);
- *   it is NOT re-applied on later writes.
+ *   Write-fence: all `config` writes share ONE file (`index.json`), so a
+ *   read-modify-write on a slot must run inside `queueTypeIndexWrite(fn)`. Use
+ *   `saveTypeIndex` for a simple patch (it queues internally).
+ *   `defaultTypeIndexConfig` seeds the slot on a fresh index (or when `config` is
+ *   missing or not a plain object); it is NOT re-applied on later writes.
  *
  * Two versioning concerns coexist:
  *   - The TYPE-LEVEL `schemaVersion` (this file): describes the on-disk
@@ -67,18 +44,13 @@
  * version while record shape stays at v4.
  *
  * Concurrency model:
- *   - `queueRecordWrite(id, fn)` tail-chains per-id, so two concurrent
- *     read-modify-write cycles on the SAME record serialize, but writes to
- *     DIFFERENT records run in parallel. This is the scalability win over
- *     the single-file write queue.
+ *   - `queueRecordWrite(id, fn)` tail-chains per-id: read-modify-write cycles on
+ *     the SAME record serialize, different records run in parallel.
  *   - `queueTypeIndexWrite(fn)` single-tail-chains writes to the type-level
- *     `index.json` so cross-record state (e.g. a shared `runs[]` log) doesn't
- *     race with itself.
- *   - `saveOne(id, record)` already wraps its write in `queueRecordWrite`, so
- *     plain mutations don't need explicit queueing. Wrap a custom RMW cycle
- *     in `queueRecordWrite(id, async () => { ... })` when an external read
- *     spans the load/save boundary, then call `saveOneNow` inside that queue
- *     so the queued function does not wait on itself.
+ *     `index.json`.
+ *   - `saveOne` already queues. Wrap a custom RMW cycle in `queueRecordWrite`
+ *     when an external read spans load/save, then call `saveOneNow` inside it so
+ *     the queued function does not wait on itself.
  */
 
 import { join } from 'path';
@@ -90,16 +62,12 @@ import { isVitestRunner } from './runtimeEnv.js';
 
 /**
  * The type-index `config` slot — cross-record state owned by the collection as
- * a whole. See the header doc block for the convention. All keys are optional;
- * a consumer that needs a slot not listed here MAY add its own (document it
- * next to the consumer). Each value should be an array or plain object so the
- * top-level shallow-merge in `saveTypeIndex` stays predictable.
+ * a whole (see the header). All keys are optional.
  *
  * @typedef {object} TypeIndexConfig
  * @property {Array<object>} [runs]
- *   Append-mostly cross-record history/audit log. The consumer is responsible
- *   for capping growth (universeBuilder keeps the last 200) and for sanitizing
- *   each entry on read/write. The only slot with a shipped consumer today.
+ *   Append-mostly cross-record history/audit log. The consumer caps growth and
+ *   sanitizes each entry.
  */
 
 /**
@@ -118,11 +86,9 @@ import { isVitestRunner } from './runtimeEnv.js';
  *   Optional record-level normalizer. Called on every `loadOne` result. Return
  *   `null` to treat the on-disk record as invalid (loadOne returns `null`).
  * @param {TypeIndexConfig} [opts.defaultTypeIndexConfig]
- *   Initial value for the `config` slot of a freshly-minted type index (and the
- *   fallback when an on-disk index is missing/has a non-object `config`).
- *   Defaults to `{}`. Seeds the slot on first read only — it is NOT re-applied
- *   on later `saveTypeIndex` writes, which shallow-merge over the current value.
- *   See the `TypeIndexConfig` typedef and the header `config`-slot convention.
+ *   Initial `config` for a fresh type index (and the fallback when an on-disk
+ *   index has a missing/non-object `config`). Defaults to `{}`; NOT re-applied
+ *   on later `saveTypeIndex` writes.
  * @param {RegExp} [opts.idPattern]
  *   Allowlist for record-directory names. Defaults to a permissive pattern
  *   (`/^[A-Za-z0-9_-]{1,128}$/`) — services with stricter id rules should pass
@@ -149,28 +115,22 @@ export function createCollectionStore({
   const typeIndexPath = () => join(dir, 'index.json');
   const recordDir = (id) => join(dir, id);
   const recordPath = (id) => join(dir, id, 'index.json');
-  // Process-local fallback for tests that mock fileUtils' read/write helpers
-  // without backing them with a real directory tree. Production listIds still
-  // uses readdir as the source of truth whenever the collection dir exists.
+  // Fallback for tests that mock fileUtils without a real directory tree;
+  // production listIds uses readdir whenever the collection dir exists.
   const knownIds = new Set();
 
-  // Reject prototype-polluting names even when they pass the id pattern, so
-  // consumers do not each need to guard legacy JSON keys used as record ids.
+  // Reject prototype-polluting names even when they pass the id pattern.
   const isValidId = (id) => typeof id === 'string' && idPattern.test(id) && !POLLUTING_KEYS.has(id);
 
-  // Per-record write queue. Tail-chained per `id` so two writes against the
-  // same record serialize while writes against different records proceed in
-  // parallel. The shared `createRecordWriteQueue` helper carries the id-keyed
-  // silence/self-prune discipline; the assert throws synchronously on a bad id
-  // before anything is enqueued.
+  // Per-record write queue; the assert throws synchronously on a bad id before
+  // anything is enqueued.
   const queueRecordWrite = createRecordWriteQueue((id) => {
     if (!isValidId(id)) {
       throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
     }
   });
 
-  // Type-index single-tail queue. Used by `saveTypeIndex` and by callers that
-  // need a write-fence around config-slot updates (`runs[]`, feature flags).
+  // Type-index single-tail queue; also the write-fence for config-slot updates.
   const queueTypeIndexWrite = createFileWriteQueue();
 
   const buildEmptyTypeIndex = () => ({
@@ -181,19 +141,14 @@ export function createCollectionStore({
   });
 
   /**
-   * Load the type-level index.json. Returns the default shape (with the
-   * code-expected `schemaVersion`) when the file is ABSENT — does NOT write
-   * to disk. Use `saveTypeIndex` / `saveOne` to persist.
+   * Load the type-level index.json. Returns the default shape when the file is
+   * ABSENT; does NOT write to disk.
    *
-   * Strict (#7261): every `config`-slot writer starts from this read and writes
-   * the result back, so a swallowed present-but-unreadable index (EACCES, EIO,
-   * truncated bytes, a cloud-sync conflict copy) would persist the shipped
-   * `defaultTypeIndexConfig` over real user state AND stamp the code's current
-   * `schemaVersion` over records still in the old on-disk layout. Throwing here
-   * means `idealoomLists.updateSettings` and universeBuilder's run writers
-   * reject BEFORE any byte is written, leaving the file intact for repair;
-   * request-path callers surface it as a 5xx (`unreadableStoreError` carries
-   * `status: 500`). Same posture as `settingsStore.get()`.
+   * Strict: every `config`-slot writer writes this read back, so a swallowed
+   * present-but-unreadable index would persist the defaults over real user state
+   * AND stamp the current `schemaVersion` over an old on-disk layout. Throwing
+   * rejects writers before any byte is written; request paths surface a 5xx
+   * (`unreadableStoreError`). Same posture as `settingsStore.get()`.
    */
   async function loadTypeIndex() {
     const { ok, value: raw } = await readJSONFileStrict(typeIndexPath(), null, { allowArray: false });
@@ -209,15 +164,10 @@ export function createCollectionStore({
 
   /**
    * Persist a patch into the type-level index. `schemaVersion` / `type` are
-   * replaced only when the patch supplies a valid value (else preserved);
-   * `config` is SHALLOW-merged one level deep (`{ ...current, ...patch.config }`,
-   * so a patched slot like `runs` replaces the whole array — see the header
-   * `config`-slot convention); `updatedAt` is restamped automatically.
-   * Serialized through `queueTypeIndexWrite` so concurrent callers can't stomp
-   * each other's config-slot edits. For a read-modify-write that must read the
-   * current slot value before writing (e.g. appending to `runs`), do the load
-   * and the write together inside one `queueTypeIndexWrite(fn)` rather than
-   * leaning on this patch form.
+   * replaced only when the patch supplies a valid value; `config` is SHALLOW-merged
+   * one level deep (see header); `updatedAt` is restamped. Serialized through
+   * `queueTypeIndexWrite`. A read-modify-write on a slot (e.g. appending to
+   * `runs`) must load and write together inside one `queueTypeIndexWrite(fn)`.
    *
    * @param {{ schemaVersion?: number, type?: string, config?: TypeIndexConfig }} [patch]
    */
@@ -238,8 +188,7 @@ export function createCollectionStore({
 
   /**
    * List the on-disk record ids. Source of truth is `readdir(dir)`, not a
-   * manifest — keeps `index.json` from drifting against the actual directory
-   * contents. Filters out the type-level `index.json`, hidden entries, and
+   * manifest. Filters out the type-level `index.json`, hidden entries, and
    * anything that doesn't match `idPattern` or isn't a directory.
    */
   async function listIds() {
@@ -262,13 +211,10 @@ export function createCollectionStore({
    * the on-disk JSON fails to parse; runs the configured `sanitizeRecord` on
    * the parsed payload (sanitizer can also return `null` to reject).
    *
-   * Non-strict by design (unlike `loadTypeIndex` above, #7261): a per-record
-   * read is not a read-modify-write of shared state — `saveOneNow` writes a
-   * record the caller already holds in full, so an unreadable neighbor can
-   * never be overwritten by defaults. The "which ids failed" signal a strict
-   * read would carry is already preserved by `loadAllResult` below, and a
-   * corrupt single record must not take down a collection-wide load. Callers
-   * that need to tell "absent" from "corrupt" use `loadAllResult`.
+   * Non-strict by design (unlike `loadTypeIndex`): a per-record read is not a
+   * read-modify-write of shared state, and a corrupt single record must not take
+   * down a collection-wide load. Callers that must tell "absent" from "corrupt"
+   * use `loadAllResult`.
    */
   async function loadOne(id) {
     if (!isValidId(id)) return null;
@@ -281,12 +227,9 @@ export function createCollectionStore({
   }
 
   /**
-   * Load one record WITHOUT running `sanitizeRecord`. Some callers need to
-   * compare the raw on-disk shape to the sanitized shape (e.g. detect "this
-   * record's nested ids need persisting" — sanitize mints missing ids on the
-   * fly but doesn't persist them until the next write). Returns the parsed
-   * JSON or `null`; ignores the sanitizer entirely. Non-strict for the same
-   * reason as `loadOne` above.
+   * Load one record WITHOUT running `sanitizeRecord`, for callers that compare
+   * the raw on-disk shape to the sanitized one (e.g. sanitize mints ids it does
+   * not persist). Non-strict for the same reason as `loadOne`.
    */
   async function loadOneRaw(id) {
     if (!isValidId(id)) return null;
@@ -296,14 +239,9 @@ export function createCollectionStore({
 
   /**
    * Load every record in parallel, keeping the "which ids failed to load" signal
-   * that `loadAll` throws away. A record `id` returned by `listIds()` whose
-   * `loadOne(id)` resolves to `null` means the on-disk file is
-   * missing/unreadable/unparseable or was rejected by `sanitizeRecord` — i.e. a
-   * corrupt record in an otherwise-readable collection. Callers that reason over
-   * the whole set (merge-rate stats, adoption reports) need to distinguish
-   * "N records" from "N-of-M records, K corrupt" so a silent undercount can't
-   * masquerade as complete truth — the same sentinel-vs-empty rule the AGENTS.md
-   * conventions call out. Mirrors the `loadAll`/`listOutcomesResult` precedent.
+   * that `loadAll` throws away: an id from `listIds()` whose `loadOne` resolves
+   * to `null` is a corrupt/rejected record. Callers reasoning over the whole set
+   * need "N-of-M, K corrupt" so a silent undercount can't masquerade as complete.
    *
    * @returns {Promise<{ records: any[], failedIds: string[] }>}
    *   `records` — the successfully-loaded, sanitized records (nulls dropped).
@@ -323,23 +261,18 @@ export function createCollectionStore({
   }
 
   /**
-   * Load every record in parallel. O(N) cost — acceptable while record counts
-   * are bounded (typical PortOS collections sit in the tens-to-hundreds), but
-   * callers iterating very large collections should prefer `listIds` +
-   * targeted `loadOne` rather than slurping the whole set. Back-compat flattening
-   * wrapper over `loadAllResult` — silently drops corrupt records; reach for
-   * `loadAllResult` when the caller must be able to tell a partial set apart.
+   * Load every record in parallel (O(N); for very large collections prefer
+   * `listIds` + `loadOne`). Silently drops corrupt records; use `loadAllResult`
+   * to tell a partial set apart.
    */
   async function loadAll() {
     return (await loadAllResult()).records;
   }
 
   /**
-   * Persist a record. Serialized per-id so two concurrent writes against the
-   * same id chain on each other; writes against different ids run in parallel.
-   * Throws on missing/invalid id; sanitizer is NOT applied on write (callers
-   * are expected to pre-sanitize before calling — same convention as the
-   * monolithic-state services).
+   * Persist a record WITHOUT the per-id queue (see `saveOne`). Throws on
+   * missing/invalid id; the sanitizer is NOT applied on write (callers
+   * pre-sanitize).
    */
   async function saveOneNow(id, record) {
     if (!isValidId(id)) {
@@ -367,21 +300,17 @@ export function createCollectionStore({
   }
 
   /**
-   * Hard-delete a record WITHOUT the per-id queue. Removes the entire
-   * `{dir}/{id}/` subtree AND drops the id from `knownIds` (the readdir-ENOENT
-   * fallback source). The delete-side counterpart to `saveOneNow`: call it
-   * INSIDE a `queueRecordWrite(id, …)` block when an external recheck must span
-   * the load→delete boundary atomically (e.g. tombstone GC re-checking that the
-   * record is still deleted before removing it). Idempotent — missing dir is a
-   * no-op. Outside a queue, prefer `deleteOne`.
+   * Hard-delete a record WITHOUT the per-id queue: removes the `{dir}/{id}/`
+   * subtree and drops the id from `knownIds`. The delete-side counterpart to
+   * `saveOneNow`: call it INSIDE `queueRecordWrite(id, …)` when a recheck must
+   * span load→delete (e.g. tombstone GC). Idempotent. Otherwise prefer `deleteOne`.
    */
   async function deleteOneNow(id) {
     if (!isValidId(id)) {
       throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
     }
-    // #6176 — a recursive delete is the most destructive form of a data-root
-    // leak, so it takes the same guard the write primitives do. Loaded lazily
-    // for the same import-budget reason as fileCore.js.
+    // A recursive delete takes the same data-root guard as the write primitives;
+    // loaded lazily for the same import-budget reason as fileCore.js.
     if (isVitestRunner()) {
       const { assertNotRealDataWrite } = await import('./testDataIsolation.js');
       assertNotRealDataWrite(recordDir(id), 'collectionStore delete');
@@ -408,21 +337,16 @@ export function createCollectionStore({
    * expected `schemaVersion`. Returns a status object rather than throwing so
    * `server/index.js` can log all collections in one pass.
    *
-   *   ok=true   — on-disk version matches code (`reason: 'match'`), or the type
-   *               index is ABSENT (`reason: 'missing'`), which is treated as a
-   *               fresh install — the next write stamps the correct version.
-   *   ok=false  — on-disk version is older (`reason: 'older'`) or newer
-   *               (`reason: 'newer'`) than code. Older → a pending migration
-   *               didn't run. Newer → code rolled back below a forward-only
-   *               migration. OR the file is present but could not be read
-   *               (`reason: 'unreadable'`, `onDisk: null`).
+   *   ok=true   — version matches (`'match'`), or the index is ABSENT
+   *               (`'missing'`, a fresh install; the next write stamps it).
+   *   ok=false  — on-disk version is older (`'older'`: a migration didn't run) or
+   *               newer (`'newer'`: code rolled back below a forward-only
+   *               migration), OR the file is present but unreadable
+   *               (`'unreadable'`, `onDisk: null`).
    *
-   * The `unreadable` verdict exists because this gate is the ONE boot-time check
-   * that catches a skipped or rolled-back storage migration (#7261). Reporting
-   * "fresh install" for a file we could not read would silence that alarm for a
-   * collection whose records are still in the old layout — and the next write
-   * would then stamp the current version over it, falsifying the marker
-   * permanently.
+   * `unreadable` matters because this is the ONE boot-time check that catches a
+   * skipped storage migration; calling it "fresh install" would silence that
+   * alarm and the next write would stamp the current version over the old layout.
    */
   async function verifySchemaVersion() {
     const { ok: readable, value: raw } = await readJSONFileStrict(typeIndexPath(), null, { allowArray: false, logError: false });
