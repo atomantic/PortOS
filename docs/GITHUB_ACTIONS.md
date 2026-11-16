@@ -38,17 +38,17 @@ See [GitHub's rerun permissions and revision semantics](https://docs.github.com/
 
 ## Where the suite actually runs
 
-Every change reaches `main` through a pull request, and `main` reaches
-`release` through a pull request, so the suite runs once per gate rather than
-once per event:
+Every change reaches `main` through a pull request and `main` reaches
+`release` through a pull request, but two green PRs can still merge into a red
+tree, so `main` is also tested after the merge:
 
 | Event | What runs |
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
-| Push/merge to `main` | **Nothing** — no push trigger; the PR gate already passed |
+| Push/merge to `main` | **Full suite**; a newer push cancels the run in flight |
 | PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
-| Scheduled 09:17 and 21:17 UTC | Full suite — the `main`-branch health signal; a red run names the merges since the last green one |
+| Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
 | `workflow_dispatch` | Full suite |
 
 A release therefore pays for one full run (on its PR), not three.
@@ -525,10 +525,10 @@ contract; the parts that are not obvious:
   `server/package.json` is in the hash alongside the lockfile so that skipping
   `npm ci` does not also skip its manifest-vs-lockfile agreement check.
 
-Hit rate comes from the nightly full run. There is no push trigger on `main`, and
-a cache written by a pull request is visible only to that branch — so the 09:17
-UTC schedule is what seeds the entries on the default branch, the one scope every
-PR branch can read. A PR that changes the lockfile misses by design.
+Hit rate comes from the full runs on `main` (every push and the 09:17 UTC
+schedule). A cache written by a pull request is visible only to that branch, so
+those runs seed the entries on the default branch, the one scope every PR branch
+can read. A PR that changes the lockfile misses by design.
 
 Three entries exist per key state (Linux, shared by `server`, `database` and `browser`,
 plus Windows and macOS) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
@@ -1038,7 +1038,7 @@ would leave those jobs permanently cold. A fallback contains only one shard's
 entries: matching content keys may skip those tests; all other selected tests
 still run. Partitioning happens before memo lookup, so changing the memo's
 source shard cannot omit or duplicate a selected test.
-Pull requests only read. The scheduled nightly, `workflow_dispatch` and
+Pull requests only read. Pushes to `main`, the scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
 by run id, and only when the test step itself succeeded, so the cache holds
 nothing a pull-request branch or a red run wrote and every PR restores the
@@ -1060,21 +1060,35 @@ JSON argument array to `spawnSync`, never through shell interpolation.
 The complete server, client, DB, lint, build, and smoke suite runs:
 
 - on every pull request whose base branch is `release` (the release gate);
+- on every push to `main` (a newer push cancels the run in flight);
 - on the schedule, 09:17 and 21:17 UTC;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
-There is **no push trigger on `main`**. A merge commit on `main` re-tests a
-tree whose PR gate is already green, so the run was pure duplication; the
-nightly full run is what catches a semantic conflict between two independently
-green PRs, and the candidate → `release` PR catches it before a release ships.
+A merge commit on `main` is tested because a PR gate only proves the PR
+against the base it was built on: in a 300-run sample 16 of 36 red PR runs were
+inherited from a broken `main` (two PRs that were each green merged into a red
+result; one direct push skipped the gate). There is no merge coordinator (#12247
+and #14185 built and removed one).
 
-A red scheduled run cannot point at a PR, so the gate's last step
-(`scripts/ci-nightly-report.js`, scheduled runs only) writes the suspect list to the run
-summary: the failing jobs and steps, plus every pull request merged since the last
-**green** scheduled run (the Compare API against that run's head). An unreadable range or
-a missing earlier green run is reported as such, never as "no suspects". To bisect, run the
-failing suite at a merge in the middle of the list and halve it.
+`.github/workflows/main-health.yml` consumes every finished push or scheduled run
+on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
+
+- **red**: the run summary lists the failing jobs and steps plus every pull request
+  merged since the last **green** run on `main` (the Compare API against the head of
+  that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
+  `model:medium`, `effort:medium`) is created, or updated with a comment when one
+  is already open. The issue carries only job names, the commit range and the run
+  URL. An unreadable range or a missing earlier green run is reported as such, never
+  as "no suspects".
+- **green**: the open issue is closed with a comment.
+- **cancelled** (superseded by a newer push): nothing changes.
+
+A failure to read or write the issue fails the `main-health` job so a stale or
+duplicate issue is visible. The reporter is a separate workflow, not a job in
+`ci.yml`, because release.yml calls `ci.yml` and a called workflow cannot hold
+`issues: write` that its caller lacks. To bisect, run the failing suite at a merge in
+the middle of the list and halve it.
 
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.

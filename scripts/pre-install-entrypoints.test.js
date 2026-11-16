@@ -144,14 +144,15 @@ describe('scripts that run from a sparse checkout of scripts/', () => {
   it('the sparse jobs are exactly the ones claiming a sparse checkout', () => {
     // Discovery floor: a THIRD sparse job added without a row above would
     // never be held to the cone contract below.
-    const workflows = ['.github/workflows/ci.yml', '.github/workflows/ci-cancel-recovery.yml']
+    const workflows = ['.github/workflows/ci.yml', '.github/workflows/ci-cancel-recovery.yml', '.github/workflows/main-health.yml']
       .map((rel) => readFileSync(join(REPO_ROOT, rel), 'utf8'))
       .join('\n');
     // The `with:` key at the start of a line, not the literal anywhere: a
     // comment mentioning it must neither inflate the count nor evade it.
     const sparseJobs = (workflows.match(/^ +sparse-checkout: scripts$/gm) || []).length;
-    // CI's two gate jobs and two independent recovery jobs use scripts.
-    expect(sparseJobs).toBe(4);
+    // CI's two gate jobs, two independent recovery jobs and the main-health
+    // reporter use scripts.
+    expect(sparseJobs).toBe(5);
     for (const entry of SPARSE_CHECKOUT_SCRIPTS) {
       expect(workflows, entry).toContain(`node ${entry}`);
     }

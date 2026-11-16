@@ -1,16 +1,13 @@
 name: CI
 
 on:
-  # No push trigger. Every change reaches `main` through a pull request whose
-  # own CI gate must be green, so re-running the suite on the merge commit only
-  # repeats work. The nightly schedule below is the main-branch health signal,
-  # and the candidate -> release pull request runs the complete suite before a
-  # release ships.
+  push:
+    branches: [main]
   pull_request:
     branches: [main, release]
   schedule:
-    # Twice a day: with no push trigger these are the only runs that test the
-    # combined tree, so the second bounds how long a bad merge can hide.
+    # Twice a day: catches what a push run cannot, such as a dependency or
+    # runner change with no commit behind it.
     - cron: '17 9 * * *'
     - cron: '17 21 * * *'
   workflow_dispatch:
@@ -33,15 +30,18 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # A newer push to main supersedes the run in flight (its tree contains the
+  # older one). `github.ref` is the caller's ref when release.yml calls this
+  # workflow, so a release run is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 jobs:
   impact:
     name: Plan test impact
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Still live despite the removed push trigger: a called workflow inherits
-    # the caller's event, and release.yml calls this one from a push.
+    # A called workflow inherits the caller's event, and release.yml calls this
+    # one from a push.
     if: github.event_name != 'push' || !contains(github.event.head_commit.message, '[skip ci]')
     permissions:
       contents: read
@@ -1134,14 +1134,6 @@ jobs:
           CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}
         run: node scripts/ci-gate-report.js
 
-      # A red scheduled run tested the combined tree with no PR attached, so name
-      # the merges since the last green one instead of leaving a hand bisect.
-      # Diagnostic only; the step above already failed the gate.
-      - name: Name the suspect merges
-        if: failure() && github.event_name == 'schedule'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/ci-nightly-report.js
 
   full-gate:
     # A second check run published ONLY when the impact plan chose the complete
