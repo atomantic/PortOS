@@ -50,7 +50,7 @@ vi.mock('../../services/api', () => ({
   setPrivacyBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled, tier: 1, source: 'curated', confidence: 'documented', clusterParent: null })),
 }));
 
-vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn(), warning: vi.fn() } }));
 
 import PrivacyBrokersTab from './PrivacyBrokersTab.jsx';
 import * as apiMod from '../../services/api';
@@ -70,6 +70,36 @@ describe('PrivacyBrokersTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.runScanDeferred = null;
+  });
+
+  it('warns naming the failed source when only one download failed', async () => {
+    const toast = (await import('../ui/Toast')).default;
+    apiMod.refreshPrivacyBrokers.mockResolvedValueOnce({ added: 1, fetched: 1, sources: { badbool: { ok: false, count: 0, error: 'HTTP 503' }, caRegistry: { ok: true, count: 1, error: null } } });
+    renderTab();
+    await screen.findByText('Spokeo');
+    fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
+    await waitFor(() => expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('BADBOOL')));
+    expect(toast.success).not.toHaveBeenCalledWith(expect.stringContaining('Broker list refreshed'));
+  });
+
+  it('shows the error and no success toast when the refresh is refused (both sources down)', async () => {
+    const toast = (await import('../ui/Toast')).default;
+    apiMod.refreshPrivacyBrokers.mockRejectedValueOnce(new Error('Broker list refresh failed: both sources were unreachable'));
+    renderTab();
+    await screen.findByText('Spokeo');
+    fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Broker list refresh failed: both sources were unreachable'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('confirms a clean refresh with a success toast', async () => {
+    const toast = (await import('../ui/Toast')).default;
+    apiMod.refreshPrivacyBrokers.mockResolvedValueOnce({ added: 2, fetched: 3, sources: { badbool: { ok: true, count: 2, error: null }, caRegistry: { ok: true, count: 1, error: null } } });
+    renderTab();
+    await screen.findByText('Spokeo');
+    fireEvent.click(screen.getByRole('button', { name: /Refresh broker list/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Broker list refreshed: 2 new (3 fetched)'));
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 
   it('renders the case board and filters by state', async () => {

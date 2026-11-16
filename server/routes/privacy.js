@@ -306,7 +306,17 @@ router.get('/brokers', asyncHandler(async (req, res) => {
 // clobbers curated rows.
 router.post('/brokers/refresh', asyncHandler(async (req, res) => {
   validateRequest(privacyBrokerRefreshSchema, req.body ?? {});
-  res.json(await refreshBrokers());
+  const result = await refreshBrokers();
+  // Both downloads failed: nothing was refreshed, so this is an upstream failure,
+  // not an empty success. One failure is a partial success the client surfaces.
+  if (!result.sources.badbool.ok && !result.sources.caRegistry.ok) {
+    throw new ServerError('Broker list refresh failed: both sources were unreachable', {
+      status: 502,
+      code: 'BROKER_SOURCES_UNAVAILABLE',
+      context: { sources: result.sources },
+    });
+  }
+  res.json(result);
 }));
 
 // Per-broker enable/disable toggle (Brokers-tab, #2146). A disabled broker is
