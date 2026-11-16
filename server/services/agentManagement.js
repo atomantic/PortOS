@@ -60,6 +60,7 @@ import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import * as shellService from './shell.js';
 
+import { exec } from '../lib/childProcess.js';
 const ROOT_DIR = PATHS.root;
 
 // Startup has two callers for this sweep: cos.start() awaits it before the
@@ -1016,7 +1017,6 @@ export async function getAgentProcessStats(agentId) {
       return { active: true, agentId, pid: null, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'unknown' };
     }
 
-    const { exec } = await import('../lib/childProcess.js');
     const { promisify } = await import('util');
     const execAsync = promisify(exec);
 

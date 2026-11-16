@@ -5,8 +5,8 @@
  */
 
 import { Router } from 'express';
-import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema } from '../lib/musicVideoValidation.js';
-import { getProductionReview, getProductionReadiness, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput } from '../services/musicVideo/productionReviewService.js';
+import { musicVideoProductionDraftSchema, musicVideoProductionApprovalSchema, musicVideoProductionProofSchema, musicVideoProductionImportSchema, musicVideoProductionFeedbackSchema, musicVideoProductionFeedbackResolutionSchema, musicVideoLyricAnchorSyncSchema, musicVideoProductionReviseSchema, musicVideoProductionRevertSchema, musicVideoDocumentShotsSchema, musicVideoAlignmentReviewSchema } from '../lib/musicVideoValidation.js';
+import { getProductionReview, getProductionReadiness, saveProductionDraft, prepareProductionReview, approveProductionReview, renderProductionProof, requireProductionReviewer, importProductionPlanning, bindProductionShot, addProductionFeedback, closeProductionFeedback, syncLyricAnchors, removeStaleStoryboardRows, reviseProductionFromFeedback, revertProductionInput, importDocumentShots, reverifyProductionAlignment } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoCastAndSetsStartSchema } from '../lib/validation.js';
 
@@ -64,9 +64,7 @@ router.get('/:id/production-review/readiness', asyncHandler(async (req, res) => 
 }));
 
 router.post('/:id/production-review/document-shots', asyncHandler(async (req, res) => {
-  const { musicVideoDocumentShotsSchema } = await import('../lib/musicVideoValidation.js');
   const input = validateRequest(musicVideoDocumentShotsSchema, req.body);
-  const { importDocumentShots } = await import('../services/musicVideo/productionReviewService.js');
   res.json(await importDocumentShots(req.params.id, input, EDIT));
 }));
 
@@ -89,10 +87,8 @@ router.post('/:id/production-review/prepare', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/production-review/alignment', asyncHandler(async (req, res) => {
-  const { musicVideoAlignmentReviewSchema } = await import('../lib/musicVideoValidation.js');
   const input = validateRequest(musicVideoAlignmentReviewSchema, req.body);
   const reviewer = await requireProductionReviewer(req);
-  const { reverifyProductionAlignment } = await import('../services/musicVideo/productionReviewService.js');
   res.json(await reverifyProductionAlignment(req.params.id, { ...input, reviewer }, EDIT));
 }));
 

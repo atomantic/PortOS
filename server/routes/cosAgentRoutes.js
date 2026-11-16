@@ -19,6 +19,8 @@ import { getDeliveryActivity } from '../services/agentDeliveryActivity.js';
 import { securityScanRequestSchema } from '../lib/securityScanEvidence.js';
 import { validateRequest, resumeCosAgentSchema, relaunchCosAgentSchema, cosAgentFeedbackBodySchema, cosAgentBtwBodySchema } from '../lib/validation.js';
 
+import { releasePublicationRequestSchema, releaseCandidateRequestSchema } from '../lib/releasePublication.js';
+import { updateReleaseSynchronizationOwnership, updateReleaseCandidateOwnership, updateClaimOwnership, checkReconcileOwnership } from '../services/cosClaimOwnership.js';
 const router = Router();
 
 router.post('/agents/:id/recheck-cleanup', asyncHandler(async (req, res) => {
@@ -38,7 +40,6 @@ router.post('/agents/:id/security-scan', asyncHandler(async (req, res) => {
 }));
 
 router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => {
-  const { releasePublicationRequestSchema } = await import('../lib/releasePublication.js');
   const input = validateRequest(releasePublicationRequestSchema, req.body ?? {});
   const { verifyAgentReleasePublication } = await import('../services/releasePublication.js');
   res.json(await verifyAgentReleasePublication(req.params.id, input));
@@ -47,13 +48,10 @@ router.post('/agents/:id/release-publication', asyncHandler(async (req, res) => 
 // The server chooses and reserves the branch before its checkout exists; the
 // capture step discovers that checkout from Git, never from a supplied path.
 router.post('/agents/:id/release-candidate', asyncHandler(async (req, res) => {
-  const { releaseCandidateRequestSchema } = await import('../lib/releasePublication.js');
   const input = validateRequest(releaseCandidateRequestSchema, req.body ?? {});
   if (input.action === 'sync-reserve' || input.action === 'sync-capture') {
-    const { updateReleaseSynchronizationOwnership } = await import('../services/cosClaimOwnership.js');
     return res.json(await updateReleaseSynchronizationOwnership(req.params.id, input.action));
   }
-  const { updateReleaseCandidateOwnership } = await import('../services/cosClaimOwnership.js');
   res.json(await updateReleaseCandidateOwnership(req.params.id, input.action, { version: input.version }));
 }));
 
@@ -88,7 +86,6 @@ const claimOwnershipSchema = z.discriminatedUnion('action', [
 ]);
 router.post('/claim-ownership', asyncHandler(async (req, res) => {
   const input = validateRequest(claimOwnershipSchema, req.body ?? {});
-  const { updateClaimOwnership, checkReconcileOwnership } = await import('../services/cosClaimOwnership.js');
   res.json(input.action === 'check' ? await checkReconcileOwnership(input) : await updateClaimOwnership(input));
 }));
 

@@ -630,7 +630,6 @@ const poolCopyGone = (result) => result.status === 'deleted'
 export async function deleteMusicVideoPoolAssets(project, items) {
   const { withProjectMediaMutation, listProjects } = await import('./projects.js');
   const { requireProject } = await import('./requireProject.js');
-  const { ServerError } = await import('../../lib/errorHandler.js');
   const { withBackupAssetPublication } = await import('../../lib/backupSnapshotBoundary.js');
   // Backup admission precedes the project boundary, matching gallery/history
   // deletion; one lease covers physical deletion and project cleanup.

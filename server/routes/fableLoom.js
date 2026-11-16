@@ -106,6 +106,7 @@ import {
   startFableLoomEditorialAutopilot,
 } from '../services/fableLoom/index.js';
 
+import { preflightFableLoomExport, startFableLoomExport, getFableLoomExport, cancelFableLoomExport, getFableLoomExportDownload } from '../services/fableLoom/exports.js';
 const router = Router();
 
 // Summaries only — a woven episode carries pages of prose per node, and the
@@ -133,23 +134,19 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 router.post('/:id/export/preflight', asyncHandler(async (req, res) => {
   const input = validateRequest(exportOptionsSchema, req.body ?? {});
-  const { preflightFableLoomExport } = await import('../services/fableLoom/exports.js');
   res.json(await preflightFableLoomExport(req.params.id, input));
 }));
 
 router.post('/:id/export', asyncHandler(async (req, res) => {
   const input = validateRequest(exportOptionsSchema, req.body ?? {});
-  const { startFableLoomExport } = await import('../services/fableLoom/exports.js');
   res.status(202).json(await startFableLoomExport(req.params.id, input));
 }));
 
 router.get('/:id/export/:jobId', asyncHandler(async (req, res) => {
-  const { getFableLoomExport } = await import('../services/fableLoom/exports.js');
   res.json(await getFableLoomExport(req.params.id, req.params.jobId));
 }));
 
 router.delete('/:id/export/:jobId', asyncHandler(async (req, res) => {
-  const { cancelFableLoomExport } = await import('../services/fableLoom/exports.js');
   res.json(await cancelFableLoomExport(req.params.id, req.params.jobId));
 }));
 
@@ -157,7 +154,6 @@ router.get('/:id/export/:jobId/download', asyncHandler(async (req, res) => {
   let artifact;
   let closed = false;
   res.once('close', () => { closed = true; artifact?.release(); });
-  const { getFableLoomExportDownload } = await import('../services/fableLoom/exports.js');
   if (closed) return;
   artifact = await getFableLoomExportDownload(req.params.id, req.params.jobId);
   if (closed) { artifact.release(); return; }

@@ -20,7 +20,7 @@ import { join } from 'path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
-import { safeUnder, edgeFadeFilter } from '../../lib/ffmpeg.js';
+import { safeUnder, edgeFadeFilter, findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
@@ -112,7 +112,6 @@ export async function startPublishKitBuild(projectId) {
 async function beginPublishKitBuild(projectId, jobId) {
   const project = await requireProject(projectId);
   const { entry, path: masterPath } = await finalRenderFile(project);
-  const { findFfmpeg, runFfmpegProcess, probeVideoDuration, probeVideoStreamInfo } = await import('../../lib/ffmpeg.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw kitError(500, 'FFMPEG_MISSING', 'ffmpeg not found on PATH');
   const job = { id: jobId, projectId, status: 'running', clients: [], abort: new AbortController() };
@@ -259,7 +258,6 @@ export async function capturePublishKitFrame(projectId, atSec) {
   assertRenderCleanupIdle(projectId);
   const project = await requireProject(projectId);
   const { entry, path: masterPath } = await finalRenderFile(project);
-  const { findFfmpeg, runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
   const duration = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
   if (!Number.isFinite(atSec) || atSec < 0 || atSec >= duration) throw kitError(422, 'VALIDATION_ERROR', 'Choose a time inside the final video');
   const filename = `music-video-${projectId.slice(3, 11)}-frame-${randomUUID()}.png`;
