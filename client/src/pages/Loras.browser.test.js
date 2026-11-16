@@ -50,6 +50,8 @@ describe.skipIf(!chrome)('LoRA touch targets (#10692)', () => {
               export const searchCivitaiLoras = async () => ({ items: [], nextCursor: null });
               export const searchVideoLoras = async () => ({ items: [], nextCursor: null });
               export const probeLoraEffect = async () => {};
+              export const getRetiredDataInventory = async () => [];
+              export const deleteRetiredData = async () => {};
             `;
             if (id !== '\0loras-fixture.jsx') return;
             return `
