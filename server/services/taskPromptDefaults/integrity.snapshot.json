@@ -24,7 +24,7 @@
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
     "data-integrity": "064bd15eb2924430aadb669296c1dcc7",
     "data-safety": "9e930585587a475901a4673427c9d87f",
-    "dependency-updates": "9fd54b2e77fc90ca17e166ed1bd908ac",
+    "dependency-updates": "506e50b0dbbb5a39d729ee20a8b2fc40",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
     "do-release": "b57b0520691aeab4ec4b952d0a498359",
     "do-replan": "35660eb7b43e4259a6a9253ed288a1db",
@@ -93,7 +93,7 @@
     "cost-efficiency": 1,
     "data-integrity": 3,
     "data-safety": 4,
-    "dependency-updates": 11,
+    "dependency-updates": 12,
     "design": 1,
     "do-release": 28,
     "do-replan": 2,
@@ -385,7 +385,8 @@
       "2d94021c979a86a349e125f5c15665d8",
       "651c238ec23db94926ef277fe1fc0092",
       "8ce4e7e33c5c7554b89af7d35a471c31",
-      "f6fdcd359c66bc49485ba057ba243f57"
+      "f6fdcd359c66bc49485ba057ba243f57",
+      "9fd54b2e77fc90ca17e166ed1bd908ac"
     ],
     "do-release": [
       "655180dfbab22e11fab79072ac49c9d6",

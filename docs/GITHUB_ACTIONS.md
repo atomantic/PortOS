@@ -1316,48 +1316,29 @@ moving input, so it is recorded rather than pinned.
 
 Triggers: weekly, `workflow_dispatch`, and pull requests touching
 `docker-compose.yml`, `docker/`, the helper script or the supercollider runtime
-constants. Scheduled and dispatched runs fail on any finding without a reviewed
-disposition; pull request runs report findings in the job summary without
-failing on them. Scanner errors, an empty or malformed SBOM, a missing OS or npm
-package ecosystem, or an unparseable scan always fail the run: a scanner that
-did not run is never zero findings.
+constants. The job summary lists **every** finding by severity with its fix
+state; findings are reported, not gated. The run fails on exactly three things:
 
-Findings are reconciled in `docker/runtime-image-security.reviews.json`
-(`target`, advisory `id`, optional `package`, `version` and `arch` scopes,
-`disposition` of `not-reachable` or `blocked`, `rationale`, `tracking` issue/PR).
-Every severity needs an entry that cites verified unreachability or a tracked
-blocker; a fix removes the finding from the scan, so it needs no entry and a
-finding still detected is never suppressed as "fixed"; do not move the
-Debian snapshot or an image digest merely to silence a scanner.
+- a scanner error or an unparseable scan;
+- an empty or malformed SBOM, or a missing OS or npm package ecosystem (a scanner
+  that did not run is never zero findings);
+- an **actionable** finding: High or Critical severity, a fix available, and absent
+  from the scan of the newest digest of the pinned tag, so bumping the pin removes
+  it. The failure names the image and the digest to adopt.
 
-### Ledger triage
+Pull request runs report an actionable finding without failing. The newest-digest
+comparison exists for `pgvector`, the one target pinned as `repo:tag@digest`;
+`supercollider` and `eidoverse-rapier` have no registry digest to compare against,
+so their findings are always reported only. A finding that is unfixed upstream, or
+fixed but not yet in the newest digest, is a report line, never a failure: there is
+no PortOS action that clears it, and a per-advisory review ledger only recorded
+that fact (it was retired in #16425).
 
-The initial entries (#15662) were triaged at package level from the scanned
-image, not advisory by advisory; re-triage an entry when its package version
-changes. The [November 11 review](RUNTIME_ADVISORY_TRIAGE.md) records individual
-Kerberos/OpenSSL paths, source-range mismatches and upstream blockers for #15768;
-the [November 14 review](RUNTIME_ADVISORY_TRIAGE.md#runtime-advisory-review-2026-11-14)
-covers #16049.
-Two dispositions are used:
-
-- `not-reachable`: upstream explicitly excludes the installed version from the
-  advisory (record the source-range evidence), or the package is not loaded by
-  the long-running process (the
-  postgres server, or `sclang`/`scsynth`) and is not run by the entrypoint,
-  health probe or PortOS. For `pgvector` the container publishes only the
-  loopback PostgreSQL port, so there is no shell, login or package-manager entry
-  point. For `supercollider` untrusted `.scd` can run arbitrary commands, so
-  the argument is the sandbox (`--network none`, `--cap-drop ALL`,
-  `no-new-privileges`, read-only root, unprivileged user, disposable per
-  render): the tool grants nothing the render sandbox does not already allow.
-- `blocked`: the package is loaded (found by `ldd` over `bin/postgres`,
-  `lib/*.so` and libpq for pgvector; over the runtime packages for SuperCollider)
-  and Debian ships no fix (`wont-fix` or `not-fixed`), tracked at #15662, or a
-  fix exists upstream but the newest image digest does not carry it yet, tracked
-  at #15669. The rationale names the exposure that bounds the risk.
-
-Delete the `#15669` entries when a rebuilt upstream digest is adopted; a fixed
-finding disappears from the scan, so it never needs a disposition.
+The fix path is a digest bump. `.github/dependabot.yml` has weekly `docker-compose`
+(`/`) and `docker` (`/docker/*`) entries that propose newer pins. The pgvector pin
+also lives in `scripts/lib/dbImage.js` and `ci.yml`; `scripts/dbImageDigestPin.test.js`
+fails a bump PR until those move with it. Do not move the Debian snapshot or an
+image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
 `deno.json`/`deno.lock` build context are built from the independent

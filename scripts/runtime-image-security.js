@@ -7,6 +7,7 @@
  *   node scripts/runtime-image-security.js build supercollider        # docker build, product argv + labels
  *   node scripts/runtime-image-security.js rapier-project <dir>       # package.json for the inline npm pin
  *   node scripts/runtime-image-security.js verify --target <id> --arch <arch> --sbom <f> --scan <f> --out <dir> [--strict]
+ *                                [--latest-sbom <f> --latest-scan <f> --latest-ref <ref> --latest-digests <list>]
  *   node scripts/runtime-image-security.js unavailable --out <dir>    # report targets this checkout cannot scan
  *
  * Targets are derived from the recipes themselves (docker-compose.yml,
@@ -14,6 +15,12 @@
  * with it and a recipe that loses its digest pin fails here. `verify` treats a
  * malformed, empty or partial scanner output as a failure: a scanner that did
  * not run is never reported as zero findings.
+ *
+ * Findings are reported, not gated, except the actionable ones: a High or
+ * Critical finding that has a fix and is absent from the newest digest of the
+ * pinned tag, so bumping the pin removes it (#16425). Everything else (no fix,
+ * a fix the newest digest does not carry yet, lower severity) is listed in the
+ * summary; the remedy for those is the Dependabot digest update, not a review.
  *
  * Builtins only (plus the pure supercollider runtime constants), so it runs on
  * a bare runner checkout with no `npm ci`.
@@ -37,13 +44,12 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const COMPOSE_PATH = 'docker-compose.yml';
 export const EIDOVERSE_RECIPE_PATH = 'docker/eidoverse-video/Dockerfile';
-export const REVIEWS_PATH = 'docker/runtime-image-security.reviews.json';
 export const EVIDENCE_SCHEMA = 1;
 
 const DIGEST_RE = /@sha256:[0-9a-f]{64}$/;
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Negligible', 'Unknown'];
-// A fix removes the finding from the scan, so "fixed" is not a disposition: a finding still detected is never suppressed by one.
-const DISPOSITIONS = ['not-reachable', 'blocked'];
+const ACTIONABLE_SEVERITIES = new Set(['Critical', 'High']);
+const DIGEST_SUFFIX_RE = /@sha256:[0-9a-f]{64}$/;
 
 /** Targets this checkout cannot scan, reported instead of faked (acceptance: "explicitly unavailable"). */
 export const UNAVAILABLE_TARGETS = Object.freeze([{
@@ -85,6 +91,8 @@ export function deriveTargets({ compose, supercolliderDockerfile, eidoverseDocke
       architectures: ['amd64', 'arm64'],
       recipe: COMPOSE_PATH,
       imageRef: pgvectorRef,
+      // The tag the pin was taken from: its newest digest is what a bump adopts.
+      latestImageRef: pgvectorRef.replace(DIGEST_SUFFIX_RE, ''),
       expectedPackageTypes: ['deb'],
     },
     supercollider: {
@@ -192,59 +200,54 @@ export function validateScan(scan, sbom = null) {
   return { counts, findings, grypeVersion: scan.descriptor.version ?? null, db: scan.descriptor.db ?? null };
 }
 
-/** Throws on a malformed review ledger; every disposition needs rationale and a tracker/PR reference. */
-export function validateReviews(doc) {
-  if (doc?.schema !== EVIDENCE_SCHEMA || !Array.isArray(doc.reviews)) throw new Error(`${REVIEWS_PATH}: expected { schema: ${EVIDENCE_SCHEMA}, reviews: [] }`);
-  for (const review of doc.reviews) {
-    const where = `${REVIEWS_PATH}: review ${review?.target}/${review?.id}`;
-    if (!review?.target || !review?.id) throw new Error(`${where} needs target and id`);
-    if (!DISPOSITIONS.includes(review.disposition)) throw new Error(`${where} disposition must be one of ${DISPOSITIONS.join(', ')}`);
-    if (!review.rationale || !review.tracking) throw new Error(`${where} needs rationale and tracking (issue/PR reference)`);
-  }
-  return doc.reviews;
-}
+const findingKey = (finding) => `${finding.id}|${finding.package}`;
 
 /**
- * Split findings into those covered by a reviewed disposition and those still
- * unreviewed. A review is scoped to its target and advisory, and to the package,
- * installed version and architecture whenever it names them, so a changed
- * package version or another architecture's finding is re-reviewed.
+ * Mark the findings a pin bump would remove: High or Critical, fixed upstream,
+ * and no longer detected in the scan of the newest digest of the same tag. With
+ * no newer-digest scan nothing is actionable, because "fixed" alone is not
+ * proof the newest image carries the fix.
  */
-export function reconcileFindings(findings, reviews, targetId, arch = null) {
-  const mine = reviews.filter((review) => review.target === targetId);
-  const reviewFor = (finding) => mine.find((review) => review.id === finding.id
-    && (!review.package || review.package === finding.package)
-    && (!review.version || review.version === finding.version)
-    && (!review.arch || review.arch === arch));
-  const reviewed = [];
-  const unreviewed = [];
-  for (const finding of findings) {
-    const review = reviewFor(finding);
-    if (review) reviewed.push({ ...finding, disposition: review.disposition, tracking: review.tracking });
-    else unreviewed.push(finding);
-  }
-  return { reviewed, unreviewed };
+export function markActionable(findings, latestFindings) {
+  const stillInLatest = new Set((latestFindings ?? []).map(findingKey));
+  return findings.map((finding) => ({
+    ...finding,
+    actionable: latestFindings != null
+      && ACTIONABLE_SEVERITIES.has(finding.severity)
+      && finding.fixState === 'fixed'
+      && !stillInLatest.has(findingKey(finding)),
+  }));
 }
 
-const MAX_SUMMARY_ROWS = 40;
+const MAX_SUMMARY_ROWS = 1000;
 
-export function renderSummary({ provenance, counts, unreviewed, reviewedCount }) {
+export function renderSummary({ provenance, counts, findings, latest }) {
   const { target, arch, ref, sbom } = provenance;
+  const actionable = findings.filter((finding) => finding.actionable);
   const lines = [
     `### Runtime image security: ${target} (${arch})`,
     '',
     `- Subject: \`${ref.image ?? ref.package}\`${ref.imageId ? ` (image ID \`${ref.imageId}\`)` : ''}`,
     `- Recipe: \`${provenance.recipe.path}\`${provenance.recipe.sha256 ? ` (recipe sha256 \`${provenance.recipe.sha256.slice(0, 12)}\`)` : ''}; commit \`${String(provenance.gitSha).slice(0, 12)}\``,
     `- SBOM: ${sbom.packageCount} packages (${sbom.packageTypes.join(', ')}); syft ${sbom.syftVersion}${sbom.distro ? `; ${sbom.distro}` : ''}`,
-    `- Findings: ${SEVERITIES.map((severity) => `${severity} ${counts[severity]}`).join(', ')}; ${reviewedCount} reviewed, ${unreviewed.length} unreviewed`,
-    '',
+    `- Findings: ${SEVERITIES.map((severity) => `${severity} ${counts[severity]}`).join(', ')}`,
   ];
-  if (unreviewed.length) {
-    lines.push('| Severity | Advisory | Package | Installed | Fix |', '| --- | --- | --- | --- | --- |');
-    for (const finding of unreviewed.slice(0, MAX_SUMMARY_ROWS)) {
-      lines.push(`| ${finding.severity} | ${finding.id} | ${finding.package} | ${finding.version ?? ''} | ${finding.fixedIn.join(', ') || finding.fixState || ''} |`);
+  if (latest) lines.push(latest.newer
+    ? `- Newest digest of \`${latest.ref}\`: \`${latest.digest}\` (differs from the pin)`
+    : `- Newest digest of \`${latest.ref}\` is the pinned one: a pin bump cannot remove any finding.`);
+  lines.push('');
+  if (actionable.length) {
+    lines.push(
+      `**${actionable.length} actionable High/Critical finding(s): fixed in the newest digest of \`${latest.ref}\`. Bump the pin of \`${ref.image}\` to \`${latest.digest}\`.**`,
+      '',
+    );
+  }
+  if (findings.length) {
+    lines.push('| Severity | Advisory | Package | Installed | Fix | Action |', '| --- | --- | --- | --- | --- | --- |');
+    for (const finding of findings.slice(0, MAX_SUMMARY_ROWS)) {
+      lines.push(`| ${finding.severity} | ${finding.id} | ${finding.package} | ${finding.version ?? ''} | ${finding.fixedIn.join(', ') || finding.fixState || ''} | ${finding.actionable ? 'bump the pin' : 'report only'} |`);
     }
-    if (unreviewed.length > MAX_SUMMARY_ROWS) lines.push('', `${unreviewed.length - MAX_SUMMARY_ROWS} more in the uploaded findings.json.`);
+    if (findings.length > MAX_SUMMARY_ROWS) lines.push('', `${findings.length - MAX_SUMMARY_ROWS} more in the uploaded findings.json.`);
     lines.push('');
   }
   return lines.join('\n');
@@ -266,18 +269,42 @@ export function renderUnavailable(entry) {
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 
 /**
- * Validate one scanner run and write its provenance + findings. Returns the exit
- * code: 0 recorded, 3 strict and unreviewed findings remain. Invalid evidence throws.
+ * Validate the scan of the newest digest of the pinned tag. A digest list that
+ * still contains the pin means the pin IS the newest, so no scan is expected.
  */
-export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = false, env = process.env, root = REPO_ROOT, dbStatusPath = null, imageId = null, repoDigests = null, reviewLedger = null, summarize = (text) => process.stdout.write(`${text}\n`) }) {
+function checkLatest(def, { repoDigests, sbomPath, scanPath }) {
+  const pinned = def.imageRef.match(DIGEST_SUFFIX_RE)?.[0].slice(1);
+  const digests = String(repoDigests ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+  if (!digests.length) throw new Error(`No repo digest was recorded for the newest ${def.latestImageRef}`);
+  const same = digests.some((entry) => entry.endsWith(`@${pinned}`));
+  const result = { ref: def.latestImageRef, digest: digests[0].slice(digests[0].indexOf('@') + 1), newer: !same, findings: null };
+  if (same) return { ...result, digest: pinned };
+  if (!sbomPath || !scanPath) throw new Error(`The newest digest of ${def.latestImageRef} differs from the pin but was not scanned`);
+  const sbomDocument = readJson(sbomPath);
+  validateSbom(sbomDocument, def);
+  return { ...result, findings: validateScan(readJson(scanPath), sbomDocument).findings };
+}
+
+/**
+ * Validate one scanner run and write its provenance + findings. Returns the exit
+ * code: 0 recorded, 3 strict and an actionable finding remains. Invalid evidence throws.
+ *
+ * `latest` describes the newest digest of the pinned tag: `{ref, repoDigests}`
+ * plus the scan of that digest when it differs from the pin
+ * (`{sbomPath, scanPath}`). A target without a `latestImageRef` takes none.
+ */
+export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = false, env = process.env, root = REPO_ROOT, dbStatusPath = null, imageId = null, repoDigests = null, latest = null, summarize = (text) => process.stdout.write(`${text}\n`), annotate = (text) => process.stderr.write(`${text}\n`) }) {
   const def = loadTargets(root)[target];
   if (!def) throw new Error(`Unknown target: ${target}`);
   if (!def.architectures.includes(arch)) throw new Error(`${target} is not scanned for architecture ${arch}`);
   const sbomDocument = readJson(sbomPath);
   const sbom = validateSbom(sbomDocument, def);
   const scan = validateScan(readJson(scanPath), sbomDocument);
-  const reviews = validateReviews(reviewLedger ?? readJson(join(root, REVIEWS_PATH)));
-  const { reviewed, unreviewed } = reconcileFindings(scan.findings, reviews, target, arch);
+  if (def.latestImageRef && !latest) throw new Error(`${target} needs the newest-digest evidence for ${def.latestImageRef}; without it no finding can be judged actionable`);
+  if (latest && !def.latestImageRef) throw new Error(`${target} has no newest-digest reference to compare against`);
+  const latestResult = latest ? checkLatest(def, latest) : null;
+  const findings = markActionable(scan.findings, latestResult?.findings ?? null);
+  const actionable = findings.filter((finding) => finding.actionable);
 
   const provenance = {
     schema: EVIDENCE_SCHEMA,
@@ -291,6 +318,7 @@ export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = f
       : { package: `${def.package}@${def.packageVersion}` },
     recipe: { path: def.recipe, sha256: def.recipeHash ?? null, debianSnapshot: def.debianSnapshot ?? null },
     sbom,
+    latest: latestResult ? { ref: latestResult.ref, digest: latestResult.digest, newer: latestResult.newer } : null,
     scan: { grypeVersion: scan.grypeVersion, db: scan.db, dbStatus: dbStatusPath ? readJson(dbStatusPath) : null, counts: scan.counts },
     scope: def.kind === 'npm-pin'
       ? `Inline ${def.package}@${def.packageVersion} npm pin resolved from the registry at scan time; does not cover the eidoverse:render parent or its deno.lock.`
@@ -298,9 +326,11 @@ export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = f
   };
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, 'provenance.json'), `${JSON.stringify(provenance, null, 2)}\n`);
-  writeFileSync(join(outDir, 'findings.json'), `${JSON.stringify({ schema: EVIDENCE_SCHEMA, target, arch, reviewed, unreviewed }, null, 2)}\n`);
-  summarize(renderSummary({ provenance, counts: scan.counts, unreviewed, reviewedCount: reviewed.length }));
-  return strict && unreviewed.length > 0 ? 3 : 0;
+  writeFileSync(join(outDir, 'findings.json'), `${JSON.stringify({ schema: EVIDENCE_SCHEMA, target, arch, findings }, null, 2)}\n`);
+  summarize(renderSummary({ provenance, counts: scan.counts, findings, latest: provenance.latest }));
+  if (actionable.length === 0) return 0;
+  annotate(`::error title=Runtime image security::${actionable.length} actionable High/Critical finding(s) in ${def.imageRef} (${arch}) are fixed in ${latestResult.digest}: bump the pin`);
+  return strict ? 3 : 0;
 }
 
 const parseFlags = (argv) => {
@@ -325,7 +355,7 @@ export function runCli(argv, env = process.env) {
   if (command === 'describe') {
     const target = loadTargets()[rest[0]];
     if (!target) throw new Error(`Unknown target: ${rest[0]}`);
-    const out = { TARGET_ID: target.id, TARGET_KIND: target.kind, TARGET_RECIPE: target.recipe, TARGET_IMAGE_REF: target.imageRef ?? '', TARGET_PACKAGE: target.package ? `${target.package}@${target.packageVersion}` : '', TARGET_RECIPE_SHA256: target.recipeHash ?? '' };
+    const out = { TARGET_ID: target.id, TARGET_KIND: target.kind, TARGET_RECIPE: target.recipe, TARGET_IMAGE_REF: target.imageRef ?? '', TARGET_LATEST_IMAGE_REF: target.latestImageRef ?? '', TARGET_PACKAGE: target.package ? `${target.package}@${target.packageVersion}` : '', TARGET_RECIPE_SHA256: target.recipeHash ?? '' };
     for (const [key, value] of Object.entries(out)) process.stdout.write(`${key}=${value}\n`);
     return 0;
   }
@@ -351,6 +381,7 @@ export function runCli(argv, env = process.env) {
       dbStatusPath: flags['db-status'] ?? null,
       imageId: flags['image-id'] ?? null,
       repoDigests: flags['repo-digests'] ?? null,
+      latest: flags['latest-digests'] ? { repoDigests: flags['latest-digests'], sbomPath: flags['latest-sbom'], scanPath: flags['latest-scan'] } : null,
       env,
       summarize: summaryWriter(env),
     });
