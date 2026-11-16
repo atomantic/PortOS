@@ -258,7 +258,7 @@ describe('local video failure holds', () => {
     })).jobId);
     for (const id of ids.slice(0, 3)) {
       await tick();
-      expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: id, modelId: 'example-cuda' }));
+      await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: id, modelId: 'example-cuda' })));
       await finish(id);
     }
     await tick();
@@ -268,7 +268,7 @@ describe('local video failure holds', () => {
     expect(retained.params).not.toHaveProperty('modelId');
     await mediaJobQueue.resumeVideoHold(retained.hold.id);
     await tick();
-    expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: ids[3], modelId: 'example-cuda' }));
+    await vi.waitFor(() => expect(stubs.generateVideo).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: ids[3], modelId: 'example-cuda' })));
   });
 
   it('uses structured signal evidence and ignores advisory text when no cause was found', async () => {
