@@ -190,20 +190,23 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
   res.json(await placeMediaPoolItem(req.params.id, req.params.sceneId, { kind, assetId, withAssetId }));
 }));
 
+// Take decisions answer with the edit result beside the scene, as shot edits do (#16270).
+const BOARD_REPLY = Object.freeze({ edit: true });
+
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
   const { musicVideoTakeSelectSchema } = await import('../lib/musicVideoValidation.js');
   const options = validateRequest(musicVideoTakeSelectSchema, req.body ?? {});
-  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options));
+  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options, BOARD_REPLY));
 }));
 
 // No body: marks the shot's unselected takes rejected, keeping their files.
 router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req, res) => {
-  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId));
+  res.json(await rejectUnusedSceneTakes(req.params.id, req.params.sceneId, BOARD_REPLY));
 }));
 
 // No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
 router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
-  res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId));
+  res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId, BOARD_REPLY));
 }));
 
 // No body: a vision model checks this frame take against its shot (user-started) → the scene.
@@ -220,7 +223,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(asyn
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
   if (review.acknowledgeRenderQuality || review.confirmFrame) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
-  res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review));
+  res.json(await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review, BOARD_REPLY));
 }));
 
 export default router;
