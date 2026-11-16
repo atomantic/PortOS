@@ -144,7 +144,9 @@ describe('saved Codex image usage recovery', () => {
     const receipt = codexRenderReceipt(meta());
     await recordRenderReceipt(receipt, { directory });
     await writeFile(join(directory, `${receipt.id}.json`), JSON.stringify({ ...receipt, ...damaged }));
-    await expect(getImageRenderUsage({ directory })).rejects.toThrow('Invalid image render usage receipt');
+    // The aggregate was built before the file was damaged; a rebuild skips and counts it.
+    await rm(join(directory, 'aggregates'), { recursive: true });
+    expect(await getImageRenderUsage({ directory })).toMatchObject({ savedOutputs: 0, renderGroups: 0, damaged: 1 });
     await expect(recordRenderReceipt(receipt, { directory })).rejects.toThrow('Conflicting image render receipt');
   });
 });
