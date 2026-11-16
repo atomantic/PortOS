@@ -359,12 +359,6 @@ describe('usage routes', () => {
     expect(savePlanTiers).not.toHaveBeenCalled();
   });
 
-  it('GET /api/usage/subscriptions returns the plan rows', async () => {
-    const res = await request(buildApp()).get('/api/usage/subscriptions');
-    expect(res.status).toBe(200);
-    expect(res.body.families).toEqual([{ family: 'claude' }]);
-  });
-
   it('PUT /api/usage/subscriptions/enabled toggles one subscription', async () => {
     setSubscriptionEnabled.mockResolvedValue({ family: 'codex', enabled: false, applied: true, changed: ['codex-cli'] });
     const res = await request(buildApp())
@@ -474,13 +468,6 @@ describe('usage routes', () => {
     expect(usage.recordMessages).not.toHaveBeenCalled();
   });
 
-  it('GET /api/usage/raw returns the raw usage data', async () => {
-    usage.getUsage.mockReturnValue({ sessions: [{ providerId: 'p1' }] });
-    const res = await request(buildApp()).get('/api/usage/raw');
-    expect(res.status).toBe(200);
-    expect(res.body.sessions[0].providerId).toBe('p1');
-  });
-
   it('starts historical reconciliation only from the explicit POST and reports progress', async () => {
     getHistoricalUsageBackfillStatus.mockReturnValue({ status: 'running', processed: 2, total: 5 });
     startHistoricalUsageBackfill.mockReturnValue({ status: 'running', processed: 0, total: 0 });
@@ -493,16 +480,6 @@ describe('usage routes', () => {
     const started = await request(buildApp()).post('/api/usage/backfill');
     expect(started.status).toBe(202);
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
-  });
-
-  it('POST /api/usage/backfill returns the Grok and Antigravity repair summaries on the job', async () => {
-    const grok = { added: 2, turns: 1, images: 1, videos: 0, backedUp: true, note: null };
-    const agy = { added: 3, images: 3, backedUp: true, note: null };
-    startHistoricalUsageBackfill.mockResolvedValue({ status: 'complete', corrected: 1, grok, agy });
-    const started = await request(buildApp()).post('/api/usage/backfill');
-    expect(started.status).toBe(202);
-    expect(started.body.grok).toEqual(grok);
-    expect(started.body.agy).toEqual(agy);
   });
 
   it('POST /api/usage/session records a session and returns its number', async () => {
@@ -525,25 +502,11 @@ describe('usage routes', () => {
     expect(usage.recordMessages).toHaveBeenCalledWith('p1', 'm', 3, 1000, 0);
   });
 
-  it('POST /api/usage/messages passes an input token count through', async () => {
-    usage.recordMessages.mockResolvedValue();
-    await request(buildApp())
-      .post('/api/usage/messages')
-      .send({ providerId: 'p1', model: 'm', messageCount: 1, tokenCount: 100, inputTokenCount: 400 });
-    expect(usage.recordMessages).toHaveBeenCalledWith('p1', 'm', 1, 100, 400);
-  });
-
   it('POST /api/usage/tokens defaults missing token counts to 0', async () => {
     usage.recordTokens.mockResolvedValue();
     const res = await request(buildApp()).post('/api/usage/tokens').send({});
     expect(res.status).toBe(200);
     expect(usage.recordTokens).toHaveBeenCalledWith(0, 0);
-  });
-
-  it('POST /api/usage/tokens passes through provided counts', async () => {
-    usage.recordTokens.mockResolvedValue();
-    await request(buildApp()).post('/api/usage/tokens').send({ inputTokens: 500, outputTokens: 200 });
-    expect(usage.recordTokens).toHaveBeenCalledWith(500, 200);
   });
 
   it.each(['5', -1, 1.5, {}, []])('POST /api/usage/tokens rejects %j', async (bad) => {

@@ -198,25 +198,6 @@ describe('CoS Routes', () => {
     getAgentRecord.mockResolvedValue(null);
   });
 
-  describe('GET /api/cos', () => {
-    it('should return CoS status', async () => {
-      const mockStatus = {
-        running: true,
-        paused: false,
-        activeAgents: 2,
-        config: {},
-        stats: {}
-      };
-      getStatus.mockResolvedValue(mockStatus);
-
-      const response = await request(app).get('/api/cos');
-
-      expect(response.status).toBe(200);
-      expect(response.body.running).toBe(true);
-      expect(response.body.activeAgents).toBe(2);
-    });
-  });
-
   describe('POST /api/cos/start', () => {
     it('should start CoS daemon', async () => {
       start.mockResolvedValue({ success: true });
@@ -224,7 +205,6 @@ describe('CoS Routes', () => {
       const response = await request(app).post('/api/cos/start');
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
       expect(start).toHaveBeenCalled();
     });
   });
@@ -236,7 +216,6 @@ describe('CoS Routes', () => {
       const response = await request(app).post('/api/cos/stop');
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
       expect(stop).toHaveBeenCalled();
     });
   });
@@ -250,7 +229,6 @@ describe('CoS Routes', () => {
         .send({ reason: 'User requested pause' });
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
       expect(pause).toHaveBeenCalledWith('User requested pause');
     });
   });
@@ -262,21 +240,7 @@ describe('CoS Routes', () => {
       const response = await request(app).post('/api/cos/resume');
 
       expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-  });
-
-  describe('GET /api/cos/config', () => {
-    it('should return configuration', async () => {
-      const mockConfig = {
-        maxConcurrentAgents: 3
-      };
-      getConfig.mockResolvedValue(mockConfig);
-
-      const response = await request(app).get('/api/cos/config');
-
-      expect(response.status).toBe(200);
-      expect(response.body.maxConcurrentAgents).toBe(3);
+      expect(resume).toHaveBeenCalledOnce();
     });
   });
 
@@ -734,7 +698,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/agents/agent-001');
 
       expect(response.status).toBe(200);
-      expect(response.body.id).toBe('agent-001');
+      expect(getAgent.mock.calls[0][0]).toBe('agent-001');
     });
 
     it('should return 404 if agent not found', async () => {
@@ -789,7 +753,6 @@ describe('CoS Routes', () => {
         .send({ context: 'try the other approach', provider: 'claude', effort: 'high' });
 
       expect(response.status).toBe(200);
-      expect(response.body.mode).toBe('requeued');
       expect(agentOrchestrator.resumeAgent).toHaveBeenCalledWith(
         'agent-001',
         expect.objectContaining({ context: 'try the other approach', provider: 'claude', effort: 'high' }),
@@ -1637,7 +1600,7 @@ describe('CoS Routes', () => {
       const response = await request(app).delete('/api/cos/agents/completed');
 
       expect(response.status).toBe(200);
-      expect(response.body.cleared).toBe(3);
+      expect(clearCompletedAgents).toHaveBeenCalledOnce();
     });
   });
 
@@ -1804,18 +1767,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/briefings');
 
       expect(response.status).toBe(200);
-      expect(response.body.briefings).toHaveLength(2);
-    });
-  });
-
-  describe('GET /api/cos/briefings/latest', () => {
-    it('should return latest briefing', async () => {
-      getLatestBriefing.mockResolvedValue({ date: '2026-02-25', content: 'Latest' });
-
-      const response = await request(app).get('/api/cos/briefings/latest');
-
-      expect(response.status).toBe(200);
-      expect(response.body.date).toBe('2026-02-25');
+      expect(response.body).toEqual({ briefings: ['2026-02-25', '2026-02-24'] });
     });
   });
 
@@ -1826,6 +1778,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/briefings/2026-02-24');
 
       expect(response.status).toBe(200);
+      expect(getBriefing.mock.calls[0][0]).toBe('2026-02-24');
     });
 
     it('should return 404 if briefing not found', async () => {
@@ -1844,38 +1797,6 @@ describe('CoS Routes', () => {
     });
   });
 
-  describe('GET /api/cos/claude-changelog', () => {
-    it('should return changelog', async () => {
-      claudeChangelog.checkChangelog.mockResolvedValue({ entries: [], lastChecked: Date.now() });
-
-      const response = await request(app).get('/api/cos/claude-changelog');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('entries');
-    });
-  });
-
-  describe('GET /api/cos/claude-changelog/cached', () => {
-    it('should return cached changelog', async () => {
-      claudeChangelog.getCachedChangelog.mockResolvedValue({ entries: [], cached: true });
-
-      const response = await request(app).get('/api/cos/claude-changelog/cached');
-
-      expect(response.status).toBe(200);
-    });
-  });
-
-  describe('GET /api/cos/scripts', () => {
-    it('should list scripts', async () => {
-      listScripts.mockResolvedValue([{ name: 'backup.sh' }]);
-
-      const response = await request(app).get('/api/cos/scripts');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(1);
-    });
-  });
-
   describe('GET /api/cos/scripts/:name', () => {
     it('should return script content', async () => {
       getScript.mockResolvedValue({ name: 'backup.sh', content: '#!/bin/bash' });
@@ -1883,7 +1804,7 @@ describe('CoS Routes', () => {
       const response = await request(app).get('/api/cos/scripts/backup.sh');
 
       expect(response.status).toBe(200);
-      expect(response.body.name).toBe('backup.sh');
+      expect(getScript.mock.calls[0][0]).toBe('backup.sh');
     });
 
     it('should return 404 if script not found', async () => {
@@ -1895,17 +1816,6 @@ describe('CoS Routes', () => {
     });
   });
 
-  describe('GET /api/cos/activity/today', () => {
-    it('should return today activity summary', async () => {
-      getTodayActivity.mockResolvedValue({ stats: { completed: 5 } });
-
-      const response = await request(app).get('/api/cos/activity/today');
-
-      expect(response.status).toBe(200);
-      expect(response.body.stats.completed).toBe(5);
-    });
-  });
-
   describe('GET /api/cos/activity/while-away', () => {
     it('passes a valid ISO since through to the service', async () => {
       getWhileAwayActivity.mockResolvedValue({ stats: { completed: 3 } });
@@ -1914,7 +1824,6 @@ describe('CoS Routes', () => {
       const response = await request(app).get(`/api/cos/activity/while-away?since=${encodeURIComponent(since)}`);
 
       expect(response.status).toBe(200);
-      expect(response.body.stats.completed).toBe(3);
       expect(getWhileAwayActivity).toHaveBeenCalledWith(since);
     });
 

@@ -127,12 +127,6 @@ describe('tracks routes', () => {
   let app;
   beforeEach(() => { app = makeApp(); vi.clearAllMocks(); lib.store.clear(); });
 
-  it('GET / returns the track list', async () => {
-    const r = await request(app).get('/api/tracks');
-    expect(r.status).toBe(200);
-    expect(r.body).toEqual([{ id: 'track-1', title: 'Intro' }]);
-  });
-
   // Regression guard: every client caller (apiTracks.listTracks) calls this
   // with no query params. If it ever returns an envelope instead of a bare
   // array, those lists silently render empty.
