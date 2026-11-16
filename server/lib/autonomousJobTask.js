@@ -13,6 +13,8 @@
  * lib because it needs none of the generator's I/O that callers' suites mock.
  */
 
+import { isTruthyMeta } from './metadataFlags.js';
+
 /** @param {object} generated - a `generateTaskFromJob` result */
 export function generatedJobTaskFields(generated) {
   const meta = generated?.metadata || {};
@@ -53,7 +55,7 @@ export function generatedJobTaskFields(generated) {
  */
 function isEphemeralJobTask(task) {
   const jobId = task?.metadata?.jobId;
-  return task?.metadata?.autonomousJob === true && !!jobId && typeof task.id === 'string' && task.id.startsWith(`${jobId}-`);
+  return isTruthyMeta(task?.metadata?.autonomousJob) && !!jobId && typeof task.id === 'string' && task.id.startsWith(`${jobId}-`);
 }
 
 /** True when an `updateTask` error is the expected miss for an unpersisted scheduled job task. */

@@ -31,7 +31,7 @@ export async function reconcileSpawnBudget(taskId) {
   const charged = spawnBudgetCount(proof.dispatch.totalSpawnCount);
   if (count === null || charged === null || count > charged) return { reconciled: false, reason: 'counter-conflict' };
   if (count === charged) return { reconciled: false, reason: 'already-reconciled' };
-  const saved = await updateTask(task.id, { metadata: { totalSpawnCount: charged, spawnBudgetReconciledHold: 'true' } }, task.taskType || 'user', {
+  const saved = await updateTask(task.id, { metadata: { totalSpawnCount: charged, spawnBudgetReconciledHold: true } }, task.taskType || 'user', {
     expectedStatus: 'blocked', expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
     recoveryOwner: { id: agent.id, startedAt: agent.startedAt, requireInactive: true, requireRegistered: true,
       expectedOwnerMetadata: structuredClone(agent.metadata) },

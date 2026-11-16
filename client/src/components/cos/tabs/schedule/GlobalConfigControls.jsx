@@ -24,6 +24,7 @@ import TaskDependencyPicker from './TaskDependencyPicker';
 import RunTaskButton from './RunTaskButton';
 import TaskDataInputs from '../../TaskDataInputs';
 import { INTERVAL_DESCRIPTIONS, PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION, toggleMetadataField, pipelineStages, IMPROVEMENT_DISABLED_TITLE, SAVING_TITLE, fileIssuesEffective, managedAgentOptionsFor, toggleFileIssuesMetadata } from './scheduleConstants';
+import { isTruthyMeta } from '../../../../../../server/lib/metadataFlags.js';
 
 // Shown for the unpinned ('' → inherit) choice: the task type is global, so the
 // policy is whatever each target app configured, and PortOS's own self-improvement
@@ -999,7 +1000,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
               providerReviewUnsupported={reviewDefaults.providerReviewUnsupported}
               stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
-                ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')
+                ? isTruthyMeta(config.taskMetadata?.reviewerApplies)
                 : reviewDefaults.reviewerApplies}
               // The same fallback the props above were seeded from. The picker
               // omits whatever still equals it, so touching one control no

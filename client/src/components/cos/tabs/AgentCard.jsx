@@ -49,6 +49,7 @@ import { AgentProgress, AgentRuntimeStatus } from './AgentRuntimeStatus';
 import AgentMemoriesUsed from './AgentMemoriesUsed';
 import { agentIssueLinkifier } from '../../../lib/issueRefs';
 import { harnessLabel, providerHarnessId } from '../../../utils/providerHarnesses';
+import { isFalsyMeta, isTruthyMeta } from '../../../../../server/lib/metadataFlags.js';
 
 const STATS_EVENTS = ['cos:agent:updated', 'cos:agent:output'];
 
@@ -105,11 +106,10 @@ function buildProviderConfigBadges(metadata = {}) {
   const harnessId = metadata.harnessId ?? inferredHarnessId;
   const providerName = metadata.providerName || providerId;
   const providerMethod = metadata.providerMethod || providerType;
-  const dispatch = metadata.useRunner === true || metadata.useRunner === 'true'
+  const dispatch = isTruthyMeta(metadata.useRunner)
     ? 'Runner'
-    : metadata.useRunner === false || metadata.useRunner === 'false' ? 'Server' : null;
-  const isCredentialBootstrap = metadata.providerHasCredentialBootstrap === true
-    || metadata.providerHasCredentialBootstrap === 'true';
+    : isFalsyMeta(metadata.useRunner) ? 'Server' : null;
+  const isCredentialBootstrap = isTruthyMeta(metadata.providerHasCredentialBootstrap);
   const credentialBootstrap = metadata.providerCredentialBootstrapId || (isCredentialBootstrap ? 'bootstrap' : null);
 
   return [

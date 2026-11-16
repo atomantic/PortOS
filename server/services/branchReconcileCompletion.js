@@ -5,6 +5,7 @@ import { getActiveAgentIds } from './agentState.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { reconcile, buildActiveOwnerIds, describeIdleReconcilePark } from './branchReconcile.js';
 import { emitLog } from './cosEvents.js';
+import { isFalsyMeta } from '../lib/metadataFlags.js';
 
 /** Finish deterministic cleanup without requiring another provider dispatch. */
 export async function settleBranchReconcileRun(agent) {
@@ -12,7 +13,7 @@ export async function settleBranchReconcileRun(agent) {
   if (type !== 'branch-reconcile') return null;
   const task = await getTaskById(agent.taskId);
   // The task holds the resolved per-app toggles. Missing records cannot grant cleanup.
-  if (!task?.metadata || task.metadata.cleanupMerged === false) return null;
+  if (!task?.metadata || isFalsyMeta(task.metadata.cleanupMerged)) return null;
   const app = agent.metadata.taskApp ? await getAppById(agent.metadata.taskApp) : null;
   if (!app?.repoPath) {
     // A missing target is an explained refusal, not a defect: record it and stop.
@@ -32,7 +33,7 @@ export async function settleBranchReconcileRun(agent) {
   const result = await reconcile(app.repoPath, {
     appId: app.id,
     cleanup: true,
-    reapSuperseded: task.metadata.reapSuperseded !== false,
+    reapSuperseded: !isFalsyMeta(task.metadata.reapSuperseded),
     pendingMergeBranches,
     activeAgentIds: buildActiveOwnerIds(new Set(getActiveAgentIds()), agents),
     claimOwners: { agents, readAgents: readClaimOwnershipAgents },

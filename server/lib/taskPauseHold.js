@@ -20,7 +20,7 @@ export function pauseMetadata({ agentId, pausedAt, workspacePath, runId }) {
   };
 }
 
-/** The metadata patch that RELEASES the hold: `undefined` (not `null`) because `updateTask` DELETES undefined keys while a null survives and TASKS.md writes the string `"null"`, reading back as a live pause. */
+/** The metadata patch that RELEASES the hold: `undefined` (not `null`) because `updateTask` DELETES undefined keys while a null is stored as a present value. */
 export function clearedPauseMetadata() {
   return Object.fromEntries(PAUSE_METADATA_KEYS.map(key => [key, undefined]));
 }

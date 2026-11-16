@@ -7,11 +7,11 @@
  * rule, fractional queue `position` assignment, and `planListSave` (turn "the whole
  * list changed" into "only these rows changed").
  *
- * A task is stored in its normalized form: exactly what the retired Markdown
- * round-trip produced (scalar metadata read back as strings, nullish metadata
- * dropped, one-line descriptions). Consumers were written against that shape and
- * still carry helpers (`isTruthyMeta`, ...) for it; storing anything else would
- * change their behavior as a side effect of changing the storage.
+ * A task is stored in its normalized form (`storedForm`): metadata keeps its JSON
+ * types and nulls, the description keeps its line breaks. Rows written before
+ * #16407 hold the retired Markdown round-trip's shape instead (scalar metadata as
+ * strings, nulls dropped, one-line descriptions), and so do tasks from peers on
+ * older versions, so readers accept both (`isTruthyMeta`, `Number(...)`).
  *
  * Queue order is (status section, priority high to low, position). `position`
  * only breaks ties inside a status+priority, and is fractional so a task can be
@@ -43,28 +43,19 @@ export function completionStamp(task) {
 }
 
 // --- Stored form --------------------------------------------------------------
-// The rules below reproduce, field by field, what writing a task as one row of the
-// retired Markdown file and reading it back did (`legacyTaskMarkdown.js`); the
-// property test in `cosTaskRows.storedForm.test.js` pins them to it. The row's line
-// patterns captured with `(.+)$`, and `.` does not match a JS line terminator other
-// than `\n` (`\r`, U+2028, U+2029), so a value or description holding one past its
-// leading whitespace was lost.
 
-const JSON_SENTINEL = '__json__:';
 const ROW_ID = /^([\w-]+)\s*$/;
 const METADATA_KEY = /^\s*(\w+)$/;
-const VALUE_TEXT = /^\s*(.+)$/;
-const FLAGGED_TAIL = /^\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i;
-const PLAIN_TAIL = /^\s*\|\s*(.+)$/;
-const DROPPED = Symbol('dropped');
+// Every line break a description can carry, written back as `\n`. An older peer's
+// stored form throws on a lone `\r`, U+2028 or U+2029 (its line patterns' `.` stops
+// there), so none of them may reach the wire.
+const LINE_BREAK = /\r\n?|[\u2028\u2029]/g;
 
 /**
  * The id a task is stored under: unregistered prefixes gain `task-`, trailing
- * whitespace is dropped. An id the row could not carry (any character outside
- * `[\w-]` before trailing whitespace, a newline) is refused; the old reader
- * dropped such a row, except that a `|` let it re-key the task under the id's
- * first segment and shift the rest into its priority or description. Refusing
- * that case too is the one place this is stricter than the round-trip.
+ * whitespace is dropped. An id outside `[\w-]` (a newline, a `|`, inner
+ * whitespace) is refused, as the Markdown rows that defined these ids could not
+ * hold it.
  */
 function storedId(id) {
   const text = `${id}`;
@@ -74,10 +65,9 @@ function storedId(id) {
 }
 
 /**
- * A metadata key as it reads back: leading whitespace dropped, first character
- * lower-cased (legacy Title-Case keys). Anything but a bare word is dropped; the
- * old reader re-keyed a `word: rest` key onto `word` with a mangled value, and
- * split a key with a newline into other lines; both are dropped here instead.
+ * A metadata key as it is stored: leading whitespace dropped, first character
+ * lower-cased (legacy Title-Case keys), anything but a bare word dropped. The
+ * rule predates #16407 and is kept so a key reads the same on every version.
  */
 function storedKey(key) {
   const match = key.includes('\n') ? null : METADATA_KEY.exec(key);
@@ -85,97 +75,74 @@ function storedKey(key) {
   return match[1].charAt(0).toLowerCase() + match[1].slice(1);
 }
 
-/** The text a metadata value was written as. */
-function valueText(value) {
-  if (Array.isArray(value) || (typeof value === 'object' && value !== null)) return JSON_SENTINEL + JSON.stringify(value);
-  if (typeof value !== 'string') return String(value);
-  if (value.includes('\n') || value.includes('\\') || value === 'null' || value === 'undefined') {
-    return JSON_SENTINEL + JSON.stringify(value);
+/**
+ * A top-level metadata value as it is stored: JSON types as they are (strings,
+ * finite numbers, booleans, null), objects and arrays as their JSON. A value JSON
+ * cannot hold (NaN, Infinity, a bigint) is kept as its string, as it always was.
+ */
+function storedValue(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (typeof value === 'object') {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : JSON.parse(json);
   }
-  return value;
+  return String(value);
 }
 
-/** The value that text reads back as, or DROPPED. Written text always follows `key: `. */
-function readValueText(text) {
-  const match = VALUE_TEXT.exec(` ${text}`);
-  if (!match) return DROPPED;
-  const raw = match[1].trim();
-  if (raw.startsWith(JSON_SENTINEL)) {
-    try {
-      return JSON.parse(raw.slice(JSON_SENTINEL.length));
-    } catch {
-      // Not JSON after all: read it as plain text below.
-    }
-  }
-  if (raw === 'null') return null;
-  if (raw === 'undefined') return undefined;
-  return raw.replace(/\\n/g, '\n');
-}
-
-/** Nullish values are dropped: an absent key already means "not set" to every reader. */
+/**
+ * Metadata as it is stored. `undefined` is dropped (absent means "not set");
+ * `null` is kept. Rows written before #16407, and tasks from peers on older
+ * versions, hold every scalar as a string with nulls dropped, so readers accept
+ * both forms (`isTruthyMeta`, `Number(...)`).
+ */
 function storedMetadata(metadata) {
   const stored = {};
   for (const [key, value] of Object.entries(metadata)) {
-    if (value === null || value === undefined) continue;
+    if (value === undefined) continue;
     const storedAs = storedKey(key);
-    if (storedAs === null) continue;
-    const readBack = readValueText(valueText(value));
-    if (readBack !== DROPPED) stored[storedAs] = readBack;
+    const storedAsValue = storedAs === null ? undefined : storedValue(value);
+    // A null never erases a value an earlier key (`Context` before `context`) stored here.
+    if (storedAsValue === undefined || (storedAsValue === null && Object.hasOwn(stored, storedAs))) continue;
+    stored[storedAs] = storedAsValue;
   }
   return stored;
 }
 
 /**
- * The approval segment written before the description. The user queue writes only
- * the hold; the internal queue states `autoApproved` too (`undefined` stays flagless).
+ * The approval flags as they are stored. The user queue carries only the hold
+ * (`approvalRequired === true`); the internal queue also holds a task whose
+ * `autoApproved` is `false`. A stored task is auto-approved exactly when it is not
+ * held.
  */
-function approvalSegment(task, internal) {
-  if (!internal) return task.approvalRequired === true ? ' | APPROVAL' : '';
-  if (task.approvalRequired || task.autoApproved === false) return ' | APPROVAL';
-  return task.autoApproved !== undefined ? ' | AUTO' : '';
+function storedApproval(task, internal) {
+  const held = internal ? Boolean(task.approvalRequired || task.autoApproved === false) : task.approvalRequired === true;
+  return { approvalRequired: held, autoApproved: !held };
 }
 
-function flatDescription(task) {
-  const { description } = task;
-  if (typeof description !== 'string' || !/\r?\n/.test(description)) return description;
-  console.warn(`⚠️ Flattened newline(s) in task ${task.id} description for single-line storage`);
-  return description.replace(/\r?\n/g, ' ');
+/** The description, line breaks and all, trimmed at both ends. */
+function storedDescription(description) {
+  return `${description}`.replace(LINE_BREAK, '\n').trim();
 }
 
 /**
- * The approval flags and description as they read back. A description that itself
- * opens with `AUTO |` or `APPROVAL |` is read as the flag, as the row's first line
- * pattern always did.
- */
-function readHeaderTail(task, internal) {
-  const tail = `${approvalSegment(task, internal)} | ${flatDescription(task)}`;
-  const flagged = FLAGGED_TAIL.exec(tail);
-  if (flagged) {
-    const flag = flagged[1].toUpperCase();
-    return { approvalRequired: flag === 'APPROVAL', autoApproved: flag === 'AUTO', description: flagged[2].trim() };
-  }
-  const plain = PLAIN_TAIL.exec(tail);
-  return plain && { approvalRequired: false, autoApproved: true, description: plain[1].trim() };
-}
-
-/**
- * The task as it is stored and read back: a lossy-by-design normalization every
- * existing consumer expects. That includes the id: one without a registered prefix
- * reads back as `task-<id>`, so the stored id, not the incoming one, is the row key.
+ * The task as it is stored and read back. Metadata keeps its JSON types and nulls,
+ * and the description keeps its line breaks (#16407). The id can change: one
+ * without a registered prefix is stored as `task-<id>`, so the stored id, not the
+ * incoming one, is the row key.
  */
 export function storedForm(task, source) {
   const representable = toRepresentableTask(task);
   const id = storedId(representable.id);
-  const header = readHeaderTail(representable, source === 'internal');
-  const metadata = storedMetadata(representable.metadata);
-  if (!id || !header) throw new Error(`Task ${task?.id} cannot be stored`);
+  if (!id) throw new Error(`Task ${task?.id} cannot be stored`);
   return {
     id,
     status: representable.status,
     priority: representable.priority,
     priorityValue: PRIORITY_VALUES[representable.priority],
-    ...header,
-    metadata,
+    ...storedApproval(representable, source === 'internal'),
+    description: storedDescription(representable.description),
+    metadata: storedMetadata(representable.metadata),
     section: representable.status,
   };
 }

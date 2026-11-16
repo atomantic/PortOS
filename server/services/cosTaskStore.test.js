@@ -124,6 +124,7 @@ import {
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
@@ -217,7 +218,7 @@ it('reconciles a stopped stale completion only against its latest episode dispat
   expect(await retryTasksResolvedByInvestigation({ id: 'sys-investigation', status: 'completed',
     metadata: { isInvestigation: true, affectedTasks: [fresh.id] } })).toEqual({ retried: [],
     skipped: [{ taskId: fresh.id, reason: 'spawn-budget-reconciled-held' }] });
-  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: '2', failureCount: '3' } });
+  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: 2, failureCount: 3 } });
   expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'already-reconciled' });
   expect(mock.events.filter(event => event.payload?.action === 'unblocked')).toHaveLength(0);
   const corrected = await getTaskById(fresh.id);
@@ -319,9 +320,9 @@ it('holds a reconciled spawn budget until an explicit reset, even against stale 
   const task = await addTask({ id: 'sys-reconcile-hold', description: 'Reconcile fixture' }, 'internal');
   const reconciled = await updateTask(task.id, { metadata: { totalSpawnCount: 2 } }, 'internal',
     { spawnBudgetOperation: { kind: 'reconcile' } });
-  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe('true');
+  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe(true);
   const stale = await updateTask(task.id, { metadata: { ...task.metadata, spawnBudgetReconciledHold: undefined } }, 'internal');
-  expect(stale.metadata.spawnBudgetReconciledHold).toBe('true');
+  expect(stale.metadata.spawnBudgetReconciledHold).toBe(true);
   const reset = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'internal',
     { spawnBudgetOperation: { kind: 'reset' } });
   expect(reset.metadata.spawnBudgetReconciledHold).toBeUndefined();
@@ -411,7 +412,7 @@ describe('forge maintenance queue recovery', () => {
     const result = await reconcileLegacyForgeMaintenanceTasks({ instanceId: 'local' });
     expect(result).toEqual({ recovered: 1, retired: 2 });
     const tasks = (await getCosTasks()).tasks;
-    expect(tasks.find(t => t.id === 'sys-screened')).toMatchObject({ status: 'pending', metadata: { forgeMaintenanceVersion: '1' } });
+    expect(tasks.find(t => t.id === 'sys-screened')).toMatchObject({ status: 'pending', metadata: { forgeMaintenanceVersion: 1 } });
     expect(tasks.find(t => t.id === 'sys-screened').metadata.blockedReason).toBeUndefined();
     for (const id of ['sys-old-pr', 'sys-old-issue']) {
       expect(tasks.find(t => t.id === id)).toMatchObject({ status: 'completed', metadata: { resolution: 'superseded' } });
@@ -1243,7 +1244,7 @@ describe('cosTaskStore.addTask', () => {
       }, 'user');
       expect(created.metadata).toMatchObject({ effort: 'high', temperature: 0.25, thinking: false });
       const reloaded = await getTaskById('task-opencode');
-      expect(reloaded.metadata).toMatchObject({ effort: 'high', temperature: '0.25', thinking: 'false' });
+      expect(reloaded.metadata).toMatchObject({ effort: 'high', temperature: 0.25, thinking: false });
     });
 
     it('accepts an explicit prompt alongside a note and never re-classifies it', async () => {
@@ -2649,6 +2650,29 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'peer-merged')).toBe(true);
   });
 
+  // #16407: rows and peers from before it hold every scalar as a string with nulls
+  // dropped; this version stores JSON types and nulls. A merge across the two forms
+  // must read the same flags either way and settle after one pass.
+  it.each([
+    ['local typed, remote strings', { openPR: true, retryCount: 2, note: null }, { openPR: 'true', retryCount: '2' }],
+    ['local strings, remote typed', { openPR: 'true', retryCount: '2' }, { openPR: true, retryCount: 2, note: null }],
+  ])('merges a task whose metadata types differ by side (%s)', async (_label, localMeta, remoteMeta) => {
+    const stamp = '2026-06-25T10:00:00.000Z';
+    await addTask({ id: 'task-mixed', description: 'Line one\nLine two', priority: 'MEDIUM', status: 'pending',
+      metadata: { ...localMeta, updatedAt: stamp } }, 'internal', { raw: true });
+    const local = await getTaskById('task-mixed');
+    const remote = [{ ...local, taskType: 'internal', metadata: { ...remoteMeta, updatedAt: stamp } }];
+    await mergePeerTasks('internal', remote, { now: NOW });
+    const merged = await getTaskById('task-mixed');
+    expect(isTruthyMeta(merged.metadata.openPR)).toBe(true);
+    expect(Number(merged.metadata.retryCount)).toBe(2);
+    expect(merged.metadata.note ?? null).toBeNull();
+    expect(merged.description).toBe(local.description);
+    vi.mocked(repository.applyTaskListSave).mockClear();
+    expect(await mergePeerTasks('internal', remote, { now: NOW })).toEqual({ changed: false });
+    expect(repository.applyTaskListSave).not.toHaveBeenCalled();
+  });
+
   it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
@@ -3362,7 +3386,7 @@ it('preserves custom Deep workflow through projection and non-raw persistence', 
   const fields = generatedJobTaskFields({ description: 'Custom deep audit', metadata: { app: 'example', auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: true, useWorktree: true } });
   const fresh = await addTask(fields, 'internal');
   expect(fresh.duplicate).not.toBe(true);
-  expect((await getTaskById(fresh.id)).metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: 'true', useWorktree: 'true' });
+  expect((await getTaskById(fresh.id)).metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: true, useWorktree: true });
   expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
   await expect(addTask(generatedJobTaskFields({ metadata: { auditDepth: 'deep', deepAuditId: 'historic' } }), 'internal')).rejects.toThrow('read-only');
 });
@@ -3371,7 +3395,7 @@ it('round-trips the server-owned audit disposition contract through persisted ta
   const created = await addTask({ id: 'sys-audit-disposition-example', description: 'Audit example boundaries',
     metadata: { app: 'example', analysisType: 'security', fileIssues: false, auditDispositionVersion: 1 } }, 'internal', { raw: true });
   const reloaded = await getTaskById(created.id);
-  expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: '1', fileIssues: 'false' });
+  expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: 1, fileIssues: false });
 });
 
 // Completed history older than the working set. The queues are rows in one table:

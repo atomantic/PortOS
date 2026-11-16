@@ -96,7 +96,7 @@ it('registers and rejoins a real task-store continuation with its frozen review 
   const [first, duplicate] = await Promise.all([ensureReleaseSynchronization(publisher), ensureReleaseSynchronization(publisher)]);
   expect(duplicate).toEqual(first);
   const task = await getTaskById(first.taskId);
-  expect(task).toMatchObject({ taskType: 'internal', status: 'pending', metadata: { reviewers: ['codex', 'copilot'], optionalReviewers: ['codex'], reviewerApplies: 'false', prCompletion: 'review-then-merge' } });
+  expect(task).toMatchObject({ taskType: 'internal', status: 'pending', metadata: { reviewers: ['codex', 'copilot'], optionalReviewers: ['codex'], reviewerApplies: false, prCompletion: 'review-then-merge' } });
   const rendered = renderDelivery(task);
   expect(rendered.section).toBe('review-loop');
   expect(rendered.local).toContain('gpt-6.1-terra');

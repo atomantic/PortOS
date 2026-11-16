@@ -17,6 +17,7 @@ import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
 import { explicitPrCompletion, resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { storedForm } from '../lib/cosTaskRows.js';
 import { cosEvents } from './cosEvents.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const queue = createFileWriteQueue();
 const identitySchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -136,7 +137,7 @@ async function releaseOwnersIdle(entry, ignoreAgentId = null, observed = null) {
     owner.metadata?.useRunner, owner.metadata?.executionMode];
   if (observed && !isDeepStrictEqual(owners.map(binding).sort(), observed.owners.map(binding).sort())) return false;
   let runnerAgents = observed?.runnerAgents || [];
-  const runnerBacked = agent => agent.metadata?.useRunner === true || agent.metadata?.useRunner === 'true'
+  const runnerBacked = agent => isTruthyMeta(agent.metadata?.useRunner)
     || ['runner', 'runner-tui'].includes(agent.metadata?.executionMode);
   const known = [...new Map([...history, ...agents].map(agent => [agent.id, agent])).values()];
   const releaseAgents = known.filter(agent => runnerBacked(agent) && ['do-release', 'release-sync'].includes(currentTaskTypeName(
@@ -293,7 +294,7 @@ export function resetReleaseSynchronization(identity, reason, actor) {
       const active = new Set(getActiveAgentIds());
       const repo = await realpath(entry.owner.workspace).catch(() => null);
       if (!repo) refuse('Release repository is unavailable');
-      if (agents.some(agent => agent.metadata?.useRunner === true || agent.metadata?.useRunner === 'true'
+      if (agents.some(agent => isTruthyMeta(agent.metadata?.useRunner)
         || ['runner', 'runner-tui'].includes(agent.metadata?.executionMode))) {
         const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');
         const running = await getActiveAgentsFromRunner();
@@ -392,7 +393,7 @@ async function newEntry(agent, publication) {
   const { getAppById } = await import('./apps.js');
   const [source, instanceId] = await Promise.all([getTaskById(agent.taskId), getInstanceId()]);
   if (!source || !instanceId || instanceId === UNKNOWN_INSTANCE_ID) refuse('Release synchronization requires its original task and local instance');
-  const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => source.metadata?.[key] !== undefined).map(key => [key, source.metadata[key]]));
+  const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => source.metadata?.[key] != null).map(key => [key, source.metadata[key]]));
   if (!policy.app) refuse('Release synchronization requires the original target app');
   policy.prCompletion = explicitPrCompletion(source);
   if (policy.prCompletion === null) {
@@ -445,7 +446,7 @@ async function registerEntry(entry) {
     entry.blocker = null;
     entry.retryAt = null;
     await saveReleaseSynchronization(entry);
-    const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => entry.task.metadata[key] !== undefined)
+    const policy = Object.fromEntries(RELEASE_SYNC_POLICY_KEYS.filter(key => entry.task.metadata[key] != null)
       .map(key => [key, entry.task.metadata[key]]));
     return { taskId: source.id, registeredAt: entry.registeredAt, policy,
       synchronizationVerified: effectiveReleaseSynchronization(entry)?.status === 'verified' };

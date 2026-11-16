@@ -88,7 +88,7 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   if (Array.isArray(taskData.affectedTasks) && taskData.affectedTasks.length > 0) metadata.affectedTasks = taskData.affectedTasks;
   if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     // Boolean flags: persist both true and false so users can explicitly override defaults.
-    // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta;
+    // The string forms ('false' on rows stored before #16407 and peers on older versions) are handled by isTruthyMeta/isFalsyMeta;
     // undefined means "use app defaults".
   if (taskData.useWorktree === true) metadata.useWorktree = true;
   else if (taskData.useWorktree === false) metadata.useWorktree = false;

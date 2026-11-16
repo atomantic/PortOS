@@ -102,7 +102,7 @@ import {
 } from './cosTaskPreStepBlocks.js';
 import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from './preflightTaskCard.js';
 import { checkGhHealth } from './github.js';
 import { detectActionableWork } from './perpetualWork.js';
@@ -157,12 +157,9 @@ export function exceedsMaxSpawns(task) {
  *     tied to the one block definition in `lib/quotaBurnOrigin.js` — a task
  *     written by any release, in either the flat or the block shape, is exempt.
  *
- * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
- * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
- * metadata via `String(value)`; only arrays/objects like `pipeline` get the JSON
- * sentinel that preserves their type). So accept BOTH the in-memory boolean and
- * the re-parsed string — a `=== true` check alone would silently miss the
- * persisted-then-reloaded task, which is exactly the one the spawn gate sees.
+ * `metadata.perpetual` is a bare boolean set upstream, but rows stored before #16407 and peers on older versions
+ * hold it as the STRING `"true"`. So accept BOTH — a `=== true` check alone would
+ * silently miss those tasks.
  *
  * Shared by both spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks`
  * here) and their dry-run planners so the cooldown-exempt set can't drift.
@@ -1806,7 +1803,7 @@ function initializePipelineMetadata(metadata) {
 // openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
 // from blocking defaultOpenPR: true when both are app-level defaults.
 export function applyAppWorktreeDefault(metadata, app) {
-  const taskTypeDisabledWorktree = metadata.useWorktree === false || metadata.useWorktree === 'false';
+  const taskTypeDisabledWorktree = isFalsyMeta(metadata.useWorktree);
 
   // Apply defaultOpenPR first (since openPR implies useWorktree)
   if (metadata.openPR === undefined) {
@@ -1836,7 +1833,7 @@ export function applyAppWorktreeDefault(metadata, app) {
 
   // Final invariant: openPR implies useWorktree (normalize in both directions)
   const finalOpenPR = isTruthyMeta(metadata.openPR);
-  const finalWorktreeOff = metadata.useWorktree === false || metadata.useWorktree === 'false';
+  const finalWorktreeOff = isFalsyMeta(metadata.useWorktree);
   if (finalOpenPR && finalWorktreeOff) {
     // openPR wins — force useWorktree on
     metadata.useWorktree = true;
@@ -2481,7 +2478,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
  */
 export function resolveUserActionDeliveryBlock(taskType, metadata) {
   if (taskType !== 'user-action-review') return '';
-  return metadata?.fileIssues === false || metadata?.fileIssues === 'false'
+  return isFalsyMeta(metadata?.fileIssues)
     ? 'Deliver each accepted proposal as a QUEUED CoS TASK (`POST /api/cos/tasks`, one bounded task per proposal, priority LOW unless the evidence is severe) — the operator turned off file-issues mode for this schedule. Do not file tracker issues.'
     : 'Deliver each accepted proposal as a FILED TRACKER ISSUE in the PortOS repository (`gh issue create` with the `plan` label; create the label first if missing). This is file-issues mode, the default. Do not queue CoS tasks.';
 }

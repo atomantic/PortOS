@@ -9,6 +9,7 @@ import { tmpdir } from 'os';
 import { statSync } from 'fs';
 import { rm } from 'fs/promises';
 import { expandHome } from './fileUtils.js';
+import { isTruthyMeta } from './metadataFlags.js';
 
 /**
  * Creative Director treatment/plan/evaluate tasks are HTTP-PATCH deliverables (`noCodeOutput`) that never asked for a worktree. With `cwd = PATHS.root` Claude Code / Codex would discover the PortOS repo's AGENTS.md
@@ -16,8 +17,7 @@ import { expandHome } from './fileUtils.js';
  */
 export function usesCreativeDirectorScratchCwd(task) {
   if (!task?.metadata?.creativeDirector) return false;
-  const useWorktree = task.metadata.useWorktree;
-  return useWorktree !== true && useWorktree !== 'true';
+  return !isTruthyMeta(task.metadata.useWorktree);
 }
 
 /** Isolated cwd for a CD-marked CLI/TUI run, under the OS temp dir, NOT the checkout (`data/cos/agents` is inside the git tree, so parent-directory walks would find AGENTS.md). `agentId` is required (a missing id would collapse every CD run onto one folder). */

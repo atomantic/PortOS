@@ -10,11 +10,10 @@ const task = (id, extra = {}) => ({ id, status: 'pending', priority: 'MEDIUM', p
 const done = (id, ageDays, extra = {}) => task(id, { status: 'completed', metadata: { updatedAt: new Date(NOW - ageDays * DAY).toISOString() }, ...extra });
 
 describe('storedForm', () => {
-  it('normalizes exactly as the old Markdown round-trip did', () => {
+  it('keeps metadata types and nulls and the description\'s newlines (#16407)', () => {
     const stored = storedForm(task('task-a', { description: 'Line one\nLine two', metadata: { openPR: true, count: 3, gone: null, note: undefined } }), 'user');
-    // Scalars read back as strings, nullish metadata is dropped, the description is one line.
-    expect(stored.metadata).toEqual({ openPR: 'true', count: '3' });
-    expect(stored.description).not.toContain('\n');
+    expect(stored.metadata).toStrictEqual({ openPR: true, count: 3, gone: null });
+    expect(stored.description).toBe('Line one\nLine two');
     expect(stored.id).toBe('task-a');
   });
 
@@ -133,10 +132,12 @@ describe('planListSave', () => {
     expect(plan.saved).toEqual(previous.map((row) => row.task));
   });
 
-  it('ignores a difference the stored form erases (undefined or null metadata)', () => {
+  it('ignores a difference the stored form erases (undefined metadata), but stores a null', () => {
     const previous = load([task('task-a')]);
-    const next = [{ ...previous[0].task, metadata: { ...previous[0].task.metadata, gone: undefined, nothing: null } }];
+    const next = [{ ...previous[0].task, metadata: { ...previous[0].task.metadata, gone: undefined } }];
     expect(planListSave({ previous, next, source: 'user' }).upserts).toEqual([]);
+    const cleared = [{ ...previous[0].task, metadata: { ...previous[0].task.metadata, nothing: null } }];
+    expect(planListSave({ previous, next: cleared, source: 'user' }).upserts.map((row) => row.task.metadata)).toEqual([{ nothing: null }]);
   });
 
   it('upserts only changed and new tasks in stored form, and deletes ids that left the list', () => {
@@ -144,7 +145,7 @@ describe('planListSave', () => {
     const next = [previous[0].task, { ...previous[1].task, status: 'completed', metadata: { openPR: true } }, task('task-d')];
     const plan = planListSave({ previous, next, source: 'user' });
     expect(plan.upserts.map((row) => row.task.id)).toEqual(['task-b', 'task-d']);
-    expect(plan.upserts[0].task.metadata).toEqual({ openPR: 'true' });
+    expect(plan.upserts[0].task.metadata).toStrictEqual({ openPR: true });
     expect(plan.upserts[0].position).toBe(1024);
     expect(plan.deletes).toEqual(['task-c']);
     expect(plan.saved.map((t) => t.id)).toEqual(['task-a', 'task-b', 'task-d']);

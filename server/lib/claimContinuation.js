@@ -400,7 +400,7 @@ export function claimContinuationPointer({ task, agentId, worktrees = [], agents
  * @param {{ metadata?: object, pathExists?: (path: string) => boolean, worktreesRoot: string }} input
  */
 export function claimContinuationWorkspace({ metadata, pathExists = () => false, worktreesRoot }) {
-  if (metadata?.claimResumeInPlace !== true && metadata?.claimResumeInPlace !== 'true') return null;
+  if (!isTruthyMeta(metadata?.claimResumeInPlace)) return null;
   const worktreePath = metadata?.resumeWorktreePath;
   const branchName = metadata?.existingBranch;
   if (!worktreePath || !branchName || !worktreesRoot) return null;

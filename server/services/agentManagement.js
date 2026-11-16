@@ -1321,8 +1321,7 @@ async function runCleanupOrphanedAgents() {
       // agent onto the same work. Old records use `useRunner`, while newer
       // records carry the more precise executionMode.
       const executionMode = agent.metadata?.executionMode;
-      const runnerOwned = agent.metadata?.useRunner === true
-        || agent.metadata?.useRunner === 'true'
+      const runnerOwned = isTruthyMeta(agent.metadata?.useRunner)
         || executionMode === 'runner'
         || executionMode === 'runner-tui';
       if (!runnerProbe.available && runnerOwned) {
@@ -1572,7 +1571,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   }
 
   if (isDeliveryCleanupHeld(task.metadata)) return;
-  if (task.metadata?.spawnBudgetReconciledHold === 'true') return;
+  if (isTruthyMeta(task.metadata?.spawnBudgetReconciledHold)) return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
   const dispatchAgent = { id: agentId, taskId, startedAt: agentStartedAt, metadata: agentMetadata };

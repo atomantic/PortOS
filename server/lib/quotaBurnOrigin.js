@@ -32,7 +32,7 @@ const MAX_FIELD = 64;
  *
  * The PERSISTED and cross-peer shape stays FLAT (`quotaBurnFamily`, …), not nested: CoS tasks federate as markdown between independently upgrading peers (`cosTaskMerge.js`),
  * and a nested-only write would read as an ordinary task on an older peer. `quotaBurnProvenance` still ACCEPTS a nested block.
- * Readers coerce because a COS-TASKS.md round-trip hands every scalar back as a string.
+ * Readers coerce because rows stored before #16407 and peers on older versions hold every scalar as a string.
  */
 const asId = (value) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 const asEpochMs = (value) => {

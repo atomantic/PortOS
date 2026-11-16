@@ -31,7 +31,7 @@ export function retryHoldMetadata(agentId, now = Date.now()) {
   };
 }
 
-/** The metadata patch that RELEASES the hold. `undefined` (not `null`) because `updateTask` deletes undefined keys while a null survives the merge on the in-memory task for the tick (the markdown store no longer persists either; the `!== 'null'` guards below stay for task files an older install wrote). */
+/** The metadata patch that RELEASES the hold. `undefined` (not `null`) because `updateTask` deletes undefined keys while a null is stored as a present value (the `!== 'null'` guards below stay for task files an older install wrote). */
 export function clearedRetryHoldMetadata() {
   return {
     [RETRY_HOLD_KEY]: undefined,

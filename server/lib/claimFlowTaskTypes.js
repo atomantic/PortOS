@@ -15,6 +15,9 @@
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
 // claimFlowTaskTypes.test.js fails if a local copy of this list reappears.
+
+import { isTruthyMeta } from './metadataFlags.js';
+
 export const CLAIM_FLOW_TASK_TYPES = new Set([
   'plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work'
 ]);
@@ -22,6 +25,6 @@ export const CLAIM_FLOW_TASK_TYPES = new Set([
 /** Trusted structured task identity only; descriptions and prompts confer no authority. */
 export function hasClaimFlowContract(task) {
   const metadata = task?.metadata;
-  return metadata?.claimFlow === true || metadata?.claimFlow === 'true'
+  return isTruthyMeta(metadata?.claimFlow)
     || CLAIM_FLOW_TASK_TYPES.has(metadata?.analysisType || metadata?.taskAnalysisType || task?.taskType);
 }

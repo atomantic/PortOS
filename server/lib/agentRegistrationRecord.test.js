@@ -53,9 +53,11 @@ it('retains recovery lineage and the persisted boolean marker through the stored
     attempt: 2, observation: 'a'.repeat(64), noProgress: true };
   const queued = buildQueuedTask({ description: 'Synthetic cleanup', isRecovery: true, metadata: { recoveryOrigin } }, 'user');
   const task = storedForm(queued, 'user');
-  expect(task.metadata.isRecovery).toBe('true');
-  const record = buildAgentRegistration({ ...args({}), task });
-  expect(record).toMatchObject({ isRecovery: true, recoveryOrigin });
+  expect(task.metadata.isRecovery).toBe(true);
+  expect(buildAgentRegistration({ ...args({}), task })).toMatchObject({ isRecovery: true, recoveryOrigin });
+  // A row stored before #16407 holds the string.
+  const legacyRow = { ...task, metadata: { ...task.metadata, isRecovery: 'true' } };
+  expect(buildAgentRegistration({ ...args({}), task: legacyRow })).toMatchObject({ isRecovery: true, recoveryOrigin });
 });
 
 it('projects non-secret provider route provenance for active and archived cards', () => {

@@ -221,7 +221,8 @@ export async function spawnPrRemediationFollowUp({ app, repoFullName, pullReques
  */
 export async function handBackPrRemediation({ task, workspacePath } = {}) {
   const meta = task?.metadata || {};
-  const number = meta.prRemediationNumber;
+  // A number on rows stored after #16407, its string on older rows and peers.
+  const number = meta.prRemediationNumber == null || meta.prRemediationNumber === '' ? NaN : Number(meta.prRemediationNumber);
   const repoFullName = typeof meta.prRemediationRepoFullName === 'string' ? meta.prRemediationRepoFullName : '';
   if (!Number.isInteger(number) || !repoFullName || !workspacePath) return false;
   // A PR URL addresses the right host on GitHub Enterprise; `--repo owner/name`

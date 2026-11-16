@@ -143,8 +143,8 @@ export function buildAgentRegistration({
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
     // Marks an explicit "Run Now" trigger so the perpetual drain-on-completion refill (`perpetualRefillPlan`) continues a
-    // MANUAL drain in the on-demand lane. `isTruthyMeta` accepts the boolean and the string `"true"` a COS-TASKS.md
-    // round-trip yields.
+    // MANUAL drain in the on-demand lane. `isTruthyMeta` accepts the boolean and the string `"true"` that
+    // rows stored before #16407 and peers on older versions hold.
     taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
     // WHO asked: a human Run keeps draining, an automated origin such as a quota burn is one unit and stops.
     taskOnDemandOrigin: task.metadata?.onDemandOrigin || null,
@@ -155,7 +155,7 @@ export function buildAgentRegistration({
     taskLiProposal: task.metadata?.liProposal || null,
     // Quota-burn provenance: the runner dispatches the NEXT job in the burn plan on `agent:completed` and must tell a burn
     // run from the agent record alone. Spread from the ONE block definition (`lib/quotaBurnOrigin.js`) so no field is
-    // persisted but unprojected. Values are coerced: a COS-TASKS.md round-trip returns every scalar as a string.
+    // persisted but unprojected. Values are coerced: rows stored before #16407 and peers on older versions hold every scalar as a string.
     ...quotaBurnAgentMetadata(task.metadata),
     ...(task.metadata?.auditDepth === 'deep' ? { taskAuditDepth: 'deep', ...(task.metadata.auditWorkflow ? { auditWorkflow: task.metadata.auditWorkflow } : {}) } : {}),
     // `declaresNoCommitCriterion` reads this, and taskLearning's backfill re-processes the ARCHIVED agent shape through the

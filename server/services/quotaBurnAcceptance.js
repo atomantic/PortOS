@@ -90,8 +90,8 @@ async function queuedRequestIds() {
  * Every task carrying burn provenance, keyed by the request that produced it.
  *
  * Read through `quotaBurnProvenance` rather than `metadata.quotaBurnRequestId`
- * directly: a task round-trips through COS-TASKS.md, which hands every scalar
- * back as a string, and that reader is the one place that coercion lives.
+ * directly: rows stored before #16407 and peers on older versions hold every scalar as a string, and that
+ * reader is the one place that coercion lives.
  */
 async function burnTasksByRequestId() {
   const { getAllTasks } = await import('./cosTaskStore.js');

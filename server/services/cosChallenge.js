@@ -24,8 +24,7 @@ export const CHALLENGE_OUTCOMES = Object.freeze(['upheld', 'escalated']);
 export const CHALLENGE_METADATA_KEYS = Object.freeze(['challengeCount', 'challenge', 'challengeResolution']);
 
 /**
- * How many challenges a task has consumed. After a TASKS.md round-trip the number arrives as the string
- * `"1"`, so parse it and treat non-positive/unparseable as 0.
+ * How many challenges a task has consumed: a number, or its string (`"1"`) on rows stored before #16407 and peers on older versions, so parse it and treat non-positive/unparseable as 0.
  */
 export function getChallengeCount(metadata) {
   const raw = metadata?.challengeCount;
