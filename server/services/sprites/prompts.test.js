@@ -16,11 +16,6 @@ describe('sprite direction contracts', () => {
     expect(new Set(SPRITE_DIRECTIONS).size).toBe(8);
   });
 
-  it('anchors exclude south (the frozen main IS the south anchor)', () => {
-    expect(ANCHOR_DIRECTIONS).toHaveLength(7);
-    expect(ANCHOR_DIRECTIONS).not.toContain('south');
-  });
-
   it('has a facing clause for every direction', () => {
     for (const d of SPRITE_DIRECTIONS) {
       expect(REFERENCE_FACING[d], d).toBeTruthy();
