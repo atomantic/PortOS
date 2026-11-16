@@ -533,6 +533,9 @@ export function installMusicVideoPageHooks() {
 const editResult = (scenes, changed = scenes.map((scene) => scene.sceneId), { updatedAt = null, project = {} } = {}) => ({
   updatedAt, sceneIds: scenes.map((scene) => scene.sceneId), scenes: scenes.filter((scene) => changed.includes(scene.sceneId)), project, removed: [],
 });
+// An updateMusicVideoProject (`edit: true`) implementation answering like the PATCH route: the edit result
+// carries the patched fields beside the shots `project` already has.
+const savedProjectEdits = (project) => async (_id, patch) => ({ edit: editResult(project.scenes || [], [], { project: patch }) });
 // An updateMusicVideoScene implementation that saves each patch onto a running copy of `project`'s shots
 // (object fields merge one level, as the server merges the shot sheet) and answers like the route.
 const savedSceneReplies = (project) => {
@@ -546,6 +549,7 @@ const savedSceneReplies = (project) => {
 
 export {
   editResult,
+  savedProjectEdits,
   savedSceneReplies,
   PROJECT_WITH_CLIP,
   PROJECT_NO_CLIP,

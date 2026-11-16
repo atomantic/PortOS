@@ -302,9 +302,9 @@ export async function cloneProject(id, options = {}) {
 }
 
 /**
- * Merge a project patch. With `{ edit: true }` a patch that touches neither the cast, the references
- * nor a style snapshot answers `{ edit }` (editResult.js) instead of the project, so the editing tab
- * patches its board; any other patch still answers the project, which the caller reloads from.
+ * Merge a project patch. With `{ edit: true }` it answers `{ edit }` (editResult.js) instead of the
+ * project, taken after the write's own follow-ups (reference naming, style snapshots), so the editing
+ * tab patches its board and never reads the project again.
  */
 export async function updateProject(id, patch, { edit: answerEdit = false } = {}) {
   const backend = await selectBackend();
@@ -317,11 +317,15 @@ export async function updateProject(id, patch, { edit: answerEdit = false } = {}
   // A reference added from the gallery or a mood board takes its catalog record's name.
   // Linking the cast alone leaves approvals current, so naming then must not stale them.
   const referencesChanged = resolved?.visualSpec?.references !== undefined;
-  if (answerEdit && !needsSnapshot && !castChanged && !referencesChanged) {
+  if (answerEdit) {
     const { applyProjectPatch } = await import('./projectsLogic.js');
     const { edit } = await editWrite(id, (current) => ({ project: applyProjectPatch(current, resolved) }),
       { catalogDescriptionBases, includeNewLinks: true });
-    return withEditResult({}, edit);
+    if (castChanged) queueProjectCatalogLinkSync(id);
+    // Naming the references is a second write: when it changed any, the edit result is taken against the record as it is now.
+    const named = referencesChanged || castChanged ? await labelProjectReferences(id, { backfill: !referencesChanged }) : null;
+    if (!named) return withEditResult({}, edit);
+    return withEditResult({}, edit, await getProject(id, edit.reads ? { catalogReads: edit.reads } : {}));
   }
   const nameReferences = async (saved) => (referencesChanged || castChanged
     ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);

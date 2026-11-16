@@ -28,8 +28,8 @@ function autopilotBlocker(project) {
  * the unsaved planning draft the storyboard approval edits.
  */
 export default function usePlanStageWiring({
-  selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
-  applyEdit, reloadOpenProject,
+  selected, replaceProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+  applyEdit, reloadOpenProject, saveOwnEdit,
 }) {
   const [arranging, setArranging] = useState(false);
   const [planning, setPlanning] = useState(false);
@@ -70,11 +70,12 @@ export default function usePlanStageWiring({
     : autopilotBlocker(selected);
   const kickoff = useMusicVideoKickoff({
     analyze: () => onAnalyze(),
-    importLyrics: (project) => importMusicVideoTrackLyrics(project.id, { mode: 'if-empty' }, { silent: true })
-      .then(({ project: next, imported }) => {
-        patchProject(next.id, { lyricCues: next.lyricCues, lyricMarkers: next.lyricMarkers, updatedAt: next.updatedAt });
+    // The kickoff carries its own copy of the project forward, so it takes the cues from the edit result too.
+    importLyrics: (project) => saveOwnEdit(project.id, (options) => importMusicVideoTrackLyrics(project.id, { mode: 'if-empty' }, options))
+      .then(({ edit, imported }) => {
         if (imported) toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} from the track`);
-        return next;
+        const changed = edit?.project;
+        return changed ? { ...project, lyricCues: changed.lyricCues ?? project.lyricCues, lyricMarkers: changed.lyricMarkers ?? project.lyricMarkers, updatedAt: edit.updatedAt } : project;
       })
       .catch((err) => { toast.error(err?.message || 'Could not import the track lyrics'); return null; }),
     separateVocals: (project) => separation.run(project.id),
@@ -99,8 +100,7 @@ export default function usePlanStageWiring({
     kickoff.run(selected);
   };
   // Saving a brief hands the project to autopilot, so mode follows it.
-  const saveAutomation = (automation) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, { silent: true })
-    .then((proj) => patchProject(proj.id, { automation: proj.automation, mode: proj.mode, updatedAt: proj.updatedAt }))
+  const saveAutomation = (automation) => saveOwnEdit(selected.id, (options) => updateMusicVideoProject(selected.id, { automation, mode: 'autonomous' }, options))
     .catch((err) => { toast.error(err?.message || 'Failed to save automation brief'); throw err; });
 
   // Auto-arrange (#1915): distribute every scene across the analyzed song

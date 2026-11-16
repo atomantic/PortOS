@@ -422,15 +422,18 @@ router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   const lyricMarkers = append
     ? [...(project.lyricMarkers || []), ...offsetLyricMarkers(markers, existing.length)]
     : markers;
-  const updated = await updateProject(project.id, { lyricCues, lyricMarkers });
-  res.json({ project: updated, imported: cues.length, format: detected });
+  // `?edit=1`: the tab applies the edit result itself, so the reply carries it instead of the project.
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  const updated = await updateProject(project.id, { lyricCues, lyricMarkers }, { edit: answerEdit });
+  res.json(answerEdit ? { ...updated, imported: cues.length, format: detected } : { project: updated, imported: cues.length, format: detected });
 }));
 
 // Import the linked track's lyric sheet ("Use track lyrics", and the
 // autopilot kickoff with `mode: 'if-empty'`, which never replaces lines).
 router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   const { mode = 'replace' } = validateRequest(musicVideoLyricsImportTrackSchema, req.body || {});
-  res.json(await importTrackLyrics(req.params.id, { mode }));
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  res.json(await importTrackLyrics(req.params.id, { mode, edit: answerEdit }));
 }));
 
 // Word-level alignment (#9074) as a job (#10155). It runs when the director

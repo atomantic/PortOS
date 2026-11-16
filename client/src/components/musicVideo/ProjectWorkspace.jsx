@@ -158,23 +158,27 @@ export default function ProjectWorkspace({
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  // Sent with its origin and asking for the edit result: a reply with one patches the board and its
-  // own change broadcast is skipped. Any other reply (a cast or reference change), or a take decision
-  // that started meanwhile, reloads instead.
+  // One project save from this tab, sent with its origin and asking for the edit result (`send(options)` gets
+  // both): a reply with one patches the board and its own change broadcast is skipped, so the
+  // save costs one request. A reply with `edit: null` wrote nothing. A take decision that started
+  // meanwhile may be newer than the reply, and a refused (409) save may leave the board behind: both reload.
+  const saveOwnEdit = (projectId, send) => {
+    const mark = takesRef.current?.writeMark();
+    return send(ownWrite({ edit: true })).then((reply) => {
+      if (reply?.edit === null) return reply;
+      if (reply?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, reply.edit);
+      else void reloadOpenProject(projectId);
+      return reply;
+    }, (err) => {
+      if (err?.status === 409) void reloadOpenProject(projectId);
+      throw err;
+    });
+  };
   const saveProjectFields = (patch) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
-      .then(() => {
-        const mark = takesRef.current?.writeMark();
-        return updateMusicVideoProject(projectId, patch, ownWrite({ edit: true })).then((saved) => {
-          if (saved?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, saved.edit);
-          else void reloadOpenProject(projectId);
-        }, (err) => {
-          if (err?.status === 409) void reloadOpenProject(projectId);
-          throw err;
-        });
-      })
+      .then(() => saveOwnEdit(projectId, (options) => updateMusicVideoProject(projectId, patch, options)))
       .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
@@ -187,18 +191,18 @@ export default function ProjectWorkspace({
 
   const review = useReviewStageWiring({ selected, replaceProject, activeStage });
   const setup = useSetupStageWiring({
-    selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, patchProject, openProject, prepareSong, navigate, onClone,
+    selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, openProject, prepareSong, navigate, onClone, saveOwnEdit,
   });
   const produce = useProduceStageWiring({
     selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
     replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
   });
-  const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview });
+  const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview, saveOwnEdit });
   const { castSets, devArtifacts, creativeSetupPending, styleReferencesPending } = castSetsStage;
   const story = useStoryStageWiring({ selected, patchProject, replaceProject });
   const plan = usePlanStageWiring({
-    selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
-    applyEdit, reloadOpenProject,
+    selected, replaceProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+    applyEdit, reloadOpenProject, saveOwnEdit,
   });
   const { kickoff, autonomous, planning, planningDraft, autopilotBlockedReason } = plan;
   const { sceneMedia, takes, revisions, production } = produce;

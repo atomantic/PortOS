@@ -531,7 +531,7 @@ describe('musicVideo routes', () => {
       expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
         lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
         lyricMarkers: [],
-      });
+      }, { edit: false });
     });
 
     it('appends plain lines after the existing cues, anchoring the sheet\'s markers after them', async () => {
@@ -548,7 +548,7 @@ describe('musicVideo routes', () => {
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 1 },
           { type: 'direction', label: 'Shouts', kind: 'shouted', line: 2 },
         ],
-      });
+      }, { edit: false });
     });
 
     it('422s when the text holds no lyric lines, and 404s for a missing project', async () => {
@@ -582,7 +582,7 @@ describe('musicVideo routes', () => {
           { type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 1 },
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
         ],
-      });
+      }, { edit: false });
     });
 
     it('if-empty never replaces lines the project already has, and skips a track with no lyrics', async () => {
