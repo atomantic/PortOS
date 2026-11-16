@@ -183,7 +183,7 @@ restore every full-run shard lineage (`merge-shards`, equal to
 `FULL_SUITE_SHARDS` for the family and pinned by `scripts/ci-test-memo-cache.test.js`)
 and fold them in with `scripts/merge-test-memo.js`, keeping the newer record
 per test and every live entry: a shard records only its slice, and related
-selection narrows a test only through its own record. Each shard saves as soon
+selection narrows a test only through its own record. Each lineage restores to the path it was saved from (a cache version hashes the path; restoring elsewhere finds nothing) and is then moved aside before the next. Each shard saves as soon
 as its own tests pass.
 Pull requests only read. Pushes to `main`, the scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
