@@ -38,7 +38,8 @@ const router = Router();
 const forceRequested = (query) => query.force === '1' || query.force === 'true';
 
 // `force` is read as a raw string; `limit`/`offset` keep parsePagination's lenient fallback.
-const suggestionsQuerySchema = paginationQuerySchema.extend({ force: z.string().optional() });
+const forceQuerySchema = z.object({ force: z.string().optional() });
+const suggestionsQuerySchema = paginationQuerySchema.merge(forceQuerySchema);
 
 // Backward-compatible by default: returns the full LoRA array. When a client
 // passes `limit`/`offset`, the response becomes the bounded
@@ -289,7 +290,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
 // a probe failure — an unmeasurable verdict is a legitimate answer about this
 // machine, and the response carries its reason.
 router.post('/:filename/effect', asyncHandler(async (req, res) => {
-  const force = forceRequested(req.query);
+  const force = forceRequested(validateRequest(forceQuerySchema, req.query));
   res.json(await probeLoraEffect(req.params.filename, { force }));
 }));
 
