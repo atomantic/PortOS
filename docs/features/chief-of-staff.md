@@ -481,9 +481,7 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | GET /api/cos/health | Health status |
 | POST /api/cos/health/check | Run health check |
 | GET /api/cos/agents | List agents |
-| POST /api/cos/agents/:id/terminate | Terminate agent |
 | GET /api/cos/feedback/stats | Aggregate live and archived agent ratings |
-| GET /api/cos/reports | List reports |
 | GET /api/cos/learning | Get learning insights |
 | GET /api/cos/digest | Get weekly digest |
 | GET /api/cos/mind/journal | Persistent Mind decision journal, filterable by `kind` and `status` |

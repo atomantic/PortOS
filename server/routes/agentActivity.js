@@ -13,7 +13,6 @@ import {
   agentActivityAgentParamsSchema,
   agentActivityAgentQuerySchema,
   agentActivityStatsQuerySchema,
-  agentActivityCleanupSchema,
 } from '../lib/validation.js';
 import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cosValidation.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -52,16 +51,6 @@ router.get('/agent/:agentId/stats', asyncHandler(async (req, res) => {
   const { days } = validateRequest(agentActivityStatsQuerySchema, req.query);
 
   res.json(await agentActivity.getAgentStats(agentId, days));
-}));
-
-// POST /cleanup - Clean up old activity files. Destructive: it unlinks every
-// day file older than the window, so the schema's 1-day floor is what stands
-// between a mistyped client call and the whole archive.
-router.post('/cleanup', asyncHandler(async (req, res) => {
-  const { daysToKeep } = validateRequest(agentActivityCleanupSchema, req.body ?? {});
-
-  const deletedCount = await agentActivity.cleanupOldActivity(daysToKeep);
-  res.json({ success: true, deletedCount });
 }));
 
 // ---------------------------------------------------------------------------

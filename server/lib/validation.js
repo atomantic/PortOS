@@ -2029,15 +2029,6 @@ export const agentActivityStatsQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).default(7),
 }).strict();
 
-// POST /api/agents/activity/cleanup — unlinks every activity file older than the
-// window. The floor is 1 day, NOT 0: `daysToKeep: 0` puts the cutoff at now and
-// deletes the whole archive, and a negative value reaches into future-dated
-// files. "Delete everything" is not a retention window; if it is ever wanted it
-// gets its own explicitly-named endpoint rather than riding this number.
-export const agentActivityCleanupSchema = z.object({
-  daysToKeep: z.coerce.number().int().min(1).max(3650).default(30),
-}).strict();
-
 // GET /api/review/queue — pagination is opt-in so existing Review Hub clients
 // keep receiving the legacy full-list envelope. Cursors are opaque and bounded
 // before they reach the queue snapshot decoder.
@@ -3063,7 +3054,6 @@ export const cosAgentFeedbackBodySchema = z.object({
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
-export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
   appId: nullishString,

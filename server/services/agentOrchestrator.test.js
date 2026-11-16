@@ -22,8 +22,7 @@ vi.mock('./agentManagement.js', () => ({
 }));
 
 vi.mock('./cosAgentLifecycle.js', () => ({
-  completeAgent: () => {},
-  terminateAgent: () => {}
+  completeAgent: () => {}
 }));
 
 vi.mock('./agentLifecycle.js', () => ({
@@ -44,20 +43,12 @@ const WIRING = [
   ['terminateAgent', agentManagement, 'terminateAgent'],
   ['getAgentProcessStats', agentManagement, 'getAgentProcessStats'],
   ['completeAgent', cosAgentLifecycle, 'completeAgent'],
-  ['requestAgentTermination', cosAgentLifecycle, 'terminateAgent'],
   ['spawnAgentForTask', agentLifecycle, 'spawnAgentForTask']
 ];
 
 describe('agentOrchestrator facade (#3450)', () => {
   it.each(WIRING)('%s resolves to the intended leaf', (exported, mod, leaf) => {
     expect(orchestrator[exported]).toBe(mod[leaf]);
-  });
-
-  it('keeps the two same-named terminates distinct', () => {
-    // The whole point of the rename. If these ever converge, one of the two
-    // aliases is pointed at the wrong module and the identity checks above
-    // would both still pass against a single shared binding.
-    expect(orchestrator.terminateAgent).not.toBe(orchestrator.requestAgentTermination);
   });
 
   it('exposes exactly the transition surface — new exports are a deliberate decision', () => {

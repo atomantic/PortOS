@@ -18,8 +18,6 @@ import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.j
  * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
-import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -33,10 +31,9 @@ import { logCosScheduleUpdate } from './userActionScheduleLog.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
 import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
-import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
+import { sleep } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
-import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -52,7 +49,7 @@ import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkin
 import { useRunner, spawningTasks, hasActiveTaskOwner } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -926,35 +923,6 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
 
   await processOrphanedTasks(userTaskData.grouped.in_progress || []);
   await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
-}
-
-/**
- * List generated scripts
- */
-export async function listScripts() {
-  await ensureDirectories();
-  const files = await readdir(SCRIPTS_DIR);
-  return files.filter(f => f.endsWith('.sh')).map(f => f.replace('.sh', ''));
-}
-
-/**
- * Get script content
- */
-export async function getScript(name) {
-  if (!isTopLevelEntryName(name) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-    throw new ServerError('Invalid script name', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const scriptPath = join(SCRIPTS_DIR, `${name}.sh`);
-  const metaPath = join(SCRIPTS_DIR, `${name}.json`);
-
-  if (!existsSync(scriptPath)) return null;
-
-  const content = await readFile(scriptPath, 'utf-8');
-  const metadata = existsSync(metaPath)
-    ? safeJSONParse(await readFile(metaPath, 'utf-8'), {}, { logError: true, context: `script metadata ${name}` })
-    : {};
-
-  return { name, content, metadata };
 }
 
 /**

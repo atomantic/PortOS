@@ -16,9 +16,7 @@ vi.mock('../services/taskLearning.js', () => ({
   recordLearningInsight: vi.fn(),
   getAllPromptRecommendations: vi.fn(),
   getPromptImprovementRecommendations: vi.fn(),
-  recalculateDurationStats: vi.fn(),
   getConfidenceLevels: vi.fn(),
-  getTaskTypeConfidence: vi.fn(),
   getDismissedRecommendations: vi.fn(),
   dismissRecommendation: vi.fn(),
   restoreRecommendation: vi.fn(),
@@ -236,28 +234,6 @@ describe('CoS Learning Routes', () => {
         .send({});
 
       expect(response.status).toBe(400);
-    });
-  });
-
-  describe('POST /api/cos/learning/recalculate-durations', () => {
-    it('should recalculate duration stats', async () => {
-      taskLearning.recalculateDurationStats.mockResolvedValue({ recalculated: 3 });
-
-      const response = await request(app).post('/api/cos/learning/recalculate-durations');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-  });
-
-  describe('GET /api/cos/learning/confidence/:taskType', () => {
-    it('should return confidence for specific task type', async () => {
-      taskLearning.getTaskTypeConfidence.mockResolvedValue({ level: 'high', score: 0.9 });
-
-      const response = await request(app).get('/api/cos/learning/confidence/review');
-
-      expect(response.status).toBe(200);
-      expect(taskLearning.getTaskTypeConfidence.mock.calls[0][0]).toBe('review');
     });
   });
 

@@ -23,14 +23,8 @@ vi.mock('./cosAgentIndex.js', () => ({
   ))
 }));
 
-vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
-  ...(await importOriginal()),
-  atomicWrite: vi.fn(async () => {})
-}));
-
 import { getAgentsByDate } from './cosAgentIndex.js';
-import { atomicWrite } from '../lib/fileUtils.js';
-import { generateReport, getRecentTasks, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
+import { getRecentTasks, getTodayActivity, getWhileAwayActivity } from './cosReports.js';
 
 // Build a completed agent record at a fixed completedAt offset (ms before now).
 const agentAt = (id, { msAgo, success = true, desc = 'did a thing', taskType = 'review', app = null } = {}) => {
@@ -218,82 +212,6 @@ const handoffOnDate = (id, dateStr) => ({
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
-describe('generateReport (#3501 date-bucket sourcing)', () => {
-  beforeEach(() => {
-    mock.daemonRunning = true;
-    mock.agentsByDate = {};
-    mock.state = stateWith([]);
-  });
-
-  afterEach(() => vi.clearAllMocks());
-
-  it('reports a historical date from the archive after state.json was swept', async () => {
-    // archiveStaleAgents evicted these from state.json — before #3501 the report
-    // scanned state.agents only and came back all-zero.
-    mock.agentsByDate['2026-01-15'] = [
-      agentOnDate('old1', '2026-01-15', { success: true }),
-      agentOnDate('old2', '2026-01-15', { success: false })
-    ];
-
-    const report = await generateReport('2026-01-15');
-
-    expect(report.date).toBe('2026-01-15');
-    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 1, totalAgents: 2 });
-    expect(report.agents.map(a => a.id).sort()).toEqual(['old1', 'old2']);
-    expect(report.agents[0].duration).toBe(3600000);
-    expect(atomicWrite).toHaveBeenCalledTimes(1);
-  });
-
-  it('prefers the live record over its archived copy', async () => {
-    const date = '2026-01-16';
-    // Live record carries the authoritative verdict; the archive predates it.
-    mock.state = stateWith([agentOnDate('dup', date, { success: true })]);
-    mock.agentsByDate[date] = [agentOnDate('dup', date, { success: false })];
-
-    const report = await generateReport(date);
-
-    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
-    expect(getAgentsByDate).not.toHaveBeenCalled();
-  });
-
-  it('does not count a relaunched run as a failed task', async () => {
-    const date = '2026-01-19';
-    mock.state = stateWith([
-      agentOnDate('ok', date, { success: true }),
-      handoffOnDate('swapped', date),
-    ]);
-
-    const report = await generateReport(date);
-
-    // Not 1 failed + 3 total: the relaunch is neither, and it stays out of the
-    // per-agent list so nothing downstream re-derives a verdict from it.
-    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
-    expect(report.agents.map(a => a.id)).toEqual(['ok']);
-  });
-
-  it('excludes an ARCHIVED relaunch too, not just a live one', async () => {
-    // The archive is the half that outlives state.json, so a per-source filter
-    // that only covered live records would put every past swap back in the
-    // failure column as soon as retention swept it.
-    const date = '2026-01-20';
-    mock.agentsByDate[date] = [handoffOnDate('archived-swap', date), agentOnDate('archived-ok', date, { success: true })];
-
-    const report = await generateReport(date);
-
-    expect(report.summary).toMatchObject({ tasksCompleted: 1, tasksFailed: 0, totalAgents: 1 });
-    expect(report.agents.map(a => a.id)).toEqual(['archived-ok']);
-  });
-
-  it('ignores agents completed on other dates', async () => {
-    mock.state = stateWith([agentOnDate('other', '2026-01-17')]);
-    mock.agentsByDate['2026-01-18'] = [agentOnDate('wanted', '2026-01-18')];
-
-    const report = await generateReport('2026-01-18');
-
-    expect(report.agents.map(a => a.id)).toEqual(['wanted']);
-  });
-});
-
 describe('getTodayActivity (#3501 date-bucket sourcing)', () => {
   beforeEach(() => {
     mock.daemonRunning = true;
@@ -330,6 +248,25 @@ describe('getTodayActivity (#3501 date-bucket sourcing)', () => {
 
     expect(activity.stats).toMatchObject({ completed: 1, running: 1, successRate: 100 });
     expect(getAgentsByDate).not.toHaveBeenCalled();
+  });
+
+  it('does not count a live relaunched run as a failed task', async () => {
+    const today = todayStr();
+    mock.state = stateWith([agentOnDate('ok', today, { success: true }), handoffOnDate('swapped', today)]);
+
+    const activity = await getTodayActivity();
+
+    // The relaunch is neither a failure nor a total: the continuation it handed the task to records the outcome.
+    expect(activity.stats).toMatchObject({ completed: 1, succeeded: 1, failed: 0 });
+  });
+
+  it('excludes an ARCHIVED relaunch too, not just a live one', async () => {
+    const today = todayStr();
+    mock.agentsByDate[today] = [handoffOnDate('archived-swap', today), agentOnDate('archived-ok', today, { success: true })];
+
+    const activity = await getTodayActivity();
+
+    expect(activity.stats).toMatchObject({ completed: 1, succeeded: 1, failed: 0 });
   });
 });
 

@@ -48,7 +48,6 @@ describe('decisionLog.js', () => {
   let recordDecision;
   let getRecentDecisions;
   let getDecisionSummary;
-  let getDecisionPatterns;
   let cleanupOldDecisions;
   let DECISION_TYPES;
 
@@ -99,7 +98,6 @@ describe('decisionLog.js', () => {
     recordDecision = decisionLogModule.recordDecision;
     getRecentDecisions = decisionLogModule.getRecentDecisions;
     getDecisionSummary = decisionLogModule.getDecisionSummary;
-    getDecisionPatterns = decisionLogModule.getDecisionPatterns;
     cleanupOldDecisions = decisionLogModule.cleanupOldDecisions;
     DECISION_TYPES = decisionLogModule.DECISION_TYPES;
 
@@ -372,45 +370,6 @@ describe('decisionLog.js', () => {
       const result = await getDecisionSummary();
 
       expect(result.transparencyScore).toBe(100);
-    });
-  });
-
-  describe('getDecisionPatterns', () => {
-    it('should identify frequently skipped task types', async () => {
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.TASK_SKIPPED, reason: 'A', context: { taskType: 'self-improve:ui' }, timestamp: '2026-01-25T10:00:00.000Z' },
-        { id: 'dec-2', type: DECISION_TYPES.TASK_SKIPPED, reason: 'B', context: { taskType: 'self-improve:ui' }, timestamp: '2026-01-25T10:00:00.000Z' },
-        { id: 'dec-3', type: DECISION_TYPES.TASK_SKIPPED, reason: 'C', context: { taskType: 'user-task' }, timestamp: '2026-01-25T10:00:00.000Z' }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await getDecisionPatterns();
-
-      expect(result.frequentlySkipped[0].taskType).toBe('self-improve:ui');
-      expect(result.frequentlySkipped[0].count).toBe(2);
-      expect(result.totalSkips).toBe(3);
-    });
-
-    it('should track switched tasks', async () => {
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.TASK_SWITCHED, reason: 'A', context: { fromTask: 'task-a' }, timestamp: '2026-01-25T10:00:00.000Z' },
-        { id: 'dec-2', type: DECISION_TYPES.TASK_SWITCHED, reason: 'B', context: { fromTask: 'task-a' }, timestamp: '2026-01-25T10:00:00.000Z' }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await getDecisionPatterns();
-
-      expect(result.totalSwitches).toBe(2);
-    });
-
-    it('should return empty patterns when no data', async () => {
-      readJSONFile.mockResolvedValue(makeDecisionData());
-
-      const result = await getDecisionPatterns();
-
-      expect(result.frequentlySkipped).toHaveLength(0);
-      expect(result.totalSkips).toBe(0);
-      expect(result.totalSwitches).toBe(0);
     });
   });
 

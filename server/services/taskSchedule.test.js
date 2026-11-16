@@ -1569,39 +1569,6 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('templates', () => {
-    it('should add a template task', async () => {
-      const template = {
-        name: 'Custom audit',
-        prompt: 'Run custom audit',
-        priority: 'HIGH'
-      }
-
-      const result = await addTemplateTask(template)
-      expect(result.id).toBeDefined()
-      expect(result.name).toBe('Custom audit')
-    })
-
-    it('round-trips a template through listing, the persisted payload, and delete', async () => {
-      // Store reads the file on every call, so each write is fed back as the next read.
-      mockSchedule()
-      const template = await addTemplateTask({ name: 'Round trip', prompt: 'test' })
-      const afterAdd = JSON.parse(writeFile.mock.calls.at(-1)[1])
-      expect(afterAdd.templates.map(t => t.id)).toContain(template.id)
-      readJSONFile.mockResolvedValue(afterAdd)
-      expect((await getTemplateTasks()).map(t => t.id)).toContain(template.id)
-
-      const result = await deleteTemplateTask(template.id)
-      expect(result.success).toBe(true)
-      const afterDelete = JSON.parse(writeFile.mock.calls.at(-1)[1])
-      expect(afterDelete.templates.map(t => t.id)).not.toContain(template.id)
-      readJSONFile.mockResolvedValue(afterDelete)
-      expect((await getTemplateTasks()).map(t => t.id)).not.toContain(template.id)
-
-      expect(await deleteTemplateTask(template.id)).toMatchObject({ error: expect.any(String) })
-    })
-  })
-
   describe('getDefaultPrompt', () => {
     it('should return prompt for known task type', () => {
       const prompt = getDefaultPrompt('security')

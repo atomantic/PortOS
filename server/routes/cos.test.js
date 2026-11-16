@@ -37,8 +37,6 @@ vi.mock('../services/cos.js', () => ({
   pause: vi.fn(),
   resume: vi.fn(),
   updateConfig: vi.fn(),
-  listScripts: vi.fn(),
-  getScript: vi.fn(),
   forceSpawnTask: vi.fn()
 }));
 vi.mock('../services/cosState.js', () => ({
@@ -86,10 +84,6 @@ vi.mock('../services/cosAgentArchive.js', () => ({
   clearCompletedAgents: vi.fn()
 }));
 vi.mock('../services/cosReports.js', () => ({
-  listReports: vi.fn(),
-  getTodayReport: vi.fn(),
-  getReport: vi.fn(),
-  generateReport: vi.fn(),
   listBriefings: vi.fn(),
   getLatestBriefing: vi.fn(),
   getBriefing: vi.fn(),
@@ -100,7 +94,6 @@ vi.mock('../services/cosReports.js', () => ({
 
 // Lifecycle transitions moved off `cos.js` onto the agentOrchestrator facade (#3450).
 vi.mock('../services/agentOrchestrator.js', () => ({
-  requestAgentTermination: vi.fn(),
   pauseAgent: vi.fn(),
   resumeAgent: vi.fn(),
   killAgent: vi.fn(),
@@ -109,15 +102,11 @@ vi.mock('../services/agentOrchestrator.js', () => ({
 
 // Mock the appActivity service
 vi.mock('../services/appActivity.js', () => ({
-  loadAppActivity: vi.fn(),
-  getAppActivityById: vi.fn(),
-  clearAppCooldown: vi.fn()
 }));
 
 // Mock the claudeChangelog service
 vi.mock('../services/claudeChangelog.js', () => ({
   checkChangelog: vi.fn(),
-  getCachedChangelog: vi.fn()
 }));
 
 // Mock the taskEnhancer service
@@ -702,17 +691,6 @@ describe('CoS Routes', () => {
     });
   });
 
-  describe('POST /api/cos/agents/:id/terminate', () => {
-    it('should terminate agent', async () => {
-      agentOrchestrator.requestAgentTermination.mockResolvedValue({ success: true, agentId: 'agent-001' });
-
-      const response = await request(app).post('/api/cos/agents/agent-001/terminate');
-
-      expect(response.status).toBe(200);
-      expect(agentOrchestrator.requestAgentTermination).toHaveBeenCalledWith('agent-001');
-    });
-  });
-
   describe('POST /api/cos/agents/:id/pause', () => {
     it('should pause agent with reason', async () => {
       agentOrchestrator.pauseAgent.mockResolvedValue({ success: true, agentId: 'agent-001', pausedAt: '2026-05-25T12:00:00.000Z' });
@@ -882,59 +860,6 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(200);
       expect(runHealthCheck).toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/cos/reports', () => {
-    it('should list all reports', async () => {
-      listReports.mockResolvedValue(['2024-01-15', '2024-01-14']);
-
-      const response = await request(app).get('/api/cos/reports');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveLength(2);
-    });
-  });
-
-  describe('GET /api/cos/reports/today', () => {
-    it('should return today report', async () => {
-      getTodayReport.mockResolvedValue({
-        date: '2024-01-15',
-        summary: { tasksCompleted: 5 }
-      });
-
-      const response = await request(app).get('/api/cos/reports/today');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toHaveProperty('summary');
-    });
-  });
-
-  describe('GET /api/cos/reports/:date', () => {
-    it('should return report by date', async () => {
-      getReport.mockResolvedValue({
-        date: '2024-01-14',
-        summary: {}
-      });
-
-      const response = await request(app).get('/api/cos/reports/2024-01-14');
-
-      expect(response.status).toBe(200);
-    });
-
-    it('should return 404 if report not found', async () => {
-      getReport.mockResolvedValue(null);
-
-      const response = await request(app).get('/api/cos/reports/1999-01-01');
-
-      expect(response.status).toBe(404);
-    });
-
-    it('should reject malformed dates before reading the report', async () => {
-      const response = await request(app).get('/api/cos/reports/not-a-date');
-
-      expect(response.status).toBe(400);
-      expect(getReport).not.toHaveBeenCalled();
     });
   });
 
@@ -1728,30 +1653,6 @@ describe('CoS Routes', () => {
   // Report Routes — additional coverage
   // ============================================================
 
-  describe('POST /api/cos/reports/generate', () => {
-    it('should generate a report', async () => {
-      generateReport.mockResolvedValue({ date: '2026-02-25', summary: {} });
-
-      const response = await request(app)
-        .post('/api/cos/reports/generate')
-        .send({ date: '2026-02-25' });
-
-      expect(response.status).toBe(200);
-      expect(generateReport).toHaveBeenCalledWith('2026-02-25');
-    });
-
-    it('should reject a date that is not a bare YYYY-MM-DD day', async () => {
-      // A full ISO timestamp matches no date bucket and no completedAt prefix,
-      // so it would write an all-zero report under an unreadable filename.
-      const response = await request(app)
-        .post('/api/cos/reports/generate')
-        .send({ date: '2026-02-25T00:00:00.000Z' });
-
-      expect(response.status).toBe(400);
-      expect(generateReport).not.toHaveBeenCalled();
-    });
-  });
-
   describe('GET /api/cos/briefings', () => {
     it('should list all briefings', async () => {
       listBriefings.mockResolvedValue(['2026-02-25', '2026-02-24']);
@@ -1786,25 +1687,6 @@ describe('CoS Routes', () => {
 
       expect(response.status).toBe(400);
       expect(getBriefing).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('GET /api/cos/scripts/:name', () => {
-    it('should return script content', async () => {
-      getScript.mockResolvedValue({ name: 'backup.sh', content: '#!/bin/bash' });
-
-      const response = await request(app).get('/api/cos/scripts/backup.sh');
-
-      expect(response.status).toBe(200);
-      expect(getScript.mock.calls[0][0]).toBe('backup.sh');
-    });
-
-    it('should return 404 if script not found', async () => {
-      getScript.mockResolvedValue(null);
-
-      const response = await request(app).get('/api/cos/scripts/missing.sh');
-
-      expect(response.status).toBe(404);
     });
   });
 

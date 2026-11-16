@@ -46,10 +46,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Derived projection: an absent or corrupt file reads as empty and is backfilled from the archive metadata."
   },
   {
-    "key": "cosReports.js :: reportFile",
-    "reason": "No write-back cycle: reports are generated from agent records and written whole; getReport only projects a stored report."
-  },
-  {
     "key": "errorLogTriage.js :: stateFile",
     "reason": "No failed-read write-back: readState reads strictly (strict:true), so a corrupt store throws instead of resetting the cursors; only an absent file seeds the empty state."
   },

@@ -95,12 +95,6 @@ router.get('/jobs/gates', asyncHandler(async (req, res) => {
   res.json({ gates: results });
 }));
 
-// POST /api/cos/jobs/:id/gate-check - Check a job's LLM gate without running
-router.post('/jobs/:id/gate-check', asyncHandler(async (req, res) => {
-  const result = await checkJobGate(req.params.id);
-  res.json({ jobId: req.params.id, hasGate: hasGate(req.params.id), ...result });
-}));
-
 // GET /api/cos/jobs/:id - Get a single job
 router.get('/jobs/:id', asyncHandler(async (req, res) => {
   const job = await autonomousJobs.getJob(req.params.id);

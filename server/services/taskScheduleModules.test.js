@@ -5,7 +5,6 @@ import * as constants from './taskScheduleConstants.js';
 import * as registry from './taskScheduleRegistry.js';
 import * as ledger from './branchReconcileOutcome.js';
 import * as schedule from './taskSchedule.js';
-import * as templates from './taskScheduleTemplates.js';
 
 const source = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
 
@@ -16,9 +15,7 @@ describe('taskSchedule module boundaries', () => {
         .map((name) => [name, constants[name]]),
       ...['DEFAULT_TASK_INTERVALS', 'SELF_IMPROVEMENT_TASK_TYPES', 'getTaskTypeInvocation',
         'requiresManagedAppTarget', 'stripManagedAgentOptionsFromOverride'].map((name) => [name, registry[name]]),
-      ...['recordTaskTypeFailure', 'recordTaskTypeSuccess'].map((name) => [name, backoff[name]]),
-      ...['addTemplateTask', 'deleteTemplateTask', 'getTemplateTasks']
-        .map((name) => [name, templates[name]])
+      ...['recordTaskTypeFailure', 'recordTaskTypeSuccess'].map((name) => [name, backoff[name]])
     ]);
 
     for (const [name, value] of Object.entries(exportsByModule)) {
