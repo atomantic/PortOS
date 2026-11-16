@@ -35,26 +35,23 @@ during install.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-acestep15-cuda.txt`, then use hash-verified uv
-0.13.7 and the [scoped-index recipe](./WAN22_CUDA.md#regenerating-locks),
-substituting ACE-Step 1.5's source/output names. Scope Torch and retained
-CUDA-local packages (currently Torchcodec) to the explicit CUDA index;
-Torchvision/TorchAudio stay on PyPI. Preserve CPython 3.11, both x86_64 target
-platforms, existing output pins, markers and unrelated hash blocks. Do not
-remove the old output before resolving. Advance the cutoff to at least seven
-days ago and restore each target/cutoff header.
+Edit `scripts/requirements-acestep15-cuda.txt`, then follow the [shared procedure](./RUNTIME_LOCKS.md#regenerating-locks)
+with these values:
 
-Ordinary PyPI packages on the CUDA mirror can lack upload dates and fail
-cooldown validation. The
-[selective regeneration procedure](./PYTHON_RUNTIME_REFRESH.md#selective-regeneration)
-describes complete-closure constraints and selective generated-block transfer.
-Query OSV for every resolved package, including `MAL-`, using
-[AudioLDM2's audit](./AUDIOLDM2_CUDA.md#regenerating-locks) with the ACE-Step
-1.5 lock paths. Check response counts, errors and pagination; any unreadable
-result or advisory blocks publication.
+```bash
+SLUG=acestep15-cuda
+LABEL="ACE-Step 1.5 CUDA"
+DOC=docs/ACESTEP15_CUDA.md
+CUDA_SCOPED="torch torchcodec"
+```
+
+Scope Torch and retained CUDA-local packages (currently Torchcodec) to the
+explicit CUDA index; Torchvision/TorchAudio stay on PyPI. Run the
+[OSV audit](./RUNTIME_LOCKS.md#osv-audit) with `acestep15-cuda`.
 
 ## Fresh install and readiness evidence
 
+Follow the [shared evidence procedure](./RUNTIME_LOCKS.md#fresh-install-and-readiness-evidence).
 Needs an NVIDIA CUDA host for a meaningful probe. Use an isolated home:
 
 ```bash
@@ -66,9 +63,5 @@ INSTALL_ACESTEP15=1 INSTALL_MFLUX=0 INSTALL_VIDEO=0 INSTALL_FLUX2=0 \
 "$HOME/.portos/venv-acestep15/bin/python3" -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-(`Scripts/python.exe` on Windows.) The installer's own probe imports the
-Transformers runtime and `acestep.inference`. Record OS, GPU, driver/CUDA,
-Python/torch versions, the selected lock and redacted probe output; run
-`uv pip check --python` with the venv interpreter and confirm Repair leaves
-versions unchanged. A Windows probe does not certify Linux. Import evidence does
-not claim generation quality.
+The installer's own probe imports the Transformers runtime and
+`acestep.inference`.
