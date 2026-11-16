@@ -354,6 +354,43 @@ describe('music-video composition documents', () => {
     expect(native.data.scenes.every(scene => scene.media === null)).toBe(true);
   });
 
+  // Uniquely catches a successful engine update leaving a stock document on the frame-by-frame player
+  // because its helper is an earlier shipped copy, and a really customized helper going unnamed.
+  describe('stock-template helpers after an engine update', () => {
+    const base = () => `/api/music-video/${project.id}/composition/document`;
+    const exportFiles = async () => Object.fromEntries(readZipArchive((await fetchBytes(`${base()}/export`)).bytes).map(entry => [entry.name, entry.read()]));
+    const stockFiles = async () => {
+      expect((await request(app).post(`${base()}/template`).send({})).status).toBe(201);
+      return exportFiles();
+    };
+    const reupload = async (files) => {
+      const imported = await uploadZip(project.id, createZip(Object.entries(files).map(([name, data]) => ({ name, data }))));
+      expect(imported.status).toBe(201);
+      return imported.body.document.directory;
+    };
+
+    it('replaces an earlier shipped helper so playback is native again', async () => {
+      const files = await stockFiles();
+      const older = await readFile(new URL('./fixtures/musicVideoImageEffects14277.txt', import.meta.url));
+      const directory = await reupload({ ...files, 'musicVideoImageEffects.js': older });
+      expect((await request(app).get(`${base()}/playback`)).body).toEqual({ native: false, reason: 'custom-helper', file: 'musicVideoImageEffects.js', upgradable: true });
+      const upgraded = await request(app).post(`${base()}/engine/upgrade`).send({ directory });
+      expect([upgraded.status, upgraded.body.changed, upgraded.body.customHelpers]).toEqual([200, true, []]);
+      expect((await request(app).get(`${base()}/playback`)).body.native).toBe(true);
+      expect((await exportFiles())['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url)));
+    });
+
+    it('names a really customized helper in the update reply and the playback reply, and keeps its bytes', async () => {
+      const files = await stockFiles();
+      const customized = Buffer.concat([files['cameraRig.js'], Buffer.from('\n// authored customization')]);
+      const directory = await reupload({ ...files, 'cameraRig.js': customized });
+      const result = await request(app).post(`${base()}/engine/upgrade`).send({ directory });
+      expect([result.status, result.body.changed, result.body.customHelpers]).toEqual([200, false, ['cameraRig.js']]);
+      expect((await request(app).get(`${base()}/playback`)).body).toEqual({ native: false, reason: 'custom-helper', file: 'cameraRig.js' });
+      expect((await exportFiles())['cameraRig.js']).toEqual(customized);
+    });
+  });
+
   it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';

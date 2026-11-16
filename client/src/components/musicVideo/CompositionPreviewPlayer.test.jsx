@@ -391,6 +391,20 @@ describe('CompositionPreviewPlayer', () => {
     await waitFor(() => expect(onProject).toHaveBeenCalledWith(upgraded));
   });
 
+  // Uniquely catches the preview dock hiding which helper file keeps a stock document off native playback.
+  it('names the differing helper file in the frame-by-frame note', async () => {
+    socket.emit.mockImplementation((event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      socket.reply(event, payload);
+      for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
+        sessionId: '00000000-0000-4000-8000-0000000000ad', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
+        playbackFallback: { reason: 'custom-helper', upgradable: false, file: 'cameraRig.js' } });
+    });
+    render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" onProject={vi.fn()} />);
+    expect(await screen.findByText(/Playing frame by frame.*helper file differs.*\(cameraRig\.js\)/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update layered engine' })).toBeNull();
+  });
+
   it('names a customized document without offering an update', async () => {
     socket.emit.mockImplementation((event, payload) => {
       if (event !== 'generated-preview:open') return;
