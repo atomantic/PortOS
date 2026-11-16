@@ -52,6 +52,7 @@ import { anchorLocalMidnightUtc, todayInTimezone } from '../lib/timezone.js';
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { isTerminalThreadStatus, threadNextLine } from '../lib/brainThreads.js';
 import { getSettings } from './settings.js';
+import { getAppById } from './apps.js';
 
 // Producers are read with a bounded upper limit. The queue reports a lower
 // bound, rather than pretending that a full count is known, when a producer
@@ -294,13 +295,10 @@ const PRODUCERS = [
         .filter(Boolean))];
       const appNames = new Map();
       if (appIds.length) {
-        const appService = await import('./apps.js').catch(() => null);
-        if (appService?.getAppById) {
-          await Promise.all(appIds.map(async appId => {
-            const app = await appService.getAppById(appId).catch(() => null);
-            if (typeof app?.name === 'string' && app.name.trim()) appNames.set(appId, app.name.trim());
-          }));
-        }
+        await Promise.all(appIds.map(async appId => {
+          const app = await getAppById(appId).catch(() => null);
+          if (typeof app?.name === 'string' && app.name.trim()) appNames.set(appId, app.name.trim());
+        }));
       }
       return {
         items: matching.map(({ thread, task }) => {

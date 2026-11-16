@@ -17,6 +17,7 @@ import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
+import { musicVideoTakeSelectSchema } from '../lib/musicVideoValidation.js';
 
 const router = Router();
 
@@ -192,7 +193,6 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
-  const { musicVideoTakeSelectSchema } = await import('../lib/musicVideoValidation.js');
   const options = validateRequest(musicVideoTakeSelectSchema, req.body ?? {});
   // The saved scene with the edit result beside its fields (see the scene PATCH).
   const { scene, edit } = await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options, { edit: true });

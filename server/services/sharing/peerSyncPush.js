@@ -52,6 +52,8 @@ import {
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
 import { getCatalogBundleForRef } from '../catalogDB.js';
+import { getReview } from '../pipeline/manuscriptReview.js';
+import { getStoredOutline } from '../pipeline/reverseOutline.js';
 
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -814,24 +816,17 @@ async function buildSeriesPushPayload(sub, sourceInstanceId, portosMeta) {
   // propagate. Same reasoning as the linkedCollection bundle above: the
   // review rides the payload AND the push hash, defeating the lastPushedHash
   // short-circuit. Skip for tombstones (a deleted series ships no review).
-  // Dynamic import keeps manuscriptReview's arcPlanner graph off peerSync's
-  // boot load path (matches the catalogBundle pattern).
   const manuscriptReview = record.deleted === true
     ? null
-    : await import('../pipeline/manuscriptReview.js')
-      
-      .then(({ getReview }) => loadOrNotFound(() => getReview(sub.recordId)));
+    : await loadOrNotFound(() => getReview(sub.recordId));
   // Bundle the reverse-outline sibling doc (the scene-by-scene segmentation)
   // on the same terms as the review above: a regenerate-only change doesn't
   // move the series record, so without bundling it the per-record push would
   // short-circuit and the receiver's outline would diverge. Only a `complete`
-  // outline is worth shipping. Skip for tombstones. Dynamic import keeps
-  // reverseOutline's arcPlanner graph off peerSync's boot load path.
+  // outline is worth shipping. Skip for tombstones.
   const reverseOutline = record.deleted === true
     ? null
-    : await import('../pipeline/reverseOutline.js')
-      
-      .then(({ getStoredOutline }) => loadOrNotFound(() => getStoredOutline(sub.recordId)));
+    : await loadOrNotFound(() => getStoredOutline(sub.recordId));
   // Same wire projection as the universe branch — see the note there.
   const bundledCollection = sanitizeRecordForWire('mediaCollection', linkedCollection);
   return {

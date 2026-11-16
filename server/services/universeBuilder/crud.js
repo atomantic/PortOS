@@ -37,6 +37,7 @@ import { listSeries } from '../pipeline/series.js';
 import { isNonBlankStr, isStr, trimTo } from '../../lib/textUtils.js';
 import { codedError } from '../../lib/codedError.js';
 import { isFileBackend } from '../../lib/pgFileFacade.js';
+import { withTransaction } from '../../lib/db.js';
 
 // Once-per-process flag for the canon-backfill log — readState() runs in both
 // the queue and from un-queued readers, and the in-memory migration is cheap
@@ -716,7 +717,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // a transaction client, then use that client for both the read and write.
     if (transactional) await s.prepare();
     const result = transactional
-      ? await (await import('../../lib/db.js')).withTransaction(write)
+      ? await withTransaction(write)
       : await write();
     if (transactional && !result.skipped && s.getBackendName() === 'postgres') s.transactionCommitted();
     // Keep projection inside the universe queue, but after an optional DB
