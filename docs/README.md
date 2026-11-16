@@ -152,6 +152,6 @@ Comms & voice: [beeper](./features/beeper.md) ([mirror](./features/beeper-mirror
 
 - [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.
 
-- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and explicit removal.
+- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and inline removal on the LoRAs page.
 
 - [Offline greybox reference sequences](GREYBOX_SEQUENCES.md) — fixed-time blocking and per-camera reference exports.

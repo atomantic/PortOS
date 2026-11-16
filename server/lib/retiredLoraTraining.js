@@ -4,7 +4,7 @@
 
 import { ServerError } from './errorHandler.js';
 
-export const TRAINING_RETIRED_MESSAGE = 'LoRA training is retired. Existing datasets, checkpoints and adapters are preserved. Use reference images for new generation; manage retained files in Settings → Data Maintenance.';
+export const TRAINING_RETIRED_MESSAGE = 'LoRA training is retired. Existing datasets, checkpoints and adapters are preserved. Use reference images for new generation; delete retained files from the LoRAs page.';
 
 export function refuseRetiredTraining() {
   throw new ServerError(TRAINING_RETIRED_MESSAGE, { status: 410, code: 'LORA_TRAINING_RETIRED' });

@@ -33,6 +33,8 @@ vi.mock('../services/api', () => ({
   searchCivitaiLoras: vi.fn(),
   searchVideoLoras: vi.fn(),
   probeLoraEffect: vi.fn(),
+  getRetiredDataInventory: vi.fn(async () => []),
+  deleteRetiredData: vi.fn(),
 }));
 
 vi.mock('../components/ui/Toast', () => ({

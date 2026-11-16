@@ -191,7 +191,7 @@ describe('nav contract — generated section child navigation', () => {
       ['Access', ['API Access', 'Credentials', 'Security', 'Sharing']],
       ['Agents', ['AI Assignments', 'Autofixer', 'Orchestration Profiles', 'Prompts']],
       ['Integrations', ['MortalLoom', 'OpenClaw', 'Telegram', 'Voice']],
-      ['System', ['Backup', 'Data Maintenance', 'Database', 'Features', 'General', 'Software']],
+      ['System', ['Backup', 'Database', 'Features', 'General', 'Software']],
     ]);
     expect(getSectionNavTabs('Settings').every((tab) => tab.navGroup)).toBe(true);
   });
@@ -437,7 +437,7 @@ describe('resolveNavCommand — fuzzy matching', () => {
     // persisted, so paths prove the move actually landed.
     expect(resolveNavCommand('media models')?.path).toBe('/models/media');
     expect(resolveNavCommand('loras')?.path).toBe('/models/loras');
-    expect(resolveNavCommand('lora training')?.path).toBe('/settings/data-maintenance');
+    expect(resolveNavCommand('lora training')?.path).toBe('/models/loras');
     expect(resolveNavCommand('embeddings')?.path).toBe('/models/embeddings');
     expect(resolveNavCommand('prompt guard')?.path).toBe('/models/llms/abuse');
     expect(resolveNavCommand('abuse-guard')?.path).toBe('/models/llms/abuse');

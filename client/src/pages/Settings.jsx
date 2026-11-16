@@ -1,4 +1,3 @@
-import DataMaintenanceTab from '../components/settings/DataMaintenanceTab';
 import { useParams, Navigate } from 'react-router';
 import { Settings as SettingsIcon } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
@@ -47,7 +46,6 @@ export default function Settings() {
       case 'api-access': return <ApiAccessTab />;
       case 'autofixer': return <AutofixerTab />;
       case 'backup': return <BackupTab />;
-      case 'data-maintenance': return <DataMaintenanceTab />;
       case 'database': return <DatabaseTab />;
       case 'credentials': return <CredentialsTab />;
       case 'features': return <InstanceFeaturesTab />;

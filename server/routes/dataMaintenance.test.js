@@ -28,8 +28,7 @@ const { default: routes } = await import('./dataMaintenance.js');
 const { hostControlRouteGate } = await import('../services/authGate.js');
 const app = express(); app.use(express.json()); app.use(hostControlRouteGate); app.use('/api/data-maintenance', routes);
 app.use((error, _req, res, _next) => res.status(error.status || 500).json({ error: error.message, code: error.code }));
-const preview = () => request(app).post('/api/data-maintenance/preview').send({ operationId: 'retired-training-runs' });
-const execute = p => request(app).post('/api/data-maintenance/execute').send({ token: p.token, confirmation: p.confirmation });
+const del = (id = 'retired-training-runs') => request(app).delete(`/api/data-maintenance/${id}`);
 beforeEach(() => {
   rmSync(root, { recursive: true, force: true });
   for (const path of ['training-runs/run-example', 'lora-datasets/example/images', 'loras']) mkdirSync(join(root, path), { recursive: true });
@@ -40,37 +39,41 @@ beforeEach(() => {
 });
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 describe('allowlisted data maintenance HTTP workflow', () => {
-  it('previews without mutating, requires exact confirmation, removes only approved artifacts and replays idempotently', async () => {
+  it('lists only the two retired-data operations with their size', async () => {
     const inventory = await request(app).get('/api/data-maintenance');
-    expect(inventory.body.find(row => row.id === 'retired-training-runs')).toMatchObject({ status: 'retained', files: 1, bytes: 17 });
-    const p = (await preview()).body;
-    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
-    expect((await request(app).post('/api/data-maintenance/execute').send({ token: p.token, confirmation: 'DELETE' })).status).toBe(400);
-    const [one, two] = await Promise.all([execute(p), execute(p)]);
-    expect(one.status).toBe(200); expect(two.body).toEqual(one.body);
+    expect(inventory.body.map(row => row.id)).toEqual(['retired-training-runs', 'retired-lora-datasets']);
+    expect(inventory.body.find(row => row.id === 'retired-training-runs')).toMatchObject({ status: 'retained', files: 1, bytes: 17, actions: ['delete'] });
+  });
+  it('deletes only the named operation for an authorized caller', async () => {
+    const result = await del();
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, operationId: 'retired-training-runs', removedFiles: 1, removedBytes: 17, status: 'deleted' });
     expect(existsSync(join(root, 'training-runs'))).toBe(false);
     expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
     expect(existsSync(join(root, 'lora-datasets/example/images/source.png'))).toBe(true);
   });
-  it('rejects stale inventories and refuses a job that starts after preview', async () => {
-    const p = (await preview()).body;
-    writeFileSync(join(root, 'training-runs/run-example/new.bin'), 'new');
-    expect((await execute(p)).body.code).toBe('MAINTENANCE_STALE');
-    const fresh = (await preview()).body;
-    state.jobs = [{ status: 'running', kind: 'image' }];
-    expect((await execute(fresh)).body.code).toBe('MAINTENANCE_BUSY');
-    expect(existsSync(join(root, 'training-runs/run-example/new.bin'))).toBe(true);
+  it('refuses an unauthorized caller without removing anything', async () => {
+    state.authorized = false;
+    expect((await del()).status).toBe(403);
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
   });
-  it('refuses surviving trainers, arbitrary paths, shared assets, unknown previews and unauthorized callers', async () => {
-    state.busy = true; expect((await preview()).body.code).toBe('MAINTENANCE_BUSY');
-    state.busy = false;
-    for (const operationId of ['../loras', 'shared-lora-adapters', 'archives']) expect((await request(app).post('/api/data-maintenance/preview').send({ operationId })).status).toBe(404);
-    expect((await execute({ token: '00000000-0000-4000-8000-000000000001', confirmation: 'DELETE training-runs' })).body.code).toBe('MAINTENANCE_STALE');
-    state.authorized = false; expect((await preview()).status).toBe(403);
+  it('refuses arbitrary paths, the shared adapter directory and unknown operation ids', async () => {
+    for (const id of ['..%2Floras', 'shared-lora-adapters', 'archives', 'loras']) expect((await del(id)).status).toBe(404);
+    expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
+  });
+  it('refuses while a trainer or media job owns the data', async () => {
+    state.busy = true; expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+    state.busy = false; state.jobs = [{ status: 'running', kind: 'image' }];
+    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
+    expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
+  });
+  it('reports nothing-to-delete as stale', async () => {
+    expect((await del()).status).toBe(200);
+    expect((await del()).body.code).toBe('MAINTENANCE_STALE');
   });
   it('refuses links without following their targets', async () => {
     symlinkSync(join(root, 'loras'), join(root, 'training-runs/run-example/link'));
-    expect((await preview()).body.code).toBe('MAINTENANCE_UNSAFE');
+    expect((await del()).body.code).toBe('MAINTENANCE_UNSAFE');
     const rows = (await request(app).get('/api/data-maintenance')).body;
     expect(rows.find(row => row.id === 'retired-training-runs').status).toBe('unavailable');
     expect(existsSync(join(root, 'loras/example.safetensors'))).toBe(true);
@@ -78,44 +81,27 @@ describe('allowlisted data maintenance HTTP workflow', () => {
 });
 
 it('refuses removal while checkpoint promotion or a retained dataset write owns the data', async () => {
-  const p = (await preview()).body;
   const { withRetiredDataAccess } = await import('../lib/retiredLoraTraining.js');
   let release;
   const access = withRetiredDataAccess(() => new Promise(resolve => { release = resolve; }));
   try {
-    expect((await execute(p)).body.code).toBe('MAINTENANCE_BUSY');
+    expect((await del()).body.code).toBe('MAINTENANCE_BUSY');
     expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
   } finally { release(); await access; }
-  expect((await execute(p)).status).toBe(200);
-});
-
-it('expires previews and rejects a replaced directory without removing its replacement', async () => {
-  const p = (await preview()).body;
-  const actualNow = Date.now;
-  vi.spyOn(Date, 'now').mockReturnValue(actualNow() + 6 * 60_000);
-  try { expect((await execute(p)).body.code).toBe('MAINTENANCE_STALE'); }
-  finally { vi.restoreAllMocks(); }
-  const fresh = (await preview()).body;
-  rmSync(join(root, 'training-runs'), { recursive: true });
-  mkdirSync(join(root, 'training-runs'));
-  writeFileSync(join(root, 'training-runs/new.bin'), 'replacement');
-  expect((await execute(fresh)).body.code).toBe('MAINTENANCE_STALE');
-  expect(existsSync(join(root, 'training-runs/new.bin'))).toBe(true);
+  expect((await del()).status).toBe(200);
 });
 
 it('reports filesystem failure without success and restores the untouched detached tree', async () => {
-  const p = (await preview()).body;
   state.failRemoval = true;
-  const result = await execute(p);
+  const result = await del();
   expect(result.status).toBe(409);
   expect(result.body.code).toBe('MAINTENANCE_INCOMPLETE');
   expect(existsSync(join(root, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
 });
 
 it('reports newly appearing files as retained instead of falsely reporting an empty category', async () => {
-  const p = (await preview()).body;
   state.recreate = true;
-  const result = await execute(p);
+  const result = await del();
   expect(result.status).toBe(200);
   expect(result.body).toMatchObject({ status: 'retained', remainingFiles: 1, remainingBytes: 10 });
   expect(existsSync(join(root, 'training-runs/new.bin'))).toBe(true);
@@ -126,7 +112,7 @@ it('refuses a linked data root instead of following it into another location', a
   renameSync(root, moved);
   try {
     symlinkSync(moved, root, process.platform === 'win32' ? 'junction' : 'dir');
-    expect((await preview()).body.code).toBe('MAINTENANCE_UNSAFE');
+    expect((await del()).body.code).toBe('MAINTENANCE_UNSAFE');
     expect(existsSync(join(moved, 'training-runs/run-example/checkpoint.bin'))).toBe(true);
   } finally {
     rmSync(root, { recursive: true, force: true });
