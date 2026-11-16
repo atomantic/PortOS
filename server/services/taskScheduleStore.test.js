@@ -10,16 +10,6 @@ vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
-vi.mock('./taskLearning.js', () => ({
-  getAdaptiveCooldownMultiplier: vi.fn().mockResolvedValue({
-    multiplier: 1,
-    reason: 'insufficient-data',
-    skip: false,
-    successRate: null,
-    completed: 0
-  })
-}));
-
 vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),

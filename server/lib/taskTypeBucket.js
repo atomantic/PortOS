@@ -31,7 +31,7 @@ const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE, 'unknown']);
 /**
  * True when a task type is a sandboxed fallback bucket (not a real learned
  * domain). Callers in routing.js gate on this to keep the fallback from
- * influencing model-tier suggestions or skip/rehabilitation gating.
+ * influencing model-tier suggestions or the low-success list.
  */
 export const isSandboxedTaskType = (taskType) => SANDBOXED_TASK_TYPES.has(taskType);
 

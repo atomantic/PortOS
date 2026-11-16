@@ -68,11 +68,7 @@ export {
   deriveFailureSignalAvoidance,
   getRoutingAccuracy,
   getPerformanceSummary,
-  getAdaptiveCooldownMultiplier,
   getSkippedTaskTypes,
-  shouldSkipTaskType,
-  checkAndRehabilitateSkippedTasks,
-  getSkippedTaskTypesWithStatus,
   getTaskTypeConfidence,
   getConfidenceLevels
 } from './routing.js';

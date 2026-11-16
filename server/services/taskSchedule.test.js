@@ -50,16 +50,6 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
 }))
 
-vi.mock('./taskLearning.js', () => ({
-  getAdaptiveCooldownMultiplier: vi.fn().mockResolvedValue({
-    multiplier: 1.0,
-    reason: 'insufficient-data',
-    skip: false,
-    successRate: null,
-    completed: 0
-  })
-}))
-
 vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
@@ -154,7 +144,6 @@ import { writeFile } from 'fs/promises'
 import { isTaskTypeEnabledForApp, getAppById, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
 import { reconcileInventoryRows } from './branchReconcileInventoryPrune.js'
 import { getLocalParts } from '../lib/timezone.js'
-import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
@@ -2534,26 +2523,12 @@ describe('taskSchedule', () => {
   })
 
   describe('getScheduleStatus', () => {
-    it('keeps learning advice separate from configured scheduling and dispatch', async () => {
+    it('reports the configured schedule with no learning adjustment fields', async () => {
       mockSchedule({ tasks: { security: { type: 'cron', cronExpression: '* * * * *', intervalMs: 60000, enabled: true } } })
-      getAdaptiveCooldownMultiplier.mockResolvedValue({
-        multiplier: 0, reason: 'skip-failing', skip: true, successRate: 13, completed: 8
-      })
-      try {
-        const before = await shouldRunTask('security')
-        expect(getAdaptiveCooldownMultiplier).not.toHaveBeenCalled()
-        const status = await getScheduleStatus()
-        const after = await shouldRunTask('security')
-        expect(after).toEqual(before)
-        expect(status.tasks.security).toMatchObject({
-          learningAdjusted: false, learningMultiplier: 1, adjustedIntervalMs: 60000,
-          learningAdvice: { advisoryOnly: true, multiplier: 0, adjustedIntervalMs: 0 }
-        })
-      } finally {
-        getAdaptiveCooldownMultiplier.mockResolvedValue({
-          multiplier: 1, reason: 'insufficient-data', skip: false, successRate: null, completed: 0
-        })
-      }
+      const status = await getScheduleStatus()
+      expect(status.tasks.security.intervalMs).toBe(60000)
+      expect(Object.keys(status.tasks.security).filter(k => k.startsWith('learning'))).toEqual([])
+      expect(status.tasks.security).not.toHaveProperty('adjustedIntervalMs')
     })
 
     it('refreshes missing inventory in the schedule response and persists current rows', async () => {

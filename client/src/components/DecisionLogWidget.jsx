@@ -8,7 +8,6 @@ import {
   CheckCircle,
   ArrowRight,
   Clock,
-  RefreshCw,
   Zap,
   Users,
   Pause,
@@ -101,8 +100,6 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
         return { icon: ArrowRight, color: 'text-purple-400', bg: 'bg-purple-400/10' };
       case 'interval_adjusted':
         return { icon: Clock, color: 'text-blue-400', bg: 'bg-blue-400/10' };
-      case 'rehabilitation':
-        return { icon: RefreshCw, color: 'text-port-success', bg: 'bg-port-success/10' };
       case 'task_selected':
         return { icon: CheckCircle, color: 'text-port-success', bg: 'bg-port-success/10' };
       case 'capacity_full':
@@ -127,7 +124,6 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
       queue_full: 'Queue Full',
       capacity_full: 'At Capacity',
       task_selected: 'Selected',
-      rehabilitation: 'Retried',
       idle: 'Idle'
     };
     return labels[type] || type;

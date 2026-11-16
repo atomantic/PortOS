@@ -311,6 +311,7 @@ describe('CoS Routes', () => {
       ['comprehensiveAppImprovement', true],
       ['immediateExecution', true],
       ['proactiveMode', false],
+      ['rehabilitationGracePeriodDays', 14],
     ])('accepts but ignores the retired %s config field for older clients', async (field, value) => {
       updateConfig.mockResolvedValue({ maxConcurrentAgents: 5 });
       const response = await request(app)

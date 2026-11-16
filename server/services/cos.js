@@ -30,7 +30,6 @@ import { clearStaleActiveAgents } from './appActivity.js';
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
-import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
 import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
@@ -445,74 +444,6 @@ async function bootDaemon(state) {
     metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
-  // Performance summary (10 min)
-  scheduleEvent({
-    id: 'cos-performance-summary',
-    type: 'interval',
-    intervalMs: 10 * 60 * 1000,
-    handler: async () => {
-      const perfSummary = await getPerformanceSummary().catch(() => null);
-      if (perfSummary && perfSummary.totalCompleted > 0) {
-        emitLog('info', `Performance: ${perfSummary.overallSuccessRate}% success over ${perfSummary.totalCompleted} tasks`, {
-          successRate: perfSummary.overallSuccessRate,
-          totalCompleted: perfSummary.totalCompleted,
-          topPerformers: perfSummary.topPerformers.length,
-          needsAttention: perfSummary.needsAttention.length
-        });
-      }
-    },
-    metadata: { description: 'CoS performance summary' }
-  });
-
-  // Learning insights (20 min)
-  scheduleEvent({
-    id: 'cos-learning-insights',
-    type: 'interval',
-    intervalMs: 20 * 60 * 1000,
-    handler: async () => {
-      const learningInsights = await getLearningInsights().catch(() => null);
-      if (learningInsights?.recommendations?.length > 0) {
-        const recommendations = learningInsights.recommendations.slice(0, 3);
-        for (const rec of recommendations) {
-          // A recommendation is advice re-announced every cycle, not a fault — stdout only.
-          const level = rec.type === 'warning' || rec.type === 'action' ? 'info' : 'debug';
-          emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
-        }
-        cosEvents.emit('learning:recommendations', {
-          recommendations,
-          insights: {
-            bestPerforming: learningInsights.insights?.bestPerforming?.slice(0, 2) || [],
-            worstPerforming: learningInsights.insights?.worstPerforming?.slice(0, 2) || [],
-            commonErrors: learningInsights.insights?.commonErrors?.slice(0, 2) || []
-          },
-          totals: learningInsights.totals
-        });
-      }
-    },
-    metadata: { description: 'CoS learning insights' }
-  });
-
-  // Rehabilitation check (2 hours)
-  scheduleEvent({
-    id: 'cos-rehabilitation-check',
-    type: 'interval',
-    intervalMs: 2 * 60 * 60 * 1000,
-    handler: async () => {
-      const s = await loadState();
-      const gracePeriodMs = (s.config.rehabilitationGracePeriodDays || 7) * 24 * 60 * 60 * 1000;
-      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {
-        emitLog('warn', `⚠️ checkAndRehabilitateSkippedTasks failed: ${err?.message || err}`, { stack: err?.stack || '' });
-        return { count: 0 };
-      });
-      if (result.count > 0) {
-        emitLog('success', `Auto-rehabilitated ${result.count} skipped task type(s)`, {
-          rehabilitated: result.rehabilitated?.map(r => r.taskType) || []
-        });
-      }
-    },
-    metadata: { description: 'CoS rehabilitation check for skipped tasks' }
-  });
-
   // Pending-merge drain (30 min). `evaluateTasks` also sweeps opportunistically,
   // but evaluation is event-driven — with no periodic evaluation timer that drain
   // fires roughly once per restart, so a green merge-only PR opened while PortOS
@@ -641,9 +572,6 @@ async function teardownDaemon() {
   // Cancel all scheduled events
   cancelEvent('cos-health-check');
   cancelEvent('cos-recording-maintenance');
-  cancelEvent('cos-performance-summary');
-  cancelEvent('cos-learning-insights');
-  cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-runtime-verification');
   cancelEvent('cos-pending-merge-sweep');

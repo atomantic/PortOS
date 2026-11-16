@@ -2715,37 +2715,13 @@ describe('CoS startup — single-flight recovery', () => {
   });
 });
 
-describe('cos-rehabilitation-check timer — failure observability (#7552)', () => {
-  // A rejecting checkAndRehabilitateSkippedTasks used to collapse to the same
-  // { count: 0 } a healthy no-op call produces, so a persistence failure in the
-  // ONLY path back from an auto-skipped task type went silent forever. This
-  // extracts and REALLY EXECUTES the shipped `.catch(err => {...})` handler
-  // (not a reimplementation) against a mocked emitLog, rather than mocking the
-  // full `runStart()` import graph — the file's own header explains why that
-  // full-mock approach is rejected here as "a brittle test of mocks".
-  const anchor = 'checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {';
-  const anchorStart = COS_SRC.indexOf(anchor);
-
-  it('is still the exact call site this test extracts its handler from', () => {
-    expect(anchorStart, 'the rehabilitation catch handler moved/changed shape — update this test\'s anchor').toBeGreaterThan(-1);
+describe('CoS maintenance timers — advisory learning removal (#16406)', () => {
+  // The learning store is only ever reset by an explicit user action; none of the
+  // removed timers (performance summary, insights, rehabilitation) may come back.
+  it.each(['cos-performance-summary', 'cos-learning-insights', 'cos-rehabilitation-check'])('does not register or cancel %s', (id) => {
+    expect(COS_SRC).not.toContain(id);
   });
-
-  it('logs via emitLog(\'warn\', ...) with the stack, and still resolves the neutral fallback, when the rehabilitation call rejects', () => {
-    const bodyStart = anchorStart + anchor.length;
-    const bodyEnd = COS_SRC.indexOf('\n      });', bodyStart);
-    const fnBody = COS_SRC.slice(bodyStart, bodyEnd);
-    const emitLog = vi.fn();
-    // executes the real extracted source, not a rewritten copy
-    const catchHandler = new Function('emitLog', `return function(err) {${fnBody}}`)(emitLog);
-
-    const err = new Error('learning store unavailable');
-    const result = catchHandler(err);
-
-    expect(emitLog).toHaveBeenCalledWith(
-      'warn',
-      expect.stringContaining('checkAndRehabilitateSkippedTasks failed: learning store unavailable'),
-      expect.objectContaining({ stack: expect.any(String) })
-    );
-    expect(result).toEqual({ count: 0 });
+  it('no longer reads or auto-resets learning data', () => {
+    expect(COS_SRC).not.toMatch(/checkAndRehabilitateSkippedTasks|resetTaskTypeLearning|getLearningInsights/);
   });
 });

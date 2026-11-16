@@ -1,17 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   deriveFailureSignalAvoidance,
-  getAdaptiveCooldownMultiplier,
   getSkippedTaskTypes,
   getTaskTypeConfidence,
   getTaskTypePriorityMultiplier,
-  checkAndRehabilitateSkippedTasks,
-  getSkippedTaskTypesWithStatus,
   suggestModelTier,
   getPerformanceSummary
 } from './routing.js';
 import { loadLearningData } from './store.js';
-import { resetTaskTypeLearning } from './reset.js';
 
 // Stub ONLY the persistence + log surface of the store; every pure helper
 // (computeEffectiveSuccessRate, computeWindowedStats, isSandboxedTaskType, …)
@@ -20,7 +16,6 @@ vi.mock('./store.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, loadLearningData: vi.fn(), emitLog: vi.fn() };
 });
-vi.mock('./reset.js', () => ({ resetTaskTypeLearning: vi.fn() }));
 
 // deriveFailureSignalAvoidance is the pure "routing consumes the enriched
 // failure signatures" core added for issue #2329. It takes learning data + a
@@ -253,38 +248,6 @@ const learningWith = (byTaskType) => ({
 describe('windowed-rate decisions (issue #2617)', () => {
   beforeEach(() => {
     vi.mocked(loadLearningData).mockReset();
-    vi.mocked(resetTaskTypeLearning).mockReset();
-  });
-
-  describe('getAdaptiveCooldownMultiplier', () => {
-    it('no longer skips a recovered task type (windowed 100% beats lifetime 27%)', async () => {
-      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': recoveredMetrics() }));
-      const out = await getAdaptiveCooldownMultiplier('self-improve:x');
-      expect(out.skip).toBe(false);
-      expect(out.recommendation).toContain('scheduling is unchanged');
-      expect(out.multiplier).toBe(0.7); // windowed 100% → high-success branch
-      expect(out.successRate).toBe(100);
-      expect(out.rateSource).toBe('windowed');
-    });
-
-    it('keeps skipping when the window is too thin (lifetime fallback, acceptance criterion 2)', async () => {
-      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': thinWindowMetrics() }));
-      const out = await getAdaptiveCooldownMultiplier('self-improve:x');
-      expect(out.skip).toBe(true); // lifetime 27% < 30 with ≥5 completions
-      expect(out.successRate).toBe(27);
-      expect(out.rateSource).toBe('lifetime');
-    });
-
-    it('still skips a type whose recent window is also failing', async () => {
-      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': stillFailingMetrics() }));
-      const out = await getAdaptiveCooldownMultiplier('self-improve:x');
-      expect(out.skip).toBe(true);
-      expect(out.multiplier).toBe(0);
-      expect(out.reason).toBe('skip-failing');
-      expect(out.recommendation).toContain('review outcomes; scheduling is unchanged');
-      expect(out.recommendation).not.toContain('skipping until reviewed');
-      expect(out.rateSource).toBe('windowed');
-    });
   });
 
   describe('getSkippedTaskTypes', () => {
@@ -299,6 +262,20 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(types).not.toContain('recovered');
       expect(types).toContain('still-broken');
       expect(types).toContain('thin-window'); // lifetime fallback still applies
+    });
+
+    it('lists a windowed-driven skip and never mutates the learning store', async () => {
+      const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
+      const healthyBurst = {
+        completed: 200, succeeded: 190, failed: 10, successRate: 95,
+        lastCompleted: new Date(tenDaysAgo).toISOString(),
+        recentOutcomes: ring(Array(6).fill(false), tenDaysAgo)
+      };
+      const data = learningWith({ 'healthy-burst': healthyBurst });
+      const before = JSON.stringify(data);
+      loadLearningData.mockResolvedValue(data);
+      expect((await getSkippedTaskTypes()).map(s => s.taskType)).toContain('healthy-burst');
+      expect(JSON.stringify(data)).toBe(before);
     });
   });
 
@@ -338,64 +315,6 @@ describe('windowed-rate decisions (issue #2617)', () => {
     it('demotes on the lifetime rate when the window is too thin', async () => {
       loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': thinWindowMetrics() }));
       expect(await getTaskTypePriorityMultiplier('self-improve:x')).toBe(0.9);
-    });
-  });
-
-  describe('checkAndRehabilitateSkippedTasks', () => {
-    it('resets a recovered type via the recovery path even though it is not idle (issue #2619)', async () => {
-      // Poor lifetime (27%) but a clean recent window (100% over 15 samples) and
-      // still running (lastCompleted just now). Pre-#2619 the idle gate left its
-      // stale lifetime/duration/failure-signature data in place forever; now the
-      // recovery path clears it regardless of idle time.
-      loadLearningData.mockResolvedValue(learningWith({ 'recovered': recoveredMetrics() }));
-      const out = await checkAndRehabilitateSkippedTasks();
-      expect(out.count).toBe(1);
-      expect(out.rehabilitated[0]).toMatchObject({ taskType: 'recovered', trigger: 'recovery' });
-      expect(resetTaskTypeLearning).toHaveBeenCalledWith('recovered');
-    });
-
-    it('does not reset a poor-lifetime type whose recent window is still too thin to prove recovery (#2619)', async () => {
-      // Same 27% lifetime, but only 3 recent samples — below the 5-sample
-      // recovery bar — and not idle. Neither path should fire.
-      loadLearningData.mockResolvedValue(learningWith({ 'thin': thinWindowMetrics() }));
-      const out = await checkAndRehabilitateSkippedTasks();
-      expect(out.count).toBe(0);
-      expect(resetTaskTypeLearning).not.toHaveBeenCalled();
-    });
-
-    it('does not reset a healthy-lifetime type skipped by a recent failure burst (windowed-driven skip)', async () => {
-      // 200 runs at 95% lifetime, then a transient outage: 6 recent failures →
-      // windowed 0% → the type IS skipped. But the skip is windowed-driven, so
-      // the destructive lifetime reset must NOT fire — the window self-heals.
-      const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
-      const healthy = {
-        completed: 200, succeeded: 190, failed: 10, successRate: 95,
-        lastCompleted: new Date(tenDaysAgo).toISOString(),
-        recentOutcomes: ring(Array(6).fill(false), tenDaysAgo)
-      };
-      loadLearningData.mockResolvedValue(learningWith({ 'healthy-burst': healthy }));
-      // Confirm it is indeed currently skipped…
-      const skipped = await getSkippedTaskTypes();
-      expect(skipped.map(s => s.taskType)).toContain('healthy-burst');
-      // …but never rehabilitated/reset, and the status view says not eligible.
-      const out = await checkAndRehabilitateSkippedTasks(7 * 24 * 60 * 60 * 1000);
-      expect(out.count).toBe(0);
-      expect(resetTaskTypeLearning).not.toHaveBeenCalled();
-      const status = await getSkippedTaskTypesWithStatus(7 * 24 * 60 * 60 * 1000);
-      expect(status[0]).toMatchObject({ taskType: 'healthy-burst', eligibleForRehabilitation: false });
-    });
-
-    it('still rehabilitates a genuinely skipped type past the grace period', async () => {
-      const broken = stillFailingMetrics();
-      // Push BOTH the ring and lastCompleted outside any recency concern for the
-      // grace period; the ring stays in-window (30 days > 8 samples aged 10 days).
-      const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
-      broken.lastCompleted = new Date(tenDaysAgo).toISOString();
-      broken.recentOutcomes = ring(Array(8).fill(false), tenDaysAgo);
-      loadLearningData.mockResolvedValue(learningWith({ 'still-broken': broken }));
-      const out = await checkAndRehabilitateSkippedTasks(7 * 24 * 60 * 60 * 1000);
-      expect(out.count).toBe(1);
-      expect(resetTaskTypeLearning).toHaveBeenCalledWith('still-broken');
     });
   });
 

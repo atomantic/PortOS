@@ -63,6 +63,17 @@ describe('cosState persistence', () => {
     expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Keep my voice.');
   });
 
+  it('loads and re-saves a stored config that still carries retired keys', async () => {
+    writeConfig({ maxConcurrentAgents: 7, rehabilitationGracePeriodDays: 14 });
+    const store = await freshModule();
+    const config = await store.getConfig();
+    expect(config.maxConcurrentAgents).toBe(7);
+    expect(config).not.toHaveProperty('rehabilitationGracePeriodDays');
+    await store.saveConfig(config);
+    expect(readJson(CONFIG_PATH)).not.toHaveProperty('rehabilitationGracePeriodDays');
+    expect(readJson(CONFIG_PATH).maxConcurrentAgents).toBe(7);
+  });
+
   // The regression: a `}{` heuristic declared VALID state files corrupt as soon
   // as any stored string held that byte pair (a slashdo doc quoting
   // `{value}{ — project|global}`, a diff carrying JSX), and the fallback reset

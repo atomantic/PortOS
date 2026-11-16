@@ -63,16 +63,6 @@ router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/learning/cooldown/:taskType - Get adaptive cooldown for specific task type
-router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const cooldownInfo = await taskLearning.getAdaptiveCooldownMultiplier(taskType);
-  res.json({
-    taskType,
-    ...cooldownInfo
-  });
-}));
-
 // GET /api/cos/learning/routing - Get routing accuracy metrics (task type × model tier)
 router.get('/learning/routing', asyncHandler(async (req, res) => {
   const routing = await taskLearning.getRoutingAccuracy();
