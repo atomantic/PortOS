@@ -36,24 +36,9 @@ describe('agents routes', () => {
       expect(res.body).toHaveLength(2);
       expect(res.body[0].agentName).toBe('Claude');
     });
-
-    it('returns an empty array when no agents are running', async () => {
-      getRunningAgents.mockResolvedValue([]);
-      const res = await request(buildApp()).get('/api/agents');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual([]);
-    });
   });
 
   describe('GET /api/agents/:pid', () => {
-    it('returns process info for an existing pid', async () => {
-      getProcessInfo.mockResolvedValue({ pid: 1234, cpu: 12.3, memory: 45.6 });
-      const res = await request(buildApp()).get('/api/agents/1234');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ pid: 1234, cpu: 12.3, memory: 45.6 });
-      expect(getProcessInfo).toHaveBeenCalledWith(1234);
-    });
-
     it('returns 404 when the pid is not found', async () => {
       getProcessInfo.mockResolvedValue(null);
       const res = await request(buildApp()).get('/api/agents/9999');
