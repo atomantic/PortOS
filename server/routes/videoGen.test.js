@@ -420,6 +420,11 @@ describe('isAudioMime', () => {
 });
 
 describe('videoGen routes', () => {
+  it('rejects a repeated query key with 400 (runtime-install, #16428)', async () => {
+    const res = await request(app).post('/api/video-gen/setup/runtime-install?runtime=a&runtime=b');
+    expect(res.status).toBe(400);
+  });
+
   it('validates poster edits and allows an explicit reset', async () => {
     const id = '00000000-0000-4000-8000-000000000001';
     updateVideoPoster.mockResolvedValue({ id, thumbnail: 'poster.jpg', posterSec: 12.4 });

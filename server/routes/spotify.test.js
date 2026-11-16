@@ -45,6 +45,11 @@ function makeApp() {
 }
 
 describe('Spotify routes', () => {
+  it('rejects a repeated query key with 400 (oauth callback, #16428)', async () => {
+    const res = await request(makeApp()).get('/api/spotify/oauth/callback?code=a&code=b');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });

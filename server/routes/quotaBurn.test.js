@@ -88,6 +88,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/quota-burn', () => {
+  it('rejects a repeated query key with 400 (refresh, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/quota-burn?refresh=1&refresh=1');
+    expect(res.status).toBe(400);
+  });
+
   it('returns the plan and its live status', async () => {
     const res = await request(buildApp()).get('/api/quota-burn');
     expect(res.status).toBe(200);

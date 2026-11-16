@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import {
   validateRequest,
@@ -50,11 +51,12 @@ router.get('/steps', (_req, res) => {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const sessions = await listStorySessions();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(page)) {
     return res.json(sessions);
   }
-  res.json(paginateArray(sessions, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(sessions, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

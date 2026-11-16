@@ -4,6 +4,7 @@
  */
 
 import { Router } from 'express';
+import { writersRoomExercisesQuerySchema } from '../lib/routeQueryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -180,7 +181,7 @@ router.get('/exercises', asyncHandler(async (req, res) => {
   // turned a filtered request into an unfiltered one (data leakage). Now we
   // pick the first non-empty string and ignore the rest, so a duplicated
   // param degrades to "filter by the first value" instead of "show all".
-  const raw = req.query.workId;
+  const { workId: raw } = validateRequest(writersRoomExercisesQuerySchema, req.query);
   const candidate = Array.isArray(raw) ? raw.find((v) => typeof v === 'string' && v) : raw;
   const workId = typeof candidate === 'string' && candidate ? candidate : undefined;
   res.json(await listExercises({ workId }));

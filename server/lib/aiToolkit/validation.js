@@ -291,6 +291,15 @@ export const providerUsageLimitBodySchema = z.object({
   waitTime: z.string().optional()
 });
 
+// GET /runs and DELETE /runs query strings: scalar strings only; the route keeps its lenient
+// number parsing and ignores unknown keys so older clients keep working.
+export const runsListQuerySchema = z.object({
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+  source: z.string().optional()
+});
+export const runsBulkDeleteQuerySchema = z.object({ filter: z.string().optional() });
+
 export function validate(schema, data) {
   const result = schema.safeParse(data);
   if (result.success) {

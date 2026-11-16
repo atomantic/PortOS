@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { refreshQuerySchema } from '../lib/routeQueryValidation.js';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
@@ -179,7 +180,8 @@ router.get('/providers', asyncHandler(async (req, res) => {
 // with no card shape to carry a `pending` flag, so a caller has nothing to
 // render or poll on. The wait is bounded by the CLI's own spawn timeout.
 router.get('/claude-code', asyncHandler(async (req, res) => {
-  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const { refresh: refreshParam } = validateRequest(refreshQuerySchema, req.query);
+  const refresh = refreshParam === '1' || refreshParam === 'true';
   const data = await getClaudeCodeUsage({ wait: refresh ? WAIT.FRESH : WAIT.CACHED });
   res.json(data);
 }));

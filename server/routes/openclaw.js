@@ -1,4 +1,5 @@
 import express from 'express';
+import { paginationQuerySchema } from '../lib/routeQueryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
@@ -106,7 +107,8 @@ router.get('/sessions/:id/messages', asyncHandler(async (req, res) => {
     throw new ServerError('Session ID is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  let limit = req.query.limit !== undefined ? Number.parseInt(String(req.query.limit), 10) : 50;
+  const { limit: rawLimit } = validateRequest(paginationQuerySchema, req.query);
+  let limit = rawLimit !== undefined ? Number.parseInt(rawLimit, 10) : 50;
   if (Number.isNaN(limit) || limit <= 0) limit = 50;
   if (limit > 200) limit = 200;
 

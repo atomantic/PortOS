@@ -32,6 +32,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/providers/fleet-peer-hosts', () => {
+  it('rejects a repeated query key with 400 (fleet-host, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/providers/fleet-host?fresh=1&fresh=1');
+    expect(res.status).toBe(400);
+  });
+
   it('returns peer hosts list from fleetLlmHost service', async () => {
     const mockHosts = [
       {

@@ -57,6 +57,11 @@ beforeEach(() => {
 });
 
 describe('GET /api/providers/codex/account', () => {
+  it('rejects a repeated query key with 400 (codex account, #16428)', async () => {
+    const res = await request(appWith()).get('/api/providers/codex/account?fresh=1&fresh=1');
+    expect(res.status).toBe(400);
+  });
+
   it('returns the readiness verdict and honours ?fresh=1', async () => {
     codexAppServer.getCodexAccountReadiness.mockResolvedValue(READY);
 
@@ -226,6 +231,11 @@ describe('GET /api/providers decorates the Codex cards', () => {
 });
 
 describe('GET /api/providers/codex/models', () => {
+  it('rejects a repeated query key with 400 (codex models, #16428)', async () => {
+    const res = await request(appWith()).get('/api/providers/codex/models?fresh=1&fresh=1');
+    expect(res.status).toBe(400);
+  });
+
   it('returns the catalog and honours ?fresh=1', async () => {
     codexAppServer.listCodexModels.mockResolvedValue({
       models: [{ id: 'model-alpha', displayName: 'Alpha', supportedEfforts: ['low', 'medium'] }],

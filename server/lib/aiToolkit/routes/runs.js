@@ -1,6 +1,6 @@
 import { resolveExecutionOptions } from '../internal/executionOptions.js';
 import { Router } from 'express';
-import { runSchema, validate, sanitizeScreenshotRefs } from '../validation.js';
+import { runSchema, runsListQuerySchema, runsBulkDeleteQuerySchema, validate, sanitizeScreenshotRefs } from '../validation.js';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
 
 export function createRunsRoutes(runnerService, options = {}) {
@@ -12,9 +12,13 @@ export function createRunsRoutes(runnerService, options = {}) {
   const { asyncHandler = defaultAsyncHandler, io = null, ServerError = ToolkitHttpError, withRunAdmission = handler => handler } = options;
 
   router.get('/', asyncHandler(async (req, res) => {
-    const limit = parseInt(req.query.limit) || 50;
-    const offset = parseInt(req.query.offset) || 0;
-    const source = req.query.source || 'all';
+    const query = validate(runsListQuerySchema, req.query);
+    if (!query.success) {
+      throw new ServerError('Invalid query', { status: 400, code: 'VALIDATION_ERROR', context: { details: query.errors } });
+    }
+    const limit = parseInt(query.data.limit) || 50;
+    const offset = parseInt(query.data.offset) || 0;
+    const source = query.data.source || 'all';
 
     const result = await runnerService.listRuns(limit, offset, source);
     res.json(result);
@@ -234,7 +238,11 @@ export function createRunsRoutes(runnerService, options = {}) {
   }));
 
   router.delete('/', asyncHandler(async (req, res) => {
-    if (req.query.filter !== 'failed') {
+    const query = validate(runsBulkDeleteQuerySchema, req.query);
+    if (!query.success) {
+      throw new ServerError('Invalid query', { status: 400, code: 'VALIDATION_ERROR', context: { details: query.errors } });
+    }
+    if (query.data.filter !== 'failed') {
       throw new ServerError('Only filter=failed is supported for bulk delete', { status: 400 });
     }
 

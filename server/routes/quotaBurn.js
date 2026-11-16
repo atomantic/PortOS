@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { refreshQuerySchema } from '../lib/routeQueryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRearmSchema, quotaBurnRunSchema } from '../lib/validation.js';
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
@@ -20,7 +21,8 @@ const router = Router();
 // why each family would or wouldn't burn, recent runs). `?refresh=1` re-scrapes
 // provider usage; the default read is cached so opening the page is free.
 router.get('/', asyncHandler(async (req, res) => {
-  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const { refresh: refreshParam } = validateRequest(refreshQuerySchema, req.query);
+  const refresh = refreshParam === '1' || refreshParam === 'true';
   // getQuotaBurnStatus returns the config it already loaded — reading the file a
   // second time here would just normalize the same bytes twice per page load.
   res.json(await getQuotaBurnStatus({ refresh }));

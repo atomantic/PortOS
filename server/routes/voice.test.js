@@ -435,6 +435,11 @@ describe('Voice Routes', () => {
   });
 
   describe('GET /api/voice/voices', () => {
+  it('rejects a repeated query key with 400 (voices, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/voice/voices?engine=a&engine=b');
+    expect(res.status).toBe(400);
+  });
+
     it('delegates to listVoices with the requested engine and returns { engine, voices } shape', async () => {
       tts.listVoices.mockResolvedValue({ engine: 'kokoro', voices: [{ id: 'af_heart' }] });
       const res = await request(buildApp()).get('/api/voice/voices?engine=kokoro');

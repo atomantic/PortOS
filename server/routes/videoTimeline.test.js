@@ -28,6 +28,11 @@ describe('videoTimeline routes', () => {
   });
 
   describe('GET /projects', () => {
+  it('rejects a repeated query key with 400 (projects, #16428)', async () => {
+    const res = await request(app).get('/api/video-timeline/projects?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
     it('returns the project list', async () => {
       svc.listProjects.mockResolvedValue([{ id: 'a', name: 'A' }]);
       const r = await request(app).get('/api/video-timeline/projects');

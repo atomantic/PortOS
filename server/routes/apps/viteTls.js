@@ -7,6 +7,7 @@
  */
 
 import { Router } from 'express';
+import { viteHostCheckQuerySchema } from '../../lib/routeQueryValidation.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
@@ -91,7 +92,8 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
 // the Dev-UI launch guard and the remediation UI in the app detail view.
 router.get('/:id/vite-host-check', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
-  const host = typeof req.query.host === 'string' ? req.query.host.trim() : '';
+  const { host: rawHost } = validateRequest(viteHostCheckQuerySchema, req.query);
+  const host = rawHost ? rawHost.trim() : '';
   const extraDirs = (app.processes || []).map((p) => p.cwd).filter(Boolean);
   const status = await checkViteHost(app.repoPath, host, { extraDirs });
   res.json({ host, ...status });

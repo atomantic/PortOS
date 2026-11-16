@@ -86,6 +86,11 @@ const fleetResult = (overrides = {}) => ({
 });
 
 describe('usage routes', () => {
+  it('rejects a repeated query key with 400 (claude-code, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/usage/claude-code?refresh=1&refresh=1');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     getFleetUsage.mockResolvedValue(fleetResult());

@@ -58,6 +58,11 @@ describe('GET /api/story-builder/steps', () => {
 });
 
 describe('GET /api/story-builder', () => {
+  it('rejects a repeated query key with 400 (list, #16428)', async () => {
+    const res = await request(makeApp()).get('/api/story-builder?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
   it('returns the full sessions array by default', async () => {
     const res = await request(makeApp()).get('/api/story-builder');
     expect(res.status).toBe(200);

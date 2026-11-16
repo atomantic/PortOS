@@ -118,6 +118,11 @@ describe('Public Voice API (/api/voice/public)', () => {
   });
 
   describe('GET /voices', () => {
+  it('rejects a repeated query key with 400 (voices, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/voice/public/voices?engine=a&engine=b');
+    expect(res.status).toBe(400);
+  });
+
     it('delegates to listVoices with the requested engine', async () => {
       tts.listVoices.mockResolvedValue({ engine: 'piper', voices: [{ id: 'af_heart' }] });
       const res = await request(buildApp()).get('/api/voice/public/voices?engine=piper');

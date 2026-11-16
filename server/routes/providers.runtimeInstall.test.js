@@ -77,6 +77,11 @@ const makeChild = () => {
 };
 
 describe('Provider runtime installer routes', () => {
+  it('rejects a repeated query key with 400 (runtimes/install, #16428)', async () => {
+    const res = await request(app()).post('/api/providers/runtimes/install?runtime=a&runtime=b');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     // The single-flight guard is module state shared with Models → Harnesses; a

@@ -7,6 +7,7 @@
  */
 
 import { Router } from 'express';
+import { confirmQuerySchema } from '../lib/routeQueryValidation.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
@@ -159,7 +160,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => withBackupAssetPubl
 
 // DELETE /api/uploads - Delete all files
 router.delete('/', asyncHandler(async (req, res) => withBackupAssetPublication(async () => {
-  const { confirm } = req.query;
+  const { confirm } = validateRequest(confirmQuerySchema, req.query);
 
   if (confirm !== 'true') {
     throw new ServerError('Add ?confirm=true to delete all uploads', { status: 400, code: 'CONFIRMATION_REQUIRED' });

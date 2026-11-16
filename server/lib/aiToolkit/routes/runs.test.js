@@ -56,6 +56,16 @@ const post = (app, overrides = {}) =>
     .send({ providerId: 'p1', model: REQUEST_MODEL, prompt: 'hello', workspaceName: 'ws', workspacePath: '/srv/repos/ws', ...overrides });
 
 describe('POST /api/runs — model execution', () => {
+  it('rejects a repeated query key with 400 (list, #16428)', async () => {
+    const res = await request(makeApp(runData({ providerType: 'api' })).app).get('/api/runs?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a repeated query key with 400 (bulk delete, #16428)', async () => {
+    const res = await request(makeApp(runData({ providerType: 'api' })).app).delete('/api/runs?filter=failed&filter=failed');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => vi.clearAllMocks());
 
   describe('(a) non-fallback runs honor the request model', () => {

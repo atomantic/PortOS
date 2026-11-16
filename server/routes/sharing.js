@@ -13,6 +13,7 @@
  */
 
 import { Router } from 'express';
+import { sharingSubscriptionsQuerySchema } from '../lib/routeQueryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import {
@@ -142,10 +143,11 @@ router.post('/buckets/:id/inbox/:manifestId/dismiss', asyncHandler(async (req, r
  * record change (debounced ~3s); unsubscribing removes the bucket-side file.
  */
 router.get('/subscriptions', asyncHandler(async (req, res) => {
+  const { bucketId, recordKind, recordId } = validateRequest(sharingSubscriptionsQuerySchema, req.query);
   const filter = {};
-  if (req.query.bucketId) filter.bucketId = String(req.query.bucketId);
-  if (req.query.recordKind) filter.recordKind = String(req.query.recordKind);
-  if (req.query.recordId) filter.recordId = String(req.query.recordId);
+  if (bucketId) filter.bucketId = bucketId;
+  if (recordKind) filter.recordKind = recordKind;
+  if (recordId) filter.recordId = recordId;
   const subscriptions = await listSubscriptions(filter);
   res.json({ subscriptions });
 }));

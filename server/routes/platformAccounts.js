@@ -5,6 +5,7 @@
  */
 
 import { Router } from 'express';
+import { platformAccountsQuerySchema } from '../lib/routeQueryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, platformAccountSchema, accountRegistrationSchema } from '../lib/validation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
@@ -17,7 +18,7 @@ const router = Router();
 
 // GET / - Get all platform accounts
 router.get('/', asyncHandler(async (req, res) => {
-  const { agentId, platform } = req.query;
+  const { agentId, platform } = validateRequest(platformAccountsQuerySchema, req.query);
 
   let accounts;
   if (agentId) {
