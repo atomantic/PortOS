@@ -186,7 +186,7 @@ export function deliverPeerSyncEvent(io, event) {
 
 async function deliverNow(io, event) {
   try {
-    const receives = RECEIVER_GATE_FOR_EVENT[event?.category];
+    const receives = Object.hasOwn(RECEIVER_GATE_FOR_EVENT, event?.category) ? RECEIVER_GATE_FOR_EVENT[event.category] : null;
     if (!io || !receives) return 0;
     const sockets = await io.in(PEER_SYNC_ROOM).fetchSockets();
     if (sockets.length === 0) return 0;

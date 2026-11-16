@@ -97,6 +97,18 @@ describe('enqueueStoryboardSceneVideo', () => {
   });
 });
 
+describe('enqueueStoryboardSceneVideo aspect ratio', () => {
+  it('falls back to 16:9 for an unknown or Object.prototype aspect ratio', async () => {
+    for (const aspectRatio of ['nope', 'constructor', 'toString']) {
+      enqueueJobMock.mockClear();
+      await enqueueStoryboardSceneVideo('iss-test', 0, { aspectRatio });
+      expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ width: 768, height: 432 }),
+      }));
+    }
+  });
+});
+
 describe('enqueueStoryboardShotStartFrame', () => {
   it('rejects non-integer indices', async () => {
     await expect(enqueueStoryboardShotStartFrame('iss-test', 'nope', 0)).rejects.toThrow(/non-negative integers/);

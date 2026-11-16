@@ -126,7 +126,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     characterAppearances: scene.characterAppearances,
   });
 
-  const aspectRatio = ASPECT_PRESETS[options.aspectRatio] ? options.aspectRatio : '16:9';
+  const aspectRatio = Object.hasOwn(ASPECT_PRESETS, options.aspectRatio) ? options.aspectRatio : '16:9';
   const { width, height } = ASPECT_PRESETS[aspectRatio];
   const modelId = options.modelId || settings.videoGen?.defaultModelId || getDefaultVideoModelId();
   // Validate the model exists for this platform before enqueueing — otherwise

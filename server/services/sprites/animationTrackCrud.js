@@ -34,7 +34,7 @@ import { atomicWrite, pathExists } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  WALK_TRACK, AUTHORED_TRACK_FIELDS, assertAnimationTrackRows, deriveTrackFields,
+  WALK_TRACK, AUTHORED_TRACK_FIELDS, assertAnimationTrackRows, deriveTrackFields, isAnimationTrack,
 } from './animationTracks.js';
 import {
   ANIMATION_TRACK_STORE_REL,
@@ -185,7 +185,7 @@ function assertTableValid(tracks, rows) {
  * of a 404 for a track they can see.
  */
 function refuseBuiltin(trackId, tracks) {
-  const row = tracks[trackId];
+  const row = isAnimationTrack(trackId, tracks) ? tracks[trackId] : undefined;
   if (trackId === WALK_TRACK || (row && row.builtin)) {
     throw new ServerError(
       `'${trackId}' is a built-in animation type and cannot be edited or deleted`,
@@ -197,7 +197,7 @@ function refuseBuiltin(trackId, tracks) {
 /** 409 for a built-in, 404 for a well-formed id that names no stored track. */
 function requireStored(trackId, tracks) {
   refuseBuiltin(trackId, tracks);
-  const row = tracks[trackId];
+  const row = isAnimationTrack(trackId, tracks) ? tracks[trackId] : undefined;
   if (!row) {
     throw new ServerError(
       `Unknown animation type '${trackId}' — the registered types are: ${Object.keys(tracks).join(', ')}`,
@@ -238,7 +238,7 @@ const mutationResult = () => ({ ...listAnimationTracks(), restartRequired: true 
 export function createAnimationTrack(input) {
   return queueStoreWrite(async () => {
     const tracks = effectiveTracksOrThrow();
-    if (tracks[input.id]) {
+    if (isAnimationTrack(input.id, tracks)) {
       refuseBuiltin(input.id, tracks);
       throw new ServerError(
         `Animation type '${input.id}' already exists — edit it instead, or choose another id`,

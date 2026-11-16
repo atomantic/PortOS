@@ -12,7 +12,7 @@
  */
 
 import { ServerError } from '../lib/errorHandler.js';
-import { ENGINES, getEngine, composeMusicLyrics } from './pipeline/musicGen.js';
+import { findEngine, getEngine, composeMusicLyrics } from './pipeline/musicGen.js';
 import { listEngineModels } from './audioModels.js';
 import {
   FEDERATED_MEDIA_WIRE_VERSION,
@@ -145,7 +145,7 @@ export async function queueMusicGeneration(input) {
     // Reject an unknown engine explicitly rather than letting getEngine() fall
     // back to the default — a typo/stale client would otherwise render with the
     // wrong local backend. An absent engine still selects the local default.
-    if (body.engine !== undefined && !ENGINES[body.engine]) {
+    if (body.engine !== undefined && !findEngine(body.engine)) {
       throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
     }
     engine = getEngine(body.engine);

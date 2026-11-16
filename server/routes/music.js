@@ -38,7 +38,7 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { createLineReader } from '../lib/streamLines.js';
 import { SETUP_IMAGE_VIDEO_SCRIPT, spawnSetupScript, stopSetupScript } from '../lib/setupScriptRunner.js';
 import {
-  ENGINES, composeMusicLyrics, isEngineHealthy, isEnginePlatformSupported,
+  ENGINES, findEngine, composeMusicLyrics, isEngineHealthy, isEnginePlatformSupported,
   enginePlatformLabel, resolveEngineVramReadiness, MUSIC_VRAM_READINESS,
   formatEngineVramReadinessMessage,
 } from '../services/pipeline/musicGen.js';
@@ -75,7 +75,7 @@ router.get('/engines', asyncHandler(async (_req, res) => {
 // avoids a second Node implementation drifting from scripts/setup-image-video.sh.
 
 const requireMusicEngine = (runtime) => {
-  const engine = ENGINES[runtime];
+  const engine = findEngine(runtime);
   if (!engine) {
     throw new ServerError(
       `Unknown music runtime: ${runtime}. Expected one of: ${Object.keys(ENGINES).join(', ')}`,
@@ -241,7 +241,7 @@ const installSchema = z.object({
 // GET /api/music/models/:engine → the merged shipped+user model list for one
 // engine (also exposed via /engines, but handy for a focused refresh).
 router.get('/models/:engine', asyncHandler(async (req, res) => {
-  if (!ENGINES[req.params.engine]) throw new ServerError('Unknown audio engine', { status: 404, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
+  if (!findEngine(req.params.engine)) throw new ServerError('Unknown audio engine', { status: 404, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
   res.json({ models: await listEngineModels(req.params.engine) });
 }));
 
@@ -255,14 +255,14 @@ router.get('/models/:engine', asyncHandler(async (req, res) => {
 // a completed install is always registered, a failed one never is.
 router.post('/models', asyncHandler(async (req, res) => {
   const body = validateRequest(installSchema, req.body ?? {});
-  if (!ENGINES[body.engine]) throw new ServerError('Unknown audio engine', { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
+  const engine = findEngine(body.engine);
+  if (!engine) throw new ServerError('Unknown audio engine', { status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
   // Reject install for engines that can't render a custom HF checkpoint (e.g.
   // ACE-Step, which uses a fixed checkpoint_dir) — otherwise a downloaded repo
   // would register as selectable but the sidecar would ignore it.
-  const engine = ENGINES[body.engine];
   const fixedModel = engine.fixedModelInstall ? engine.models.find((model) => model.repo === body.repo) || null : null;
   if (!engine.customModels && !fixedModel) {
-    throw new ServerError(`${ENGINES[body.engine].name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
+    throw new ServerError(`${engine.name} does not support custom HuggingFace models`, { status: 400, code: 'AUDIO_MODEL_ENGINE_FIXED' });
   }
   if (!isValidRepoId(body.repo)) throw new ServerError('Invalid HuggingFace repo id', { status: 400, code: 'AUDIO_MODEL_INVALID_REPO' });
   // Register first so it's durable before the stream signals completion.
@@ -471,7 +471,7 @@ const generateSchema = z.object({
 // Local caption preview: pure composition, no queue, peer probe or provider work.
 router.post('/prompt-preview', asyncHandler(async (req, res) => {
   const body = validateRequest(generateSchema, req.body ?? {});
-  if (body.engine !== undefined && !ENGINES[body.engine]) {
+  if (body.engine !== undefined && !findEngine(body.engine)) {
     throw new ServerError(`Unknown audio engine: ${body.engine}`, { status: 400, code: 'PIPELINE_MUSIC_UNKNOWN_ENGINE' });
   }
   res.json({

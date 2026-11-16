@@ -370,11 +370,17 @@ export const ENGINES = Object.freeze({
 
 export const DEFAULT_ENGINE_ID = 'musicgen';
 
+// Own-key lookup into ENGINES: request-supplied ids such as "constructor" or
+// "__proto__" must read as unknown, never resolve to an Object.prototype member.
+export function findEngine(engineId) {
+  return typeof engineId === 'string' && Object.hasOwn(ENGINES, engineId) ? ENGINES[engineId] : null;
+}
+
 // Resolve a requested engine id to its registry entry, falling back to the
 // default engine for unknown/absent ids (the route validates against the known
 // set, but generateMusic can be called directly).
 export function getEngine(engineId) {
-  return ENGINES[engineId] || ENGINES[DEFAULT_ENGINE_ID];
+  return findEngine(engineId) || ENGINES[DEFAULT_ENGINE_ID];
 }
 
 // Look up a model within a specific engine. Returns null for unknown ids so the

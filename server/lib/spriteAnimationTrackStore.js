@@ -95,7 +95,7 @@ function loadStoredRows() {
     if (id === WALK_TRACK) {
       throw new Error(`${ANIMATION_TRACK_STORE_REL}: '${WALK_TRACK}' is the mandatory built-in track and cannot be redefined by a stored row`);
     }
-    if (byId[id]) throw new Error(`${ANIMATION_TRACK_STORE_REL}: track '${id}' is defined twice`);
+    if (Object.hasOwn(byId, id)) throw new Error(`${ANIMATION_TRACK_STORE_REL}: track '${id}' is defined twice`);
     byId[id] = normalizeStoredRow(raw);
   }
   return Object.freeze(byId);
