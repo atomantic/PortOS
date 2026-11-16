@@ -98,7 +98,7 @@ function useDocumentPlayback(project) {
     // A drawing edit keeps the audio/player mounted while its new data arrives.
     setPlayback(previous => previous?.target === target ? previous : null);
     getMusicVideoCompositionPlayback(project.id, { silent: true })
-      .then((result) => { if (active) setPlayback({ target, native: result?.native === true, data: result?.data }); })
+      .then((result) => { if (active) setPlayback({ target, native: result?.native === true, data: result?.data, reason: result?.reason, file: result?.file }); })
       .catch(() => { if (active) setPlayback({ target, native: false }); });
     return () => { active = false; };
   }, [project.id, directory, target, revision]);

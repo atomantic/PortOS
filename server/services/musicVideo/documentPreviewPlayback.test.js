@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
-vi.mock('./compositionDocument.js', () => ({ isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine') }));
+vi.mock('./compositionDocument.js', () => ({
+  isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine'),
+  isStaleShippedHelper: (_rel, bytes) => bytes.toString().startsWith('// older shipped helper'),
+}));
 import { adaptStagedDocumentPreview, shippedLayeredDocument } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
@@ -40,11 +43,15 @@ describe('recognized staged composition playback capability', () => {
     const custom = await staged();
     await writeFile(join(custom, 'cameraRig.js'), 'globalThis.custom = true;');
     const before = await readFile(join(custom, 'engine.js'));
-    expect(await adaptStagedDocumentPreview(custom)).toMatchObject({ adapted: false, reason: 'custom-helper' });
+    expect(await adaptStagedDocumentPreview(custom)).toMatchObject({ adapted: false, reason: 'custom-helper', file: 'cameraRig.js' });
     expect(await readFile(join(custom, 'engine.js'))).toEqual(before);
     const altered = await staged();
     await writeFile(join(altered, 'index.html'), '<script src="engine.js"></script><script>sideEffect()</script>');
     expect(await adaptStagedDocumentPreview(altered)).toMatchObject({ adapted: false, reason: 'custom-entrypoint' });
+    // An earlier shipped helper is named too, and flagged so the player offers the engine update.
+    const staleHelper = await staged();
+    await writeFile(join(staleHelper, 'lyricType.js'), '// older shipped helper\n');
+    expect(await shippedLayeredDocument(staleHelper)).toEqual({ shipped: false, reason: 'custom-helper', file: 'lyricType.js', upgradable: true });
     const generated = await staged();
     const index = await readFile(join(generated, 'index.html'), 'utf8');
     await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
@@ -60,7 +67,7 @@ describe('recognized staged composition playback capability', () => {
     expect(await readFile(join(root, 'engine.js'))).toEqual(before);
     const custom = await staged();
     await writeFile(join(custom, 'cameraRig.js'), 'globalThis.custom = true;');
-    expect(await shippedLayeredDocument(custom)).toEqual({ shipped: false, reason: 'custom-helper' });
+    expect(await shippedLayeredDocument(custom)).toEqual({ shipped: false, reason: 'custom-helper', file: 'cameraRig.js' });
     const generated = await staged();
     const index = await readFile(join(generated, 'index.html'), 'utf8');
     await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));

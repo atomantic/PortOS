@@ -504,7 +504,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
       page, scratchRoot: staged.scratchRoot, playbackAdapter, unsupportedEffects,
       ...(playbackAvailable ? { playback: { ...playbackAdapter, version: 1 } } : {}),
       // Why live playback falls back to exact per-frame seeks, so the player can name it.
-      ...(!playbackAvailable && playbackAdapter?.reason ? { playbackFallback: { reason: playbackAdapter.reason, upgradable: playbackAdapter.upgradable === true } } : {}),
+      ...(!playbackAvailable && playbackAdapter?.reason ? { playbackFallback: { reason: playbackAdapter.reason, upgradable: playbackAdapter.upgradable === true, ...(playbackAdapter.file ? { file: playbackAdapter.file } : {}) } } : {}),
       width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.durationSec,
     };
   } catch (error) {
