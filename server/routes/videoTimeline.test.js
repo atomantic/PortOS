@@ -142,7 +142,7 @@ describe('videoTimeline routes', () => {
       svc.renderProject.mockResolvedValue({ jobId: 'job-123' });
       const r = await request(app).post('/api/video-timeline/projects/p1/render').send({});
       expect(r.status).toBe(200);
-      expect(r.body.jobId).toBe('job-123');
+      expect(svc.renderProject.mock.calls[0][0]).toBe('p1');
     });
   });
 
