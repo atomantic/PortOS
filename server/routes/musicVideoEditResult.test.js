@@ -123,6 +123,21 @@ describe('board edit replies carry what a reload would show', () => {
     expect(approved.reply.counts).toMatchObject({ approved: 1 });
   });
 
+  // Uniquely catches a take decision whose reply leaves readiness or neighbour staleness as it was.
+  it('each take decision folds into the reloaded board', async () => {
+    const takes = (await read()).scenes.find((scene) => scene.sceneId === 'b').takes;
+    const spare = takes.find((take) => take.assetId === 'spare.png');
+    const selected = await expectReloadParity(() => request(app).post(`${base()}/scenes/b/takes/${spare.takeId}/select`).send({}));
+    expect(selected.reply.referenceImageId).toBe('spare.png');
+    const reviewed = await expectReloadParity(() => request(app).patch(`${base()}/scenes/b/takes/${spare.takeId}`).send({ note: 'Example note' }));
+    expect(reviewed.reply.edit.sceneIds).toEqual(['a', 'b', 'c']);
+    await request(app).patch(`${base()}/scenes/b`).send({ endImageId: 'c.png' });
+    await expectReloadParity(() => request(app).post(`${base()}/scenes/b/swap-frames`).send({}));
+    await expectReloadParity(() => request(app).post(`${base()}/scenes/b/takes/reject-unused`).send({}));
+    const marked = await expectReloadParity(() => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'c.png' }], mark: 'bad' }));
+    expect(marked.reply.assetMarks).toBeTruthy();
+  });
+
   it('the change broadcast names the tab that asked, and only that one', async () => {
     const seen = [];
     const listen = (event) => { if (event.recordId === project.id) seen.push(event.origin ?? null); };

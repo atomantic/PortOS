@@ -1444,6 +1444,34 @@ describe('shot edits apply their reply without a project read', () => {
     expect(reads()).toBe(loaded);
   });
 
+  // Uniquely catches a take decision that patches only its shot, leaving a following board edit to reload the project.
+  it('a take decision applies its edit result, so the next board edit still needs no project read', async () => {
+    await asThisTab();
+    const takes = [
+      { takeId: 't-a', kind: 'image', assetId: 'take-a.png', source: 'generated', provider: 'portos', status: 'candidate', note: null },
+      { takeId: 't-b', kind: 'image', assetId: 'take-b.png', source: 'imported', provider: 'midjourney', status: 'candidate', note: null },
+    ];
+    const withTakes = { ...first, referenceImageId: 'take-a.png', videoHistoryId: null, takes };
+    const takeBoard = { ...board, scenes: [withTakes, second] };
+    const chosen = { ...withTakes, referenceImageId: 'take-b.png' };
+    selectMusicVideoSceneTake.mockResolvedValueOnce({ ...chosen, edit: editResult([chosen, second], ['s1', 's2'], { updatedAt: '2026-01-01T00:00:01.000Z' }) });
+    const moved = [{ ...chosen, endSec: 10.042 }, { ...second, startSec: 10.042 }];
+    moveMusicVideoSceneStart.mockResolvedValue({ scene: moved[1], previous: moved[0], edit: editResult(moved, ['s1', 's2'], { updatedAt: '2026-01-01T00:00:02.000Z' }) });
+    await openProject(takeBoard, 'produce');
+    const loaded = reads();
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 1/ })));
+    await showFrames();
+    const strip = screen.getByRole('list', { name: /Frame takes/ });
+    fireEvent.click(within(strip).getByRole('button', { name: /Use/ }));
+    await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-2', 's1', 't-b', ownOrigin));
+    await waitFor(() => expect(within(strip).getAllByText('In use', { selector: 'button > span' })).toHaveLength(1));
+    await act(async () => fireEvent.click(await screen.findByRole('button', { name: /^Open Shot 2/ })));
+    fireEvent.click(screen.getByRole('button', { name: 'Start one frame later' }));
+    await waitFor(() => expect(moveMusicVideoSceneStart).toHaveBeenCalled());
+    await settle();
+    expect(reads()).toBe(loaded);
+  });
+
   it('reloads after a refused (409) edit, and after a reply older than the board', async () => {
     await asThisTab();
     const conflict = Object.assign(new Error('The shot changed'), { status: 409 });

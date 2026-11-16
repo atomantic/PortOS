@@ -645,19 +645,27 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
 // those read every linked catalog record and stat its media, twice per click.
 const SCENE_ONLY = Object.freeze({ sceneOnly: true });
 
+// A take decision write. With `answerEdit` it answers with the edit result (editResult.js) too, so the
+// board shows the readiness and neighbour take staleness the decision changed without a project read.
+async function takeDecisionWrite(id, transform, answerEdit) {
+  if (!answerEdit) return mutateProjectRecord(id, transform, SCENE_ONLY);
+  const { outcome, edit } = await editWrite(id, transform);
+  return withEditResult(outcome, edit);
+}
+
 /**
  * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks,
  * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
  */
-export async function markMediaPoolAssets(id, keys, mark, options = {}) {
+export async function markMediaPoolAssets(id, keys, mark, options = {}, { edit: answerEdit = false } = {}) {
   const { markPoolAssets } = await import('./mediaPool.js');
   let resultChanges = [];
-  const { project, scenes } = await mutateProjectRecord(id, (current) => {
+  const { project, scenes, edit } = await takeDecisionWrite(id, (current) => {
     const outcome = markPoolAssets(current, keys, mark, options);
     resultChanges = outcome.changes || [];
     return outcome;
-  }, SCENE_ONLY);
-  return { assetMarks: project.assetMarks || {}, scenes, changes: resultChanges };
+  }, answerEdit);
+  return { assetMarks: project.assetMarks || {}, scenes, changes: resultChanges, ...(edit ? { edit } : {}) };
 }
 
 // ---- scene takes (#8965) ----
@@ -697,10 +705,10 @@ export async function appendTakesAcrossScenes(id, items) {
 }
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
-export async function selectSceneTake(id, sceneId, takeId, options = {}) {
+export async function selectSceneTake(id, sceneId, takeId, options = {}, { edit: answerEdit = false } = {}) {
   const { selectSceneTake: select } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId, options), SCENE_ONLY);
-  return scene;
+  const { scene, edit } = await takeDecisionWrite(id, (current) => select(current, sceneId, takeId, options), answerEdit);
+  return answerEdit ? { scene, edit } : scene;
 }
 
 /**
@@ -756,23 +764,25 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
 }
 
 /** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
-export async function rejectUnusedSceneTakes(id, sceneId) {
+export async function rejectUnusedSceneTakes(id, sceneId, { edit: answerEdit = false } = {}) {
   const { rejectUnusedTakes } = await import('./takes.js');
-  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId), SCENE_ONLY);
-  return { scene, rejected };
+  const { scene, rejected, edit } = await takeDecisionWrite(id, (current) => rejectUnusedTakes(current, sceneId), answerEdit);
+  return { scene, rejected, ...(edit ? { edit } : {}) };
 }
 
 /** Swap a shot's start and end frames (and their prompts). Returns the scene. */
-export async function swapProjectSceneFrames(id, sceneId) {
+export async function swapProjectSceneFrames(id, sceneId, { edit: answerEdit = false } = {}) {
   const { swapSceneFrames } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => swapSceneFrames(current, sceneId), SCENE_ONLY);
-  return scene;
+  const { scene, edit } = await takeDecisionWrite(id, (current) => swapSceneFrames(current, sceneId), answerEdit);
+  return answerEdit ? { scene, edit } : scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
-export async function reviewSceneTake(id, sceneId, takeId, review) {
+export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answerEdit = false } = {}) {
   const { reviewSceneTake: reviewTake } = await import('./takes.js');
-  const { project, scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), SCENE_ONLY);
+  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit);
+  // The edit result's copy of the shot is presented as GET presents it (catalog check-in included).
+  if (answerEdit) return { scene: edit.scenes.find((entry) => entry.sceneId === sceneId) || scene, edit };
   // A scene-only write presents takes against the stored record. A confirmation's reply is what the
   // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
   if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;
