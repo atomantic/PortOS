@@ -1,54 +1,43 @@
 /**
  * Creative Commission → Creative Director project control.
  *
- * A commission fire mints a CD project and the advance loop drives it from
- * there. Two things the commission must still be able to do to that work, and
- * the seam both run on:
+ * A commission fire mints a CD project and the advance loop drives it from there. Two
+ * things the commission must still do to that work:
  *
- *   - **Stop it.** Pausing or deleting a commission used to cancel only the CRON.
- *     The projects already spawned kept re-dispatching their cognitive stages,
- *     and the orphan sweeps (boot + the 15-minute health check in cos.js) kept
- *     respawning the agent tasks behind them — so a commission with a bad brief
- *     could not actually be stopped. `stopCommissionProjects` runs the CD hard
- *     stop over everything the commission spawned.
+ *   - **Stop it.** Pausing or deleting a commission cancels the cron, but projects already
+ *     spawned keep re-dispatching and the orphan sweeps (boot + the 15-minute health check
+ *     in cos.js) keep respawning their agent tasks. `stopCommissionProjects` runs the CD
+ *     hard stop over everything the commission spawned.
  *
- *   - **Re-provider it.** The commission's LLM pin is resolved at DISPATCH time
- *     (agentBridge → `commissionStagePin` below), so an edit reaches every
- *     not-yet-dispatched stage with no write and no sweep. The one thing a live
- *     read cannot fix is a task ALREADY handed to the runner: its provider is
- *     frozen in the task's own metadata, and the orphan sweep respawns it
- *     verbatim. `restartCommissionStages` retires exactly those.
+ *   - **Re-provider it.** The LLM pin is resolved at DISPATCH time (agentBridge →
+ *     `commissionStagePin`), so an edit reaches every not-yet-dispatched stage. A task
+ *     ALREADY handed to the runner has its provider frozen in its metadata and is respawned
+ *     verbatim by the orphan sweep; `restartCommissionStages` retires exactly those.
  *
- * The link is `project.commissionId`, stamped at fire time. The commission's run
- * ledger is NOT the link: it is capped at MAX_PERSISTED_RUNS, so a project still
- * wedged after that many fires — the precise case this module exists for — has
- * already fallen out of it, and a project a plan step spawns indirectly
- * (bridgeFromIssue) never enters it at all. The ledger is still unioned in as a
- * compatibility path for projects minted before the back-pointer existed.
+ * The link is `project.commissionId`, stamped at fire time. The run ledger is NOT the
+ * link: it is capped at MAX_PERSISTED_RUNS, so a long-wedged project has fallen out of it,
+ * and a project spawned indirectly (bridgeFromIssue) never enters it. It is still unioned
+ * in for projects minted before the back-pointer existed.
  *
- * Everything here runs OUTSIDE the Express request lifecycle (the store's
- * `commission:changed` bus) — no path throws out.
+ * Runs OUTSIDE the Express request lifecycle (the store's `commission:changed` bus), so
+ * no path throws out.
  */
 
 import { commissionStore, sanitizeCommission, commissionEvents } from './store.js';
 import { PROJECT_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 
-// The CD cognitive stages a commission's single pin drives. `evaluation` is
-// deliberately absent — it is a vision API call, not a CoS agent, and pinning it
-// to a CLI/TUI provider would trip agentBridge's harness-boundary guard.
+// The CD cognitive stages a commission's single pin drives. `evaluation` is absent: it is a
+// vision API call, not a CoS agent, and a CLI/TUI pin would trip agentBridge's harness-boundary guard.
 export const COMMISSION_PINNED_STAGES = ['treatment', 'plan'];
 
-// Statuses in which a project is still being driven by the advance loop, so a
-// stage restart should hand it straight back. A `paused` project keeps the fresh
-// provider but is NOT auto-resumed — the user parked it, and Resume is theirs.
+// Statuses in which the advance loop still drives a project, so a stage restart hands it
+// straight back. A `paused` project keeps the fresh provider but is NOT auto-resumed.
 const ADVANCING_PROJECT_STATUSES = new Set(['planning', 'rendering', 'stitching']);
 
 /**
- * Read a commission by id INCLUDING a tombstoned one — the delete path runs
- * AFTER the tombstone lands and still needs the record. Reads raw (not
- * `getCommission`) deliberately: these paths only need the machine-local
- * assignment, and must not drag the federated feedback hydration onto an
- * event-bus handler or onto every agent dispatch.
+ * Read a commission by id INCLUDING a tombstoned one (the delete path runs after the
+ * tombstone lands). Reads raw, not `getCommission`, so the federated feedback hydration
+ * stays off event-bus handlers and agent dispatch.
  */
 async function readCommission(id) {
   if (!id) return null;
@@ -57,21 +46,16 @@ async function readCommission(id) {
 }
 
 /**
- * The commission's live `{ providerId, model }` pin for its CD cognitive stages,
- * or `null` to inherit the install's AI Assignment. Resolved at DISPATCH, so an
- * edit to the commission reaches work already in flight without rewriting a
- * single project record.
+ * The commission's live `{ providerId, model }` pin for its CD cognitive stages, or
+ * `null` to inherit the install's AI Assignment. Resolved at DISPATCH, so an edit reaches
+ * work already in flight without rewriting any project record.
  *
- * A pin becomes unusable three ways — an api-type provider (trips agentBridge's
- * harness-boundary guard), a removed provider, or a provider the user later
- * DISABLED (the agent runner honors an explicit task pin without re-checking
- * `enabled`, so a disabled provider would keep launching commissions and defeat
- * the disable control). The UI only offers enabled agent-harness providers, but a
- * direct REST write, a provider whose type later changed to `api`, or a post-pin
- * disable could slip a bad pin past it. An unusable pin is DROPPED so the stage
- * falls back to the install default and the commission still generates rather
- * than stalling. Fail open: an unresolvable provider (toolkit hiccup) also falls
- * back.
+ * A pin is unusable when its provider is api-type (trips agentBridge's harness-boundary
+ * guard), removed, or DISABLED (the runner honors an explicit task pin without re-checking
+ * `enabled`, which would defeat the disable control). The UI offers only enabled
+ * agent-harness providers, but a REST write or later change can slip a bad pin past it. An
+ * unusable pin is DROPPED so the stage falls back to the install default; an unresolvable
+ * provider (toolkit hiccup) also falls back (fail open).
  */
 export async function commissionStagePin(commissionId) {
   const commission = await readCommission(commissionId);
@@ -92,8 +76,8 @@ export async function commissionStagePin(commissionId) {
 }
 
 /**
- * Distinct CD project ids named by a commission's run ledger, newest first. Pure.
- * The compatibility half of the lookup — see `commissionProjects`.
+ * Distinct CD project ids named by a commission's run ledger, newest first. Pure. The
+ * compatibility half of `commissionProjects`.
  */
 export function ledgerProjectIds(commission) {
   const seen = new Set();
@@ -106,17 +90,14 @@ export function ledgerProjectIds(commission) {
 }
 
 /**
- * Every live, non-terminal project a commission owns. Unions the authoritative
- * `commissionId` query with the run ledger, so projects minted before the
- * back-pointer existed are still reachable on an install that just upgraded.
+ * Every live, non-terminal project a commission owns: the authoritative `commissionId`
+ * query unioned with the run ledger (pre-back-pointer projects).
  */
 async function commissionProjects(commissionId, preread) {
   const { listProjectsByCommissionId, getProjectsByIds } = await import('../creativeDirector/local.js');
   const owned = await listProjectsByCommissionId(commissionId).catch(() => []);
-  // The ledger fallback needs the record. Callers that already hold it pass it
-  // in; the delete path does not, and reading it here (rather than making every
-  // caller remember) is what keeps pre-back-pointer projects reachable on a
-  // delete as well as a pause.
+    // The ledger fallback needs the record. Read it here rather than requiring every caller
+    // to pass it, so pre-back-pointer projects are reachable on delete as well as pause.
   const commission = preread || await readCommission(commissionId);
   const known = new Set(owned.map((p) => p.id));
   const legacyIds = ledgerProjectIds(commission).filter((id) => !known.has(id));
@@ -125,12 +106,12 @@ async function commissionProjects(commissionId, preread) {
 }
 
 /**
- * Retire the stages a commission's projects have ALREADY dispatched, so the next
- * dispatch picks up the commission's current provider instead of the one frozen
- * in the live task's metadata, then hand each project back to the advance loop.
+ * Retire the stages a commission's projects have ALREADY dispatched, so the next dispatch
+ * uses the commission's current provider instead of the one frozen in the live task's
+ * metadata, then hand each project back to the advance loop.
  *
- * Only the LLM stages are torn down — a `plan-step` run is a tool dispatch (often
- * a render already burning GPU time) and has nothing to do with the LLM pin.
+ * Only LLM stages are torn down; a `plan-step` run is a tool dispatch (often a render
+ * already burning GPU) unrelated to the LLM pin.
  *
  * @returns {Promise<{restarted: string[], checked: number}>}
  */
@@ -143,14 +124,12 @@ export async function restartCommissionStages(commissionId, commission) {
     import('../creativeDirector/planAdvance.js'),
     import('../creativeDirector/completionHook.js'),
   ]);
-  // Which advance loop owns a project depends on its shape, and BOTH shapes can
-  // carry a commissionId: a commission fire mints a directive project, but a plan
-  // step's `cd_produceVideoFromIssue` mints a legacy scene-loop teaser that
-  // inherits the same back-pointer. Handing a directive-less project to
-  // advanceAfterPlanStepSettled is a silent no-op (it returns on `!project.directive`),
-  // which would leave the stage we just retired with nothing to re-dispatch it —
-  // wedged until a manual Resume. Same branch as recovery.js and
-  // agentManagement.js#settleOrphanedCreativeDirectorRun.
+    // Which advance loop owns a project depends on its shape, and BOTH shapes can carry a
+    // commissionId: a fire mints a directive project, but a plan step's
+    // `cd_produceVideoFromIssue` mints a legacy scene-loop teaser with the same back-pointer.
+    // advanceAfterPlanStepSettled on a directive-less project silently no-ops (`!project.directive`),
+    // leaving the retired stage wedged until a manual Resume. Same branch as recovery.js and
+    // agentManagement.js#settleOrphanedCreativeDirectorRun.
   const advance = (project) => (project.directive
     ? advanceAfterPlanStepSettled(project.id)
     : advanceAfterSceneSettled(project.id));
@@ -173,13 +152,11 @@ export async function restartCommissionStages(commissionId, commission) {
 }
 
 /**
- * Hard-stop every project this commission spawned — the missing half of pausing
- * or deleting a commission. Cancelling the cron stops FUTURE fires; this stops
- * the work already running (agent processes, CoS tasks, run rows, media jobs).
+ * Hard-stop every project this commission spawned. Cancelling the cron stops FUTURE fires;
+ * this stops running work (agent processes, CoS tasks, run rows, media jobs).
  *
- * Stopped projects are parked as `paused` with the reason, NOT deleted: the
- * outputs already produced stay browsable, and the user can Resume an individual
- * project from the CD detail page if they only wanted to change the provider.
+ * Stopped projects are parked as `paused` with the reason, NOT deleted: outputs stay
+ * browsable and the user can Resume an individual project.
  *
  * @returns {Promise<{stopped: string[], checked: number}>}
  */
@@ -200,24 +177,22 @@ export async function stopCommissionProjects(commissionId, { reason = 'Commissio
   return { stopped, checked: projects.length };
 }
 
-// A commission mutation that cannot possibly change what its in-flight work
-// should be doing. `fields` is the patched key set, absent on emitters that don't
-// report one — and absent must mean "reconcile" (we cannot prove it was
-// irrelevant), never "skip".
+// A commission mutation that cannot change what in-flight work should be doing. `fields` is
+// the patched key set, absent on emitters that don't report one, and absent must mean
+// "reconcile" (irrelevance is unproven), never "skip".
 const RECONCILABLE_FIELDS = ['enabled', 'assignment'];
 
 /**
- * The `commission:changed` reconciler — the single decision table for what a
- * commission mutation must do to the work it already spawned:
+ * The `commission:changed` reconciler — the decision table for what a mutation does to
+ * the work already spawned:
  *
- *   delete            → stop everything (the user removed the job).
- *   update + disabled → stop everything (Pause means STOP, not "let it keep
- *                       retrying with no way to intervene").
- *   update + enabled  → restart the stages already dispatched, so they pick up
- *   restore             the commission's current provider on re-dispatch.
- *   create            → nothing; a brand-new commission has spawned nothing.
- *   merge (no id)     → nothing; a peer merge only carries the federated brief,
- *                       never the machine-local schedule/assignment/runs.
+ *   delete            → stop everything.
+ *   update + disabled → stop everything (Pause means STOP).
+ *   update + enabled  → restart already-dispatched stages so they pick up the
+ *   restore             commission's current provider on re-dispatch.
+ *   create            → nothing; nothing has spawned yet.
+ *   merge (no id)     → nothing; a peer merge carries only the federated brief, never
+ *                       the machine-local schedule/assignment/runs.
  *
  * Never throws — it runs on an EventEmitter callback, outside any request.
  */
@@ -232,9 +207,8 @@ export async function reconcileCommissionProjects({ id, action, fields } = {}) {
   }
   const commission = await readCommission(id);
   if (!commission) return { action: 'noop' };
-  // Tombstoned, but reached here on some action other than 'delete' (a restore
-  // that lost the LWW, a hand-fired event). Deleted outranks everything else:
-  // restarting a dead commission's stages would re-dispatch work the user removed.
+    // Tombstoned but reached on some action other than 'delete' (a restore that lost the LWW,
+    // a hand-fired event). Deleted outranks everything: don't re-dispatch work the user removed.
   if (commission.deleted) {
     await stopCommissionProjects(id, { reason: 'Creative commission deleted', commission });
     return { action: 'stopped' };
@@ -248,9 +222,8 @@ export async function reconcileCommissionProjects({ id, action, fields } = {}) {
 }
 
 /**
- * Subscribe the reconciler to every commission write. Lives here rather than in
- * the cron scheduler so that module stays about arming crons; called once at
- * import by whoever pulls this module into the boot graph.
+ * Subscribe the reconciler to every commission write. Lives here so the cron scheduler
+ * stays about arming crons; called once at import by whoever pulls this into the boot graph.
  */
 export function registerCommissionProjectReconciler() {
   commissionEvents.on('commission:changed', (change) => {
@@ -260,43 +233,28 @@ export function registerCommissionProjectReconciler() {
 }
 
 /**
- * One-shot boot backfill for projects minted BEFORE the back-pointer existed.
- * Reads the commission's run ledger and, for each project it still names:
+ * One-shot boot backfill for projects minted BEFORE the back-pointer existed. Reads the
+ * commission's run ledger and, for each project it still names:
  *
  *   1. stamps `commissionId`, and
- *   2. CLEARS the `modelOverrides.{treatment,plan}` snapshot the old fire path
- *      wrote onto it.
+ *   2. CLEARS the `modelOverrides.{treatment,plan}` snapshot the old fire path wrote.
  *
- * Both halves are needed, and (2) is the one that actually unsticks the user's
- * problem. The dispatch path only consults a commission when the project names
- * one — so without (1) a wedged project keeps its frozen provider forever. But a
- * per-project pin now outranks the commission's (it means "the user chose this in
- * the models drawer"), and every pre-change project carries one purely because
- * the fire wrote it — so without (2) the stamp would land and the stale snapshot
- * would still win, leaving the project exactly as stuck as before.
+ * Both are needed. Dispatch consults a commission only when the project names one (1), but
+ * a per-project pin now outranks the commission's (it means "chosen in the models drawer")
+ * and every pre-change project carries one purely because the fire wrote it, so without (2)
+ * the stale snapshot would still win. We cannot distinguish a machine-written snapshot from
+ * a drawer edit on a pre-change project; clearing honors the commission going forward and
+ * the user can re-set an override that will now stick.
  *
- * The trade-off is deliberate: on a pre-change project we cannot distinguish the
- * machine-written snapshot from a drawer edit made on top of it, and clearing is
- * the only choice that honors the commission going forward. A user who wants a
- * per-project override can re-set it in the drawer, where it will now stick.
+ * The ledger is capped, so only what it still remembers is recovered; a fresh fire mints a
+ * correctly-stamped project.
  *
- * The ledger is capped, so this recovers what it still remembers; anything
- * already evicted stays unlinked (nothing else can recover it, and a fresh fire
- * mints a correctly-stamped project with no snapshot at all).
+ * A commission PAUSED or DELETED before the upgrade gets its newly-linked projects stopped
+ * here: its event fired on a build with no reconciler, so nothing ever stopped that work.
  *
- * Finally, a commission that was PAUSED or DELETED before the upgrade gets its
- * newly-linked projects stopped here. Its `commission:changed` event fired on the
- * old build, which had no reconciler — so nothing ever stopped that work, and
- * without this pass it keeps re-dispatching after the user already asked for it to
- * stop. That is the exact complaint this whole change exists to answer, and on an
- * upgrading install it is the projects reachable ONLY through this backfill that
- * are still stuck.
- *
- * Pure data movement, no LLM (a stop kills processes and cancels renders; it never
- * calls a provider), so this is compliant with the no-cold-bootstrap-LLM rule.
- * Idempotent: a project that already carries the back-pointer is skipped, so a
- * re-run writes nothing and stops nothing. Best-effort — a failure leaves the
- * install exactly as it was.
+ * Pure data movement, no LLM (a stop kills processes and cancels renders), so compliant
+ * with the no-cold-bootstrap-LLM rule. Idempotent: a project already carrying the
+ * back-pointer is skipped. Best-effort: a failure leaves the install as it was.
  *
  * @returns {Promise<{stamped: number, stopped: number}>}
  */
@@ -324,9 +282,8 @@ export async function backfillProjectCommissionIds() {
         .catch((e) => { console.error(`❌ Commission back-pointer backfill: ${project.id} failed: ${e.message}`); return false; });
       if (ok) { stamped += 1; linked.push(project); }
     }
-    // A commission stopped BEFORE this build shipped never had its work stopped —
-    // the reconciler didn't exist when its pause/delete event fired. Catch up now,
-    // or the projects we just linked keep retrying forever.
+        // A commission stopped BEFORE this build never had its work stopped (no reconciler when
+        // its event fired). Catch up now or the projects we just linked keep retrying.
     if (!linked.length || (!commission.deleted && commission.enabled !== false)) continue;
     const { stopProject } = await import('../creativeDirector/stopProject.js');
     const reason = commission.deleted

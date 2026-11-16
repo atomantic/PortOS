@@ -16,12 +16,4 @@
  * counters cannot drift into disagreeing about which side of the pending/active
  * line a mid-spawn task falls on. See that file for the full contract.
  */
-export {
-  SPAWN_CLAIM_GRACE_MS,
-  spawnClaimAgeMs,
-  runningAgentsByTaskId,
-  spawningAgentForTask,
-  isSpawningTask,
-  withoutSpawningTasks,
-  unclaimedTaskIds,
-} from '../../../server/lib/cosSpawnWindow.js';
+export { runningAgentsByTaskId, isSpawningTask, withoutSpawningTasks } from '../../../server/lib/cosSpawnWindow.js';

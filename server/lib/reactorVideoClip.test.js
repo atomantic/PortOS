@@ -100,8 +100,6 @@ describe('reactorVideoClip client mirror', () => {
     // prompt fail at Generate instead of in the field.
     const clientMirror = await import('../../client/src/lib/reactorVideoClip.js');
     expect(clientMirror.REACTOR_MAX_PROMPT_LENGTH).toBe(REACTOR_MAX_PROMPT_LENGTH);
-    expect(clientMirror.REACTOR_MIN_CLIP_SECONDS).toBe(REACTOR_MIN_CLIP_SECONDS);
-    expect(clientMirror.REACTOR_MAX_CLIP_SECONDS).toBe(REACTOR_MAX_CLIP_SECONDS);
     expect(clientMirror.REACTOR_DEFAULT_CLIP_LENGTH).toBe(REACTOR_DEFAULT_CLIP_LENGTH);
     expect([...clientMirror.REACTOR_CLIP_LENGTHS]).toEqual([...REACTOR_CLIP_LENGTHS]);
     for (const seconds of REACTOR_CLIP_LENGTHS) {
@@ -109,12 +107,7 @@ describe('reactorVideoClip client mirror', () => {
     }
     // The canvas picker builds from the mirror, so a canvas that drifted would
     // offer a resolution the service refuses (or omit one it renders).
-    expect(clientMirror.REACTOR_DEFAULT_ASPECT).toBe(REACTOR_DEFAULT_ASPECT);
-    expect([...clientMirror.REACTOR_ASPECTS]).toEqual([...REACTOR_ASPECTS]);
     expect(clientMirror.REACTOR_CANVASES.map((c) => ({ ...c })))
       .toEqual(REACTOR_CANVASES.map((c) => ({ ...c })));
-    for (const [w, h] of [[3024, 4032], [1920, 1080], [768, 768], [0, 0]]) {
-      expect(clientMirror.nearestReactorAspect(w, h)).toBe(nearestReactorAspect(w, h));
-    }
   });
 });

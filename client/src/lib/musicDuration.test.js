@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-  analyzeMusicLyrics,
   recommendMinimaxDurationSec,
   MINIMAX_AUTO_MAX_DURATION_SEC,
   MINIMAX_AUTO_MIN_DURATION_SEC,
-} from './musicDuration.js';
+} from '../../../server/lib/musicDuration.js';
+import { analyzeMusicLyrics } from './musicDuration.js';
 
 describe('music duration recommendations', () => {
   it('uses lyrics and section structure to leave room for an ending', () => {

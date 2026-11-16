@@ -132,8 +132,28 @@ const SPECIFIER = /(?:\bfrom|\bimport\(|\bmock\(|\bdoMock\(|\bimportActual\(|\br
 const STAR_EXPORT = /export\s*\*\s*from\s*['"](\.[^'"]+)['"]/g;
 const REEXPORT = /export\s*\{([^}]*)\}\s*from\s*['"][^'"]+['"]/g;
 const HOOK_DECLARATION = /^export\s+(?:async\s+)?(?:function\*?|const|let|class)\s+(_[\w$]*)/gm;
-const HOOK_SCOPE = /^server\/(?:services|lib)\/(?!aiToolkit\/)[^]*\.js$/;
+const HOOK_SCOPE = /^(?:server\/(?:services|lib)\/(?!aiToolkit\/)|client\/src\/lib\/)[^]*\.js$/;
 const isTestFile = file => /\.test\.[cm]?[jt]sx?$/.test(file);
+
+// Client music-video shims, kept out of the client/src/lib slice of #16230 to
+// avoid colliding with concurrent music-video work. Shrink-only: the guard
+// fails on an entry that is no longer an offender, so delete entries as the
+// re-exports are removed.
+const REEXPORT_ALLOWLIST = new Set(Object.entries({
+  'client/src/lib/musicVideoAspect.js': ['musicVideoFrameGenSize'],
+  'client/src/lib/musicVideoAutonomous.js': ['autonomousAttentionLink', 'normalizeLocalMusicOptions'],
+  'client/src/lib/musicVideoCoverOverlay.js': ['DEFAULT_COVER_DESIGN', 'customTypeface'],
+  'client/src/lib/musicVideoCutEffects.js': ['beatToggleSwitches', 'cutEffectCuts', 'plannedCutEffect'],
+  'client/src/lib/musicVideoGrade.js': ['MUSIC_VIDEO_GRADE_MAX_GRAIN'],
+  'client/src/lib/musicVideoImageEffects.js': ['END_FRAME_IMAGE_EFFECTS', 'IMAGE_EFFECT_SEC_RANGE', 'PHOTO_SEQUENCE_RATES'],
+  'client/src/lib/musicVideoLayers.js': ['MUSIC_VIDEO_STILL_MOVES', 'MUSIC_VIDEO_TEXT_ZONES', 'LAYERED_COMPOSITION_MODES'],
+  'client/src/lib/musicVideoMotion.js': ['AUDIO_REACTIVE_PERFORMANCE_GUARD', 'MOTION_CONTINUITY_CLAUSE', 'silentMotionPrompt'],
+  'client/src/lib/musicVideoNarrativeEvents.js': ['narrativeFrameState'],
+  'client/src/lib/musicVideoSceneAttention.js': ['COVERAGE_TOLERANCE_SEC'],
+  'client/src/lib/musicVideoShotTiming.js': ['MUSIC_VIDEO_SHOT_MODES', 'approximateMotionCues', 'sceneClipLengthSec'],
+  'client/src/lib/musicVideoTransitions.js': ['MUSIC_VIDEO_GLITCH_REPEAT_SEC', 'MUSIC_VIDEO_TRANSITION_STYLES'],
+  'client/src/lib/musicVideoWipes.js': ['sceneWipe'],
+}).flatMap(([file, names]) => names.map(name => `${file}:${name}`)));
 
 function stripComments(source) {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
@@ -318,6 +338,15 @@ describe('server dead exports', () => {
     expect(callerlessReExports(files)).toEqual(['server/services/shim.js:orphan', 'server/services/shim.js:onlyTested']);
   });
 
+  it('covers client/src/lib shims and hooks', () => {
+    const files = [
+      ['client/src/lib/shim.js', "export { used, orphan } from '../../../server/lib/impl.js';\nexport function _resetClient() {}\n"],
+      ['client/src/components/Caller.jsx', "import { used } from '../lib/shim.js';\nused;\n"],
+    ];
+    expect(callerlessReExports(files)).toEqual(['client/src/lib/shim.js:orphan']);
+    expect(unreferencedTestHooks(files)).toEqual(['client/src/lib/shim.js:_resetClient']);
+  });
+
   it('ignores a re-export name that only appears in a comment or another module', () => {
     const files = [
       ['server/services/shim.js', "// export { ghost } from './impl.js';\nexport { real } from './impl.js';\n"],
@@ -342,7 +371,10 @@ describe('server dead exports', () => {
   it('keeps server re-exports used and test hooks referenced', () => {
     const files = codeFiles();
     const index = referenceIndex(files);
-    expect(callerlessReExports(files, index)).toEqual([]);
+    const reExports = callerlessReExports(files, index);
+    expect(reExports.filter(entry => !REEXPORT_ALLOWLIST.has(entry))).toEqual([]);
+    // Shrink-only: an allowlisted entry that no longer offends must be deleted.
+    expect([...REEXPORT_ALLOWLIST].filter(entry => !reExports.includes(entry))).toEqual([]);
     expect(unreferencedTestHooks(files, index)).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import GraphTab from './GraphTab';
@@ -28,7 +28,11 @@ async function renderCanvas() {
     </MemoryRouter>
   );
   await screen.findByText('1 nodes, 0 edges');
-  return container.querySelector('canvas');
+  // The render effect sizes the canvas from getBoundingClientRect (mocked 800x600) after the
+  // count text appears; hitTest maps pointers through canvas.width/height, so wait for it.
+  const canvas = container.querySelector('canvas');
+  await waitFor(() => expect(canvas.width).toBe(800));
+  return canvas;
 }
 
 const touch = (extra) => ({ pointerId: 1, pointerType: 'touch', button: 0, ...extra });

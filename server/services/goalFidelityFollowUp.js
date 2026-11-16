@@ -1,56 +1,38 @@
 /**
  * Goal-fidelity follow-up — file the finding, and/or queue the fix.
  *
- * The goal-fidelity gate (`lib/goalFidelity.js`, run from `agentFinalization`)
- * answers "did this run ship what was asked?". Until now a `rethink` verdict
- * held the run and raised a Review Hub alert, and that was the end of it: the
- * finding lived in one install's run record, where it could only be acted on by
- * the person who happened to open the agent card.
+ * The goal-fidelity gate (`lib/goalFidelity.js`, run from `agentFinalization`) answers "did this run ship what was
+ * asked?". This module is the durable half: on a verdict the user configured as actionable it can
  *
- * This module is the durable half. On a verdict the user configured as
- * actionable it can:
+ *  - FILE the finding on the project's tracker (GitHub, GitLab or JIRA, resolved from the app's own `workTracker`
+ *    so the issue lands where a claim would read it); and/or
+ *  - QUEUE a CoS follow-up task so an agent reconciles it without a human relaying the finding.
  *
- *  - FILE the finding on whichever tracker the project actually uses — GitHub,
- *    GitLab, or JIRA, resolved from the app's own `workTracker` so the issue
- *    lands where a claim would read it; and/or
- *  - QUEUE a CoS follow-up task so an agent reconciles it without a human
- *    relaying the finding by hand.
+ * The two are independent switches. Filing first lets the queued task name the issue and run the project's
+ * normal claim flow.
  *
- * The two are independent switches. Filing first means the queued task can name
- * the issue and run the project's normal claim flow instead of re-deriving the
- * work from prose.
+ * The queued task is told to CHECK THE FINDING before acting: a verdict is one local model's reading of a diff it
+ * saw without the repository, and an agent told only to reconcile will invent a change to satisfy a baseless
+ * finding. When the objective was in fact delivered, the investigator reports the blind spot instead
+ * (`services/goalFidelityCalibration.js`). The instructions come from `lib/goalFidelityCalibration.js`; this
+ * module supplies the loopback API base, which a pure builder cannot resolve.
  *
- * The queued task is told to CHECK THE FINDING before acting on it. A verdict is
- * one local model's reading of a diff it saw without the repository, and an
- * agent told only to reconcile will reconcile — inventing a change to satisfy a
- * finding that had nothing behind it. When the objective turns out to have been
- * delivered, the investigator reports the blind spot instead
- * (`services/goalFidelityCalibration.js`), which queues the fix for the detector
- * rather than for the run. The instructions come from
- * `lib/goalFidelityCalibration.js`; this module supplies the loopback API base,
- * which is the one half of it a pure builder cannot resolve.
+ * DUPLICATE SUPPRESSION is load-bearing because the producer is a scheduled unattended loop: a perpetual task
+ * drifting the same way would otherwise file the same issue every cadence. Two guards, both keyed on the
+ * fingerprint `lib/goalFidelityFollowUp.js` derives:
  *
- * DUPLICATE SUPPRESSION is the load-bearing part, because the producer is a
- * scheduled unattended loop: a perpetual task that keeps drifting the same way
- * would otherwise file the same issue every cadence, forever. Two guards, both
- * keyed on the one fingerprint `lib/goalFidelityFollowUp.js` derives:
+ *  1. the issue side lists this feature's marker LABEL across every issue STATE and reads the fingerprint back
+ *     from the rows. A label is a direct field filter: no index lag (full-text search lags minutes on GitHub and
+ *     JIRA, exactly when a schedule re-runs), every state (a human-CLOSED issue is not re-filed), and a page
+ *     bounded by our own issues;
+ *  2. the queued task goes through `fileInvestigationTask`, inheriting the shared fingerprint dedup, circuit
+ *     breaker and loop policy.
  *
- *  1. the issue side lists this feature's own marker LABEL across every issue
- *     STATE and reads the fingerprint back out of the rows. A label is a direct
- *     field filter — no index lag (a full-text search has minutes of it on both
- *     GitHub and JIRA, which is exactly when a schedule re-runs), every state
- *     (so an issue a human CLOSED is not re-filed), and a page bounded by our
- *     own issues rather than by the repo's whole backlog;
- *  2. the queued task goes through `fileInvestigationTask`, inheriting the
- *     shared fingerprint dedup, circuit breaker, and loop policy.
+ * FAIL-CLOSED on the issue side, against the usual convention: a tracker we could not read is NOT "nothing is
+ * filed", which is how a transient `gh` blip files a duplicate. Refusing costs one missed issue on a finding that
+ * will recur; filing blind costs a tracker.
  *
- * FAIL-CLOSED on the issue side, on purpose and against the usual convention: a
- * tracker we could not read is NOT "nothing is filed". That is exactly how a
- * transient `gh` blip files a duplicate. Refusing to file costs one missed
- * issue on a finding that will recur; filing blind costs a tracker.
- *
- * Nothing here can fail a run. `agentFinalization` calls this after the verdict
- * is decided, records what happened, and proceeds either way.
+ * Nothing here can fail a run: `agentFinalization` records what happened and proceeds either way.
  */
 
 import { execGh } from './github.js';
@@ -82,26 +64,19 @@ import {
 /** Rows per request for the label-filtered duplicate listing. */
 const PAGE_LIMIT = 100;
 /**
- * Hard ceiling on how many of our own filed issues the duplicate scan will read.
- *
- * `gh issue list --limit` paginates internally, so GitHub reaches this in one
- * call; GitLab and JIRA page up to it. A tracker that has this many
- * goal-fidelity issues on one repo is not a backlog, it is a runaway — and the
- * scan says so (below) rather than reading a truncated page as "nothing filed".
+ * Hard ceiling on how many of our own filed issues the duplicate scan will read. A tracker with this many
+ * goal-fidelity issues on one repo is a runaway, and the scan says so rather than reading a truncated page as
+ * "nothing filed".
  */
 const SCAN_LIMIT = 1_000;
 
 /**
  * The managed-app record whose tracker this finding belongs on.
  *
- * A task with no `metadata.app` is PortOS's own work — and that resolves to the
- * REAL `PORTOS_APP_ID` record (always seeded by `loadApps`), not to a
- * `{ repoPath: ROOT_DIR }` literal. The three fields a literal would drop are
- * the three that decide where the issue lands: `workTracker` (an install that
- * pinned PortOS to JIRA would otherwise get a GitHub issue nothing will ever
- * claim), `forgeAccount` (the wrong credentials on a multi-account install),
- * and `jira` (without it the JIRA arm is structurally unreachable for PortOS's
- * own tasks).
+ * A task with no `metadata.app` is PortOS's own work and resolves to the REAL `PORTOS_APP_ID` record (seeded by
+ * `loadApps`), not a `{ repoPath: ROOT_DIR }` literal, which would drop the fields that decide where the issue
+ * lands: `workTracker` (a JIRA-pinned install would get a GitHub issue nothing claims), `forgeAccount` (wrong
+ * credentials on a multi-account install) and `jira` (the JIRA arm would be unreachable).
  */
 async function resolveFollowUpRepo(task) {
   const app = await getAppById(task?.metadata?.app || PORTOS_APP_ID).catch(() => null);
@@ -111,15 +86,12 @@ async function resolveFollowUpRepo(task) {
 /**
  * Everything a forge call for this app needs, resolved ONCE.
  *
- * `resolveForgeExecOptions` is neither cached nor cheap — it shells out for the
- * origin remote, then `gh auth status` / `gh auth token`, plus `gh api user`
- * when the app pins a forge account. Resolving it per call made the list and
- * the create each pay for it; worse, the create ran with no options at all, so
- * an app pinned to a non-ambient account filed (or 404'd) under the wrong
- * login — the exact failure `resolveForgeExecOptions` exists to prevent.
+ * `resolveForgeExecOptions` is neither cached nor cheap (origin remote, `gh auth status` / `gh auth token`, plus
+ * `gh api user` for a pinned forge account), and the create must run with the same options as the list: an app
+ * pinned to a non-ambient account would otherwise file (or 404) under the wrong login.
  *
- * `glab` resolves its project from the working directory rather than a token
- * overlay, so only GitHub passes a repo path here.
+ * `glab` resolves its project from the working directory rather than a token overlay, so only GitHub passes a repo
+ * path here.
  */
 const resolveForgeContext = (app, tracker) => resolveForgeExecOptions(
   tracker === 'github' ? app.repoPath : null,
@@ -127,24 +99,17 @@ const resolveForgeContext = (app, tracker) => resolveForgeExecOptions(
 );
 
 /**
- * Every issue this feature has ever filed on this tracker, in one normalized
- * `{ number, title, body, url }` shape — or `null` when the tracker could not
- * be read.
+ * Every issue this feature has ever filed on this tracker, in one normalized `{ number, title, body, url }` shape,
+ * or `null` when the tracker could not be read.
  *
- * Filtered by LABEL across every STATE, which is what makes the dedup sound:
+ * Filtered by LABEL across every STATE, which makes the dedup sound:
+ * - a label is a direct field filter with no index lag (full-text lag is minutes on GitHub and JIRA, exactly when
+ *   a scheduled task re-runs);
+ * - every state, so a human-CLOSED issue is still found;
+ * - the page is bounded by our own issues, so a busy repo cannot push them off the end and read as "nothing filed".
  *
- * - a label is a direct field filter, so unlike a full-text search it has no
- *   index lag — and the lag window (minutes, on both GitHub and JIRA) is
- *   exactly when a scheduled task re-runs and would re-file;
- * - every state, so an issue a human already CLOSED is still found and not
- *   re-filed;
- * - and it bounds the page by the thing we care about rather than by the
- *   tracker's whole backlog, so a busy repo cannot push our own issues off the
- *   end of the page and silently read as "nothing filed".
- *
- * The three trackers disagree about field names (`iid` / `key`, `description`
- * for the body, `summary` for a JIRA title). They are reconciled here, so the
- * matcher and the result have one shape to read.
+ * The trackers disagree about field names (`iid` / `key`, `description` for the body, `summary` for a JIRA
+ * title); they are reconciled here so the matcher has one shape to read.
  */
 async function listFiledIssues({ app, target, tracker, exec }) {
   if (tracker === 'github') {
@@ -162,10 +127,8 @@ async function listFiledIssues({ app, target, tracker, exec }) {
   }
 
   if (tracker === 'gitlab') {
-    // `--all` is every STATE, not every page — glab caps a page at 100, so the
-    // pages are walked until one comes back short. Without the walk, the 101st
-    // goal-fidelity issue pushes an older fingerprint off the only page read and
-    // the scheduled task re-files it every cadence.
+    // `--all` is every STATE, not every page: glab caps a page at 100, so walk pages until one comes back short, or
+        // the 101st issue pushes an older fingerprint off the only page read and the task re-files it.
     const all = [];
     for (let page = 1; all.length < SCAN_LIMIT; page += 1) {
       const { rows } = await execGlabJson(
@@ -185,12 +148,10 @@ async function listFiledIssues({ app, target, tracker, exec }) {
     return all;
   }
 
-  // JIRA. The project is scoped explicitly — a label match across every project
-  // the token can see would dedupe one app's finding against another's.
-  // `jira.js` is imported lazily here and in the creator: only a JIRA-tracked
-  // app reaches it, and a static edge would put the whole JIRA client graph on
-  // the closure of every suite reaching agent finalization (server/AGENTS.md
-  // "Import scoping").
+  // JIRA. The project is scoped explicitly, or a label match across every project the token can see would dedupe
+    // one app's finding against another's. `jira.js` is imported lazily here and in the creator: only a JIRA-tracked
+    // app reaches it, and a static edge would put the JIRA client graph on the closure of every suite reaching agent
+    // finalization (server/AGENTS.md "Import scoping").
   const { searchIssues, escapeJql } = await import('./jira.js');
   const jql = `project = "${escapeJql(app.jira.projectKey)}" AND labels = "${escapeJql(GOAL_FIDELITY_ISSUE_LABEL)}"`;
   const rows = await searchIssues(app.jira.instanceId, jql, {
@@ -221,10 +182,9 @@ function createForgeIssue({ app, target, tracker, exec, title, body }) {
 }
 
 /**
- * Create the JIRA ticket for one finding, in the same `{ ok, number, url }`
- * shape. It carries the same marker label as its forge siblings — that label is
- * what the next run's duplicate check filters on, so a ticket filed without it
- * would be invisible to the dedup and re-filed every cadence.
+ * Create the JIRA ticket for one finding, in the same `{ ok, number, url }` shape. It carries the same marker
+ * label as its forge siblings: the next run's duplicate check filters on it, so a ticket without it would be
+ * invisible to the dedup.
  */
 async function createJiraIssue({ app, title, body }) {
   const { createTicket } = await import('./jira.js');
@@ -241,8 +201,7 @@ async function createJiraIssue({ app, title, body }) {
 }
 
 /**
- * Is this app's tracker one we can file to, and does it have what it needs?
- * Returns the refusal sentence, or `null` when the file may proceed.
+ * Is this app's tracker one we can file to, with what it needs? Returns the refusal sentence, or `null` to proceed.
  */
 function trackerRefusal({ app, target, tracker }) {
   if (tracker === 'jira') {
@@ -263,67 +222,56 @@ function trackerRefusal({ app, target, tracker }) {
 /**
  * File one goal-fidelity finding on the app's tracker.
  *
- * One flow for all three trackers, because the sequence is the same everywhere
- * and the fail-closed rule is this feature's load-bearing invariant — stating
- * it once means a later guard cannot land on two of the three.
+ * One flow for all three trackers, so the fail-closed invariant is stated once and a later guard cannot land on
+ * two of the three.
  *
- * @returns {Promise<{issue: object|null, error: string|null}>} `issue` carries
- *   `duplicate: true` when an existing item already tracks this fingerprint —
- *   the queued task still wants that item's URL, so a duplicate is a usable
- *   result, not a failure.
+ * @returns {Promise<{issue: object|null, error: string|null}>} `issue` carries `duplicate: true` when an existing
+ *   item already tracks this fingerprint; the queued task still wants its URL, so a duplicate is a usable result.
  */
 async function fileFollowUpIssue({ task, review, fingerprint, context }) {
   const app = await resolveFollowUpRepo(task);
-  // Named, not interpolated blind: a task with no `metadata.app` is PortOS's
-  // own work, and `app 'undefined' has no configured repository` is not a
-  // sentence anyone can act on.
+  // Named, not interpolated blind: a task with no `metadata.app` is PortOS's own work, and
+    // `app 'undefined' has no configured repository` is not actionable.
   if (!app) return { issue: null, error: `app '${task?.metadata?.app || PORTOS_APP_ID}' has no configured repository` };
 
   const { tracker, target } = await resolveAppForgeTarget(app).catch(() => ({ tracker: null, target: null }));
   const refusal = trackerRefusal({ app, target, tracker });
   if (refusal) return { issue: null, error: refusal };
 
-  // A local task can quote journals, media records, or other personal prose.
-  // Scrubbing token/email shapes cannot authorize publishing that content.
-  // Finalization grants this provenance only to a complete fetched claim
-  // objective, and it may return only to that same tracker and repository.
+  // A local task can quote journals, media records or other personal prose, and scrubbing token/email shapes
+    // cannot authorize publishing it. Finalization grants this provenance only to a complete fetched claim
+    // objective, and it may return only to that same tracker and repository.
   const publicationRefusal = explainGoalFidelityPublicationRefusal({
     publication: context?.publication, tracker, target,
   });
   if (publicationRefusal) return { issue: null, error: publicationRefusal };
 
   const exec = tracker === 'jira' ? null : await resolveForgeContext(app, tracker);
-  // The reachability probe runs before anything is read or created: on an
-  // unreachable forge this is one failing call instead of a list and a label
-  // create that each have to time out first. Kept ahead of the duplicate read
-  // below rather than folded into `fileForgeIssue`'s own probe, for the same
-  // reason `persistentMindIssueCapability.js` keeps its own early probe.
+  // The reachability probe runs before anything is read or created, so an unreachable forge is one failing call
+    // instead of a list and a label create that each time out. Kept ahead of the duplicate read, as
+    // `persistentMindIssueCapability.js` keeps its own early probe.
   const probe = await probeForgeReachability({
     cli: forgeCliForTracker(tracker), hostname: target?.apiHost, env: exec?.customEnv,
     label: 'goal-fidelity-followup',
   });
   if (!probe.ok) return { issue: null, error: probe.error };
 
-  // Read before writing. A failed read must NOT read as "nothing is tracked" —
-  // that is exactly how a transient CLI blip files the same issue twice — so an
-  // unreadable tracker refuses the file rather than proceeding blind.
+  // Read before writing. A failed read must NOT read as "nothing is tracked" (a transient CLI blip would file the
+    // same issue twice), so an unreadable tracker refuses the file.
   const existing = await listFiledIssues({ app, target, tracker, exec });
   if (!existing) return { issue: null, error: `could not read the ${tracker} issue list to check for duplicates; nothing was filed` };
   const duplicate = existing.find((issue) => issueMatchesGoalFidelityMarker(issue, fingerprint));
   if (duplicate) return { issue: { ...duplicate, duplicate: true }, error: null };
-  // A scan that came back at the ceiling did not prove ABSENCE — it proved we
-  // stopped looking. Filing here is how the 1001st issue re-files the 1st, so
-  // this fails closed like every other unreadable-tracker path. Reaching this
-  // at all means something upstream is filing without bound; say so.
+  // A scan that came back at the ceiling proved we stopped looking, not ABSENCE; filing here is how the 1001st
+    // issue re-files the 1st, so fail closed. Reaching this means something upstream is filing without bound.
   if (existing.length >= SCAN_LIMIT) {
     return { issue: null, error: `this repository already carries ${SCAN_LIMIT}+ '${GOAL_FIDELITY_ISSUE_LABEL}' issues, so a duplicate cannot be ruled out; nothing was filed` };
   }
 
   const draft = buildGoalFidelityIssue({ task, review, fingerprint, context });
   if (draft.error) return { issue: null, error: draft.error };
-  // Publishing the objective adds more operator-authored text than a title.
-  // The shared forge scrubber strips PII and credentials; never include
-  // transcripts or unrelated metadata in this public projection.
+  // Publishing the objective adds more operator-authored text than a title. The shared forge scrubber strips PII
+    // and credentials; never include transcripts or unrelated metadata in this public projection.
   const title = scrubForgeIssueText(draft.title);
   const body = scrubForgeIssueText(draft.body);
   // The marker hashes the local fingerprint, so redacting dates or private
@@ -338,23 +286,18 @@ async function fileFollowUpIssue({ task, review, fingerprint, context }) {
 /**
  * Queue the CoS follow-up run.
  *
- * Goes through the shared investigation producer rather than `addTask`
- * directly, so this participates in the machinery every other failure-driven
- * task already does: the durable fingerprint dedup (a second finding for the
- * same cause folds into the open task), the rolling circuit breaker (a drift
- * storm cannot mint one agent per failure), the loop policy (a cause we already
- * queued a fix for and that came back is held for the human), and the
- * worktree + PR delivery posture.
+ * Goes through the shared investigation producer rather than `addTask`, so it participates in the machinery every
+ * failure-driven task has: durable fingerprint dedup (a second finding for the same cause folds into the open
+ * task), the rolling circuit breaker (a drift storm cannot mint one agent per failure), the loop policy (a cause
+ * already fixed that came back is held for the human) and the worktree + PR delivery posture.
  *
- * The producer's approval verdict rides back out with the task: the loop policy
- * can HOLD a follow-up for a human (`repeat-fingerprint`, `failure-storm`), and
- * that is the case the user most needs named — reporting "queued" for a task
- * nothing will pick up is the one wrong thing to say about it.
+ * The producer's approval verdict rides back with the task: the loop policy can HOLD a follow-up
+ * (`repeat-fingerprint`, `failure-storm`), and reporting "queued" for a task nothing will pick up is the one wrong
+ * thing to say.
  */
 async function queueFollowUpTask({ task, review, fingerprint, context, issue }) {
-  // The API base is resolved here because it is this layer's to know: the pure
-  // builder cannot read the install's live network exposure to find the loopback
-  // port the agent should call.
+  // The API base is resolved here because only this layer knows the install's live network exposure and the
+    // loopback port the agent should call.
   const falsePositiveBlock = buildGoalFidelityFalsePositiveReportBlock({
     apiBase: localApiBaseUrl(),
     findingFingerprint: fingerprint,
@@ -369,22 +312,19 @@ async function queueFollowUpTask({ task, review, fingerprint, context, issue }) 
     context: `Auto-generated from a goal-fidelity ${review?.verdict} verdict`,
     ...(task?.metadata?.app ? { app: task.metadata.app } : {}),
   });
-  // One reading of the producer's return, shared with the calibration producer:
-  // a HELD task is not a queued one, and a duplicate fold is a usable outcome
-  // rather than a failure. Both are easy to re-derive slightly differently.
+  // One reading of the producer's return, shared with the calibration producer: a HELD task is not a queued one,
+    // and a duplicate fold is a usable outcome rather than a failure.
   return investigationOutcome(filed, { subject: 'the follow-up task' });
 }
 
 /**
  * Run whatever follow-up the user configured for this verdict.
  *
- * Returns `{ ran: false }` when nothing is configured or the verdict does not
- * fire the configured trigger — the overwhelmingly common path, and the reason
- * this costs a disabled install nothing but one settings read.
+ * Returns `{ ran: false }` when nothing is configured or the verdict does not fire the trigger: the common path,
+ * costing a disabled install one settings read.
  *
- * Every arm is individually fallible and individually reported: a tracker that
- * refused the file must not also cancel the queued task, because the task is
- * the arm that actually gets the work done.
+ * Every arm is individually fallible and reported: a tracker that refused the file must not cancel the queued
+ * task, which is the arm that actually gets the work done.
  *
  * @param {{ agentId: string, task: object, review: object }} args
  * @returns {Promise<{ran: boolean, fingerprint?: string, issue?: object|null,
@@ -420,9 +360,7 @@ export async function runGoalFidelityFollowUp({ agentId, task, review, context =
         ...(queued.loopReason ? { loopReason: queued.loopReason } : {}),
       }
       : null;
-    // The producer's own refusal sentence, which names the loop policy's reason
-    // when it has one — "could not be queued" is the least actionable thing we
-    // could say about a deliberate suppression.
+    // The producer's own refusal sentence, which names the loop policy's reason when it has one.
     if (!result.task) result.taskError = queued?.reason || 'the follow-up task could not be queued';
   }
 

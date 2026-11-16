@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  overflowSeverity,
-  panelLetteringMetrics,
-  analyzeComicLettering,
-} from './letteringDensity';
+import { overflowSeverity, panelLetteringMetrics } from '../../../server/lib/editorial/letteringDensity.js';
+import { analyzeComicLettering } from './letteringDensity';
 
 // Mirror of server/lib/editorial/letteringDensity.js — the server test is the
 // authoritative contract; this covers the client copy used by the comic-script

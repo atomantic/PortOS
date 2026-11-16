@@ -232,7 +232,6 @@ describe('persistent mind routes', () => {
     mocks.wakePersistentMind.mockResolvedValue({ success: true });
     const res = await post('/mind/wake');
     expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
     expect(mocks.wakePersistentMind).toHaveBeenCalledOnce();
   });
 

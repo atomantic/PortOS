@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { EXTERNAL_UNTYPED_TASK_TYPE, extractCosTaskType } from './cosTaskType';
+import { EXTERNAL_UNTYPED_TASK_TYPE } from '../../../server/lib/taskTypeBucket.js';
+import { extractCosTaskType } from './cosTaskType';
 
 describe('extractCosTaskType', () => {
   it('keeps a scheduled analysis bucket ahead of generic words in its description', () => {

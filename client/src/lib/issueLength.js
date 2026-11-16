@@ -15,14 +15,7 @@
  */
 import { DEFAULT_LENGTH_PROFILE, LENGTH_PROFILES } from '../../../server/lib/issueLength.js';
 
-export {
-  CUSTOM_MINUTE_MAX,
-  CUSTOM_MINUTE_MIN,
-  CUSTOM_PAGE_MAX,
-  CUSTOM_PAGE_MIN,
-  DEFAULT_LENGTH_PROFILE,
-  LENGTH_PROFILES,
-} from '../../../server/lib/issueLength.js';
+export { CUSTOM_MINUTE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_PAGE_MAX, CUSTOM_PAGE_MIN, LENGTH_PROFILES } from '../../../server/lib/issueLength.js';
 
 // Clamp + round + fallback. Returns `null` for non-finite input so callers
 // can distinguish "user cleared the field" from "user typed nonsense".
