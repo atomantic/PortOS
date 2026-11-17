@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { FABLELOOM_STATIC_PLAYER_FILES } from '../staticPlayerFiles.js';
+import { pathWithin } from '../../../../scripts/lib/pathWithin.js';
 import { createKeywordResolver, createSession, liveInputAllowed, mediaUrl } from './runtime.js';
 
 const HASH = 'a'.repeat(64);
@@ -428,7 +430,8 @@ describe('static reference player runtime', () => {
     expect(extras.every((name) => name.endsWith('.test.js'))).toBe(true);
     const banned = /https?:\/\/|localhost|127\.0\.0\.1|api\/fableloom|bearer|ngrok|tailscale|cloudflare|password|api key|secret|\bportos\b/i;
     for (const name of FABLELOOM_STATIC_PLAYER_FILES) {
-      const text = (await readFile(new URL(name, import.meta.url), 'utf8')).replaceAll('portos-allow-hidden-content', '');
+      // pathWithin: the names live in another module, so the test memo keys this directory for them.
+      const text = (await readFile(pathWithin(fileURLToPath(new URL('.', import.meta.url)), name), 'utf8')).replaceAll('portos-allow-hidden-content', '');
       expect(text, name).not.toMatch(banned);
       if (name !== 'contract-example.js' && name !== 'player.js') expect(text).not.toMatch(/\bfetch\s*\(/);
     }

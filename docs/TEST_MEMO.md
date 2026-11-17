@@ -116,8 +116,8 @@ A directory a test reads as a whole is an input as a whole.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is
-only the known prefix of a path with a variable segment (`join(HERE, p)`:
-the read may land outside it); for a test with a
+only the known prefix of a path with a variable segment, even one proven to
+stay inside it ([Variable path segments](#variable-path-segments)); for a test with a
 non-literal `require()`, which could load the tree natively where no
 recording shows it (a browser suite therefore loads its driver with
 `import { chromium } from 'playwright-core'`, never through
@@ -125,6 +125,54 @@ recording shows it (a browser suite therefore loads its driver with
 nested repository (one listed entry, whatever it contains); and outside a git checkout. A product
 module's own oversized read is still ignored, as before: only a tree-scanning
 guard calls those walkers, and a guard (`*.guard.test.js`) is never memoized.
+
+## Variable path segments
+
+`join(HERE, name)` names a directory and leaves the rest to run time. Until
+#16602 the key took that directory's tree, as if the read had to land in it.
+A helper called as `read('../../client/src/limits.js')` leaves it, and a
+template URL (`new URL(\`../../data.reference/templates/${name}\`, import.meta.url)`)
+was keyed as the importing file's own directory: the key held files the test
+never read and missed the one it did. `server/test/fixtures/ecosystemConfigCopy.js`
+was keyed that way in every suite that imports it.
+
+A variable segment is now one of three things:
+
+- **Resolved.** The variable is a parameter of a function declared once in
+  the file, never exported, stored or handed on, and every call passes a
+  literal (or another resolved variable); or it is the callback parameter or
+  `for…of` variable of a literal array, an `it.each` table of strings, or a
+  `const` array nothing in the file can add to. The path is evaluated once per
+  value (up to 64 combinations) and each file is an ordinary input. No
+  directory is keyed, and a helper nothing calls contributes nothing.
+- **Contained.** The variable is an unchanged entry of a `readdir`/
+  `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
+  `randomUUID()`, or the path is built with `pathWithin(dir, ...segments)`
+  (`scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
+  the result is outside `dir`. The directory's tree is the input, as before.
+  The literal directories in front of the variable are part of it:
+  `\`${HERE}/fixtures/${name}\`` keys `fixtures`, not `HERE`.
+- **Unbounded.** Anything else: a property, a call result, an argument that is
+  not a literal, a name that was rewritten (`name.replace(…)`), chosen
+  (`cond ? a : name`), followed by a `..` segment, glued to the directory
+  with no separator, or resolved through `new URL()` (which decodes `%2e%2e`
+  and reads `\` as a separator). The test file, and any member under
+  `scripts/`, fails closed: `reads a path through read() that the analyzer
+  cannot resolve (under <dir>)` when the variable is a helper's parameter,
+  `reads a path with a variable segment that can leave <dir>` otherwise.
+
+A test that reads a file it cannot name in its own source (a name from a table
+in another module, a value parsed out of a file) stays memoizable by joining
+with `pathWithin()`. The analyzer accepts the call only when the name is
+imported from that module.
+
+The rule belongs to the test file and to `scripts/`, like the git and
+oversized-tree rules. A library module builds such a path from what its caller
+passes and reads it only when a test calls it, so it keeps the directory it
+was keyed with: for an unbounded template that is the importing file's
+directory and now the literal directory too, never less than before. A
+variable `import()` whose module path is unbounded is an unresolved edge for
+the floor key, whichever member holds it.
 
 ## Never memoized (fails closed)
 
@@ -136,7 +184,9 @@ file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —
 product modules that run git on their own targets are under the test's
 control); a test file or `scripts/` member that reads machine-local state
-(`data/`, the home directory); a member that reads a path the analyzer
+(`data/`, the home directory); a test file or `scripts/` member that reads
+a path whose variable segment nothing bounds
+([Variable path segments](#variable-path-segments)); a member that reads a path the analyzer
 cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
 `readServerSource`/`readClientSource`, a directory with more than 400
 files that the listing cannot stand in for, see
