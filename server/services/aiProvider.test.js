@@ -112,15 +112,24 @@ describe('callProviderAISimple completion classification', () => {
 
   const sentPrompt = () => JSON.parse(globalThis.fetch.mock.calls[0][1].body).messages[0].content;
 
-  it('stamps the IP-latitude clause when the caller declares the prompt creative', async () => {
-    // This helper posts to /chat/completions itself, so neither buildPrompt nor
-    // runPromptThroughProvider can stamp it — the opt-in flag is the only route.
+  it('stamps the IP-latitude clause when the call site has a creative source', async () => {
+    // No toolkit in this suite, so the request goes out untracked and the
+    // runner's own stamp never runs: the helper has to stamp from `source`.
     respondWith({ choices: [{ message: { content: 'prose' } }] });
 
-    await callProviderAISimple(provider, 'model-1', 'Write the scene.', { creative: true });
+    await callProviderAISimple(provider, 'model-1', 'Write the scene.', { source: 'taste-summary' });
 
     expect(sentPrompt().startsWith(CREATIVE_LATITUDE_HEADING)).toBe(true);
     expect(sentPrompt().endsWith('Write the scene.')).toBe(true);
+    expect(sentPrompt().split(CREATIVE_LATITUDE_HEADING)).toHaveLength(2);
+  });
+
+  it('ignores the retired creative flag: classification is by source only', async () => {
+    respondWith({ choices: [{ message: { content: 'ok' } }] });
+
+    await callProviderAISimple(provider, 'model-1', 'Summarize CPU load.', { creative: true });
+
+    expect(sentPrompt()).toBe('Summarize CPU load.');
   });
 
   it('leaves a non-creative prompt untouched', async () => {
@@ -629,10 +638,10 @@ describe('provider review preparation deadline', () => {
   });
 });
 
-describe('callProviderAISimple xAI usage ledger', () => {
+describe('callProviderAISimple toolkit-less usage', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('records cached and reasoning tokens from a successful xAI completion', async () => {
+  it('returns measured cached and reasoning counts without writing the server ledger', async () => {
     recordRunUsage.mockClear();
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -653,13 +662,6 @@ describe('callProviderAISimple xAI usage ledger', () => {
       'prompt',
     );
     expect(result.usage).toMatchObject({ inputTokens: 26, outputTokens: 103, cacheReadTokens: 6 });
-    await vi.waitFor(() => expect(recordRunUsage).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: 'grok',
-      model: 'grok-4.7',
-      tokensIn: 26,
-      tokensOut: 103,
-      cacheReadTokens: 6,
-      source: 'measured',
-    })));
+    expect(recordRunUsage).not.toHaveBeenCalled();
   });
 });

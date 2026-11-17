@@ -43,8 +43,9 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return includeDeleted ? all : all.filter((project) => !project.deleted);
   }
 
-  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare } = {}) {
-    const projects = await listProjects({ includeDeleted });
+  async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
+    const all = await listProjects({ includeDeleted });
+    const projects = filter ? all.filter(filter) : all;
     if (compare) projects.sort(compare);
     return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
   }

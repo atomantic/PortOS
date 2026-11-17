@@ -52,6 +52,16 @@ describe('projectsFile backend', () => {
     expect((await file.getProject(created.id)).name).toBe('MV One');
   });
 
+  it('filters before slicing a project page', async () => {
+    const first = await file.createProject({ name: 'First' });
+    const done = await file.createProject({ name: 'Done' });
+    const last = await file.createProject({ name: 'Last' });
+    await file.updateProject(done.id, { status: 'complete' });
+    const page = await file.listProjectPage({ limit: 1, offset: 1, filter: project => project.status !== 'complete' });
+    expect(page).toMatchObject({ total: 2, items: [{ id: last.id }] });
+    expect(page.items[0].id).not.toBe(first.id);
+  });
+
   it('updates project metadata', async () => {
     const p = await file.createProject({ name: 'A' });
     const updated = await file.updateProject(p.id, { name: 'B', status: 'ready' });

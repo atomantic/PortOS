@@ -96,7 +96,7 @@ const TRACKED = [
   'client/src/a11y/scanner.conventions.test.js',
   'client/src/App.jsx',
   'client/src/App.test.jsx',
-  'client/src/hooks/mountedRefConventions.test.js',
+  'client/src/hooks/mountedRefConventions.guard.test.js',
   'client/src/components/catalog/CatalogCard.jsx',
   'client/src/components/catalog/CatalogCard.test.jsx',
   'client/src/components/sprites/WalkWorkflow.test.jsx',
@@ -821,10 +821,10 @@ describe('CI test impact planner', () => {
   it('routes always-run selectors to the runner that globs them', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
-      'scripts/agent-instructions-files.test.js',
+      'scripts/agent-instructions-files.guard.test.js',
       'client/src/a11y/overlays.conventions.test.js',
     ])).toEqual({
-      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.test.js'],
+      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.guard.test.js'],
       client: ['client/src/a11y/overlays.conventions.test.js'],
     });
   });
@@ -955,7 +955,7 @@ describe('CI test impact planner', () => {
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
-    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
@@ -1094,7 +1094,7 @@ describe('CI test impact planner', () => {
     expect(plan.client.files).toContain('client/src/a11y/overlays.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/routeHeadings.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/scanner.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
+    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
     expect(plan.lint).toEqual({
       mode: 'files',
       files: [
@@ -1111,7 +1111,7 @@ describe('CI test impact planner', () => {
     // by a change that touches no `.jsx` at all.
     const plan = buildCiTestPlan(['client/src/hooks/useAsyncAction.js'], { trackedFiles: TRACKED });
 
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
+    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/controlNames.conventions.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/dnd.conventions.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
@@ -1444,7 +1444,7 @@ describe('CI test impact planner', () => {
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
-      'server/lib/apiRouteGraph.test.js',
+      'server/lib/apiRouteGraph.guard.test.js',
       'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];
@@ -2535,7 +2535,7 @@ describe('path-gated single-purpose jobs', () => {
 
   it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
     for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'autofixer/package.json', '.nvmrc',
-      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.test.js', '.github/workflows/ci.yml',
+      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.guard.test.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
     for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {
       expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(false);

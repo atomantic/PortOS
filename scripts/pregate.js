@@ -18,6 +18,7 @@ import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
+import { isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -326,9 +327,9 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const structuralGuards = structuralTestsFor(changedFiles, tracked);
   const serverStructuralGuards = structuralGuards.filter((path) => !path.startsWith('client/'));
   const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
-  // Discover convention guards so new client scanners join the local gate
-  // without a second hand-maintained list (including guards under hooks/).
-  const clientGuards = trackedFiles.filter((path) => /^client\/src\/.*Conventions\.test\.js$/.test(path));
+  // Client tree guards join the local gate by their suffix, the same name the
+  // planner selects them by, so there is no second list (guards under hooks/ included).
+  const clientGuards = trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path));
   return {
     ...plan,
     full: false,

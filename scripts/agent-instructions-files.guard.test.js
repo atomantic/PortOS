@@ -89,7 +89,7 @@ const DUAL_NAME_IMPLEMENTATION = [
   'server/services/promptSections/instructions.js',
   'server/lib/agentInstructionsFile.js',
   'server/lib/agentInstructionsFile.test.js',
-  'scripts/agent-instructions-files.test.js',
+  'scripts/agent-instructions-files.guard.test.js',
 ];
 
 const git = (...args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });

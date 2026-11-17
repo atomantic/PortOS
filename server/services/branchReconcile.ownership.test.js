@@ -168,9 +168,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     const clean = await addCompletedClaim();
 
     injected.gitSpawns.length = 0;
+    const log = vi.spyOn(console, 'log');
     const result = await reconcileWithoutOwners();
+    const removals = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes(': removed '));
+    log.mockRestore();
     expect(result.cleaned).toEqual(['claim/issue-11']);
     expect(existsSync(clean)).toBe(false);
+    // The removal names the checkout and the evidence that admitted it (#16618).
+    expect(removals).toEqual([expect.stringMatching(/^🔀 branch-reconcile: remove worktree for claim\/issue-11: removed .*claim-issue-11 at [0-9a-f]{12} \(head contained in main\)$/)]);
     expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'claim/issue-12', reason: 'worktree-locked' }));
     expect(existsSync(locked)).toBe(true);
     expect(await branches()).toEqual(expect.arrayContaining(['claim/issue-12']));

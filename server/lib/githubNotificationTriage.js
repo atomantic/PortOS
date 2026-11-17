@@ -249,7 +249,7 @@ const HANDOFF_ISSUE_DECISIONS = new Set(['needs-you', 'surface']);
 const PULL_PATH_RE = /\/pulls\/(\d{1,9})$/;
 
 // The notification kinds an automation rule can name (GITHUB_AGENT_RULE_KINDS
-// in lib/validation.js).
+// in lib/githubValidation.js).
 export const AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
 const RULE_KINDS = new Set(AGENT_RULE_KINDS);
 // What a rule does with a matching thread (#13192). A stored legacy rule's

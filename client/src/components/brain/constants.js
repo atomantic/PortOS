@@ -1,4 +1,4 @@
-import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video, ListTodo } from 'lucide-react';
+import { MessageSquare, Database, Calendar, Rss, Shield, Users, FolderKanban, Lightbulb, ClipboardList, Settings, Link2, BookOpen, Network, FileText, NotebookPen, Upload, Target, BookText, Music, Video, ListTodo, AudioLines } from 'lucide-react';
 import { getPageNavTabs } from '../../../../server/lib/navManifest.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
 
@@ -14,6 +14,7 @@ const TAB_PRESENTATION = {
   ideas: { icon: Lightbulb },
   'daily-log': { icon: NotebookPen, fullBleed: true },
   links: { icon: Link2 },
+  meditation: { icon: AudioLines },
   memory: { icon: Database, fullBleed: true },
   notes: { icon: FileText, fullBleed: true },
   graph: { icon: Network, fullBleed: true },

@@ -1,7 +1,7 @@
 import { it, expect } from 'vitest';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,7 +22,7 @@ function withSavedProviderReview(context, run) {
         request.on('end', () => {
           bodies.push(body);
           response.writeHead(200, { 'Content-Type': 'application/json' });
-          response.end(JSON.stringify({ choices: [{ message: { content: 'NO FINDINGS' } }] }));
+          response.end(JSON.stringify({ choices: [{ message: { content: 'NO FINDINGS' } }], usage: { prompt_tokens: 32, completion_tokens: 9, prompt_tokens_details: { cached_tokens: 6 } } }));
         });
       });
       await new Promise(resolve => api.listen(0, '127.0.0.1', resolve));
@@ -100,12 +100,15 @@ function withSavedProviderReview(context, run) {
 }
 
 it('runs saved API review defaults and attribution from the standalone bridge without bootstrapping PortOS', context => withSavedProviderReview(context, async ({ root, data, bodies, runReview }) => {
+  const ledger = { totalSessions: 5, totalMessages: 0, totalToolCalls: 0, totalTokens: { input: 40, output: 20 },
+    byProvider: {}, byModel: {}, dailyActivity: {}, monthlyActivity: {}, hourlyActivity: Array(24).fill(0), blockEvents: [], lastUpdated: null };
+  const originalLedger = JSON.stringify(ledger);
+  await writeFile(join(data, 'usage.json'), originalLedger);
   const request = { backend: 'provider:example-gpu', diff: 'diff --git a/example.js b/example.js' };
   // A resumed claim may finish before attribution has been initialized (#14102).
   const noState = await runReview(request);
   expect(noState.code, noState.stderr).toBe(0);
   expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
-  expect(JSON.parse(noState.stdout).attributionError).toBeUndefined();
   const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
   expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
   expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
@@ -123,6 +126,42 @@ it('runs saved API review defaults and attribution from the standalone bridge wi
   expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\n');
   const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root, signal: context.signal });
   expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
+  // Three separate bridge processes produce three request records while the
+  // long-lived server's ledger stays byte-for-byte unchanged.
+  expect(await readFile(join(data, 'usage.json'), 'utf8')).toBe(originalLedger);
+  const ids = await readdir(join(data, 'runs'));
+  expect(ids).toHaveLength(3);
+  for (const id of ids) {
+    expect(JSON.parse(await readFile(join(data, 'runs', id, 'metadata.json'), 'utf8'))).toMatchObject({
+      success: true, source: 'code-review', selfContainedUsage: true, usageSessionDeferred: true,
+      reportedUsage: { tokensIn: 26, tokensOut: 9, cacheReadTokens: 6 },
+    });
+  }
+  // Each invocation models a server restart. Counts and their per-run markers
+  // must commit together, so a second import adds neither tokens nor sessions.
+  const importUsage = async () => {
+    const code = `console.log = () => {}; const usage = await import('./server/services/usage.js'); await usage.loadUsage(); process.stdout.write(JSON.stringify(usage.getUsage()));`;
+    const env = { ...process.env, NODE_ENV: 'test', MEMORY_BACKEND: 'file', PORTOS_DATA_ROOT: root };
+    delete env.VITEST;
+    const result = await promisify(execFile)(process.execPath, ['--preserve-symlinks', '--input-type=module', '-e', code], {
+      cwd: root, env, signal: context.signal,
+    });
+    return JSON.parse(result.stdout);
+  };
+  const once = await importUsage();
+  expect(once).toMatchObject({ totalSessions: 8, totalMessages: 3, totalTokens: { input: 136, output: 47 } });
+  expect(Object.keys(once.reconciledRuns)).toHaveLength(3);
+  expect(await importUsage()).toEqual(once);
+
+}), 15000);
+
+it('keeps the verdict and a zero exit when the attribution receipt cannot be written (#16571)', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+  // A directory at the receipt path makes the append fail; attribution is best-effort and must never block a review.
+  await mkdir(join(root, '.git/portos-local-review-models'));
+  const result = await runReview({ backend: 'provider:example-cli', model: 'review-model', diff: 'diff --git a/example.js b/example.js' });
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, verdict: 'clean', findings: 'NO FINDINGS' });
+  expect(JSON.parse(result.stdout)).not.toHaveProperty('attributionError');
 }), 15000);
 
 it('runs ordinary and claim CLI reviews in scratch with the explicit model', context => withSavedProviderReview(context, async ({ root, runReview }) => {

@@ -14,7 +14,7 @@ import {
   federatedMediaAudioProfileSchema,
   renderFederatedMediaAudioPrompt,
 } from '../../lib/federatedMediaWire.js';
-import { federatedMediaJobRoutingSchema } from '../../lib/validation.js';
+import { federatedMediaJobRoutingSchema } from '../../lib/federatedMediaValidation.js';
 import { createRemoteMediaExecutor, remoteMediaError } from '../federatedMedia/remoteExecutor.js';
 import { audioGenEvents } from './events.js';
 

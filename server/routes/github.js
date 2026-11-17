@@ -1,8 +1,9 @@
 import express from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
+import { validateRequest } from '../lib/validateRequest.js';
+import { githubRepoUpdateSchema, githubSecretSchema, githubAccountCreateSchema, githubAccountUpdateSchema,
   githubNotificationsQuerySchema, githubNotificationsSyncSchema, githubNotificationsClearSchema, githubNotificationActionSchema, githubDeploymentReviewSchema, GITHUB_NOTIFICATION_THREAD_ID_RE,
-  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema, githubNotificationPullRequestActionSchema } from '../lib/validation.js';
+  githubNotificationCadenceSchema, githubAuditApplySchema, githubNotificationAgentRunSchema, githubNotificationPullRequestActionSchema } from '../lib/githubValidation.js';
 import * as githubService from '../services/github.js';
 import * as githubAccounts from '../services/githubAccounts.js';
 import * as githubNotifications from '../services/githubNotifications.js';

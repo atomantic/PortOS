@@ -12,7 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
-import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import {
   loadCompletionOrderIndex,
@@ -37,38 +37,9 @@ import {
   removePendingAgentFeedbackRef,
   upsertPendingAgentFeedbackRef,
 } from './cosAgentFeedbackStore.js';
-import { extractTaskType } from './taskLearning/store.js';
+import { feedbackTaskType, scanArchivedAgents } from './cosArchivedAgentScan.js';
 
-const ARCHIVE_READ_BATCH_SIZE = 50;
 const hasValidFeedback = hasValidAgentFeedback;
-
-// Completed agents are written to their date-bucket archive before they age out
-// of live state. Feedback statistics therefore have to read both stores and
-// de-duplicate by agent id; reading state alone makes almost all historical
-// ratings disappear from the learning view as soon as normal retention runs.
-async function loadArchivedAgentsWithFeedback() {
-  const idx = await loadAgentIndex();
-  const entries = [...idx.entries()];
-  const agents = [];
-
-  // Match the archive reader's bounded fan-out so a long-lived install does not
-  // open every metadata file at once.
-  for (let i = 0; i < entries.length; i += ARCHIVE_READ_BATCH_SIZE) {
-    const batch = entries.slice(i, i + ARCHIVE_READ_BATCH_SIZE);
-    const reads = batch.map(async ([agentId, dateBucket]) => {
-      const content = await tryReadFile(join(getAgentDir(agentId, dateBucket), 'metadata.json'));
-      if (!content) return null;
-      const raw = safeJSONParse(content, null);
-      return hasValidFeedback(raw) ? { ...raw, id: raw.id || raw.agentId || agentId } : null;
-    });
-    const settled = await Promise.allSettled(reads);
-    for (const result of settled) {
-      if (result.status === 'fulfilled' && result.value) agents.push(result.value);
-    }
-  }
-
-  return agents;
-}
 
 async function readArchivedAgent(agentId, dateBucket) {
   const metadataPath = join(getAgentDir(agentId, dateBucket), 'metadata.json');
@@ -357,11 +328,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       taskId: response.agent?.taskId ?? null,
       rating: feedbackData.rating,
       comment: feedbackData.comment,
-      taskType: extractTaskType({
-        description: response.agent?.metadata?.taskDescription,
-        metadata: response.agent?.metadata,
-        taskType: response.agent?.metadata?.taskType,
-      }),
+      taskType: feedbackTaskType(response.agent),
     },
     source: { service: 'cosAgentFeedback', fn: 'submitAgentFeedback' },
     happenedAt: feedbackData.submittedAt,
@@ -373,8 +340,11 @@ export async function submitAgentFeedback(agentId, feedback) {
 // Get aggregated feedback statistics
 export async function getFeedbackStats() {
   const state = await loadState();
-  const archived = await loadArchivedAgentsWithFeedback();
-  const byAgentId = new Map(archived.map(agent => [agent.id, agent]));
+  // Completed agents age out of live state into the dated archive, so the stats
+  // read both and de-duplicate by agent id; state alone would drop historical ratings.
+  const { byId: archived } = await scanArchivedAgents();
+  const byAgentId = new Map();
+  for (const { feedbackAgent } of archived.values()) if (feedbackAgent) byAgentId.set(feedbackAgent.id, feedbackAgent);
 
   // Live state is freshest, but only overwrite an archived rating when the live
   // record actually carries valid feedback. This preserves a durable rating if
@@ -391,11 +361,8 @@ export async function getFeedbackStats() {
   // Group by task type
   const byTaskType = {};
   withFeedback.forEach(a => {
-    const taskType = extractTaskType({
-      description: a.metadata?.taskDescription,
-      metadata: a.metadata,
-      taskType: a.metadata?.taskType,
-    });
+    // Archived projections carry their type precomputed; live records are classified here.
+    const taskType = a.feedbackTaskType ?? feedbackTaskType(a);
     const bucket = bucketFor(byTaskType, taskType, () => ({ positive: 0, negative: 0, neutral: 0, total: 0 }));
     if (!bucket) return;
     bucket[a.feedback.rating]++;

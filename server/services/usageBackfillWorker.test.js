@@ -167,6 +167,65 @@ describe('historical usage worker', () => {
     expect(result.corrections).toEqual([]);
   });
 
+  it('never treats a settled self-contained run as having billed a CLI session', async () => {
+    // An API completion whose provider id names the same CLI family, settled on
+    // both passes, overlapping an unreconciled CLI run in the same workspace.
+    // Its markers mean "nothing to scan", so the session still belongs to the
+    // CLI run and the completion itself is not a backfill candidate.
+    await writeRun('run-self-contained', {
+      providerId: 'claude-api-example',
+      model: 'example-model',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      selfContainedUsage: true,
+      usageReconciled: true,
+      usageSiblingsReconciled: true
+    });
+    await writeRun('run-overlapping-history', {
+      providerId: 'claude-code-tui',
+      model: 'claude-opus-5',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:02:00.000Z',
+      endTime: '2026-07-01T10:12:00.000Z'
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home, claimsSeed: snapshotUsageClaims() });
+    expect(result.total).toBe(1);
+    expect(result.corrections).toHaveLength(1);
+    expect(result.corrections[0]).toMatchObject({ runId: 'run-overlapping-history', measured: [expect.objectContaining({ tokensOut: 200 })] });
+  });
+
+  it('imports reported bridge counts without a workspace or transcript and respects ledger and metadata markers', async () => {
+    const metadata = { providerId: 'claude-api-example', model: 'example-model',
+      startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:10:00Z',
+      success: true, selfContainedUsage: true, usageSessionDeferred: true,
+      reportedUsage: { tokensIn: 7, tokensOut: 3, cacheReadTokens: 2 } };
+    await writeRun('bridge', metadata);
+    await writeRun('settled', { ...metadata, usageReconciled: true });
+    await writeRun('running', { ...metadata, endTime: null });
+    const first = await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true });
+    expect(first.corrections).toEqual([expect.objectContaining({ runId: 'bridge', unrecorded: true, deferredSession: true, estimate: null,
+      measured: [expect.objectContaining({ tokensIn: 7, tokensOut: 3, cacheReadTokens: 2, source: 'measured' })], siblings: [] })]);
+    expect((await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true, reconciledRunIds: ['bridge'] })).corrections).toEqual([]);
+    expect(snapshotUsageClaims()).toEqual(expect.objectContaining({ codexHighWater: [] }));
+  });
+
+  it('skips an unreconciled self-contained run instead of swapping an estimate for a session it cannot own', async () => {
+    await writeRun('run-self-contained-pending', {
+      providerId: 'claude-api-example',
+      model: 'example-model',
+      workspacePath: workspace,
+      startTime: '2026-07-01T10:00:00.000Z',
+      endTime: '2026-07-01T10:10:00.000Z',
+      selfContainedUsage: true
+    });
+
+    const result = await scanHistoricalUsage({ runsDir: root, home, claimsSeed: snapshotUsageClaims() });
+    expect(result.total).toBe(0);
+    expect(result.corrections).toEqual([]);
+  });
+
   it('leaves a message written after the settled run reconciled to the run that owns it', async () => {
     // Inside the settled run's trailing slack, but written after it was read.
     await writeTranscript({ id: 'message-2', timestamp: '2026-07-01T10:10:30.000Z', file: 'session-later.jsonl' });

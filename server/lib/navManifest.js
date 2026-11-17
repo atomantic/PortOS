@@ -140,6 +140,7 @@ const RAW_NAV_COMMANDS = [
   { id: 'nav.brain.ideas', path: '/brain/ideas', label: 'Ideas', section: 'Brain', tabGroup: 'brain', tabId: 'ideas', aliases: ['brain-ideas', 'ideas'], keywords: ['brainstorm', 'creative', 'thought', 'concept'] },
   { id: 'nav.brain.daily-log', path: '/brain/daily-log', label: 'Daily Log', section: 'Brain', tabGroup: 'brain', tabId: 'daily-log', aliases: ['daily-log', 'journal'] },
   { id: 'nav.brain.links', path: '/brain/links', label: 'Links', section: 'Brain', tabGroup: 'brain', tabId: 'links', aliases: ['brain-links'] },
+  { id: 'nav.brain.meditation', path: '/brain/meditation', label: 'Meditation', section: 'Brain', tabGroup: 'brain', tabId: 'meditation', aliases: ['meditation', 'brain-meditation', '40-hz'], keywords: ['sound', 'audio', 'forty hertz'] },
   { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', tabGroup: 'brain', tabId: 'memory', aliases: ['brain-memory', 'memory'] },
   { id: 'nav.brain.notes', path: '/brain/notes', label: 'Notes', section: 'Brain', tabGroup: 'brain', tabId: 'notes', aliases: ['brain-notes', 'notes'] },
   { id: 'nav.brain.graph', path: '/brain/graph', label: 'Graph', section: 'Brain', tabGroup: 'brain', tabId: 'graph', aliases: ['brain-graph'] },

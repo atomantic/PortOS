@@ -8,10 +8,12 @@ import { getMusicVideoProject } from '../../services/apiMusicVideo.js';
  * again by id (dropped on a 404), an unlisted one refreshes the first page. The
  * open project and this tab's own writes are skipped; the page follows those.
  */
-export default function useProjectSummarySync({ summaries, selectedId, enabled }) {
+export default function useProjectSummarySync({ summaries, selectedId, enabled, resetOnMembershipChange = false }) {
   const summarySyncRef = useRef(null);
   summarySyncRef.current = {
     selectedId,
+    resetOnMembershipChange,
+    reconcileFirst: summaries.reconcileFirst,
     items: summaries.items,
     refreshFirst: summaries.refreshFirst,
     removeItem: summaries.removeItem,
@@ -28,10 +30,20 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled }
       getMusicVideoProject(id, { silent: true })
         .then((fresh) => {
           if (!active || !fresh) return;
-          summarySyncRef.current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+          const current = summarySyncRef.current;
+          const previous = current.items.find((p) => p.id === id);
+          if (current.resetOnMembershipChange && previous && (previous.status === 'complete') !== (fresh.status === 'complete')) {
+            current.setItems((items) => items.filter((p) => p.id !== id));
+            current.reconcileFirst();
+          } else current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
         })
         .catch((err) => {
-          if (active && err?.status === 404) summarySyncRef.current.removeItem(id);
+          if (active && err?.status === 404) {
+            if (summarySyncRef.current.resetOnMembershipChange) {
+              summarySyncRef.current.setItems((items) => items.filter((p) => p.id !== id));
+              summarySyncRef.current.reconcileFirst();
+            } else summarySyncRef.current.removeItem(id);
+          }
         })
         .finally(() => {
           const current = inflight.get(id);
@@ -45,7 +57,8 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled }
       if (data.origin && data.origin === socket.id) return;
       if (id === summarySyncRef.current.selectedId) return;
       const listed = summarySyncRef.current.items.some((project) => project.id === id);
-      if (!listed) summarySyncRef.current.refreshFirst();
+      if (!listed && summarySyncRef.current.resetOnMembershipChange) summarySyncRef.current.reconcileFirst();
+      else if (!listed) summarySyncRef.current.refreshFirst();
       else readListed(id);
     };
     socket.on('music-video:project:changed', onChanged);

@@ -11,12 +11,31 @@ import { recordLocalReviewAttribution } from '../lib/localReviewAttribution.js';
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
+import { createRunnerService } from '../lib/aiToolkit/runner.js';
+import { createProviderService } from '../lib/aiToolkit/providers.js';
+import { join } from 'node:path';
+import { atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { setAIToolkit } from '../services/runner.js';
 import { stopCodexAppServer } from '../services/codexAppServer.js';
 import { screenLinkedContribution } from '../services/untrustedContent.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
 globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+
+// This process owns run directories only. The server imports deferred sessions
+// and counts; importing usage hooks here would race its in-memory ledger.
+const providers = createProviderService({ dataDir: PATHS.data });
+const runStore = createRunnerService({ dataDir: PATHS.data, providerService: providers });
+setAIToolkit({ services: { providers, runner: {
+  ...runStore,
+  async createRun(options) {
+    const run = await runStore.createRun(options);
+    run.metadata.usageSessionDeferred = true;
+    await atomicWrite(join(run.runDir, 'metadata.json'), run.metadata);
+    return run;
+  },
+} } }, { dataDir: PATHS.data });
 
 // CLI flag dispatch for explicit agent reporting or active tier queries
 const args = process.argv.slice(2);
@@ -114,17 +133,11 @@ try {
   await recordOutcome.catch((err) => {
     process.stderr.write(`Unable to persist reviewer health: ${err.message}\n`);
   });
-  // Attribution is publication bookkeeping, not a reviewer verdict or health
-  // failure. Retain the completed result so a receipt can be repaired without
-  // spending another provider call.
-  const attributionError = request.recordAttribution === true && request.kind !== 'claim-comments'
-    ? await recordLocalReviewAttribution(process.cwd(), result).then(() => null, () => 'REVIEW_ATTRIBUTION_FAILED')
-    : null;
-  process.stdout.write(`${JSON.stringify(attributionError ? { ...result, attributionError } : result)}\n`);
-  if (attributionError) {
-    process.stderr.write('Review completed, but model attribution could not be persisted. Publication is blocked until attribution is repaired; do not rerun the reviewer.\n');
-    process.exitCode = 1;
+  // Attribution is best-effort bookkeeping for PR labels: a failed receipt write never changes the verdict or the exit code.
+  if (request.recordAttribution === true && request.kind !== 'claim-comments') {
+    await recordLocalReviewAttribution(process.cwd(), result).catch(() => {});
   }
+  process.stdout.write(`${JSON.stringify(result)}\n`);
   if (!result.ok) {
     // A reviewer that CAN'T be satisfied reads identically to one that merely
     // timed out, and the claim procedure answers both with `review-blocked` —

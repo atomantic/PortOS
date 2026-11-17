@@ -45,7 +45,7 @@ const {
   resolveEffortHint,
   effectiveStage,
 } = await import('./stageRunner.js');
-const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } = await import('./promptRunner.js');
+const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } = await import('../lib/localLlmConcurrency.js');
 const { withStagePinsIgnored, stagePinsIgnored } = await import('../lib/stagePinPolicy.js');
 const { CODEX_CONTEXT_WINDOW, DEFAULT_LARGE_CONTEXT_WINDOW } = await import('../lib/providerContextWindows.js');
 // The pre-dispatch gate itself, imported from the toolkit leaf rather than its

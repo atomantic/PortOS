@@ -28,6 +28,8 @@ Production approvals use the existing signed-in session, including authenticated
 
 Respect renderer capabilities while pursuing this direction: native Code uses its documented Canvas restrictions and native output size; composition documents support richer local fonts, authored worlds and the deterministic `seek(t)` contract. Code-only prohibits imagegen for guides as well as output. Build its guides and proofs from code-rendered scenes. A limitation is a reason to revise the implementation plan or choose a supported renderer, not to silently substitute raster assets or remote dependencies.
 
+For a custom instrumental document with zero lyric cues, the default automatic lyric overlay setting draws no cues. If the project explicitly disables automatic lyrics, its document runtime must honor that preference even when the cue list is empty. A proof or final render can report `DOCUMENT_LYRIC_VISIBILITY_UNSUPPORTED` after a successful preview. Use a current visibility-aware document runtime and verify the output with the intended preference. Authored text has its own controls.
+
 ## Revisions and footage variants
 
 Use **Fork vN** before revising a finished code video when the original must stay independently editable. For manual composition documents, **Export zip**, edit the HTML/JS locally, then import the revised ZIP/folder into the fork. Imports write immutable versions; unreferenced versions may be pruned, so fork before replacing a document you want to keep. Code-only sections also remain editable through the composition API and the section regeneration action.
@@ -106,9 +108,10 @@ manual documents can import it. Generated spatial sections receive
   `dispose()` when done. The spatial host fuses ink into its existing
   composite pass to avoid a second geometry render.
 
-Render a seven-dish parabolic row at dusk from inside, outside and rim-level
-views. Verify visible rim thickness, clear footprints, hidden-edge occlusion,
-and ink with DOF/bloom/grade enabled and disabled before accepting a candidate.
+Review the film’s own geometry from its intended camera positions. For a
+standalone toon-kit test, a row of seven parabolic dishes at dusk provides
+interior, exterior and rim-level views for checking shell thickness, spacing,
+hidden-edge occlusion and ink with DOF, bloom and grade toggled.
 
 ## Review and publication authority
 

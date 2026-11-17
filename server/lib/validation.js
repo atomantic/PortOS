@@ -1,17 +1,15 @@
 /**
- * Catch-all Zod schemas for app, process, provider, social, GitHub and backup routes, plus the
+ * Catch-all Zod schemas for app, process, provider, social and backup routes, plus the
  * `validateRequest` middleware and shared helpers.
  *
- * Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing,
+ * Catch-all Zod schemas (app/process/provider, social accounts, backup/sharing,
  * document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`,
  * `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files
  * below so existing deep imports keep working.
  */
 
-import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
+import { MAX_IMAGE_EDGE } from './imageLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-import { federatedSourceAudioSchema } from './federatedMediaWire.js';
-import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 import { DEFAULT_BACKUP_CRON, MIN_RETENTION_COUNT, MAX_RETENTION_COUNT } from './backupConfig.js';
 import { z } from 'zod';
@@ -37,6 +35,7 @@ import { GOOGLE_IMAGE_MODEL_IDS } from './googleImageModels.js';
 import { GOOGLE_LOCATION_PATTERN, GOOGLE_PROJECT_ID_PATTERN } from './googleCloudConfig.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
+  imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
   EXCLUDE_PATTERN_MAX_LENGTH, isSafeExcludePattern,
   AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
@@ -48,13 +47,6 @@ import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { parseProviderRef } from './providerRef.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
-import {
-  FEDERATED_MEDIA_ASSET_MAX_COUNT,
-  FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
-  federatedMediaInputAssetRefSchema,
-  isFederatedMediaAudioPrompt,
-} from './federatedMediaWire.js';
-import { isPlainObject } from './objects.js';
 import { isValidCronExpression, isCronShaped } from './cronValidation.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from './userActionTypes.js';
 import { MIND_BUNDLE_GROUP_CHOICES, MIND_BUNDLE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MAX_CHARS, MIND_BUNDLE_PASSPHRASE_MIN_CHARS, PERSISTENT_MIND_BUNDLE_GROUPS, PERSISTENT_MIND_BUNDLE_SCOPES } from './mindBundleFormat.js';
@@ -108,11 +100,6 @@ export const gitDeleteBranchBodySchema = z.object({
 });
 
 
-export const imageEdgeSchema = z.number().int().min(64).max(MAX_IMAGE_EDGE).optional();
-export const refineImagePixelCap = (d) =>
-  !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
-export const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;
-
 // Reject a record id that isn't a bare filename segment. Use before a
 // peer-supplied / externally-sourced id is interpolated into a filesystem path
 // (e.g. the sharing importer's raw `join(bucket, …, `${id}.json`)` reads, or
@@ -134,6 +121,7 @@ export { optionalBooleanMap };
 // re-exported so every existing `import { … } from '../lib/validation.js'`
 // keeps working unchanged.
 export {
+  imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter,
 };
 
@@ -869,180 +857,6 @@ export const socialAccountBulkBodySchema = z.object({ accounts: z.array(z.unknow
 export const socialAccountUpdateSchema = partialWithoutDefaults(socialAccountSchema);
 
 // =============================================================================
-// GITHUB REPOS SCHEMAS
-// =============================================================================
-
-export const githubRepoUpdateSchema = z.object({
-  flags: z.record(z.boolean()).optional(),
-  managedSecrets: z.array(z.string().min(1)).optional()
-});
-
-export const githubSecretSchema = z.object({
-  value: z.string().min(1)
-});
-
-// GitHub notifications manager accounts (#12869). A bare hostname (optional
-// :port) whose first character also rules out a value `gh` would parse as a flag.
-export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
-// github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
-export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
-export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
-
-// Per-repo automation rules for the GitHub inbox (#13192): what Assist and
-// Autopilot do with a kind of notification, in one repo (`owner/repo`), an
-// account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
-// when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
-// AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
-export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', 'do-review', 'untrusted-review', 'merge']);
-export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
-const emptyToNullString = (value) => (value === '' ? null : value);
-// A legacy `agent: true/false` (rules saved before #13192) is accepted and
-// stored as `action: 'agent' / 'leave'`; `action` wins when both are sent.
-export const githubAgentRuleSchema = z.object({
-  id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
-  kind: z.enum(GITHUB_AGENT_RULE_KINDS),
-  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, owner/* for an account or organization, or * for every repo'),
-  agent: z.boolean().optional(),
-  action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
-  mergeMethod: z.enum(['merge', 'squash', 'rebase']).optional(),
-  deleteBranch: z.boolean().optional(),
-  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
-  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
-  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
-}).strict().superRefine((rule, ctx) => {
-  const action = rule.action ?? (typeof rule.agent === 'boolean' ? (rule.agent ? 'agent' : 'leave') : null);
-  if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
-  else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
-  }
-  if (['do-review', 'untrusted-review', 'merge'].includes(action) && !['dependabot-pr', 'pull-request', 'own-pr', 'review-request'].includes(rule.kind)) {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'PR actions require a pull-request notification rule' });
-  }
-  if (action === 'merge' && rule.kind !== 'dependabot-pr') {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Automatic merge is available for verified Dependabot pull requests' });
-  }
-}).transform(({ agent, ...rule }) => ({ ...rule, action: rule.action ?? (agent ? 'agent' : 'leave') }));
-export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
-  const seen = new Set();
-  rules.forEach((rule, index) => {
-    const key = `${rule.kind}#${rule.repo.toLowerCase()}`;
-    if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index, 'repo'], message: `There is already a ${rule.kind} rule for ${rule.repo}` });
-    seen.add(key);
-  });
-});
-
-// The provider/model/effort an agent run starts from (#13191): the account's
-// defaults, or the operator's choice for one Resolve with agent run. null or
-// '' = Auto (CoS chooses).
-const githubAgentPinFields = {
-  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
-  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
-  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
-};
-export const githubAgentDefaultsSchema = z.object(githubAgentPinFields).strict();
-export const githubNotificationAgentRunSchema = z.object(githubAgentPinFields).strict();
-export const githubNotificationPullRequestActionSchema = z.object({
-  action: z.enum(['merge', 'do-review', 'untrusted-review']),
-  method: z.enum(['merge', 'squash', 'rebase']).optional(),
-  deleteBranch: z.boolean().optional(),
-  ...githubAgentPinFields,
-}).strict();
-
-export const githubAccountCreateSchema = z.object({
-  label: z.string().trim().max(80).optional(),
-  host: z.string().trim().toLowerCase()
-    .transform((value) => value.replace(/^https?:\/\//, '').replace(/\/+$/, ''))
-    .pipe(z.string().min(1).max(253).regex(GITHUB_ACCOUNT_HOST_RE, 'Use a bare hostname such as github.example.com')),
-  login: z.string().trim().regex(GITHUB_ACCOUNT_LOGIN_RE, 'Not a valid GitHub login').nullable().optional(),
-  trust: z.enum(GITHUB_ACCOUNT_TRUST_LEVELS).optional(),
-  // null = the trust level's default (Private: local providers only).
-  allowedProviders: z.array(z.string().trim().min(1).max(128)).max(50).nullable().optional(),
-  mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
-  // Monthly subscription audit delivered as a PortOS notification (#12874).
-  auditReport: z.boolean().optional(),
-  // Private (Enterprise) accounts refuse every agent hand-off unless the operator
-  // opts in: the lanes run on PortOS's own providers, which the allow-list cannot bind.
-  allowAgents: z.boolean().optional(),
-  // Enterprise hosts only: every human on the instance counts as trusted (#13203).
-  trustInstanceUsers: z.boolean().optional(),
-  agentRules: githubAgentRulesSchema.optional(),
-  agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
-  enabled: z.boolean().optional(),
-}).strict();
-
-export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().strict();
-
-// GitHub notifications inbox (#12870).
-export const githubNotificationsQuerySchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-  view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
-}).strict();
-
-export const githubNotificationsSyncSchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-}).strict();
-
-export const githubNotificationsClearSchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-}).strict();
-
-// Deployment approval from the inbox (#13198): operator only.
-export const githubDeploymentReviewSchema = z.object({
-  state: z.enum(['approved', 'rejected']),
-  environmentIds: z.array(z.number().int().positive()).min(1).max(20),
-  comment: z.string().trim().max(1000).optional(),
-}).strict();
-
-export const githubNotificationActionSchema = z.object({
-  action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
-}).strict();
-
-export const GITHUB_NOTIFICATION_THREAD_ID_RE = /^\d{1,20}$/;
-
-// Automations tab (#12871): the one cadence it offers, or back to Run now only.
-export const GITHUB_NOTIFICATION_CADENCES = Object.freeze({ 'weekdays-15m': '*/15 * * * 1-5', off: null });
-export const githubAuditApplySchema = z.object({
-  suggestionId: z.string().trim().min(1).max(300),
-}).strict();
-
-export const githubNotificationCadenceSchema = z.object({
-  cadence: z.enum(Object.keys(GITHUB_NOTIFICATION_CADENCES)),
-}).strict();
-
-// =============================================================================
-// INSIGHTS SCHEMAS
-// =============================================================================
-
-export const insightRefreshSchema = z.object({
-  providerId: providerRefSchema.optional(),
-  model: z.string().optional()
-});
-
-// Goal effectiveness scorecard (#2157).
-export const scorecardComputeSchema = z.object({
-  weekStart: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
-});
-
-export const scorecardSettingsSchema = z.object({
-  enabled: z.boolean().optional(),
-  provider: providerRefSchema.nullable().optional(),
-  model: z.string().nullable().optional(),
-  feedBrainDigest: z.boolean().optional(),
-  weekStartsOn: z.number().int().min(1).max(7).optional()
-});
-
-// Per-goal mapping overrides: { [goalId]: { keywords?, personIds?, subcalendarIds?, enabled? } }.
-const scorecardRuleOverrideSchema = z.object({
-  keywords: z.array(z.string()).optional(),
-  personIds: z.array(z.string()).optional(),
-  subcalendarIds: z.array(z.string()).optional(),
-  enabled: z.boolean().optional()
-});
-export const scorecardRulesSchema = z.record(z.string(), scorecardRuleOverrideSchema);
-
-// =============================================================================
 // SEARCH SCHEMAS
 // =============================================================================
 
@@ -1308,218 +1122,6 @@ export const musicSettingsSchema = z.object({
     lyricsTemplate: z.preprocess(emptyToUndefined, z.string().max(8000).optional()),
   }).partial().optional(),
 });
-
-// Federated media is an opt-in provider surface. The outer objects remain
-// passthrough for mixed-version peers/settings UIs: a rolled-back install must
-// preserve fields introduced by a newer build while still validating every
-// field this build understands.
-export const federatedMediaModelSchema = z.object({
-  engine: z.string().trim().min(1).max(80),
-  modelId: z.string().trim().min(1).max(256),
-}).passthrough();
-
-const federatedMediaModelListSchema = z.array(federatedMediaModelSchema).max(100).refine(
-  (models) => new Set(models.map((model) => `${model.engine}\u0000${model.modelId}`)).size === models.length,
-  { message: 'models must not contain duplicate engine/model pairs' },
-);
-
-// Image/video federation shares this same model-pair shape (`{ engine,
-// modelId }`) as audio for wire uniformity, but only `engine: 'local'`
-// resolves to a live capability today — the provider only has readiness
-// signals for this install's own local generator, not the cloud-CLI image/
-// video backends (codex/grok/agy/external), which spend a *provider's own*
-// account quota rather than sharing this machine's GPU. A peer that
-// configures a non-local engine simply reports 'unknown-engine' and never
-// admits a job, so this schema doesn't need to special-case it.
-export const federatedMediaProviderSettingsSchema = z.object({
-  enabled: z.boolean().optional(),
-  maxQueuedJobs: z.number().int().min(1).max(20).optional(),
-  audioModels: federatedMediaModelListSchema.optional(),
-  imageModels: federatedMediaModelListSchema.optional(),
-  videoModels: federatedMediaModelListSchema.optional(),
-}).passthrough();
-
-// Consumer-side peer selection is independent from the provider's local queue
-// limit. Unknown fields stay round-trip-safe across mixed-version Instances
-// clients while known model pairs remain unique and bounded.
-export const federatedMediaPeerSettingsSchema = z.object({
-  enabled: z.boolean().optional(),
-  audioModels: federatedMediaModelListSchema.optional(),
-  imageModels: federatedMediaModelListSchema.optional(),
-  videoModels: federatedMediaModelListSchema.optional(),
-}).passthrough();
-
-// Where UNATTENDED jobs (Creative Director / Creative Commission) of a given
-// kind render. One peer + one model per kind, chosen by the local operator and
-// stored server-side, so an LLM planner never names a peer. Nullable because
-// clearing a kind is how routing is turned back off — an absent key means
-// "unchanged", an explicit null means "render locally again".
-export const federatedMediaRouteSchema = z.object({
-  peerId: z.string().trim().min(1).max(200),
-  engine: z.string().trim().min(1).max(80),
-  modelId: z.string().trim().min(1).max(256),
-}).strict();
-
-export const federatedMediaRoutingSchema = z.object({
-  image: federatedMediaRouteSchema.nullable().optional(),
-  video: federatedMediaRouteSchema.nullable().optional(),
-}).passthrough();
-
-export const federationSettingsSchema = z.object({
-  strictPullAuthorization: z.boolean().optional(),
-  mediaProvider: federatedMediaProviderSettingsSchema.optional(),
-  mediaRouting: federatedMediaRoutingSchema.optional(),
-}).passthrough();
-
-export const federatedMediaJobRoutingSchema = z.object({
-  engine: z.string().trim().min(1).max(80),
-  modelId: z.string().trim().min(1).max(256),
-  durationSec: z.number().finite().min(1).max(3600).optional(),
-  durationMode: z.enum(['auto', 'manual']).optional(),
-}).strict();
-
-// Provider submissions accept model selection, the canonical fixed-vocabulary
-// instrumental prompt, and — since ADR
-// docs/decisions/2026-08-22-federated-media-input-assets.md rule 2 — free-form
-// lyrics. The asymmetry between the two text fields is deliberate rather than
-// inconsistent: a style/mood/instrument profile renders `prompt` with no
-// expressive loss, so the privacy-safe canonical form is required there; lyrics
-// ARE the words, so no alphabet encodes them without discarding them, and they
-// cross verbatim under the same submission-body rule image/video prompts do.
-// The provider still refuses them for a model whose capability reports
-// `lyrics: false`. URLs, paths, commands, provider credentials, and unknown
-// fields are excluded by the strict object as before.
-const federatedMediaAudioJobSubmissionSchema = federatedMediaJobRoutingSchema.extend({
-  kind: z.literal('audio'),
-  prompt: z.string().trim().min(1).max(8000),
-  lyrics: z.string().max(50_000).optional(),
-}).strict().superRefine((value, ctx) => {
-  if (!isFederatedMediaAudioPrompt(value.prompt)) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['prompt'],
-      message: 'prompt must be rendered from a privacy-safe federated audio profile',
-    });
-  }
-});
-
-// Image/video prompts cross as submitted, with no fixed-vocabulary rendering
-// like audio's: there is no closed taxonomy for arbitrary visual/motion content
-// the way audio has a finite style/mood/instrument alphabet. Why that does not
-// breach the "no PII on federation" rule — a submitted job body is not a status
-// payload, and status/capability payloads stay absolutely prompt-free — is
-// ADR docs/decisions/2026-08-20-federated-visual-prompts.md.
-//
-// Conditioning IMAGES ride the same rule (ADR
-// docs/decisions/2026-08-22-federated-media-input-assets.md rule 1), by id
-// rather than by value: the bytes went up through the authenticated,
-// digest-verified asset endpoint first. What is still refused here — and refused
-// by the routes, since neither has a field to name it — is a MODEL (LoRA
-// weights, rule 3) and multi-step CHAIN STATE (a video to extend, chained
-// chunks, IC-LoRA references, rule 4).
-// Exported UN-REFINED as well, and the split is load-bearing rather than
-// cosmetic. The cross-field rule below pairs `initImageStrength` with
-// `initImage` — but a conditioning image reaches the body as an asset id
-// resolved immediately BEFORE submission, so the persisted marker legitimately
-// carries the strength with no image beside it yet. The marker and the request
-// builder validate against the base; the provider route, which sees the fully
-// assembled body, validates against the refined schema.
-export const federatedMediaImageJobSubmissionBaseSchema = federatedMediaJobRoutingSchema.omit({
-  durationSec: true, durationMode: true,
-}).extend({
-  kind: z.literal('image'),
-  prompt: z.string().trim().min(1).max(4000),
-  negativePrompt: z.string().trim().max(4000).optional(),
-  width: imageEdgeSchema,
-  height: imageEdgeSchema,
-  steps: z.number().int().min(1).max(150).optional(),
-  guidance: z.number().finite().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-  initImage: federatedMediaInputAssetRefSchema.optional(),
-  initImageStrength: z.number().finite().min(0).max(1).optional(),
-  referenceImages: z.array(federatedMediaInputAssetRefSchema)
-    .max(FEDERATED_MEDIA_ASSET_MAX_COUNT).optional(),
-}).strict()
-  .refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
-
-export const federatedMediaImageJobSubmissionSchema = federatedMediaImageJobSubmissionBaseSchema
-  // A strength with nothing to apply it to is a caller bug, not a default to
-  // guess at: silently ignoring it renders at full denoise, which is the
-  // opposite of what a low strength asked for.
-  .refine((value) => value.initImageStrength === undefined || value.initImage !== undefined, {
-    message: 'initImageStrength requires an initImage',
-    path: ['initImageStrength'],
-  });
-
-// Same boundary as the image schema above — see the ADRs named there.
-//
-// Exported UN-REFINED as well: `negotiateVideoConstraints` re-validates a
-// partially-negotiated body against `.partial()`, and Zod refuses `.partial()`
-// on a schema carrying refinements. Splitting the object from its cross-field
-// rule keeps both callers honest instead of dropping the rule to keep the
-// partial working.
-export const federatedMediaVideoJobSubmissionBaseSchema = federatedMediaJobRoutingSchema.omit({
-  durationSec: true, durationMode: true,
-}).extend({
-  kind: z.literal('video'),
-  a2vLoraStageStrengths: a2vLoraStageStrengthsSchema.refine(isDefaultA2vLoraStages, {
-    message: 'Federated video does not support per-stage user LoRA strengths',
-  }).optional(),
-  prompt: z.string().trim().min(1).max(4000),
-  negativePrompt: z.string().trim().max(4000).optional(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
-  numFrames: z.number().int().min(1).max(FEDERATED_MEDIA_MAX_VIDEO_FRAMES).optional(),
-  fps: z.number().int().min(1).max(60).optional(),
-  steps: z.number().int().min(1).max(150).optional(),
-  guidance: z.number().finite().min(0).max(30).optional(),
-  seed: z.number().int().min(0).optional(),
-  sourceImage: federatedMediaInputAssetRefSchema.optional(),
-  lastImage: federatedMediaInputAssetRefSchema.optional(),
-  sourceAudio: federatedMediaInputAssetRefSchema.optional(),
-  audioConditioning: federatedSourceAudioSchema.optional(),
-}).strict();
-
-export const federatedMediaVideoJobSubmissionSchema = federatedMediaVideoJobSubmissionBaseSchema
-  .refine((v) => Boolean(v.sourceAudio) === Boolean(v.audioConditioning), {
-    message: 'sourceAudio and audioConditioning must be supplied together',
-  })
-  .refine((v) => !v.audioConditioning || (v.fps !== undefined && v.numFrames !== undefined), {
-    message: 'Source audio requires explicit fps and numFrames for its exact window',
-  })
-  .refine((v) => !v.sourceAudio || (!v.lastImage && v.sourceAudio.assetId.endsWith(v.audioConditioning?.clipSha256 || '!')), {
-    message: 'Source audio must match its clip digest and cannot combine with an end frame',
-  })
-  // First-last-frame needs both ends. A lone end frame would render a plain
-  // text-to-video clip and quietly discard the frame the caller supplied.
-  .refine((value) => value.lastImage === undefined || value.sourceImage !== undefined, {
-    message: 'lastImage requires a sourceImage (first-last-frame needs both ends)',
-    path: ['lastImage'],
-  });
-
-// An already-shipped consumer's request body never carries `kind` — it only
-// knows the pre-existing audio-only shape. Defaulting the missing field to
-// 'audio' before the discriminated union runs keeps that body validating
-// exactly as before; a new consumer names its kind explicitly.
-export const federatedMediaJobSubmissionSchema = z.preprocess(
-  (value) => (isPlainObject(value) && value.kind === undefined ? { ...value, kind: 'audio' } : value),
-  z.discriminatedUnion('kind', [
-    federatedMediaAudioJobSubmissionSchema,
-    federatedMediaImageJobSubmissionSchema,
-    federatedMediaVideoJobSubmissionSchema,
-  ]),
-);
-
-export const federatedMediaIdempotencyKeySchema = z.string().trim().min(1).max(200)
-  .regex(/^[A-Za-z0-9._:-]+$/, 'Idempotency-Key contains unsupported characters');
-
-export const federatedMediaJobParamsSchema = z.object({
-  id: z.string().uuid(),
-}).strict();
-
-export const federatedMediaStatusQuerySchema = z.object({
-  kinds: z.string().trim().max(40).regex(/^[a-z]+(,[a-z]+)*$/).optional(),
-}).passthrough();
 
 // Creative Director settings slice. Each LLM-backed stage can pin its own
 // provider/model instead of inheriting the system default. `evaluation` is a
@@ -2949,7 +2551,7 @@ export const promptVariableKeySchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'inv
 
 // =============================================================================
 // ROUTE BODY SCHEMAS (#9950) — handlers that used to read `req.body` by hand.
-// `routeValidationConventions.test.js` fails any body-bearing POST/PUT/PATCH
+// `routeValidationConventions.guard.test.js` fails any body-bearing POST/PUT/PATCH
 // handler that skips `validateRequest`. A bodyless POST (a bare "run now"
 // button) still parses an optional-field object: pass `req.body ?? {}`.
 // =============================================================================

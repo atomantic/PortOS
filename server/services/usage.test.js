@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  */
 
 vi.mock('fs/promises', () => ({
+  readdir: vi.fn().mockResolvedValue([]),
   writeFile: vi.fn().mockResolvedValue(undefined)
 }));
 
