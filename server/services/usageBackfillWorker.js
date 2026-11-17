@@ -7,6 +7,7 @@ import {
   isSelfContainedRun,
   mergeUsageClaims,
   readMeasuredUsage,
+  reportedRunUsage,
   reconcileRunUsage,
   resolveFamilyProvider,
   snapshotUsageClaims,
@@ -136,6 +137,7 @@ export async function scanHistoricalUsage({
   siblingReconciledRunIds = [],
   providers = null,
   claimsSeed = null,
+  reportedOnly = false,
   onProgress = () => {}
 }) {
   // This function runs inside a worker thread, which gets its own empty copy
@@ -154,13 +156,23 @@ export async function scanHistoricalUsage({
   for (const runId of await listRunIds(runsDir)) {
     const metadataPath = join(runsDir, runId, 'metadata.json');
     const metadata = await readJSONFile(metadataPath, null);
-    if (!metadata || !metadata.providerId || typeof metadata.workspacePath !== 'string' || !metadata.workspacePath
+    if (!metadata || !metadata.providerId
       || typeof metadata.startTime !== 'string' || typeof metadata.endTime !== 'string'
       || !Number.isFinite(Date.parse(metadata.startTime)) || !Number.isFinite(Date.parse(metadata.endTime))) continue;
-    // One HTTP request has no transcript to backfill, and its settled markers
-    // are not evidence that it billed any: re-reading "what it claimed" would
-    // take a session away from the CLI run that owns it.
-    if (isSelfContainedRun(metadata)) continue;
+    const parentSettled = reconciled.has(runId) || metadata.usageReconciled === true;
+    const deferredSession = metadata.usageSessionDeferred === true;
+    // These requests have no ledger estimate to replace. The bridge never
+    // opens a session or writes counts, and a live completion may also have
+    // left reported counts pending after a failed ledger write.
+    if (!parentSettled && isSelfContainedRun(metadata)
+      && (reportedRunUsage(metadata) || deferredSession)) {
+      candidates.push({ runId, metadataPath, metadata, parentPending: true, siblingPending: false, unrecorded: true });
+      continue;
+    }
+    // A self-contained record never claims a CLI transcript, even as settled
+    // evidence. Ephemeral subscription turns have no native transcript either.
+    if (reportedOnly || isSelfContainedRun(metadata)
+      || typeof metadata.workspacePath !== 'string' || !metadata.workspacePath) continue;
     const parentPending = !reconciled.has(runId) && !metadata.usageReconciled
       && Boolean(transcriptFamily(metadata));
     // The sibling pass has no parent-family precondition: an Ollama-backed run
@@ -168,13 +180,13 @@ export async function scanHistoricalUsage({
     // no transcript of its own.
     const siblingPending = canScanSiblings
       && !siblingReconciled.has(runId) && !metadata.usageSiblingsReconciled;
-    const parentSettled = reconciled.has(runId) || metadata.usageReconciled === true;
     const siblingSettled = siblingReconciled.has(runId) || metadata.usageSiblingsReconciled === true;
     if (parentSettled || siblingSettled) settled.push({ metadata, parentSettled, siblingSettled });
     if (!parentPending && !siblingPending) continue;
     candidates.push({ runId, metadataPath, metadata, parentPending, siblingPending });
   }
-  if (candidates.length) await claimSettledUsage(settled, candidates, { home, providers });
+  const transcriptCandidates = candidates.filter((candidate) => !candidate.unrecorded);
+  if (transcriptCandidates.length) await claimSettledUsage(settled, transcriptCandidates, { home, providers });
   candidates.sort((a, b) => Date.parse(a.metadata.startTime) - Date.parse(b.metadata.startTime));
 
   const corrections = [];
@@ -189,7 +201,8 @@ export async function scanHistoricalUsage({
       cacheReadTokens: 0,
       cacheWriteTokens: 0
     };
-    const records = asList(await reconcileRunUsage(candidate.metadata, estimate, {
+    const failedWithoutCounts = candidate.unrecorded && candidate.metadata.success !== true && !reportedRunUsage(candidate.metadata);
+    const records = failedWithoutCounts ? [] : asList(await reconcileRunUsage(candidate.metadata, estimate, {
       home,
       providers: candidate.siblingPending ? providers : null
     }));
@@ -201,7 +214,7 @@ export async function scanHistoricalUsage({
     const parentRecords = candidate.parentPending
       ? records.filter((entry) => entry?.role !== 'sibling')
       : [];
-    if (isWorthRecording(parentRecords, siblings)) {
+    if (candidate.unrecorded || isWorthRecording(parentRecords, siblings)) {
       corrections.push({
         runId: candidate.runId,
         metadataPath: candidate.metadataPath,
@@ -210,8 +223,15 @@ export async function scanHistoricalUsage({
         model: candidate.metadata.model ?? null,
         // Null when the parent pass already ran — the day bucket holds measured
         // counts by then, and there is no estimate left to remove.
-        estimate: parentRecords.length ? estimate : null,
-        measured: parentRecords.length ? parentRecords : null,
+        estimate: !candidate.unrecorded && parentRecords.length ? estimate : null,
+        measured: candidate.unrecorded || parentRecords.length ? parentRecords : null,
+        ...(candidate.unrecorded ? {
+          unrecorded: true,
+          deferredSession: candidate.metadata.usageSessionDeferred === true,
+          providerName: candidate.metadata.providerName,
+          startTime: candidate.metadata.startTime,
+          endTime: candidate.metadata.endTime,
+        } : {}),
         siblings,
         siblingScanned: candidate.siblingPending
       });

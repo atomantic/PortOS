@@ -124,12 +124,14 @@ recording shows it (a browser suite therefore loads its driver with
 `require(require.resolve(…))`, #16586); for a tree holding a submodule or
 nested repository (one listed entry, whatever it contains); and outside a git checkout. A product
 module's own oversized read is still ignored, as before: only a tree-scanning
-guard calls those walkers, and the planner keeps those always-run.
+guard calls those walkers, and a guard (`*.guard.test.js`) is never memoized.
 
 ## Never memoized (fails closed)
 
-A file in the planner's always-run set
-or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
+A tree guard, named `*.guard.test.js` (the planner selects guards by that
+suffix, see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)); any other file in the
+planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
+tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —
 product modules that run git on their own targets are under the test's
@@ -183,7 +185,7 @@ was refused:
 ```
 🧠 Test memo: recorded 12 green entries for 14 passed files.
 🧠   not recorded: client/src/components/Example.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
-🧠   not recorded: 3 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).
+🧠   not recorded: 3 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).
 ```
 
 At most 40 files are listed, then the rest are counted. Files that are never
@@ -225,7 +227,7 @@ under the run's own key only.
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.
-`scripts/browser-suite-registry.test.js` reads every registered suite and fails
+`scripts/browser-suite-registry.guard.test.js` reads every registered suite and fails
 on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a

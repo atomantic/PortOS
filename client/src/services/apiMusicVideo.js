@@ -21,10 +21,11 @@ export const exportMusicVideoMakingOf = (selection, options = {}) => request('/m
 
 // Bounded, newest-first summary page (#10169) — `{ items, total, nextCursor }`
 // for the index and header picker, never the full project records.
-export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options = {}) => {
+export const listMusicVideoProjectSummaries = ({ cursor, limit, statusFilter } = {}, options = {}) => {
   const query = new URLSearchParams({ summary: '1' });
   if (limit != null) query.set('limit', String(limit));
   if (cursor != null) query.set('cursor', String(cursor));
+  if (statusFilter) query.set('statusFilter', statusFilter);
   return request(`/music-video?${query}`, options);
 };
 // Live `{ id, name }` rows for the sidebar's Music Video sub-nav.

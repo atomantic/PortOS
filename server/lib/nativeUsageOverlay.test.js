@@ -37,6 +37,18 @@ describe('overlayNativeUsage', () => {
     expect(ledger['2026-07-10'].byProvider['claude-code'].tokensIn).toBe(130);
   });
 
+  it('keeps measured ephemeral subscription counts once alongside native sessions, with measured provenance', () => {
+    const bucket = { sessions: 1, ...counts(108, 53, { cacheReadTokens: 4 }), source: 'measured',
+      unpersisted: counts(8, 3, { cacheReadTokens: 4 }),
+      byModel: { 'model-c': { ...counts(108, 53, { cacheReadTokens: 4 }), source: 'measured', unpersisted: counts(8, 3, { cacheReadTokens: 4 }) } } };
+    const ledger = { '2026-07-10': { byProvider: { codex: bucket } } };
+    const stores = { codex: store({ '2026-07-10': { 'model-c': native(100, 50) } }) };
+    const once = overlayNativeUsage(ledger, { stores, providers });
+    expect(once['2026-07-10'].byProvider.codex).toMatchObject({ sessions: 1, tokensIn: 108, tokensOut: 53, cacheReadTokens: 4, source: 'measured',
+      byModel: { 'model-c': { tokensIn: 108, tokensOut: 53, cacheReadTokens: 4, source: 'measured' } } });
+    expect(overlayNativeUsage(once, { stores, providers })).toEqual(once);
+  });
+
   it('drops measured counts of every family provider, not only the reported one', () => {
     const ledger = { '2026-07-10': { byProvider: {
       'claude-tui': { name: 'Claude TUI', ...counts(50, 50), source: 'measured', byModel: { 'model-a': { ...counts(50, 50), source: 'measured' } } },

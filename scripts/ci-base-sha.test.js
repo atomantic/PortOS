@@ -331,7 +331,7 @@ describe('ci.yml autofixer workspace install', () => {
     // its own .npmrc, and `npm run setup` / scripts/ensure-deps.js install it
     // on every user's machine. When no CI job ran `npm ci` against it, a
     // lockfile that stopped resolving shipped green and failed at setup time
-    // instead — the static parity checks in dependency-overrides.test.js only
+    // instead — the static parity checks in dependency-overrides.guard.test.js only
     // parse the JSON. The impact job is the one that always runs, so the
     // install and the `node --check` of the entry point live there.
     // Named, so the loop below is never vacuously green on a deleted step.

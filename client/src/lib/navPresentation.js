@@ -129,6 +129,7 @@ export const NAV_PRESENTATION = {
   '/brain/import': { icon: Upload },
   '/brain/inbox': { icon: MessageSquare },
   '/brain/links': { icon: Link2 },
+  '/brain/meditation': { icon: AudioLines },
   '/brain/memory': { icon: Database },
   '/brain/notes': { icon: FileText },
   '/brain/spotify': { icon: Music },

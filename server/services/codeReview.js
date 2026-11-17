@@ -935,7 +935,7 @@ function reviewMessages({ messages, userMessage, systemPromptFor }, workspace) {
 async function loadReviewProvider(backend) {
   const providerId = backend.slice('provider:'.length)
   // The auth-independent claim bridge has no server bootstrap. Use the same
-  // provider-store reader there without starting a server or creating runners.
+  // provider-store reader for toolkit-less callers without starting a server.
   return getAIToolkitInstance()
     ? await getProviderById(providerId)
     : await createProviderService({ dataDir: PATHS.data }).getProviderById(providerId)

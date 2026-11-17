@@ -13,7 +13,7 @@ import vitestConfig from '../../vitest.config.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 /** This file's own path, as `trackedTestFiles` spells it. */
-const SELF = 'src/test/timeouts.test.js';
+const SELF = 'src/test/timeouts.guard.test.js';
 
 /** A brace-delimited object literal with no nested braces, and its `key:` names. */
 const FLAT_OBJECT = /\{([^{}]*)\}/g;

@@ -196,6 +196,21 @@ describe('historical usage worker', () => {
     expect(result.corrections[0]).toMatchObject({ runId: 'run-overlapping-history', measured: [expect.objectContaining({ tokensOut: 200 })] });
   });
 
+  it('imports reported bridge counts without a workspace or transcript and respects ledger and metadata markers', async () => {
+    const metadata = { providerId: 'claude-api-example', model: 'example-model',
+      startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:10:00Z',
+      success: true, selfContainedUsage: true, usageSessionDeferred: true,
+      reportedUsage: { tokensIn: 7, tokensOut: 3, cacheReadTokens: 2 } };
+    await writeRun('bridge', metadata);
+    await writeRun('settled', { ...metadata, usageReconciled: true });
+    await writeRun('running', { ...metadata, endTime: null });
+    const first = await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true });
+    expect(first.corrections).toEqual([expect.objectContaining({ runId: 'bridge', unrecorded: true, deferredSession: true, estimate: null,
+      measured: [expect.objectContaining({ tokensIn: 7, tokensOut: 3, cacheReadTokens: 2, source: 'measured' })], siblings: [] })]);
+    expect((await scanHistoricalUsage({ runsDir: root, home, reportedOnly: true, reconciledRunIds: ['bridge'] })).corrections).toEqual([]);
+    expect(snapshotUsageClaims()).toEqual(expect.objectContaining({ codexHighWater: [] }));
+  });
+
   it('skips an unreconciled self-contained run instead of swapping an estimate for a session it cannot own', async () => {
     await writeRun('run-self-contained-pending', {
       providerId: 'claude-api-example',

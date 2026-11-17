@@ -232,7 +232,9 @@ describe('callers of callProviderAISimple leave one run and one usage session pe
     const pending = generateReport('example-app', {
       name: 'Example App', jira: { enabled: true, instanceId: 'example-instance', projectKey: 'EX' },
     });
-    await vi.waitFor(async () => expect(await records()).toHaveLength(1));
+    // A directory exists before createRun has finished publishing it. This
+    // case stops an actual in-flight request; early Stop is covered separately.
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     const [live] = await records();
     expect(await runner.stopRun(live.id)).toBe(true);
     const report = await pending;

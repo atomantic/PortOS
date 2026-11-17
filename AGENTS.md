@@ -102,7 +102,7 @@ The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the c
 
 Read the nested `AGENTS.md` (each with a bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (the last is an override-consistency contract: no imports out to other PortOS modules); scope list: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
-**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.test.js` caps every instruction file's size. Splice details and where procedure moves: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
+**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.guard.test.js` caps every instruction file's size. Splice details and where procedure moves: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
 ### Command Palette & Voice Nav
 
@@ -142,7 +142,7 @@ Write comments for agents maintaining the code: the why, invariants, non-obvious
 - **Zod validation** for all route inputs via `lib/validation.js`.
 - **Command allowlists**: preserve the operator and unattended execution policies in `server/lib/commandSecurity.js` and the agent guard (PortOS runtime execution; dev-agent tool permissions come from the host).
 - **Push, don't poll**: the server emits a Socket.IO event when data changes; own mutations apply their response locally; never refetch on a timer ([exceptions](docs/UX_DESIGN_GUIDE.md#realtime-updates-not-polling); client rules in `client/src/AGENTS.md`).
-- **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/logLevelConventions.test.js`; [marker table](docs/INSTRUCTION_RULE_DETAIL.md#logging-levels)).
+- **Single-line logging** with emoji prefixes and interpolation, never JSON blobs or arrays. **stderr means "investigate"**: `console.error`/`console.warn` only for something actually wrong; guard refusals, skips and handled degraded states stay on `console.log` with a non-failure marker (`server/logLevelConventions.guard.test.js`; [marker table](docs/INSTRUCTION_RULE_DETAIL.md#logging-levels)).
 - **LLM response merging**: key absent preserves the original; key present and empty applies the clear; never `.length` truthiness. Keep server merges and the client's `pick` helpers mirrored ([string and array gates](docs/INSTRUCTION_RULE_DETAIL.md#llm-response-merging-and-sentinels)).
 - **Sentinels**: never let absent, failed-to-fetch or invalid collapse into fetched-and-empty or valid; use an explicit sentinel and validate, not `x.length` or `x || fallback` ([examples](docs/INSTRUCTION_RULE_DETAIL.md#llm-response-merging-and-sentinels)).
 

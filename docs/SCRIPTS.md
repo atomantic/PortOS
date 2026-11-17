@@ -1,6 +1,6 @@
 # Scripts reference
 
-Every top-level file in `scripts/` is either wired into something (CI, a test, a `package.json` script, the server) or listed here with when to run it. The guard in `server/scriptReferences.test.js` fails a top-level script that nothing references, so a new one needs a row here or a caller. Test files (`*.test.js`) are collected by the Vitest run and are not listed.
+Every top-level file in `scripts/` is either wired into something (CI, a test, a `package.json` script, the server) or listed here with when to run it. The guard in `server/scriptReferences.guard.test.js` fails a top-level script that nothing references, so a new one needs a row here or a caller. Test files (`*.test.js`) are collected by the Vitest run and are not listed.
 
 ## npm scripts
 

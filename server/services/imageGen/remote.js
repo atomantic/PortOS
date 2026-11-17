@@ -19,10 +19,7 @@ import { z } from 'zod';
 import { PATHS, atomicWrite } from '../../lib/fileUtils.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import {
-  federatedMediaImageJobSubmissionBaseSchema,
-  federatedMediaImageJobSubmissionSchema,
-} from '../../lib/validation.js';
+import { federatedMediaImageJobSubmissionBaseSchema, federatedMediaImageJobSubmissionSchema } from '../../lib/federatedMediaValidation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { imageGenEvents } from '../imageGenEvents.js';

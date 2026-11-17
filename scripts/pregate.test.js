@@ -194,7 +194,7 @@ describe('resolvePlanStages', () => {
   });
 
   it.each(['related', 'full'])('runs shared guards before every costly %s stage without changing the broad selection', (mode) => {
-    const tracked = ['server/lib/moduleSummaries.test.js', getAlwaysRunTests()[0], 'client/src/fooConventions.test.js'];
+    const tracked = ['server/lib/moduleSummaries.test.js', getAlwaysRunTests()[0], 'client/src/fooConventions.guard.test.js'];
     const plan = planWith({
       server: { mode, files: tracked.slice(0, 2), sources: ['server/lib/helper.js'] },
       client: { mode, files: tracked.slice(2), sources: [] },
@@ -1215,13 +1215,14 @@ describe('downgradeFullPlan', () => {
   it('replaces the full suite with the tracked always-run guards', () => {
     const serverGuards = getAlwaysRunTests().slice(0, 3);
     const clientGuards = [
-      'client/src/asyncEffectDisposalConventions.test.js',
-      'client/src/fooConventions.test.js',
-      'client/src/hooks/mountedRefConventions.test.js',
+      'client/src/asyncEffectDisposalConventions.guard.test.js',
+      'client/src/components/ui/fooPanel.guard.test.jsx',
+      'client/src/hooks/mountedRefConventions.guard.test.js',
     ];
+    // Neither a convention-sounding name without the suffix nor a server guard is a client guard.
     const tracked = [...serverGuards, ...clientGuards,
-      'client/src/App.test.jsx', 'client/src/fooConventions.js',
-      'server/fooConventions.test.js',
+      'client/src/App.test.jsx', 'client/src/fooConventions.js', 'client/src/fooConventions.test.js',
+      'server/fooConventions.guard.test.js',
     ];
     const downgraded = downgradeFullPlan(planWith({ full: true }), tracked);
     expect(downgraded.full).toBe(false);
