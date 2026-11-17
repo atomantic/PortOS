@@ -1184,6 +1184,28 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return null;
   };
 
+  /**
+   * True when the code `roots` run reaches Chrome: a root, or (when walking)
+   * a module it imports or a script it executes, names the browser. JS that
+   * is only read as data does not count: a product module that lists a
+   * template directory also lists that directory's browser tests, and that
+   * must not turn every importer into a real-browser test.
+   */
+  const reachesChrome = (roots, walk) => {
+    const seen = new Set();
+    const pending = [...roots];
+    while (pending.length) {
+      const rel = pending.pop();
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const f = factsFor(rel);
+      if (f.tools.has('chrome')) return true;
+      if (walk) for (const dep of f.modules) pending.push(dep);
+      for (const side of f.sideModules) if (!f.dataModules.has(side)) pending.push(side);
+    }
+    return false;
+  };
+
   /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
   const gather = (roots, { walk, testRel = null, stop = null, followMockOnly = true }) => {
     const members = new Set();
@@ -1242,9 +1264,9 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     }
     // A real-browser test renders what a dev server, bundler or static server
     // reads for it, none of which the module runner records. Every directory
-    // the test file hands to such a tool is therefore an input, whole. Node
-    // tests keep the older reading (a directory passed along is a value).
-    if (testRel !== null && members.has(testRel) && tools.has('chrome')) {
+    // the test file hands to such a tool is therefore an input, whole. Every
+    // other test keeps the older reading (a directory passed along is a value).
+    if (testRel !== null && members.has(testRel) && reachesChrome(roots, walk)) {
       const own = factsFor(testRel);
       for (const dir of own.handedDirs) {
         const problem = addHandedDir(dir, own, { inputs, absent, dataPackages, trees });
@@ -1382,7 +1404,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const reach = new Set();
     // The directories a real-browser test hands to a tool (`gather`); a problem there already failed the recorded key.
     const own = factsFor(testRel);
-    if ([testRel, ...record.modules].some((rel) => factsFor(rel).tools.has('chrome'))) {
+    if (reachesChrome([testRel, ...record.modules], false)) {
       for (const dir of own.handedDirs) addHandedDir(dir, own, { inputs: reach, absent: new Set(), dataPackages: new Map() });
     }
     const walked = new Map(); // rel -> highest mode walked; a wider later visit re-walks it

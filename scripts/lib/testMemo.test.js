@@ -326,6 +326,23 @@ describe('floor key', () => {
       expect(key(handing, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).toBe(key(handing).key);
     });
 
+    it('treats a test as real-browser through what it runs, not through browser tests a member only lists', () => {
+      const lister = "export const templates = () => readdirSync(join(__dirname, 'templates'));\n";
+      const sibling = "import { chromium } from 'playwright-core';\nit('a browser test in the listed directory', () => {});\n";
+      const tree = { ...SERVED, 'server/lib/lister.js': lister, 'server/lib/templates/engine.browser.test.js': sibling };
+      const body = `import { templates } from './lister.js';\n${handing}`;
+      const listed = keyOf({ ...tree, [test]: nodeTest(body) }).floor;
+      expect(listed.memoizable).toBe(true);
+      expect(keyOf({ ...tree, 'client/src/Panel.jsx': 'export const Panel = 2;\n', [test]: nodeTest(body) }).floor.key).toBe(listed.key);
+      // A helper the test imports, or a script it spawns, that drives Chrome does make it one.
+      const helper = { ...SERVED, 'server/lib/driver.js': "export const chrome = process.env.CHROME_PATH;\n" };
+      for (const reach of ["import { chrome } from './driver.js';", "spawn(process.execPath, [join(__dirname, 'driver.js')]);"]) {
+        const before = keyOf({ ...helper, [test]: nodeTest(`${reach}\n${handing}`) }).floor;
+        expect(before.memoizable, reach).toBe(true);
+        expect(keyOf({ ...helper, 'client/src/Panel.jsx': 'export const Panel = 2;\n', [test]: nodeTest(`${reach}\n${handing}`) }).floor.key, reach).not.toBe(before.key);
+      }
+    });
+
     it('selects the suite for a change in a handed tree, recorded or not', () => {
       const files = { ...SERVED, [test]: browserTest(handing) };
       const digestOf = (rel) => createHash('sha256').update(files[rel]).digest('hex').slice(0, 16);
