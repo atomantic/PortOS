@@ -45,6 +45,7 @@ const api = vi.hoisted(() => ({
   getSettings: vi.fn(),
   generateImage: vi.fn(),
   updateUniverse: vi.fn(),
+  patchUniverseCanonEntry: vi.fn(),
   updatePipelineSeries: vi.fn(),
   listCatalogIngredientsByIds: vi.fn(),
 }));
@@ -890,6 +891,94 @@ describe('StoryBuilder — detail stepper', () => {
       category: 'characters',
     });
     expect(api.updateUniverse).not.toHaveBeenCalled();
+  });
+
+  const unlockedSteps = (upTo) => mkSteps(Object.fromEntries(
+    STEPS.map((s) => s.id).slice(0, STEPS.findIndex((s) => s.id === upTo)).map((id) => [id, { status: 'locked', locked: true }]),
+  ));
+  const openStep = (stepId, extra = {}) => {
+    api.getStorySession.mockResolvedValue({
+      id: 'stb-1', title: 'Salt Run', currentStep: stepId, seedIdea: 'a seed', universeId: 'u1', seriesId: 's1',
+      steps: unlockedSteps(stepId), staleSteps: [], llm: { provider: '', model: '' }, ...extra,
+    });
+    renderAt(`/story-builder/stb-1/${stepId}`);
+  };
+
+  it('idea step: title and starter idea edit in place and commit on blur without an AI call', async () => {
+    api.updateStorySession.mockImplementation(async (_id, patch) => patch);
+    openStep('idea');
+    const title = await screen.findByLabelText('Working title');
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Salt Run II');
+    expect(api.updateStorySession).not.toHaveBeenCalled();
+    await userEvent.tab();
+    await waitFor(() => expect(api.updateStorySession).toHaveBeenCalledWith('stb-1', { title: 'Salt Run II' }, expect.anything()));
+    expect(screen.getByLabelText('Working title').value).toBe('Salt Run II');
+
+    const idea = screen.getByLabelText('Starter idea');
+    await userEvent.type(idea, ' plus more');
+    await userEvent.tab();
+    await waitFor(() => expect(api.updateStorySession).toHaveBeenCalledWith('stb-1', { seedIdea: 'a seed plus more' }, expect.anything()));
+    expect(api.generateStoryStep).not.toHaveBeenCalled();
+  });
+
+  it('idea step: an emptied title is refused client-side and reverts', async () => {
+    openStep('idea');
+    const title = await screen.findByLabelText('Working title');
+    await userEvent.clear(title);
+    await userEvent.tab();
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith('Title cannot be empty'));
+    expect(api.updateStorySession).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Working title').value).toBe('Salt Run');
+  });
+
+  it('universe aesthetic step: logline and influences commit through updateUniverse on blur', async () => {
+    api.getUniverse.mockResolvedValue({ id: 'u1', logline: 'L', premise: 'P', styleNotes: 'S', influences: { embrace: ['noir'], avoid: ['neon'] }, characters: [] });
+    api.updateUniverse.mockImplementation(async (_id, patch) => ({ id: 'u1', logline: 'L', premise: 'P', styleNotes: 'S', influences: { embrace: ['noir'], avoid: ['neon'] }, characters: [], ...patch }));
+    openStep('universeAesthetic');
+    const logline = await screen.findByLabelText('Logline');
+    await userEvent.clear(logline);
+    await userEvent.type(logline, 'New logline');
+    await userEvent.tab();
+    await waitFor(() => expect(api.updateUniverse).toHaveBeenCalledWith('u1', { logline: 'New logline' }, expect.anything()));
+
+    const embrace = screen.getByLabelText('Influences — embrace');
+    await userEvent.type(embrace, ', grain');
+    await userEvent.tab();
+    // Both lists are sent: the server defaults a missing list to [] and would wipe "avoid".
+    await waitFor(() => expect(api.updateUniverse).toHaveBeenCalledWith(
+      'u1', { influences: { embrace: ['noir', 'grain'], avoid: ['neon'] } }, expect.anything(),
+    ));
+  });
+
+  it('universe aesthetic step: locked fields stay read-only', async () => {
+    openStep('universeAesthetic', {
+      steps: mkSteps({ idea: { locked: true }, universeAesthetic: { status: 'locked', locked: true } }),
+    });
+    await waitFor(() => expect(screen.getByText('Logline')).toBeTruthy());
+    expect(screen.queryByLabelText('Logline')).toBeNull();
+    expect(screen.queryByLabelText('Premise')).toBeNull();
+  });
+
+  it('characters step: a character without a description gets an inline field that enables its preview', async () => {
+    api.getUniverse.mockResolvedValue({
+      id: 'u1', name: 'Giant', influences: { embrace: [], avoid: [] }, styleNotes: 'inky',
+      characters: [{ id: 'ch1', name: 'Kessa', physicalDescription: '', imageRefs: [] }],
+    });
+    const withDesc = { id: 'u1', name: 'Giant', influences: { embrace: [], avoid: [] }, styleNotes: 'inky',
+      characters: [{ id: 'ch1', name: 'Kessa', physicalDescription: 'tall, scarred', imageRefs: [] }] };
+    api.patchUniverseCanonEntry.mockResolvedValue({ universe: withDesc, entry: withDesc.characters[0] });
+    openStep('characters');
+    const field = await screen.findByLabelText('Description for Kessa');
+    await userEvent.type(field, ' tall, scarred ');
+    await userEvent.tab();
+    await waitFor(() => expect(api.patchUniverseCanonEntry).toHaveBeenCalledWith(
+      'u1', 'characters', 'ch1', { physicalDescription: 'tall, scarred' }, expect.anything(),
+    ));
+    await waitFor(() => expect(screen.getByLabelText('Description for Kessa').value).toBe('tall, scarred'));
+    fireEvent.click(screen.getByTitle('Render image for this item'));
+    await waitFor(() => expect(api.generateImage).toHaveBeenCalled());
+    expect(api.generateImage.mock.calls[0][0].prompt).toContain('tall, scarred');
   });
 
   it('persists the provider/model picker choice to session.llm', async () => {
