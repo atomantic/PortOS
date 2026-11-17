@@ -504,10 +504,10 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 function guardBudgetStatus(files, durations) {
   const timed = Object.fromEntries(files.filter(file => typeof durations[file] === 'number').map(file => [file, durations[file]]));
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
-  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${GUARD_BUDGET_MS / 1000}s).`);
+  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
   const over = overBudgetGuards(timed);
   if (over.length === 0) return 0;
-  const detail = `${describeGuardDurations(over)} over the ${GUARD_BUDGET_MS / 1000}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
+  const detail = `${describeGuardDurations(over)} over the ${(GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
   console.error(`❌ Always-run guard over its time budget: ${detail}`);
   console.error(formatErrorAnnotation('Always-run guard over its time budget', detail));
   return 1;

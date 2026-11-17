@@ -643,7 +643,7 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
 
       const enforced = run({ CI_GUARD_BUDGET: 'enforce' });
       expect(enforced.status).toBe(1);
-      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${guard} 3.5s over the 3s per-file budget.`);
+      expect(enforced.stderr).toContain(`❌ Always-run guard over its time budget: ${guard} 3.5s over the 3.0s per-file budget.`);
       // The guard ran alone, before the rest of the selection.
       expect(enforced.stdout.match(/^RAN .*$/gm)).toEqual([`RAN ["../${guard}"]`, `RAN ["../${other}"]`]);
 
@@ -654,7 +654,7 @@ describe('always-run guard time budget through the real runner (#16551)', () => 
 
       const fast = run({ CI_GUARD_BUDGET: 'enforce', FAKE_SLOW_GUARD: 'no-such-file' });
       expect(fast.status, fast.stderr).toBe(0);
-      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 1: ${guard} 0.0s (budget 3s).`);
+      expect(fast.stdout).toContain(`⏱️ Always-run guards, slowest of 1: ${guard} 0.0s (budget 3.0s).`);
     } finally {
       rmSync(fixture, { recursive: true, force: true });
     }
