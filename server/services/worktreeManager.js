@@ -2193,6 +2193,9 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
  *   1. the working tree is completely clean, and
  *   2. every commit on the branch is already in the default branch — detected via
  *      `hasBranchMergeEvidence`, which covers normal AND squash/rebase merges.
+ * Outside the CoS root, where no run record owns the tree, the branch must also
+ * not be new, published, or still in use (`decideMergedWorktreeReap`, #16625):
+ * ancestry alone reads a branch created at main a minute ago as merged.
  *
  * Because of gate (2) this works regardless of merge strategy, but a true merge
  * commit (see the `--merge`-preferring agent prompts) makes detection bulletproof.
