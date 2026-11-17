@@ -1578,6 +1578,27 @@ describe('CI test impact planner', () => {
       expect(exact.server.mode).toBe('files');
       expect(exact.shards.server).toEqual([1]);
     });
+
+    it('fans a server related plan out on measured import reach over the cap, never on a small one (#16547)', () => {
+      const source = 'server/services/flat.js';
+      const tests = featureTests('server/services/flatfeature', 3);
+      const trackedFiles = [...TRACKED, source, ...tests];
+      const reach = (selected) => ({ selected, rows: [{ source, dynamicReach: selected, staticReach: 10 }] });
+
+      const broad = buildCiTestPlan([source], { trackedFiles, serverReach: reach(1069) });
+      expect(broad.server.mode).toBe('related');
+      expect(broad.shards).toEqual({ server: SERVER_FANOUT, client: [1], windows: [1] });
+      expect(broad.suiteReasons.server).toMatch(/related import reach of 1069 suites exceeds the 125-file cap, sharded 2 ways/);
+
+      const narrow = buildCiTestPlan([source], { trackedFiles, serverReach: reach(50) });
+      expect(narrow.shards.server).toEqual([1]);
+      expect(narrow.suiteReasons.server).not.toMatch(/sharded/);
+
+      // Reach only partitions a related walk: an exact-file plan stays put.
+      const exact = buildCiTestPlan(tests, { trackedFiles, serverReach: reach(1069) });
+      expect(exact.server.mode).toBe('files');
+      expect(exact.shards.server).toEqual([1]);
+    });
   });
 
   it('falls back to full CI for unknown artifacts and wide changes', () => {

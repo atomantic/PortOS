@@ -77,16 +77,21 @@ export const shardIndexes = (mode, count) => (
  * Whether a scoped Linux runner fans out across its full-suite shard count.
  *
  * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
- * - Everything else stays on one runner. A server `related` plan used to fan
- *   out unconditionally because lazy `import()` edges let one changed source
- *   select ~1,300 suites; the runner now narrows a recorded test to the
- *   modules its green run loaded (`recordedReach` in lib/testMemo.js, #16424),
- *   so graph reach alone no longer justifies a second runner.
+ * - A server `related` plan whose measured import reach (`serverReach.selected`,
+ *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
+ *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
+ *   The client has no reach measure, so only the cap applies there.
+ * - Everything else stays on one runner. Record-aware selection
+ *   (`recordedReach` in lib/testMemo.js, #16424) narrows what a selected test
+ *   actually runs; reach is measured, not assumed, so a small graph stays put.
  *
  * No shard-count floor is needed: the runner slices the selection itself and
  * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
-const fansOut = ({ mode, files }) => mode !== 'skip' && mode !== 'full' && files.length > MAX_TARGETED_TEST_FILES;
+const fansOut = ({ mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
+  && (files.length > MAX_TARGETED_TEST_FILES || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+
+const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
 
 const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
 
@@ -945,6 +950,9 @@ export const isRouteOnlyAppDiff = (diff) => {
 const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
+  if (plan[runner].files.length <= MAX_TARGETED_TEST_FILES) {
+    return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
+  }
   return `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
 };
 
@@ -1043,6 +1051,9 @@ export function buildCiTestPlan(changedFiles, options = {}) {
 
 function buildSuitePlan(changedFiles, {
   trackedFiles = [],
+  // measureRepoImportReach() report; its `selected` count can fan a server
+  // related plan out (see fansOut). null keeps the explicit-selector cap only.
+  serverReach = null,
   forceFull = false,
   forceFullReason = 'full CI requested',
   appRouteOnly = false,
@@ -1292,13 +1303,14 @@ function buildSuitePlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
-  }, { appRouteOnly });
+  }, { appRouteOnly, serverReach });
 }
 
 /** The derived fields every plan carries: per-suite reasons and shard matrices. */
 const finishPlan = (plan, options = {}) => {
+  const reachSelected = serverReachCount(options.serverReach);
   const linuxShards = (runner) => shardIndexes(
-    fansOut(plan[runner]) ? 'full' : plan[runner].mode,
+    fansOut(plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {
@@ -1311,7 +1323,7 @@ const finishPlan = (plan, options = {}) => {
   return {
     ...plan,
     slashdo: needsSlashdoSubmodule(plan),
-    suiteReasons: suiteReasonsFor({ ...plan, shards }, options),
+    suiteReasons: suiteReasonsFor({ ...plan, shards, reachSelected }, options),
     shards,
   };
 };
