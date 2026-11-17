@@ -13,10 +13,25 @@ const api = vi.hoisted(() => ({
   getCosLearningConfidence: vi.fn(),
   getCosFeedbackStats: vi.fn(),
   getDismissedCosRecommendations: vi.fn(),
+  getReviewerVerdictStats: vi.fn(),
   backfillCosLearning: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: (event, handler) => {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event).add(handler);
+    },
+    off: (event, handler) => handlers.get(event)?.delete(handler),
+    emit: vi.fn(),
+    receive: (event, payload) => handlers.get(event)?.forEach(handler => handler(payload)),
+  };
+});
+
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const renderTab = () => render(<MemoryRouter><LearningTab /></MemoryRouter>);
@@ -31,6 +46,7 @@ beforeEach(() => {
   api.getCosLearningConfidence.mockResolvedValue({});
   api.getCosFeedbackStats.mockResolvedValue({ total: 0 });
   api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [] });
+  api.getReviewerVerdictStats.mockResolvedValue({ runs: 0, reports: 0, byReviewer: [], bySize: [] });
 });
 
 describe('LearningTab failed reads', () => {
@@ -87,4 +103,96 @@ it('labels low success as historical advice rather than automatic skipping', asy
   expect(screen.getByText(/not a scheduler pause/)).toBeInTheDocument();
   expect(screen.queryByText(/automatically skipped/)).not.toBeInTheDocument();
   expect(screen.getByTitle('Clear historical learning metrics; scheduling is unchanged')).toBeInTheDocument();
+});
+
+describe('LearningTab reviewer verdicts', () => {
+  it('shows clean rate per reviewer and per diff size once runs recorded verdicts', async () => {
+    api.getReviewerVerdictStats.mockResolvedValue({
+      runs: 3, reports: 4,
+      byReviewer: [{ reviewer: 'codex', reports: 4, clean: 1, findings: 3, cleanRate: 25, runs: 3, avgRounds: 1.3 }],
+      bySize: [
+        { bucket: 'xs', label: '0-20 lines', reports: 1, clean: 1, findings: 0, cleanRate: 100 },
+        { bucket: 'm', label: '101-500 lines', reports: 3, clean: 0, findings: 3, cleanRate: 0 },
+        { bucket: 'unknown', label: 'Size not reported', reports: 0, clean: 0, findings: 0, cleanRate: null },
+      ],
+    });
+    renderTab();
+
+    expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
+    expect(screen.getByText('codex')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.getByText('101-500 lines')).toBeInTheDocument();
+    expect(screen.queryByText('Size not reported')).not.toBeInTheDocument();
+  });
+
+  it('re-reads the aggregate when a run records a verdict while the tab is open', async () => {
+    renderTab();
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewer Verdicts')).not.toBeInTheDocument();
+
+    api.getReviewerVerdictStats.mockResolvedValue({
+      runs: 1, reports: 1,
+      byReviewer: [{ reviewer: 'codex', reports: 1, clean: 0, findings: 1, cleanRate: 0, runs: 1, avgRounds: 1 }],
+      bySize: [{ bucket: 's', label: '21-100 lines', reports: 1, clean: 0, findings: 1, cleanRate: 0 }],
+    });
+    await act(async () => { socket.receive('cos:reviewer-verdict:recorded', { agentId: 'agent-example', reviewer: 'codex', verdict: 'findings' }); });
+
+    expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
+    expect(screen.getByText('21-100 lines')).toBeInTheDocument();
+    expect(api.getReviewerVerdictStats).toHaveBeenLastCalledWith({ silent: true });
+  });
+
+  it('re-reads after a reconnect, and a failed re-read keeps the last aggregate and names the section', async () => {
+    const recorded = {
+      runs: 1, reports: 1,
+      byReviewer: [{ reviewer: 'codex', reports: 1, clean: 1, findings: 0, cleanRate: 100, runs: 1, avgRounds: 1 }],
+      bySize: [{ bucket: 'xs', label: '0-20 lines', reports: 1, clean: 1, findings: 0, cleanRate: 100 }],
+    };
+    renderTab();
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+
+    api.getReviewerVerdictStats.mockResolvedValue(recorded);
+    await act(async () => { socket.receive('connect'); });
+    expect(await screen.findByText('Reviewer Verdicts')).toBeInTheDocument();
+
+    api.getReviewerVerdictStats.mockRejectedValueOnce(new Error('Synthetic verdict failure'));
+    await act(async () => { socket.receive('cos:reviewer-verdict:recorded', { agentId: 'agent-example', reviewer: 'codex', verdict: 'clean' }); });
+    expect(await screen.findByText(/Could not load some learning sections \(reviewer verdicts\)/)).toBeInTheDocument();
+    expect(screen.getByText('Reviewer Verdicts')).toBeInTheDocument();
+
+    await act(async () => { socket.receive('cos:reviewer-verdict:recorded', { agentId: 'agent-example', reviewer: 'codex', verdict: 'clean' }); });
+    expect(screen.queryByText(/Could not load some learning sections/)).not.toBeInTheDocument();
+  });
+
+  it('shows recorded verdicts even before task learning has completed tasks, and names unreadable runs', async () => {
+    api.getCosLearning.mockResolvedValue({ totals: { completed: 0, succeeded: 0, failed: 0, successRate: 0 }, recommendations: [] });
+    api.getReviewerVerdictStats.mockResolvedValue({
+      runs: 1, reports: 1, unreadableRuns: 2,
+      byReviewer: [{ reviewer: 'codex', reports: 1, clean: 1, findings: 0, cleanRate: 100, runs: 1, avgRounds: 1 }],
+      bySize: [{ bucket: 'xs', label: '0-20 lines', reports: 1, clean: 1, findings: 0, cleanRate: 100 }],
+    });
+    renderTab();
+
+    expect(await screen.findByText('No learning data available yet.')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer Verdicts')).toBeInTheDocument();
+    expect(screen.getByText(/2 archived runs could not be read/)).toBeInTheDocument();
+  });
+
+  it('re-reads when runs are deleted or cleared, not when they are only archived', async () => {
+    renderTab();
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    const initialReads = api.getReviewerVerdictStats.mock.calls.length;
+
+    await act(async () => { socket.receive('cos:agents:changed', { action: 'auto-archive', archived: 2 }); });
+    expect(api.getReviewerVerdictStats).toHaveBeenCalledTimes(initialReads);
+
+    await act(async () => { socket.receive('cos:agents:changed', { action: 'cleared-completed', cleared: 3, retained: 0 }); });
+    expect(api.getReviewerVerdictStats).toHaveBeenCalledTimes(initialReads + 1);
+  });
+
+  it('shows no panel when no run has recorded a verdict', async () => {
+    renderTab();
+    expect(await screen.findByText('Tasks Analyzed')).toBeInTheDocument();
+    expect(screen.queryByText('Reviewer Verdicts')).not.toBeInTheDocument();
+  });
 });

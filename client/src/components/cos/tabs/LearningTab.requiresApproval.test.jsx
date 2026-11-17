@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getCosLearningConfidence: vi.fn(),
   getCosFeedbackStats: vi.fn(),
   getDismissedCosRecommendations: vi.fn(),
+  getReviewerVerdictStats: vi.fn(),
   resetCosTaskTypeLearning: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ describe('LearningTab — Requires Approval controls', () => {
     api.getCosLearningRouting.mockResolvedValue({ byModelTier: {} });
     api.getCosFeedbackStats.mockResolvedValue({ total: 0 });
     api.getDismissedCosRecommendations.mockResolvedValue({ dismissed: [] });
+    api.getReviewerVerdictStats.mockResolvedValue({ runs: 0, reports: 0, byReviewer: [], bySize: [] });
     api.resetCosTaskTypeLearning.mockResolvedValue({ reset: true });
     api.getCosLearningConfidence.mockResolvedValue({
       levels: {

@@ -3,6 +3,7 @@
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { buildMergeAdmissionSection } from './promptSections/completion.js';
+import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from './promptSections/reviewerOutcome.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -5085,5 +5086,25 @@ describe('{portosApiUrl} spawn-time expansion (#12405)', () => {
       {}, '/repo', null, { providerType: 'api' },
     );
     expect(prompt).toContain('PATCH http://127.0.0.1:5553/api/creative-director/cd-1/treatment');
+  });
+});
+
+describe('CLI review-outcome run id (#16572)', () => {
+  // The claim block is generated into the task before the run exists, so the
+  // verdict report's agentId is a slot the builder fills at spawn time.
+  const task = makeTask({ description: `Claim work\n\n${buildCliReviewerOutcomeInstructions(['codex'])}` });
+
+  it.each(['api', 'tui'])('fills the run id on the %s path', async (providerType) => {
+    const prompt = await buildAgentPrompt(task, {}, '/repo', null, { providerType, providerCommand: 'claude', agentId: 'agent-example' });
+    expect(prompt).toContain('"agentId":"agent-example"');
+    expect(prompt).toContain('`changedLines`');
+    expect(prompt).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
+  });
+
+  it('drops the run-id sentence rather than sending a placeholder when the run has no usable id', async () => {
+    const prompt = await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'api', agentId: 'bad id/../x' });
+    expect(prompt).toContain('/api/code-review/cli-outcome');
+    expect(prompt).not.toContain('"agentId"');
+    expect(prompt).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
   });
 });

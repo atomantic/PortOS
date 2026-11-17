@@ -703,6 +703,11 @@ export const cliReviewerOutcomeSchema = z.discriminatedUnion('outcome', [
     reviewer: cliReviewerIdentitySchema,
     outcome: z.literal('reviewed'),
     verdict: z.enum(['clean', 'findings']),
+    // Optional so reports from prompts built before #16572 still validate; with
+    // agentId the verdict is also recorded on that running agent's record.
+    agentId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/).optional(),
+    round: z.number().int().min(1).max(1000).optional(),
+    changedLines: z.number().int().min(0).max(10_000_000).optional(),
   }).strict(),
   z.object({
     reviewer: cliReviewerIdentitySchema,
