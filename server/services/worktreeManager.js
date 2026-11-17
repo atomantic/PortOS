@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -2232,7 +2232,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   includeClaudeTrees = true,
   appId = null
 } = {}) {
-  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
+  const { getDefaultBranch, hasBranchMergeEvidence, readBranchLineage, readBranchPublished } = await import('./git.js');
   const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
@@ -2270,8 +2270,14 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
     }), {
       ...contentReaders,
-      // A merged PR at this exact head makes uncommitted and untracked files disposable.
-      disposableHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
+      // A merged PR at this exact head makes uncommitted and untracked files
+      // disposable, and proves a new or still-used branch shipped (#16625).
+      mergedPrAtHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
+      lineage: () => readBranchLineage(sourceWorkspace, scannedBranch, wt.head, target),
+      published: () => readBranchPublished(sourceWorkspace, scannedBranch),
+      claimReserved: async () => (await import('./claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
+      checkoutProcess: () => hasProcessCwdInside(wt.path),
+      idleMs: async () => (await import('./branchReconcile.js')).checkoutIdleMs(wt.path),
     });
     if (scan.hold) {
       // Named so a caller can say WHICH branch a hold kept, not just which path.

@@ -49,6 +49,10 @@ vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async 
 const mergedPrHeads = new Set();
 vi.mock('./prProbe.js', () => ({ isMergedPrHead: async (_repo, branch, head) => mergedPrHeads.has(`${branch}@${head}`) }));
 vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+// lsof is absent on some CI hosts and fails closed there; a checkout a process
+// sits in is named per test instead.
+const occupiedCheckouts = new Set();
+vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async dir => occupiedCheckouts.has(dir) }));
 
 /**
  * Why `wantedPath` was skipped, matched separator-insensitively — `skipped[].path`
@@ -539,6 +543,16 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     return path;
   }
 
+  /**
+   * Backdate a checkout's activity (directory, index, HEAD log) past the idle
+   * window, so a branch merged by ancestry reads as no longer worked in (#16625).
+   */
+  async function idle(path) {
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const then = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const stamp of [join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD'), path]) await utimes(stamp, then, then);
+  }
+
   // Every other hold/retire permutation is a pure case in
   // branchRetirementDecision.test.js (decideMergedWorktreeReap and
   // decideMergedWorktreeRemoval); these keep one real-git contract per outcome
@@ -549,6 +563,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     await execGit(['merge', '--no-ff', 'merged-br', '--no-edit'], dir);
     await writeFile(join(dir, '.git', 'info', 'exclude'), '*.png\n');
     await writeFile(join(mergedPath, 'reference.png'), 'generated image');
+    await idle(mergedPath);
 
     const result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
 
@@ -559,6 +574,31 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     const branches = (await execGit(['branch', '--format=%(refname:short)'], dir)).stdout.trim().split('\n');
     expect(branches).not.toContain('merged-br');
     expect(branches).toContain('pending-br');
+  });
+
+  // #16625: ancestry alone reads all three as merged. A tree with no owner
+  // record is new until it has commits of its own, and in use while a process
+  // sits in it or it was touched within the idle window.
+  it('holds a new tree with no commits of its own and merged trees still in use', async () => {
+    const fresh = await addWorktree(dir, 'fresh', 'fresh-br', { commit: false });
+    const busy = await addWorktree(dir, 'busy', 'busy-br');
+    const occupied = await addWorktree(dir, 'occupied', 'occupied-br');
+    for (const branch of ['busy-br', 'occupied-br']) await execGit(['merge', '--no-ff', branch, '--no-edit'], dir);
+    await idle(occupied);
+    occupiedCheckouts.add(occupied);
+
+    let result;
+    try {
+      result = await reapMergedWorktrees(dir, { includeClaudeTrees: true });
+    } finally {
+      occupiedCheckouts.clear();
+    }
+
+    expect(result.reaped).toEqual([]);
+    expect(skipReason(result, fresh)).toBe('branch-has-no-own-commits');
+    expect(skipReason(result, busy)).toBe('checkout-recently-touched');
+    expect(skipReason(result, occupied)).toBe('checkout-process-active');
+    for (const path of [fresh, busy, occupied]) expect(existsSync(path)).toBe(true);
   });
 
   // A registration git already considers prunable used to fail `git status` in a
@@ -625,6 +665,7 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('reapMergedWorktrees', () => {
     async () => {
       const path = await addWorktree(dir, 'stuck', 'stuck-br');
       await execGit(['merge', '--no-ff', 'stuck-br', '--no-edit'], dir);
+      await idle(path);
       await chmod(claudeRoot(dir), 0o555);
 
       let result;

@@ -33,7 +33,17 @@ export const STALE_CLAIM_IDLE_MS = 7 * 24 * 60 * 60 * 1000;
 // into a single recheck.
 export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000;
 
+// Why an hour: a checkout with no owner record (a `/do:next` sibling, a Claude
+// Code worktree) shows it is still being worked only through activity in it.
+// An hour outlasts a pause between steps of a session and still lets a branch
+// merged by ancestry retire on a later pass the same day.
+export const ANCESTRY_RETIREMENT_IDLE_MS = 60 * 60 * 1000;
+
 const COMMIT_SHA = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
+const ISSUE_CLAIM_BRANCH = /^(?:next|claim)\/issue-([1-9]\d*)$/;
+
+/** The issue number a `/do:next` or `/claim` branch reserves, or null. */
+export const claimIssueOfBranch = branch => ISSUE_CLAIM_BRANCH.exec(branch || '')?.[1] ?? null;
 const shortBranch = ref => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
 const holdOn = (reason, retryAt) => ({ hold: { reason, ...(retryAt ? { retryAt } : {}) } });
 
@@ -76,6 +86,55 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
 }
 
 /**
+ * Whether a branch that reads as merged is really new or still owned (#16625).
+ * A branch created at the default branch a minute ago is "merged" by ancestry,
+ * so every merged sweep without an owner record for the checkout asks this
+ * after its own gates. Gates, in order:
+ *
+ * 1. lineage (`readBranchLineage`): a branch still at the commit it was created
+ *    at has no commits of its own and is new (`branch-has-no-own-commits`);
+ * 2. a branch published to a remote is a claim others can see
+ *    (`published-claim-unmerged`);
+ * 3. evidence by ancestry alone (lineage `'ancestry'`; a rebase or squash merge
+ *    reads `'patch'` and skips this): a reserved issue claim, a process with its
+ *    working directory in the checkout, or activity there within
+ *    ANCESTRY_RETIREMENT_IDLE_MS holds, because a live owner outranks ancestry.
+ *
+ * Each hold lifts only when the forge reports a PR merged at exactly this head
+ * (`mergedPrAtHead`, read only once something would hold). Every unreadable fact
+ * holds under its own reason.
+ *
+ * @param {{ branch: string, checkoutPath: string|null, nowMs?: number, facts: object }} input
+ *   facts: `lineage`, `published`, `claimReserved`, `checkoutProcess`, `idleMs`, `mergedPrAtHead`
+ * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | null}
+ */
+export function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }) {
+  const unlessShipped = (reason, retryAt) => {
+    if (facts.mergedPrAtHead === undefined) return { need: 'mergedPrAtHead' };
+    return facts.mergedPrAtHead === true ? null : holdOn(reason, retryAt);
+  };
+  if (facts.lineage === undefined) return { need: 'lineage' };
+  if (facts.lineage === null) return unlessShipped('branch-own-commits-unreadable');
+  if (facts.lineage === 'new') return unlessShipped('branch-has-no-own-commits');
+  if (facts.published === undefined) return { need: 'published' };
+  if (facts.published !== false) return unlessShipped(facts.published === null ? 'branch-publication-unreadable' : 'published-claim-unmerged');
+  if (facts.lineage !== 'ancestry') return null;
+  if (claimIssueOfBranch(branch)) {
+    if (facts.claimReserved === undefined) return { need: 'claimReserved' };
+    if (facts.claimReserved !== false) return unlessShipped(facts.claimReserved === null ? 'claim-issue-unverified' : 'claim-issue-reserved');
+  }
+  if (!checkoutPath) return null;
+  if (facts.checkoutProcess === undefined) return { need: 'checkoutProcess' };
+  if (facts.checkoutProcess !== false) return unlessShipped('checkout-process-active');
+  if (facts.idleMs === undefined) return { need: 'idleMs' };
+  if (!Number.isFinite(facts.idleMs)) return unlessShipped('checkout-idle-unreadable');
+  if (facts.idleMs < ANCESTRY_RETIREMENT_IDLE_MS) {
+    return unlessShipped('checkout-recently-touched', new Date(nowMs + ANCESTRY_RETIREMENT_IDLE_MS - facts.idleMs).toISOString());
+  }
+  return null;
+}
+
+/**
  * Admission for retiring a named branch and its checkout, evaluated inside the
  * claim-ownership critical section. Gates, in order:
  *
@@ -93,6 +152,9 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  * 7. merged retirement of a `claim-*` checkout: a recorded completed owner, or
  *    the forge's proof that a manual session shipped. Registry silence and age
  *    never waive a claim hold (#12990).
+ * 8. merged retirement without a run receipt, and of a branch with no checkout
+ *    (right after gate 5): `mergedOwnershipHold`, so a new, published or
+ *    actively used branch is not retired on ancestry (#16625).
  *
  * @param {object} input
  * @param {string} input.repoPath
@@ -110,7 +172,8 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  * @param {boolean} [input.allowLiveClaim]
  * @param {number} [input.nowMs]
  * @param {object} input.facts - inspected so far: agents, defaultBranch, head, policyHold,
- *   holders, mergedAtHead, dirty, completionRecords, receipt, forgeMerge, githubOrigin, idleMs
+ *   holders, mergedAtHead, dirty, completionRecords, receipt, forgeMerge, githubOrigin, idleMs,
+ *   then `mergedOwnershipHold`'s
  * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | { admit: { activeAgentIds: Set<string>|null, expectedHead: string, worktreePath: string|null, worktreeLocked: boolean, claimCompletion: 'receipt'|'forge-merged'|null, requireCleanWorktree: boolean } }}
  */
 export function decideBranchRetirement({
@@ -153,7 +216,8 @@ export function decideBranchRetirement({
     activeAgentIds: ownerIds, expectedHead, worktreePath, worktreeLocked, claimCompletion,
     requireCleanWorktree: requireCleanWorktree && !disposable,
   } });
-  if (!worktreePath) return admit();
+  const owned = () => mergedOwnershipHold({ branch, checkoutPath: worktreePath, nowMs, facts });
+  if (!worktreePath) return (mergedRetirement && owned()) || admit();
 
   // Location adds no completion evidence for a named merged branch: external
   // checkouts get the same owner, lock, claim and content checks as managed ones.
@@ -187,7 +251,8 @@ export function decideBranchRetirement({
   }
   const tree = facts.holders.find(wt => wt.path === worktreePath);
   if (!tree || tree.head !== expectedHead) return holdOn('worktree-holder-changed');
-  return admit(claimCompletion);
+  // A completed run's receipt is the owner record for this checkout and head.
+  return (claimCompletion !== 'receipt' && owned()) || admit(claimCompletion);
 }
 
 /**
@@ -522,8 +587,12 @@ const reapRoots = (worktreesDir, claudeTreesRoot) => [
  *    branch-reconcile knows whether a claim shipped or went idle;
  * 4. the `.claude/worktrees` opt-out;
  * 5. content: unreadable holds, and dirt (lockfiles included) holds unless a PR
- *    merged at exactly this head (`disposableHead`);
- * 6. merge evidence for the branch.
+ *    merged at exactly this head (`mergedPrAtHead`);
+ * 6. merge evidence for the branch;
+ * 7. outside the CoS root, `mergedOwnershipHold` (#16625). An `agent-*` tree in
+ *    the CoS root passed gate 3 with known liveness, so its run has ended and
+ *    the registry already answers who owns it; an ended run's empty checkout
+ *    stays reapable there.
  *
  * @param {object} input
  * @param {{ path: string, branch?: string, head?: string, locked?: boolean, bare?: boolean, detached?: boolean }} input.tree
@@ -533,10 +602,11 @@ const reapRoots = (worktreesDir, claudeTreesRoot) => [
  * @param {string} input.claudeTreesRoot
  * @param {boolean} [input.includeClaudeTrees=true]
  * @param {Set<string>|null|undefined} input.activeAgentIds - anything but a Set is unknown and holds
- * @param {object} input.facts - `dirty` (null unreadable; lockfile churn counts), `disposableHead`, `mergeEvidence`
- * @returns {{ need: string } | { hold: { reason: string }, branch: string|null } | { admit: { branch: string, disposable: boolean } }}
+ * @param {number} [input.nowMs]
+ * @param {object} input.facts - `dirty` (null unreadable; lockfile churn counts), `mergedPrAtHead`, `mergeEvidence`, then `mergedOwnershipHold`'s
+ * @returns {{ need: string } | { hold: { reason: string, retryAt?: string }, branch: string|null } | { admit: { branch: string, disposable: boolean } }}
  */
-export function decideMergedWorktreeReap({ tree, defaultBranch, currentBranch, worktreesDir, claudeTreesRoot, includeClaudeTrees = true, activeAgentIds, facts }) {
+export function decideMergedWorktreeReap({ tree, defaultBranch, currentBranch, worktreesDir, claudeTreesRoot, includeClaudeTrees = true, activeAgentIds, nowMs = Date.now(), facts }) {
   const branch = tree.bare || tree.detached ? null : shortBranch(tree.branch) || null;
   const hold = reason => ({ hold: { reason }, branch });
   if (!branch) return hold('no-branch');
@@ -553,11 +623,13 @@ export function decideMergedWorktreeReap({ tree, defaultBranch, currentBranch, w
   // Unlike removeWorktree(), the background reaper keeps even lockfile-only
   // edits: a fresh-from-main checkout may be an agent before its first commit.
   if (facts.dirty) {
-    if (facts.disposableHead === undefined) return { need: 'disposableHead' };
-    if (!facts.disposableHead) return hold('uncommitted');
+    if (facts.mergedPrAtHead === undefined) return { need: 'mergedPrAtHead' };
+    if (!facts.mergedPrAtHead) return hold('uncommitted');
   }
   if (facts.mergeEvidence === undefined) return { need: 'mergeEvidence' };
   if (!facts.mergeEvidence) return hold('unmerged');
+  const owned = !isPathInsideDir(worktreesDir, tree.path) && mergedOwnershipHold({ branch, checkoutPath: tree.path, nowMs, facts });
+  if (owned) return owned.need ? owned : { ...owned, branch };
   return { admit: { branch, disposable: facts.dirty } };
 }
 
@@ -617,6 +689,10 @@ export function decideMergedWorktreeRemoval({ tree, holder, sourceWorkspace, dis
  * 8. content: unreadable holds, and dirt holds unless a PR merged at exactly
  *    this head (`disposableHead`);
  * 9. merge evidence for the branch.
+ *
+ * No `mergedOwnershipHold` (#16625): gate 1 admits only an `agent-*` directory
+ * whose run is known to have ended, so the registry already answers who owns
+ * it, as for the reaper's CoS root.
  *
  * @param {object} input
  * @param {string} input.path - the directory under the shared worktrees root
