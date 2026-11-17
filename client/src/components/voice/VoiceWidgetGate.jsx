@@ -72,10 +72,13 @@ export default function VoiceWidgetGate({ children }) {
   const [Widget, setWidget] = useState(null);
   const mountedRef = useMounted();
   const loadRequestedRef = useRef(false);
-  // What the widget missed while its chunk was loading: a start asked for by
-  // the sidebar mic or the hotkey, and whether Daily Log dictation is on (the
-  // server only says so once). The widget claims both once, after it mounts;
-  // nothing else may start capture from them.
+  // What the widget missed while its chunk was loading, kept as two separate
+  // facts. `pendingStartRef`: the mic should open, asked for by the sidebar
+  // mic, the hotkey or a dictation starting, and withdrawn by whatever would
+  // stop a live capture. `heldDictationRef`: Daily Log dictation is on, which
+  // the server says only once and which hiding the controls does not end.
+  // The widget claims both once, after it mounts; nothing else may start
+  // capture from them.
   const pendingStartRef = useRef(false);
   const heldDictationRef = useRef(false);
 
@@ -128,10 +131,11 @@ export default function VoiceWidgetGate({ children }) {
         loadRequestedRef.current = false;
         if (isStaleChunkError(err, { duringImport: true }) && await reloadOnceForStaleChunk()) return;
         console.warn(`⚠️ voice widget failed to load: ${err?.message || err}`);
-        if (!mountedRef.current || !(pendingStartRef.current || heldDictationRef.current)) return;
-        // A press is answered by this message. Dictation stays held: it is
-        // still on at the server, so a later load must still open the mic.
-        pendingStartRef.current = false;
+        if (!mountedRef.current || !pendingStartRef.current) return;
+        // A press is answered by this message. A start that dictation asked
+        // for stays: dictation is still on at the server, so a later load
+        // must still open the mic.
+        pendingStartRef.current = heldDictationRef.current;
         toast.error('Voice controls could not load. Try again.');
       },
     );
@@ -167,11 +171,14 @@ export default function VoiceWidgetGate({ children }) {
       requestWidget();
     };
     // Daily Log's Dictate button reaches the server without the widget, and
-    // the widget is what opens the mic for it. Ending dictation stops a live
-    // capture there, so here it withdraws a held start as well.
+    // the widget is what opens the mic for it. In the widget, dictation
+    // starting opens the mic and dictation ending stops it; the same here.
     const onDictation = (payload) => {
-      heldDictationRef.current = !!payload?.enabled;
-      if (!heldDictationRef.current) pendingStartRef.current = false;
+      const active = !!payload?.enabled;
+      heldDictationRef.current = active;
+      pendingStartRef.current = active;
+      // A load that already failed is not in flight: this press retries it.
+      if (active) requestWidget();
     };
     requestWidget();
     window.addEventListener(ENGAGE_EVENT, onEngage);
@@ -190,10 +197,7 @@ export default function VoiceWidgetGate({ children }) {
   }, [enabled, Widget, hotkey, requestWidget]);
 
   const claimHeld = useCallback(() => {
-    const held = {
-      start: pendingStartRef.current || heldDictationRef.current,
-      dictation: heldDictationRef.current,
-    };
+    const held = { start: pendingStartRef.current, dictation: heldDictationRef.current };
     pendingStartRef.current = false;
     heldDictationRef.current = false;
     return held;
