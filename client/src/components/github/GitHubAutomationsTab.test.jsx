@@ -59,7 +59,7 @@ describe('GitHubAutomationsTab', () => {
     expect(screen.queryByText(/Could not load recent actions/)).toBeNull();
   });
 
-  it('keeps the newest reload when an earlier one answers last', async () => {
+  it('drops a read that a newer change made obsolete and shows the trailing read', async () => {
     api.getGitHubAutomationActivity.mockResolvedValueOnce({ actions: [] });
     renderTab();
     await screen.findByText(/have not acted on anything yet/);
@@ -67,12 +67,15 @@ describe('GitHubAutomationsTab', () => {
     const older = deferred();
     const newer = deferred();
     api.getGitHubAutomationActivity.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
-    act(() => { socket.handlers['github:notifications:changed'](); });
-    act(() => { socket.handlers['github:notifications:changed'](); });
+    await act(async () => { socket.handlers['github:notifications:changed'](); });
+    await waitFor(() => expect(api.getGitHubAutomationActivity).toHaveBeenCalledTimes(2));
+    await act(async () => { socket.handlers['github:notifications:changed'](); });
 
+    // useSocketResource single-flights: the burst's trailing read starts once
+    // the active (now obsolete) read settles, and only it may write.
+    await act(async () => { older.resolve({ actions: [] }); });
     await act(async () => { newer.resolve({ actions: [action(2, 'Newest action')] }); });
     await screen.findByText('Newest action');
-    await act(async () => { older.resolve({ actions: [] }); });
 
     await waitFor(() => expect(screen.getByText('Newest action')).toBeTruthy());
     expect(screen.queryByText(/have not acted on anything yet/)).toBeNull();

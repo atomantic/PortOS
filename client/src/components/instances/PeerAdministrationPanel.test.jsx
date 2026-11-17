@@ -71,6 +71,7 @@ describe('planning-only peer administration', () => {
     getPeerAdminSetup.mockReturnValueOnce(new Promise(resolve => { resolveOld = resolve; }));
     const view = render(<PeerAdministrationPanel peer={peer} />);
     fireEvent.click(screen.getByRole('button', { name: /Peer administration/ }));
+    await waitFor(() => expect(getPeerAdminSetup).toHaveBeenCalledTimes(1));
     view.rerender(<PeerAdministrationPanel peer={{ ...peer, instanceId: '33333333-3333-4333-8333-333333333333' }} />);
     await act(async () => { resolveOld(setup); });
     expect(screen.queryByText(setup.hostInstanceId)).toBeNull();
@@ -201,8 +202,11 @@ it('refreshes local execution grants on change and reconnect, retaining the revi
   fireEvent.click(screen.getByRole('button', { name: 'Allow execution for one hour' }));
   await screen.findByText('Refresh the changed grant');
   expect(savePeerExecutionGrant.mock.calls[0][0].previousGrantId).toBeNull();
-  expect(socket.on).toHaveBeenCalledWith('connect', refresh);
+  const reconnect = socket.on.mock.calls.find(([event]) => event === 'connect')[1];
+  getPeerAdminSetup.mockClear();
+  await act(async () => { reconnect(); });
+  expect(getPeerAdminSetup).toHaveBeenCalledTimes(1);
   view.unmount();
   expect(socket.off).toHaveBeenCalledWith('peer-execution:changed', refresh);
-  expect(socket.off).toHaveBeenCalledWith('connect', refresh);
+  expect(socket.off).toHaveBeenCalledWith('connect', reconnect);
 });

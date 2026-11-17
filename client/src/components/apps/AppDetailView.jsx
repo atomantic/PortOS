@@ -77,7 +77,8 @@ function AppDetail() {
   const [nativeLaunchLoading, setNativeLaunchLoading] = useState(false);
   const [nativeLaunchOnline, setNativeLaunchOnline] = useState(false);
   const [buildLoading, setBuildLoading] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // A reload on `?appTab=…` (the drawer's own deep link) re-opens the drawer on that tab.
+  const [editing, setEditing] = useState(() => searchParams.has('edit') || searchParams.has('appTab'));
   // Vite Dev-UI host guard: when an online app exposes a Vite dev server, check
   // whether its config allows the Tailscale/IP host PortOS is served under
   // (Vite ≥5 blocks unknown hosts). `null` = not yet checked.
@@ -117,6 +118,17 @@ function AppDetail() {
     next.delete('edit');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
+
+  // Closing drops the drawer's `appTab` so a later reload doesn't re-open it.
+  const closeEditor = () => {
+    setEditing(false);
+    setSearchParams((prev) => {
+      if (!prev.has('appTab')) return prev;
+      const next = new URLSearchParams(prev);
+      next.delete('appTab');
+      return next;
+    }, { replace: true });
+  };
 
   const handleStart = async () => {
     setActionLoading('start');
@@ -584,11 +596,11 @@ function AppDetail() {
         {renderTab()}
       </div>
 
-      {editing && (
+      {editing && app && (
         <EditAppDrawer
           app={app}
-          onClose={() => setEditing(false)}
-          onSave={() => { setEditing(false); refetch(); }}
+          onClose={closeEditor}
+          onSave={() => { closeEditor(); refetch(); }}
         />
       )}
     </div>
