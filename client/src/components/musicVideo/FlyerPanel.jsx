@@ -4,7 +4,7 @@ import PublishCard from './PublishCard.jsx';
 import useContainerWidth from '../../hooks/useContainerWidth.js';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker';
 import { FLYER_IMAGE_CHOICES, FLYER_LAYOUTS, FLYER_STYLES, FLYER_TEXT_LIMITS, buildFlyerHtml, flyerImagePath, resolveFlyer } from '../../lib/musicVideoFlyer.js';
-import { releaseLinkUrl } from '../../../../server/lib/musicVideoCrossLinks.js';
+import { releaseLinkUrl } from '../../../../server/lib/musicVideo/musicVideoCrossLinks.js';
 
 const PAGE_W = 816; // 8.5in at 96 CSS px per inch
 const PAGE_H = 1056;

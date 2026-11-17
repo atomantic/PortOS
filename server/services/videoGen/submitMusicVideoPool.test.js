@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { submitVideoGenJob } from './submitJob.js';
-import { captureMusicVideoEvidence, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence, musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 
 const peerId = '00000000-0000-4000-8000-000000000123';
 const m = vi.hoisted(() => ({ project: null, enqueue: vi.fn(), slice: vi.fn(), discard: vi.fn(), revision: vi.fn(), currentAudio: vi.fn() }));

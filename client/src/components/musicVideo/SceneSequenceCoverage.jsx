@@ -1,5 +1,5 @@
 import { Film } from 'lucide-react';
-import { planProjectSequenceCoverage, sequenceGroupInput } from '../../../../server/lib/musicVideoSequenceCoverage.js';
+import { planProjectSequenceCoverage, sequenceGroupInput } from '../../../../server/lib/musicVideo/musicVideoSequenceCoverage.js';
 import { renderMusicVideoSequence } from '../../services/apiMusicVideo.js';
 import useAsyncAction from '../../hooks/useAsyncAction.js';
 import toast from '../ui/Toast';
@@ -12,7 +12,7 @@ const BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hov
  * generated with in one timed request, the exact prompt sent (with the
  * prompt-expansion value as a labeled addition), and — on the run's first shot —
  * the Render sequence action. Or why this shot stays per-shot.
- * The plan and prompt are the server's own (lib/musicVideoSequenceCoverage.js).
+ * The plan and prompt are the server's own (lib/musicVideo/musicVideoSequenceCoverage.js).
  */
 export default function SceneSequenceCoverage({ project, scene }) {
   const { groups, perShot } = planProjectSequenceCoverage(project);

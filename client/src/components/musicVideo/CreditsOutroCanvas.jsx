@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { CREDITS_OUTRO_FONTS, drawCreditsOutro } from '../../../../server/lib/musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_FONTS, drawCreditsOutro } from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
 
 // The canvas the animatic paints at; CSS scales it to the figure. The final render paints at the cut's own size.
 const WIDTH = 1280;
@@ -16,7 +16,7 @@ function addCreditsFaces() {
 }
 
 /**
- * The film credits ending (lib/musicVideoCreditsOutro.js) at scene time `t`,
+ * The film credits ending (lib/musicVideo/musicVideoCreditsOutro.js) at scene time `t`,
  * painted by the same function the final render captures. `credits` is the
  * normalized record.
  */

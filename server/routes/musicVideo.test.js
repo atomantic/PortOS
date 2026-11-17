@@ -123,7 +123,7 @@ import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
-import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideoLimits.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideo/musicVideoLimits.js';
 import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 
 describe('musicVideo routes', () => {

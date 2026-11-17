@@ -17,7 +17,7 @@ import socket from '../../../services/socket';
 import useMounted from '../../../hooks/useMounted';
 import useUnsavedChangesGuard from '../../../hooks/useUnsavedChangesGuard';
 import { resolveDetailTab } from '../../../lib/creativeLibraries';
-import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../../server/lib/musicVideoSubjectLimits.js';
+import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import { ingredientPayload, sameValue } from './ingredientDraft';
 
 export default function useIngredientEditor({ id, tabParam, library, backPath, navigate }) {

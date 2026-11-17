@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
 import { groupMusicVideoProjects } from '../../lib/musicVideoProjectList.js';
-import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideoReviewDraft.js';
+import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideo/musicVideoReviewDraft.js';
 
 /**
  * The project index grid: forks collapse under their root with a per-card

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Scissors, X } from 'lucide-react';
-import { timedSongScenes } from '../../../../server/lib/musicVideoColdOpen.js';
-import { lyricWordCuts } from '../../../../server/lib/musicVideoLyricAnchors.js';
+import { timedSongScenes } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
+import { lyricWordCuts } from '../../../../server/lib/musicVideo/musicVideoLyricAnchors.js';
 import { formatCount, formatTimecode } from '../../utils/formatters.js';
 
 const MODES = [['phrase', 'One shot per phrase'], ['word', 'One shot per word']];

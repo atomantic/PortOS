@@ -30,7 +30,7 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from './prDisposition.js';
 import { QUEUEABLE_IMAGE_MODES } from './generationModes.js';
-import { normalizeAutopilotParams } from './musicVideoAutonomous.js';
+import { normalizeAutopilotParams } from './musicVideo/musicVideoAutonomous.js';
 import { PUBLIC_REVIEW_EXECUTION_PROFILES } from './agentExecutionProfiles.js';
 import { ORCHESTRATION_MODES, ORCHESTRATION_ROLES } from './orchestrationProfile.js';
 import { AGENT_RUN_EVENT_KINDS, RUN_EVENT_READ_LIMITS } from './agentRunEvents.js';
@@ -1465,7 +1465,7 @@ export function sanitizeTaskMetadata(raw) {
     clean.mode = raw.mode;
     hasKeys = true;
   }
-  // The music-video-autopilot handler's params bag (lib/musicVideoAutonomous.js
+  // The music-video-autopilot handler's params bag (lib/musicVideo/musicVideoAutonomous.js
   // owns the shape): tools, per-tool models, budget, limits, checkpoints, LLM,
   // and the Brain idea tags it may draw from. Re-normalized on every save.
   if (Object.prototype.hasOwnProperty.call(raw, 'musicVideoAutopilot')) {

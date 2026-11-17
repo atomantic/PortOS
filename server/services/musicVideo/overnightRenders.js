@@ -7,9 +7,9 @@
  * A batch is just its jobs, tagged `musicVideo.batchId`; there is no separate record.
  */
 import { basename } from 'path';
-import { authoredShotPrompt } from '../../lib/musicVideoShotPrompt.js';
-import { ltxReferenceFrames, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
-import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
+import { authoredShotPrompt } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { ltxReferenceFrames, sceneRenderShot } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { preMusicClipSound } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 
 /** Which overnight lane a local model renders on, or null when it takes no clip references. */

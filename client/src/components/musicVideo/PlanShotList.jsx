@@ -4,7 +4,7 @@ import ScenePoster from './ScenePoster.jsx';
 import { planShotRows } from '../../lib/musicVideoStages.js';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
-import { preMusicSoundSummary } from '../../../../server/lib/musicVideoColdOpen.js';
+import { preMusicSoundSummary } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
 const FILTERS = [['all', 'All'], ['fix', 'Needs a fix']];
 

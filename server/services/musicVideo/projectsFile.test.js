@@ -1,5 +1,5 @@
-import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
-import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
+import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 /**
  * Music Video file-backend round-trip (#1760). Runs against a tmpdir in the
  * normal (non-DB) suite — covers create/list/get/update/delete + the scene-board

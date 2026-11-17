@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { __testing } from './autonomousBrief.js';
-import { SUNO_LIMITS } from '../../lib/musicVideoAutonomous.js';
+import { SUNO_LIMITS } from '../../lib/musicVideo/musicVideoAutonomous.js';
 
 const { sanitizeBrief, buildBriefPrompt } = __testing;
 

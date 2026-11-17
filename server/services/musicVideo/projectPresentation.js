@@ -6,7 +6,7 @@
  * so an edit can present its before and after records from one set of reads (editResult.js).
  */
 
-import { presentMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { presentMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { productionReadiness } from './productionReview.js';
 import { presentProjectCastAndSets } from './castAndSetsService.js';
 import { presentProjectAutonomousRun } from './autonomousService.js';

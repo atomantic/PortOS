@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useVideoFileSrc } from './useVideoFileSrc.js';
 import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate, sceneUsesAuthoredTiming, sharedTakeExtraSec } from '../lib/musicVideoLayers.js';
 import { selectedPerformanceInstruction } from '../lib/musicVideoShotTiming.js';
-import { resolveSourceTake, scenePlayableClipId, sourceClipNeedSec } from '../../../server/lib/musicVideoSourceTake.js';
+import { resolveSourceTake, scenePlayableClipId, sourceClipNeedSec } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
 
 /** A shot's native clip metadata and render-adjusted coverage (counting later shots that reuse its take via `scenes`). Keep mounted with the card. */
 export default function useSceneClipPlayback(scene, scenes = null) {

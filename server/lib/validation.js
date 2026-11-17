@@ -2170,7 +2170,7 @@ export const submoduleUpdateSchema = z.object({
 export * from './peerSyncValidation.js';
 export * from './creativeDirectorValidation.js';
 export * from './creativeCommissionValidation.js';
-export * from './musicVideoValidation.js';
+export * from './musicVideo/musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
 export * from './privacyValidation.js';

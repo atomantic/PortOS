@@ -6,7 +6,7 @@
  */
 
 import { useSearchParams } from 'react-router';
-import { SHOT_SHEET_MAP_BARS } from '../../../server/lib/musicVideoShotSheet.js';
+import { SHOT_SHEET_MAP_BARS } from '../../../server/lib/musicVideo/musicVideoShotSheet.js';
 
 /**
  * The stretch tapped on the shot sheet's map, kept in the URL so the sheet and

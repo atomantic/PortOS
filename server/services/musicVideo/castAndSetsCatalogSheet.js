@@ -9,10 +9,10 @@
  * cannot disagree with what the shot would actually render from.
  */
 
-import { isPreMusicShot } from '../../lib/musicVideoColdOpen.js';
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
-import { sceneCatalogSubjectIds } from '../../lib/musicVideoConditioning.js';
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { isPreMusicShot } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { sceneCatalogSubjectIds } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { pluralize as plural } from '../../lib/textUtils.js';
 import { CAST_SETS_SET_COLORS, CAST_SETS_SHEET_STYLE, SHEET_NEUTRAL_COLOR as NEUTRAL, escapeHtml as e, formatSheetTime, sheetFigure } from './castAndSetsSheet.js';
 

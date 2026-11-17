@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as limits from './referenceLimits.js';
 import * as capabilities from './imageGenCapabilities.js';
-import * as conditioning from './musicVideoConditioning.js';
+import * as conditioning from './musicVideo/musicVideoConditioning.js';
 
 describe('shared reference limits', () => {
   it('keeps the original exports on the modules that used to own them', () => {

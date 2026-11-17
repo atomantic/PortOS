@@ -5,7 +5,7 @@ import FrameStepper from './FrameStepper.jsx';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
 import usePrevizWorld from '../../hooks/usePrevizWorld.js';
 import { worldClockText } from '../../../../server/lib/worldMap.js';
-import { previzFrameAt, previzPlaceGreybox } from '../../../../server/lib/musicVideoPreviz.js';
+import { previzFrameAt, previzPlaceGreybox } from '../../../../server/lib/musicVideo/musicVideoPreviz.js';
 import { aspectRatio } from '../../lib/greybox';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 

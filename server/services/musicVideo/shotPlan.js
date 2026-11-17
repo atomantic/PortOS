@@ -24,10 +24,10 @@
  * invented. Pure and deterministic: same inputs → same plan.
  */
 
-import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
-import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
+import { performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { deliveryNotesWithin } from '../../lib/lyricMarkers.js';
-import { singerWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { singerWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 

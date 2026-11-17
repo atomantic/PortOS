@@ -92,7 +92,7 @@ function PracticalLight({ part }) {
   return <pointLight position={part.position} color={LAMP_COLOR} intensity={pool ? 40 : 8} distance={pool ? 14 : 6} decay={1.5} />;
 }
 
-// A cast object at its mark (lib/musicVideoPreviz.js `cutProps`): a car (headlights on after dark), a bike lying on its side, or a small box.
+// A cast object at its mark (lib/musicVideo/musicVideoPreviz.js `cutProps`): a car (headlights on after dark), a bike lying on its side, or a small box.
 function PropProxy({ prop, dark, labelPortal }) {
   const material = <meshStandardMaterial color={prop.color} roughness={0.9} />;
   let body;
@@ -177,7 +177,7 @@ function CameraRig({ camera: shot }) {
 }
 
 /**
- * One previz frame (lib/musicVideoPreviz.js `previzFrameAt`) drawn over its
+ * One previz frame (lib/musicVideo/musicVideoPreviz.js `previzFrameAt`) drawn over its
  * set's greybox, or over the whole world when the cut plays on the timeline: the layout lit by the frame's
  * clock (its marked practicals on after dark), every visible person and named prop as a proxy, seen through the
  * cut's camera at its lens and aspect. `labelPortal` is the DOM overlay for names.

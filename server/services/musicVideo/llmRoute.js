@@ -32,7 +32,7 @@
 import { isTuiProvider } from '../../lib/providerTypes.js';
 import { resolveCliEffort } from '../../lib/providerModels.js';
 import { captureSystemCapabilities, isHardwareCompatible, withProviderHardwareCompatibility } from '../../lib/systemCapabilities.js';
-import { normalizeMusicVideoLlm } from '../../lib/musicVideoAutomation.js';
+import { normalizeMusicVideoLlm } from '../../lib/musicVideo/musicVideoAutomation.js';
 
 const transportOf = (provider) => (provider?.type === 'tui' ? 'tui' : provider?.type === 'cli' ? 'cli' : 'api');
 

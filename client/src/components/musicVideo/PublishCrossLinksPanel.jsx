@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Check, Link2, LogIn } from 'lucide-react';
 import PublishCard from './PublishCard.jsx';
-import { crossLinkBackfill, crossLinksEnabled } from '../../../../server/lib/musicVideoCrossLinks.js';
+import { crossLinkBackfill, crossLinksEnabled } from '../../../../server/lib/musicVideo/musicVideoCrossLinks.js';
 
 const LABELS = { youtube: 'YouTube description', suno: 'Suno caption', x: 'X reply', stackerNews: 'Stacker News comment', facebook: 'Facebook comment' };
 const ACTION = { youtube: 'Fill edit', suno: 'Fill edit', x: 'Fill reply', stackerNews: 'Fill comment', facebook: 'Fill comment' };

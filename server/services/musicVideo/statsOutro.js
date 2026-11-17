@@ -1,5 +1,5 @@
 /**
- * Music Video — the ending after the song (lib/musicVideoEnding.js: the
+ * Music Video — the ending after the song (lib/musicVideo/musicVideoEnding.js: the
  * cutting room floor, then the film credits, each optional): the floor's tally
  * read from the project's records, and the final-render pass that appends the
  * ending after the song.
@@ -17,9 +17,9 @@ import { fileURLToPath } from 'node:url';
 import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { STATS_OUTRO_FONTS, musicVideoOutroStats } from '../../lib/musicVideoStatsOutro.js';
-import { CREDITS_OUTRO_FONTS } from '../../lib/musicVideoCreditsOutro.js';
-import { endingPageSource, endingParts } from '../../lib/musicVideoEnding.js';
+import { STATS_OUTRO_FONTS, musicVideoOutroStats } from '../../lib/musicVideo/musicVideoStatsOutro.js';
+import { CREDITS_OUTRO_FONTS } from '../../lib/musicVideo/musicVideoCreditsOutro.js';
+import { endingPageSource, endingParts } from '../../lib/musicVideo/musicVideoEnding.js';
 
 export const STATS_OUTRO_SCRATCH_DIR = 'music-video-stats-outro';
 

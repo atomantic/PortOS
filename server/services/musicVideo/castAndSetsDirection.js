@@ -1,5 +1,5 @@
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video — Cast & Sets creative direction (pure): the LLM prompt, the
  * response parser and the absent-vs-empty merge.
@@ -44,9 +44,9 @@ import { createHash } from 'crypto';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
-import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
-import { musicVideoBriefTools as briefTools } from '../../lib/musicVideoMediumPlan.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext, withoutPeople } from '../../lib/musicVideo/musicVideoCreativeContext.js';
+import { isOutsideMusicVideoReference } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoBriefTools as briefTools } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { moodBoardItemCaption } from '../../lib/moodBoardStyleContext.js';
 import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSetsDefinitions.js';

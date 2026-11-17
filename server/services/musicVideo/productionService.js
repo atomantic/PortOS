@@ -1,6 +1,6 @@
 import { prepareProductionReview, attachProductionPilotProof } from './productionReviewService.js';
 import { productionReadiness, productionProofNeedsRender } from './productionReview.js';
-import { currentAdjacency, currentPlateEvidence, footagePlateScenes, plateAdjacencyFailed, plateRequirementBasis, selectedPlateTake, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { currentAdjacency, currentPlateEvidence, footagePlateScenes, plateAdjacencyFailed, plateRequirementBasis, selectedPlateTake, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 import { ensureSceneTakes, selectSceneTake } from './takes.js';
 /**
  * Music Video — server-owned production run (#9066): the orchestrator over the
@@ -34,8 +34,8 @@ const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { sou
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
 import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
-import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
-import { isSelfDrawnLayer } from '../../lib/musicVideoLayers.js';
+import { codeFirstProductionAssets } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { isSelfDrawnLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { beginNextAttempt } from './autoReview.js';
 import { withAutopilotCutting } from './composition.js';
 import { currentPilotPass, pilotClass, pilotRepair } from './productionPilot.js';

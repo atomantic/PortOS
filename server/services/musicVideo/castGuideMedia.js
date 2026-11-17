@@ -3,7 +3,7 @@
 // The catalog lives in Postgres and is imported only for a scene that asks for
 // a cast member, so a project without variants never touches it.
 
-import { musicVideoSceneCastIds } from '../../lib/musicVideoConditioning.js';
+import { musicVideoSceneCastIds } from '../../lib/musicVideo/musicVideoConditioning.js';
 
 /**
  * Null when the scene names no cast member, or when every catalog read fails: a

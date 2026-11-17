@@ -1,7 +1,7 @@
 /** Pin legacy intent without deleting assets, changing tools or enabling providers. */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { musicVideoMediaMode } from '../../server/lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode } from '../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { writeJsonAtomic } from './_lib.js';
 
 export const migrateMediaMode = (record) => Object.hasOwn(record, 'mediaMode') ? record : { ...record, mediaMode: musicVideoMediaMode(record) };

@@ -5,7 +5,7 @@
 // only `concept.universeId` / `visualSpec.moodBoardId`; the create/update
 // dispatcher fills the snapshot text in here.
 
-import { MUSIC_VIDEO_MAX_SUBJECTS, MUSIC_VIDEO_MAX_VISUAL_REFERENCES } from '../../lib/musicVideoLimits.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS, MUSIC_VIDEO_MAX_VISUAL_REFERENCES } from '../../lib/musicVideo/musicVideoLimits.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
 import {
@@ -17,7 +17,7 @@ import { visualProfileLook } from '../../lib/universeVisualProfile.js';
 import {
   getMusicVideoCharacterStyle, musicVideoCharacterStyleReferenceId, musicVideoCharacterStyleSnapshot,
   musicVideoCharacterStyleSubject, musicVideoCharacterStyleSubjectId,
-} from '../../lib/musicVideoCharacterStyles.js';
+} from '../../lib/musicVideo/musicVideoCharacterStyles.js';
 import { getCharacterStyleReferenceImage } from './characterStyles.js';
 
 export { STYLE_SNAPSHOT_MAX, universeStyleSnapshot };

@@ -17,8 +17,8 @@ import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_
 import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus.js';
 import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
 import { formatBytes, formatUsd } from '../../utils/formatters.js';
-import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
-import { sceneRenderTierPlan } from '../../../../server/lib/musicVideoRenderTier.js';
+import { localModelRendersCutaway } from '../../../../server/lib/musicVideo/musicVideoLocalModels.js';
+import { sceneRenderTierPlan } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
 const falOptionLabel = (model) => {

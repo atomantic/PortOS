@@ -2,7 +2,7 @@
  * The sound under a film's lead-in shots. The film supplies the picture; the
  * Board's cold-open controls supply the sound, mixed by the footage path.
  */
-import { blenderShotFrameRange, normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
+import { blenderShotFrameRange, normalizeBlenderRecord } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { coldOpenAudioShots, ensureColdOpenAudio } from '../coldOpen.js';
 import { shotSegmentDir } from '../shotSegmentPaths.js';
 import { blenderLeadSec, blenderLeadShots } from './manifest.js';

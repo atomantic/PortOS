@@ -595,7 +595,7 @@ export const generateBodySchema = z.object({
       // sends, so the shot-intent lines and the silent-model rewrite are skipped.
       promptAsTyped: z.boolean().optional(),
       // `prompt` is the director's own text and the server composes the rest as
-      // labeled additions (lib/musicVideoShotPrompt.js, #11317); `audioReactive`
+      // labeled additions (lib/musicVideo/musicVideoShotPrompt.js, #11317); `audioReactive`
       // names an audio-reactive LoRA take, which gets its guard clause.
       compose: z.boolean().optional(),
       audioReactive: z.boolean().optional(),

@@ -3,7 +3,7 @@
  * push agree).
  */
 
-import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
+import { festivalPacketSchema } from './musicVideo/musicVideoFestivalPacket.js';
 import {
   BIBLE_LIMITS,
   IDENTITY_ASSET_ROLES,

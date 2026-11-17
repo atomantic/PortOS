@@ -8,7 +8,7 @@
  */
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderMediaPath, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, blenderWorkspaceLabel, readBlenderJson } from './workspace.js';
 import { hashBlenderSources } from './hashing.js';
 import { blenderFilmProblems, readBlenderManifest } from './manifest.js';

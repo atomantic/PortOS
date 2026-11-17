@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getMusicVideoOutroStats } from '../services/apiMusicVideo.js';
 
 /**
- * The cutting room floor outro's clock (lib/musicVideoStatsOutro.js): `start()`
+ * The cutting room floor outro's clock (lib/musicVideo/musicVideoStatsOutro.js): `start()`
  * plays it for `seconds` on a clock of its own and fetches the tally afresh, so
  * it counts the latest choices; it holds on its last frame once it has run.
  * With `audioRef`, it also starts when that song ends. A different project or

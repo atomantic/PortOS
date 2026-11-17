@@ -23,7 +23,7 @@ import { join, relative, sep } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { readJSONFileStrict } from '../../lib/jsonIo.js';
-import { MUSIC_VIDEO_BLENDER_SHOT_ID, blenderSourceFileKind } from '../../lib/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_SHOT_ID, blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
 
 const MEDIA_TYPES = Object.freeze({
   mp4: 'video/mp4', png: 'image/png', jpg: 'image/jpeg', log: 'text/plain; charset=utf-8',

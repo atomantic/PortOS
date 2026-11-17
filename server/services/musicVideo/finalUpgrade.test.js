@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { finalApprovalPatch } from '../../lib/musicVideoFinalApproval.js';
+import { finalApprovalPatch } from '../../lib/musicVideo/musicVideoFinalApproval.js';
 
 const state = { project: null };
 const updateScene = vi.fn();

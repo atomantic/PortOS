@@ -1,5 +1,5 @@
-import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
-import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
+import { assertMusicVideoMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
  *
@@ -24,11 +24,11 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
  * take the first time a take operation touches the scene (no record rewrite).
  */
 
-import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
-import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
-import { musicVideoTakeCharacterReferenceState } from '../../lib/musicVideoCharacterReferenceAge.js';
-import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideoSequenceTake.js';
-import { isMusicVideoRenderTier } from '../../lib/musicVideoRenderTier.js';
+import { musicVideoCastInputsRecord } from '../../lib/musicVideo/musicVideoCastLook.js';
+import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { musicVideoTakeCharacterReferenceState } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
+import { extendTakeRecord, sequenceTakeRecord, sequenceTakeSelectionPatch } from '../../lib/musicVideo/musicVideoSequenceTake.js';
+import { isMusicVideoRenderTier } from '../../lib/musicVideo/musicVideoRenderTier.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';

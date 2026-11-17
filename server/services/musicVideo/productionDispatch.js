@@ -1,4 +1,4 @@
-import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 /**
  * Music Video production run (#9066) — server-side scene generation.
  *
@@ -29,19 +29,19 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields, shotRequestSpanSec } from '../../lib/musicVideoShotTiming.js';
-import { sourceClipNeedSec } from '../../lib/musicVideoSourceTake.js';
-import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
-import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
+import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields, shotRequestSpanSec } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { sourceClipNeedSec } from '../../lib/musicVideo/musicVideoSourceTake.js';
+import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideo/musicVideoEndFrame.js';
+import { preMusicClipSound } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
-import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
-import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
-import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
-import { isPerformanceScene, ltxReferenceFrames } from '../../lib/musicVideoShotTiming.js';
-import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideoRenderTier.js';
-import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
+import { castInputsFromReferences } from '../../lib/musicVideo/musicVideoCastLook.js';
+import { captureImageFrameDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { isPerformanceScene, ltxReferenceFrames } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideo/musicVideoRenderTier.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
   `"${scene.label || scene.sceneId}" has no ${what} prompt to generate from`,

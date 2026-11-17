@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import { plateRequirementBasis, plateRequirements } from '../../../../server/lib/musicVideoPlateEvidence.js';
+import { plateRequirementBasis, plateRequirements } from '../../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import PlateComparison from './PlateComparison.jsx';
 
 it('compares the exact selected and candidate plates and reveals missing subjects', () => {

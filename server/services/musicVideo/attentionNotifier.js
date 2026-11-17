@@ -20,7 +20,7 @@
  */
 
 import { musicVideoEvents } from './events.js';
-import { AUTONOMOUS_ATTENTION_STATUSES, autonomousAttentionLink, describeAutonomousWait } from '../../lib/musicVideoAutonomous.js';
+import { AUTONOMOUS_ATTENTION_STATUSES, autonomousAttentionLink, describeAutonomousWait } from '../../lib/musicVideo/musicVideoAutonomous.js';
 
 const PRODUCTION_STOPS = new Set(['limit-reached', 'needs-human', 'blocked', 'needs-replan']);
 const AUTO_REVIEW_STOPS = new Set(['limit-reached', 'needs-human']);

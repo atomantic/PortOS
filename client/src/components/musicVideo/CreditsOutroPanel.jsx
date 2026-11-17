@@ -4,7 +4,7 @@ import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCreditsPrefill } from '../../services/apiMusicVideo.js';
 import {
   CREDITS_OUTRO_DEFAULTS, CREDITS_OUTRO_LIMITS, CREDITS_OUTRO_ROLES, normalizeCreditsOutro,
-} from '../../../../server/lib/musicVideoCreditsOutro.js';
+} from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
 
 // Lengths offered for the credits, in seconds (inside CREDITS_OUTRO_LIMITS).
 const LENGTHS = [6, 8, 10, 12, 15, 20, 25, 30];
@@ -31,7 +31,7 @@ function TextField({ id, label, value, placeholder = '', list, onCommit, hideLab
 }
 
 /**
- * The film credits ending (lib/musicVideoCreditsOutro.js): an optional credits
+ * The film credits ending (lib/musicVideo/musicVideoCreditsOutro.js): an optional credits
  * page after the song (after the cutting room floor when that is on too).
  * Turning it on the first time fills the song title, the artist from
  * Create › Music › Artists and Directed / Music / Produced by lines; every

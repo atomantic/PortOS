@@ -62,7 +62,7 @@ it('keeps every shared film module outside the Music Video service graph', () =>
     const closure = staticImportClosure(abs(`services/film/${name}`)).files;
     expect([...closure].filter((file) => file.startsWith(`${abs('services/musicVideo')}${sep}`)), name).toEqual([]);
   }
-  expect(reaches('services/film/sync.js', 'lib/musicVideoBlender.js')).toBe(true);
+  expect(reaches('services/film/sync.js', 'lib/musicVideo/musicVideoBlender.js')).toBe(true);
 });
 
 // Each row: the entry that was narrowed, the module it must no longer
@@ -209,13 +209,13 @@ const NARROWED = [
   ['services/installState.js', '../scripts/run-migrations.js',
     'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
   // #14867: optional music-video and agent workflows load where they run.
-  ['lib/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
+  ['lib/musicVideo/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
     'reads IMAGE_REFERENCE_REQUEST_LIMIT from the referenceLimits.js leaf'],
-  ['lib/musicVideoValidation.js', 'lib/musicVideoConditioning.js',
+  ['lib/musicVideo/musicVideoValidation.js', 'lib/musicVideo/musicVideoConditioning.js',
     'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
   ['routes/signal.js', 'lib/validation.js',
     'validates through the validateRequest leaf'],
-  ['routes/signal.js', 'lib/musicVideoValidation.js',
+  ['routes/signal.js', 'lib/musicVideo/musicVideoValidation.js',
     'validates through the validateRequest leaf'],
   ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
     'loads vocal-stem storage only when checking a stem against the master'],
@@ -269,8 +269,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
     expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
-    expect(reaches('lib/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
-    expect(reaches('lib/validation.js', 'lib/musicVideoValidation.js')).toBe(true);
+    expect(reaches('lib/musicVideo/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
+    expect(reaches('lib/validation.js', 'lib/musicVideo/musicVideoValidation.js')).toBe(true);
     expect(reaches('services/musicVideo/vocalStem.js', 'services/musicVideo/projects.js')).toBe(true);
   });
 

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
-import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
+import { normalizeTitleCard } from '../../../../server/lib/musicVideo/musicVideoTitleCard.js';
 import { documentPreviewLook, documentPreviewRevision } from './CompositionPreviewPlayer.jsx';
 
 /**

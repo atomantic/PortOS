@@ -9,7 +9,7 @@
  * card is then left out of the join and returned as `lookPassInputs` for that pass
  * to draw over the look (blenderTitleCardPlan).
  */
-import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { blenderScratchDir } from './workspace.js';
 import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';

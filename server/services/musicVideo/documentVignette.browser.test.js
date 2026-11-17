@@ -8,7 +8,7 @@ import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 // Native loading preserves browser-inlined function source (Vite rewrites imported identifiers).
-vi.mock('../../lib/musicVideoEnding.js', async original => ({ ...await original(), endingPageSource: options => execFileSync(process.execPath, ['--input-type=module', '-e', `import { endingPageSource } from ${JSON.stringify(new URL('../../lib/musicVideoEnding.js', import.meta.url).href)}; process.stdout.write(endingPageSource(JSON.parse(process.argv[1])));`, JSON.stringify(options)], { encoding: 'utf8' }) }));
+vi.mock('../../lib/musicVideo/musicVideoEnding.js', async original => ({ ...await original(), endingPageSource: options => execFileSync(process.execPath, ['--input-type=module', '-e', `import { endingPageSource } from ${JSON.stringify(new URL('../../lib/musicVideo/musicVideoEnding.js', import.meta.url).href)}; process.stdout.write(endingPageSource(JSON.parse(process.argv[1])));`, JSON.stringify(options)], { encoding: 'utf8' }) }));
 const chrome = resolveTestChrome();
 vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }) }));
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-document-vignette-') }));

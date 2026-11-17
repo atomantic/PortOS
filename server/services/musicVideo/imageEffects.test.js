@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { imageEffectState, sceneImageEffect } from '../../lib/musicVideoImageEffects.js';
-import { sceneImageEffectGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { imageEffectState, sceneImageEffect } from '../../lib/musicVideo/musicVideoImageEffects.js';
+import { sceneImageEffectGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, replaceScenes } from './projectsLogic.js';
 

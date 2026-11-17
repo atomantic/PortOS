@@ -22,7 +22,7 @@
  * so an event arriving mid-step can never start a second review.
  */
 
-import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { analyzeTemporalPerformance } from './temporalPerformance.js';
 import { unlink } from 'fs/promises';
 import { existsSync } from 'fs';

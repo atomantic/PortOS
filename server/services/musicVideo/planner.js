@@ -1,4 +1,4 @@
-import { musicVideoCreativeContext, musicVideoDirectionContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCreativeContext, musicVideoDirectionContext, musicVideoSongStyleContext } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 /**
  * Music Video — autonomous shot planner (#1855; multi-shot + lyrics #8964).
  *
@@ -49,7 +49,7 @@ import { requireProject } from './requireProject.js';
 import { productionFeedbackContext } from './productionReview.js';
 import { parseShotCamera, planShotCameras, shotCameraPromptSection } from './shotCamera.js';
 import { getCameraMovement } from '../../lib/cameraMovements.js';
-import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
+import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 
 const SCENE_LABEL_MAX = 120;
 const SCENE_TEXT_MAX = 2000;

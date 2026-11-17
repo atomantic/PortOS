@@ -6,9 +6,9 @@ import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { resolveDockerEngine } from '../dockerEngine.js';
-import { musicVideoEidoverseSceneSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoEidoverseSceneSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { codeFrameSize, quantizeSongDuration } from './codeTimeline.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 
 const EIDOVERSE_RENDER_IMAGE = 'portos-eidoverse-video:1';
 const OUTPUT_LIMIT = 2 * 1024 ** 3;

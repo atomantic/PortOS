@@ -1,5 +1,5 @@
 import { supportsToolFreeOneShot, toolFreeOneShotSelectionPolicy } from '../../utils/providerSelection.js';
-import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { musicVideoDocumentRenderer } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { useEffect, useState, useRef } from 'react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useTimeTick } from '../../hooks/useTimeTick.js';

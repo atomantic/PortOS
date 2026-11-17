@@ -9,7 +9,7 @@
  */
 
 import { GEMINI_OMNI_WEB_MODEL } from '../../../server/lib/geminiWebVideo.js';
-import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideoRenderTier.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
 import { formatUsd } from '../utils/formatters.js';
 

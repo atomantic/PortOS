@@ -1,4 +1,4 @@
-import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode, musicVideoDocumentRenderer, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { assertProductionApproval } from './productionReview.js';
 /**
  * User-triggered mixed-media document authoring. No provider runs on read or boot.
@@ -18,9 +18,9 @@ import { withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { parse } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getFilmStyleGrammar, renderFilmStyleGrammarPrompt } from '../../lib/filmStyleGrammars.js';
-import { resolveNarrativeEvents } from '../../lib/musicVideoNarrativeEvents.js';
-import { isDeterministicCodeSource, MUSIC_VIDEO_CODE_SOURCE_MAX } from '../../lib/musicVideoValidation.js';
-import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
+import { resolveNarrativeEvents } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
+import { isDeterministicCodeSource, MUSIC_VIDEO_CODE_SOURCE_MAX } from '../../lib/musicVideo/musicVideoValidation.js';
+import { summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { buildMixedMediaDocumentPrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
 import { isOllamaBackedProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';

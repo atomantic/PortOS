@@ -1,4 +1,4 @@
-import { musicVideoGreyboxReference } from '../../lib/musicVideoGreybox.js';
+import { musicVideoGreyboxReference } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveImageInputPath } from '../../lib/pathSafety.js';
 

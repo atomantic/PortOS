@@ -2141,8 +2141,9 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
-    // Server-only media suites do not mount the changed client component.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
+    // Server-only media suites do not mount the changed client component. The title-card suite is
+    // not among them: it lives in server/lib/musicVideo/ (#16561), so the musicVideo feature selects it.
+    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
       'server/services/greyboxRender.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',

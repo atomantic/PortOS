@@ -22,7 +22,7 @@ const { default: cameoRoutes } = await import('./musicVideoCameos.js');
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { buildDocumentData } = await import('../services/musicVideo/documentRender.js');
-const { musicVideoCameoCoverage } = await import('../lib/musicVideoCameos.js');
+const { musicVideoCameoCoverage } = await import('../lib/musicVideo/musicVideoCameos.js');
 
 const app = express();
 app.use(express.json());

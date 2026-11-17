@@ -1,8 +1,8 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { assertProductionApproval, nameShots, productionReviewBasis } from './productionReview.js';
-import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
+import { musicVideoGradeFilter } from '../../lib/musicVideo/musicVideoGrade.js';
 /**
  * Music Video — render pipeline (#1760, Phase 2).
  *
@@ -46,19 +46,19 @@ import { getProject, listProjects, updateProject, mutateProjectRecord } from './
 import { requireProject } from './requireProject.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { isLocalRenderMark, settledRender, settleMusicVideoRender } from './renderSettlement.js';
-import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideoLayers.js';
-import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
-import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideoAspect.js';
+import { COVERAGE_TOLERANCE_SEC, MUSIC_VIDEO_FRAME_FITS, STILL_PAN_TRAVEL, STILL_PUSH_ZOOM, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipReversed, isSelfDrawnLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming, sceneVisualLayer, wordTimedScenes } from '../../lib/musicVideo/musicVideoLayers.js';
+import { assertSongAudioCurrent, audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
+import { musicVideoAspect, musicVideoRenderCanvas } from '../../lib/musicVideo/musicVideoAspect.js';
 import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from './codeRender.js';
 import { documentRenderInitScripts, encodeDocumentComposition, prepareDocumentRender, sweepDocumentScratch } from './documentRender.js';
 import { sweepCompositionScratch } from './compositionRender.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
-import { endingSeconds } from '../../lib/musicVideoEnding.js';
-import { coldOpenPlan, coldOpenScenes, withSongScenesOnly } from '../../lib/musicVideoColdOpen.js';
-import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideoSourceTake.js';
-import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
+import { endingSeconds } from '../../lib/musicVideo/musicVideoEnding.js';
+import { coldOpenPlan, coldOpenScenes, withSongScenesOnly } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
+import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
@@ -66,16 +66,16 @@ import { musicVideoEvents } from './events.js';
 import { projectSoundBed } from './soundBed.js';
 import { intercutClips } from './intercut.js';
 import { applyFrameHold, projectFrameHold } from './frameHold.js';
-import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
-import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
-import { applyCameraCutDefaults, imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
-import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS, cameraFrameWindow, musicVideoOverscan, shotCamera } from '../../lib/musicVideoFilmLook.js';
+import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideo/musicVideoProductionMedium.js';
+import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideo/musicVideoCutEffects.js';
+import { applyCameraCutDefaults, imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS, cameraFrameWindow, musicVideoOverscan, shotCamera } from '../../lib/musicVideo/musicVideoFilmLook.js';
 import { sumExpr } from '../../lib/ffmpegExpr.js';
-import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
+import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideo/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { isEndFrameImageEffect, musicVideoImageEffectFilter, photoSequenceArrivals, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 import { trackedRenderMap } from '../renderActivity.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 
 // Per-project render mutex (keyed by projectId so two projects can render in
 // parallel; same-project re-entry returns 409 with the live jobId for re-attach).

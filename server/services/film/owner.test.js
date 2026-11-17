@@ -3,7 +3,7 @@ import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { createFakeBlender, exampleManifest } from '../musicVideo/blender/__blenderFixture.js';
 import { listBlenderFiles, scaffoldBlenderWorkspace } from './sources.js';
 import { startBlenderSync } from './sync.js';

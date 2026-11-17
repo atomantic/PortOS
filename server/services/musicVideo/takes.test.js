@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
-import { musicVideoSceneCastIds } from '../../lib/musicVideoConditioning.js';
+import { captureImageFrameDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { musicVideoSceneCastIds } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { appendSceneTakes, appendTakesAcrossScenes, rejectUnusedTakes, reviewSceneTake, selectSceneTake, swapSceneFrames } from './takes.js';
-import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
+import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 
 const project = () => ({ id: 'mv-1', scenes: [{ sceneId: 's1' }] });
 

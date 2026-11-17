@@ -63,7 +63,7 @@ vi.mock('./projects.js', () => ({
 }));
 
 const { buildTypographyDocument } = await import('./composition.js');
-const { titleCardRuntimeSource } = await import('../../lib/musicVideoTitleCard.js');
+const { titleCardRuntimeSource } = await import('../../lib/musicVideo/musicVideoTitleCard.js');
 const { typographyOverlayWindows } = await import('./compositionRender.js');
 const { cancelShotRender, getShotRenderStatus, startShotRender } = await import('./shotSegments.js');
 const { musicVideoEvents } = await import('./events.js');

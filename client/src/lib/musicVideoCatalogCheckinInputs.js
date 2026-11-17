@@ -2,13 +2,13 @@
  * A string that changes exactly when the catalog check-in or a shot reference warning can change, so the page re-reads Cast & Sets only then.
  *
  * Mirrors what `GET /:id/cast-and-sets` reads from the stored project (server/services/musicVideo/catalogCheckin.js,
- * shotReferenceCheck.js and the scene readers in server/lib/musicVideoConditioning.js). The catalog records
+ * shotReferenceCheck.js and the scene readers in server/lib/musicVideo/musicVideoConditioning.js). The catalog records
  * themselves are not here: catalog socket events refresh the read. A field the check might read belongs in
  * this signature; leaving one out leaves a warning stale after the edit that should have changed it, while an
  * extra one only costs a read. Deliberately left out: Done (`shotSheet.checked`), take status and notes, film
  * look, render settings and timing, except where timing reorders the shot numbers the warnings name.
  */
-import { shotNumbers } from '../../../server/lib/musicVideoColdOpen.js';
+import { shotNumbers } from '../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
 // Scene fields the check reads as they are.
 const SCENE_FIELDS = [

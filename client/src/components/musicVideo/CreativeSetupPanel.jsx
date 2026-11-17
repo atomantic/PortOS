@@ -1,7 +1,7 @@
-import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects } from '../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import { useEffect, useState } from 'react';
-import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
+import { musicVideoToolPolicyConflict } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import { universeStyleRefusal } from '../../../../server/lib/universeVisualStyle.js';
 import { formatCount } from '../../utils/formatters.js';
 import { Link } from 'react-router';

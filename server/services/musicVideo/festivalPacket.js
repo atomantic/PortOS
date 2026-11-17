@@ -7,7 +7,7 @@ import { getHistoryItem } from '../videoGen/history.js';
 import {
   FESTIVAL_FIELDS, FESTIVAL_NOTE_FIELDS, FESTIVAL_RIGHTS_LABELS,
   emptyFestivalPacket, festivalPacketSchema, festivalPacketText, festivalSafeText,
-} from '../../lib/musicVideoFestivalPacket.js';
+} from '../../lib/musicVideo/musicVideoFestivalPacket.js';
 
 const unknown = () => ({ status: 'unavailable', width: null, height: null, durationSec: null });
 const fileVersion = info => [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':');

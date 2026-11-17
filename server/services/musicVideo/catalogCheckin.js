@@ -1,13 +1,13 @@
 // Current check-in items resolve from catalog identities. Generated stage media
 // remains historical evidence and is never an input to this projection.
 import { createHash } from 'node:crypto';
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { listPickableImages, pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
-import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideoConditioning.js';
-import { shotNumbers } from '../../lib/musicVideoColdOpen.js';
+import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { shotNumbers } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { musicVideoShotReferenceChecks } from './shotReferenceCheck.js';
 
 export const isCatalogCheckin = project => project?.castAndSets?.source === 'catalog';

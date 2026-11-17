@@ -1,18 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Clapperboard, Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
-import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import WorldMap, { useWorldMapView } from '../../catalog/WorldMapView';
 import { formatCount } from '../../../utils/formatters.js';
 import { worldClockText } from '../../../../../server/lib/worldMap.js';
-import { musicVideoShotPlaceId } from '../../../../../server/lib/musicVideoRouteMaps.js';
-import { placePrevizCutsOnTimeline, previzPawnColors, projectPreviz } from '../../../../../server/lib/musicVideoPreviz.js';
-import { TIMELINE_BEATS_MAX, TIMELINE_PACES } from '../../../../../server/lib/musicVideoPrevizLimits.js';
+import { musicVideoShotPlaceId } from '../../../../../server/lib/musicVideo/musicVideoRouteMaps.js';
+import { placePrevizCutsOnTimeline, previzPawnColors, projectPreviz } from '../../../../../server/lib/musicVideo/musicVideoPreviz.js';
+import { TIMELINE_BEATS_MAX, TIMELINE_PACES } from '../../../../../server/lib/musicVideo/musicVideoPrevizLimits.js';
 import {
   draftTimelineFromShots, timelineActorsAt, timelineBeatProblems, timelineClockAt, timelineMinuteOfClock, previzTimeline, previzVehicles,
-} from '../../../../../server/lib/musicVideoPrevizTimeline.js';
+} from '../../../../../server/lib/musicVideo/musicVideoPrevizTimeline.js';
 
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-0';
 const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';

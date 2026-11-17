@@ -3,7 +3,7 @@ import { Moon } from 'lucide-react';
 import socket from '../../services/socket';
 import toast from '../ui/Toast';
 import { cancelOvernightRenders, listOvernightRenders, queueOvernightRenders } from '../../services/apiImageVideo.js';
-import { shotNumbers } from '../../../../server/lib/musicVideoColdOpen.js';
+import { shotNumbers } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { formatCount, formatTimeOfDay } from '../../utils/formatters.js';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';

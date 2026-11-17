@@ -1,6 +1,6 @@
 import { useCallback, useId, useState } from 'react';
 import { ImagePlus } from 'lucide-react';
-import { buildCastSetsImageEditPrompt, CAST_SETS_IMAGE_EDIT_MAX } from '../../../../server/lib/musicVideoCastSetsImageEdit.js';
+import { buildCastSetsImageEditPrompt, CAST_SETS_IMAGE_EDIT_MAX } from '../../../../server/lib/musicVideo/musicVideoCastSetsImageEdit.js';
 import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import ModelInputPreview from '../media/ModelInputPreview.jsx';
 import useModelInputPreview from '../../hooks/useModelInputPreview.js';

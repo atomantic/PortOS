@@ -4,7 +4,7 @@ import FilmLookFrame from '../media/FilmLookFrame.jsx';
 import CreditsOutroCanvas from './CreditsOutroCanvas.jsx';
 import CreditsOutroPanel from './CreditsOutroPanel.jsx';
 import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
-import { CREDITS_OUTRO_DEFAULTS, normalizeCreditsOutro } from '../../../../server/lib/musicVideoCreditsOutro.js';
+import { CREDITS_OUTRO_DEFAULTS, normalizeCreditsOutro } from '../../../../server/lib/musicVideo/musicVideoCreditsOutro.js';
 
 const PREVIEW_FPS = 24;
 

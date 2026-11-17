@@ -1,9 +1,9 @@
-import { shotActionPrompt } from '../../lib/musicVideoActionContract.js';
+import { shotActionPrompt } from '../../lib/musicVideo/musicVideoActionContract.js';
 import { shotCameraPrompt } from '../../lib/cameraMovements.js';
-import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
-import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
-import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
-import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
+import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideo/musicVideoCreativeContext.js';
+import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideo/musicVideoMotion.js';
+import { isOutsideMusicVideoReference } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { isQuickEditPrompt } from '../../lib/quickEditPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import

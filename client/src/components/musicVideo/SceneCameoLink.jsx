@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { shotInheritsCameoStill, cameoStillFor } from '../../../../server/lib/musicVideoCameos.js';
+import { shotInheritsCameoStill, cameoStillFor } from '../../../../server/lib/musicVideo/musicVideoCameos.js';
 import { linkMusicVideoCameoShots, setMusicVideoCameoStillFromShot, unlinkMusicVideoCameoShots } from '../../services/apiMusicVideo.js';
 import toast from '../ui/Toast';
 

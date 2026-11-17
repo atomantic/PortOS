@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { artGuideProposeSchema, previzProposeSchema, shotSheetProposeSchema, storyApplySchema, storyBeatsApplySchema, storyProposeSchema, storySummarySchema } from '../lib/musicVideoStoryValidation.js';
+import { artGuideProposeSchema, previzProposeSchema, shotSheetProposeSchema, storyApplySchema, storyBeatsApplySchema, storyProposeSchema, storySummarySchema } from '../lib/musicVideo/musicVideoStoryValidation.js';
 import { applyStory, applyStoryBeats, proposeArtGuides, proposeStory, saveStorySummary, storyContext } from '../services/musicVideo/story.js';
 import { proposeShotSheet } from '../services/musicVideo/shotSheetProposals.js';
 import { proposePrevizEdit } from '../services/musicVideo/previzProposals.js';

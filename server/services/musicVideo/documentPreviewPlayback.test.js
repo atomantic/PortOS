@@ -10,7 +10,7 @@ vi.mock('./compositionDocument.js', () => ({
 }));
 import { adaptStagedDocumentPreview, shippedLayeredDocument } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
 
 const roots = [];
 const templates = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
@@ -19,7 +19,7 @@ async function staged() {
   const root = await mkdtemp(join(tmpdir(), 'preview-playback-contract-')); roots.push(root);
   await cp(join(templates, 'layered'), root, { recursive: true });
   await cp(join(templates, 'shared'), root, { recursive: true });
-  await cp(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), join(root, 'musicVideoImageEffects.js'));
+  await cp(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), join(root, 'musicVideoImageEffects.js'));
   return root;
 }
 

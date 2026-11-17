@@ -33,8 +33,8 @@
  * Browser-safe: no node-only imports.
  */
 
-import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
-import { coldOpenPlan, isPreMusicShot } from './musicVideoColdOpen.js';
+import { sungLyricTextWithin } from './musicVideo/musicVideoLyricAnchors.js';
+import { coldOpenPlan, isPreMusicShot } from './musicVideo/musicVideoColdOpen.js';
 import { storyboardPreludeShotSec, storyboardPanelArt, storyboardPanelRev } from './storyboardFit.js';
 import { STORYBOARD_DEFAULT_HOLD_SEC, storyboardPreludeCount } from './storyboardSongBrief.js';
 import { STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';

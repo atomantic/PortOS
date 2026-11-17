@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { Check } from 'lucide-react';
-import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideoFinalApproval.js';
+import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { takeClipUrl } from '../../lib/musicVideoTakes.js';
 
 const BUTTON = 'flex items-center gap-1 rounded border border-port-accent px-2 py-1.5 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
