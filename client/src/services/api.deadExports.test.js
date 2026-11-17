@@ -12,7 +12,23 @@ const BARRELS = new Set(['api.js']);
 // for the stale-client check; it has no UI importer by design.
 const INTENTIONALLY_UNREFERENCED = Object.freeze(['CLIENT_BUILD_ID']);
 
-const isTest = (name) => /\.test\.(js|jsx)$/.test(name);
+// Exports whose only importer is their own unit test, kept public on purpose
+// (keyed `<file>:<name>`): pure routing and reply parsers that the voice
+// fast-path suite pins one by one, and the teardown a browser-LLM suite needs
+// to reset the module-level session between cases.
+const TEST_PINNED_EXPORTS = Object.freeze([
+  'voiceFastPath.js:resolveNavIntent',
+  'voiceFastPath.js:isActionIntent',
+  'voiceFastPath.js:isCapabilityQuery',
+  'voiceFastPath.js:looksLikeConfirmationFollowup',
+  'voiceFastPath.js:isEscalate',
+  'voiceFastPath.js:cleanNanoReply',
+  'browserLlm.js:destroyNanoSession',
+]);
+
+// `client/src/test/**` holds mock factories and fixtures that only ever name an
+// export to stub it, so a reference there never makes the export live.
+const isTest = (name) => /\.test\.(js|jsx)$/.test(name) || /(^|[\\/])src[\\/]test[\\/]/.test(name);
 
 function walk(dir, acc = []) {
   for (const name of readdirSync(dir)) {
@@ -107,10 +123,7 @@ function identFiles(files) {
 
 function exportModules() {
   return readdirSync(HERE)
-    .filter((f) => !isTest(f) && (
-      f === 'socket.js'
-      || (f.startsWith('api') && f.endsWith('.js') && f !== 'api.js')
-    ))
+    .filter((f) => !isTest(f) && f.endsWith('.js') && f !== 'api.js')
     .map((f) => join(HERE, f));
 }
 
@@ -125,6 +138,7 @@ function findDeadExports({ extraModule } = {}) {
   const consider = (file, src) => {
     for (const name of collectNamedExports(src)) {
       if (INTENTIONALLY_UNREFERENCED.includes(name)) continue;
+      if (TEST_PINNED_EXPORTS.includes(`${relative(HERE, file)}:${name}`)) continue;
       const hits = (filesFor.get(name) || []).filter((f) => f !== file);
       if (hits.length === 0) dead.push(`${relative(SRC_ROOT, file)}:${name}`);
     }
@@ -147,6 +161,12 @@ describe('client API wrappers have callers', () => {
       extraModule: { file: 'apiFake.js', src },
     });
     expect(dead.some((row) => row.endsWith(':definitelyUnusedApiWrapper5727'))).toBe(true);
+  });
+
+  it('treats client/src/test mock factories as non-callers', () => {
+    expect(isTest(join(SRC_ROOT, 'test', 'videoGenPageMocks.jsx'))).toBe(true);
+    expect(isTest(join(SRC_ROOT, 'services', 'apiImageVideo.js'))).toBe(false);
+    expect(exportModules().map((f) => relative(HERE, f))).toEqual(expect.arrayContaining(['browserLlm.js', 'apiImageVideo.js']));
   });
 
   it('allowlists CLIENT_BUILD_ID as the only intentional keep', () => {

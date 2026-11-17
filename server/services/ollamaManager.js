@@ -287,9 +287,9 @@ function invalidateServiceStatus() {
   serviceStatusCache = null
 }
 
-function getServiceStatus(forceRefresh = false) {
+function getServiceStatus() {
   const cached = serviceStatusCache
-  if (!forceRefresh && cached) {
+  if (cached) {
     if (cached.inflight) return cached.inflight
     if (Date.now() - cached.at < SERVICE_STATUS_TTL_MS) return Promise.resolve(cached.value)
   }
@@ -2220,12 +2220,7 @@ export {
   ensureRunning,
   ensureProviderReady,
   isOllamaProvider,
-  getServiceStatus,
-  invalidateServiceStatus,
   getModelsDir,
   listStoredModels,
-  getEmbeddings,
-  isBootstrapConflictError,
-  isPullDeadlineError,
-  finalizeHuggingFacePull
+  getEmbeddings
 }

@@ -54,12 +54,15 @@ const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 const { removeCompositionScratch, renderTypographyOverlays } = await import('./compositionRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { musicVideoEvents } = await import('./events.js');
-const { startBlenderSync } = await import('./blender/sync.js');
+const filmSync = await import('../film/sync.js');
+const filmSources = await import('../film/sources.js');
+const { musicVideoFilmOwner } = await import('./blender/owner.js');
 const { enqueueBlenderRenders, cancelBlenderProjectJobs, resumePendingBlenderRenders } = await import('./blender/queue.js');
 const { saveBlenderSettings } = await import('./blender/record.js');
 const { listBlenderJobs } = await import('./blender/jobs.js');
 const { blenderFilmReadState } = await import('./blender/renderIndex.js');
-const { writeBlenderFile } = await import('./blender/sources.js');
+const startBlenderSync = (id, ...args) => filmSync.startBlenderSync(musicVideoFilmOwner(id), ...args);
+const writeBlenderFile = (id, ...args) => filmSources.writeBlenderFile(musicVideoFilmOwner(id), ...args);
 const { __resetBlenderJobsForTests } = await import('./blender/jobs.js');
 
 afterAll(cleanupTempDataRoots);

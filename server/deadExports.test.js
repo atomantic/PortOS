@@ -201,13 +201,21 @@ function exportedNames(clause) {
     .map(part => part.split(/\s+as\s+/).pop().trim());
 }
 
+// A barrel (`index.js`) or an `export * from` shim has no per-name list to audit,
+// so it stays only while some production file imports it at all; a zero-importer
+// one is reported as `<file>:*`.
 function callerlessReExports(files, index = referenceIndex(files)) {
   const offenders = [];
   for (const [file, source] of files) {
-    if (!HOOK_SCOPE.test(file) || isTestFile(file) || /(^|\/)index\.js$/.test(file) || !source.includes('} from')) continue;
-    const reExports = [...stripComments(source).matchAll(REEXPORT)];
-    if (!reExports.length) continue;
+    if (!HOOK_SCOPE.test(file) || isTestFile(file)) continue;
+    const code = stripComments(source);
+    const reExports = [...code.matchAll(REEXPORT)];
+    const isBarrel = /(^|\/)index\.js$/.test(file);
+    const hasStar = /^export\s*\*\s*from/m.test(code);
+    if (!reExports.length && !hasStar) continue;
     const callers = [...index.importers(file)].filter(other => other !== file && !isTestFile(other));
+    if ((isBarrel || hasStar) && !callers.length) offenders.push(`${file}:*`);
+    if (isBarrel) continue;
     for (const match of reExports) {
       for (const name of exportedNames(match[1])) {
         if (!callers.some(other => index.mentions(other, name))) offenders.push(`${file}:${name}`);
@@ -316,6 +324,18 @@ describe('server dead exports', () => {
       ['server/services/shim.test.js', "import { onlyTested } from './shim.js';\nonlyTested;\n"],
     ];
     expect(callerlessReExports(files)).toEqual(['server/services/shim.js:orphan', 'server/services/shim.js:onlyTested']);
+  });
+
+  it('flags a zero-importer export-star shim and barrel, and keeps imported ones', () => {
+    const files = [
+      ['server/services/film/dead.js', "export * from './impl.js';\n"],
+      ['server/services/barrel/index.js', "export * from './impl.js';\n"],
+      ['server/services/film/live.js', "export * from './impl.js';\n"],
+      ['server/services/livebarrel/index.js', "export { a } from './impl.js';\n"],
+      ['server/routes/caller.js', "import { x } from '../services/film/live.js';\nimport { a } from '../services/livebarrel';\nx; a;\n"],
+      ['server/services/film/dead.test.js', "import { x } from './dead.js';\n"],
+    ];
+    expect(callerlessReExports(files)).toEqual(['server/services/film/dead.js:*', 'server/services/barrel/index.js:*']);
   });
 
   it('covers client/src/lib shims and hooks', () => {

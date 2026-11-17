@@ -213,32 +213,3 @@ export async function getDecisionSummary() {
     hasImpactfulDecisions: impactfulDecisions.length > 0
   };
 }
-
-/**
- * Clear old decisions (keep last N days)
- */
-export async function cleanupOldDecisions(daysToKeep = 7) {
-  const data = await loadDecisions();
-  const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
-
-  const before = data.decisions.length;
-  data.decisions = data.decisions.filter(
-    d => new Date(d.timestamp).getTime() > cutoff
-  );
-  const removed = before - data.decisions.length;
-
-  if (removed > 0) {
-    await saveDecisions(data);
-  }
-
-  return { removed, remaining: data.decisions.length };
-}
-
-// Export types for easy importing
-export default {
-  recordDecision,
-  getRecentDecisions,
-  getDecisionSummary,
-  cleanupOldDecisions,
-  DECISION_TYPES
-};

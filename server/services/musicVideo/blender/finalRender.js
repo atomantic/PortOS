@@ -15,7 +15,7 @@ import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm 
 import { blenderFinishFilter } from './finishFilter.js';
 import { blenderLeadAudio } from './leadAudio.js';
 import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
-import { assembleBlenderVideo } from './assemble.js';
+import { assembleBlenderVideo } from '../../film/assemble.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';
 

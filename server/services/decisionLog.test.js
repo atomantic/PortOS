@@ -48,7 +48,6 @@ describe('decisionLog.js', () => {
   let recordDecision;
   let getRecentDecisions;
   let getDecisionSummary;
-  let cleanupOldDecisions;
   let DECISION_TYPES;
 
   beforeAll(async () => {
@@ -98,7 +97,6 @@ describe('decisionLog.js', () => {
     recordDecision = decisionLogModule.recordDecision;
     getRecentDecisions = decisionLogModule.getRecentDecisions;
     getDecisionSummary = decisionLogModule.getDecisionSummary;
-    cleanupOldDecisions = decisionLogModule.cleanupOldDecisions;
     DECISION_TYPES = decisionLogModule.DECISION_TYPES;
 
     savedData = null;
@@ -370,59 +368,6 @@ describe('decisionLog.js', () => {
       const result = await getDecisionSummary();
 
       expect(result.transparencyScore).toBe(100);
-    });
-  });
-
-  describe('cleanupOldDecisions', () => {
-    it('should remove decisions older than specified days', async () => {
-      const now = Date.now();
-      const recentTimestamp = new Date(now - 1000 * 60 * 60 * 24).toISOString(); // 1 day ago
-      const oldTimestamp = new Date(now - 1000 * 60 * 60 * 24 * 10).toISOString(); // 10 days ago
-
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.IDLE, reason: 'Recent', timestamp: recentTimestamp },
-        { id: 'dec-2', type: DECISION_TYPES.IDLE, reason: 'Old', timestamp: oldTimestamp }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await cleanupOldDecisions(7);
-
-      expect(result.removed).toBe(1);
-      expect(result.remaining).toBe(1);
-      expect(savedData.decisions).toHaveLength(1);
-      expect(savedData.decisions[0].reason).toBe('Recent');
-    });
-
-    it('should not save when nothing to remove', async () => {
-      const now = Date.now();
-      const recentTimestamp = new Date(now - 1000 * 60 * 60).toISOString(); // 1 hour ago
-
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.IDLE, reason: 'Recent', timestamp: recentTimestamp }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await cleanupOldDecisions(7);
-
-      expect(result.removed).toBe(0);
-      expect(writeFile).not.toHaveBeenCalled();
-    });
-
-    it('should use default of 7 days', async () => {
-      const now = Date.now();
-      const recentTimestamp = new Date(now - 1000 * 60 * 60 * 24 * 5).toISOString(); // 5 days ago
-      const oldTimestamp = new Date(now - 1000 * 60 * 60 * 24 * 10).toISOString(); // 10 days ago
-
-      const decisions = [
-        { id: 'dec-1', type: DECISION_TYPES.IDLE, reason: 'Recent', timestamp: recentTimestamp },
-        { id: 'dec-2', type: DECISION_TYPES.IDLE, reason: 'Old', timestamp: oldTimestamp }
-      ];
-      readJSONFile.mockResolvedValue(makeDecisionData({ decisions }));
-
-      const result = await cleanupOldDecisions();
-
-      expect(result.removed).toBe(1);
-      expect(result.remaining).toBe(1);
     });
   });
 });

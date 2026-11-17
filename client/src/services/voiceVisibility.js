@@ -4,7 +4,7 @@
 
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
-export const HIDDEN_KEY = 'portos.voice.hidden';
+const HIDDEN_KEY = 'portos.voice.hidden';
 export const VISIBILITY_EVENT = 'portos:voice:visibility';
 export const ENGAGE_EVENT = 'portos:voice:engage';
 export const DISENGAGE_EVENT = 'portos:voice:disengage';
