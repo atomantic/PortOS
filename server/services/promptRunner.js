@@ -557,13 +557,15 @@ const COMPLETION_ARGS = new Set([
  * @param {{ temperature?: number, maxTokens?: number, recover?: (failure: object) => Promise<string|null> }}
  *   [args.completion] — ask for a BOUNDED completion instead of a streamed run: one non-streaming
  *   `/chat/completions` request whose body is exactly `{ model, messages, temperature, max_tokens }`
+ *   (native Ollama `/api/chat` with `options.num_ctx` for an Ollama provider that sets `numCtx`)
  *   with the caller's own sampling, `timeout` as a wall-clock deadline, and the provider's reported
  *   token counts recorded as measured usage. API providers only. It is a pinned, routing-free run
  *   (`services/apiCompletionRun.js` lists what it leaves out and why): the provider is executed as
  *   passed, nothing falls back, and `model` goes on the wire verbatim. `recover` may repair a failed
  *   first attempt and name a model for one retry inside the same run. It takes `provider`, `prompt`,
  *   `source`, `model`, `timeout`, `signal`, `cwd`, `onRunCreated` and `onRunSettled`; any other
- *   argument is refused, never silently ignored. Resolves with `usage`,
+ *   argument is refused, never silently ignored. A prompt that provably exceeds the provider's known
+ *   context window is refused before dispatch, as on the streamed path. Resolves with `usage`,
  *   `tokens` and `retried` beside the usual fields; rejects with the reply's own error text and
  *   `completionFailure`, the failed reply itself (`{ error, status?, body?, stallPhase?, model, retried }`,
  *   with `canceled: true` when the run was stopped).
@@ -625,6 +627,15 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     if (unsupported.length > 0) {
       throw new Error(`runPromptThroughProvider: a completion request does not support ${unsupported.join(', ')}`);
     }
+    // The streamed path's pre-dispatch refusal, on the prompt alone (a
+    // completion declares no output reserve). A prompt that provably does not
+    // fit a known window is refused with both numbers before any run record
+    // exists, instead of being cut by the daemon; an unknown window refuses nothing.
+    await assertRequestFitsContext(
+      args.provider,
+      args.model ?? null,
+      refusalCapabilities({ requestCapabilities: buildRequestCapabilities({ prompt: args.prompt }), prompt: args.prompt }),
+    );
     // Lazy: only bounded-completion callers pay for the exchange's closure.
     const { executeApiCompletionRun } = await import('./apiCompletionRun.js');
     // Same precedence the streamed path gives `timeout`, resolved here so the
