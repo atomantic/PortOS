@@ -54,7 +54,7 @@ describe('tree-scanning guards are derived into CI selection (#5055, #16085)', (
     expect(getTreeGuards()).toEqual([...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
     expect(getTreeGuards()).toContain('scripts/agent-instructions-files.test.js');
     expect(getTreeGuards()).toContain('scripts/tailnet-identity-leak.test.js');
-    expect(getTreeGuards()).toContain('server/lib/textUtils.test.js');
+    expect(getTreeGuards()).toContain('server/lib/textUtils.guard.test.js');
     expect(getTreeGuards().length).toBeGreaterThanOrEqual(8);
   });
 
