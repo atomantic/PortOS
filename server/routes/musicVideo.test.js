@@ -295,6 +295,25 @@ describe('musicVideo routes', () => {
     expect((await request(app).get('/api/music-video?summary=1&statusFilter=unknown')).status).toBe(400);
   });
 
+  it('searches names across every project before paging, combined with the status filter', async () => {
+    svc.listProjects.mockResolvedValue([
+      { id: 'a', name: 'Alpha Night', status: 'complete', createdAt: '2026-05-01' },
+      { id: 'b', name: 'Beta', createdAt: '2026-04-01' },
+      { id: 'c', name: 'night drive', createdAt: '2026-03-01' },
+      { id: 'd', name: 'Gamma', createdAt: '2026-02-01' },
+      { id: 'e', name: 'Late NIGHT owl', createdAt: '2026-01-01' },
+    ]);
+    const first = await request(app).get('/api/music-video?summary=1&limit=1&q=%20night%20');
+    expect(first.body).toMatchObject({ total: 3, nextCursor: '1', items: [{ id: 'a' }] });
+    const last = await request(app).get('/api/music-video?summary=1&limit=1&q=night&cursor=2');
+    expect(last.body).toMatchObject({ total: 3, nextCursor: null, items: [{ id: 'e' }] });
+    const combined = await request(app).get('/api/music-video?summary=1&q=night&statusFilter=in-progress');
+    expect(combined.body.items.map((item) => item.id)).toEqual(['c', 'e']);
+    const none = await request(app).get('/api/music-video?summary=1&q=zzz');
+    expect(none.body).toMatchObject({ total: 0, items: [], nextCursor: null });
+    expect((await request(app).get(`/api/music-video?summary=1&q=${'x'.repeat(201)}`)).status).toBe(400);
+  });
+
   it('presents only the requested summary page, including cursor precedence and an empty page', async () => {
     const readOffPage = vi.fn(() => { throw new Error('Off-page detail was inspected'); });
     const older = { id: 'older', createdAt: '2026-01-01', get scenes() { return readOffPage(); } };
