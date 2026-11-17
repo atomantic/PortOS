@@ -948,7 +948,7 @@ describe('swarm reservations (in-progress, no assignee)', () => {
     });
     const glabWrites = () => execGlab.mock.calls.map(([argv, cwd]) => [argv, cwd]);
 
-    it('releases a stale reservation with one note and one unlabel, never a close', async () => {
+    it('releases a stale reservation with one unlabel and one note, never a close', async () => {
       mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: glMention, open: [] });
       const result = await reconcile('/repo', { now: NOW });
       expect(result.zombies).toEqual([]);
@@ -957,10 +957,10 @@ describe('swarm reservations (in-progress, no assignee)', () => {
       expect(await release(result)).toBe(1);
       const writes = glabWrites();
       expect(writes).toHaveLength(2);
-      expect(writes[0][0].slice(0, 4)).toEqual(['issue', 'note', '42', '--message']);
-      expect(writes[0][0].at(-1)).toContain('reservation');
-      expect(writes[0][0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
-      expect(writes[1][0]).toEqual(['issue', 'update', '42', '--unlabel', 'in-progress']);
+      expect(writes[0][0]).toEqual(['issue', 'update', '42', '--unlabel', 'in-progress']);
+      expect(writes[1][0].slice(0, 4)).toEqual(['issue', 'note', '42', '--message']);
+      expect(writes[1][0].at(-1)).toContain('reservation');
+      expect(writes[1][0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
       expect(writes.every(([, cwd]) => cwd === '/repo')).toBe(true);
       expect(writes.some(([argv]) => argv.includes('close'))).toBe(false);
       expect(execGh).not.toHaveBeenCalled();
@@ -995,21 +995,54 @@ describe('swarm reservations (in-progress, no assignee)', () => {
       }
     });
 
-    it('still unlabels when the note fails; a failed unlabel reports 0 so the next pass retries', async () => {
+    it('a failed note still counts as released once the label is gone', async () => {
       const error = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: [] });
         const result = await reconcile('/repo', { now: NOW });
-
         execGlab.mockImplementation(async (argv) => (argv[1] === 'note' ? null : ''));
         expect(await release(result)).toBe(1);
-        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['note', 'update']);
-
-        execGlab.mockReset();
-        execGlab.mockImplementation(async (argv) => (argv[1] === 'update' ? null : ''));
-        expect(await release(result)).toBe(0);
+        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['update', 'note']);
       } finally {
         error.mockRestore();
+      }
+    });
+
+    // A note would refresh `updated_at`, making the next scan read the reservation as fresh.
+    it('a failed unlabel writes no note and reports 0, so the next scan retries it', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: [] });
+        execGlab.mockImplementation(async (argv) => (argv[1] === 'update' ? null : ''));
+        expect(await release(await reconcile('/repo', { now: NOW }))).toBe(0);
+        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['update']);
+
+        execGlab.mockReset();
+        execGlab.mockResolvedValue('');
+        const next = await reconcile('/repo', { now: NOW });
+        expect(next.abandoned.map((a) => a.number)).toEqual([42]);
+        expect(await release(next)).toBe(1);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('holds expired reservations while the open-MR page is full (an unseen MR may own one)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const fullPage = Array.from({ length: 100 }, (_, i) => ({ iid: 1000 + i, source_branch: `b${i}`, description: '' }));
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage });
+        const result = await reconcile('/repo', { now: NOW });
+        expect(result.abandoned).toEqual([]);
+        expect(result.reserved.map((r) => r.number)).toEqual([42]);
+        expect(await release(result)).toBe(0);
+        expect(execGlab).not.toHaveBeenCalled();
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: open change list for .* reached the page limit/));
+
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage.slice(1) });
+        expect((await reconcile('/repo', { now: NOW })).abandoned.map((a) => a.number)).toEqual([42]);
+      } finally {
+        log.mockRestore();
       }
     });
   });
