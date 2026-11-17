@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
   decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
-  claimIssueOfBranch, MERGED_OWNERSHIP_HOLDS, mergedOwnershipHold, recoveryWorktreeReason, supersededPolicyHold,
+  claimIssueOfBranch, MERGED_OWNERSHIP_HOLDS, recoveryWorktreeReason, supersededPolicyHold,
   ANCESTRY_RETIREMENT_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
@@ -169,13 +169,24 @@ describe('decideBranchRetirement — merged named branches', () => {
 });
 
 // A branch that reads as merged by ancestry may be new or still owned (#16625).
+// Driven through the reaper (a .claude tree passes every earlier gate) and,
+// without a checkout, through branch retirement; `asked` lists only the gate's reads.
 describe('mergedOwnershipHold', () => {
-  const CHECKOUT = '/work/next-issue-7';
+  const CHECKOUT = `${MANAGED}/next-issue-7`;
   const IDLE = 2 * HOUR;
-  // A clear gate returns null; drive() reads that as an admission.
-  const own = ({ branch = 'feat/x', checkoutPath = CHECKOUT, facts = {} } = {}) => drive(input => mergedOwnershipHold(input) ?? {}, { branch, checkoutPath, nowMs: NOW }, {
-    lineage: 'ancestry', published: false, claimReserved: false, checkoutProcess: false, idleMs: IDLE, mergedPrAtHead: false, ...facts,
-  });
+  const BASE_READS = { reap: ['dirty', 'mergeEvidence'], branch: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'] };
+  const own = ({ branch = 'feat/x', checkoutPath = CHECKOUT, facts = {} } = {}) => {
+    const answers = { lineage: 'ancestry', published: false, claimReserved: false, checkoutProcess: false, idleMs: IDLE, mergedPrAtHead: false, ...facts };
+    const step = checkoutPath === null
+      ? decide(mergedCase(branch, null, { scan: { worktreePath: null }, facts: answers }))
+      : drive(decideMergedWorktreeReap, {
+        tree: { path: checkoutPath, branch: `refs/heads/${branch}`, head: HEAD, locked: false }, defaultBranch: 'main', currentBranch: 'main',
+        worktreesDir: '/data/cos/worktrees', claudeTreesRoot: MANAGED, activeAgentIds: new Set(), nowMs: NOW,
+      }, { dirty: false, mergeEvidence: true, ...answers });
+    const base = BASE_READS[checkoutPath === null ? 'branch' : 'reap'];
+    expect(step.asked.slice(0, base.length)).toEqual(base);
+    return { ...step, asked: step.asked.slice(base.length) };
+  };
 
   it.each([
     // [case, overrides, verdict]
