@@ -4,10 +4,9 @@
 import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
 import { withGlabJson } from '../lib/glabArgs.js';
-import { githubRepoSpec, hostToWorkTracker } from '../lib/workTracker.js';
+import { githubRepoSpec, resolveRepoForgeTarget } from '../lib/workTracker.js';
 import { IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { getOriginInfo } from '../lib/gitRemote.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 
 /**
@@ -20,7 +19,10 @@ import { resolveForgeExecOptions } from './forgeExecOptions.js';
  *   or malformed read). Never collapse null into either answer.
  */
 export async function readClaimIssueReservation(target, issue, forgeExec) {
-  const repoSpec = githubRepoSpec(target);
+  return readGithubClaimIssueReservation(githubRepoSpec(target), issue, forgeExec);
+}
+
+async function readGithubClaimIssueReservation(repoSpec, issue, forgeExec) {
   if (!repoSpec || !forgeExec) return null;
   const raw = await execGh(['issue', 'view', String(issue), '--repo', repoSpec, '--json', 'state,labels,assignees'],
     undefined, { cwd: forgeExec.cwd, env: forgeExec.env }).catch(() => null);
@@ -60,8 +62,11 @@ async function readGitlabClaimIssueReservation(repoPath, issue) {
  * @returns {Promise<boolean|null>}
  */
 export async function readRepoClaimIssueReservation(repoPath, issue, { forgeAccount = null } = {}) {
-  const origin = await getOriginInfo(repoPath).catch(() => null);
-  if (!githubRepoSpec(origin)) return hostToWorkTracker(origin?.host) === 'gitlab' ? readGitlabClaimIssueReservation(repoPath, issue) : null;
+  // The shared resolver, not a two-segment origin parse: a GitLab project in a
+  // subgroup (group/subgroup/app) has no owner/repo pair but is still GitLab.
+  const target = await resolveRepoForgeTarget(repoPath).catch(() => null);
+  if (target?.forge === 'gitlab') return readGitlabClaimIssueReservation(repoPath, issue);
+  if (target?.forge !== 'github') return null;
   const forgeExec = await resolveForgeExecOptions(repoPath, { forgeAccount }).catch(() => null);
-  return readClaimIssueReservation(origin, issue, forgeExec);
+  return readGithubClaimIssueReservation(target.repoSpec, issue, forgeExec);
 }
