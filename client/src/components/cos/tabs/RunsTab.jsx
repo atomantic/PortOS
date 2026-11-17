@@ -39,32 +39,58 @@ export default function RunsTab() {
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
   const loading = runsState === 'loading';
 
-  // Every run lifecycle transition (start, completion, failure, cancellation,
-  // and the post-listen boot close of runs a previous process left open,
-  // #16557) arrives as an `llm` system-activity invalidation. Re-read the page
-  // in place so a row never sits on Running after its run ended, and again on
-  // reconnect for frames missed while offline. A failed re-read keeps the last
-  // successful rows on screen; only the newest re-read may land.
+  // Run lifecycle transitions (an AI run starting or ending, a CoS agent
+  // finishing, the post-listen boot close of runs a previous process left
+  // open, #16557) arrive as `system:activity` invalidations. The server
+  // coalesces a burst into one frame naming only its last source, so every
+  // frame re-reads the page in place; a reconnect re-reads frames missed while
+  // offline. A frame that lands while the list is loading is held and re-read
+  // once it is ready, because that load may have read the record before the
+  // change. A failed re-read keeps the last successful rows on screen, and only
+  // the newest re-read may land.
   const runsReady = useRef(false);
   runsReady.current = runsState === 'ready';
   const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef(false);
+  const refreshPending = useRef(false);
+  const refreshRuns = useCallback(() => {
+    if (!runsReady.current) {
+      refreshPending.current = true;
+      return;
+    }
+    const current = ++refreshGeneration.current;
+    refreshInFlight.current = true;
+    fetchRuns().then((list) => {
+      if (current !== refreshGeneration.current) return;
+      refreshInFlight.current = false;
+      if (runsReady.current) setRuns(list);
+    }, () => {
+      if (current === refreshGeneration.current) refreshInFlight.current = false;
+    });
+  }, [fetchRuns, setRuns]);
+  // A confirmed delete must not be undone by a re-read that started before it:
+  // drop that read and, if one was running, start a fresh one after the delete.
+  const supersedeRefresh = () => {
+    const wasInFlight = refreshInFlight.current;
+    refreshGeneration.current += 1;
+    refreshInFlight.current = false;
+    if (wasInFlight) refreshRuns();
+  };
   useEffect(() => {
-    const refresh = () => {
-      if (!runsReady.current) return;
-      const current = ++refreshGeneration.current;
-      fetchRuns().then((list) => {
-        if (current === refreshGeneration.current && runsReady.current) setRuns(list);
-      }, () => {});
-    };
-    const onActivity = (frame) => { if (frame?.source === 'llm') refresh(); };
-    socket.on('system:activity', onActivity);
-    socket.on('connect', refresh);
+    if (runsState !== 'ready' || !refreshPending.current) return;
+    refreshPending.current = false;
+    refreshRuns();
+  }, [runsState, refreshRuns]);
+  useEffect(() => {
+    socket.on('system:activity', refreshRuns);
+    socket.on('connect', refreshRuns);
     return () => {
       refreshGeneration.current += 1;
-      socket.off('system:activity', onActivity);
-      socket.off('connect', refresh);
+      refreshInFlight.current = false;
+      socket.off('system:activity', refreshRuns);
+      socket.off('connect', refreshRuns);
     };
-  }, [fetchRuns, setRuns]);
+  }, [refreshRuns]);
 
   // Filter runs by source and status
   const filteredRuns = runs.filter(run => {
@@ -84,6 +110,7 @@ export default function RunsTab() {
     e.stopPropagation();
     const deleted = await api.deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
+    supersedeRefresh();
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
   };
@@ -204,6 +231,7 @@ export default function RunsTab() {
   const handleClearFailed = async () => {
     const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
     if (ok) {
+      supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
     }
   };
