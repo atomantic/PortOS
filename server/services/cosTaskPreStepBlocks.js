@@ -888,7 +888,7 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   // the issue-watcher stamp always has a releaser (issue #6112). Failures are
   // logged inside and simply retried next pass.
   const releasedCount = await releaseAbandonedClaims(result.abandoned, {
-    forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName,
+    forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName, repoPath: app.repoPath,
   }).catch((err) => {
     emitLog('warn', `issue-reconcile could not release abandoned claims for ${app.name}: ${err.message}`, { appId: app.id });
     return 0;
