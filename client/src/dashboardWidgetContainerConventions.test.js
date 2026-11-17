@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (reads the widget sources widgetRegistry.jsx names, computed at run time)
 /**
  * Rule: Components reachable from `WIDGETS` in `widgetRegistry.jsx` must use `@container` + `@sm:`/`@md:`/`@lg:` container queries, never bare viewport breakpoints (see `client/src/components/dashboard/AGENTS.md`).
  * Fix: Put `@container` on the component's root and prefix layout classes with `@sm:`/`@md:`/`@lg:`.
