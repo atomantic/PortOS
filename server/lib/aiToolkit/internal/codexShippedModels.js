@@ -9,6 +9,8 @@
  * dropped every shipped model the CLI did not yet list.
  */
 export const CODEX_SHIPPED_MODELS = [
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
   'gpt-6-astra',
   'gpt-6.1-sol',
   'gpt-6.1-terra',

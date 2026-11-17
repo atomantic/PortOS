@@ -739,6 +739,8 @@ describe('Provider Service', () => {
 
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
+        'gpt-6.2-astra',
+        'gpt-6.2-sol',
         'gpt-6-astra',
         'gpt-6.1-sol',
         'gpt-6.1-terra',
@@ -777,6 +779,8 @@ describe('Provider Service', () => {
 
       const codexTui = await providerService.getProviderById('codex-tui');
       expect(codexTui.models).toEqual([
+        'gpt-6.2-astra',
+        'gpt-6.2-sol',
         'gpt-6-astra',
         'gpt-6.1-sol',
         'gpt-6.1-terra',
@@ -818,6 +822,8 @@ describe('Provider Service', () => {
 
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
+        'gpt-6.2-astra',
+        'gpt-6.2-sol',
         'gpt-6-astra',
         'gpt-6.1-sol',
         'gpt-6.1-terra',
@@ -857,6 +863,8 @@ describe('Provider Service', () => {
 
       const codex = await providerService.getProviderById('codex');
       expect(codex.models).toEqual([
+        'gpt-6.2-astra',
+        'gpt-6.2-sol',
         'gpt-6-astra',
         'gpt-6.1-sol',
         'gpt-6.1-terra',
@@ -1949,7 +1957,7 @@ rl.on('line', (line) => {
       expect(updated).not.toBeNull();
       expect(updated.models).toEqual(withCodexShippedModels(['gpt-6-astra', 'gpt-5.6-sol']));
       const reload = createProviderService({ dataDir: TEST_DATA_DIR, providersFile: 'providers.json' });
-      expect((await reload.getProviderById(p.id)).models).toContain('gpt-6.1-terra');
+      expect((await reload.getProviderById(p.id)).models).toEqual(expect.arrayContaining(['gpt-6.1-terra', 'gpt-6.2-astra', 'gpt-6.2-sol']));
     });
 
     it.skipIf(process.platform === 'win32')('refreshes a Codex TUI provider too', async () => {
