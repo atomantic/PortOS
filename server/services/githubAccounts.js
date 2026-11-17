@@ -29,8 +29,8 @@ import {
   GITHUB_ACCOUNT_TRUST_LEVELS,
   githubAccountCreateSchema,
   githubAccountUpdateSchema,
-  validateRequest,
-} from '../lib/validation.js';
+} from '../lib/githubValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 const ACCOUNTS_FILE = join(PATHS.data, 'github-accounts.json');
 const STORE_VERSION = 1;
