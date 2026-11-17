@@ -146,6 +146,8 @@ describe('OrchestrationTab', () => {
         name: 'Test Profile',
       }));
     });
+    // Saved record is applied locally: no follow-up list read, no spinner flash.
+    expect(api.getOrchestrationProfiles).toHaveBeenCalledTimes(1);
   });
 
   it('confirms inline before deleting a non-builtin profile', async () => {
@@ -161,5 +163,7 @@ describe('OrchestrationTab', () => {
     await waitFor(() => {
       expect(api.deleteOrchestrationProfile).toHaveBeenCalledWith('custom-team');
     });
+    await waitFor(() => expect(screen.queryByText('Custom Team')).toBeNull());
+    expect(api.getOrchestrationProfiles).toHaveBeenCalledTimes(1);
   });
 });
