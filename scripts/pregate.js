@@ -24,7 +24,7 @@ import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
+import { GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, guardReuseInputs, guardReuseStageKey, PREGATE_REPORT_PATH, readReusableStagePasses, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -831,58 +831,15 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Re-run only the over-budget guard files once, serially, and return their
- * isolated wall times. Sibling agents' Vitest runs can stretch a guard past
- * budget while the load average still fits the core count (#16279). The memo
- * is bypassed so the files really execute.
+ * Name the guard files of a passed stage that ran over the per-file budget.
+ * Report only: local wall time measures this host's contention as much as the
+ * guard, so hosted CI enforces the budget on its uniform runner (#16551).
  */
-async function isolatedGuardDurations(result, files, owner) {
-  const dir = mkdtempSync(join(tmpdir(), 'portos-pregate-durations-'));
-  const path = join(dir, 'durations.json');
-  try {
-    await runStage({
-      ...result,
-      env: { ...result.env, CI_TEST_FILES: JSON.stringify(files), PORTOS_TEST_MEMO: 'off', PORTOS_PREGATE_DURATIONS_PATH: path },
-    }, owner);
-    return readGuardDurations(path);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+function reportSlowGuards(result) {
+  const over = overBudgetGuards(result.fileDurations);
+  if (over.length > 0) {
+    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget hosted CI enforces: ${describeGuardDurations(over)}.`);
   }
-}
-
-/**
- * Fail a passed guard stage whose files overran their budget, naming each one.
- * A file over budget in the stage is re-timed alone before failing; only files
- * still over in that isolated run fail. Marks `result` failed like
- * stageOutcomeVerdict so the receipt agrees.
- */
-async function guardBudgetVerdict(result, owner) {
-  // Calibrate only once a guard looks slow, so the common case pays nothing.
-  const raw = overBudgetGuards(result.fileDurations);
-  if (raw.length === 0) return null;
-  const scale = calibrateBudgetScale();
-  const budgetMs = GUARD_BUDGET_MS * scale;
-  const over = overBudgetGuards(result.fileDurations, budgetMs);
-  if (over.length === 0) {
-    console.log(`🐢 ${result.name} guards over ${formatDuration(GUARD_BUDGET_MS)} but within the ${formatDuration(budgetMs)} budget scaled ${scale.toFixed(1)}x for this machine's speed: ${raw.map(({ file, durationMs }) => `${file} ${formatDuration(durationMs)}`).join('; ')}.`);
-    return null;
-  }
-  const describe = ({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`;
-  if (hostTooBusyForBudget()) {
-    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${over.map(describe).join('; ')}.`);
-    return null;
-  }
-  const { cleared, stillOver } = settleOverBudget(over, await isolatedGuardDurations(result, over.map(({ file }) => file), owner));
-  if (cleared.length > 0) {
-    console.log(`🐢 ${result.name} guards over budget under load, within it in isolation: ${cleared.map(({ file, durationMs, isolatedMs }) => `${file} ${formatDuration(durationMs)} → ${formatDuration(isolatedMs)}`).join('; ')}.`);
-  }
-  if (stillOver.length === 0) return null;
-  const lines = stillOver.map(({ file, durationMs, isolatedMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} in the stage and ${isolatedMs === null ? 'no reading' : formatDuration(isolatedMs)} in isolation (budget ${formatDuration(budgetMs)})`);
-  result.status = 'failed';
-  return {
-    failure: `❌ ${result.name} over the ${formatDuration(budgetMs)} per-guard budget (${formatDuration(GUARD_BUDGET_MS)} scaled ${scale.toFixed(1)}x for this machine): ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
-    exitCode: 1,
-  };
 }
 
 /** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
@@ -1159,10 +1116,11 @@ async function main() {
       result.fileDurations = readGuardDurations(durationsPath);
       rmSync(durationsDir, { recursive: true, force: true });
     }
-    const verdict = stageOutcomeVerdict(result, outcome) ?? await guardBudgetVerdict(result, owner);
+    const verdict = stageOutcomeVerdict(result, outcome);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {
+      if (result.guard) reportSlowGuards(result);
       result.status = 'passed';
       result.exitCode = 0;
       if (beforeGuards && guardInputSnapshot(REPO_ROOT) === beforeGuards) {

@@ -353,7 +353,7 @@ export const WINDOWS_CONTRACT_TESTS = [
 // where the alternative is reasoning per-scope about what can reach it. The
 // whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
 // a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
-// pregate enforces; a behavioural test that no scan needs does not belong here.
+// hosted CI enforces; a behavioural test that no scan needs does not belong here.
 export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports, so a docs-only PR that documented a removed endpoint

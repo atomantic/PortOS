@@ -340,6 +340,10 @@ jobs:
           CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           CI_EXPECT_SLASHDO_SUBMODULE: ${{ needs.impact.outputs.slashdo }}
+          # The always-run guards' per-file time budget is enforced here, on the
+          # uniform Linux runner, and nowhere else: local pregate only reports it
+          # (scripts/lib/guardBudget.js, #16551).
+          CI_GUARD_BUDGET: enforce
           # Keep successful-test output signal-dense. Developers can reproduce
           # locally without this flag when assertion context needs app logs.
           PORTOS_TEST_QUIET: 1
