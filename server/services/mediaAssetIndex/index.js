@@ -10,8 +10,9 @@
  *   - reconcileMediaAssetIndexAtBoot() — fire-and-forget after `listen()`. Runs
  *     the full reconcile (so the index matches disk regardless of events missed
  *     while the server was down) and the restored-media tombstone check. Until it
- *     finishes the gallery serves the previous boot's rows; every write goes
- *     through queueMediaIndexRefresh, so a live hook cannot interleave with it.
+ *     finishes the gallery serves the previous boot's rows, then open list views
+ *     get a refetch notice; every write goes through queueMediaIndexRefresh, so a
+ *     live hook cannot interleave with it.
  *   - unindexImage() / unindexVideo() — the delete-side mirror of those hooks,
  *     called by the media delete paths so a row dies with its file (#2738).
  *   - The reconcile + row I/O live in db.js; the pure transforms in logic.js.
@@ -153,6 +154,13 @@ export async function reconcileMediaAssetIndexAtBoot() {
     console.error(`❌ Media asset index boot reconcile failed: ${err.message}`);
     return { ok: false, reason: 'reconcile-failed' };
   });
+  // A gallery opened before the sweep finished read the previous boot's rows and
+  // does not poll, so tell open list views to refetch.
+  if (result.ok) {
+    await import('../peerSyncEventBus.js')
+      .then(({ emitMediaListChanged }) => { emitMediaListChanged('image'); emitMediaListChanged('video'); })
+      .catch((err) => console.error(`❌ Media index boot refresh notice failed: ${err.message}`));
+  }
   // Put Back from the OS Trash restores files with no PortOS event; this boot
   // pass is where a locally owned item that came back sheds its delete record.
   await import('../mediaRestoreTombstones.js')
