@@ -172,6 +172,10 @@ describe('VoiceWidgetGate — voice stays out of the page until it is on', () =>
     // fireEvent returns false only when a handler called preventDefault: the
     // hotkey must stay the page's own while voice is off.
     expect(fireEvent.keyDown(window, { code: 'Space' })).toBe(true);
+    // Nor may a stray engage event pull the chunk in.
+    act(() => { window.dispatchEvent(new Event('portos:voice:engage')); });
+    act(() => emitSocket('connect'));
+    await settle();
     expect(mocks.loadWidget).not.toHaveBeenCalled();
   });
 
@@ -204,6 +208,28 @@ describe('VoiceWidgetGate — voice stays out of the page until it is on', () =>
     unmount();
     expect(mocks.socketHandlers.get('voice:config:changed').size).toBe(0);
     expect(mocks.socketHandlers.get('connect').size).toBe(0);
+  });
+
+  it('asks for the widget chunk again when the connection comes back after a failed load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localStorage.setItem(HIDDEN_KEY, '0');
+    mocks.loadWidget.mockRejectedValueOnce(new Error('network unreachable'));
+    renderGate();
+    await screen.findByRole('button', { name: DISENGAGE });
+    await settle();
+    expect(screen.queryByRole('button', { name: WIDGET_MIC })).toBeNull();
+    // Nobody asked for a start, so there is nothing to tell the user yet.
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+
+    act(() => emitSocket('connect'));
+    expect(await screen.findByRole('button', { name: WIDGET_MIC })).toBeInTheDocument();
+    expect(mocks.loadWidget).toHaveBeenCalledTimes(2);
+
+    // Mounted: a later reconnect has nothing left to fetch.
+    act(() => emitSocket('connect'));
+    await settle();
+    expect(mocks.loadWidget).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
   });
 
   it('asks for the config again when the socket reconnects after a failed read', async () => {
@@ -353,7 +379,7 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
 });
 
 describe('VoiceWidgetGate — once the widget is listening', () => {
-  it('starts once per toggle press and holds nothing back for a later re-enable', async () => {
+  it('starts once per toggle press, however the config changes afterwards', async () => {
     renderGate();
     await screen.findByRole('button', { name: ENGAGE });
     await settle();
@@ -362,7 +388,8 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
     await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
 
-    // Had the gate also recorded that press, re-enabling would replay it.
+    // The widget heard that press itself; the gate has nothing to replay.
+    act(() => emitSocket('voice:config:changed', { hotkey: 'KeyV' }));
     act(() => emitSocket('voice:config:changed', { enabled: false }));
     act(() => emitSocket('voice:config:changed', { enabled: true }));
     await settle();
@@ -377,9 +404,6 @@ describe('VoiceWidgetGate — once the widget is listening', () => {
     expect(fireEvent.keyDown(window, { code: 'Space' })).toBe(false);
     await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
 
-    // Had the gate also counted that press, re-enabling would replay it.
-    act(() => emitSocket('voice:config:changed', { enabled: false }));
-    act(() => emitSocket('voice:config:changed', { enabled: true }));
     await settle();
     expect(mocks.startContinuous).toHaveBeenCalledOnce();
   });
