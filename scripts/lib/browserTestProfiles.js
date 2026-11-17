@@ -22,6 +22,40 @@ export function browserTestProfileArgs(profile = 'full') {
   throw new Error(`Unknown browser test profile: ${profile}`);
 }
 
+/**
+ * Settings whose green memo entry also proves `profile`'s cases, for
+ * `planTestMemo`'s `acceptVerdictsFrom`. `smoke` runs every case but
+ * `[fidelity]` and `full` every case but `[local-performance]`; every
+ * `[local-performance]` case is also `[fidelity]`
+ * (`localPerformanceTagViolations`), so smoke's cases in a file are a subset
+ * of full's and a full verdict covers them. Nothing proves `full` or
+ * `fidelity` but their own run. Pull requests run `smoke` and only trusted
+ * runs, which run `full`, save the memo, so without this a PR never skips one.
+ */
+export function browserProfileAcceptedVerdicts(profile) {
+  browserTestProfileArgs(profile);
+  if (profile !== 'smoke') return [];
+  return [{ label: 'full profile', env: { PORTOS_BROWSER_TEST_PROFILE: 'full' }, caseFilter: browserTestProfileArgs('full') }];
+}
+
+/**
+ * Lines of registered browser suites (`sources`: file -> source) that mention
+ * `local-performance` without `[fidelity]` on the same line. Such a case would
+ * run under `smoke` but not `full`, which breaks the subset
+ * `browserProfileAcceptedVerdicts` relies on. Line-based on purpose: a tag
+ * held in a constant, split across lines or put on a `describe` is reported
+ * too, which only asks for it to be written next to `[fidelity]`.
+ */
+export function localPerformanceTagViolations(sources) {
+  const violations = [];
+  for (const [file, source] of Object.entries(sources)) {
+    source.split('\n').forEach((line, index) => {
+      if (line.includes('local-performance') && !line.includes('[fidelity]')) violations.push(`${file}:${index + 1}`);
+    });
+  }
+  return violations;
+}
+
 export function browserTestProfileFiles(profile, files) {
   browserTestProfileArgs(profile);
   if (profile === 'smoke') return files.filter(file => !BROWSER_FIDELITY_ONLY_FILES.includes(file));

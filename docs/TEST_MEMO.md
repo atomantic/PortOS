@@ -207,6 +207,28 @@ selection for another profile. A seed the run does not fill in stays empty
 and is ignored. `scripts/lib/testMemoRunner.test.js` pins the whole exchange
 against the installed Vitest.
 
+### Smoke reuses a full verdict
+
+Pull requests run the browser suites on the `smoke` profile, and only trusted
+runs save the memo, on `full`. Their keys differ in the profile's env value and
+case filter, so before #16546 a pull request never skipped a browser suite. A
+`smoke` run now also looks up, under both the recorded and the floor key, the
+key the same inputs would get with `PORTOS_BROWSER_TEST_PROFILE=full` and
+`full`'s `--testNamePattern` (`browserProfileAcceptedVerdicts` in
+`scripts/lib/browserTestProfiles.js`, `acceptVerdictsFrom` on `planTestMemo`).
+Every other key line (file bytes, records, packages, tools, Node, platform,
+arch and other env values) stays this run's own, and entries are still written
+under the run's own key only.
+
+`smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
+Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
+are a subset of its full cases, and a full verdict covers them.
+`scripts/browser-suite-registry.test.js` reads every registered suite and fails
+on a line that mentions `local-performance` without `[fidelity]`. The reverse
+never holds: a `smoke` entry skipped the fidelity cases, so `full` and
+`fidelity` accept only their own entries. The verbose listing marks such a
+skip `(recorded key, full profile verdict)`.
+
 ## Shards
 
 A matrix shard takes its slice of the FULL selected list with

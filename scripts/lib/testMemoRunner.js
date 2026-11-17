@@ -68,16 +68,18 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
  * @param {string[]} options.repoFiles planner-selected test files (repo-relative)
  * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
  * @param {string|null} options.memoDir null when the memo is off
- * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor'}>,
+ * @param {Array<{label: string, env: object, caseFilter: string[]}>} [options.acceptVerdictsFrom]
+ *   settings whose green entry may also skip a file here (`createTestMemoAnalyzer`)
+ * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor', from?: string}>,
  *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
   // Files mode only: the other modes need every closure to resolve their selection.
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' ? candidates.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles: () => listFiles(repoRoot) };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null) => {
@@ -133,14 +135,21 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const skipped = [];
   const run = [];
   let unanalyzed = 0;
+  // This run's own entry first, then one written under settings whose verdict
+  // also proves this run's cases (`acceptVerdictsFrom`); `from` names those.
+  const hit = (test, verdict) => {
+    if (!verdict?.memoizable) return null;
+    const meta = { test, workspace: scope };
+    if (readEntry(memoDir, verdict.key, meta)) return {};
+    const accepted = verdict.acceptedKeys.find(({ key }) => readEntry(memoDir, key, meta));
+    return accepted ? { from: accepted.label } : null;
+  };
   for (const test of slice) {
     const info = verdicts.get(test);
     if (unmemoizable.has(test)) unanalyzed += 1;
-    const via = !memoDir || !info ? null
-      : info.recorded?.memoizable && readEntry(memoDir, info.recorded.key, { test, workspace: scope }) ? 'recorded'
-        : info.floor.memoizable && readEntry(memoDir, info.floor.key, { test, workspace: scope }) ? 'floor'
-          : null;
-    if (via) { skipped.push({ test, via }); continue; }
+    const recorded = memoDir && info ? hit(test, info.recorded) : null;
+    const floor = memoDir && info && !recorded ? hit(test, info.floor) : null;
+    if (recorded || floor) { skipped.push({ test, via: recorded ? 'recorded' : 'floor', ...(recorded ?? floor) }); continue; }
     run.push(test);
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
