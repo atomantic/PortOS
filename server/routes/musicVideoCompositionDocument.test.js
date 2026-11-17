@@ -692,17 +692,20 @@ describe('music-video composition documents', () => {
   it('registers every historical still-effect module digest in upgradable or compatible sets', async () => {
     const repoRoot = join(fileURLToPath(import.meta.url), '..', '..', '..');
     const relPath = 'server/lib/musicVideo/musicVideoImageEffects.js';
-    const commits = execFileSync('git', ['log', '--follow', '--format=%H', '--', relPath], {
+    // Each commit is read at the path it had then: --follow crosses the move out of the flat
+    // server/lib (#16561), and an older commit has no file at the current path.
+    const commits = execFileSync('git', ['log', '--follow', '--name-only', '--format=@%H', '--', relPath], {
       cwd: repoRoot,
       encoding: 'utf8',
-    }).trim().split('\n').filter(Boolean);
+    }).split('@').map((entry) => entry.trim().split('\n').filter(Boolean)).filter((lines) => lines.length === 2)
+      .map(([commit, path]) => ({ commit, path }));
     expect(commits.length).toBeGreaterThan(0);
 
     const currentBytes = await readFile(join(repoRoot, relPath));
     const currentDigest = createHash('sha256').update(currentBytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
-    for (const commit of commits) {
-      const content = execFileSync('git', ['show', `${commit}:${relPath}`], {
+    for (const { commit, path } of commits) {
+      const content = execFileSync('git', ['show', `${commit}:${path}`], {
         cwd: repoRoot,
         encoding: 'utf8',
       });
