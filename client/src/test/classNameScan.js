@@ -1,8 +1,8 @@
 /**
  * Shared string-literal scanner for the class-string convention guards.
  *
- * `src/responsiveGridConventions.test.js`, `src/popoverClampConventions.test.js`,
- * and `src/subNavConventions.test.js` all enforce a class-string convention by
+ * `src/responsiveGridConventions.guard.test.js`, `src/popoverClampConventions.guard.test.js`,
+ * and `src/subNavConventions.guard.test.js` all enforce a class-string convention by
  * reading every quoted string in the client tree and inspecting the Tailwind
  * tokens inside it. They need the same two primitives — blank out comments so a
  * doc block quoting an example class isn't scanned as markup, then walk the

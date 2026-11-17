@@ -50,6 +50,8 @@ describe('issue-reconcile releases abandoned claims before it can park', () => {
     // But never before the null guard: a transient/unsupported scan has no
     // `abandoned` set to read, and must skip without writing to the forge.
     expect(body.indexOf('if (!result) return { skip: true };')).toBeLessThan(releaseIdx);
+    // glab is cwd-routed: without the checkout path the GitLab release is a silent no-op (#16608).
+    expect(body.slice(releaseIdx, body.indexOf('})', releaseIdx))).toContain('repoPath: app.repoPath');
   });
 });
 

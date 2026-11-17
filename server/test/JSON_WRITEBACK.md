@@ -1,6 +1,6 @@
 # JSON write-back prevention guard
 
-Run from `server/`: `node_modules/.bin/vitest run jsonWritebackConventions.test.js`.
+Run from `server/`: `node_modules/.bin/vitest run jsonWritebackConventions.guard.test.js`.
 The guard parses server modules to discover wrappers, then checks service source; it never imports services, reads runtime
 records, connects to a database, or requires git history to run.
 

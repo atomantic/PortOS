@@ -502,6 +502,51 @@ describe('reconcileRunUsage', () => {
     expect(result).toMatchObject({ providerId: 'ollama', tokensOut: 340, source: 'estimate' });
   });
 
+  it('bills the counts the provider reported on the run record instead of the estimate', async () => {
+    const result = await reconcileRunUsage(
+      {
+        ...run, providerId: 'ollama', model: 'llama3',
+        reportedUsage: { tokensIn: 26, tokensOut: 103, cacheReadTokens: 6, cacheWriteTokens: 0, longTokensIn: 26, source: 'measured' },
+      },
+      { tokensIn: 12, tokensOut: 340 },
+      { home }
+    );
+    expect(result).toMatchObject({
+      providerId: 'ollama', role: 'parent', messages: 1,
+      tokensIn: 26, tokensOut: 103, cacheReadTokens: 6, cacheWriteTokens: 0, longTokensIn: 26, source: 'measured'
+    });
+  });
+
+  it.each([
+    ['with provider-reported counts', { reportedUsage: { tokensIn: 7, tokensOut: 3 } }, { tokensIn: 7, tokensOut: 3, cacheReadTokens: 0, source: 'measured' }],
+    ['with no counts from the provider', {}, { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0, source: 'estimate' }],
+  ])('reads no CLI transcript for a self-contained run %s', async (_label, stamp, billed) => {
+    // An API record whose id names a CLI family, with a CLI provider of another
+    // family configured: the sessions in this workspace and window belong to
+    // some other run and must stay unclaimed, counts or no counts.
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z', input: 10, cacheWrite: 100, cacheRead: 1000, output: 50 })
+    ]);
+    const providers = [{ id: 'claude-code', type: 'cli', enabled: true, command: 'claude' }];
+    const selfContained = { ...run, selfContainedUsage: true, ...stamp };
+    const asOwnFamily = await reconcileRunUsage(selfContained, { tokensIn: 1, tokensOut: 1 }, { home, providers });
+    expect(asOwnFamily).toMatchObject(billed);
+    const asSibling = await reconcileRunUsage({ ...selfContained, providerId: 'example-api' }, { tokensIn: 1, tokensOut: 1 }, { home, providers });
+    expect(asSibling).toMatchObject({ ...billed, providerId: 'example-api', role: 'parent' });
+    // The session is still there for the run it does belong to.
+    const owner = await reconcileRunUsage(run, { tokensIn: 1, tokensOut: 1 }, { home });
+    expect(owner).toEqual([expect.objectContaining({ tokensOut: 50, cacheReadTokens: 1000 })]);
+  });
+
+  it('ignores a malformed reported-usage stamp and keeps the estimate', async () => {
+    const result = await reconcileRunUsage(
+      { ...run, providerId: 'ollama', reportedUsage: { tokensIn: 'many', tokensOut: -4, cacheReadTokens: Number.NaN } },
+      { tokensIn: 12, tokensOut: 340 },
+      { home }
+    );
+    expect(result).toMatchObject({ tokensIn: 12, tokensOut: 340, source: 'estimate' });
+  });
+
   it('clamps a negative estimate to zero', async () => {
     const result = await reconcileRunUsage(run, { tokensIn: -5, tokensOut: -1 }, { home });
     expect(result).toMatchObject({ tokensIn: 0, tokensOut: 0 });
@@ -551,6 +596,40 @@ describe('recordCompletedRunUsage', () => {
     expect(recordRunUsage.mock.calls.at(-1)[0]).toEqual([expect.objectContaining({
       model: 'gpt-5.3-codex', tokensIn: 500, cacheReadTokens: 1500, tokensOut: 50, source: 'measured'
     })]);
+  });
+
+  it('bills a self-contained run once, without scanning for nested sessions or queueing behind its workspace', async () => {
+    // A CLI session sits in this workspace and window, and a CLI provider of its
+    // family is configured: a run that could have launched it would bill it as
+    // a sibling. One HTTP request cannot have.
+    await writeClaudeSession('a.jsonl', [
+      claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z', input: 10, cacheWrite: 100, cacheRead: 1000, output: 50 })
+    ]);
+    const run = {
+      id: 'run-self-reported', providerId: 'example-api', model: 'example-model', workspacePath: WORKSPACE, promptLength: 400,
+      startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z',
+      selfContainedUsage: true,
+      reportedUsage: { tokensIn: 34, tokensOut: 9, cacheReadTokens: 6, cacheWriteTokens: 0, source: 'measured' }
+    };
+    recordRunUsage.mockClear();
+    getRecentCodexUsageClaims.mockClear();
+    // An earlier completion in the same workspace that never finishes its own
+    // accounting must not hold this one up.
+    let releaseEarlier;
+    recordRunUsage.mockImplementationOnce(() => new Promise((resolve) => { releaseEarlier = resolve; }));
+    const earlier = recordCompletedRunUsage({ ...run, id: 'run-earlier', providerId: 'ollama', selfContainedUsage: false, reportedUsage: undefined }, 'x', { home, providers: [] });
+    await vi.waitFor(() => expect(releaseEarlier).toBeTypeOf('function'));
+
+    await recordCompletedRunUsage(run, 'an answer', { home, providers: [{ id: 'claude-code', type: 'cli', enabled: true, command: 'claude' }] });
+
+    expect(recordRunUsage).toHaveBeenCalledTimes(2);
+    expect(recordRunUsage.mock.calls[1]).toEqual([
+      expect.objectContaining({ providerId: 'example-api', role: 'parent', messages: 1, tokensIn: 34, tokensOut: 9, cacheReadTokens: 6, source: 'measured' }),
+      { reconciledRunId: 'run-self-reported', siblings: true, codexHighWater: [] },
+    ]);
+    releaseEarlier();
+    await earlier;
+    expect(getRecentCodexUsageClaims).toHaveBeenCalledTimes(1);
   });
 
   it('does not claim a transcript that was unavailable to an estimate-only completion', async () => {

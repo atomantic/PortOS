@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { federationSettingsSchema } from './validation.js';
+import { federationSettingsSchema } from './federatedMediaValidation.js';
 
 // #4348 — `federation.mediaRouting` decides where UNATTENDED renders go, so a
 // shape that slips past validation becomes a job silently routed at the wrong

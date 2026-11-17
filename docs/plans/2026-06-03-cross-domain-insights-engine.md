@@ -16,7 +16,7 @@ unifying design**, which is exactly the gap this spike closes. What exists today
 | INS-02 Taste ↔ identity themes (LLM) | shipped | `insightsService.js` `generateThemeAnalysis()` → `data/insights/themes.json` |
 | INS-04 Cross-domain narrative (LLM) | shipped | `insightsService.js` `refreshCrossDomainNarrative()` → `data/insights/narrative.json` |
 | `/insights` surface (4 tabs) | shipped | `client/src/pages/Insights.jsx`, `client/src/components/insights/*` |
-| REST routes | shipped | `server/routes/insights.js`, validation `insightRefreshSchema` in `server/lib/validation.js` |
+| REST routes | shipped | `server/routes/insights.js`, validation `insightRefreshSchema` in `server/lib/insightsValidation.js` |
 | Nav manifest entries | shipped | `server/lib/navManifest.js` (`nav.insights*`) |
 | **INS-03 Health ↔ goals** | **missing** | — |
 | **Insight disposition (dismiss / accept) data model + UX** | **missing** | — |

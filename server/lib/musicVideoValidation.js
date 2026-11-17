@@ -2660,6 +2660,7 @@ export const musicVideoProductionFeedbackResolutionSchema = z.object({
 // (an offset the summary page issued) falls back to the first page.
 export const musicVideoProjectListQuerySchema = z.object({
   summary: z.enum(['1', 'true', '0', 'false']).optional(),
+  statusFilter: z.enum(['completed', 'in-progress']).optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),
   cursor: z.string().max(64).optional(),

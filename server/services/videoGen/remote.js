@@ -20,10 +20,7 @@ import { z } from 'zod';
 import { PATHS } from '../../lib/fileUtils.js';
 import { generateThumbnail, optimizeForStreaming } from '../../lib/ffmpeg.js';
 import { FEDERATED_MEDIA_WIRE_VERSION } from '../../lib/federatedMediaWire.js';
-import {
-  federatedMediaVideoJobSubmissionBaseSchema,
-  federatedMediaVideoJobSubmissionSchema,
-} from '../../lib/validation.js';
+import { federatedMediaVideoJobSubmissionBaseSchema, federatedMediaVideoJobSubmissionSchema } from '../../lib/federatedMediaValidation.js';
 import { createRemoteMediaExecutor } from '../federatedMedia/remoteExecutor.js';
 import { applyRemoteInputAssets, remoteInputAssetsSchema } from '../federatedMedia/inputAssets.js';
 import { videoGenEvents } from './events.js';

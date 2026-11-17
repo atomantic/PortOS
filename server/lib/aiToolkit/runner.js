@@ -345,13 +345,22 @@ export function createRunnerService(config = {}) {
         requestCapabilities = null,
         screenshots = [],
         allowFallback = true,
+        // The exact record a routing-free caller will execute. The run is
+        // recorded against it as given: no store lookup, no availability swap
+        // or refusal, no enabled check. For a caller whose contract is "run on
+        // this provider or report its own failure", where a benched or
+        // since-edited store record must not change which request goes out.
+        provider: pinnedProvider = null,
+        // A host executor can make Stop effective before metadata becomes
+        // visible, including cancellation from the onRunCreated hook.
+        externalRun = null,
       } = options;
 
       if (!providerService) {
         throw new Error('Provider service not configured');
       }
 
-      const requestedProvider = await providerService.getProviderById(providerId);
+      const requestedProvider = pinnedProvider ?? await providerService.getProviderById(providerId);
       const optionRequest = resolveExecutionOptions(
         { source: 'provider', options: requestedProvider?.executionSelectionDefaults ?? requestedProvider?.executionOptions },
         { source: 'selection', options: requestedProvider?.executionSelectionOptions },
@@ -370,7 +379,7 @@ export function createRunnerService(config = {}) {
         requestCapabilities,
       });
 
-      if (providerStatusService && !providerStatusService.isAvailable(providerId)) {
+      if (!pinnedProvider && providerStatusService && !providerStatusService.isAvailable(providerId)) {
         if (!allowFallback || hasExecutionOptions) {
           const status = providerStatusService.getStatus(providerId) || {};
           throw new Error(`Provider ${providerId} is unavailable (${status.reason || 'unknown'}) and fallback is disabled`);
@@ -416,7 +425,7 @@ export function createRunnerService(config = {}) {
         throw new Error('Provider not found');
       }
 
-      if (!provider.enabled) {
+      if (!pinnedProvider && !provider.enabled) {
         throw new Error('Provider is disabled');
       }
 
@@ -462,14 +471,19 @@ export function createRunnerService(config = {}) {
         outputSize: 0
       };
 
-      await withAssetPublication(async () => {
-        // The record must never name missing prompt/output bytes after a failure.
-        await atomicWrite(join(runDir, 'prompt.txt'), prompt);
-        await atomicWrite(join(runDir, 'output.txt'), '');
-        await atomicWrite(join(runDir, 'metadata.json'), metadata);
-      });
-
-      hooks.onRunCreated?.(metadata);
+      if (externalRun) service.registerExternalRun(runId, externalRun);
+      try {
+        await withAssetPublication(async () => {
+          // The record must never name missing prompt/output bytes after a failure.
+          await atomicWrite(join(runDir, 'prompt.txt'), prompt);
+          await atomicWrite(join(runDir, 'output.txt'), '');
+          await atomicWrite(join(runDir, 'metadata.json'), metadata);
+        });
+        hooks.onRunCreated?.(metadata);
+      } catch (error) {
+        if (externalRun) service.unregisterExternalRun(runId);
+        throw error;
+      }
       console.log(`🤖 AI run [${source}]: ${provider.name}/${metadata.model}`);
 
       const effectiveTimeout = timeout ?? provider.timeout;

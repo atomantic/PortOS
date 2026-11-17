@@ -2,7 +2,7 @@
  * Pure overlay of each provider app's own daily usage history onto the ledger's `dailyActivity` —
  * `overlayNativeUsage(dailyActivity, { stores, providers })`.
  *
- * For a family's CLI/TUI providers, reported tokens = native store + the ledger's estimated share
+ * For a family's CLI/TUI providers, reported tokens = native store + estimates + measured ephemeral turns
  * (runs the app never saves); from the store's `coverageStart` it replaces, before it only where it
  * counts more, after its last refresh the ledger stands. Fed by `services/nativeUsageHistory.js`.
  */
@@ -19,11 +19,11 @@ import { familyForProvider, familyLabel } from './providerFamilies.js';
  * terminal and desktop use included — and are the source of truth for them. So
  * for a CLI/TUI provider of a family with a native store:
  *
- *   reported tokens = native store + the ledger's ESTIMATED share
+ *   reported tokens = native store + estimates + measured ephemeral turns
  *
  * The ledger's measured share came from those same files and is dropped. Its
- * estimated share is usage the app never recorded (PortOS runs one-shots and
- * reviews with `--no-session-persistence` / `--ephemeral`, and a run whose
+ * estimated and `unpersisted` measured shares are absent from native history
+ * (PortOS runs one-shots and reviews with `--no-session-persistence` / `--ephemeral`, and a run whose
  * session could not be found), so it is kept. API providers, local models and
  * every non-token counter (sessions, images, video seconds) are untouched.
  *
@@ -72,17 +72,31 @@ function estimatedShare(bucket) {
   return Object.fromEntries(TOKEN_FIELDS.map((field) => [field, all ? num(bucket?.[field]) : 0]));
 }
 
+// Measured ephemeral turns are absent from the native store just like estimates,
+// but retain measured provenance. The two shares are disjoint at ledger write.
+function retainedShare(bucket) {
+  const estimated = estimatedShare(bucket);
+  return Object.fromEntries(TOKEN_FIELDS.map((field) => [field,
+    Math.min(num(bucket?.[field]), estimated[field] + num(bucket?.unpersisted?.[field])),
+  ]));
+}
+const retainedSource = (bucket) => {
+  const estimated = billed(estimatedShare(bucket)) > 0;
+  const measured = billed(bucket?.unpersisted) > 0;
+  return estimated && measured ? 'mixed' : estimated ? 'estimate' : measured ? 'measured' : null;
+};
+
 /**
- * What a provider bucket keeps: its models' estimated shares, plus the estimated
+ * What a provider bucket keeps: its models' retained shares, plus the retained
  * part of any counts no model row carries. Provider totals then always match
  * `byModel`, which the report prices and reconciles against.
  */
 function keptShare(bucket) {
   const models = Object.values(bucket?.byModel || {});
-  if (!models.length) return estimatedShare(bucket);
-  const modelKeeps = models.map(estimatedShare);
-  const residualEstimated = bucket?.estimated
-    ? (field) => num(bucket.estimated[field]) - models.reduce((sum, model) => sum + estimatedShare(model)[field], 0)
+  if (!models.length) return retainedShare(bucket);
+  const modelKeeps = models.map(retainedShare);
+  const residualEstimated = bucket?.estimated || bucket?.unpersisted
+    ? (field) => num(bucket.estimated?.[field]) + num(bucket.unpersisted?.[field]) - models.reduce((sum, model) => sum + retainedShare(model)[field], 0)
     : (field) => (bucket?.source === 'estimate' || bucket?.source == null ? Infinity : 0);
   return Object.fromEntries(TOKEN_FIELDS.map((field) => {
     const kept = modelKeeps.reduce((sum, keep) => sum + keep[field], 0);
@@ -130,24 +144,24 @@ function applyFamilyDay(day, nativeModels, { ids, target }, mode) {
   for (const [, bucket] of buckets) {
     const keep = keptShare(bucket);
     for (const model of Object.values(bucket.byModel || {})) {
-      const modelKeep = estimatedShare(model);
+      const modelKeep = retainedShare(model);
       for (const field of TOKEN_FIELDS) if (model[field] != null || modelKeep[field]) model[field] = modelKeep[field];
-      model.source = billed(modelKeep) > 0 ? 'estimate' : model.source;
+      model.source = retainedSource(model) ?? model.source;
     }
     for (const field of TOKEN_FIELDS) if (bucket[field] != null || keep[field]) bucket[field] = keep[field];
-    bucket.source = billed(keep) > 0 ? 'estimate' : null;
+    bucket.source = retainedSource(bucket);
   }
   if (native.length) {
     const bucket = day.byProvider[target.id] ??= { name: target.name || target.id, sessions: 0, byModel: {}, source: null };
     bucket.byModel ??= {};
     for (const [model, counts] of native) {
       const row = bucket.byModel[model] ??= { sessions: 0, source: null };
-      const hadEstimate = billed(row) > 0;
+      const hadEstimate = billed(row) > 0 && row.source !== 'measured';
       for (const field of TOKEN_FIELDS) row[field] = num(row[field]) + counts[field];
       row.source = hadEstimate ? 'mixed' : 'measured';
       for (const field of TOKEN_FIELDS) bucket[field] = num(bucket[field]) + counts[field];
     }
-    bucket.source = bucket.source === 'estimate' ? 'mixed' : 'measured';
+    bucket.source = ['estimate', 'mixed'].includes(bucket.source) ? 'mixed' : 'measured';
   }
   return true;
 }

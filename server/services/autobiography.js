@@ -650,6 +650,7 @@ Return a JSON array of exactly 3 strings, nothing else. Example:
 ["Question 1?", "Question 2?", "Question 3?"]`;
 
   const result = await callProviderAISimple(provider, model, prompt, {
+    source: 'autobiography-follow-ups',
     temperature: 0.7,
     max_tokens: 500
   });
@@ -755,11 +756,12 @@ Rules:
 - Return only the narrative prose, no preamble, headings, or commentary`;
 
   const result = await callProviderAISimple(provider, model, prompt, {
+    // A creative source (lib/creativeLatitude.js): first-person memoir prose
+    // that can name real works, people, and places — exactly what a model
+    // hedges around without the IP-latitude clause.
+    source: 'autobiography-weave',
     temperature: 0.6,
     max_tokens: 2000,
-    // First-person memoir prose that can name real works, people, and places —
-    // exactly what a model hedges around without the IP-latitude clause.
-    creative: true,
     op: 'autobiography-weave',
     opLabel: 'Weaving your story…'
   });
@@ -895,6 +897,7 @@ export async function evaluateStory(storyId, providerId) {
     provider.defaultModel,
     buildStoryCraftEvaluationPrompt({ question: story.promptText, story: story.content }),
     {
+      source: 'autobiography-evaluate',
       // Low temperature: a rubric score the user will act on should be the same
       // answer twice, not a different reading each time they press the button.
       temperature: 0.2,

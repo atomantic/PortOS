@@ -21,17 +21,17 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
   const pending = useRef(null);
   const restartPending = useRef(null);
   const currentRead = useRef(null);
-  const refreshQueued = useRef(false);
-  const retryRefresh = useRef(false);
+  const refreshQueued = useRef(null);
+  const retryRefresh = useRef(null);
   const commit = useCallback(next => { state.current = next; setPage(next); }, []);
 
-  const read = useCallback(async function readPage(refresh = false) {
+  const read = useCallback(async function readPage(refresh = false, rebase = false) {
     if (!enabled || (!refresh && state.current.loaded && state.current.nextCursor == null)) return;
-    if (pending.current) { if (refresh) refreshQueued.current = true; return; }
+    if (pending.current) { if (refresh) refreshQueued.current = { rebase: rebase || !!refreshQueued.current?.rebase }; return; }
     const epoch = generation.current;
     const controller = new AbortController();
     pending.current = controller;
-    restartPending.current = () => readPage(refresh);
+    restartPending.current = () => readPage(refresh, rebase);
     commit({ ...state.current, loading: true, error: null });
     try {
       const result = await fetchPage({ cursor: refresh ? null : state.current.nextCursor, signal: controller.signal });
@@ -43,18 +43,19 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
       const items = new Map((refresh ? result.items : state.current.items).map(item => [item.id, item]));
       for (const item of refresh ? state.current.items : result.items) if (!refresh || !items.has(item.id)) items.set(item.id, item);
       commit({ items: [...items.values()], total: result.total ?? state.current.total, meta: result.meta ?? state.current.meta,
-        nextCursor: refresh && overlaps ? state.current.nextCursor : result.nextCursor ?? null, loaded: true, loading: false, error: null });
+        nextCursor: refresh && overlaps && !rebase ? state.current.nextCursor : result.nextCursor ?? null, loaded: true, loading: false, error: null });
     } catch (error) {
       if (generation.current === epoch) {
-        retryRefresh.current = refresh;
+        retryRefresh.current = { refresh, rebase };
         commit({ ...state.current, loading: false, error });
       }
     } finally {
       if (pending.current === controller) {
         pending.current = null;
         if (refreshQueued.current && generation.current === epoch) {
-          refreshQueued.current = false;
-          readPage(true);
+          const queued = refreshQueued.current;
+          refreshQueued.current = null;
+          readPage(true, queued.rebase);
         }
       }
     }
@@ -62,13 +63,19 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
 
   useEffect(() => { currentRead.current = read; }, [read]);
 
-  const loadMore = useCallback(() => read(Boolean(state.current.error && retryRefresh.current)), [read]);
+  const loadMore = useCallback(() => {
+    const retry = state.current.error ? retryRefresh.current : null;
+    return read(retry?.refresh || false, retry?.rebase || false);
+  }, [read]);
   const refreshFirst = useCallback(() => read(true), [read]);
+  // A membership change shifts offset cursors. Keep the visible rows while
+  // restarting pagination so subsequent pages cannot skip shifted records.
+  const reconcileFirst = useCallback(() => read(true, true), [read]);
 
   const reset = useCallback(() => {
     generation.current += 1;
-    refreshQueued.current = false;
-    retryRefresh.current = false;
+    refreshQueued.current = null;
+    retryRefresh.current = null;
     pending.current?.abort();
     pending.current = null;
     commit(emptyPage());
@@ -76,7 +83,7 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
   const reload = useCallback(() => { reset(); return loadMore(); }, [reset, loadMore]);
   useEffect(() => {
     reload();
-    return () => { generation.current += 1; refreshQueued.current = false; pending.current?.abort(); pending.current = null; };
+    return () => { generation.current += 1; refreshQueued.current = null; pending.current?.abort(); pending.current = null; };
   }, [reload]);
 
   // Confirmed local changes supersede reads already in flight. Replay the
@@ -100,5 +107,5 @@ export function usePagedCollection(fetchPage, { enabled = true } = {}) {
     return setItems(items => items.filter(item => item.id !== id)) ?? currentRead.current(true);
   }, [setItems]);
 
-  return { ...page, setItems, removeItem, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst };
+  return { ...page, setItems, removeItem, hasMore: !page.loaded || page.nextCursor != null, loadMore, reload, refreshFirst, reconcileFirst };
 }

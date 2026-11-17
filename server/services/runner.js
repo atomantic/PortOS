@@ -105,9 +105,12 @@ export function getRunsPath() {
  * overwrites, so the two are not interchangeable.
  *
  * `reportFailure: false` finalizes the record but skips the `onRunFailed` hook,
- * for a run that is a deliberate PROBE of a provider rather than work the user
- * asked for. Same reasoning as the `canceled` branch below: the failure is the
- * caller's measurement, not evidence that a configured provider is broken.
+ * for a run whose caller owns the failure: a deliberate PROBE of a provider
+ * (the failure is the caller's measurement, not evidence that a configured
+ * provider is broken), or a bounded completion, which reports its failure
+ * through its own status toast (`services/apiCompletionRun.js`). It
+ * fires `onRunUnreported` instead, which carries no failure detail and exists so
+ * the activity snapshot learns the run ended.
  *
  * `onlyIfRecorded: true` finalizes only a record that still exists when the
  * turn starts, and returns null (no write, no hook) otherwise. Boot recovery
@@ -211,6 +214,10 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     settleCompletion(() => runnerConfig.hooks?.onRunCanceled?.({ runId: metadata.id }), 'onRunCanceled');
   } else if (reportFailure) {
     settleCompletion(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), 'onRunFailed');
+  } else {
+    // Unreported is not unfinished: with no hook at all the shared activity
+    // snapshot kept showing this run as live until some other run ended.
+    settleCompletion(() => runnerConfig.hooks?.onRunUnreported?.({ runId: metadata.id }), 'onRunUnreported');
   }
 
   return metadata;

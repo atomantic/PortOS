@@ -67,6 +67,14 @@ it('keeps every shared film module outside the Music Video service graph', () =>
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['lib/insightsValidation.js', 'lib/validation.js',
+    'defines insights schemas without loading the catch-all validation barrel'],
+  ['routes/insights.js', 'lib/validation.js',
+    'validates insights requests through domain schemas and the leaf validator'],
+  ['lib/federatedMediaValidation.js', 'lib/validation.js',
+    'validates federated jobs through domain schemas without loading the catch-all barrel'],
+  ['lib/federatedMediaRequest.js', 'lib/validation.js',
+    'builds federated requests through domain schemas and the leaf validator'],
   ['services/videoGen/renderArgs.js', 'services/videoGen/loraStages.js',
     'checks the shared request contract without runtime capability validation'],
   ['services/videoGen/prepareParams.js', 'services/videoGen/loraStages.js',
@@ -229,6 +237,12 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('lib/insightsValidation.js', 'lib/zodCompat.js')).toBe(true);
+    expect(reaches('routes/insights.js', 'lib/insightsValidation.js')).toBe(true);
+    expect(reaches('routes/insights.js', 'lib/validateRequest.js')).toBe(true);
+    expect(reaches('lib/federatedMediaValidation.js', 'lib/sharedSchemas.js')).toBe(true);
+    expect(reaches('lib/federatedMediaRequest.js', 'lib/federatedMediaValidation.js')).toBe(true);
+    expect(reaches('lib/federatedMediaRequest.js', 'lib/validateRequest.js')).toBe(true);
     expect(reaches('services/eidoverseWorld.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseTravel.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseWorld.test.js', 'services/eidoverseWorldProjection.js')).toBe(true);

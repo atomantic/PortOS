@@ -132,6 +132,7 @@ ${ticketData}`;
   // Try each provider until one succeeds
   for (const provider of candidates) {
     const aiResult = await callProviderAISimple(provider, provider.lightModel || provider.defaultModel, prompt, {
+      source: 'jira-status-report',
       temperature: 0.3,
       max_tokens: 1500,
       // Associate this call with the app it's reporting on so the OpenWorld AI Core aims
@@ -140,6 +141,12 @@ ${ticketData}`;
     }).catch(err => ({ error: err.message }));
 
     if (!aiResult.error) return aiResult.text.trim();
+    // Stopped from the Runs page: trying the next provider would start another
+    // (possibly billed) request the operator just declined.
+    if (aiResult.canceled) {
+      console.log('📊 Status summary stopped, using plain ticket list');
+      return buildPlainSummary(completed, inProgress, blocked, todo);
+    }
     console.log(`📊 Provider ${provider.id} failed: ${aiResult.error}`);
   }
 
