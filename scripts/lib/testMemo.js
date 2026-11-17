@@ -342,6 +342,7 @@ function extendTail(tail, next) {
  */
 function joinPartial(base, segment, glued = false) {
   const before = `${base.post ?? ''}${glued ? '' : '/'}`;
+  if (glued && base.maybeSelf && !base.open && (base.post ?? '') === '') return partialPath(base, base.v, UNBOUNDED);
   if (segment.k === 'str') {
     const post = before + segment.v;
     // A resolvable path is evaluated again in full, so only a contained one can be lost here.
@@ -433,10 +434,9 @@ function urlValue(args) {
     const only = args[0];
     if (only.k !== 'path') return only.k === 'str' && /^[a-z]+:/i.test(only.v) ? EXTERNAL : only.k === 'ext' ? EXTERNAL : UNKNOWN;
     if (only.partial) return only.open ? only : partialPath(only, only.v, UNBOUNDED);
-    // `new URL(href + '/' + name)`: the text is parsed, so `?raw` and `%20` are not part of the file name.
-    if (!/[?#%\\\s]/.test(only.v)) return only;
-    const parsed = fileUrlPath('', only.v);
-    return parsed.k === 'path' ? { ...parsed, isDir: only.isDir, sep: only.sep } : parsed;
+    // `new URL(href + '/' + name)` parses `?raw` and `%20` out of the text, `new URL(pathToFileURL(file))`
+    // keeps a `#` that is part of the name: which one this is, the path does not say.
+    return /[?#%\\\s]/.test(only.v) ? partialPath(dirValue(posix.dirname(only.v)), posix.dirname(only.v), UNBOUNDED) : only;
   }
   const [spec, base] = args;
   if (base.k === 'ext' || base.k === 'home') return base;
@@ -555,7 +555,8 @@ function guardedJoin(args) {
   const [dir, ...segments] = args;
   if (dir?.k !== 'path') return UNKNOWN;
   if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
-  if (!segments.every((segment) => segment.k === 'str')) return partialPath({ ...dir, isDir: true }, dir.v, CONTAINED);
+  // `maybeSelf`: with an empty segment the result is the directory itself, so text glued onto it names a sibling.
+  if (!segments.every((segment) => segment.k === 'str')) return { ...partialPath({ ...dir, isDir: true }, dir.v, CONTAINED), maybeSelf: true };
   // `join()` semantics: a leading separator is a plain segment.
   return segments.reduce((path, segment) => joinPath(path, str(segment.v.replace(/^\/+/, ''))), dir);
 }
@@ -682,8 +683,11 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
     // Both are trusted as the imported binding only: a parameter or a local of that name is anything.
     if ((token.v === 'pathWithin' && ctx.guarded) || (token.v === 'randomUUID' && ctx.uuid && args.length === 0)) {
       ctx.shared.scopes ??= createScopes(ctx.shared.root);
-      // Shadowed, the guard guards nothing: its directory is only where the path starts.
-      if (ctx.shared.scopes.shadowed(token.v)) return { value: token.v === 'pathWithin' && args[0]?.k === 'path' ? partialPath(args[0], args[0].v, UNBOUNDED) : UNKNOWN, end };
+      // Shadowed or mocked, the guard guards nothing: its directory is only where the path starts.
+      if (ctx.shared.scopes.shadowed(token.v) || (token.v === 'pathWithin' && ctx.replaced.guard)) {
+        return { value: token.v === 'pathWithin' && args[0]?.k === 'path' ? partialPath(args[0], args[0].v, UNBOUNDED) : UNKNOWN, end };
+      }
+      ctx.shared.trusted[token.v === 'pathWithin' ? 'guard' : 'crypto'] = true;
       // A UUID is 36 characters of hex and dashes: a name, wherever it is joined.
       return { value: token.v === 'pathWithin' ? guardedJoin(args) : PLAIN_NAME, end };
     }
@@ -715,7 +719,7 @@ const READDIR_CALLEES = new Set(['readdirSync', 'readdir']);
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises']);
 const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
 /** Keywords an operand follows, so the token after one continues the expression. */
-const OPERAND_KEYWORDS = new Set(['await', 'typeof', 'new', 'yield', 'void', 'delete', 'async', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof']);
+const OPERAND_KEYWORDS = new Set(['await', 'typeof', 'new', 'yield', 'void', 'delete', 'async', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof', 'function', 'class', 'extends']);
 /** Keywords after which `function` starts an expression, or an exported declaration other modules can call. */
 const BEFORE_FUNCTION_EXPRESSION = new Set([...OPERAND_KEYWORDS, 'export', 'default']);
 /** The elements of an array are directory-entry names (`PLAIN_NAME`); a finite set is a `string[]`. */
@@ -754,18 +758,28 @@ function tokenArrays(tokens, match, out = []) {
  * the semicolon was left out (an operand directly after a complete operand).
  */
 function expressionEnd(tokens, match, start) {
+  let bodies = 0; // `function` and `class` expressions whose `{…}` body is still to come
   for (let i = start; i < tokens.length; i += 1) {
     const token = tokens[i];
+    const prev = tokens[i - 1];
+    const complete = i > start && (prev.t === 'p' ? [')', ']', '}'].includes(prev.v) : !(prev.t === 'id' && OPERAND_KEYWORDS.has(prev.v)));
     if (token.t === 'p') {
       if (OPENERS[token.v]) {
+        // `a {` is no expression: a block after a complete operand starts the next statement, unless
+        // it is the body of a function or class expression. `a (` and `a [` continue, as they do in JavaScript.
+        if (token.v === '{' && complete) {
+          if (bodies === 0) return i;
+          bodies -= 1;
+        }
         if (match[i] === undefined) return tokens.length;
         i = match[i];
       } else if ([',', ';', ')', ']', '}'].includes(token.v)) return i;
       continue;
     }
-    if (i === start || isWord(token, 'in', 'of', 'instanceof', 'as')) continue;
-    const prev = tokens[i - 1];
-    if (prev.t === 'p' ? [')', ']', '}'].includes(prev.v) : !(prev.t === 'id' && OPERAND_KEYWORDS.has(prev.v))) return i;
+    if (isWord(token, 'function', 'class')) bodies += 1;
+    // A template after an operand is a tagged template, not a new statement.
+    if (i === start || token.t === 'tpl' || isWord(token, 'in', 'of', 'instanceof', 'as', 'extends')) continue;
+    if (complete) return i;
   }
   return tokens.length;
 }
@@ -893,10 +907,7 @@ function createScopes(ctx) {
         const extent = bodyExtent(arr, m, arr[head].i, i + 1);
         const role = roleOf(arr, m, head);
         // A `let` can be given another function later, so only a `const` arrow has a known parameter list.
-        if (role.kind === 'named' && role.constant) {
-          arrowArity.set(role.nameToken.v, arrowArity.has(role.nameToken.v) ? Infinity : parameterCount(arr, m, open));
-          ownDeclarations.set(role.nameToken.v, 1);
-        }
+        if (role.kind === 'named' && role.constant) arrowArity.set(role.nameToken.v, arrowArity.has(role.nameToken.v) ? Infinity : parameterCount(arr, m, open));
         if (open !== null) bindParameters(arr, m, open, extent, role);
         else bind(arr[head], extent, { kind: 'param', role, index: 0 });
       } else if (isWord(token, 'for') && !isPunct(arr[i - 1], '.', '?.')) {
@@ -974,11 +985,17 @@ function createScopes(ctx) {
   // A file that mocks fs, or spies on its readdir, decides what a listing returns; so does one that
   // writes to the namespace object or hands it on (`fs.readdirSync = fake`, `Object.assign(fs, …)`).
   if (ctx.replaced.fs) { listers.clear(); fsNamespaces.clear(); }
-  for (const name of [...fsNamespaces]) {
-    const intact = arrays.every(({ arr }) => arr.every((use, at) => use.t !== 'id' || use.v !== name || isPunct(arr[at - 1], '.', '?.') || isWord(arr[at - 1], 'import', 'as', 'const', 'let', 'var')
-      || (isPunct(arr[at + 1], '.') && arr[at + 2]?.t === 'id' && !assignsAt(arr, at + 3))));
-    if (!intact) fsNamespaces.delete(name);
-  }
+  // Every use of a namespace is a call through it (`fs.readdirSync(…)`, `fs.promises.readdir(…)`). Anything
+  // else can replace a member or alias the object, and the namespaces share their objects, so one
+  // such use takes the trust from all of them.
+  const calledThrough = (arr, at) => {
+    let last = at;
+    while (isPunct(arr[last + 1], '.') && arr[last + 2]?.t === 'id') last += 2;
+    return last > at && isPunct(arr[last + 1], '(');
+  };
+  const intact = [...fsNamespaces].every((name) => arrays.every(({ arr }) => arr.every((use, at) => use.t !== 'id' || use.v !== name
+    || isPunct(arr[at - 1], '.', '?.') || isWord(arr[at - 1], 'import', 'as', 'const', 'let', 'var') || calledThrough(arr, at))));
+  if (!intact) { listers.clear(); fsNamespaces.clear(); }
   /** True when `name` is bound anywhere in the file beyond the declaration its trusted meaning comes from: a use may then mean something else. */
   const shadowed = (name) => binders.has(name) || (declared.get(name) ?? []).length > (ownDeclarations.get(name) ?? 0);
   /** True when the call whose callee ends at `callee` (a dotted path from `head`) is node's readdir. */
@@ -994,8 +1011,8 @@ function createScopes(ctx) {
     let after = at + 1;
     while (isPunct(arr[after], ')')) after += 1; // `(p) = other`
     if (assignsAt(arr, after) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--')) return true;
-    // `for (p of rows)`: the head assigns on every turn.
-    if (isWord(arr[at + 1], 'of', 'in') && !isWord(arr[at - 1], 'const', 'let', 'var') && inForHead(arr, m, at)) return true;
+    // `for (p of rows)`, `for ((p) of rows)`: the head assigns on every turn.
+    if (isWord(arr[after], 'of', 'in') && !isWord(arr[at - 1], 'const', 'let', 'var') && inForHead(arr, m, at)) return true;
     // `({ p } = other)`, `[p] = other`: the pattern closes before the `=`.
     return inAssignedPattern(arr, m, at);
   };
@@ -1072,13 +1089,19 @@ function createScopes(ctx) {
     if (isWord(arr[at], 'async')) at += 1;
     const count = isPunct(arr[at], '(') && m[at] !== undefined && isPunct(arr[m[at] + 1], '=>') ? parameterCount(arr, m, at)
       : arr[at]?.t === 'id' && isPunct(arr[at + 1], '=>') ? 1
-        : arr[at]?.t === 'id' && isPunct(arr[at + 1], ')') && !shadowed(arr[at].v) ? (arr[at].v === 'Boolean' ? 1 : arrowArity.get(arr[at].v) ?? Infinity)
+        : arr[at]?.t === 'id' && isPunct(arr[at + 1], ')') ? namedArity(arr[at].v)
           : Infinity;
     return count <= limit;
   };
+  /** Parameters of the callback `name`: the global `Boolean`, or a `const` arrow declared once and bound nowhere else. */
+  const namedArity = (name) => {
+    if (name === 'Boolean') return shadowed(name) ? Infinity : 1;
+    return (declared.get(name) ?? []).length === 1 && !binders.has(name) ? arrowArity.get(name) ?? Infinity : Infinity;
+  };
   /** True when `arr[at]` is directly inside the parentheses of a `for` head. */
   const inForHead = (arr, m, at) => {
-    const open = enclosingOpen(arr, m, at);
+    let open = enclosingOpen(arr, m, at);
+    while (open !== null && isPunct(arr[open], '(') && isPunct(arr[open - 1], '(')) open = enclosingOpen(arr, m, open); // grouping parentheses
     return open !== null && isPunct(arr[open], '(') && (isWord(arr[open - 1], 'for') || (isWord(arr[open - 1], 'await') && isWord(arr[open - 2], 'for')));
   };
   /** True when `arr[at]` sits in a pattern that is assigned to: `[a, names[0]] = pair`, `for ({ p } of rows)`. */
@@ -1095,7 +1118,22 @@ function createScopes(ctx) {
    * use of a name that would change what is proven about it may be hiding there.
    */
   const stringText = arrays.flatMap(({ arr }) => arr.flatMap((token) => (token.t === 's' ? [token.v] : token.t === 'tpl' ? token.quasis : []))).join('\n');
-  const hiddenUse = (name, after) => new RegExp(`(?:^|[^\\w$.])${name.replace(/[$]/g, '\\$&')}\\s*(?:${after})`).test(stringText);
+  const named = (name, after) => new RegExp(`(?:^|[^\\w$.])${name.replace(/[$]/g, '\\$&')}\\s*(?:${after})`, 'g');
+  const hiddenUse = (name, after) => named(name, after).test(stringText);
+  /** A write to `name` spelled inside a string or template: `eval("name = …")`, or code read as text. */
+  const hiddenWrite = (name) => confused || hiddenUse(name, '=(?!=)|\\+\\+|--|[-+*/%|&^?]{1,3}=|\\)\\s*=(?!=)');
+  /**
+   * True when the source calls `name` more often than the tokens show. A regex literal read as
+   * division can end in `//` and take the rest of its line for a comment, call and all; a comment
+   * that happens to spell a call costs that file the resolution, nothing more.
+   */
+  const hiddenCall = (name) => {
+    const written = (ctx.src.match(named(name, '\\(')) ?? []).length;
+    const seen = arrays.reduce((count, { arr }) => count + arr.filter((token, at) => token.t === 'id' && token.v === name && isPunct(arr[at + 1], '(') && !isPunct(arr[at - 1], '.', '?.')).length, 0);
+    return written > seen;
+  };
+  /** A lone backslash is no JavaScript outside a literal: an escaped identifier (`r\u0065ad`) or code the tokenizer lost. */
+  const confused = arrays.some(({ arr }) => arr.some((token) => isPunct(token, '\\')));
   /** True when the dotted callee ending at `arr[at]` hangs off the test API: `it.each`, `describe.skip.each`. */
   const onTestApi = (arr, at) => {
     let root = at;
@@ -1121,6 +1159,8 @@ function createScopes(ctx) {
   const readsArray = (arr, m, at) => {
     const prev = arr[at - 1];
     const next = arr[at + 1];
+    // `({ map: NAMES.map } = other)`, `[NAMES[0]] = pair`: a target, whatever is named.
+    if (inAssignedPattern(arr, m, at)) return false;
     if (isPunct(prev, '.', '?.')) return true; // a property of that name on something else
     if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
     if (isPunct(next, '.', '?.')) {
@@ -1135,9 +1175,10 @@ function createScopes(ctx) {
     if (isPunct(next, '[') && m[at + 1] !== undefined) {
       // One element, read: not called (`NAMES['push'](x)`), not written (`NAMES[0] = x`, `NAMES[0] += x`,
       // `[NAMES[0]] = pair`, `for (NAMES[0] of xs)`). `NAMES[0] === x` is a read.
-      const after = m[at + 1] + 1;
-      return !isPunct(arr[after], '(', '?.', '++', '--') && !isPunct(prev, '++', '--') && !isWord(arr[after], 'of', 'in')
-        && !assignsAt(arr, after) && !inAssignedPattern(arr, m, at);
+      let after = m[at + 1] + 1;
+      if (isPunct(arr[after], '(', '?.')) return false;
+      while (isPunct(arr[after], ')')) after += 1; // `(NAMES[1]) = x`
+      return !isPunct(arr[after], '++', '--') && !isPunct(prev, '++', '--') && !isWord(arr[after], 'of', 'in') && !assignsAt(arr, after);
     }
     if (isPunct(prev, '(', ',') && isPunct(next, ')', ',')) {
       // Handed to something that only reads it: `expect(NAMES)`, `new Set(NAMES)`, `Array.from(NAMES)`,
@@ -1202,7 +1243,7 @@ function createScopes(ctx) {
   /** Every value parameter `index` of the function named by `nameToken` is called with, or null when a use is not a plain call. */
   const callSiteDomain = (nameToken, index) => {
     const name = nameToken.v;
-    if ((declared.get(name) ?? []).length !== 1 || binders.has(name) || hiddenUse(name, '[(`.]|\\?\\.')) return null;
+    if ((declared.get(name) ?? []).length !== 1 || binders.has(name) || hiddenUse(name, '[(`.]|\\?\\.') || hiddenCall(name)) return null;
     const parts = [];
     for (const { arr, m } of arrays) {
       for (let at = 0; at < arr.length; at += 1) {
@@ -1254,7 +1295,7 @@ function createScopes(ctx) {
     // `p = other()`, `p++` or `({ p } = other)` in the body: the variable no longer holds what it was given.
     // `arguments[0] = x` rebinds a parameter in a sloppy-mode script, and `eval` can do anything.
     const rewritten = writtenIn(binder.name, inside) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
-      || hiddenUse(binder.name, '=(?!=)|\\+\\+|--|[-+*/%|&^?]{1,3}=|\\)\\s*=(?!=)');
+      || hiddenWrite(binder.name);
     if (ambiguous || rewritten) return null;
     if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
     else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
@@ -1262,7 +1303,7 @@ function createScopes(ctx) {
     return binder.domain;
   };
 
-  return { binderAt, domainOf, writtenIn, shadowed, declaredTwice: (name) => (declared.get(name) ?? []).length > 1, hasBinder: (name) => binders.has(name) };
+  return { binderAt, domainOf, writtenIn, shadowed, hiddenWrite, declaredTwice: (name) => (declared.get(name) ?? []).length > 1, hasBinder: (name) => binders.has(name) };
 }
 
 /**
@@ -1278,7 +1319,7 @@ function identifierValue(token, ctx, depth) {
   if (binder === null) return bindingValue(token.v, ctx, depth);
   if (ctx.overrides?.has(binder)) return str(ctx.overrides.get(binder));
   const domain = ctx.shared.scopes.domainOf(binder);
-  if (domain === LISTED) return PLAIN_NAME;
+  if (domain === LISTED) { ctx.shared.trusted.fs = true; return PLAIN_NAME; }
   if (domain !== null) return variableValue({ open: true, vars: [binder] });
   return binder.role?.kind === 'named' ? variableValue({ open: true, via: binder.role.nameToken.v }) : UNKNOWN;
 }
@@ -1299,7 +1340,7 @@ function bindingValue(name, ctx, depth = 0) {
   const declarator = ctx.tokens[bound - 2];
   const constant = isWord(ctx.tokens[bound - 3], 'const');
   const rebound = (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name) || ctx.shared.scopes.hasBinder(name)
-    || (!constant && ctx.shared.scopes.writtenIn(name, () => true, declarator)));
+    || (!constant && (ctx.shared.scopes.writtenIn(name, () => true, declarator) || ctx.shared.scopes.hiddenWrite(name))));
   const value = rebound ? UNKNOWN : initial;
   ctx.bindingValues.set(name, value);
   return value;
@@ -1445,10 +1486,14 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   // A source this file or the workspace setup (`replaced`) mocks is trusted for nothing.
   const own = replacedSources(src, fileRel);
   ctx.replaced = { fs: own.fs || replaced?.fs === true, crypto: own.crypto || replaced?.crypto === true, guard: own.guard || replaced?.guard === true };
-  ctx.guarded = !ctx.replaced.guard && importsNamed(tokens, match, 'pathWithin', (spec) => isGuardModule(fileRel, spec) && spec.endsWith('.js'));
+  ctx.guarded = importsNamed(tokens, match, 'pathWithin', (spec) => isGuardModule(fileRel, spec));
+  facts.replaces = own;
+  ctx.src = src;
   ctx.uuid = !ctx.replaced.crypto && importsNamed(tokens, match, 'randomUUID', isCryptoModule);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
-  ctx.shared = { root: ctx, scopes: undefined };
+  // `trusted`: the sources a contained path of this file relied on, for a mock registered by another member (`gather`).
+  ctx.shared = { root: ctx, scopes: undefined, trusted: { fs: false, crypto: false, guard: false } };
+  facts.trusted = ctx.shared.trusted;
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
   // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
   // `const pyBin = resolveTestPython()` makes `pyBin` the python interpreter.
@@ -1518,6 +1563,13 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
     }
     if (value.k !== 'path') return value.k !== 'unknown';
     if (consumer !== null && NON_READ_CALLEES.has(consumer)) return true;
+    // A glob pattern is no file: it reads every match under the directory in front of its first wildcard.
+    if (consumer !== null && /^glob/i.test(consumer) && !value.partial && /[*?[\]{}]/.test(value.v)) {
+      const literal = value.v.slice(0, value.v.search(/[*?[\]{}]/));
+      const rel = normalizeRel(literal === '' || literal.endsWith('/') ? literal : posix.dirname(literal));
+      facts.dirs.push({ rel, walk, guessed: true, open: CLIMBS.test(value.v.slice(literal.length)), via: null });
+      return true;
+    }
     if (value.partial || value.isDir) {
       // A complete directory handed to an unknown function (`resolveInstallRoot(join(__dirname, '..'))`)
       // or passed nowhere (`cwd || process.cwd()`) is a value. A partial path (variable
@@ -1563,7 +1615,8 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
       if (arg.kind === 'none') continue;
       for (const value of valuesAt(arg.index)) {
         if (value.k === 'path') {
-          if (!value.partial && !value.isDir) { facts.paths.push({ rel: value.v, walk: true }); continue; }
+          // A complete path: a file, a directory, or a name the loader completes (`./mod` is `./mod.js`).
+          if (!value.partial) { facts.paths.push({ rel: value.v, walk: true }); continue; }
           facts.dirs.push({ rel: value.v, walk: true });
           if (!(value.partial && value.open)) continue;
           // Unbounded, the module may be anywhere, under the prefix or not: an edge the source does not name.
@@ -1892,11 +1945,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   let setupReplaced = null;
   const replacedBySetup = () => {
     if (setupReplaced !== null) return setupReplaced;
+    // Set before the walk: the setup files' own facts ask for it, and what they trust does not matter.
     setupReplaced = { fs: false, crypto: false, guard: false };
-    for (const rel of WORKSPACE_SETUP_ENTRIES[workspaceRel] ?? []) {
-      const bytes = fs.read(rel);
-      const replaced = bytes === null ? null : replacedSources(bytes.toString('utf8'), rel);
-      for (const source of Object.keys(setupReplaced)) setupReplaced[source] ||= replaced?.[source] === true;
+    for (const entry of WORKSPACE_SETUP_ENTRIES[workspaceRel] ?? []) {
+      if (fs.kind(entry) !== 'file') continue;
+      // The entry and everything it imports: `import './testMocks.js'` registers its mocks all the same.
+      for (const rel of closureOf(entry, null).members) {
+        const replaces = factsFor(rel).replaces;
+        for (const source of Object.keys(setupReplaced)) setupReplaced[source] ||= replaces?.[source] === true;
+      }
     }
     return setupReplaced;
   };
@@ -1917,12 +1974,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
       openReads: new Set(), // reads whose variable segment is not proven to stay under the prefix that was keyed
+      replaces: null, trusted: null, // sources this file mocks, and sources its contained paths rely on (`replacedSources`)
     };
     facts.set(rel, resolved);
     const bytes = fs.read(rel);
     if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
     if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
     const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel, replaced: replacedBySetup() });
+    resolved.replaces = raw.replaces ?? null;
+    resolved.trusted = raw.trusted ?? null;
     resolved.never = raw.never;
     resolved.git = raw.git;
     resolved.nativeUnresolved = raw.nativeUnresolved;
@@ -2119,6 +2179,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const tools = new Set();
     const unresolvedEdges = [];
     const unresolvedInputs = [];
+    const replacedBy = { fs: null, crypto: null, guard: null }; // the first member that mocks each trusted source
+    const trusting = []; // members whose contained paths rely on one
     let never = false;
     let git = false;
     while (stack.length) {
@@ -2152,6 +2214,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // is a guess. Same ownership as the two rules above: a library member builds such a path
       // from what its caller passes, and reads it only when a test calls it.
       for (const reason of ownsTrees ? f.openReads : []) unresolvedInputs.push(`${rel}: ${reason}`);
+      if (f.replaces) for (const source of Object.keys(replacedBy)) if (f.replaces[source]) replacedBy[source] ??= rel;
+      if (ownsTrees && f.trusted) trusting.push({ rel, trusted: f.trusted });
       for (const dir of ownsTrees ? f.dataTrees : []) {
         const data = dataTree(dir);
         if (data === null) { unresolvedInputs.push(`${rel}: directory input too large: ${dir}`); continue; }
@@ -2163,6 +2227,14 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       }
       if (f.never) never = true;
       if (f.git && (testRel === null || gitRuleApplies(rel, testRel))) git = true;
+    }
+    // A mock registered by any member (a helper the test imports) replaces the module for the test too:
+    // what a listing, a generated id or the guard returns is then that member's to decide.
+    const SOURCE_NAMES = { fs: 'a directory listing', crypto: 'randomUUID()', guard: 'pathWithin()' };
+    for (const { rel, trusted } of trusting) {
+      for (const source of Object.keys(replacedBy)) {
+        if (trusted[source] && replacedBy[source] !== null && replacedBy[source] !== rel) unresolvedInputs.push(`${rel}: relies on ${SOURCE_NAMES[source]}, which ${replacedBy[source]} mocks`);
+      }
     }
     // A real-browser test renders what a dev server, bundler or static server
     // reads for it, none of which the module runner records. Every directory
