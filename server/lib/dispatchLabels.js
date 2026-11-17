@@ -746,7 +746,7 @@ const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, 
 export const LIGHT_FINDINGS_BATCH_EXCEPTION = 'findings dispatched light and low-effort (`model:light` + `effort:low`, or that tracker\'s spelling) that share an area go into ONE checklist item of up to 10 entries instead; a bug, security or data-safety finding always stays its own item';
 
 /** `source:<lane>`: which scheduled lane filed an issue; deliberately not a dispatch axis and absent from interactive filings. */
-export const SOURCE_LABEL_GUIDANCE = 'Scheduled audit lanes and tasks also add `source:<lane>` (lower-case lane or task type id), created with `gh label create source:<lane> --color 0E8A16 2>/dev/null || true`; interactive and ad-hoc filings omit it.';
+export const SOURCE_LABEL_GUIDANCE = 'Scheduled lanes/tasks also add `source:<lane>` (lower-case lane or task type id); create it with `gh label create source:<lane> --color 0E8A16 2>/dev/null || true`. Interactive and ad-hoc filings omit it.';
 
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [

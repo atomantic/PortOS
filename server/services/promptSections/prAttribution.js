@@ -11,7 +11,7 @@ export function buildPrAttributionSection({ model = null, forgeCli = 'gh' } = {}
   // A provider name identifies a runner, not the model that opened the PR.
   const id = normalizePlannerId(model);
   const heading = '## PR Model Attribution';
-  const reviewNote = `If you run local pre-PR reviewers, \`${LOCAL_REVIEW_ATTRIBUTION_GUIDE}\` says how to label them.`;
+  const reviewNote = `If this workflow actually runs local pre-PR reviewers, \`${LOCAL_REVIEW_ATTRIBUTION_GUIDE}\` says how to label them.`;
   if (!id) return `${heading}\nNo opener model was resolved for this run: label the PR \`implementer:<model>\` only from a model your execution context verifies, never a guess; otherwise omit it.\n${reviewNote}`;
   const cli = forgeCli === 'glab' ? 'glab' : 'gh';
   const label = forgeLabelName(`implementer:${id}`, { cli });

@@ -369,7 +369,7 @@ describe('shared guidance', () => {
   it('tells lane-filed issues to carry source:<lane> and interactive filings to omit it (#16571)', () => {
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`source:<lane>`');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`gh label create source:<lane> --color');
-    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('interactive and ad-hoc filings omit it');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('Interactive and ad-hoc filings omit it');
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('lower-case lane or task type id');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('`source-<lane>`');
   });
