@@ -68,22 +68,24 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
         className="mx-auto block aspect-video w-full max-w-[calc(50vh*16/9)] rounded border border-port-border bg-black object-contain"
       />
-      <ShotStepper
-        scenes={scenes}
-        time={songTime}
-        onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
-        onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
-        range={range}
-        keys
-      />
-      <FrameStepper
-        time={songTime}
-        onSeek={stepFrame}
-        maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
-        capture={() => captureMediaFrame(videoRef.current)}
-        label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
-        keys
-      />
+      <div data-preview-controls className="space-y-2">
+        <ShotStepper
+          scenes={scenes}
+          time={songTime}
+          onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
+          onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
+          range={range}
+          keys
+        />
+        <FrameStepper
+          time={songTime}
+          onSeek={stepFrame}
+          maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
+          capture={() => captureMediaFrame(videoRef.current)}
+          label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
+          keys
+        />
+      </div>
     </div>
   );
 }
@@ -135,8 +137,13 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * shots' renders from that state, so a render that lands shows without a reload.
  * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
  * `compact` drops the title for a page that frames the player itself (the editor).
+ * `controlsBeside` keeps the play bar under the picture and stacks the other
+ * controls in a column to its right, for a short, wide space (the editor). Each
+ * player marks its picture (`data-preview-picture`), its play bar
+ * (`data-preview-scrub`) and its other controls (`data-preview-controls`);
+ * `.mv-preview-beside` in index.css places them.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false, controlsBeside = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const playable = sources.filter((entry) => !entry.disabled);
@@ -176,7 +183,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.
-    <aside ref={dockRef} aria-label="Preview" className="@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2"
+    <aside ref={dockRef} aria-label="Preview" className={`@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2 ${controlsBeside ? 'mv-preview-beside' : ''}`}
       onPlayCapture={sounding(solo.started)} onPauseCapture={sounding(solo.stopped)} onEndedCapture={sounding(solo.stopped)}>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-port-text-muted">
         {/* Compact (the editor): no title row of its own, the source picker is the header. */}

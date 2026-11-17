@@ -2511,6 +2511,166 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bmacos-native\b/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_MACOS_NATIVE: ${{ needs.macos-native.result }}');
   });
+
+  it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
+    for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'autofixer/package.json', '.nvmrc',
+      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.test.js', '.github/workflows/ci.yml',
+    ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
+    for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {
+      expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(false);
+    }
+    expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).nodeMinimum).toBe(true);
+
+    const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
+    expect(jobs.impact).toContain('node_minimum: ${{ steps.plan.outputs.node_minimum }}');
+    expect(jobs['node-minimum']).toContain("if: needs.impact.outputs.node_minimum == 'true'");
+    expect(jobs.gate).toContain('CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}');
+  });
+});
+
+// A push to main runs the complete primary suites, but the native
+// single-purpose jobs follow the tree diff since the last green push or
+// schedule run (CI_GATED_BASE_SHA from scripts/ci-base-sha.js), so a client
+// change no longer queues the macOS, Windows and SuperCollider runners.
+// Prompt history is history-sensitive and stays unconditional.
+describe('native jobs on a push to main', () => {
+  const NATIVE_OUTPUTS = ['linux_containment', 'supercollider_live', 'docker_containment_live',
+    'macos_native', 'node_minimum', 'windows'];
+  const nativeOutputs = (outputs) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, outputs[name]]));
+  const allNative = (value) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, value]));
+  const gatedPlan = (gatedChangedFiles, extra = {}) => {
+    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
+    return buildCiTestPlan([], {
+      forceFull: true, forceFullReason: 'full CI requested', trackedFiles: WINDOWS_CONTRACT_TESTS, gatedChangedFiles,
+      promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, ...extra,
+    });
+  };
+  const gates = (plan) => ({
+    linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
+    dockerContainmentLive: plan.dockerContainmentLive, macosNative: plan.macosNative, nodeMinimum: plan.nodeMinimum, windows: plan.windows,
+  });
+  const none = { linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false,
+    macosNative: false, nodeMinimum: false, windows: false };
+
+  it('plans the push through the CLI from the diff against the last green main commit, and falls back to every job', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-gated-push-'));
+    const planner = fileURLToPath(new URL('./ci-test-plan.js', import.meta.url));
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    const write = (path, body) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), body);
+    };
+    const commit = () => {
+      git('add', '--all');
+      git('-c', 'user.name=Example Contributor', '-c', 'user.email=contributor@example.com',
+        '-c', 'commit.gpgsign=false', 'commit', '-qm', 'fixture');
+      return git('rev-parse', 'HEAD');
+    };
+    const plan = (gatedBase) => JSON.parse(execFileSync(process.execPath, [planner], {
+      cwd: root, encoding: 'utf8', stdio: PLANNER_STDIO,
+      env: { ...process.env, CI_BASE_SHA: '', CI_BASE_REF: '', CI_FORCE_FULL: 'true', CI_CHANGED_FILES: undefined,
+        CI_GATED_BASE_SHA: gatedBase, GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
+    }));
+    try {
+      git('init', '-q');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      // The forced-full Windows plan checks its contract inventory is tracked.
+      for (const test of WINDOWS_CONTRACT_TESTS) write(test, '// fixture\n');
+      write('client/src/pages/Example.jsx', 'export const value = 1;\n');
+      write('server/lib/darwinAgentSupervisor.py', 'print("fixture")\n');
+      const green = commit();
+
+      write('client/src/pages/Example.jsx', 'export const value = 2;\n');
+      commit();
+      const clientOnly = plan(green);
+      // The primary suites stay complete; only the native jobs are gated.
+      expect(clientOnly).toMatchObject({ full: true, server_mode: 'full', client_mode: 'full', db: true, build: true, smoke: true });
+      expect(nativeOutputs(clientOnly)).toEqual(allNative(false));
+      expect(clientOnly.windows_mode).toBe('skip');
+      // Gated, so not complete-run evidence; prompt history still runs.
+      expect(clientOnly).toMatchObject({ native_gated: true, prompt_history: true });
+
+      write('server/lib/darwinAgentSupervisor.py', 'print("changed")\n');
+      commit();
+      expect(nativeOutputs(plan(green))).toEqual({ ...allNative(false), macos_native: true });
+
+      // A base git cannot diff against (a failed fetch) fails open.
+      const unresolvable = plan('0'.repeat(40));
+      expect(nativeOutputs(unresolvable)).toEqual(allNative(true));
+      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false, prompt_history: true });
+      // As does a push whose lookup exported nothing.
+      expect(nativeOutputs(plan(''))).toEqual(allNative(true));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('decides each native job from the gated diff exactly as a pull request would', () => {
+    expect(gates(gatedPlan(['client/src/App.jsx', 'client/src/components/Layout.jsx']))).toEqual(none);
+    expect(gates(gatedPlan([]))).toEqual(none);
+    expect(gates(gatedPlan(['server/lib/darwinAgentSupervisor.py']))).toEqual({ ...none, macosNative: true });
+    expect(gates(gatedPlan(['server/lib/codeAnimationContainment.js']))).toMatchObject({ linuxContainment: true, macosNative: false, nodeMinimum: false, windows: false });
+    expect(gates(gatedPlan(['server/services/dockerEngine.js']))).toMatchObject({ dockerContainmentLive: true, macosNative: false });
+    expect(gates(gatedPlan(['package.json']))).toMatchObject({ nodeMinimum: true, supercolliderLive: true, macosNative: false });
+    expect(gates(gatedPlan(['server/lib/bufferedSpawn.js']))).toMatchObject({ windows: true, supercolliderLive: true, macosNative: false });
+    expect(gates(gatedPlan(['.github/workflows/ci.yml']))).toEqual(Object.fromEntries(Object.keys(none).map((key) => [key, true])));
+
+    // A gated Windows run carries the same native contract set as any other.
+    const windowsPlan = gatedPlan(['scripts/fix-windows-console.js']);
+    expect(windowsPlan).toMatchObject({ full: true, windows: true, windowsMode: 'files', windowsFiles: [...WINDOWS_CONTRACT_TESTS].sort() });
+    expect(windowsPlan.suiteReasons.windows).toContain('native jobs gated on 1 file(s) changed since the last green main run');
+    expect(gatedPlan([]).suiteReasons.windows).toMatch(/^skipped: no Windows native contract changed/);
+  });
+
+  it('lets only a proven platform-neutral server manifest change skip Windows', () => {
+    const LOCK = 'server/package-lock.json';
+    const lock = (packages) => JSON.stringify({ name: 'server', lockfileVersion: 3, packages: { '': { name: 'server' }, ...packages } });
+    const base = lock({ 'node_modules/express': { version: '5.0.0' } });
+    const neutral = classifyDependencyChange(LOCK, base, lock({ 'node_modules/express': { version: '5.1.0' } }));
+    const sensitive = classifyDependencyChange(LOCK, base, lock({ 'node_modules/express': { version: '5.0.0' }, 'node_modules/node-pty': { version: '1.0.0' } }));
+    expect(gatedPlan([LOCK], { gatedDependencyChanges: { [LOCK]: neutral } }).windows).toBe(false);
+    expect(gatedPlan([LOCK], { gatedDependencyChanges: { [LOCK]: sensitive } }).windows).toBe(true);
+    // No comparison available fails closed.
+    expect(gatedPlan([LOCK]).windows).toBe(true);
+  });
+
+  it('always runs prompt history on a push, because a reverted prompt change leaves no tree diff', () => {
+    for (const files of [[], ['client/src/App.jsx'], ['data.reference/prompts/stages/example.md']]) {
+      expect(gatedPlan(files).promptHistory, files.join()).toBe(true);
+    }
+  });
+
+  it('runs every native job when forced full without a gated diff', () => {
+    expect(gates(buildCiTestPlan([], { forceFull: true, trackedFiles: WINDOWS_CONTRACT_TESTS, gatedChangedFiles: null })))
+      .toEqual(Object.fromEntries(Object.keys(none).map((key) => [key, true])));
+    // An inconclusive closure walk still runs its job.
+    expect(gatedPlan(['client/src/App.jsx'], { linuxContainmentInputs: null }).linuxContainment).toBe(true);
+    // A pull request never takes the gated path, even if handed a list.
+    expect(buildCiTestPlan(['docs/README.md'], { gatedChangedFiles: ['server/lib/darwinAgentSupervisor.py'] }).macosNative).toBe(false);
+  });
+
+  it('collects the two-dot tree diff, including both sides of a rename', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-ci-gated-diff-'));
+    const git = (...args) => execFileSync('git', ['-c', 'user.name=CI', '-c', 'user.email=ci@example.com',
+      '-c', 'commit.gpgsign=false', ...args], { cwd: root, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-q');
+      mkdirSync(join(root, 'server/lib'), { recursive: true });
+      writeFileSync(join(root, 'server/lib/old.js'), 'export const a = "a long enough body to be detected as a rename";\n');
+      git('add', '--all');
+      git('commit', '-q', '--no-verify', '-m', 'base');
+      const green = git('rev-parse', 'HEAD');
+      git('mv', 'server/lib/old.js', 'server/lib/new.js');
+      git('commit', '-q', '--no-verify', '-m', 'rename');
+      const inputs = collectPlanInputs({ forceFull: true, gatedBaseSha: green, cwd: root });
+      expect(inputs.gatedChangedFiles.sort()).toEqual(['server/lib/new.js', 'server/lib/old.js']);
+      expect(inputs.linuxContainmentInputs).toEqual(expect.arrayContaining(LINUX_CONTAINMENT_TESTS));
+      // Without a gated base a forced-full run skips the walks entirely.
+      expect(collectPlanInputs({ forceFull: true, cwd: root })).toMatchObject({ gatedChangedFiles: null, linuxContainmentInputs: null });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 // Database maintenance sources select the DB job by path.

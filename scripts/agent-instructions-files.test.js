@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { readFileSync, lstatSync, existsSync, statSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { importGrowthSkipReason, resolveImportGrowthBase } from './lib/importGrowth.js';
 
 // Regression guard for #4852. `AGENTS.md` is the cross-vendor agent-instructions
 // standard every CLI PortOS drives reads — except Claude Code, whose memory
@@ -42,11 +43,28 @@ const INSTRUCTION_DIRS = [
  */
 const ROOT_MAX_BYTES = 28 * 1024;
 const NESTED_MAX_BYTES = 12 * 1024;
-// A file sitting within a few bytes of its ceiling makes every one-line rule
-// need a matching deletion, and two in-cap edits that merge separately land over
-// it (five branches broke on 2026-11-15). Keeping 10% free is what lets
-// concurrent small edits merge; the ceiling itself stays the hard limit.
+// An absolute 90% line failed concurrent branches: two edits that each fit
+// under it merged separately and broke main (five branches on 2026-11-15). The
+// headroom rule is therefore relative to the merge base: a file already above
+// 90% there may not grow in this change, so it can only shrink toward the line.
+// The ceiling itself stays the only absolute failure.
 const HEADROOM_FRACTION = 0.9;
+
+/**
+ * Pure policy. Each entry is { file, size, baseSize, limit }; `baseSize` is the
+ * file's size at the merge base, or 0 when the file did not exist there.
+ * Returns one message per violation.
+ */
+export function instructionFileViolations(entries) {
+  return entries.flatMap(({ file, size, baseSize, limit }) => {
+    if (size > limit) return [`${file}: ${size} bytes > ${limit} byte ceiling; move procedure into a skill or doc`];
+    const line = Math.floor(limit * HEADROOM_FRACTION);
+    if (baseSize > line && size > baseSize) {
+      return [`${file}: grew ${baseSize} -> ${size} bytes while already above 90% (${line}) of its ${limit} ceiling at the merge base; trim as much as you add`];
+    }
+    return [];
+  });
+}
 
 /** Entire body of a bridge file. */
 const IMPORT_BODY = '@AGENTS.md\n';
@@ -89,19 +107,59 @@ describe('agent-instructions files (#4852)', () => {
     }
   });
 
-  it('every AGENTS.md stays at or below 90% of its byte ceiling', () => {
+  describe('byte budget policy', () => {
+    const limit = NESTED_MAX_BYTES;
+    const at = (fraction) => Math.floor(limit * fraction);
+    const verdict = (baseFraction, headFraction) =>
+      instructionFileViolations([{ file: 'x/AGENTS.md', size: at(headFraction), baseSize: at(baseFraction), limit }]);
+
+    it('lets a file below 90% at the base grow past 90%', () => {
+      expect(verdict(0.89, 0.93)).toEqual([]);
+    });
+    it('refuses growth of a file already above 90% at the base', () => {
+      expect(verdict(0.93, 0.94)).toHaveLength(1);
+    });
+    it('lets a file above 90% at the base shrink', () => {
+      expect(verdict(0.93, 0.92)).toEqual([]);
+    });
+    it('fails anything above the ceiling regardless of base', () => {
+      expect(verdict(0.5, 1.01)).toHaveLength(1);
+      expect(verdict(1.0, 1.01)).toHaveLength(1);
+    });
+    it('treats a file new at the base as starting from zero', () => {
+      expect(instructionFileViolations([{ file: 'n/AGENTS.md', size: at(0.95), baseSize: 0, limit }])).toEqual([]);
+    });
+  });
+
+  it('fails closed when the base commit cannot be resolved', () => {
+    expect(() => resolveImportGrowthBase({ repoRoot: REPO_ROOT, env: { CI_BASE_SHA: '0'.repeat(40) } })).toThrow(/CI_BASE_SHA/);
+  });
+
+  it('no AGENTS.md exceeds its ceiling or grows while above 90% of it at the merge base', () => {
     const tracked = git('ls-files', '--', 'AGENTS.md', '*/AGENTS.md').split('\n').filter(Boolean);
     expect(tracked, 'detector self-check: root AGENTS.md must be tracked').toContain('AGENTS.md');
 
-    const oversized = tracked
-      .map((file) => {
-        const limit = file === 'AGENTS.md' ? ROOT_MAX_BYTES : NESTED_MAX_BYTES;
-        return { file, size: statSync(join(REPO_ROOT, file)).size, limit };
-      })
-      .filter(({ size, limit }) => size > limit * HEADROOM_FRACTION)
-      .map(({ file, size, limit }) => `${file}: ${size} bytes > ${Math.floor(limit * HEADROOM_FRACTION)} (90% of the ${limit} ceiling; move procedure into a skill or doc)`);
+    // A missing base fails closed, exactly like the import-growth guard, whose
+    // base resolution (CI_BASE_SHA, HEAD^1 on Actions, else merge-base with the
+    // remote default branch) this reuses. Release-bound runs aggregate a whole
+    // cycle of already-gated changes, so they share its skip.
+    const skipped = importGrowthSkipReason();
+    const baseSha = skipped ? null : resolveImportGrowthBase({ repoRoot: REPO_ROOT }).sha;
 
-    expect(oversized).toEqual([]);
+    const baseSizeOf = (file) => {
+      if (!baseSha) return 0;
+      const exists = spawnSync('git', ['cat-file', '-e', `${baseSha}:${file}`], { cwd: REPO_ROOT });
+      if (exists.status !== 0) return 0;
+      return Number(git('cat-file', '-s', `${baseSha}:${file}`).trim());
+    };
+
+    const entries = tracked.map((file) => ({
+      file,
+      size: statSync(join(REPO_ROOT, file)).size,
+      baseSize: baseSizeOf(file),
+      limit: file === 'AGENTS.md' ? ROOT_MAX_BYTES : NESTED_MAX_BYTES,
+    }));
+    expect(instructionFileViolations(entries)).toEqual([]);
   });
 
   it('no tracked AGENTS.md or CLAUDE.md is a symlink', () => {

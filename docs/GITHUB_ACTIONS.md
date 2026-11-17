@@ -45,7 +45,7 @@ tree, so `main` is also tested after the merge:
 | Event | What runs |
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
-| Push/merge to `main` | **Full suite**; the run in flight finishes, and only the newest waiting push runs next |
+| Push/merge to `main` | **Full suite**, native jobs path-gated (see "Native jobs on a push to `main`"); the run in flight finishes, and only the newest waiting push runs next |
 | PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
 | Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
@@ -215,52 +215,10 @@ CI run that never needed it — they keep the documented skip.
 
 ### Local equivalent: `npm run pregate`
 
-`scripts/pregate.js` runs the same planner over the committed and uncommitted
-diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural
-guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
-including untracked tests, without expanding through transitive imports.
-
-`npm run pregate -- --full` opts into the CI-selected broad suites locally:
-server and client tests, the client build, the
-boot smoke, browser suites (smoke profile, prerequisites required rather than
-skipped), and the serial `portos_test` DB suite last and alone. Each stage
-receives the environment the matching job sets. A suite the machine cannot run
-(no reachable test Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
-`--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
-as not run — in the summary and in the receipt `.cache/pregate/report.json`,
-which records the plan, stage outcomes and durations, the skipped suites, the
-base and HEAD SHAs, and the hash of the exact working tree validated. The
-shipped prompt-history guard runs locally when selected; the Windows job and
-the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
-contract: `docs/CONTRIBUTING.md`.
-
-The early guards use the same always-run and diff-selected structural selection
-as CI and `--guards-only`. They run before broad tests and resource probes.
-Successful guards are reused within this invocation only when the working tree,
-index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. The receipt records guard outcomes, reuse proofs and per-file guard
-durations (`fileDurations`). A guard file over 3s fails the stage by name
-(`scripts/lib/guardBudget.js`; there are no per-file exceptions, and enforcement
-is skipped while host load exceeds the core count, since Vitest wall time is
-then meaningless). `scripts/ensure-deps.test.js`
-is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
-`update.ps1` and the lockfiles. Persistent test
-memo rules, required stages and worker caps remain the same. Downgraded full
-plans and `--guards-only` run the guard selection once; `--full` runs it before
-the full suites.
-
-`npm run pregate:merged -- --merged-with <base-ref>` (the same as
-`node scripts/pregate.js --guards-only --merged-with <base-ref>`) runs the
-structural guards on HEAD merged with a fetched base in an isolated temporary
-repository. It is an opt-in diagnostic for investigating an integration break,
-not a merge precondition: no PortOS merge path runs it. The pending-merge sweep
-and the quality-snapshot publisher merge when the forge reports the PR mergeable
-with its required checks green, pinned to the recorded or published head. CI
-already tests each pull request on its merge ref, skips every runner for a
-`.quality.json`-only change because no guard reads that file, and scheduled CI
-on `main` publishes `Full CI Gate` as the post-merge backstop.
-
+`scripts/pregate.js` runs the same planner as CI over the committed, uncommitted
+and untracked diff and hands its plan to the same runners. What it selects, its
+`--full` plan and receipt, interrupt and Windows behavior, and test process
+containment: [PREGATE.md](PREGATE.md).
 
 ### Browser workload partition
 
@@ -503,10 +461,11 @@ contract; the parts that are not obvious:
   `server/package.json` is in the hash alongside the lockfile so that skipping
   `npm ci` does not also skip its manifest-vs-lockfile agreement check.
 
-Hit rate comes from the full runs on `main` (every push and the 09:17 UTC
-schedule). A cache written by a pull request is visible only to that branch, so
-those runs seed the entries on the default branch, the one scope every PR branch
-can read. A PR that changes the lockfile misses by design.
+Hit rate comes from the full runs on `main` (every push, which seeds Windows
+and macOS only when it runs them, and both schedule runs). A cache written by a
+pull request is visible only to that branch, so those runs seed the entries on
+the default branch, the one scope every PR branch can read. A PR that changes
+the lockfile misses by design.
 
 Three entries exist per key state (Linux, shared by `server`, `database` and `browser`,
 plus Windows and macOS) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
@@ -535,8 +494,8 @@ Reading the base off the checkout rather than `github.event.pull_request.base.sh
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
 so the payload value can name a commit the tested tree was never merged with.
 
-Non-pull-request runs (nightly, dispatch, release fallback) force the complete
-suite, need no diff at all, and get no base.
+Non-pull-request runs (push, nightly, dispatch, release fallback) force the
+complete suite and get no base; a push gets `CI_GATED_BASE_SHA` (below).
 
 ### Required checks
 
@@ -607,8 +566,8 @@ The selected work is split across parallel jobs:
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
-  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
-  always run it.
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer
+  (`NODE_MINIMUM_PATH_RE`). Non-push full runs always run it; a push gates it.
 - **Shipped prompt history** — the one job with a full-history clone; it checks
   that every prompt body ever shipped is current or retired in
   `data.reference/prompts/shipped-hashes.json`.
@@ -626,7 +585,8 @@ The selected work is split across parallel jobs:
   closure of those tests and the server Vitest harness, `server/package.json`,
   `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
   head tree on every run, so a new dependency is gated without a list edit.
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only.
 - **Docker containment live** — runs the opt-in live suite of the Docker
   containment profile (`server/services/dockerContainment.live.test.js`,
@@ -639,7 +599,8 @@ The selected work is split across parallel jobs:
   closure of the live suite and the server Vitest harness,
   `server/package.json`, `server/package-lock.json` or `ci.yml`
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
@@ -658,8 +619,8 @@ The selected work is split across parallel jobs:
   `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
   `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
   `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
-  every run, so a new import is covered without a list edit. Non-PR runs
-  (nightly) and pull requests into `release` always run it; `workflow_dispatch`
+  every run, so a new import is covered without a list edit. Non-push full runs
+  and pull requests into `release` always run it, a push gates it; `workflow_dispatch`
   of `CI` is the manual evidence run. Pregate reports it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
@@ -810,8 +771,8 @@ the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
 `scripts/vitestTempRootSetup.js`), the install inputs
 (`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
-`scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
-`release` always run it. It is part of `CI Gate`; a skipped run passes.
+`scripts/trusted-rebuilds.js`) or `ci.yml`. A push gates it the same way; non-push
+full runs and pull requests into `release` always run it. It is part of `CI Gate`; a skipped run passes.
 
 Before the suites, the job runs the supervisor's own `--probe`: a real
 single-use launchd job round trip. A runner whose user domain refuses
@@ -890,6 +851,22 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 - on the schedule, 09:17 and 21:17 UTC;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
+
+### Native jobs on a push to `main`
+
+A push to `main` runs the primary suites and prompt history complete (its
+guard reads every committed body, which a tree diff cannot see), but the six
+native job families (SuperCollider, Windows, macOS, Linux and Docker
+containment, Node minimum) follow the tree diff since the last green `main`
+run, decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
+(opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes
+one Actions API call for the newest successful `push` or `schedule` run of
+`ci.yml` on `main`, fetches its head at depth 1 and exports
+`CI_GATED_BASE_SHA`; the planner diffs it against `HEAD` (two-dot,
+`--no-renames`). Any lookup, fetch or diff failure runs every native job.
+Scheduled, dispatched and release runs are unchanged, so every native job still
+runs twice a day and on the release candidate. A gated push publishes no `Full CI Gate`
+(`native_gated`): it is not complete-run evidence for release reuse.
 
 A merge commit on `main` is tested because a PR gate only proves the PR
 against the base it was built on: two PRs that were each green can merge into a
@@ -1269,7 +1246,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

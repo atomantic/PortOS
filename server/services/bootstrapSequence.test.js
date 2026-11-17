@@ -897,6 +897,27 @@ describe('runPostRouteSequence — post-route boot order', () => {
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Instance init failed'));
   });
 
+  it('logs one line of per-phase milliseconds before the listener opens', async () => {
+    const recorder = createRecorder();
+    // Each phase spends 10ms of injected clock; process start is t=0.
+    let clock = 0;
+    const tick = (impl) => () => { clock += 10; return impl?.(); };
+    const deps = buildDeps(recorder, {
+      now: () => clock,
+      ensureSelf: tick(),
+      runDatabasePhase: tick(() => ({ dbReady: true })),
+      startListening: recorder.step('startListening', () => {
+        // Logged before listen(), so the line reports the time to listening.
+        expect(console.log).toHaveBeenCalledTimes(1);
+      })
+    });
+    await runPostRouteSequence(deps);
+    expect(recorder.calls).toContain('startListening');
+    const [line] = console.log.mock.calls.at(-1);
+    expect(line).not.toContain('\n');
+    expect(line).toBe('⏱️  Boot phases (ms): self=10 syncLog=0 cloneRecovery=0 mediaQueue=0 lora=0 database=10 coverBackfillLoad=0 — 20ms since process start');
+  });
+
   it('is NOT fatal when a fire-and-forget step rejects', async () => {
     const recorder = createRecorder();
     const deps = buildDeps(recorder, {
@@ -923,6 +944,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
     return {
       announceListening: step('announceListening'),
       setupProcessErrorHandlers: step('setupProcessErrorHandlers'),
+      reconcileMediaAssetIndex: step('reconcileMediaAssetIndex', () => Promise.resolve()),
       backfillOriginInstanceId: step('backfillOriginInstanceId', () => Promise.resolve()),
       relayUnloggedBrainRecords: step('relayUnloggedBrainRecords', () => Promise.resolve(0)),
       startPolling: step('startPolling'),
@@ -938,6 +960,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
     expect(recorder.calls).toEqual([
       'announceListening',
       'setupProcessErrorHandlers',
+      'reconcileMediaAssetIndex',
       'backfillOriginInstanceId',
       'relayUnloggedBrainRecords',
       'startPolling',
@@ -949,7 +972,27 @@ describe('runPostListenSequence — inside the listen callback', () => {
   it('under the boot smoke (#8343), never starts peer polling or sync', async () => {
     const recorder = createRecorder();
     await runPostListenSequence(gateStepsForSmokeBoot(buildDeps(recorder), 'postListen', true));
-    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'backfillOriginInstanceId']);
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'backfillOriginInstanceId']);
+  });
+
+  it('starts the media index sweep after listening and never waits on it (#16556)', async () => {
+    const recorder = createRecorder();
+    // The sweep never settles; peer sync and scheduling must still start.
+    await runPostListenSequence(buildDeps(recorder, {
+      reconcileMediaAssetIndex: recorder.step('reconcileMediaAssetIndex', () => deferred().promise)
+    }));
+    expect(recorder.calls.indexOf('reconcileMediaAssetIndex')).toBeGreaterThan(recorder.calls.indexOf('announceListening'));
+    expect(recorder.calls).toContain('startBrainScheduler');
+  });
+
+  it('logs a media index sweep failure and keeps booting', async () => {
+    const recorder = createRecorder();
+    await runPostListenSequence(buildDeps(recorder, {
+      reconcileMediaAssetIndex: recorder.step('reconcileMediaAssetIndex', () => Promise.reject(new Error('disk gone')))
+    }));
+    await flush();
+    expect(recorder.calls).toContain('startBrainScheduler');
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Media asset index boot reconcile failed: disk gone'));
   });
 
   it('does not start peer polling until origin tags are backfilled', async () => {
@@ -977,7 +1020,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
     stopping = true;
     gate.resolve();
     await done;
-    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'backfillOriginInstanceId']);
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'backfillOriginInstanceId']);
   });
 
   it('starts peer sync even when the brain relay sweep fails', async () => {

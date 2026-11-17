@@ -880,10 +880,9 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // landed). LWW on updatedAt; writes the winner to both sides. Marker-gated
     // in data/catalog-canon-reconcile.applied.json.
     reconcileCanonCatalog: async () => (await import('../scripts/reconcileCanonCatalog.js')).reconcileCanonCatalog(),
-    // Media asset index (#1000): subscribe the generation-completed hooks +
-    // reconcile the derived media_assets table against on-disk images/videos.
-    // Bytes + sidecars + video-history.json stay authoritative; this builds a
-    // queryable index over them. Idempotent, safe to run every boot.
+    // Media asset index (#1000): ensure its schema + subscribe the
+    // generation-completed hooks. The full reconcile of the derived media_assets
+    // table against on-disk images/videos runs after listen() (#16556).
     initMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).initMediaAssetIndex()
   }).finally(markCosAgentMigrationsSettled),
 
@@ -1092,6 +1091,7 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // Process-level safety net, wired with the io instance so unhandled
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
+      reconcileMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).reconcileMediaAssetIndexAtBoot(),
       backfillOriginInstanceId,
       // Relay any brain record whose current state never reached the sync log
       // (a crash or failed append on a previous run) — #8351.

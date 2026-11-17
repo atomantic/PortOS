@@ -438,7 +438,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           <p className="p-3 text-xs text-port-text-muted">{failed ? '' : wanted ? 'Building the preview…' : ''}</p>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div data-preview-scrub className="flex flex-wrap items-center gap-2">
         {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={retryPreview}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview.ready || !audioUrl || (failed && !playing)}>
           {playing || preparing ? <Pause size={14} /> : <Play size={14} />} {playing || preparing ? 'Pause' : 'Play'}
@@ -450,20 +450,22 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
         {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
       </div>
-      {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
-      {shotNav && (
-        <FrameStepper
-          time={t}
-          fps={fps}
-          maxSec={duration || null}
-          onSeek={stopPlayback}
-          disabled={!preview.ready || failed}
-          capture={preview.captureFrame}
-          label={[project.name, activeShot ? sceneShotName(activeShot, { number: shotIndex }) : null].filter(Boolean).join(' · ')}
-          keys
-        />
-      )}
-      {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
+      <div data-preview-controls className="space-y-2 empty:hidden">
+        {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
+        {shotNav && (
+          <FrameStepper
+            time={t}
+            fps={fps}
+            maxSec={duration || null}
+            onSeek={stopPlayback}
+            disabled={!preview.ready || failed}
+            capture={preview.captureFrame}
+            label={[project.name, activeShot ? sceneShotName(activeShot, { number: shotIndex }) : null].filter(Boolean).join(' · ')}
+            keys
+          />
+        )}
+        {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
+      </div>
       {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" data-song-clock="0" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
     </div>
   );

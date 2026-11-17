@@ -561,6 +561,7 @@ export default function ProjectWorkspace({
       blender={blenderMode ? blender : null}
       clockRef={songClockRef}
       compact={OWN_DOCK_STAGES.has(activeStage)}
+      controlsBeside={OWN_DOCK_STAGES.has(activeStage)}
     />
   );
   const ownDock = OWN_DOCK_STAGES.has(activeStage);

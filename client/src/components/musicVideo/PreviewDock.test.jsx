@@ -47,6 +47,23 @@ describe('PreviewDock video shot steps', () => {
   });
 });
 
+describe('PreviewDock controls beside the picture', () => {
+  it('marks the picture, its play bar and the other controls only when asked, so other pages keep the stacked player', () => {
+    const project = { id: 'p', scenes: [{ startSec: 18 }, { startSec: 22 }] };
+    const sources = [{ id: 'draft-1', kind: 'video', label: 'Draft', src: '/data/videos/draft.mp4', startSec: 20, endSec: 30 }];
+    const { unmount } = render(<MemoryRouter><PreviewDock project={project} sources={sources} audioUrl="/song.mp3" controlsBeside /></MemoryRouter>);
+    const dock = screen.getByRole('complementary', { name: 'Preview' });
+    expect(dock.classList.contains('mv-preview-beside')).toBe(true);
+    // The layout in index.css places the picture's siblings: the steppers go in the side column.
+    const picture = dock.querySelector('[data-preview-picture]');
+    const controls = picture.parentElement.querySelector(':scope > [data-preview-controls]');
+    expect(controls.contains(screen.getByRole('button', { name: 'Next shot' }))).toBe(true);
+    unmount();
+    render(<MemoryRouter><PreviewDock project={project} sources={sources} audioUrl="/song.mp3" /></MemoryRouter>);
+    expect(screen.getByRole('complementary', { name: 'Preview' }).classList.contains('mv-preview-beside')).toBe(false);
+  });
+});
+
 describe('PreviewDock live composite', () => {
   it('plays a composed video from the selected takes when no shot segment is rendered', () => {
     const project = {

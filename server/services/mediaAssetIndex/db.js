@@ -419,7 +419,8 @@ async function readListStrict(fn) {
  *    sentinel rule from AGENTS.md — failed-read ≠ legitimately-empty.)
  *
  * Idempotent: re-running with no disk changes is a no-op upsert + empty prune.
- * Cheap enough to run unconditionally at boot.
+ * Runs every boot, but after `listen()` (reconcileMediaAssetIndexAtBoot): on a
+ * large library the full read + upsert takes seconds (#16556).
  *
  * The disk readers are injected (defaulting to the real services) so tests can
  * drive reconcile without the media-gen stack. Both injected and default
