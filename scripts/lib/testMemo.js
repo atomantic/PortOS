@@ -455,6 +455,17 @@ function importsNamed(tokens, match, name, accepts) {
 }
 
 /**
+ * True when the file replaces a module `accepts(specifier)` names (`vi.mock`,
+ * `vi.doMock`) or names one of `members` as a string (`vi.spyOn(fs,
+ * 'readdirSync')`). What such a module then returns is the test's to decide,
+ * so nothing is inferred from a call to it.
+ */
+function mocksModule(tokens, accepts, members) {
+  return tokens.some((token, i) => (token.t === 's' && members.includes(token.v))
+    || (isWord(token, 'mock', 'doMock') && isPunct(tokens[i - 1], '.') && isPunct(tokens[i + 1], '(') && tokens[i + 2]?.t === 's' && accepts(tokens[i + 2].v)));
+}
+
+/**
  * `pathWithin(dir, ...segments)`: the call throws unless the joined path is
  * inside `dir`, so a run that passed read nothing outside it, whatever the
  * segments were. Literal segments still resolve exactly.
@@ -503,6 +514,12 @@ function evaluate(tokens, match, start, ctx, depth = 0) {
 }
 
 const closeOf = (match, open) => (match[open] ?? open) + 1;
+/**
+ * The value of a parenthesized expression or a template hole that was
+ * evaluated up to `end`. `(name, other)` is `other`, so a listed name or a
+ * resolvable variable that is not the whole of it is neither.
+ */
+const wholeValue = ({ value, end }, close) => (end !== close && isVariableText(value) ? UNKNOWN : value);
 
 function evaluatePostfix(tokens, match, start, ctx, depth) {
   let { value, end } = evaluatePrimary(tokens, match, start, ctx, depth);
@@ -536,15 +553,15 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
     let acc = str(token.quasis[0]);
     for (let i = 0; i < token.exprs.length; i += 1) {
       const inner = token.exprs[i];
-      const { value } = evaluate(inner, matchBrackets(inner), 0, ctx, depth + 1);
-      acc = concatValue(acc, value);
+      const hole = evaluate(inner, matchBrackets(inner), 0, ctx, depth + 1);
+      acc = concatValue(acc, wholeValue(hole, inner.length));
       acc = concatValue(acc, str(token.quasis[i + 1]));
     }
     return { value: acc, end: start + 1 };
   }
   if (token.t === 'p' && token.v === '(') {
     const inner = evaluate(tokens, match, start + 1, ctx, depth + 1);
-    return { value: inner.value, end: closeOf(match, start) };
+    return { value: wholeValue(inner, match[start]), end: closeOf(match, start) };
   }
   if (token.t !== 'id') return { value: UNKNOWN, end: start + 1 };
   const dot = (i) => tokens[i]?.t === 'p' && tokens[i].v === '.';
@@ -597,6 +614,8 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
 const ELEMENT_CALLBACKS = new Set(['map', 'forEach', 'filter', 'flatMap', 'some', 'every', 'find', 'findLast', 'findIndex', 'findLastIndex']);
 /** Array methods whose result holds only elements of the receiver. */
 const ELEMENT_PRESERVING = new Set(['filter', 'sort', 'slice', 'reverse', 'toSorted', 'toReversed']);
+/** Array methods that hand their callback the array itself, as the argument after the index. */
+const ARRAY_ITERATORS = new Set([...ELEMENT_CALLBACKS, 'reduce', 'reduceRight']);
 /** Array methods that can put a new element into the receiver. */
 const ELEMENT_ADDING = new Set(['push', 'unshift', 'splice', 'fill', 'copyWithin']);
 /** Callees that only read an array handed to them. */
@@ -716,6 +735,7 @@ function createScopes(ctx) {
   const binders = new Map(); // name -> Binder[]
   const declared = new Map(); // name -> source offsets of const/let/var/function/class declarations
   const loopVariables = new Set(); // the tokens a `for…of` head declares: binders, counted as such
+  const arrowArity = new Map(); // `const name = (a, b) => …`: name -> parameter count (Infinity with a rest parameter, or declared twice)
   const declare = (token) => { if (!loopVariables.has(token)) declared.set(token.v, [...(declared.get(token.v) ?? []), token.i]); };
   const bind = (token, extent, detail) => binders.set(token.v, [...(binders.get(token.v) ?? []), { name: token.v, ...extent, ...detail, domain: undefined }]);
 
@@ -739,6 +759,12 @@ function createScopes(ctx) {
       const plain = to === from + 1 && arr[from].t === 'id';
       for (const token of boundNames(arr, m, from, to)) bind(token, extent, plain ? { kind: 'param', role, index } : { kind: 'opaque' });
     });
+  };
+  /** Parameters of an arrow whose list opens at `open` (null: one bare name); a rest parameter can take any number. */
+  const parameterCount = (arr, m, open) => {
+    if (open === null) return 1;
+    const ranges = listRanges(arr, m, open);
+    return ranges.some(([from]) => isPunct(arr[from], '...')) ? Infinity : ranges.length;
   };
   const bodyExtent = (arr, m, from, bodyStart) => {
     if (isPunct(arr[bodyStart], '{') && m[bodyStart] !== undefined) return { from, to: arr[m[bodyStart]].i };
@@ -767,6 +793,7 @@ function createScopes(ctx) {
         const head = open ?? i - 1;
         const extent = bodyExtent(arr, m, arr[head].i, i + 1);
         const role = roleOf(arr, m, head);
+        if (role.kind === 'named') arrowArity.set(role.nameToken.v, arrowArity.has(role.nameToken.v) ? Infinity : parameterCount(arr, m, open));
         if (open !== null) bindParameters(arr, m, open, extent, role);
         else bind(arr[head], extent, { kind: 'param', role, index: 0 });
       } else if (isWord(token, 'for') && !isPunct(arr[i - 1], '.', '?.')) {
@@ -823,6 +850,8 @@ function createScopes(ctx) {
       else if (main[i + 1]?.t === 'id') fsNamespaces.add(main[i + 1].v);
     }
   }
+  // A file that mocks fs, or spies on its readdir, decides what a listing returns.
+  if (mocksModule(main, (spec) => FS_MODULES.has(spec), [...READDIR_CALLEES])) { listers.clear(); fsNamespaces.clear(); }
   const shadowed = (name) => binders.has(name) || (declared.get(name) ?? []).length > 1;
   /** True when the call whose callee ends at `callee` (a dotted path from `head`) is node's readdir. */
   const listsDirectory = (arr, head, callee) => {
@@ -830,6 +859,19 @@ function createScopes(ctx) {
     if (callee === head) return listers.has(arr[head].v);
     return fsNamespaces.has(arr[head].v) && READDIR_CALLEES.has(arr[callee].v) && (callee === head + 2 || (callee === head + 4 && arr[head + 2].v === 'promises'));
   };
+
+  /** True when `arr[at]` is written: assigned, updated, or a target of a destructuring assignment. */
+  const writesTo = (arr, m, at) => {
+    if (isPunct(arr[at - 1], '.', '?.')) return false; // a property of that name
+    if (assignsAt(arr, at + 1) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--')) return true;
+    // `({ p } = other)`, `[p] = other`: the pattern closes before the `=`.
+    for (let open = enclosingOpen(arr, m, at); open !== null && isPunct(arr[open], '{', '['); open = enclosingOpen(arr, m, open)) {
+      if (assignsAt(arr, m[open] + 1)) return true;
+    }
+    return false;
+  };
+  /** True when `name` is written at a source offset `inside` accepts, other than at the token `declaration`. */
+  const writtenIn = (name, inside, declaration = null) => arrays.some(({ arr, m }) => arr.some((use, at) => use.t === 'id' && use.v === name && use !== declaration && inside(use.i) && writesTo(arr, m, at)));
 
   const binderAt = (name, offset) => {
     const candidates = binders.get(name);
@@ -904,7 +946,21 @@ function createScopes(ctx) {
     const next = arr[at + 1];
     if (isPunct(prev, '.', '?.')) return true; // a property of that name on something else
     if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
-    if (isPunct(next, '.', '?.')) return arr[at + 2]?.t === 'id' && !ELEMENT_ADDING.has(arr[at + 2].v);
+    if (isPunct(next, '.', '?.')) {
+      const method = arr[at + 2];
+      if (method?.t !== 'id' || ELEMENT_ADDING.has(method.v)) return false;
+      const open = at + 3;
+      if (!ARRAY_ITERATORS.has(method.v) || !isPunct(arr[open], '(') || m[open] === undefined) return true;
+      // `names.forEach((name, i, all) => all.push(x))`: the callback is handed the array. Only an arrow that
+      // declares no such parameter is known not to write to it (an arrow has no `arguments` either).
+      let start = open + 1;
+      if (isWord(arr[start], 'async')) start += 1;
+      const inline = isPunct(arr[start], '(') && m[start] !== undefined && isPunct(arr[m[start] + 1], '=>') ? parameterCount(arr, m, start)
+        : arr[start]?.t === 'id' && isPunct(arr[start + 1], '=>') ? 1
+          : arr[start]?.t === 'id' && isPunct(arr[start + 1], ')') && !shadowed(arr[start].v) ? arrowArity.get(arr[start].v) ?? Infinity
+            : Infinity;
+      return inline <= (method.v.startsWith('reduce') ? 3 : 2);
+    }
     if (isPunct(next, '[') && m[at + 1] !== undefined) {
       // `NAMES[0] = x` and `NAMES[0] += x` write an element; `NAMES[0] === x` does not.
       return !assignsAt(arr, m[at + 1] + 1);
@@ -1009,17 +1065,15 @@ function createScopes(ctx) {
     const inside = (offset) => binder.from <= offset && offset < binder.to;
     const ambiguous = binders.get(binder.name).some((other) => other !== binder && (inside(other.from) || (other.from <= binder.from && binder.from < other.to)))
       || (declared.get(binder.name) ?? []).some(inside);
-    // `p = other()` or `p++` in the body: the variable no longer holds what it was given.
-    const reassigned = arrays.some(({ arr }) => arr.some((use, at) => use.t === 'id' && use.v === binder.name && inside(use.i) && !isPunct(arr[at - 1], '.', '?.')
-      && (assignsAt(arr, at + 1) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--'))));
-    if (ambiguous || reassigned) return null;
+    // `p = other()`, `p++` or `({ p } = other)` in the body: the variable no longer holds what it was given.
+    if (ambiguous || writtenIn(binder.name, inside)) return null;
     if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
     else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
     else if (binder.kind === 'param' && binder.role.kind === 'callback') binder.domain = callbackDomain(binder.role, binder.index);
     return binder.domain;
   };
 
-  return { binderAt, domainOf };
+  return { binderAt, domainOf, writtenIn, declaredTwice: (name) => (declared.get(name) ?? []).length > 1 };
 }
 
 /**
@@ -1046,8 +1100,15 @@ function bindingValue(name, ctx, depth = 0) {
   if (bound === undefined || ctx.resolving.has(name)) return UNKNOWN;
   if (ctx.bindingValues.has(name)) return ctx.bindingValues.get(name);
   ctx.resolving.add(name);
-  const { value } = evaluate(ctx.tokens, ctx.match, bound, ctx, depth + 1);
+  const initial = evaluate(ctx.tokens, ctx.match, bound, ctx, depth + 1).value;
   ctx.resolving.delete(name);
+  // `let name = 'a.json'` that is assigned again is not the literal it started as. (A path keeps the
+  // older reading: its first value is an input either way.)
+  ctx.shared.scopes ??= createScopes(ctx.shared.root);
+  // Nor is it when an inner scope declares the name again (`const { name } = row`): which one a use means is not modelled.
+  const rebound = (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name)
+    || (!isWord(ctx.tokens[bound - 3], 'const') && ctx.shared.scopes.writtenIn(name, () => true, ctx.tokens[bound - 2])));
+  const value = rebound ? UNKNOWN : initial;
   ctx.bindingValues.set(name, value);
   return value;
 }
@@ -1185,9 +1246,11 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
   }
   const match = matchBrackets(tokens);
   const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set(),
-    guarded: importsNamed(tokens, match, 'pathWithin', (spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)) === PATH_WITHIN_MODULE),
-    uuid: importsNamed(tokens, match, 'randomUUID', (spec) => spec === 'crypto' || spec === 'node:crypto'),
   };
+  const isGuardModule = (spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)) === PATH_WITHIN_MODULE;
+  const isCrypto = (spec) => spec === 'crypto' || spec === 'node:crypto';
+  ctx.guarded = importsNamed(tokens, match, 'pathWithin', isGuardModule) && !mocksModule(tokens, isGuardModule, ['pathWithin']);
+  ctx.uuid = importsNamed(tokens, match, 'randomUUID', isCrypto) && !mocksModule(tokens, isCrypto, ['randomUUID']);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
   ctx.shared = { root: ctx, scopes: undefined };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
