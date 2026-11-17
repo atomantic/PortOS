@@ -122,29 +122,29 @@ export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
  */
 export const TEST_MEMO_NEVER = Object.freeze({
   'scripts/migrations/shippedPromptHashes.guard.test.js': 'compares shipped-hashes.json against the reference prompts and the merge base',
-  'scripts/direct-invocation-drift.test.js': 'scans every tracked .js file',
-  'scripts/repo-scan-guards.test.js': 'scans every tracked test file',
+  'scripts/direct-invocation-drift.guard.test.js': 'scans every tracked .js file',
+  'scripts/repo-scan-guards.guard.test.js': 'scans every tracked test file',
   'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',
-  'server/lib/layering.test.js': 'scans every server/lib source for upward service imports',
-  'server/lib/generatedManifests.test.js': 'scans scripts/generate-*.js and their sibling tests',
+  'server/lib/layering.guard.test.js': 'scans every server/lib source for upward service imports',
+  'server/lib/generatedManifests.guard.test.js': 'scans scripts/generate-*.js and their sibling tests',
   'server/lib/moduleSummaries.test.js': 'reads every server/lib module header',
   'server/lib/apiAccessPolicy.test.js': 'walks server/lib and server/services source trees',
-  'server/lib/creativeLatitude.sources.test.js': 'walks server sources to collect source literals',
-  'server/lib/dispatchLabels.audit.test.js': 'walks repository instructions and source trees',
-  'server/lib/dynamicImportGlobGuard.test.js': 'walks server sources for dynamic imports',
+  'server/lib/creativeLatitude.sources.guard.test.js': 'walks server sources to collect source literals',
+  'server/lib/dispatchLabels.audit.guard.test.js': 'walks repository instructions and source trees',
+  'server/lib/dynamicImportGlob.guard.test.js': 'walks server sources for dynamic imports',
   'server/lib/promptSystemStages.test.js': 'enumerates shipped prompt templates in data.reference',
-  'server/logLevelConventions.test.js': 'scans the whole server tree',
+  'server/logLevelConventions.guard.test.js': 'scans the whole server tree',
   'server/services/agentImportCycles.test.js': 'walks the server/services import graph for static cycles',
   'server/services/meatspacePostImportCycles.test.js': 'walks the server/services import graph for static cycles',
   'server/services/serviceImportCycles.test.js': 'walks the server/services import graph for static cycles',
   'server/services/twinImportCycles.test.js': 'walks the server/services import graph for static cycles',
-  'server/mockContractConventions.test.js': 'scans every tracked test file',
-  'server/negativeProofSleepConventions.test.js': 'scans every tracked test file',
-  'server/childListenerOrderConventions.test.js': 'scans the whole server tree',
-  'server/routeTestCoverageConventions.test.js': 'scans server/index.js mounts against every test',
-  'server/routeValidationConventions.test.js': 'scans every route module',
-  'server/floatingAsyncConventions.test.js': 'scans the whole server tree',
-  'server/timerCallbackConventions.test.js': 'scans the whole server tree',
+  'server/mockContractConventions.guard.test.js': 'scans every tracked test file',
+  'server/negativeProofSleepConventions.guard.test.js': 'scans every tracked test file',
+  'server/childListenerOrderConventions.guard.test.js': 'scans the whole server tree',
+  'server/routeTestCoverageConventions.guard.test.js': 'scans server/index.js mounts against every test',
+  'server/routeValidationConventions.guard.test.js': 'scans every route module',
+  'server/floatingAsyncConventions.guard.test.js': 'scans the whole server tree',
+  'server/timerCallbackConventions.guard.test.js': 'scans the whole server tree',
   'client/src/lib/moduleSummaries.test.js': 'reads every client/src/lib module header',
   'client/src/hooks/moduleSummaries.test.js': 'reads every client/src/hooks module header',
   'client/src/utils/moduleSummaries.test.js': 'reads every client/src/utils module header',
@@ -1255,7 +1255,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // fails closed. A library member (`server/lib/testHelper.js` and its
       // source walkers) reads such a tree only when a test calls it, and every
       // test that does is a tree scanner the planner already keeps always-run
-      // (`scripts/repo-scan-guards.test.js` enforces the registration).
+      // (`scripts/repo-scan-guards.guard.test.js` enforces the registration).
       // A data-read tree the repository listing can enumerate is keyed instead
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);

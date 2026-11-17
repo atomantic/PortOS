@@ -325,7 +325,7 @@ A passing run without a reproduced slow phase does not resolve the timeout.
 - **No test whose only proof is that a request value reached the mock, or that the body equals what the mock returned.** One success-path test per endpoint may check the identifying argument (the `:id`, the owner) so a swapped parameter fails; the rest of a pass-through belongs to the service suite. One normaliser gets its input matrix once, on the helper or schema, not as N route cases.
 - **Pin the argument, not the argument list.** Assert the positions and keys the route owns (`expect(fn.mock.calls[0][0]).toBe(id)`, `expect.objectContaining({ limit: 50 })`). Exact whole-call equality is for cases where absence is the contract (unknown keys stripped, no mass assignment). An optional argument added later must not break an unrelated suite.
 - **Prefer the real service when it is cheap.** A file-backed service runs behind the route over `lazyTempDataRoot` + `makePathsProxy` (`server/routes/storyboards.test.js`), asserted through follow-up requests. Mock it when it reaches Postgres, a subprocess, a provider or the network.
-- **A router with no validation and no derivation needs no suite of its own.** List it in `UNTESTED_ALLOWLIST` (`server/routeTestCoverageConventions.test.js`), naming the service suite that covers it.
+- **A router with no validation and no derivation needs no suite of its own.** List it in `UNTESTED_ALLOWLIST` (`server/routeTestCoverageConventions.guard.test.js`), naming the service suite that covers it.
 
 For server watch mode, run this alternative from the repository root:
 

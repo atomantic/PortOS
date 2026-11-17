@@ -100,7 +100,7 @@ its caller's `with:` inputs, so they assert the steps GitHub runs. Its reads are
 anchored at `import.meta.url`, which makes `ci.yml` and `.github/actions/` test
 memo inputs for every test that uses it. actionlint validates each caller's
 inputs against the action's metadata while it lints `ci.yml`;
-`scripts/github-actions-pinned.test.js` applies the SHA-pin contract to the
+`scripts/github-actions-pinned.guard.test.js` applies the SHA-pin contract to the
 action files, and any change under `.github/actions/` makes the impact plan
 full, Windows included.
 
@@ -194,7 +194,7 @@ tracked tests with the detectors in `scripts/lib/guardScanners.js` and adds them
 to every plan (client scanners ride any `client/src` js/jsx change).
 `EXPLICIT_ALWAYS_RUN_TESTS` lists only guards the detector cannot see, and
 `TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
-reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
+reaches. `scripts/repo-scan-guards.guard.test.js` pins the derivation.
 
 Because they run on every PR, each always-run guard has a per-file time budget
 (`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
@@ -348,7 +348,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.guard.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
@@ -1144,7 +1144,7 @@ action clears it (the review ledger that recorded this was retired in #16425).
 The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
 (`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
 in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
-`scripts/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
+`scripts/dbImageDigestPin.guard.test.js` rejects a second copy. Do not move the Debian
 snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the

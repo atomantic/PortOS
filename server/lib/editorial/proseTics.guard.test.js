@@ -7,7 +7,7 @@ import { collectServerSources, readServerSource } from '../testHelper.js';
 // repetition.js (twice), slopScore.js and checkInfra/proseDensity.js — the last
 // exported as `countWords`, the name lib/textUtils.js gives the WHITESPACE
 // count, so a check could import the wrong denominator by name alone. Like the
-// escape guard in textUtils.test.js this keys on the idiom (the character
+// escape guard in textUtils.guard.test.js this keys on the idiom (the character
 // class), so a paste under any name fails the suite. Server-only: nothing in the
 // browser bundle runs the prose checks.
 const PROSE_WORD_CLASS = /\[A-Za-z\]\[A-Za-z'\]\*/;

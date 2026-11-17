@@ -24,7 +24,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // shaped like the patterns it's guarding against, so it must exclude
 // itself from the repo-wide scan — otherwise it would fail on its own
 // fixtures.
-const SELF_PATHSPEC = ':!scripts/tailnet-identity-leak.test.js';
+const SELF_PATHSPEC = ':!scripts/tailnet-identity-leak.guard.test.js';
 
 /**
  * Real Tailscale MagicDNS tailnet suffixes are auto-generated as the literal

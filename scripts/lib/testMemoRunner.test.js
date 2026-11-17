@@ -57,19 +57,19 @@ describe('planTestMemo and recordTestMemo', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-layering-memo-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-layering-memo-store-'));
     writeRepo(root, FILES);
-    const guard = 'server/lib/layering.test.js';
+    const guard = 'server/lib/layering.guard.test.js';
     const source = 'server/lib/unrelated.js';
     // Keep the real scanner and assertions; this standalone Vitest fixture
     // supplies globals instead of resolving its intentionally stubbed package.
-    const original = readFileSync(new URL('../../server/lib/layering.test.js', import.meta.url), 'utf8');
+    const original = readFileSync(new URL('../../server/lib/layering.guard.test.js', import.meta.url), 'utf8');
     writeRepo(root, { [guard]: original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, ''), [source]: 'export const unrelated = true;\n' });
     const config = join(root, 'vitest.config.mjs');
-    writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.test.js"], maxWorkers: 1 } };\n');
+    writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.guard.test.js"], maxWorkers: 1 } };\n');
     const planned = () => {
       const impact = buildCiTestPlan([source], { trackedFiles: [guard, source] });
       expect(impact.full).toBe(false);
       const memo = plan({ mode: impact.server.mode, repoFiles: impact.server.files, repoSources: impact.server.sources,
-        listTests: () => ['lib/layering.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
+        listTests: () => ['lib/layering.guard.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
       expect(memo.selected).toContain(guard);
       expect(memo.skipped).toEqual([]);
       expect(memo.run).toContain(guard);
@@ -266,7 +266,7 @@ describe('planTestMemo and recordTestMemo', () => {
   it('names every passed file it could not record, with the reason each key was refused', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-store-'));
-    const guard = 'server/lib/layering.test.js'; // always-run guard: never analyzed in a files plan
+    const guard = 'server/lib/layering.guard.test.js'; // always-run guard: never analyzed in a files plan
     const dynamic = 'server/lib/dynamic.test.js';
     const marked = 'server/lib/markedMember.test.js';
     writeRepo(root, {
@@ -425,7 +425,7 @@ describe('planTestMemo and recordTestMemo', () => {
   it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-never-store-'));
-    const guard = 'server/lib/layering.test.js'; // always-run guard
+    const guard = 'server/lib/layering.guard.test.js'; // always-run guard
     const listed = 'server/lib/moduleSummaries.test.js'; // TEST_MEMO_NEVER entry
     const marked = 'server/lib/marked.test.js';
     const ordinary = 'server/lib/c.test.js';

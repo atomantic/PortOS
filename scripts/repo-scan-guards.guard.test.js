@@ -4,7 +4,7 @@
  * A handful of tests assert over the *tracked tree* rather than over anything
  * they import: they shell out to `git grep` / `git ls-files`, read the matched
  * files as text, and fail when some unrelated file anywhere in the repo breaks
- * a convention. `scripts/agent-instructions-files.test.js` is the archetype.
+ * a convention. `scripts/agent-instructions-files.guard.test.js` is the archetype.
  *
  * A second shape has the same problem from the opposite direction: a test
  * reads ONE specific file from the *other* runner's tree with `readFileSync`
@@ -52,8 +52,8 @@ describe('tree-scanning guards are derived into CI selection (#5055, #16085)', (
 
   it('finds the known scanners', () => {
     expect(getTreeGuards()).toEqual([...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
-    expect(getTreeGuards()).toContain('scripts/agent-instructions-files.test.js');
-    expect(getTreeGuards()).toContain('scripts/tailnet-identity-leak.test.js');
+    expect(getTreeGuards()).toContain('scripts/agent-instructions-files.guard.test.js');
+    expect(getTreeGuards()).toContain('scripts/tailnet-identity-leak.guard.test.js');
     expect(getTreeGuards()).toContain('server/lib/textUtils.guard.test.js');
     expect(getTreeGuards().length).toBeGreaterThanOrEqual(8);
   });
@@ -65,7 +65,7 @@ describe('tree-scanning guards are derived into CI selection (#5055, #16085)', (
 
   it('selects a client scanner when a client source file changes', () => {
     const plan = buildCiTestPlan(['client/src/components/Foo.jsx'], { trackedFiles: [...trackedTests, 'client/src/components/Foo.jsx'] });
-    expect(plan.client.files).toContain('client/src/numberFormattingConventions.test.js');
+    expect(plan.client.files).toContain('client/src/numberFormattingConventions.guard.test.js');
   });
 
   it('keeps the explicit list to entries the detector cannot see, all still tracked', () => {

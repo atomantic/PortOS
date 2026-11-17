@@ -341,12 +341,12 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      Impact selection is import-graph-driven by construction, so it has no
 //      edge that can reach them: the violating file is some *other* file, in
 //      some other directory, that the guard only ever sees as a path string.
-//      They sat structurally unselectable — `agent-instructions-files.test.js`
+//      They sat structurally unselectable — `agent-instructions-files.guard.test.js`
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
 //      The planner derives this half from the tree (getTreeGuards, detected by
 //      scripts/lib/guardScanners.js), so a new scanner needs no registration;
-//      repo-scan-guards.test.js pins the detector and the derived set.
+//      repo-scan-guards.guard.test.js pins the detector and the derived set.
 //
 // Everything here is deliberately cheap: it reads only prompt data or `git`
 // output, which is affordable on every PR including documentation-only ones,
@@ -364,8 +364,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/doc-code-pointers.test.js',
-  // A newly added shared selector has no import edge to its documentation inventory.
-  'server/lib/executionOptions.consumers.test.js',
   // Route policy scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
@@ -375,8 +373,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
   // and fails closed when that commit cannot be read; pregate forwards the plan's base.
   'server/lib/importScoping.test.js',
-  // Scans every lib source for upward service imports without importing it.
-  'server/lib/layering.test.js',
   // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
   'server/services/agentImportCycles.test.js',
   'server/services/meatspacePostImportCycles.test.js',
@@ -634,7 +630,7 @@ export const MACOS_NATIVE_TESTS = [
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 // The `node-minimum` job installs every workspace and runs the runtime gate on
 // the oldest supported Node; only these files can change its answer.
-export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.test\.js|\.github\/workflows\/ci\.yml)$/;
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -842,9 +838,9 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    add('client/src/dashboardWidgetContainerConventions.test.js');
+    add('client/src/dashboardWidgetContainerConventions.guard.test.js');
     // Tree-scanning client guards are derived (scripts/lib/guardScanners.js);
-    // timeouts.test.js scans the TEST files, which this pattern also matches.
+    // timeouts.guard.test.js scans the TEST files, which this pattern also matches.
     for (const path of getTreeGuards()) if (path.startsWith('client/src/')) add(path);
   }
 

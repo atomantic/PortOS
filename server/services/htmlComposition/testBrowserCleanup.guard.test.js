@@ -20,7 +20,7 @@ describe('fixture-owned CDP artifacts root', () => {
     const listed = spawnSync('git', ['grep', '-l', '-F', 'chromium.connectOverCDP(', '--', '*.test.js'], { cwd: server, encoding: 'utf8' });
     expect(listed.status).toBe(0);
     // This file's probe strings above are not fixtures.
-    const files = listed.stdout.split('\n').filter(file => file && file !== 'services/htmlComposition/testBrowserCleanup.test.js');
+    const files = listed.stdout.split('\n').filter(file => file && file !== 'services/htmlComposition/testBrowserCleanup.guard.test.js');
     expect(files.length).toBeGreaterThan(0);
     expect(files.filter(file => unowned(readFileSync(join(server, file), 'utf8')))).toEqual([]);
   });

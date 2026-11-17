@@ -21,7 +21,7 @@
  * five modules and three different CLI runners, and a NEW call site is exactly
  * when the guard needs to fire. So this walks the whole server tree rather than
  * listing known files — the same discover-don't-enumerate shape as
- * `spawnCwd.test.js` and `cliChildEnv.test.js`.
+ * `spawnCwd.guard.test.js` and `cliChildEnv.guard.test.js`.
  */
 
 import { describe, it, expect } from 'vitest';

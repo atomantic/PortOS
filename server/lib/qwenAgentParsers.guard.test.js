@@ -12,7 +12,8 @@ describe('qwen parser spellings live only in the table', () => {
     // guided install (#4767) must import this table instead of retyping the
     // string. Scoped to git-tracked JS so scratch files never flake it.
     const tracked = trackedFiles(REPO_ROOT, ['*.js', '*.jsx', '*.cjs', '*.mjs']);
-    const allowed = new Set(['server/lib/qwenAgentParsers.js', 'server/lib/qwenAgentParsers.test.js']);
+    // The table, its behavioural suite, and this file, whose pattern below spells both.
+    const allowed = new Set(['server/lib/qwenAgentParsers.js', 'server/lib/qwenAgentParsers.test.js', 'server/lib/qwenAgentParsers.guard.test.js']);
     const offenders = tracked.filter((rel) => {
       if (allowed.has(rel)) return false;
       return /qwen3_xml|qwen3_coder/.test(readFileSync(join(REPO_ROOT, rel), 'utf8'));
