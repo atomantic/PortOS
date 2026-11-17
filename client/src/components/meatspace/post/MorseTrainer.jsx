@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useId } from 'react';
-import { ArrowLeft, Radio, Headphones, Hand, EyeOff, CheckCircle, XCircle, Play, RefreshCw, Volume2, GitBranch, List as ListIcon, Ruler, Eraser } from 'lucide-react';
+import { ArrowLeft, Radio, Headphones, CheckCircle, XCircle, Play, RefreshCw, Volume2, Eraser } from 'lucide-react';
 import useDrawerTab from '../../../hooks/useDrawerTab';
 import useAudioSessionClaim from '../../../hooks/useAudioSessionClaim.js';
 import useKeyCapture from '../../../hooks/useKeyCapture';
 import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
 import { DRILL_DESCRIPTIONS } from './constants';
+import { MORSE_MODES as MODES, MORSE_REFERENCE_VIEWS as REFERENCE_VIEWS } from './trainerModes';
 import MorseProgressPanel from './MorseProgressPanel';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
 import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage';
@@ -106,35 +107,6 @@ const DEFAULT_PREFS = { wpm: 18, effectiveWpm: 18, hz: 700, kochLevel: DEFAULT_K
 // Tone envelope ramp — fast enough to avoid clicks, slow enough to feel like a key
 const RAMP_SEC = 0.005;
 const TONE_GAIN = 0.25;
-
-// Mode ids map to the `morse-<id>` drill types, so the blurb lives once in
-// DRILL_DESCRIPTIONS (constants.js) and is read below — no second copy here.
-export const MODES = [
-  {
-    id: 'copy',
-    label: 'Copy',
-    icon: Headphones,
-    color: 'text-cyan-400',
-    bgColor: 'bg-cyan-500/20',
-    example: 'Koch progression: K, M → add letters as you hit 90%',
-  },
-  {
-    id: 'head-copy',
-    label: 'Head Copy',
-    icon: EyeOff,
-    color: 'text-purple-400',
-    bgColor: 'bg-purple-500/20',
-    example: 'Same Koch pool, pure recall — nothing to look at',
-  },
-  {
-    id: 'send',
-    label: 'Send',
-    icon: Hand,
-    color: 'text-amber-400',
-    bgColor: 'bg-amber-500/20',
-    example: 'Tap short for ·, hold long for —',
-  },
-];
 
 // Training log module name — passed as `module` on every submitTrainingEntry
 // call from this trainer so POST's training stats can group Morse practice
@@ -434,10 +406,6 @@ function useKeyingDecoder({ unitMs, hz, ensureCtx, claimSession, releaseSession,
   return { pattern, decoded, pressing, beginPress, endPress, clear, getLetterLog };
 }
 
-// Valid `:mode` subroute segments. Anything else (stale/deleted deep link)
-// falls through to the mode grid rather than a blank panel.
-export const MORSE_MODE_IDS = MODES.map((m) => m.id);
-
 // `mode` is the routed `:mode` segment (`/post/morse/:mode`), validated by the
 // caller (PostTab) to one of MORSE_MODE_IDS or null — the URL is the single
 // source of truth for which drill is open, so there is no local mode state.
@@ -699,14 +667,6 @@ function SliderRow({ label, value, min, max, step = 1, onChange, suffix = '', hi
     </div>
   );
 }
-
-// Exported for the same reason as MODES above: the Practice Library lists the
-// `?ref=` reference charts and must not keep its own copy of this list.
-export const REFERENCE_VIEWS = [
-  { id: 'tree', label: 'Tree', icon: GitBranch },
-  { id: 'length', label: 'Length', icon: Ruler },
-  { id: 'list', label: 'List', icon: ListIcon },
-];
 
 const REFERENCE_VIEW_IDS = REFERENCE_VIEWS.map((v) => v.id);
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { Suspense, useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { Loader } from 'lucide-react';
 import { getPostConfig, getPostRecommendations, getPostSessions, getPostStats } from '../../../services/api';
@@ -7,8 +7,6 @@ import toast from '../../ui/Toast';
 import ListLoadError from '../../ui/ListLoadError';
 import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
-import PostLlmDrillRunner from '../post/PostLlmDrillRunner';
-import PostCognitiveDrillRunner from '../post/PostCognitiveDrillRunner';
 import PostSessionResults from '../post/PostSessionResults';
 import PostSessionDetail from '../post/PostSessionDetail';
 import PostHistory from '../post/PostHistory';
@@ -17,13 +15,24 @@ import PostDrillConfig from '../post/PostDrillConfig';
 import PracticePlan from '../post/PracticePlan';
 import PracticeLibrary from '../post/PracticeLibrary';
 import MemoryBuilder from '../post/MemoryBuilder';
-import MemoryPractice, { MEMORY_PRACTICE_MODE_IDS } from '../post/MemoryPractice';
-import ElementsSong, { ELEMENTS_MODE_IDS } from '../post/ElementsSong';
 import DrillTransition from '../post/DrillTransition';
 import WordplayTrainer from '../post/WordplayTrainer';
-import MorseTrainer, { MORSE_MODE_IDS } from '../post/MorseTrainer';
-import RhetoricTrainer from '../post/RhetoricTrainer';
 import { LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES } from '../post/constants';
+import { ELEMENTS_MODE_IDS, MEMORY_PRACTICE_MODE_IDS, MORSE_MODE_IDS } from '../post/trainerModes';
+import BrailleSpinner from '../../BrailleSpinner';
+import { lazyWithReload } from '../../../utils/lazyWithReload';
+
+// The six largest trainers and runners load the first time their drill opens,
+// so the launcher, config and progress views never download them. Each starts
+// its clock in its own mount effect, so the time a chunk takes to arrive is
+// never counted against a timed drill: the Suspense fallback stays on screen
+// until the component mounts.
+const PostLlmDrillRunner = lazyWithReload(() => import('../post/PostLlmDrillRunner'));
+const PostCognitiveDrillRunner = lazyWithReload(() => import('../post/PostCognitiveDrillRunner'));
+const MemoryPractice = lazyWithReload(() => import('../post/MemoryPractice'));
+const ElementsSong = lazyWithReload(() => import('../post/ElementsSong'));
+const MorseTrainer = lazyWithReload(() => import('../post/MorseTrainer'));
+const RhetoricTrainer = lazyWithReload(() => import('../post/RhetoricTrainer'));
 
 // The live in-progress run lives at /post/session/run; every OTHER `:subtab`
 // under the `session` tab is a saved session id served at /post/session/:id.
@@ -167,241 +176,249 @@ export default function PostTab({ tab = 'launcher', subtab, mode }) {
   const isLlmDrill = activeType ? LLM_DRILL_TYPES.includes(activeType) : false;
   const isCognitiveDrill = activeType ? COGNITIVE_DRILL_TYPES.includes(activeType) : false;
 
-  // Active run / saved-session results live at their own URLs: /post/session/run
-  // (the live run) and /post/session/:id (any saved session — shareable).
-  // Handled before the tab `switch` so `session` isn't a nav-manifest tab.
-  if (tab === 'session') {
-    if (!isRunSubroute(subtab)) {
-      // Any non-`run` subtab is a saved session id.
-      return <PostSessionDetail id={subtab} onBack={() => navigate('/post/history')} />;
-    }
-    // Completed but not yet saved → live results screen with the Save button.
-    if (session.state === 'complete' || session.state === 'saving') {
-      return (
-        <PostSessionResults
-          session={session}
-          conditions={{}}
-          onSaved={handleSaved}
-          onBack={handleBack}
-        />
-      );
-    }
-
-    if (session.state === 'between-drills') {
-      const nextIndex = session.currentDrillIndex + 1;
-      const nextDrill = session.drills[nextIndex];
-      if (nextDrill) {
+  function renderView() {
+    // Active run / saved-session results live at their own URLs: /post/session/run
+    // (the live run) and /post/session/:id (any saved session — shareable).
+    // Handled before the tab `switch` so `session` isn't a nav-manifest tab.
+    if (tab === 'session') {
+      if (!isRunSubroute(subtab)) {
+        // Any non-`run` subtab is a saved session id.
+        return <PostSessionDetail id={subtab} onBack={() => navigate('/post/history')} />;
+      }
+      // Completed but not yet saved → live results screen with the Save button.
+      if (session.state === 'complete' || session.state === 'saving') {
         return (
-          <DrillTransition
-            nextDrillType={nextDrill.type}
-            drillIndex={nextIndex}
-            drillCount={session.drillCount}
-            completedResults={session.drillResults}
-            onContinue={session.nextDrill}
+          <PostSessionResults
+            session={session}
+            conditions={{}}
+            onSaved={handleSaved}
+            onBack={handleBack}
           />
         );
       }
-    }
 
-    if (session.state === 'loading' && (isLlmDrill || isCognitiveDrill)) {
+      if (session.state === 'between-drills') {
+        const nextIndex = session.currentDrillIndex + 1;
+        const nextDrill = session.drills[nextIndex];
+        if (nextDrill) {
+          return (
+            <DrillTransition
+              nextDrillType={nextDrill.type}
+              drillIndex={nextIndex}
+              drillCount={session.drillCount}
+              completedResults={session.drillResults}
+              onContinue={session.nextDrill}
+            />
+          );
+        }
+      }
+
+      if (session.state === 'loading' && (isLlmDrill || isCognitiveDrill)) {
+        return (
+          <div className="flex flex-col items-center justify-center h-64 gap-3">
+            <Loader size={32} className="text-port-accent-2 animate-spin" />
+            <div className="text-gray-400">Processing {currentDrillConfig?.type ? currentDrillConfig.type.replace(/-/g, ' ') : 'drill'}...</div>
+          </div>
+        );
+      }
+      if (session.currentDrill && isLlmDrill) {
+        return (
+          <PostLlmDrillRunner
+            drill={session.currentDrill}
+            timeLimitSec={session.currentDrill.timeLimitSec}
+            drillIndex={session.currentDrillIndex}
+            drillCount={session.drillCount}
+            onComplete={session.completeLlmDrill}
+            isTraining={session.isTraining}
+            providerId={currentDrillConfig?.providerId}
+            model={currentDrillConfig?.model}
+          />
+        );
+      }
+      if (session.currentDrill && isCognitiveDrill) {
+        return (
+          <PostCognitiveDrillRunner
+            drill={session.currentDrill}
+            drillIndex={session.currentDrillIndex}
+            drillCount={session.drillCount}
+            onComplete={session.completeCognitiveDrill}
+            isTraining={session.isTraining}
+          />
+        );
+      }
+      if (session.currentDrill) return <PostDrillRunner session={session} />;
+
+      // idle/saved (or a stale loading with no drill): the redirect effect above
+      // sends us to the launcher; render a spinner in the meantime.
       return (
         <div className="flex flex-col items-center justify-center h-64 gap-3">
-          <Loader size={32} className="text-port-accent-2 animate-spin" />
-          <div className="text-gray-400">Processing {currentDrillConfig?.type ? currentDrillConfig.type.replace(/-/g, ' ') : 'drill'}...</div>
+          <Loader size={32} className="text-port-accent animate-spin" />
         </div>
       );
     }
-    if (session.currentDrill && isLlmDrill) {
-      return (
-        <PostLlmDrillRunner
-          drill={session.currentDrill}
-          timeLimitSec={session.currentDrill.timeLimitSec}
-          drillIndex={session.currentDrillIndex}
-          drillCount={session.drillCount}
-          onComplete={session.completeLlmDrill}
-          isTraining={session.isTraining}
-          providerId={currentDrillConfig?.providerId}
-          model={currentDrillConfig?.model}
-        />
-      );
-    }
-    if (session.currentDrill && isCognitiveDrill) {
-      return (
-        <PostCognitiveDrillRunner
-          drill={session.currentDrill}
-          drillIndex={session.currentDrillIndex}
-          drillCount={session.drillCount}
-          onComplete={session.completeCognitiveDrill}
-          isTraining={session.isTraining}
-        />
-      );
-    }
-    if (session.currentDrill) return <PostDrillRunner session={session} />;
 
-    // idle/saved (or a stale loading with no drill): the redirect effect above
-    // sends us to the launcher; render a spinner in the meantime.
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <Loader size={32} className="text-port-accent animate-spin" />
-      </div>
-    );
-  }
-
-  switch (tab) {
-    case 'history':
-      return <PostHistory onBack={() => navigate('/post/launcher')} />;
-    case 'progress':
-      return <PostProgress subtab={subtab} onBack={() => navigate('/post/launcher')} />;
-    case 'config':
-      // Wait for the async config load before mounting the editor: its state is
-      // seeded once from the `config` prop, so mounting on a null/loading config
-      // would seed drill defaults and a subsequent Save would overwrite the
-      // user's saved settings. Mirrors PostSessionLauncher's null guard.
-      return config ? (
-        <PostDrillConfig
-          config={config}
-          onSaved={handleConfigSaved}
-          onBack={() => navigate('/post/launcher')}
-        />
-      ) : (
-        <div className="text-gray-500">Loading configuration...</div>
-      );
-    case 'explore':
-      // The browsable catalog of every test type and study surface. Renders
-      // without waiting on `config` — an unloaded config just means no "In your
-      // plan" badges, and the catalog itself is static.
-      return <PracticeLibrary config={config} onBack={() => navigate('/post/launcher')} />;
-    case 'plan':
-      // Practice Plan owns "what am I studying" (issue #3252). Same null guard
-      // as `config`: the editor seeds its draft state once from the loaded
-      // config, so mounting before it resolves would save defaults over the
-      // user's settings.
-      return config ? (
-        <PracticePlan
-          config={config}
-          onSaved={handleConfigSaved}
-          onBack={() => navigate('/post/launcher')}
-        />
-      ) : (
-        <div className="text-gray-500">Loading practice plan...</div>
-      );
-    case 'wordplay':
-      // Selected game mode is the `:mode` sub-route (URL is source of truth),
-      // mirroring the Morse trainer's `:mode` routing.
-      return (
-        <WordplayTrainer
-          key={`run:${runNonce}`}
-          config={config}
-          onConfigUpdate={setConfig}
-          mode={subtab}
-          onSelectMode={(id) => navigate(`/post/wordplay/${id}`)}
-          onExitMode={() => navigate('/post/wordplay')}
-          onBack={() => navigate('/post/launcher')}
-          onContinue={continueDailyRoutine}
-        />
-      );
-    case 'rhetoric':
-      return (
-        <RhetoricTrainer
-          config={config}
-          onConfigUpdate={setConfig}
-          mode={subtab}
-          onSelectMode={(id) => navigate(`/post/rhetoric/${id}`)}
-          onExitMode={() => navigate('/post/rhetoric')}
-          onBack={() => navigate('/post/launcher')}
-          onContinue={continueDailyRoutine}
-        />
-      );
-    case 'morse': {
-      // The `:mode` sub-route (copy/send) is the source of truth; an unknown
-      // segment degrades to the mode grid instead of a blank panel.
-      const morseMode = MORSE_MODE_IDS.includes(subtab) ? subtab : null;
-      // Preserve the current `?ref=` search param across mode transitions so the
-      // selected reference tab (tree/length/list) survives entering/exiting a
-      // mode — both mode and reference view are deep-linkable, so switching one
-      // must not silently reset the other back to its default.
-      return (
-        <MorseTrainer
-          key={`run:${runNonce}`}
-          mode={morseMode}
-          onSelectMode={(id) => navigate(`/post/morse/${id}${location.search}`)}
-          onExitMode={() => navigate(`/post/morse${location.search}`)}
-          onBack={() => navigate('/post/launcher')}
-          onContinue={continueDailyRoutine}
-        />
-      );
-    }
-    case 'memory': {
-      // `/post/memory` → the item list. Any other `:subtab` selects an item:
-      // `elements` is the reserved Elements Song surface, everything else is a
-      // memory item id. The optional third segment is the practice mode, so a
-      // drill is directly linkable (issue #3249). An unrecognized mode degrades
-      // to the mode picker, mirroring MorseTrainer's MORSE_MODE_IDS guard.
-      if (!subtab) {
-        return (
-          <MemoryBuilder
-            onBack={() => navigate('/post/launcher')}
-            onSelectItem={(item) => {
-              if (item.id === 'elements-song') { setElementsItem(item); navigate('/post/memory/elements'); }
-              else { setMemoryItem(item); navigate(`/post/memory/${item.id}`); }
-            }}
-            onReviewItem={(item) => {
-              if (item.id === 'elements-song') navigate('/post/memory/elements/element-flash');
-              else navigate(`/post/memory/${item.id}/spaced`);
-            }}
-          />
-        );
-      }
-      if (MEMORY_SUBROUTE_IDS.includes(subtab)) {
-        const elementsMode = ELEMENTS_MODE_IDS.includes(mode) ? mode : null;
-        return (
-          <ElementsSong
-            key={`run:${runNonce}`}
-            item={elementsItem}
-            mode={elementsMode}
-            onSelectMode={(id) => navigate(`/post/memory/elements/${id}`)}
-            onExitMode={() => navigate('/post/memory/elements')}
-            onBack={() => { setElementsItem(null); navigate('/post/memory'); }}
-            onContinue={continueDailyRoutine}
-            loadItemOnMount={!elementsItem}
-          />
-        );
-      }
-      const practiceMode = MEMORY_PRACTICE_MODE_IDS.includes(mode) ? mode : null;
-      // Only pass the cached item when it actually matches the URL — a stale
-      // one from a previous selection would render the wrong item's practice.
-      // Keying on the mode remounts the runner per entry, so each run starts
-      // from clean state without a manual reset.
-      return (
-        <MemoryPractice
-          key={`${subtab}:${practiceMode || 'picker'}:${runNonce}`}
-          itemId={subtab}
-          item={memoryItem?.id === subtab ? memoryItem : null}
-          mode={practiceMode}
-          onSelectMode={(id) => navigate(`/post/memory/${subtab}/${id}`)}
-          onExitMode={() => navigate(`/post/memory/${subtab}`)}
-          onBack={() => { setMemoryItem(null); navigate('/post/memory'); }}
-          onContinue={continueDailyRoutine}
-        />
-      );
-    }
-    default:
-      return (
-        <>
-          {sessionsError && (
-            <ListLoadError className="mb-4" what="recent sessions" error={sessionsError} onRetry={loadData} />
-          )}
-          <PostSessionLauncher
+    switch (tab) {
+      case 'history':
+        return <PostHistory onBack={() => navigate('/post/launcher')} />;
+      case 'progress':
+        return <PostProgress subtab={subtab} onBack={() => navigate('/post/launcher')} />;
+      case 'config':
+        // Wait for the async config load before mounting the editor: its state is
+        // seeded once from the `config` prop, so mounting on a null/loading config
+        // would seed drill defaults and a subsequent Save would overwrite the
+        // user's saved settings. Mirrors PostSessionLauncher's null guard.
+        return config ? (
+          <PostDrillConfig
             config={config}
-            recentSessions={recentSessions}
-            stats={stats}
-            statsWeek={statsWeek}
-            onStart={handleStart}
-            autoStartRecommendationId={new URLSearchParams(location.search).get('continue')}
-            onAutoStartConsumed={() => navigate('/post/launcher', { replace: true })}
-            onNavigate={navigate}
+            onSaved={handleConfigSaved}
+            onBack={() => navigate('/post/launcher')}
           />
-        </>
-      );
+        ) : (
+          <div className="text-gray-500">Loading configuration...</div>
+        );
+      case 'explore':
+        // The browsable catalog of every test type and study surface. Renders
+        // without waiting on `config` — an unloaded config just means no "In your
+        // plan" badges, and the catalog itself is static.
+        return <PracticeLibrary config={config} onBack={() => navigate('/post/launcher')} />;
+      case 'plan':
+        // Practice Plan owns "what am I studying" (issue #3252). Same null guard
+        // as `config`: the editor seeds its draft state once from the loaded
+        // config, so mounting before it resolves would save defaults over the
+        // user's settings.
+        return config ? (
+          <PracticePlan
+            config={config}
+            onSaved={handleConfigSaved}
+            onBack={() => navigate('/post/launcher')}
+          />
+        ) : (
+          <div className="text-gray-500">Loading practice plan...</div>
+        );
+      case 'wordplay':
+        // Selected game mode is the `:mode` sub-route (URL is source of truth),
+        // mirroring the Morse trainer's `:mode` routing.
+        return (
+          <WordplayTrainer
+            key={`run:${runNonce}`}
+            config={config}
+            onConfigUpdate={setConfig}
+            mode={subtab}
+            onSelectMode={(id) => navigate(`/post/wordplay/${id}`)}
+            onExitMode={() => navigate('/post/wordplay')}
+            onBack={() => navigate('/post/launcher')}
+            onContinue={continueDailyRoutine}
+          />
+        );
+      case 'rhetoric':
+        return (
+          <RhetoricTrainer
+            config={config}
+            onConfigUpdate={setConfig}
+            mode={subtab}
+            onSelectMode={(id) => navigate(`/post/rhetoric/${id}`)}
+            onExitMode={() => navigate('/post/rhetoric')}
+            onBack={() => navigate('/post/launcher')}
+            onContinue={continueDailyRoutine}
+          />
+        );
+      case 'morse': {
+        // The `:mode` sub-route (copy/send) is the source of truth; an unknown
+        // segment degrades to the mode grid instead of a blank panel.
+        const morseMode = MORSE_MODE_IDS.includes(subtab) ? subtab : null;
+        // Preserve the current `?ref=` search param across mode transitions so the
+        // selected reference tab (tree/length/list) survives entering/exiting a
+        // mode — both mode and reference view are deep-linkable, so switching one
+        // must not silently reset the other back to its default.
+        return (
+          <MorseTrainer
+            key={`run:${runNonce}`}
+            mode={morseMode}
+            onSelectMode={(id) => navigate(`/post/morse/${id}${location.search}`)}
+            onExitMode={() => navigate(`/post/morse${location.search}`)}
+            onBack={() => navigate('/post/launcher')}
+            onContinue={continueDailyRoutine}
+          />
+        );
+      }
+      case 'memory': {
+        // `/post/memory` → the item list. Any other `:subtab` selects an item:
+        // `elements` is the reserved Elements Song surface, everything else is a
+        // memory item id. The optional third segment is the practice mode, so a
+        // drill is directly linkable (issue #3249). An unrecognized mode degrades
+        // to the mode picker, mirroring the MORSE_MODE_IDS guard.
+        if (!subtab) {
+          return (
+            <MemoryBuilder
+              onBack={() => navigate('/post/launcher')}
+              onSelectItem={(item) => {
+                if (item.id === 'elements-song') { setElementsItem(item); navigate('/post/memory/elements'); }
+                else { setMemoryItem(item); navigate(`/post/memory/${item.id}`); }
+              }}
+              onReviewItem={(item) => {
+                if (item.id === 'elements-song') navigate('/post/memory/elements/element-flash');
+                else navigate(`/post/memory/${item.id}/spaced`);
+              }}
+            />
+          );
+        }
+        if (MEMORY_SUBROUTE_IDS.includes(subtab)) {
+          const elementsMode = ELEMENTS_MODE_IDS.includes(mode) ? mode : null;
+          return (
+            <ElementsSong
+              key={`run:${runNonce}`}
+              item={elementsItem}
+              mode={elementsMode}
+              onSelectMode={(id) => navigate(`/post/memory/elements/${id}`)}
+              onExitMode={() => navigate('/post/memory/elements')}
+              onBack={() => { setElementsItem(null); navigate('/post/memory'); }}
+              onContinue={continueDailyRoutine}
+              loadItemOnMount={!elementsItem}
+            />
+          );
+        }
+        const practiceMode = MEMORY_PRACTICE_MODE_IDS.includes(mode) ? mode : null;
+        // Only pass the cached item when it actually matches the URL — a stale
+        // one from a previous selection would render the wrong item's practice.
+        // Keying on the mode remounts the runner per entry, so each run starts
+        // from clean state without a manual reset.
+        return (
+          <MemoryPractice
+            key={`${subtab}:${practiceMode || 'picker'}:${runNonce}`}
+            itemId={subtab}
+            item={memoryItem?.id === subtab ? memoryItem : null}
+            mode={practiceMode}
+            onSelectMode={(id) => navigate(`/post/memory/${subtab}/${id}`)}
+            onExitMode={() => navigate(`/post/memory/${subtab}`)}
+            onBack={() => { setMemoryItem(null); navigate('/post/memory'); }}
+            onContinue={continueDailyRoutine}
+          />
+        );
+      }
+      default:
+        return (
+          <>
+            {sessionsError && (
+              <ListLoadError className="mb-4" what="recent sessions" error={sessionsError} onRetry={loadData} />
+            )}
+            <PostSessionLauncher
+              config={config}
+              recentSessions={recentSessions}
+              stats={stats}
+              statsWeek={statsWeek}
+              onStart={handleStart}
+              autoStartRecommendationId={new URLSearchParams(location.search).get('continue')}
+              onAutoStartConsumed={() => navigate('/post/launcher', { replace: true })}
+              onNavigate={navigate}
+            />
+          </>
+        );
+    }
   }
+
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center h-64"><BrailleSpinner text="Loading drill" /></div>}>
+      {renderView()}
+    </Suspense>
+  );
 }

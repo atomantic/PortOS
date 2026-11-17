@@ -23,7 +23,8 @@ vi.mock('../../../services/api', () => ({
   updateMorseLevel: vi.fn(() => Promise.resolve({ kochLevel: 2, kochLevelSet: true, adopted: false, settings: null })),
 }));
 
-import MorseTrainer, { MODES, MORSE_MODE_IDS, MORSE_TABLE, KeyPad, isNodeOnPath, resultsToItems } from './MorseTrainer';
+import MorseTrainer, { MORSE_TABLE, KeyPad, isNodeOnPath, resultsToItems } from './MorseTrainer';
+import { MORSE_MODES as MODES, MORSE_MODE_IDS } from './trainerModes';
 import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
 
 // Minimal Web Audio mock so CopyDrill's round flow (which calls ensureCtx →
