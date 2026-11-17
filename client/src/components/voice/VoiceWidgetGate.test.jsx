@@ -451,6 +451,36 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
     warn.mockRestore();
   });
 
+  it('answers a press made during the stale-build check with that attempt, not a second import', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let finishProbe;
+    mocks.reloadOnceForStaleChunk.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
+    const chunk = deferWidgetChunk();
+    renderGate();
+    const engage = await screen.findByRole('button', { name: ENGAGE });
+    await chunk.fail(new Error('Failed to fetch dynamically imported module'));
+    expect(mocks.reloadOnceForStaleChunk).toHaveBeenCalledOnce();
+
+    // Pressed while the check is still out: no second import may start, or
+    // the first one's failure would discard this press after it succeeded.
+    fireEvent.click(engage);
+    await settle();
+    expect(mocks.loadWidget).toHaveBeenCalledOnce();
+
+    // Not a newer build after all: the press is told the load failed.
+    await act(async () => { finishProbe(false); });
+    expect(mocks.toast.error).toHaveBeenCalledExactlyOnceWith('Voice controls could not load. Try again.');
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    // And the next press loads the widget and opens the mic, once.
+    fireEvent.click(screen.getByRole('button', { name: DISENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
+    await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
+    expect(mocks.loadWidget).toHaveBeenCalledTimes(2);
+    expect(mocks.toast.error).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
   it('hands a chunk from a replaced build to the stale-build reload instead of reporting it', async () => {
     mocks.reloadOnceForStaleChunk.mockResolvedValue(true);
     const chunk = deferWidgetChunk();
