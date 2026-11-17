@@ -127,9 +127,13 @@ export default function VoiceWidgetGate({ children }) {
         if (mountedRef.current) setWidget(() => mod.default);
       },
       async (err) => {
-        // Not latched: a reconnect or the next start request tries again.
-        loadRequestedRef.current = false;
+        // The stale-build probe takes a moment. The latch stays set across
+        // it, so a start requested meanwhile joins this attempt (and gets its
+        // answer below) instead of starting a second import whose pending
+        // start this handler would then throw away.
         if (isStaleChunkError(err, { duringImport: true }) && await reloadOnceForStaleChunk()) return;
+        // Not latched from here: a reconnect or the next start request tries again.
+        loadRequestedRef.current = false;
         console.warn(`⚠️ voice widget failed to load: ${err?.message || err}`);
         if (!mountedRef.current || !pendingStartRef.current) return;
         // A press is answered by this message. A start that dictation asked
