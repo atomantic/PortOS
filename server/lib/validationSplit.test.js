@@ -11,6 +11,15 @@ import * as spriteValidation from './spriteValidation.js';
 import * as sharedSchemas from './sharedSchemas.js';
 import * as federatedMediaValidation from './federatedMediaValidation.js';
 import * as githubValidation from './githubValidation.js';
+import * as insightsValidation from './insightsValidation.js';
+
+it('exposes insights schemas only through their declaring module', () => {
+  const names = Object.keys(insightsValidation);
+  expect(names.sort()).toEqual([
+    'insightRefreshSchema', 'scorecardComputeSchema', 'scorecardRulesSchema', 'scorecardSettingsSchema',
+  ]);
+  for (const name of names) expect(validation).not.toHaveProperty(name);
+});
 
 // Issues #1151 and #1831 split validation.js's domain schema groups into per-
 // domain files, with validation.js re-exporting them so existing deep imports
