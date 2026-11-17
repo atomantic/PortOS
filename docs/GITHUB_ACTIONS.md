@@ -45,7 +45,7 @@ tree, so `main` is also tested after the merge:
 | Event | What runs |
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
-| Push/merge to `main` | **Full suite**; the run in flight finishes, and only the newest waiting push runs next |
+| Push/merge to `main` | **Full suite**, native jobs path-gated (see "Native jobs on a push to `main`"); the run in flight finishes, and only the newest waiting push runs next |
 | PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
 | Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
@@ -503,10 +503,11 @@ contract; the parts that are not obvious:
   `server/package.json` is in the hash alongside the lockfile so that skipping
   `npm ci` does not also skip its manifest-vs-lockfile agreement check.
 
-Hit rate comes from the full runs on `main` (every push and the 09:17 UTC
-schedule). A cache written by a pull request is visible only to that branch, so
-those runs seed the entries on the default branch, the one scope every PR branch
-can read. A PR that changes the lockfile misses by design.
+Hit rate comes from the full runs on `main` (every push, which seeds Windows
+and macOS only when it runs them, and both schedule runs). A cache written by a
+pull request is visible only to that branch, so those runs seed the entries on
+the default branch, the one scope every PR branch can read. A PR that changes
+the lockfile misses by design.
 
 Three entries exist per key state (Linux, shared by `server`, `database` and `browser`,
 plus Windows and macOS) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
@@ -535,8 +536,8 @@ Reading the base off the checkout rather than `github.event.pull_request.base.sh
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
 so the payload value can name a commit the tested tree was never merged with.
 
-Non-pull-request runs (nightly, dispatch, release fallback) force the complete
-suite, need no diff at all, and get no base.
+Non-pull-request runs (push, nightly, dispatch, release fallback) force the
+complete suite and get no base; a push gets `CI_GATED_BASE_SHA` (below).
 
 ### Required checks
 
@@ -607,8 +608,8 @@ The selected work is split across parallel jobs:
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
-  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
-  always run it.
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer
+  (`NODE_MINIMUM_PATH_RE`). Non-push full runs always run it; a push gates it.
 - **Shipped prompt history** — the one job with a full-history clone; it checks
   that every prompt body ever shipped is current or retired in
   `data.reference/prompts/shipped-hashes.json`.
@@ -617,8 +618,8 @@ The selected work is split across parallel jobs:
   `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
   prompt-hash regenerator, `ci.yml`, or any module the guard statically
   imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
-  `scripts/ci-test-plan.js`). Non-PR runs
-  and pull requests into `release` always run it, and `npm run pregate` runs
+  `scripts/ci-test-plan.js`). Non-push full runs
+  and pull requests into `release` always run it (a push gates it), and `npm run pregate` runs
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
@@ -626,7 +627,8 @@ The selected work is split across parallel jobs:
   closure of those tests and the server Vitest harness, `server/package.json`,
   `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
   head tree on every run, so a new dependency is gated without a list edit.
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only.
 - **Docker containment live** — runs the opt-in live suite of the Docker
   containment profile (`server/services/dockerContainment.live.test.js`,
@@ -639,7 +641,8 @@ The selected work is split across parallel jobs:
   closure of the live suite and the server Vitest harness,
   `server/package.json`, `server/package-lock.json` or `ci.yml`
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
@@ -658,8 +661,8 @@ The selected work is split across parallel jobs:
   `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
   `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
   `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
-  every run, so a new import is covered without a list edit. Non-PR runs
-  (nightly) and pull requests into `release` always run it; `workflow_dispatch`
+  every run, so a new import is covered without a list edit. Non-push full runs
+  and pull requests into `release` always run it, a push gates it; `workflow_dispatch`
   of `CI` is the manual evidence run. Pregate reports it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
@@ -810,8 +813,8 @@ the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
 `scripts/vitestTempRootSetup.js`), the install inputs
 (`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
-`scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
-`release` always run it. It is part of `CI Gate`; a skipped run passes.
+`scripts/trusted-rebuilds.js`) or `ci.yml`. A push gates it the same way; non-push
+full runs and pull requests into `release` always run it. It is part of `CI Gate`; a skipped run passes.
 
 Before the suites, the job runs the supervisor's own `--probe`: a real
 single-use launchd job round trip. A runner whose user domain refuses
@@ -890,6 +893,21 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 - on the schedule, 09:17 and 21:17 UTC;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
+
+### Native jobs on a push to `main`
+
+A push to `main` runs the primary suites complete, but the seven native job
+families (SuperCollider, Windows, macOS, Linux and Docker containment, Node
+minimum, prompt history) follow the tree diff since the last green `main` run,
+decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
+(opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes
+one Actions API call for the newest successful `push` or `schedule` run of
+`ci.yml` on `main`, fetches its head at depth 1 and exports
+`CI_GATED_BASE_SHA`; the planner diffs it against `HEAD` (two-dot,
+`--no-renames`). Any lookup, fetch or diff failure runs every native job.
+Scheduled, dispatched and release runs are unchanged, so every native job still
+runs twice a day and on the release candidate. A gated push that skips Windows
+publishes no `Full CI Gate`, which only the release pull request's run supplies.
 
 A merge commit on `main` is tested because a PR gate only proves the PR
 against the base it was built on: two PRs that were each green can merge into a
@@ -1269,7 +1287,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

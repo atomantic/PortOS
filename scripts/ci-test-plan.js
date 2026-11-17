@@ -558,8 +558,10 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 );
 
 // The narrow CI jobs below observe a small, enumerable input set, so a pull
-// request that touches none of it skips them (non-PR and release-base runs are
-// forced full and always run every one). A gate takes one of two forms:
+// request that touches none of it skips them, and so does a push to `main`
+// whose tree diff against the last green push or schedule run touches none of
+// it (CI_GATED_BASE_SHA). Schedule, dispatch, workflow_call and release-base
+// runs always run every one. A gate takes one of two forms:
 // - the head tree's static import closure of the job's entry points, computed
 //   per run so it cannot drift from a hand-kept list, plus the non-module
 //   inputs named by the job's pattern (prompt-history, linux-containment,
@@ -631,6 +633,9 @@ export const MACOS_NATIVE_TESTS = [
 // job installs and loads, and ci.yml plus the setup-server action it installs
 // through, so a workflow edit proves the job runs.
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
+// The `node-minimum` job installs every workspace and runs the runtime gate on
+// the oldest supported Node; only these files can change its answer.
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -882,6 +887,42 @@ const hasWindowsRiskFile = (paths) => paths.some((path) => (
   !isDocumentationOnly(path) && WINDOWS_RISK_RULES.some((rule) => rule.test(path))
 ));
 
+/**
+ * Every FULL_TRIGGER_RULES match in `changed`, each with its Windows relevance
+ * resolved (a manifest through its dependency verdict), plus the verdict notes.
+ */
+function fullTriggersFor(changed, dependencyChanges) {
+  const dependencyVerdicts = [];
+  const fullTriggers = changed
+    .flatMap((path) => FULL_TRIGGER_RULES
+      .filter(({ re }) => re.test(path))
+      .map(({ reason, windowsRelevant }) => {
+        const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
+        if (!scopedToWindows) return { path, reason, windowsRelevant };
+        if (!windowsInstalls(path)) {
+          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
+          return { path, reason, windowsRelevant: false };
+        }
+        if (windowsRelevant === true) return { path, reason, windowsRelevant };
+        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
+        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
+        return { path, reason, windowsRelevant: verdict.escalate };
+      }));
+  return { fullTriggers, windowsNote: dependencyVerdicts.join('; ') };
+}
+
+/**
+ * Whether a diff selects the native Windows contract job: the same answer a
+ * pull request with this diff gets, whatever its primary plan.
+ */
+const windowsSelectionFor = (changed, dependencyChanges) => {
+  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
+  return {
+    windows: fullTriggers.some((trigger) => trigger.windowsRelevant) || hasWindowsRiskFile(changed),
+    windowsNote,
+  };
+};
+
 const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
 
 /**
@@ -943,31 +984,53 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
  * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live, macOS native) runs.
+ * Docker containment live, macOS native, Node minimum) runs.
  *
  * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
+ *
+ * A forced-full plan runs every gated job, except when `gatedChangedFiles` is
+ * an array: a push to `main` whose diff against the last green push or
+ * schedule run is known (`CI_GATED_BASE_SHA`). Then the gated jobs and the
+ * Windows native job are decided from that diff exactly as a pull request
+ * would decide them, while the primary suites stay full. null keeps them all.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
     forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null,
-    dockerContainmentLiveInputs = null, serverReach = null,
+    dockerContainmentLiveInputs = null, serverReach = null, trackedFiles = [],
+    gatedChangedFiles = null, gatedDependencyChanges = {},
   } = options;
+  const gatedFull = forceFull && Array.isArray(gatedChangedFiles);
+  const gateFiles = gatedFull ? uniqueSorted(gatedChangedFiles.filter(Boolean)) : plan.changedFiles;
+  // Forced full without a known green base: every gated job runs.
+  const gate = (decide) => (forceFull && !gatedFull) || decide(gateFiles);
   // Informational: names the changed source behind a large related selection
   // (#12285). It never changes what runs.
   const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
+  let gatedWindows = {};
+  if (gatedFull) {
+    const { windows, windowsNote } = windowsSelectionFor(gateFiles, gatedDependencyChanges);
+    const fields = {
+      windows,
+      windowsMode: windows ? 'files' : 'skip',
+      windowsFiles: windows ? windowsContractTests(new Set(trackedFiles)) : [],
+      windowsNote: [`native jobs gated on ${gateFiles.length} file(s) changed since the last green main run`, windowsNote]
+        .filter(Boolean).join('; '),
+    };
+    gatedWindows = { ...fields, suiteReasons: { ...plan.suiteReasons, windows: suiteReasonsFor({ ...plan, ...fields }).windows } };
+  }
   return {
     ...plan,
+    ...gatedWindows,
     ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
-    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
-    linuxContainment: forceFull
-      || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
-    supercolliderLive: forceFull
-      || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
-    dockerContainmentLive: forceFull
-      || touchesJobInputs(plan.changedFiles, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE),
-    macosNative: forceFull || plan.changedFiles.some((path) => MACOS_NATIVE_PATH_RE.test(path)),
+    promptHistory: gate((files) => touchesJobInputs(files, promptHistoryInputs, PROMPT_HISTORY_PATH_RE)),
+    linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
+    supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
+    dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
+    macosNative: gate((files) => files.some((path) => MACOS_NATIVE_PATH_RE.test(path))),
+    nodeMinimum: gate((files) => files.some((path) => NODE_MINIMUM_PATH_RE.test(path))),
   };
 }
 
@@ -1011,25 +1074,9 @@ function buildSuitePlan(changedFiles, {
   // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
   // branch below returning before the triggers are even looked at — which
   // downgraded Windows for an App.jsx PR that also bumped a lockfile.
-  const dependencyVerdicts = [];
-  const fullTriggers = changed
-    .flatMap((path) => FULL_TRIGGER_RULES
-      .filter(({ re }) => re.test(path))
-      .map(({ reason, windowsRelevant }) => {
-        const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
-        if (!scopedToWindows) return { path, reason, windowsRelevant };
-        if (!windowsInstalls(path)) {
-          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
-          return { path, reason, windowsRelevant: false };
-        }
-        if (windowsRelevant === true) return { path, reason, windowsRelevant };
-        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
-        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
-        return { path, reason, windowsRelevant: verdict.escalate };
-      }));
+  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
   const fullTrigger = fullTriggers.at(0);
   const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsRelevant);
-  const windowsNote = dependencyVerdicts.join('; ');
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
   if (appCompositionChanged && !appRouteOnly) {
@@ -1406,6 +1453,7 @@ export function emitGitHubPlan(plan) {
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
     macos_native: plan.macosNative,
+    node_minimum: plan.nodeMinimum,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1540,8 +1588,13 @@ function collectTestDependencies(entries, dependenciesFor) {
  * local caller may supply the complete committed + working-tree path list; in
  * that mode files present but not yet tracked are plan inputs too, while paths
  * deleted from the working tree are deliberately absent from trackedFiles.
+ *
+ * `gatedBaseSha` (forced-full runs only) is a commit whose tree passed a
+ * complete CI run; the path-gated jobs are then decided from the tree diff
+ * against it. A diff that git cannot produce leaves `gatedChangedFiles` null,
+ * which runs every gated job.
  */
-export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cwd = process.cwd() }) {
+export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, gatedBaseSha, cwd = process.cwd() }) {
   const hasChangedFilesOverride = changedFiles !== undefined;
   const collectedChangedFiles = forceFull
     ? []
@@ -1625,13 +1678,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   // tree: HEAD in CI, HEAD plus local edits under pregate). The base commit is
   // inside the depth-2 checkout, so `git show` resolves it; any read failure
   // becomes null, which classifyDependencyChange() treats as escalation.
-  const readAtBase = (path) => {
+  const readAt = (sha, path) => {
     try {
-      return execFileSync('git', ['show', `${baseSha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+      return execFileSync('git', ['show', `${sha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
     } catch {
       return null;
     }
   };
+  const readAtBase = (path) => readAt(baseSha, path);
   const readInTree = (path) => {
     try {
       return readFileSync(join(cwd, path), 'utf8');
@@ -1661,15 +1715,33 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     }
   }
 
-  // A forced-full run always runs every gated job, so it skips the walks.
-  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(cwd);
-  const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
-  const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
-  const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);
+  // Two-dot: a tree comparison, so the base need not be an ancestor of HEAD
+  // and needs no merge base in the shallow clone. --no-renames lists a renamed
+  // file under both paths, so a renamed job entry point still selects its job.
+  let gatedChangedFiles = null;
+  let gatedDependencyChanges = {};
+  if (forceFull && gatedBaseSha) {
+    try {
+      gatedChangedFiles = gitPaths(['diff', '-z', '--name-only', '--no-renames', gatedBaseSha, 'HEAD'], cwd);
+      gatedDependencyChanges = Object.fromEntries(gatedChangedFiles
+        .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
+        .map((path) => [path, classifyDependencyChange(path, readAt(gatedBaseSha, path), readInTree(path))]));
+    } catch (err) {
+      console.warn(`⚠️ No diff against the last green main run (${err.message.split('\n')[0]}); every native job runs`);
+      gatedChangedFiles = null;
+    }
+  }
+
+  // A forced-full run with no gated diff runs every gated job, so it skips the walks.
+  const walkGates = !forceFull || gatedChangedFiles !== null;
+  const promptHistoryInputs = walkGates ? collectPromptHistoryInputs(cwd) : null;
+  const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd) : null;
+  const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd) : null;
+  const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
-    dockerContainmentLiveInputs, serverReach };
+    dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
 }
 
 function main() {
@@ -1696,10 +1768,14 @@ function main() {
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
+    gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
+    // scripts/ci-base-sha.js exports it on a push to main only; a release
+    // pull request is forced full by CI_BASE_REF and never gets one.
+    gatedBaseSha: process.env.CI_GATED_BASE_SHA || undefined,
   });
   const plan = buildCiTestPlan(changedFiles, {
     trackedFiles,
@@ -1717,6 +1793,8 @@ function main() {
     supercolliderLiveInputs,
     dockerContainmentLiveInputs,
     serverReach,
+    gatedChangedFiles,
+    gatedDependencyChanges,
   });
   emitGitHubPlan(plan);
 }
