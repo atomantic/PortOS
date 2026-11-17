@@ -166,6 +166,8 @@ async function cleanupMerged(repo, target, branches, options) {
 beforeEach(() => {
   vi.clearAllMocks();
   isMergedPrHeadMock.mockReset().mockResolvedValue(false);
+  git.readBranchLineage.mockReset().mockResolvedValue('patch');
+  git.readBranchPublished.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
