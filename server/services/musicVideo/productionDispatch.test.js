@@ -37,7 +37,7 @@ vi.mock('../../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => 
 
 const { dispatchProductionStep, dispatchStoryboardStillClip } = await import('./productionDispatch.js');
 const { assertProductionSubmission } = await import('./productionService.js');
-const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
+const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 
 const project = {
   id: 'mv-example',

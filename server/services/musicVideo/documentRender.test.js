@@ -121,7 +121,7 @@ async function canonicalPreview() {
   const value = await fixture(), directory = join(PATHS.data, value.plan.directory);
   await cp(new URL('./documentTemplates/layered/', import.meta.url), directory, { recursive: true });
   await cp(new URL('./documentTemplates/shared/', import.meta.url), directory, { recursive: true });
-  await cp(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), join(directory, 'musicVideoImageEffects.js'));
+  await cp(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), join(directory, 'musicVideoImageEffects.js'));
   value.project.composition.document = { directory: value.plan.directory };
   return value;
 }

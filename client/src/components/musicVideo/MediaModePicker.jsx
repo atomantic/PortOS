@@ -1,4 +1,4 @@
-import { MUSIC_VIDEO_MEDIA_MODES, MUSIC_VIDEO_MEDIA_MODE_LABELS } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { MUSIC_VIDEO_MEDIA_MODES, MUSIC_VIDEO_MEDIA_MODE_LABELS } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 
 export default function MediaModePicker({ value = 'code-images-video', onChange, disabled = false, id = 'mv-media-mode' }) {
   return <div className="min-w-0 space-y-1">

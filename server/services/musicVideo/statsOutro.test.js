@@ -93,7 +93,7 @@ describe('cutting room floor outro pass', () => {
       '/api/music-video/mv-1/blender/media?path=one%2Fstills%2Ftm000000500.png',
       '/api/music-video/mv-1/blender/media?path=two%2Ffinal%2Fposter.jpg',
     ]);
-    const { statsOutroRows } = await import('../../lib/musicVideoStatsOutro.js');
+    const { statsOutroRows } = await import('../../lib/musicVideo/musicVideoStatsOutro.js');
     expect(statsOutroRows(stats).map(({ label }) => label)).toEqual(['Shots', 'Frames rendered', 'Render time (seconds)', 'Stills rendered', 'Cuts assembled']);
     expect(statsOutroRows({ mode: 'blender', shots: 1 }).map(({ label }) => label)).toEqual(['Shots']);
     await appendStatsOutro({ project: film, path, jobId: 'film-ending' });

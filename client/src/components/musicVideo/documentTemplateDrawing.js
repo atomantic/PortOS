@@ -1,8 +1,8 @@
-import { documentCameraView } from '../../../../server/lib/musicVideoDocumentCamera.js';
-import { narrativeFrameState } from '../../../../server/lib/musicVideoNarrativeEvents.js';
+import { documentCameraView } from '../../../../server/lib/musicVideo/musicVideoDocumentCamera.js';
+import { narrativeFrameState } from '../../../../server/lib/musicVideo/musicVideoNarrativeEvents.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
 import { formatPercent } from '../../utils/formatters.js';
-import { templateEffects } from '../../../../server/lib/musicVideoTemplateEffects.js';
+import { templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
 
 // The template's inline canvas painters have no importable module. Keep their
 // drawing order and pixels pinned against the shipped engine in

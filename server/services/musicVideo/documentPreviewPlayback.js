@@ -115,7 +115,7 @@ async function shippedHelpersMismatch(directory, template) {
   const helpers = [
     ['cameraRig.js', join(ROOT, 'layered')],
     ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
-    ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/', import.meta.url))],
+    ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/musicVideo/', import.meta.url))],
   ];
   const { isStaleShippedHelper } = await import('./compositionDocument.js');
   try {

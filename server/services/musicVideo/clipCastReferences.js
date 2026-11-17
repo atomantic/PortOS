@@ -9,7 +9,7 @@
 
 import { basename } from 'node:path';
 import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
-import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipReferenceCapacity, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, isLegacyCatalogReference } from '../../lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipReferenceCapacity, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, isLegacyCatalogReference } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 

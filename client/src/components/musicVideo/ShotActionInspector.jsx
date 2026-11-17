@@ -1,5 +1,5 @@
 import { useId, useRef, useState } from 'react';
-import { SHOT_ACTION_TEXT_LIMITS, SHOT_ACTION_LIST_FIELDS, shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
+import { SHOT_ACTION_TEXT_LIMITS, SHOT_ACTION_LIST_FIELDS, shotActionContractProblem } from '../../../../server/lib/musicVideo/musicVideoActionContract.js';
 import { formatTimecode } from '../../utils/formatters.js';
 
 const TEXT_LABELS = { purpose: 'Purpose', startEmotion: 'Starting emotion', endEmotion: 'Ending emotion', activeSpeaker: 'Active speaker' };

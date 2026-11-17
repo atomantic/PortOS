@@ -8,10 +8,10 @@ import { formatCount } from '../../utils/formatters.js';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
 import {
   ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
-} from '../../../../server/lib/musicVideoRouteMapLimits.js';
+} from '../../../../server/lib/musicVideo/musicVideoRouteMapLimits.js';
 import {
   draftRouteMapStops, projectRouteMaps, routeMapProblems, routeMapStopShots, shotRangesText,
-} from '../../../../server/lib/musicVideoRouteMaps.js';
+} from '../../../../server/lib/musicVideo/musicVideoRouteMaps.js';
 
 export const ROUTE_MAPS_ANCHOR = 'mv-route-maps';
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';

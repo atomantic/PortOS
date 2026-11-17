@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import MediaImage from '../MediaImage';
 
 /** An explicit set/camera choice. Loading and missing captures remain visible. */

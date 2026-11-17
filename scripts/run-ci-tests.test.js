@@ -746,7 +746,7 @@ describe('ci.yml shard wiring', () => {
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
     const body = CI_JOBS.browser;
-    expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
+    expect(body).toContain('if: fromJSON(needs.impact.outputs.plan).browser\n');
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -757,7 +757,7 @@ describe('ci.yml shard wiring', () => {
     expect(step).toContain('PORTOS_CI_BROWSER_OWNER: browser');
     expect(body).toContain('-browser-${{ matrix.shard }}of${{ strategy.job-total }}');
     expect(body).toContain('name: animatic-capture-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}');
-    expect(step).toContain('CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}');
+    expect(step).toContain('CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}');
     expect(step).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
     // The client workspace must be installed before the suites bundle it.
     expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
@@ -817,7 +817,7 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.lint).not.toMatch(/matrix\.shard/);
     // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
     // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
-    expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");
+    expect(jobs.lint).toContain("if: fromJSON(needs.impact.outputs.plan).lint_mode != 'skip'");
     // The aggregate gate is the single required check, so a job it does not
     // observe can fail without blocking a merge.
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINT: ${{ needs.lint.result }}');

@@ -1,4 +1,4 @@
-import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
+import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
 /**
  * Music Video — pre-production treatment record transforms (#8980).
  *
@@ -40,9 +40,9 @@ import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js
  * against older writers that would discard them during treatment edits.
  */
 
-import { captureMusicVideoEvidence, musicVideoDependencyChanges, musicVideoTakeChanges, remapMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence, musicVideoDependencyChanges, musicVideoTakeChanges, remapMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { createHash, randomUUID } from 'crypto';
-import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo, isNonBlankStr } from '../../lib/textUtils.js';
 import {
@@ -55,13 +55,13 @@ import {
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
   MUSIC_VIDEO_PROOF_CHECKS as PROOF_CHECKS,
   MUSIC_VIDEO_PROOF_STATUSES as PROOF_STATUSES,
-} from '../../lib/musicVideoValidation.js';
-import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+} from '../../lib/musicVideo/musicVideoValidation.js';
+import { performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { normalizeComposition } from './composition.js';
 import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { applyShotSheetMedium, sheetDirectionOverlay } from '../../lib/musicVideoShotSheet.js';
+import { applyShotSheetMedium, sheetDirectionOverlay } from '../../lib/musicVideo/musicVideoShotSheet.js';
 
 const TREATMENT_VERSION = 1;
 

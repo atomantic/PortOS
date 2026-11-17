@@ -7,7 +7,7 @@
  * card's quote stands in when the record has none. A lane with no price records the render
  * unpriced, so the project shows how many renders its total cannot include.
  */
-import { renderSpendEntry, summarizeRenderSpend, mediaJobProjectId, METERED_RENDER_LANES } from '../../lib/musicVideoSpend.js';
+import { renderSpendEntry, summarizeRenderSpend, mediaJobProjectId, METERED_RENDER_LANES } from '../../lib/musicVideo/musicVideoSpend.js';
 import { addRenderSpendAdjustment, deleteRenderSpendAdjustment, findRenderSpendForAsset, listRenderSpend, recordRenderSpend } from './renderSpendStore.js';
 import { musicVideoEvents } from './events.js';
 

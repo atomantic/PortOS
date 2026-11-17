@@ -27,12 +27,12 @@
  * route that acts on it, so no `musicVideoProjects` schema bump is needed.
  */
 
-import { captureTakeDependencies, musicVideoDependencyChanges, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
+import { captureTakeDependencies, musicVideoDependencyChanges, musicVideoTakeChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
-import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
+import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { ensureSceneTakes, reviewSceneTake, TAKE_SLOT } from './takes.js';
 import { projectExcerpts } from './excerpt.js';
 

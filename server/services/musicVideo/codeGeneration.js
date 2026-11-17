@@ -10,15 +10,15 @@ import { assertProductionApproval, productionReviewBasis, productionFeedbackCont
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
-import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
+import { isDeterministicCodeSource } from '../../lib/musicVideo/musicVideoValidation.js';
 import { universeStyleLines } from '../../lib/styleSourcePrompt.js';
-import { musicVideoCodeDirectionContext } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCodeDirectionContext } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 import { buildMusicVideoCodePrompt, extractCodeSections } from '../codeAnimation/prompt.js';
 import { normalizeComposition } from './composition.js';
 import { approvedCastAndSetsDirection } from './castAndSets.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { musicVideoLlmRouteLabel } from '../../lib/musicVideoAutomation.js';
+import { musicVideoLlmRouteLabel } from '../../lib/musicVideo/musicVideoAutomation.js';
 import { effortArg, resolveMusicVideoLlm } from './llmRoute.js';
 import { buildCodeTimeline, buildSongDocument, paletteFromProject } from './codeTimeline.js';
 

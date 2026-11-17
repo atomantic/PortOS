@@ -153,6 +153,18 @@ describe('callProviderAISimple completion classification', () => {
     expect(statusOp.complete).not.toHaveBeenCalled();
   });
 
+  // #16614: the untracked leg applies the same refusal as the tracked run.
+  it('refuses an over-window prompt to an Ollama provider with numCtx, sending nothing', async () => {
+    respondWith({ message: { content: 'never' }, done: true });
+    const ollama = { id: 'ollama-remote', name: 'Remote Ollama', type: 'api', endpoint: 'http://ollama.example.com:11434/v1', numCtx: 1000 };
+
+    const result = await callProviderAISimple(ollama, 'model-1', 'word '.repeat(2000), {});
+
+    expect(result.error).toMatch(/^Remote Ollama \(model-1\): known 1000-token context is below the \d+-token request budget$/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(statusOp.error).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a usable completion as success', async () => {
     respondWith({ choices: [{ message: { content: 'a real answer' } }] });
 

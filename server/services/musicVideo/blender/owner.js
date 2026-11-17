@@ -1,8 +1,8 @@
 /** Music Video owns persistence, song context, Board integration and socket routing. */
 import { join } from 'node:path';
 import { PATHS } from '../../../lib/paths.js';
-import { blenderShotFrameRange, normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
-import { blenderCutEffects, plannedTransitions, sceneCutEffect } from '../../../lib/musicVideoCutEffects.js';
+import { blenderShotFrameRange, normalizeBlenderRecord } from '../../../lib/musicVideo/musicVideoBlender.js';
+import { blenderCutEffects, plannedTransitions, sceneCutEffect } from '../../../lib/musicVideo/musicVideoCutEffects.js';
 import { musicVideoEvents } from '../events.js';
 import { getBlenderSong } from './song.js';
 import { mirrorBlenderScenes, scenesConflict, unmirroredScenes } from './sceneMirror.js';

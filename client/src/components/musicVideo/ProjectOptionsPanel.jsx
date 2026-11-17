@@ -8,11 +8,11 @@ import Pill from '../ui/Pill.jsx';
 import { RenderStyleSelect } from './ProjectActionGroups.jsx';
 import { compositionDraft, RENDER_STYLE_HELP } from './compositionDraft.js';
 import { describePreviewSourceChange, listPreviewSources } from '../../lib/musicVideoStages.js';
-import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
-import { musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { formatUsd } from '../../utils/formatters.js';
-import { finishedOutsideBlocker } from '../../../../server/lib/musicVideoFinishedOutside.js';
+import { finishedOutsideBlocker } from '../../../../server/lib/musicVideo/musicVideoFinishedOutside.js';
 import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 
 const TOOL_GROUPS = [['image', 'Image'], ['video', 'Video'], ['code', 'Code']];

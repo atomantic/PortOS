@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, resolvedFramePickIds, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
-import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideoGreybox.js';
-import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
+import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, resolvedFramePickIds, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
+import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideo/musicVideoShotPrompt.js';
+import { musicVideoCameoReferences } from '../../../../server/lib/musicVideo/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import InfoTooltip from '../ui/InfoTooltip';

@@ -19,7 +19,7 @@
  * against the freshest record under the backend's write serialization.
  */
 
-import { musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
+import { musicVideoDependencyImpact } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';

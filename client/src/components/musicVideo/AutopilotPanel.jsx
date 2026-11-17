@@ -9,7 +9,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import { VideoModelField } from './ToolPicker.jsx';
 import MediumPlanSummary from './MediumPlanSummary.jsx';
-import { codeFirstProductionAssets } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { codeFirstProductionAssets } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
 import {
   DEFAULT_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, automationDraftFrom, automationFromDraft, llmRouteLabel,
 } from '../../lib/musicVideoAutomation.js';

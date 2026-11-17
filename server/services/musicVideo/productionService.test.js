@@ -29,11 +29,11 @@ vi.mock('./productionReviewService.js', () => ({
   attachProductionPilotProof: vi.fn(async () => {}),
 }));
 import { startProductionOnProject, markProductionPlanned, reserveProductionStep } from './production.js';
-import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
-import { plateRequirements } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
+import { plateRequirements } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 import { startAutoReviewOnProject, nextAutoReviewStep, beginAttemptReview, deferAttemptReview } from './autoReview.js';
 import { pilotDependencies } from './productionPilot.js';
-import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence } from '../../lib/musicVideo/musicVideoDependencies.js';
 /**
  * Music Video production run (#9066) — orchestration contract with injected
  * queue events. The project store is an in-memory double with the real

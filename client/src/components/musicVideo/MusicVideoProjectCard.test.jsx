@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
-import { summarizeMusicVideoProject } from '../../../../server/lib/musicVideoSummary.js';
+import { summarizeMusicVideoProject } from '../../../../server/lib/musicVideo/musicVideoSummary.js';
 import { autopilotStatus, deriveNextAction, deriveStages, describeProjectStatus } from '../../lib/musicVideoStages.js';
 import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
 

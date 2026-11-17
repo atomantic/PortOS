@@ -11,11 +11,11 @@ import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vites
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'fs';
 import { join } from 'path';
-import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import * as database from '../../lib/db.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideoSummary.js';
+import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideo/musicVideoSummary.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 

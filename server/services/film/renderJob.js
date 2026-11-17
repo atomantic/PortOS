@@ -14,7 +14,7 @@ import { atomicWrite } from '../../lib/fileCore.js';
 import {
   MUSIC_VIDEO_BLENDER_SHEET_LIMITS, blenderRenderFrame, blenderShotFrameRange, blenderShotHandleRanges,
   normalizeBlenderHandles, normalizeBlenderRecord, normalizeBlenderSheetOptions,
-} from '../../lib/musicVideoBlender.js';
+} from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderScratchDir, blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, codeModuleClosures, filmCodeEntries, hashBlenderSources } from './hashing.js';

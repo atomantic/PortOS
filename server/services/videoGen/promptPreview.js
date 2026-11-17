@@ -17,10 +17,10 @@ import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, videoReferenceImageSlots } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
-import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
-import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoClipReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';

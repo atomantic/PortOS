@@ -15,7 +15,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { localImageFilename } from '../../lib/localImageFilename.js';
-import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { sungLyricTextWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { fitStoryboardToSong, songSectionBeats, storyboardFitSong, storyboardPanelArt, storyboardPanelRev, storyboardShotPanel } from '../../lib/storyboardFit.js';
 import { addPanelTake, getStoryboard, mutateStoryboard, selectPanelTake } from './index.js';
 

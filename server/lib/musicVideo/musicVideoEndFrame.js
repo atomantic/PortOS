@@ -1,0 +1,89 @@
+/**
+ * Music Video style-break end frames (#11173).
+ *
+ * Style-break end frames (#11173): `sceneEndFramePlan(scene, { backend, falModelId })` says whether a
+ * clip sends the scene's end frame (only fal models with an end image, never a performance shot) and
+ * why not; `sceneEndFrameRequestFields` turns it into `lastImageFile`; `sceneActiveEndImageId` is the
+ * end frame unless the shot switched it off (`endFrameOff`). Shared by the board and production.
+ *
+ * A scene may carry an optional end frame (`scene.endImageId`, the selected
+ * `endImage` take): a stylized still the clip moves into from its photographic
+ * start frame, such as a pencil-sketch or magazine-cutout version. fal models
+ * whose catalog entry takes an end image honour it, and so does a local model
+ * whose runtime anchors the last frame of a first+last-frame render (LTX-2.x,
+ * #11258). Every other lane ignores it, and this module says why, so the board
+ * and the production dispatcher make the same call.
+ */
+import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../runwayVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../googleVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../higgsfieldVideoModels.js';
+import { isPerformanceScene } from './musicVideoShotTiming.js';
+import { isLastFrameAnchoredRuntime } from '../runners.js';
+import { VIDEO_RUNTIME_MODES } from '../videoModeProfiles.js';
+
+// A local clip ends on the end frame through a first+last-frame render, so the
+// runtime must both run that mode and anchor its last frame (MiniMax H3 ref2va
+// anchors it but renders song-driven clips only).
+const localRuntimeEndsOnFrame = (runtime) => isLastFrameAnchoredRuntime(runtime)
+  && Boolean(VIDEO_RUNTIME_MODES[runtime]?.includes('fflf'));
+
+/**
+ * The end frame a clip for `scene` may end on: its selected end frame, unless
+ * the director switched the shot's end frame off (`scene.endFrameOff`), which
+ * keeps the selection, prompt and takes for when it is switched back on.
+ */
+export const sceneActiveEndImageId = (scene) => (scene?.endFrameOff !== true && typeof scene?.endImageId === 'string' && scene.endImageId.trim()
+  ? scene.endImageId : null);
+
+/**
+ * Whether a clip for `scene` on `backend` (with `falModelId` for fal, `runwayModelId` for Runway, the local
+ * model's `localRuntime` for local, and the request's video `mode`,
+ * image-to-video by default) sends the scene's end frame. Returns
+ * `{ endImageId, used, reason }`: `reason` names why a selected end frame is
+ * ignored, and is null when it is used or absent.
+ */
+export function sceneEndFramePlan(scene, { backend = null, falModelId = null, runwayModelId = null, googleModelId = null, higgsfieldModelId = null, mode = 'image', localRuntime = null } = {}) {
+  const endImageId = sceneActiveEndImageId(scene);
+  if (!endImageId) return { endImageId: null, used: false, reason: null };
+  const ignored = (reason) => ({ endImageId, used: false, reason });
+  if (isPerformanceScene(scene)) return ignored('A performance shot follows the song and takes no end frame');
+  if (mode !== 'image') return ignored('A song-driven clip takes no end frame');
+  if (backend === 'local') {
+    return localRuntimeEndsOnFrame(localRuntime)
+      ? { endImageId, used: true, reason: null }
+      : ignored('This local model animates from the start frame only; local LTX-2.x and MiniMax H3 end on the end frame');
+  }
+  if (backend === 'runway') {
+    const model = getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL);
+    return model?.endImage
+      ? { endImageId, used: true, reason: null }
+      : ignored(`${model?.label || 'This Runway model'} takes no end frame; choose one that does`);
+  }
+  if (backend === 'google') {
+    const model = getGoogleVideoModel(googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL);
+    return model?.endFrame
+      ? { endImageId, used: true, reason: null }
+      : ignored(`${model?.label || 'This Google model'} takes no end frame; use Veo 3.1`);
+  }
+  if (backend === 'higgsfield') {
+    const model = getHiggsfieldVideoModel(higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL);
+    return model?.endFrameField
+      ? { endImageId, used: true, reason: null }
+      : ignored(`${model?.label || 'This Higgsfield model'} takes no end frame; choose one that does`);
+  }
+  if (backend !== 'fal') return ignored('This renderer takes no end frame; choose a model that does');
+  const model = getFalVideoModel(falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
+  if (!model?.endImage) return ignored(`${model?.label || 'This fal.ai model'} takes no end frame; choose one that does`);
+  return { endImageId, used: true, reason: null };
+}
+
+/**
+ * The `/api/video-gen` fields that carry the end frame, or nothing. A local
+ * render anchors it only in first+last-frame mode, so that lane also names it.
+ */
+export const sceneEndFrameRequestFields = (scene, options) => {
+  const plan = sceneEndFramePlan(scene, options);
+  if (!plan.used) return {};
+  return options?.backend === 'local' ? { lastImageFile: plan.endImageId, mode: 'fflf' } : { lastImageFile: plan.endImageId };
+};

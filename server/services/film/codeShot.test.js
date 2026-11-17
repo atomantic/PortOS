@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { createFakeBlender } from '../musicVideo/blender/__blenderFixture.js';
 import { renderFilmCodeFrames } from './codeRender.js';
 import { describeNeedsBlender } from './describeRun.js';

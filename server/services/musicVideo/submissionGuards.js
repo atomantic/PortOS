@@ -8,15 +8,15 @@
  */
 import { basename } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
-import { musicVideoBriefAllowsVideo } from '../../lib/musicVideoMediumPlan.js';
-import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideoActionContract.js';
-import { captureClipReferenceDependency, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
-import { clipCastInputs } from '../../lib/musicVideoCharacterReferenceAge.js';
-import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
-import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
-import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { clipLengthShortfall, falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
+import { musicVideoBriefAllowsVideo } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { assertShotActionContract, withShotActionPrompt } from '../../lib/musicVideo/musicVideoActionContract.js';
+import { captureClipReferenceDependency, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { clipCastInputs } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
+import { silentMotionPrompt } from '../../lib/musicVideo/musicVideoMotion.js';
+import { musicVideoCreativeContext } from '../../lib/musicVideo/musicVideoCreativeContext.js';
+import { musicVideoShotModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { clipLengthShortfall, falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 
 const SONG_SAMPLE_RATE = 48000;

@@ -2,19 +2,19 @@
 import { randomUUID } from 'node:crypto';
 import { canonicalSnapshotChecksum as hash } from '../../lib/snapshotChecksum.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 
 import { isNonBlankStr as text } from '../../lib/textUtils.js';
 import { cameraMovementFromText, getCameraMovement, shotCameraLabel } from '../../lib/cameraMovements.js';
 import { cameraVarietyReport } from './shotCamera.js';
 import { overlayTextReport } from './overlayText.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { lyricCueSpan } from './timedText.js';
-import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
-import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { coldOpenScenes, songScenes } from '../../lib/musicVideoColdOpen.js';
-import { CHARACTER_REFERENCE_CHANGED, musicVideoSceneCharacterReferenceTakes } from '../../lib/musicVideoCharacterReferenceAge.js';
+import { cuesSungWithin, lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { coldOpenScenes, songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { CHARACTER_REFERENCE_CHANGED, musicVideoSceneCharacterReferenceTakes } from '../../lib/musicVideo/musicVideoCharacterReferenceAge.js';
 const artifact = (project, id) => (project.devArtifacts || []).find(a => a.id === id && !a.deleted);
 const artifactBasis = a => a ? { id: a.id, version: a.version, file: a.file } : null;
 const source = p => {
@@ -737,7 +737,7 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
       problems.push(problem(timingMissing ? 'shot-timing' : 'shot-incomplete', `Complete timing, action, staging, camera and transition for ${scene.label || 'each shot'}.`, scene.sceneId));
       incompleteShots.push({ sceneId: scene.sceneId, missing });
     }
-    // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideoLyricAnchors.js).
+    // A shot anchors every line sung over it, counted from the line's first sung word (lib/musicVideo/musicVideoLyricAnchors.js).
     const sung = cuesSungWithin(cues, scene.startSec, scene.endSec);
     if (sung.some(c => !shot?.lyricCueIds?.includes(c.id))
       || shot?.lyricCueIds?.some(id => !cues.some(c => c.id === id))) {

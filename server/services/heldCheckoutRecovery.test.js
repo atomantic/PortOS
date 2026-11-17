@@ -11,7 +11,7 @@
 import { describe, expect, it as unitIt, vi } from 'vitest';
 // Load the factories before any import below resolves a mocked module.
 import { mockBranchCompletionPolicy, mockExecGit, mockPaths, mockTaskScheduleStore, injected, retirementFaults, SYMLINKS } from './_heldCheckoutRecoveryMocks.js';
-import { appendFile, lstat, mkdir, readlink, symlink, writeFile, readFile } from 'fs/promises';
+import { appendFile, lstat, mkdir, readlink, symlink, writeFile, readFile, utimes } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
@@ -32,6 +32,8 @@ vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(),
   probePrForBranch: async () => ({ readable: true, cli: 'gh', prState: null, prHead: null, prUrl: null }) }));
 vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => forge.delivery }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
+// lsof is absent on some CI hosts and fails closed there; no process sits in these checkouts.
+vi.mock('../lib/processCwdProbe.js', () => ({ probeProcessCwdInside: async () => false, hasProcessCwdInside: async () => false }));
 
 import { describeHeldCheckoutRecovery, it, beforeEach, scratch, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, retirePendingMergeCheckout, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');
@@ -77,6 +79,10 @@ describeHeldCheckoutRecovery(() => {
     await execGit(['add', '.gitignore'], path);
     await execGit(['commit', '-m', 'fixture ignore rule'], path);
     await execGit(['merge', '--ff-only', branch], repo);
+    // Merged by ancestry, so the checkout must also be idle to read as done (#16625).
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const then = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const stamp of [join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD'), path]) await utimes(stamp, then, then);
     const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
     const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
@@ -99,6 +105,11 @@ describeHeldCheckoutRecovery(() => {
   it('settles a normally retired branch-only row while retaining unrelated unexplained disappearance', async () => {
     const branch = 'feature/merged-branch-only';
     await execGit(['branch', branch, 'main'], repo);
+    // A commit of its own, fast-forwarded onto main: merged work, not a new branch (#16625).
+    const tree = (await execGit(['rev-parse', 'main^{tree}'], repo)).stdout.trim();
+    const work = (await execGit(['commit-tree', tree, '-p', branch, '-m', 'feat: branch-only work'], repo)).stdout.trim();
+    await execGit(['update-ref', '-m', 'commit: branch-only work', `refs/heads/${branch}`, work], repo);
+    await execGit(['merge', '--ff-only', branch], repo);
     const head = (await execGit(['rev-parse', branch], repo)).stdout.trim();
     const vanished = { branch: 'feature/unexplained-disappearance', head, reason: 'branch-held' };
     await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ branch, head, reason: 'branch-held' }, vanished] });

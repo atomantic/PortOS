@@ -23,7 +23,7 @@
  * `NeedsAttentionBanner` renders them and the page wires their actions.
  */
 
-import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
+import { supersededStillsCheckpoint } from '../../../server/lib/musicVideo/musicVideoAutonomous.js';
 import { describeAutonomousWait } from './musicVideoAutonomous.js';
 import { RESUMABLE_RUN_STATUSES, changedFieldsText, currentProductionRun } from './musicVideoStages.js';
 

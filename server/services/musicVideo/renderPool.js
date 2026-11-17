@@ -1,7 +1,7 @@
 /** Project-scoped shot placement. A saved pool narrows existing grants; it never enables one. */
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
+import { isPerformanceScene } from '../../lib/musicVideo/musicVideoShotTiming.js';
 
 const refuse = (message, reasons = []) => {
   throw new ServerError(message, { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE', context: { reasons } });

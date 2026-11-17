@@ -27,6 +27,10 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn(async () => 'main'),
   resolveForgeForRepo: vi.fn(async () => null),
   hasBranchMergeEvidence: vi.fn(),
+  // Merged work with commits of its own, replayed onto main and unpublished:
+  // what merged retirement retires (#16625). Cases that need another answer set it.
+  readBranchLineage: vi.fn(async () => 'patch'),
+  readBranchPublished: vi.fn(async () => false),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
 vi.mock('../lib/execGit.js', () => ({
@@ -40,6 +44,7 @@ vi.mock('./worktreeManager.js', async () => {
   return {
     listWorktrees: vi.fn(async () => []),
     deleteCompletedLocalBranch: vi.fn(async () => true),
+    readCheckoutPresence: vi.fn(async () => true),
     forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
     readWorktreeStatus: async (path) => {
@@ -162,6 +167,8 @@ async function cleanupMerged(repo, target, branches, options) {
 beforeEach(() => {
   vi.clearAllMocks();
   isMergedPrHeadMock.mockReset().mockResolvedValue(false);
+  git.readBranchLineage.mockReset().mockResolvedValue('patch');
+  git.readBranchPublished.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
@@ -577,6 +584,22 @@ describe('cleanupMerged', () => {
     const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42' }]);
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' && args[1] === 'edit')).toBe(false);
+  });
+
+  // #16625: a merge by ancestry of a /do:next branch also needs its issue released.
+  // The Git page passes no credential overlay; retirement resolves one itself.
+  it.each([
+    ['a closed issue retires the branch', { state: 'CLOSED', labels: [], assignees: [] }, 'cleaned'],
+    ['an assigned open issue holds it', { state: 'OPEN', labels: [], assignees: [{ login: 'someone' }] }, 'claim-issue-reserved'],
+  ])('reads a merged-by-ancestry claim\'s issue reservation without a caller-supplied credential: %s', async (_name, issue, expected) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    git.readBranchLineage.mockResolvedValue('ancestry');
+    execGh.mockImplementation(async args => (args[0] === 'issue' && args[1] === 'view' ? JSON.stringify(issue) : '[]'));
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-77' }]);
+    if (expected === 'cleaned') expect(result.cleaned).toEqual(['next/issue-77']);
+    else expect(result.skipped).toEqual([expect.objectContaining({ branch: 'next/issue-77', reason: expected })]);
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: null });
+    expect(execGh).toHaveBeenCalledWith(['issue', 'view', '77', '--repo', expect.any(String), '--json', 'state,labels,assignees'], undefined, expect.objectContaining({ env: PINNED_ENV }));
   });
 
   it('leaves markers intact for a live owner or a failed branch deletion', async () => {

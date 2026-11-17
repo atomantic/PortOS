@@ -13,7 +13,7 @@ vi.mock('../services/musicVideo/audioAnalysis.js', async (original) => ({ ...(aw
 const { default: routes } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const service = await import('../services/musicVideo/songRevision.js');
-const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
+const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
 const { stripMusicVideoLocalRenderPins } = await import('../lib/syncWire.js');
 const app = express();
 app.use(express.json()); app.use('/api/music-video', routes); app.use(errorMiddleware);

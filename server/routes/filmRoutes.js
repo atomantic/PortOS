@@ -2,12 +2,12 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { normalizeBlenderRecord } from '../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../lib/musicVideo/musicVideoBlender.js';
 import {
   musicVideoBlenderCutSchema, musicVideoBlenderFileQuerySchema, musicVideoBlenderFileWriteSchema, musicVideoBlenderMediaQuerySchema,
   musicVideoBlenderNoteSchema, musicVideoBlenderRenderSchema, musicVideoBlenderSettingsSchema, musicVideoBlenderSyncSchema,
   musicVideoBlenderWorkspaceSchema,
-} from '../lib/musicVideoBlenderValidation.js';
+} from '../lib/musicVideo/musicVideoBlenderValidation.js';
 
 export function createFilmRoutes({ resolveOwner, readState, startCut }) {
 const router = Router();

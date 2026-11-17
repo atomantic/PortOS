@@ -3,7 +3,7 @@
 // `{ [subjectId]: text }` shape musicVideoSubjectScaleText takes. A subject not
 // linked to the catalog takes its Cast & Sets height by name.
 
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
 import { characterHeightStat } from '../../lib/catalogAppearance.js';
 import { resolveHeight } from '../../lib/characterHeight.js';
 

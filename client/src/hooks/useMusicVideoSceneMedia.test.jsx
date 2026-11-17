@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, cleanup, waitFor } from '@testing-library/react';
-import { musicVideoLinkedReferenceId } from '../../../server/lib/musicVideoConditioning.js';
+import { musicVideoLinkedReferenceId } from '../../../server/lib/musicVideo/musicVideoConditioning.js';
 
 // Every listener per event, like the real socket: the frame and end-frame
 // lanes both listen on music-video:scene-image (#11173).

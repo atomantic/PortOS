@@ -5,9 +5,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { musicVideoSpendAdjustmentSchema } from '../lib/musicVideoValidation.js';
-import { projectSpend } from '../lib/musicVideoSpend.js';
-import { currentRun } from '../lib/musicVideoSummary.js';
+import { musicVideoSpendAdjustmentSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { projectSpend } from '../lib/musicVideo/musicVideoSpend.js';
+import { currentRun } from '../lib/musicVideo/musicVideoSummary.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { adjustProjectSpend, readProjectRenderSpend, removeProjectSpendAdjustment } from '../services/musicVideo/renderSpend.js';
 

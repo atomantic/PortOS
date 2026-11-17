@@ -1,8 +1,8 @@
 /** Asset pilots use the existing review gate, never a second grading rubric. */
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
-import { captureMusicVideoEvidence, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
-import { codeFirstProductionAssets } from '../../lib/musicVideoMediumPlan.js';
-import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { captureMusicVideoEvidence, captureTakeDependencies, musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { codeFirstProductionAssets } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 
 export function pilotClass(scene, project) {
   const medium = project.treatment?.shotDirections?.find((d) => d.sceneId === scene.sceneId)?.medium;

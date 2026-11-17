@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { festivalPacketSchema } from '../lib/musicVideoFestivalPacket.js';
+import { festivalPacketSchema } from '../lib/musicVideo/musicVideoFestivalPacket.js';
 
 const router = Router();
 router.get('/:id/festival-packet', asyncHandler(async (req, res) => {

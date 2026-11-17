@@ -3,7 +3,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { proposeMusicVideoShotSheet } from '../../services/apiMusicVideo.js';
-import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet, shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
+import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet, shotSheetDrivesPrompt } from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
 
 const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { musicVideoShotReferenceChecks } from './shotReferenceCheck.js';
-import { musicVideoLinkedReferenceId } from '../../lib/musicVideoConditioning.js';
+import { musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
 
 // A comparison sheet is one image filed on both characters' records (`sheet:comparison`), with each
 // record also holding its own half (`sheet:comparison-solo`). These pin that the shared sheet covers both.

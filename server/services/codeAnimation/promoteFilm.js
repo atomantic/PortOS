@@ -4,7 +4,7 @@ import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { promoteFilmSchema } from '../../lib/codeAnimationFilms.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderRefusal } from '../film/workspace.js';
 import { blenderFilmProblems, readBlenderManifest } from '../film/manifest.js';
 import { requireFilmProject, codeAnimationFilmOwner } from './films.js';

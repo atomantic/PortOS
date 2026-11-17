@@ -11,7 +11,7 @@ import { promisify } from 'util';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideoAutonomous.js';
+import { sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideo/musicVideoAutonomous.js';
 import { SUNO_SONG_MENU_SELECTOR, markSunoSongMenu, sunoDownloadDialogSong } from '../../lib/sunoPage.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';

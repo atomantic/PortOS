@@ -12,8 +12,8 @@ import {
   MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY,
   MUSIC_VIDEO_BLENDER_OPTION_TYPES, MUSIC_VIDEO_BLENDER_RENDERERS, MUSIC_VIDEO_BLENDER_SHOT_ID,
   MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem, blenderShotHandleRanges,
-} from '../../lib/musicVideoBlender.js';
-import { PRE_MUSIC_DURATION_RANGE } from '../../lib/musicVideoColdOpen.js';
+} from '../../lib/musicVideo/musicVideoBlender.js';
+import { PRE_MUSIC_DURATION_RANGE } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { blenderManifestFile, readBlenderJson } from './workspace.js';
 
 // How far a boundary may sit from a frame boundary and still be snapped onto it.

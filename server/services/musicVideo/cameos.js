@@ -1,7 +1,7 @@
 /**
  * Music Video cameo roster (#14821) — record transforms behind the
  * `/api/music-video/:id/cameos` routes. The pure rules (which shots inherit a
- * still, coverage, document data) live in lib/musicVideoCameos.js; each edit
+ * still, coverage, document data) live in lib/musicVideo/musicVideoCameos.js; each edit
  * that changes a still refills the linked shots in the same write.
  */
 
@@ -11,7 +11,7 @@ import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import {
   MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_VARIANTS,
   fillSceneFromCameo, fillCameoShots, musicVideoCameos, cameoStillFor,
-} from '../../lib/musicVideoCameos.js';
+} from '../../lib/musicVideo/musicVideoCameos.js';
 import { mutateProjectRecord } from './projects.js';
 
 const notFound = (what) => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });

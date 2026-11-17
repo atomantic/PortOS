@@ -312,8 +312,8 @@ describe('take decisions', () => {
   // Uniquely catches a frame confirmation answering with take states read without the catalog
   // check-in, which differ from what the next GET shows, so the board needs a second press (#16274).
   it('answers a frame confirmation with the take states the next read shows', async () => {
-    const { captureImageFrameDependencies } = await import('../../lib/musicVideoDependencies.js');
-    const { musicVideoSceneCastIds } = await import('../../lib/musicVideoConditioning.js');
+    const { captureImageFrameDependencies } = await import('../../lib/musicVideo/musicVideoDependencies.js');
+    const { musicVideoSceneCastIds } = await import('../../lib/musicVideo/musicVideoConditioning.js');
     const { canonicalSnapshotChecksum } = await import('../../lib/snapshotChecksum.js');
     const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' },
       { id: 'subj-b', kind: 'character', name: 'Ben', ingredientId: 'cat-chr-b' },
@@ -352,8 +352,8 @@ describe('take decisions', () => {
   // Uniquely catches a board take decision's edit result presenting takes without the catalog check-in:
   // a frame whose stamp only the check-in recognises would read stale until the next reload (#16270).
   it('answers board take decisions on a catalog project with the take states the next read shows', async () => {
-    const { captureImageFrameDependencies } = await import('../../lib/musicVideoDependencies.js');
-    const { musicVideoSceneCastIds } = await import('../../lib/musicVideoConditioning.js');
+    const { captureImageFrameDependencies } = await import('../../lib/musicVideo/musicVideoDependencies.js');
+    const { musicVideoSceneCastIds } = await import('../../lib/musicVideo/musicVideoConditioning.js');
     const { canonicalSnapshotChecksum } = await import('../../lib/snapshotChecksum.js');
     const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' }, { id: 'subj-b', kind: 'character', name: 'Ben', ingredientId: 'cat-chr-b' }];
     const checkin = { items: subjects.map(({ id, kind, name, ingredientId }) => ({ subjectId: id, kind, name, ingredientId, images: [] })), problems: [] };

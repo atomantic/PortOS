@@ -157,6 +157,72 @@ describe('the request a tracked call sends', () => {
   });
 });
 
+// #16614: `/v1/chat/completions` cannot carry `num_ctx`, so an Ollama daemon
+// would run the call at its default window and drop the prompt's head. A
+// loopback daemon, so a window probe would show up as an extra request.
+describe('an Ollama provider with a context window', () => {
+  const ollama = {
+    id: 'example-ollama', name: 'Example Ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', numCtx: 1000,
+  };
+  const nativeReply = (content) => mockJsonResponse({
+    model: 'model-1', message: { role: 'assistant', content }, done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 3,
+  });
+
+  it('sends the call to native /api/chat carrying num_ctx and reads the native reply', async () => {
+    const fetch = respondWith(nativeReply('an answer'));
+
+    const result = await callProviderAISimple(ollama, 'model-1', 'Summarize the week.', { source: 'goal-check-in', temperature: 0.4, max_tokens: 200 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/api/chat');
+    expect(JSON.parse(sent(fetch).body)).toEqual({
+      model: 'model-1',
+      messages: [{ role: 'user', content: 'Summarize the week.' }],
+      stream: false,
+      options: { num_ctx: 1000, temperature: 0.4, num_predict: 200 },
+    });
+    expect(result).toEqual({ text: 'an answer', finishReason: 'stop', usage: { inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, source: 'measured' } });
+    expect((await record()).metadata).toMatchObject({ success: true, finishReason: 'stop' });
+  });
+
+  it('keeps an Ollama provider without numCtx on the byte-identical /chat/completions request', async () => {
+    const fetch = respondWith(completion('ok'));
+    const { numCtx: _unset, ...plain } = ollama;
+
+    await callProviderAISimple(plain, 'model-1', 'Summarize the week.', { source: 'goal-check-in' });
+
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/v1/chat/completions');
+    expect(sent(fetch).body).toBe(JSON.stringify({
+      model: 'model-1', messages: [{ role: 'user', content: 'Summarize the week.' }], temperature: 0.3, max_tokens: 1000,
+    }));
+  });
+
+  it('refuses a prompt larger than the window with both numbers, sending nothing and recording no run', async () => {
+    const fetch = respondWith(nativeReply('never'));
+    // ~4 characters a token: well over the 1000-token window.
+    const prompt = 'word '.repeat(2000);
+
+    const result = await callProviderAISimple(ollama, 'model-1', prompt, { source: 'goal-check-in' });
+
+    expect(result.error).toMatch(/known 1000-token context is below the \d+-token request budget/);
+    expect(Number(result.error.match(/below the (\d+)-token/)[1])).toBeGreaterThan(1000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runIds()).toEqual([]);
+    expect(spies.onRunCreated).not.toHaveBeenCalled();
+    expect(providerStatusService.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('never refuses a provider whose window is unknown, however long the prompt', async () => {
+    const fetch = respondWith(completion('ok'));
+    const prompt = 'word '.repeat(2000);
+
+    const result = await callProviderAISimple(provider, 'model-1', prompt, { source: 'goal-check-in' });
+
+    expect(result.text).toBe('ok');
+    expect(JSON.parse(sent(fetch).body).messages[0].content).toBe(prompt);
+  });
+});
+
 describe('run record and usage for one call', () => {
   it('writes one run record, one usage session and the provider-reported counts once', async () => {
     respondWith(completion('a real answer', { usage: { prompt_tokens: 40, completion_tokens: 9, prompt_tokens_details: { cached_tokens: 6 } } }));
@@ -533,6 +599,19 @@ describe('runPromptThroughProvider completion requests', () => {
       provider, prompt: 'a prompt', source: 'goal-check-in', signal: new AbortController().signal,
     })).rejects.toThrow('signal is honoured only for completion requests');
     expect(await runIds()).toEqual([]);
+  });
+
+  it('refuses a recovery retry whose model has a smaller known window, sending no second request', async () => {
+    const fetch = respondWith(mockTextResponse('model not found', { ok: false, status: 404 }), completion('never'));
+    const target = { ...provider, modelContextWindows: { 'model-1': 100000, 'model-small': 1000 } };
+
+    const failure = await runPromptThroughProvider({
+      provider: target, prompt: 'word '.repeat(2000), source: 'goal-check-in', model: 'model-1',
+      completion: { temperature: 0, maxTokens: 32, recover: async () => 'model-small' },
+    }).catch((err) => err);
+
+    expect(failure.message).toMatch(/^Example API \(model-small\): known 1000-token context is below the \d+-token request budget$/);
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('resolves with the run id and rejects with the reply detail a caller needs', async () => {

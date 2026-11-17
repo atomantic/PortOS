@@ -35,7 +35,7 @@ import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImageProm
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { problem, withProblems } from '../../../test/musicVideoProblems.js';
-import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
+import { finalApprovalPatch } from '../../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 
 installMusicVideoPageHooks();
 

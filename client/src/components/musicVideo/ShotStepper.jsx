@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { ChevronFirst, Pencil, SkipBack, SkipForward } from 'lucide-react';
 import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
-import { isPreMusicShot } from '../../../../server/lib/musicVideoColdOpen.js';
+import { isPreMusicShot } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
 // Back within this far into a shot goes to the shot before it; further in, to its own start.
 const RESTART_SEC = 1;

@@ -267,7 +267,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/initialized-checkout-fixtures/', reason: 'Retired CoS checkout test fixtures — regenerable, removed by migration 461', overridable: false },
   { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
-  { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
+  { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies and claim-prompt sections staged for agent prompts — derived from shipped code, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
   // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer
   // writes training-runs/<id>/checkpoints/, mflux writes
