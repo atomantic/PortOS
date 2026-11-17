@@ -56,9 +56,9 @@ const warnIfQuiet = (peak) => {
 
 // Loaded on demand by `VoiceWidgetGate`, which owns the voice config read and
 // its `voice:config:changed` subscription and hands the result down as
-// `config`. `claimPendingStart` returns true once if a start was requested
-// while this chunk was still loading.
-export default function VoiceWidget({ config, claimPendingStart }) {
+// `config`. `claimHeld` returns, once, what happened while this chunk was
+// still loading: `{ start, dictation }`.
+export default function VoiceWidget({ config, claimHeld }) {
   const navigate = useNavigate();
   const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
   const [stage, setStage] = useState('idle');
@@ -661,10 +661,11 @@ export default function VoiceWidget({ config, claimPendingStart }) {
   // stream/recorder means a rapid disengage→engage can otherwise let the
   // pending teardown stop tracks from the new capture.
   // A start requested while this chunk was still loading is held by the gate
-  // and claimed here, through the same engage path. The claim waits one
-  // microtask: StrictMode's simulated unmount runs between two synchronous
-  // mounts and cancels capture, so a claim made in the first mount would be
-  // consumed and then dropped.
+  // and claimed here, through the same engage path, along with a Daily Log
+  // dictation that began in that window (its `voice:dictation` event is not
+  // repeated). The claim waits one microtask: StrictMode's simulated unmount
+  // runs between two synchronous mounts and cancels capture, so a claim made
+  // in the first mount would be consumed and then dropped.
   useEffect(() => {
     let live = true;
     const onEngage = async () => {
@@ -688,14 +689,17 @@ export default function VoiceWidget({ config, claimPendingStart }) {
     window.addEventListener(ENGAGE_EVENT, onEngage);
     window.addEventListener(DISENGAGE_EVENT, onDisengage);
     queueMicrotask(() => {
-      if (live && claimPendingStart?.()) onEngage();
+      if (!live) return;
+      const held = claimHeld?.();
+      if (held?.dictation) setDictationActive(true);
+      if (held?.start) onEngage();
     });
     return () => {
       live = false;
       window.removeEventListener(ENGAGE_EVENT, onEngage);
       window.removeEventListener(DISENGAGE_EVENT, onDisengage);
     };
-  }, [enabled, claimPendingStart]);
+  }, [enabled, claimHeld]);
 
   // Drain a queued engage once voice is actually on. Without this, an engage
   // that beat the enable would show the widget but leave the mic dormant.

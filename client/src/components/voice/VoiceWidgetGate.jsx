@@ -72,9 +72,12 @@ export default function VoiceWidgetGate({ children }) {
   const [Widget, setWidget] = useState(null);
   const mountedRef = useMounted();
   const loadRequestedRef = useRef(false);
-  // A start asked for while the widget chunk is still loading. The widget
-  // claims it once, after it mounts; nothing else may start capture from it.
+  // What the widget missed while its chunk was loading: a start asked for by
+  // the sidebar mic or the hotkey, and whether Daily Log dictation is on (the
+  // server only says so once). The widget claims both once, after it mounts;
+  // nothing else may start capture from them.
   const pendingStartRef = useRef(false);
+  const heldDictationRef = useRef(false);
 
   useEffect(() => {
     const updated = new Set();
@@ -125,7 +128,9 @@ export default function VoiceWidgetGate({ children }) {
         loadRequestedRef.current = false;
         if (isStaleChunkError(err, { duringImport: true }) && await reloadOnceForStaleChunk()) return;
         console.warn(`⚠️ voice widget failed to load: ${err?.message || err}`);
-        if (!mountedRef.current || !pendingStartRef.current) return;
+        if (!mountedRef.current || !(pendingStartRef.current || heldDictationRef.current)) return;
+        // A press is answered by this message. Dictation stays held: it is
+        // still on at the server, so a later load must still open the mic.
         pendingStartRef.current = false;
         toast.error('Voice controls could not load. Try again.');
       },
@@ -140,9 +145,10 @@ export default function VoiceWidgetGate({ children }) {
   // exactly once. While voice is off nothing here loads or listens.
   useEffect(() => {
     if (!enabled) {
-      // Turning voice off withdraws a start nobody has claimed yet, so it
+      // Turning voice off withdraws whatever nobody has claimed yet, so it
       // cannot open the mic whenever voice is next turned on.
       pendingStartRef.current = false;
+      heldDictationRef.current = false;
       return undefined;
     }
     if (Widget) return undefined;
@@ -160,30 +166,43 @@ export default function VoiceWidgetGate({ children }) {
       pendingStartRef.current = !pendingStartRef.current;
       requestWidget();
     };
+    // Daily Log's Dictate button reaches the server without the widget, and
+    // the widget is what opens the mic for it. Ending dictation stops a live
+    // capture there, so here it withdraws a held start as well.
+    const onDictation = (payload) => {
+      heldDictationRef.current = !!payload?.enabled;
+      if (!heldDictationRef.current) pendingStartRef.current = false;
+    };
     requestWidget();
     window.addEventListener(ENGAGE_EVENT, onEngage);
     window.addEventListener(DISENGAGE_EVENT, onDisengage);
     window.addEventListener('keydown', onKey);
+    socket.on('voice:dictation', onDictation);
     // A chunk that failed to load is asked for again once the network is back.
     socket.on('connect', requestWidget);
     return () => {
       window.removeEventListener(ENGAGE_EVENT, onEngage);
       window.removeEventListener(DISENGAGE_EVENT, onDisengage);
       window.removeEventListener('keydown', onKey);
+      socket.off('voice:dictation', onDictation);
       socket.off('connect', requestWidget);
     };
   }, [enabled, Widget, hotkey, requestWidget]);
 
-  const claimPendingStart = useCallback(() => {
-    const pending = pendingStartRef.current;
+  const claimHeld = useCallback(() => {
+    const held = {
+      start: pendingStartRef.current || heldDictationRef.current,
+      dictation: heldDictationRef.current,
+    };
     pendingStartRef.current = false;
-    return pending;
+    heldDictationRef.current = false;
+    return held;
   }, []);
 
   return (
     <VoiceEnabledContext.Provider value={enabled}>
       {children}
-      {Widget && <Widget config={config} claimPendingStart={claimPendingStart} />}
+      {Widget && <Widget config={config} claimHeld={claimHeld} />}
     </VoiceEnabledContext.Provider>
   );
 }
