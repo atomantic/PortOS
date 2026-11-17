@@ -75,7 +75,8 @@ describe('MusicVideo project load recovery (#9761)', () => {
     if (path === '/music-video') {
       expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
     } else {
-      expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+      // The workspace is its own chunk (#16565), so it renders once that import settles.
+      expect(await screen.findByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: /^Storyboard/ })).toHaveAttribute('aria-selected', 'true');
     }
   });

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import toast from '../ui/Toast';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -29,14 +29,7 @@ import ContactSheetDrawer from './ContactSheetDrawer.jsx';
 import DevArtifactDrawer from './DevArtifactDrawer.jsx';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker.jsx';
-import SetupStage from './stages/SetupStage.jsx';
-import StoryStage from './stages/StoryStage.jsx';
-import CastSetsStage from './stages/CastSetsStage.jsx';
-import PlanStage from './stages/PlanStage.jsx';
-import ReviewStage from './stages/ReviewStage.jsx';
-import PublishStage from './stages/PublishStage.jsx';
-import CleanupStage from './stages/CleanupStage.jsx';
-import AssetsStage from './stages/AssetsStage.jsx';
+import { lazyWithReload } from '../../utils/lazyWithReload.js';
 import useSetupStageWiring from './stages/useSetupStageWiring.js';
 import useStoryStageWiring from './stages/useStoryStageWiring.js';
 import useCastSetsStageWiring from './stages/useCastSetsStageWiring.js';
@@ -67,10 +60,21 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 const PLAYER_FIRST_STAGES = new Set(['produce', 'review', 'editor']);
 // Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
 const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
-const ProduceStage = lazy(() => import('./stages/ProduceStage.jsx'));
-// Loaded when the optional Previz step first opens.
-const PrevizStage = lazy(() => import('./stages/PrevizStage.jsx'));
-const EditorStage = lazy(() => import('./stages/EditorStage.jsx'));
+// Each stage panel is its own chunk, fetched when its step first opens, so the
+// project list and every other step never download it. The wiring hooks above
+// stay static: they run for every step (checklists, notes, attention items).
+const SetupStage = lazyWithReload(() => import('./stages/SetupStage.jsx'));
+const StoryStage = lazyWithReload(() => import('./stages/StoryStage.jsx'));
+const CastSetsStage = lazyWithReload(() => import('./stages/CastSetsStage.jsx'));
+const PlanStage = lazyWithReload(() => import('./stages/PlanStage.jsx'));
+const PrevizStage = lazyWithReload(() => import('./stages/PrevizStage.jsx'));
+const ProduceStage = lazyWithReload(() => import('./stages/ProduceStage.jsx'));
+const ReviewStage = lazyWithReload(() => import('./stages/ReviewStage.jsx'));
+const PublishStage = lazyWithReload(() => import('./stages/PublishStage.jsx'));
+const AssetsStage = lazyWithReload(() => import('./stages/AssetsStage.jsx'));
+const CleanupStage = lazyWithReload(() => import('./stages/CleanupStage.jsx'));
+const EditorStage = lazyWithReload(() => import('./stages/EditorStage.jsx'));
+const stageFallback = <PageSkeleton header="none" label="Loading step" cards={3} sidebar={false} />;
 // The editor lays the player out itself, beside the open shot and over the timeline.
 const OWN_DOCK_STAGES = new Set(['editor']);
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
@@ -695,9 +699,9 @@ export default function ProjectWorkspace({
             )}
             dock={dock && !ownDock ? withTitleCard(dock) : null}
           >
-            {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
+            {storyVisited.current && <div hidden={activeStage !== 'story'}><Suspense fallback={stageFallback}><StoryStage board={board} active={activeStage === 'story'} /></Suspense></div>}
             {activeStage !== 'story' && (
-              <Suspense fallback={<PageSkeleton header="none" label="Loading shots" cards={3} sidebar={false} />}>
+              <Suspense fallback={stageFallback}>
                 <StageView board={ownDock ? { ...board, previewDock: dock, songClock: () => songClockRef.current?.() ?? null } : board} />
               </Suspense>
             )}
