@@ -9,6 +9,7 @@ import * as mediaValidation from './mediaValidation.js';
 import * as pipelineValidation from './pipelineValidation.js';
 import * as spriteValidation from './spriteValidation.js';
 import * as sharedSchemas from './sharedSchemas.js';
+import * as federatedMediaValidation from './federatedMediaValidation.js';
 import * as githubValidation from './githubValidation.js';
 
 // Issues #1151 and #1831 split validation.js's domain schema groups into per-
@@ -69,6 +70,12 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
     expect(validation.MAX_CONVERGENCE_ROUNDS).toBe(20);
   });
 
+  it('federated-media image primitives retain their shared identities', () => {
+    for (const key of ['imageEdgeSchema', 'refineImagePixelCap', 'PIXEL_CAP_MESSAGE']) {
+      expect(validation[key]).toBe(sharedSchemas[key]);
+    }
+  });
+
   it('cross-cutting primitives stayed in validation.js', () => {
     expect(typeof validation.validateRequest).toBe('function');
     expect(typeof validation.validate).toBe('function');
@@ -101,7 +108,7 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
   });
 
   it('the new #1831 domain files do NOT import back from validation.js (cycle guard)', () => {
-    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation, githubValidation]) {
+    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation, githubValidation, federatedMediaValidation]) {
       // validateRequest / parsePagination live only in validation.js — if a
       // domain file re-imported the barrel they'd leak through `export *`.
       expect(mod.validateRequest).toBeUndefined();

@@ -244,7 +244,7 @@ describe('validateRequest imports go to the leaf (#16096)', () => {
 // local `export { … }` lists; `export … from` re-exports are not counted: a moved domain
 // may keep one for existing deep imports, or drop it once every importer is
 // re-pointed (githubValidation.js, #16604).
-const OWN_EXPORT_CEILING = 285;
+const OWN_EXPORT_CEILING = 270;
 const OWN_DECLARATION_RE = /^export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm;
 const LOCAL_EXPORT_LIST_RE = /^export\s*\{([^}]*)\}\s*(?:;|$)/gm;
 

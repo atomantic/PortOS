@@ -5,13 +5,8 @@
 
 import { Router, raw } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  federatedMediaIdempotencyKeySchema,
-  federatedMediaJobParamsSchema,
-  federatedMediaJobSubmissionSchema,
-  federatedMediaStatusQuerySchema,
-  validateRequest,
-} from '../lib/validation.js';
+import { federatedMediaIdempotencyKeySchema, federatedMediaJobParamsSchema, federatedMediaJobSubmissionSchema, federatedMediaStatusQuerySchema } from '../lib/federatedMediaValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   FEDERATED_MEDIA_ASSET_MAX_BYTES,
   FEDERATED_MEDIA_ASSET_MIME_TYPES,
