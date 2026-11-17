@@ -378,10 +378,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
   // and fails closed when that commit cannot be read; pregate forwards the plan's base.
   'server/lib/importScoping.test.js',
-  // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
-  'server/services/agentImportCycles.test.js',
-  'server/services/meatspacePostImportCycles.test.js',
-  'server/services/twinImportCycles.test.js',
   // Prompt-upgrade contract: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',
   // Size ratchet over rendered claim prompts (#16409): growth comes from edits to any prompt
