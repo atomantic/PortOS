@@ -24,12 +24,12 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
-import { buildApiRouteCatalog } from '../server/lib/apiRouteGraph.js';
+import { getApiRouteCatalog } from '../server/lib/apiRouteGraph.js';
 import { ERROR_CODES_BY_STATUS } from '../server/lib/errorHandler.js';
 
 const DOCS_DIR = dirname(fileURLToPath(import.meta.url));
 const DOC = readFileSync(join(DOCS_DIR, 'API.md'), 'utf8');
-const CATALOG = buildApiRouteCatalog({ repoRoot: join(DOCS_DIR, '..') });
+const CATALOG = getApiRouteCatalog();
 
 const PROBE_HEADING = '## Federated peer-probe contract';
 const INDEX_HEADING = '## Route Domain Index';

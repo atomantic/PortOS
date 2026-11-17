@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: 44px hit areas and key-submit autofocus.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

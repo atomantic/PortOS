@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: a heading on every routed page.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

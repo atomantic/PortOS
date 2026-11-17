@@ -31,10 +31,19 @@ const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(|\bread(?:Serv
 const RECURSIVE_READDIR = /readdirSync\s*\([^)]*\brecursive\s*:\s*true/;
 const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm, '');
 
+/**
+ * Blank string literals that read as embedded code (they contain whitespace or a
+ * call paren): a test's fixture snippet such as "execFileSync('git', ['ls-files'])"
+ * is data under test, not a scan. Bare tokens ('git', 'ls-files', an import
+ * specifier) stay visible because the detectors above match on them.
+ */
+const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
+const blankLiterals = (source) => source.replace(STRING_LITERAL, (lit) => (/[\s(]/.test(lit.slice(1, -1)) ? '""' : lit));
+
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
-  const code = stripLineComments(source);
-  return (GIT_CALL.test(source) && GIT_ENUMERATION.test(source)) || TRACKED_HELPER.test(source)
+  const code = blankLiterals(stripLineComments(source));
+  return (GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
     || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code);
 };
 

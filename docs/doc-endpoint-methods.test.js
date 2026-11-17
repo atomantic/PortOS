@@ -17,7 +17,7 @@ import { existsSync, readdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { describe, expect, it } from 'vitest';
-import { buildApiRouteCatalog } from '../server/lib/apiRouteGraph.js';
+import { getApiRouteCatalog } from '../server/lib/apiRouteGraph.js';
 
 const DOCS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(DOCS_DIR, '..');
@@ -73,7 +73,7 @@ export const findMentions = (file, text) => {
   return mentions;
 };
 
-const CATALOG = buildApiRouteCatalog({ repoRoot: REPO_ROOT });
+const CATALOG = getApiRouteCatalog();
 const live = new Set(CATALOG.routes.map(({ method, path }) => `${method} ${normalizePath(path)}`));
 const isRoutable = ({ method, path }) => live.has(`${method} ${normalizePath(path)}`);
 

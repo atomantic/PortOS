@@ -13,7 +13,7 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const historyAvailable = !isShallowRepository(repoRoot);
 
 if (!historyAvailable) {
-  console.warn(
+  console.log(
     '⏭️ Skipping shipped stage-prompt history scan: checkout has shallow git history',
   );
 }
