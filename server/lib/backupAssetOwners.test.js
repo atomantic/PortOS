@@ -24,7 +24,7 @@ const takesAdmission = (path) => {
   const source = blankComments(readFileSync(join(SERVER_ROOT, path), 'utf8')).join('\n');
   return /\bwithBackupAssetPublication\s*\(/.test(source)
     || (INJECTED_TOOLKIT_MODULES.has(path) && /\bwithAssetPublication\s*\(/.test(source))
-    || (RUNTIME_DELEGATES.has(path) && /import \{ publishRuntimeFiles \} from ['"]\.\.\/lib\/runtimeFilePublication\.js['"]/.test(source)
+    || (RUNTIME_DELEGATES.has(path) && /import \{[^}]*\bpublishRuntimeFiles\b[^}]*\} from ['"]\.\.\/lib\/runtimeFilePublication\.js['"]/.test(source)
       && /\bpublishRuntimeFiles\s*\(/.test(source));
 };
 const admittedModules = new Set(BACKUP_ASSET_OWNERS

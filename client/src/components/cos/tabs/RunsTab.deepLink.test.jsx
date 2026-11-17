@@ -96,6 +96,21 @@ describe('RunsTab ?run= deep link', () => {
     expect(screen.getByText('second prompt')).toBeInTheDocument();
   });
 
+  it('folds a burst of invalidations during a re-read into one follow-up read', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    let finishFirst;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }));
+    await act(async () => {
+      for (let seq = 1; seq <= 4; seq++) socket.fire('system:activity', { seq, source: 'llm', phase: 'start' });
+    });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
+    await act(async () => { finishFirst({ runs: RUNS }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
+  });
+
   it('keeps the loaded rows when an invalidation re-read fails', async () => {
     renderTab('/cos/runs');
     expect(await screen.findByText('first prompt')).toBeInTheDocument();
