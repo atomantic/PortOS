@@ -129,6 +129,37 @@ describe('reconcileMediaAssetIndexAtBoot (post-listen sweep, #16556)', () => {
     expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
   });
 
+  it('sends the refetch notice only after renders that completed mid-sweep are indexed', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
+    await initMediaAssetIndex();
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    const order = [];
+    upsertAsset.mockImplementationOnce(async (row) => {
+      entered.resolve();
+      await release.promise;
+      order.push(`upsert ${row.mediaKey}`);
+    });
+    const onNotice = (payload) => order.push(`notice ${payload.kind}`);
+    peerSyncBus.on('media-history-changed', onNotice);
+    try {
+      // The render's completion event already reached clients; its row write is
+      // still queued. The notice must not overtake it.
+      imageGenEvents.emit('completed', { filename: 'img-mid-sweep.png' });
+      await entered.promise;
+      const sweep = reconcileMediaAssetIndexAtBoot();
+      await flush();
+      expect(order).toEqual([]);
+      release.resolve();
+      await sweep;
+      expect(order).toEqual(['upsert image:img-mid-sweep.png', 'notice image', 'notice video']);
+    } finally {
+      release.resolve();
+      peerSyncBus.off('media-history-changed', onNotice);
+    }
+  });
+
   it('logs a reconcile failure without rejecting, and still runs the tombstone check', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
