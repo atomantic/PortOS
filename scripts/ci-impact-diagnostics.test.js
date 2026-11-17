@@ -144,18 +144,7 @@ it('observes every repository stage before runner finalization while retaining t
   expect(jobs.impact).toContain('if: always()\n        run: node scripts/ci-impact-diagnostics.js settlement');
   expect(jobs.impact).not.toMatch(/continue-on-error/);
   expect(jobs.gate).toContain('CI_GATE_RESULT_IMPACT: ${{ needs.impact.result }}');
-  // Exercise the actual heredoc script; a malformed delimiter can silently
-  // swallow a shell command or change which GitHub outputs reach later jobs.
-  if (process.platform === 'win32') return;
-  const dir = root();
-  const script = jobs.impact.match(/          (node scripts\/ci-impact-diagnostics\.js summary -- [^\n]+\n[\s\S]*?          PORTOS_IMPACT_SCRIPT)\n/)?.[1];
-  expect(script).toBeTruthy();
-  const result = spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-s'], {
-    input: script.split('\n').map(line => line.slice(line.startsWith('          ') ? 10 : 0)).join('\n'),
-    cwd: fileURLToPath(new URL('../', import.meta.url)), encoding: 'utf8', timeout: 10_000,
-    env: { ...process.env, PORTOS_CI_IMPACT_DIAGNOSTICS: dir,
-      GITHUB_OUTPUT: join(dir, 'output'), GITHUB_STEP_SUMMARY: join(dir, 'summary') },
-  });
-  expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(join(dir, 'summary'), 'utf8')).toContain('### CI impact plan');
+  // The planner writes the plan summary itself (#16555). A heredoc here would
+  // be shell no test runs: a malformed delimiter swallows the commands after it.
+  expect(jobs.impact).not.toMatch(/<<-?'?[A-Z_]+/);
 });
