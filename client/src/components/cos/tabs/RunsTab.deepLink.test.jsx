@@ -56,18 +56,44 @@ describe('RunsTab ?run= deep link', () => {
     expect(api.getRunOutput).toHaveBeenCalledWith('run-b');
   });
 
-  it('moves a Running row to its end state when a run lifecycle invalidation arrives (#16557)', async () => {
+  it('moves a Running row to its end state on any activity invalidation (#16557)', async () => {
     api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] });
     renderTab('/cos/runs');
     expect(await within(await screen.findByTestId('run-row-recovering')).findByText('Running')).toBeVisible();
 
+    // A coalesced frame names only the burst's last source, so even a media
+    // frame may carry a run transition.
     api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: false, canceled: true }] });
     await act(async () => { socket.fire('system:activity', { seq: 1, source: 'media', phase: 'completion' }); });
-    expect(api.getRuns).toHaveBeenCalledTimes(1);
-
-    await act(async () => { socket.fire('system:activity', { seq: 2, source: 'llm', phase: 'cancellation' }); });
     expect(api.getRuns).toHaveBeenCalledTimes(2);
     expect(within(screen.getByTestId('run-row-recovering')).queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('re-reads once the first load lands when an invalidation arrived during it', async () => {
+    let finishLoad;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve; }));
+    renderTab('/cos/runs');
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'llm', phase: 'cancellation' }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(1);
+
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: false }] });
+    await act(async () => { finishLoad({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByTestId('run-row-recovering')).queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('does not restore a deleted run from a re-read that started before the delete', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    let finishStale;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishStale = resolve; }));
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'llm', phase: 'start' }); });
+    api.deleteRun.mockResolvedValue({ ok: true });
+    api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
+    await act(async () => { fireEvent.click(within(screen.getByTestId('run-row-run-a')).getByRole('button', { name: 'Delete run' })); });
+    await act(async () => { finishStale({ runs: RUNS }); });
+    expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
+    expect(screen.getByText('second prompt')).toBeInTheDocument();
   });
 
   it('keeps the loaded rows when an invalidation re-read fails', async () => {
