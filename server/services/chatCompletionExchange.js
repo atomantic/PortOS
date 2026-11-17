@@ -9,16 +9,26 @@
  * toolkit-less callers use this exchange directly without a run store.
  *
  * The request body is exactly `{ model, messages, temperature, max_tokens }`.
- * The streaming executor adds `stream`, provider-level sampling defaults and,
- * for Ollama, a different endpoint, and it reports no token counts; none of that
- * may change under a caller that already depends on this shape, so the two
- * request shapes stay distinct.
+ * The streaming executor adds `stream` and provider-level sampling defaults and
+ * reports no token counts; none of that may change under a caller that already
+ * depends on this shape, so the two request shapes stay distinct.
+ *
+ * The one exception is an Ollama provider with a `numCtx`: `/v1/chat/completions`
+ * cannot carry a context window, so the daemon would load the model at its
+ * default and silently keep only the prompt's tail. That request goes to native
+ * `/api/chat` with `options.num_ctx` instead, exactly as the streamed runner
+ * does (`lib/aiToolkit/internal/ollamaNativeChat.js`), and its reply is read
+ * into the same `{ text | error }` shape.
  */
 
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
 import { normalizeChatCompletionUsage } from '../lib/chatCompletionUsage.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
+import { buildOllamaNativeChatBody, ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
+import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
+import { estimateTokens } from '../lib/contextBudget.js';
 
 /**
  * The provider's reported token counts as usage-ledger fields, or `null` when
@@ -43,6 +53,56 @@ function reportedUsageFields(normalized) {
 }
 
 /**
+ * Why this prompt provably cannot fit the provider's known context window, as
+ * the message to refuse it with (naming both numbers), or `null`.
+ *
+ * The streamed path's pre-dispatch rule (`promptRunner.assertRequestFitsContext`)
+ * on the prompt alone, since a completion declares no output reserve. It reads
+ * only configured windows (`contextWindow`, the model catalog, `numCtx`, the
+ * ambient Ollama ceiling) and skips that path's local `/models` probe, so a
+ * completion sends nothing beyond its own request. An unknown window is never a
+ * refusal. The prompt is refused whole, never cut.
+ */
+export function completionContextRefusal(provider, model, prompt) {
+  const reason = contextWindowRejection(withOllamaRuntimeContextWindow(provider), model, { requiredContextTokens: estimateTokens(prompt) });
+  if (!reason) return null;
+  const message = `${provider.name || provider.id}${model ? ` (${model})` : ''}: ${reason}`;
+  console.log(`📏 Refused before dispatch: ${message}`);
+  return message;
+}
+
+/**
+ * Where the completion goes, what it carries, and how its reply reads as the
+ * OpenAI shape the classifier below expects.
+ */
+function completionWire(provider, model, prompt, { temperature, max_tokens }) {
+  const nativeUrl = ollamaNativeChatUrl(provider);
+  if (!nativeUrl) {
+    return {
+      url: `${provider.endpoint}/chat/completions`,
+      body: { model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens },
+      read: (data) => data,
+    };
+  }
+  return {
+    url: nativeUrl,
+    body: {
+      ...buildOllamaNativeChatBody({ model, messageContent: prompt, provider, generation: { temperature }, maxTokens: max_tokens }),
+      stream: false,
+    },
+    // Native replies carry `message` and the counts at top level; a body
+    // without `message` stays malformed rather than reading as an empty answer.
+    read: (data) => ({
+      choices: data?.message ? [{ message: data.message, finish_reason: data.done_reason }] : undefined,
+      usage: {
+        ...(Number.isFinite(data?.prompt_eval_count) ? { prompt_tokens: data.prompt_eval_count } : {}),
+        ...(Number.isFinite(data?.eval_count) ? { completion_tokens: data.eval_count } : {}),
+      },
+    }),
+  };
+}
+
+/**
  * POST one completion and classify the reply.
  *
  * @returns {Promise<
@@ -52,6 +112,7 @@ function reportedUsageFields(normalized) {
  *   as usage-ledger fields.
  */
 async function requestChatCompletion(provider, model, prompt, { temperature, max_tokens, timeout, signal }) {
+  const wire = completionWire(provider, model, prompt, { temperature, max_tokens });
   const headers = { 'Content-Type': 'application/json' };
   if (provider.apiKey) {
     // Never send the API key to an arbitrary/metadata host (SSRF / key
@@ -80,11 +141,11 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
   let response;
   try {
     controller.signal.throwIfAborted();
-    response = await fetch(`${provider.endpoint}/chat/completions`, {
+    response = await fetch(wire.url, {
       method: 'POST',
       headers,
       signal: controller.signal,
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], temperature, max_tokens })
+      body: JSON.stringify(wire.body)
     });
     stallPhase = 'response-body';
 
@@ -93,7 +154,7 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
       return { error: `Provider returned ${response.status}: ${errorText}`, status: response.status, body: errorText };
     }
 
-    const data = await readResponseJson(response);
+    const data = wire.read(await readResponseJson(response));
     // A valid completion always carries `choices`; its absence means the 200 body
     // wasn't the expected JSON (e.g. a proxy HTML page). Surface that as an error
     // rather than masquerading a malformed body as an empty-but-successful reply.
@@ -166,6 +227,10 @@ export async function runChatCompletion({ provider, model, prompt, temperature, 
   if (!first.error || typeof recover !== 'function' || signal?.aborted) return { ...first, model, retried: false };
   const retryModel = await recover(first, { signal });
   if (!retryModel || signal?.aborted) return { ...first, model, retried: false };
+  // The caller judged only the first model's window; a repaired model may
+  // have a smaller one, and its retry is refused rather than cut the same way.
+  const refusal = completionContextRefusal(provider, retryModel, prompt);
+  if (refusal) return { error: refusal, model: retryModel, retried: false };
   const retry = await requestChatCompletion(provider, retryModel, prompt, opts);
   return { ...retry, model: retryModel, retried: true };
 }

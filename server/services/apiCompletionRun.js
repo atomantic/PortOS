@@ -18,7 +18,9 @@
  *   - no `onRunFailed` report: these calls surface their own failure through
  *     `ai:status`, and the hook would add a second error toast and queue an
  *     auto-fix investigation, which is a provider call nobody asked for;
- *   - no context-window admission or fallback cascade.
+ *   - no output-reserve sizing or fallback cascade. (The context-window
+ *     refusal does apply: `runPromptThroughProvider` runs it before this
+ *     executor is reached.)
  */
 
 import { createRun, finalizeRunRecord, patchRunMetadata, unregisterActiveRun, emitRunStarted } from './runner.js';
