@@ -178,6 +178,20 @@ describe('player-first steps', () => {
     for (let i = 1; i < order.length; i += 1) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  // Uniquely catches the Shots step stacking its checklist over a full-width player again.
+  it('keeps the checklist beside the player when the step has no approval panel', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+      onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} playerFirst
+      lead={<section aria-label="Checklist">checklist</section>} dock={<aside aria-label="Preview">preview</aside>}>
+      <section aria-label="Work">work</section>
+    </MusicVideoLayout>);
+    const checklist = screen.getByRole('region', { name: 'Checklist' });
+    const preview = screen.getByRole('complementary', { name: 'Preview' });
+    const row = checklist.parentElement.parentElement;
+    expect(row).toBe(preview.parentElement.parentElement);
+    expect(row.className).toMatch(/xl:grid-cols-\[minmax\(0,1fr\)_minmax\(20rem,24rem\)\]/);
+  });
+
   it('docks the player at the side and closes the step with the approval otherwise', () => {
     renderStep(false);
     const panel = screen.getByRole('tabpanel');

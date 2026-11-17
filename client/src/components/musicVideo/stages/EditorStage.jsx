@@ -11,34 +11,71 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
  * The height that takes `el` from where it sits to the bottom of the page's
  * scroll area (the nearest `main`), so the docked timeline is on screen
  * without scrolling whatever the headers above it wrap to. Null until measured.
+ * Whatever the page still adds below it (a wrapper's padding or gap) is read
+ * back from the scroll area's overflow and taken off, so the page never scrolls.
  */
 function useScreenFill(el) {
   const [height, setHeight] = useState(null);
   useEffect(() => {
     const scroller = el?.closest('main');
     if (!el || !scroller || typeof ResizeObserver === 'undefined') return undefined;
+    let handle = 0;
     const apply = () => {
       const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
       const padBottom = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
-      // 12px under it, so its border isn't flush with the window's edge.
-      setHeight(Math.max(0, Math.floor(scroller.clientHeight - top - padBottom - 12)));
+      const fit = Math.max(0, Math.floor(scroller.clientHeight - top - padBottom));
+      setHeight(fit);
+      cancelAnimationFrame(handle);
+      handle = requestAnimationFrame(() => {
+        const over = scroller.scrollHeight - scroller.clientHeight;
+        if (over > 0 && over < fit / 2) setHeight(fit - over);
+      });
     };
     apply();
     const observer = new ResizeObserver(apply);
     // A width change is what rewraps the headers above, and it resizes the scroll area too.
     observer.observe(scroller);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(handle); };
   }, [el]);
   return height;
 }
 
 /**
+ * The widest the preview card in `cell` may be for all of it, its controls
+ * included, to fit the cell's height: the card's height less its picture's is
+ * its controls, and the picture keeps its own shape. Null until measured.
+ */
+function usePreviewFit(cell) {
+  const [maxWidth, setMaxWidth] = useState(null);
+  useEffect(() => {
+    if (!cell || typeof ResizeObserver === 'undefined') return undefined;
+    const apply = () => {
+      const card = cell.firstElementChild;
+      // Each player marks the box its picture fills (`data-preview-picture`).
+      const picture = card?.querySelector('[data-preview-picture]');
+      if (!card || !picture?.offsetHeight || !picture.offsetWidth) return;
+      const chrome = card.offsetHeight - picture.offsetHeight;
+      const shape = picture.offsetWidth / picture.offsetHeight;
+      const width = Math.floor((cell.clientHeight - chrome) * shape + (card.offsetWidth - picture.offsetWidth));
+      // A pixel either way is the controls rewrapping; settling on it would loop.
+      setMaxWidth((current) => (current != null && Math.abs(current - width) <= 2 ? current : width));
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    observer.observe(cell);
+    if (cell.firstElementChild) observer.observe(cell.firstElementChild);
+    return () => observer.disconnect();
+  }, [cell]);
+  return maxWidth;
+}
+
+/**
  * The editor, laid out like a desktop editing application from `xl` up: one
- * screen with no scrolling, the effects library at the top left, the preview
- * scaled into the middle, the inspector (the selected shot's or effect's
- * settings) at the top right, and the timeline docked across the bottom. Below
- * `xl` they stack: preview, timeline, then the inspector under the timeline. A
- * tapped shot opens its card in the same slide-in drawer the Shots board uses.
+ * screen with no scrolling, a side panel at the top left (the effects library,
+ * or a tapped effect's settings in its place), the preview scaled to fit beside
+ * it, and the timeline docked across the bottom. Below `xl` they stack:
+ * preview, then the timeline with an effect's settings under it. A tapped shot
+ * opens its card in the same slide-in drawer the Shots board uses.
  *
  * It is another view of the Shots board, not a second copy of it: the player
  * is the workspace's preview (`board.previewDock`), the card is the board's own
@@ -54,10 +91,11 @@ export default function EditorStage({ board }) {
   const layered = isLayeredComposition(project);
   const effectOptions = useMemo(() => ({ layered, planned: plannedTransitions(storyboardRows), cameras: project.cameras }),
     [layered, storyboardRows, project.cameras]);
-  // From xl the timeline puts its library and inspector in the panels beside the preview.
+  // From xl the timeline puts its library, and a selected effect's settings, in the panel beside the preview.
   const desktop = useMediaQuery('(min-width: 1280px)');
   const [libraryEl, setLibraryEl] = useState(null);
-  const [inspectorEl, setInspectorEl] = useState(null);
+  const [previewCell, setPreviewCell] = useState(null);
+  const previewWidth = usePreviewFit(previewCell);
   const [screenEl, setScreenEl] = useState(null);
   const screenHeight = useScreenFill(screenEl);
   const editShot = (sceneId, patch) => { board.editSceneLocal(sceneId, patch); return board.saveScene(sceneId, patch); };
@@ -94,7 +132,7 @@ export default function EditorStage({ board }) {
       effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
       onSplitShot={board.locked || orderOwned || !board.onSplitScene ? null : (sceneId, atSec) => board.onSplitScene(sceneId, null, atSec)}
       onPreview={(t, play) => board.seekToScene?.({ startSec: t }, { play, pause: !play })}
-      libraryEl={desktop ? libraryEl : null} inspectorEl={desktop ? inspectorEl : null} />
+      libraryEl={desktop ? libraryEl : null} />
   );
   const panelCls = 'min-h-0 overflow-y-auto rounded-lg border border-port-border bg-port-card';
   return (
@@ -102,14 +140,13 @@ export default function EditorStage({ board }) {
       {desktop ? (
         // One screen: the top row takes what the docked timeline leaves.
         <div ref={setScreenEl} style={screenHeight ? { height: screenHeight } : undefined}
-          className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-5rem)] min-h-[32rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
-          <div className="grid min-h-0 grid-cols-[17rem_minmax(0,1fr)_20rem] gap-3">
-            <section ref={setLibraryEl} aria-label="Effects library" className={panelCls} />
+          className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-3rem)] min-h-[32rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
+          <div className="grid min-h-0 grid-cols-[20rem_minmax(0,1fr)] gap-3">
+            <section ref={setLibraryEl} aria-label="Effects" className={panelCls} />
             {/* The player's controls sit under its picture; its width is held to what the row's height allows. */}
-            <div className="flex min-h-0 min-w-0 justify-center overflow-y-auto [container-type:size]">
-              <div className="w-full min-w-[20rem] max-w-[calc((100cqh-10rem)*16/9)]">{board.previewDock}</div>
+            <div ref={setPreviewCell} className="flex min-h-0 min-w-0 items-start justify-center overflow-hidden">
+              <div className="w-full min-w-[20rem]" style={previewWidth ? { maxWidth: previewWidth } : undefined}>{board.previewDock}</div>
             </div>
-            <section ref={setInspectorEl} aria-label="Inspector" className={panelCls} />
           </div>
           <div className="max-h-[45dvh] min-h-0 overflow-y-auto">{timeline}</div>
         </div>

@@ -52,7 +52,8 @@ export const MUSIC_VIDEO_STAGES = [
  * Assets is every still and clip made for the video.
  */
 export const MUSIC_VIDEO_PAGES = [
-  { id: 'editor', label: 'Editor', title: 'Editor' },
+  // The editor fills the screen like an editing application, so its title is for screen readers only.
+  { id: 'editor', label: 'Editor', title: 'Editor', quietTitle: true },
   { id: 'assets', label: 'Assets', title: 'Assets' },
   { id: 'cleanup', label: 'Cleanup', title: 'Cleanup' },
 ];

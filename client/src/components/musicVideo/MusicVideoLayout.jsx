@@ -358,13 +358,19 @@ export default function MusicVideoLayout({
           aria-labelledby={`mv-step-title-${stage}`}
           className={`min-w-0 space-y-3 ${expandedDock ? 'xl:col-start-2 xl:row-start-2' : ''}`}
         >
-          <div className="space-y-0.5">
+          <div className={stageEntry?.quietTitle ? 'sr-only' : 'space-y-0.5'}>
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
             {/* The step checklist already says what done means, item by item; the line stands in only without one. */}
             {stageEntry?.doneWhen && !lead && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
-          {lead}
-          {playerFirst && (dock || review) && (
+          {/* A player-first step without a review panel (Shots) keeps its checklist beside the player, sized like the other steps' side preview. */}
+          {playerFirst && dock && !review && lead ? (
+            <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]">
+              <div className="min-w-0">{lead}</div>
+              <div className="min-w-0">{dock}</div>
+            </div>
+          ) : lead}
+          {playerFirst && (dock || review) && !(dock && !review && lead) && (
             <div className={`grid min-w-0 items-start gap-3 ${dock && review ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
               {dock && <div className="min-w-0">{dock}</div>}
               {review}

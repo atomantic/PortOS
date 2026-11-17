@@ -84,6 +84,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
       <div
         ref={labelPortal}
         data-testid="previz-player"
+        data-preview-picture
         className="relative mx-auto w-full max-w-[calc(50vh*16/9)] overflow-hidden rounded border border-port-border bg-black"
         style={{ aspectRatio: ratio }}
       >
