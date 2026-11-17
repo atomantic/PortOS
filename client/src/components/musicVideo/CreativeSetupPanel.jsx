@@ -38,8 +38,10 @@ const catalogEntry = (ingredient) => {
 
 /** Project-owned snapshots: changing source canon never silently recasts a video. */
 export default function CreativeSetupPanel({ project, onSave, onPendingChange, onCastLinked }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(null);
+  // A project with nothing configured opens straight into the editor; there is nothing to "edit" yet.
+  const [unconfigured] = useState(() => !(project.concept?.subjects || []).length && !project.concept?.characterStyleId);
+  const [editing, setEditing] = useState(unconfigured);
+  const [draft, setDraft] = useState(() => (unconfigured ? { universeId: project.concept?.universeId || '', characterStyleId: '', subjects: [] } : null));
   const [lists, setLists] = useState({ universes: [] });
   const [universe, setUniverse] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -100,9 +102,10 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     setError('');
     setEditing(true);
   };
+  const makeSubject = (existing, kind, name, description, canon) => ({ id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: description || '', ...(kind === 'character' ? { role: existing.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) });
   const add = (kind, name, description, canon) => {
     if (!name.trim() || subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS) return;
-    const subject = { id: `mvc-${uuidv4()}`, kind, name: name.trim().slice(0, 120), description: description || '', ...(kind === 'character' ? { role: subjects.some((s) => s.kind === 'character') ? 'supporting' : 'protagonist' } : {}), ...(canon?.id ? { canonId: canon.id } : {}), ...(canon?.ingredientId ? { ingredientId: canon.ingredientId } : {}) };
+    const subject = makeSubject(subjects, kind, name, description, canon);
     setDraft((d) => ({ ...d, subjects: [...d.subjects, subject] }));
     if (subject.ingredientId) setDescriptionBases((bases) => ({ ...bases, [subject.id]: subject.description }));
     if (canon) setSelectedCanon((items) => [...items, { subjectId: subject.id, kind, entry: canon }]);
@@ -118,10 +121,16 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     if (!universeReady) { setError('Wait for the selected universe to load before saving.'); return; }
     if (refusal) { setError(refusal.message); return; }
     if (overlongSubjects.length) { setError('Shorten the highlighted descriptions before saving.'); return; }
+    // A half-typed new subject is refused rather than silently dropped; a complete one is saved with the rest.
+    const pendingName = newName.trim();
+    const pendingDescription = newDescription.trim();
+    if (!!pendingName !== !!pendingDescription) { setError('Fill in both the name and description of the new subject, or clear them, before saving.'); return; }
+    if (pendingName && draft.subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS) { setError(`A video holds up to ${MUSIC_VIDEO_MAX_SUBJECTS} subjects; clear the new subject or remove one.`); return; }
+    const allSubjects = pendingName ? [...draft.subjects, makeSubject(draft.subjects, newKind, newName, newDescription)] : draft.subjects;
     setSaving(true);
     setError('');
     // Blank lines in a character's "always visible" list are editing leftovers, not details.
-    const savedSubjects = draft.subjects.map(({ requiredDetails, ...subject }) => {
+    const savedSubjects = allSubjects.map(({ requiredDetails, ...subject }) => {
       const details = (requiredDetails || []).map((line) => line.trim()).filter(Boolean);
       return details.length ? { ...subject, requiredDetails: details } : subject;
     });
@@ -133,7 +142,7 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     const pulled = pullUniverseCanonReferences(canon, project.visualSpec?.references || []);
     const catalogDescriptionBases = draft.subjects.filter((subject) => subject.ingredientId && Object.hasOwn(descriptionBases, subject.id))
       .map((subject) => ({ subjectId: subject.id, description: descriptionBases[subject.id] }));
-    return onSave({ concept, catalogDescriptionBases, ...(pulled.added ? { visualSpec: { references: pulled.next } } : {}) }).then(() => setEditing(false)).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
+    return onSave({ concept, catalogDescriptionBases, ...(pulled.added ? { visualSpec: { references: pulled.next } } : {}) }).then(() => { setNewName(''); setNewDescription(''); setEditing(false); }).catch((err) => setError(err.message || 'Could not save creative setup')).finally(() => setSaving(false));
   };
 
   return <section className="bg-port-card border border-port-border rounded-lg p-3 space-y-3 min-w-0 break-words" aria-label="Creative setup">
@@ -228,11 +237,10 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
       </div>
       <label htmlFor={idFor('description')} className="block text-xs">Appearance / description</label><textarea id={idFor('description')} aria-describedby={idFor('description-count')} rows={2} className={inputClass} value={newDescription} onChange={(e) => setNewDescription(e.target.value)} />
       <p id={idFor('description-count')} className={`text-xs ${newDescription.length > SUBJECT_DESCRIPTION_MAX ? 'text-port-error' : 'text-port-text-muted'}`}>
-        {formatCount(newDescription.length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{newDescription.length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before adding' : ''}
+        {formatCount(newDescription.length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{newDescription.length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before saving' : ''}
       </p>
       <button type="button" className="text-port-accent text-sm min-h-[44px] rounded border border-port-border px-3 py-2 hover:bg-port-accent/10 disabled:opacity-50" disabled={!newName.trim() || subjects.length >= MUSIC_VIDEO_MAX_SUBJECTS || newDescription.length > SUBJECT_DESCRIPTION_MAX} onClick={() => { add(newKind, newName, newDescription); setNewName(''); setNewDescription(''); }}>Add to production</button>
-      {(newName.trim() || newDescription.trim()) && <p className="text-xs text-port-text-muted">Add the new subject to the production before saving.</p>}
-      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!refusal || !!newName.trim() || !!newDescription.trim() || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
+      <div className="flex flex-wrap gap-3"><button type="button" onClick={save} disabled={!universeReady || !!refusal || newDescription.length > SUBJECT_DESCRIPTION_MAX || !!overlongSubjects.length} className="bg-port-accent text-white rounded px-3 py-2 text-sm disabled:opacity-50">{saving ? 'Saving…' : 'Save creative setup'}</button><button type="button" onClick={() => setEditing(false)} className="text-sm">Cancel</button></div>
     </fieldset>}
     {!editing && subjects.length > 0 && <VideoCastLinksDisclosure
       summary={`Catalog links (${formatCount(subjects.filter((s) => s.ingredientId).length)} of ${formatCount(subjects.length)} linked)`}

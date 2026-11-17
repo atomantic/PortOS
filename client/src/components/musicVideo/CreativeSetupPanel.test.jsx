@@ -25,7 +25,7 @@ vi.mock('../IngredientPicker.jsx', () => ({
 const project = { id: 'mv1', concept: {}, visualSpec: {} };
 const open = (onSave = vi.fn(async () => {})) => {
   render(<MemoryRouter><CreativeSetupPanel project={project} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
-  fireEvent.click(screen.getByText('Set up creative direction'));
+  // An unconfigured project opens straight into the editor.
   return onSave;
 };
 beforeEach(() => {
@@ -226,7 +226,7 @@ describe('large canon pickers (#16205)', () => {
 });
 describe('tools / policy conflict', () => {
   const render_ = (extra, onSave = vi.fn(async () => {})) => {
-    render(<MemoryRouter><CreativeSetupPanel project={{ ...project, ...extra }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    render(<MemoryRouter><CreativeSetupPanel project={{ ...project, concept: { characterStyleId: 'style-1' }, ...extra }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
     return onSave;
   };
   const noVideo = { automation: { tools: ['image:codex', 'code:render'] } };
@@ -260,7 +260,6 @@ describe('tools / policy conflict', () => {
     const { setMusicVideoCharacterStyleReference } = await import('../../services/apiMusicVideo.js');
     const onSave = vi.fn(async () => {});
     render(<MemoryRouter><CreativeSetupPanel project={{ ...project, visualSpec: { references: [{ imageId: 'sheet.png' }] } }} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
-    fireEvent.click(screen.getByText('Set up creative direction'));
     await screen.findByText('Claudia slopcore');
     fireEvent.change(screen.getByLabelText('Character style'), { target: { value: 'claudia-slopcore' } });
     expect(screen.getByText('Claudia joins the cast as protagonist when you save.')).toBeTruthy();
@@ -271,6 +270,22 @@ describe('tools / policy conflict', () => {
     fireEvent.click(screen.getByText('Save creative setup'));
     await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
     expect(onSave.mock.calls[0][0].concept).toMatchObject({ characterStyleId: 'claudia-slopcore' });
+  });
+});
+
+describe('creative setup defaults and pending subject', () => {
+  it('saves a complete new subject on Save without a separate Add click, and refuses a half-filled one', async () => {
+    const onSave = open();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Neon alley' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Fill in both the name and description');
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Create for this video'), { target: { value: 'place' } });
+    fireEvent.change(screen.getByLabelText('Appearance / description'), { target: { value: 'Wet neon' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0].concept.subjects).toMatchObject([{ kind: 'place', name: 'Neon alley', description: 'Wet neon' }]);
   });
 });
 

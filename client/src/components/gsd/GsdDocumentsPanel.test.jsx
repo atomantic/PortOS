@@ -64,4 +64,16 @@ describe('GsdDocumentsPanel document loading', () => {
     expect(screen.getByRole('textbox', { name: 'Document content' })).toHaveValue('Roadmap body');
   });
 
+  it('offers Create for a missing document and keeps an empty file distinct', async () => {
+    api.getGsdDocument.mockResolvedValueOnce({ content: null });
+    const { unmount } = renderPanel('ROADMAP.md');
+    expect(await screen.findByRole('button', { name: /create/i })).toBeInTheDocument();
+    expect(screen.getByText('Document not found')).toBeInTheDocument();
+    unmount();
+
+    api.getGsdDocument.mockResolvedValueOnce({ content: '' });
+    renderPanel('ROADMAP.md');
+    expect(await screen.findByRole('button', { name: /edit/i })).toBeInTheDocument();
+    expect(screen.getByText('Document is empty')).toBeInTheDocument();
+  });
 });
