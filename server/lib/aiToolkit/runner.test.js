@@ -154,6 +154,36 @@ describe('AI Toolkit runner service', () => {
     expect(providerService.getAllProviders).not.toHaveBeenCalled();
   });
 
+  it('records a pinned provider as given: no lookup, no availability refusal, no enabled check', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    // The store holds a different record under the same id, the status service
+    // calls the provider benched, and the pinned record is disabled: none of the
+    // three may change which provider the run is recorded against.
+    const stored = { id: 'primary', name: 'Stored', type: 'api', enabled: true, defaultModel: 'stored-model' };
+    const pinned = { id: 'primary', name: 'Pinned', type: 'api', enabled: false, defaultModel: 'pinned-model' };
+    const providerService = {
+      getAllProviders: vi.fn().mockResolvedValue({ providers: [stored] }),
+      getProviderById: vi.fn().mockResolvedValue(stored),
+    };
+    const providerStatusService = {
+      isAvailable: vi.fn().mockReturnValue(false),
+      getFallbackProvider: vi.fn(),
+      getStatus: vi.fn().mockReturnValue({ reason: 'rate-limit' }),
+    };
+    const onRunCreated = vi.fn();
+    const runner = createRunnerService({ dataDir, providerService, providerStatusService, hooks: { onRunCreated } });
+
+    const result = await runner.createRun({ providerId: pinned.id, provider: pinned, prompt: 'stay pinned', allowFallback: false });
+
+    expect(result.provider).toBe(pinned);
+    expect(result.usedFallback).toBe(false);
+    expect(result.metadata).toMatchObject({ providerId: 'primary', providerName: 'Pinned', model: 'pinned-model', usedFallback: false });
+    expect(providerService.getProviderById).not.toHaveBeenCalled();
+    expect(providerStatusService.isAvailable).not.toHaveBeenCalled();
+    expect(onRunCreated).toHaveBeenCalledTimes(1);
+  });
+
   it('derives request capabilities for direct and pre-created runs', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
     tempDirs.push(dataDir);

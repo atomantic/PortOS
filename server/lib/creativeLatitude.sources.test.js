@@ -12,8 +12,8 @@ import { OPERATIONAL_RUN_SOURCES, isCreativeRunSource } from './creativeLatitude
 
 const SERVER_ROOT = join(import.meta.dirname, '..');
 // The shared runners are the only paths the runner-side stamp sits behind.
-// runCreativeRefinement is a thin wrapper over runPromptThroughProvider, so its sources need classifying too.
-const RUNNER_CALL = /\b(runPromptThroughProvider|runStagedLLM|runInlineLLM|runStageScopedInlineLLM|runCreativeRefinement)\s*\(/g;
+// runCreativeRefinement and callProviderAISimple are thin wrappers over runPromptThroughProvider, so their sources need classifying too.
+const RUNNER_CALL = /\b(runPromptThroughProvider|runStagedLLM|runInlineLLM|runStageScopedInlineLLM|runCreativeRefinement|callProviderAISimple)\s*\(/g;
 // A generous window: the `source:` key is inside the same options object, and
 // these calls run to a couple dozen lines with comments interleaved.
 const CALL_WINDOW = 900;
