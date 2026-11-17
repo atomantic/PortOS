@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { Copy, Globe, Loader2 } from 'lucide-react';
 import { getCatalogUniverseContext, setCatalogUniverseOwner, forkCatalogIngredient, linkCatalogIngredient, unlinkCatalogIngredient } from '../../services/apiCatalog';
 import { listUniverseNames } from '../../services/apiUniverseBuilder';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import { ingredientPath } from '../../lib/creativeLibraries';
 import { threadRefUrl } from '../../lib/threadRefKinds';
 import ThreadRefChip from '../brain/ThreadRefChip';
@@ -21,12 +21,12 @@ const roleLabel = (role = '') => ({ owner: 'Owning universe', 'canon-character':
 // `seed` = { candidates, forms, ready, error, load } — the source's
 // reference images a fork can start from. `redesign` = { fields, clear } — a
 // redesign-assistant proposal to save onto the fork instead of the source.
+const CONTEXT_EVENTS = ['catalog:primitive-changed'];
+
 export default function CatalogUniversePanel({ ingredient, context, onContextChange, readOnly = false, forkBlocked = false, unsaved = false, seed = null, redesign = null }) {
   const fieldId = useId();
   const navigate = useNavigate();
   const mounted = useMounted();
-  const contextSequence = useRef(0);
-  const applyContext = (updated) => { contextSequence.current += 1; onContextChange(updated); };
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [usageError, setUsageError] = useState(false);
@@ -58,21 +58,28 @@ export default function CatalogUniversePanel({ ingredient, context, onContextCha
   const seedLoad = seed?.load;
   const seedReady = seed?.ready;
   useEffect(() => { if (open && seedLoad && !seedReady) seedLoad(); }, [open, seedLoad, seedReady]);
+  // Ownership/usage reads follow catalog changes for this ingredient and
+  // reconnects; no entry read unless usage is incomplete or a retry is asked.
+  const { data: freshContext, error: contextError, refetch: refreshContext, updateData: updateContext } = useSocketResource(
+    () => getCatalogUniverseContext(ingredient.id, { silent: true }),
+    { events: CONTEXT_EVENTS, resourceKey: ingredient.id, immediate: false, matchesEvent: (payload) => payload?.ingredientId === ingredient.id },
+  );
   useEffect(() => {
-    let active = true;
-    const refresh = (event) => {
-      if (event && event.ingredientId !== ingredient.id) return;
-      const sequence = ++contextSequence.current;
-      getCatalogUniverseContext(ingredient.id, { silent: true }).then((data) => { if (active && sequence === contextSequence.current) { setUsageError(false); onContextChange(data); } })
-        .catch(() => { if (active) { setUsageError(true); toast.error('Unable to refresh universe ownership and usage. Retry before changing it.'); } });
-    };
+    if (!freshContext) return;
+    setUsageError(false);
+    onContextChange(freshContext);
+  }, [freshContext, onContextChange]);
+  useEffect(() => {
+    if (!contextError) return;
+    setUsageError(true);
+    toast.error('Unable to refresh universe ownership and usage. Retry before changing it.');
+  }, [contextError]);
+  const applyContext = (updated) => { updateContext(updated); onContextChange(updated); };
+  useEffect(() => {
     const retryRequested = handledUsageRetry.current !== usageRetry;
     handledUsageRetry.current = usageRetry;
-    if (context?.usageComplete === false || retryRequested) refresh();
-    socket.on('catalog:primitive-changed', refresh);
-    socket.on('connect', refresh);
-    return () => { active = false; socket.off('catalog:primitive-changed', refresh); socket.off('connect', refresh); };
-  }, [ingredient.id, onContextChange, context?.usageComplete, usageRetry]);
+    if (context?.usageComplete === false || retryRequested) refreshContext();
+  }, [ingredient.id, context?.usageComplete, usageRetry, refreshContext]);
 
   const owner = context?.owner;
   const own = async () => {

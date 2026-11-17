@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
 const socketHandlers = new Map();
@@ -47,7 +47,7 @@ vi.mock('../ui/Toast', () => ({
 vi.mock('../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../StatusBadge', () => ({ default: () => null }));
 vi.mock('./DeployPanel', () => ({ default: () => null }));
-vi.mock('./EditAppDrawer', () => ({ default: () => null }));
+vi.mock('./EditAppDrawer', () => ({ default: ({ onClose }) => <button onClick={onClose}>Close edit drawer</button> }));
 vi.mock('./DesktopLaunchProgress', () => ({ default: ({ online }) => <output data-testid="native-state">{online ? 'Running' : 'Exited'}</output> }));
 vi.mock('./tabs/OverviewTab', () => ({ default: ({ app }) => <output data-testid="overview-app">{app.id}</output> }));
 vi.mock('./tabs/TasksTab', () => ({ default: () => null }));
@@ -77,10 +77,10 @@ const APP = {
 };
 
 function LocationProbe() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const navigate = useNavigate();
   return <>
-    <output data-testid="location">{pathname}</output>
+    <output data-testid="location">{pathname}{search}</output>
     <button onClick={() => navigate('/apps/app-2/overview')}>View second app</button>
   </>;
 }
@@ -151,6 +151,16 @@ describe('AppDetailView header title', () => {
 
     const heading = await screen.findByRole('heading', { name: APP.name });
     expect(heading.parentElement).toHaveClass('flex-1', 'lg:flex-initial', 'min-w-0');
+  });
+
+  it('re-opens the edit drawer on a reload carrying ?appTab and forgets the tab on close', async () => {
+    api.getApp.mockResolvedValue(APP);
+    renderDetail('/apps/app-1/overview?appTab=intelligence');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close edit drawer' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close edit drawer' })).toBeNull());
+    expect(screen.getByTestId('location')).toHaveTextContent('/apps/app-1/overview');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('appTab');
   });
 
   it('does not display PM2 process names in the header', async () => {

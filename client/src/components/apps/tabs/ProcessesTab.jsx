@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, Fragment } from 'react';
-import { createPortal } from 'react-dom';
+import Modal from '../../ui/Modal';
 import { Maximize2, X } from 'lucide-react';
 import { applyProcessAction } from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
@@ -8,7 +8,6 @@ import ProcessLogLines, { LogStreamBadge } from '../../ui/ProcessLogLines';
 import ListLoadError from '../../ui/ListLoadError';
 import { useProcessSnapshot } from '../../../hooks/useProcessSnapshot';
 import { useProcessLogs } from '../../../hooks/useProcessLogs';
-import useFocusTrap from '../../../hooks/useFocusTrap';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { formatBytes, formatCount, formatDurationMs, formatTimeOfDaySeconds } from '../../../utils/formatters';
 
@@ -28,11 +27,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
   const [fullscreen, setFullscreen] = useState(false);
   const logsRef = useRef(null);
   const fullscreenLogsRef = useRef(null);
-  const fullscreenModalRef = useRef(null);
   const fullscreenButtonRef = useRef(null);
-
-  // Focus trap for fullscreen modal: trap Tab/Shift+Tab and restore focus on close
-  useFocusTrap(fullscreen, fullscreenModalRef);
 
   // Socket log lifecycle lives in the shared hook so this tab and the desktop
   // launch-progress panel can't drift.
@@ -68,13 +63,6 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
       .map(({ line, type, timestamp }) => `[${formatTimeOfDaySeconds(timestamp)}] [${type}] ${line}`)
       .join('\n');
     copyToClipboard(text, 'Logs copied');
-  };
-
-  const handleFullscreenEscape = (e) => {
-    if (e.key === 'Escape' && fullscreen) {
-      e.preventDefault();
-      setFullscreen(false);
-    }
   };
 
   const filteredProcesses = filterFn
@@ -255,27 +243,17 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
         </div>
       </div>
 
-      {/*
-        Fullscreen Log Modal — portaled to <body>.
-
-        This tab renders inside an app-detail / processes-page card tree, and on
-        "glass" themes (`--port-backdrop-filter` non-none) `index.css` gives every
-        bordered/rounded `.bg-port-card` a backdrop-filter, which makes that card
-        the containing block for `position:fixed` descendants. Rendered inline the
-        overlay would be sized to the card instead of the viewport. Same escape
-        GalleryImagePicker / FolderPicker get via <ui/Modal>'s `usePortal`, and the
-        same fix MediaLightbox took in #4151 — reached through createPortal
-        directly because this overlay isn't a <Modal>.
-      */}
-      {fullscreen && expandedProcess && createPortal(
-        <div
-          ref={fullscreenModalRef}
-          className="fixed inset-0 bg-port-bg z-50 flex flex-col"
-          role="dialog"
-          aria-modal="true"
-          aria-label={`Logs for ${expandedProcess}`}
-          onKeyDown={handleFullscreenEscape}
-        >
+      {/* <Modal> portals to <body>: glass-theme card backdrop-filters would otherwise size a fixed overlay to the card (#4151). */}
+      <Modal
+        open={fullscreen && Boolean(expandedProcess)}
+        onClose={() => setFullscreen(false)}
+        usePortal
+        size="none"
+        align="none"
+        backdropClassName="bg-port-bg"
+        panelClassName="w-full h-dvh flex flex-col bg-port-bg overflow-hidden"
+        ariaLabel={`Logs for ${expandedProcess}`}
+      >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 px-4 sm:px-6 py-3 sm:py-4 border-b border-port-border bg-port-card">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <span className="text-lg font-medium text-white">Logs: {expandedProcess}</span>
@@ -324,9 +302,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
           >
             <ProcessLogLines logs={logs} status={status} statusDetail={statusDetail} onRetry={retry} showTimestamps timestampGap="mr-3" />
           </div>
-        </div>,
-        document.body
-      )}
+      </Modal>
     </>
   );
 }

@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import * as api from '../services/api';
+import { useSocketSubscription } from './useSocketSubscription';
 
 const MAX_FEED_ITEMS = 200;
 let idCounter = 0;
@@ -42,16 +43,10 @@ export default function useMoltworldWs() {
     setFeedItems([...feedRef.current]);
   }, []);
 
-  useEffect(() => {
-    // Subscribe to agents channel (moltworld events ride on agent subscribers).
-    // Re-emit on every (re)connect too: the server rebuilds an empty per-socket
-    // subscriber Set on reconnect (sleep/blip/restart), so a one-shot emit at
-    // mount would leave the feed + presence panel permanently dead after a
-    // reconnect — and this hook has no polling fallback.
-    const subscribe = () => socket.emit('agents:subscribe');
-    subscribe();
-    socket.on('connect', subscribe);
+  // Moltworld events ride on the agents subscriber room; the hook re-subscribes on reconnect.
+  useSocketSubscription('agents');
 
+  useEffect(() => {
     const handleStatus = (data) => {
       setConnectionStatus(data.status || 'disconnected');
       addFeedItem('status', { ...data, agentName: 'System', content: `Connection: ${data.status}` });
@@ -100,7 +95,6 @@ export default function useMoltworldWs() {
 
     return () => {
       abortCtrl.abort();
-      socket.off('connect', subscribe);
       socket.off('moltworld:status', handleStatus);
       socket.off('moltworld:event', handleEvent);
       socket.off('moltworld:presence', handlePresence);
