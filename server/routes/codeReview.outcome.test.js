@@ -10,6 +10,14 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: () => {} },
 }))
 
+const cos = vi.hoisted(() => ({ state: null, emitted: [] }))
+vi.mock('../services/cosState.js', () => ({
+  withStateLock: async work => work(),
+  loadState: async () => cos.state,
+  saveState: async state => { cos.state = structuredClone(state) },
+}))
+vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: (event, payload) => cos.emitted.push([event, payload]) } }))
+
 const { default: routes } = await import('./codeReview.js')
 const { pickCodeReviewDefaults } = await import('../services/codeReview.js')
 
@@ -20,6 +28,11 @@ app.use(errorMiddleware)
 const report = body => request(app).post('/api/code-review/cli-outcome').send(body)
 
 beforeEach(() => {
+  cos.emitted = []
+  cos.state = { agents: {
+    'agent-example': { id: 'agent-example', status: 'running', metadata: { taskDescription: 'Example claim' } },
+    'agent-finished': { id: 'agent-finished', status: 'completed', metadata: {} },
+  } }
   settings.current = {
     codeReview: {
       reviewers: ['opencode', 'codex'],
@@ -89,5 +102,42 @@ describe('CLI reviewer outcome reporting', () => {
   ])('rejects invalid or unbounded reports without a health write', async body => {
     expect((await report(body)).status).toBe(400)
     expect(settings.current.codeReview.reviewerHealth).toBeUndefined()
+  })
+})
+
+describe('verdicts on the owning run (#16572)', () => {
+  // `recorded` stays the reviewer-health result: codex has no fault to clear here.
+  it('records a findings verdict with its round and changed-line count on the running agent', async () => {
+    const result = await report({ reviewer: 'codex', outcome: 'reviewed', verdict: 'findings', agentId: 'agent-example', round: 2, changedLines: 140 })
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual({ recorded: false, runRecorded: true })
+    const agent = cos.state.agents['agent-example']
+    expect(agent.metadata.taskDescription).toBe('Example claim')
+    expect(agent.metadata.reviewVerdicts).toEqual([
+      { reviewer: 'codex', verdict: 'findings', round: 2, changedLines: 140, recordedAt: expect.any(String) },
+    ])
+    expect(cos.emitted).toEqual([
+      ['agent:updated', agent],
+      ['reviewer-verdict:recorded', { agentId: 'agent-example', reviewer: 'codex', verdict: 'findings' }],
+    ])
+  })
+
+  it('refuses a run that is not live and leaves a report without a run id unrecorded', async () => {
+    const before = structuredClone(cos.state)
+    const finished = await report({ reviewer: 'codex', outcome: 'reviewed', verdict: 'clean', agentId: 'agent-finished', round: 1, changedLines: 3 })
+    expect(finished.body).toEqual({ recorded: false, runRecorded: false, reason: 'run-not-running' })
+    expect((await report({ reviewer: 'codex', outcome: 'reviewed', verdict: 'clean' })).body).toEqual({ recorded: false })
+    expect(cos.state).toEqual(before)
+  })
+
+  it.each([
+    { agentId: '../agent-example' },
+    { round: 0 },
+    { changedLines: -1 },
+    { round: 1.5 },
+  ])('rejects an out-of-shape run field (%j)', async extra => {
+    const before = structuredClone(cos.state)
+    expect((await report({ reviewer: 'codex', outcome: 'reviewed', verdict: 'clean', agentId: 'agent-example', ...extra })).status).toBe(400)
+    expect(cos.state).toEqual(before)
   })
 })
