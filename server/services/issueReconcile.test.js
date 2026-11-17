@@ -24,7 +24,10 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(async () => '[]'),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }));
-vi.mock('./gitlab.js', () => ({ execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })) }));
+vi.mock('./gitlab.js', () => ({
+  execGlab: vi.fn(async () => ''),
+  execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })),
+}));
 vi.mock('./jira.js', () => ({ fetchMyCurrentSprintTickets: vi.fn(async () => []) }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
@@ -49,13 +52,14 @@ import {
 } from './issueReconcile.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
-import { execGlabJson } from './gitlab.js';
+import { execGlab, execGlabJson } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+  execGlab.mockResolvedValue('');
   getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' });
   readOriginRemoteUrl.mockResolvedValue('git@github.com:atomantic/PortOS.git');
 });
@@ -937,6 +941,77 @@ describe('swarm reservations (in-progress, no assignee)', () => {
         log.mockRestore();
       }
     });
+
+    // #16608 — the gather → release boundary on GitLab, where `glab` is cwd-routed.
+    const release = (result) => releaseAbandonedClaims(result.abandoned, {
+      forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName, repoPath: '/repo',
+    });
+    const glabWrites = () => execGlab.mock.calls.map(([argv, cwd]) => [argv, cwd]);
+
+    it('releases a stale reservation with one note and one unlabel, never a close', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: glMention, open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies).toEqual([]);
+      expect(result.abandoned.map((a) => [a.number, a.state])).toEqual([[42, 'RESERVED']]);
+
+      expect(await release(result)).toBe(1);
+      const writes = glabWrites();
+      expect(writes).toHaveLength(2);
+      expect(writes[0][0].slice(0, 4)).toEqual(['issue', 'note', '42', '--message']);
+      expect(writes[0][0].at(-1)).toContain('reservation');
+      expect(writes[0][0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
+      expect(writes[1][0]).toEqual(['issue', 'update', '42', '--unlabel', 'in-progress']);
+      expect(writes.every(([, cwd]) => cwd === '/repo')).toBe(true);
+      expect(writes.some(([argv]) => argv.includes('close'))).toBe(false);
+      expect(execGh).not.toHaveBeenCalled();
+    });
+
+    it('holds a fresh reservation: nothing to release, nothing written', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(FOREIGN_CLAIM_STALE_DAYS - 1) })], merged: [], open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.reserved.map((r) => r.number)).toEqual([42]);
+      expect(await release(result)).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    });
+
+    it('never releases a reservation whose activity time is unresolved', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: undefined })], merged: [], open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.reserved.map((r) => [r.number, r.staleDays])).toEqual([[42, null]]);
+      expect(await release(result)).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    });
+
+    it('an unreadable assignee list is not "no assignee": a stale issue is never released', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ updated_at: daysAgo(400) })], merged: [], open: [] });
+        const result = await reconcile('/repo', { now: NOW });
+        expect(result.stalled.map((s) => [s.number, s.hasAssignee])).toEqual([[42, null]]);
+        expect(await release(result)).toBe(0);
+        expect(execGlab).not.toHaveBeenCalled();
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it('still unlabels when the note fails; a failed unlabel reports 0 so the next pass retries', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: [] });
+        const result = await reconcile('/repo', { now: NOW });
+
+        execGlab.mockImplementation(async (argv) => (argv[1] === 'note' ? null : ''));
+        expect(await release(result)).toBe(1);
+        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['note', 'update']);
+
+        execGlab.mockReset();
+        execGlab.mockImplementation(async (argv) => (argv[1] === 'update' ? null : ''));
+        expect(await release(result)).toBe(0);
+      } finally {
+        error.mockRestore();
+      }
+    });
   });
 });
 
@@ -981,6 +1056,20 @@ describe('releaseAbandonedClaims', () => {
     expect(await releaseAbandonedClaims([], ctx)).toBe(0);
     expect(await releaseAbandonedClaims(abandoned, { ...ctx, repoSpec: null })).toBe(0);
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  // GitLab has no ABANDONED state, and glab needs the checkout it resolves the project from.
+  it('on GitLab releases only a reservation, and only with a repo path', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const gl = { forge: 'gitlab', repoSpec: null, fullName: 'g/p', repoPath: '/repo' };
+      expect(await releaseAbandonedClaims([{ ...abandoned[0], state: 'ABANDONED' }], gl)).toBe(0);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: not releasing #2220/));
+      expect(await releaseAbandonedClaims([{ ...abandoned[0], state: 'RESERVED' }], { ...gl, repoPath: undefined })).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 
