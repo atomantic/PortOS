@@ -147,8 +147,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
 
   /**
    * A clean checkout of a branch with one commit of its own that has landed on
-   * main: by a no-ff merge (main contains the head by ancestry) or as a
-   * rebase-merge replays it (a patch-equivalent commit, a different SHA).
+   * main: by a no-ff merge (main contains the head by ancestry), as a
+   * rebase-merge replays it (a patch-equivalent commit, a different SHA), or
+   * squashed into one new commit.
    */
   async function addMergedTree(path, branch, how) {
     await addTree(path, branch);
@@ -157,6 +158,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await execGit(['add', file], path);
     await execGit(['commit', '-m', `feat: ${branch}`], path);
     if (how === 'no-ff') await execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch], repo);
+    else if (how === 'squash') {
+      await execGit(['merge', '--squash', branch], repo);
+      await execGit(['commit', '-m', `feat: ${branch} (squash)`], repo);
+    }
     // -x keeps the replayed SHA distinct even within the same second.
     else await execGit(['cherry-pick', '-x', (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()], repo);
     return path;
@@ -387,15 +392,15 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).not.toContain('next/issue-8');
   });
 
-  it('retires a rebase-merged branch with its own commits from a clean checkout outside the managed roots', async () => {
-    const path = await addMergedTree(join(external, 'rebased'), 'feat/rebased', 'rebase');
-    expect(await execGit(['merge-base', '--is-ancestor', 'feat/rebased', 'main'], repo, { ignoreExitCode: true })).toMatchObject({ exitCode: 1 });
+  it.each([['rebase', 'feat/rebased'], ['squash', 'feat/squashed']])('retires a %s-merged branch with its own commits from a clean checkout outside the managed roots', async (how, branch) => {
+    const path = await addMergedTree(join(external, how), branch, how);
+    expect(await execGit(['merge-base', '--is-ancestor', branch, 'main'], repo, { ignoreExitCode: true })).toMatchObject({ exitCode: 1 });
 
-    const result = await cleanupMerged(repo, 'main', [{ branch: 'feat/rebased' }], { activeAgentIds: new Set() });
+    const result = await cleanupMerged(repo, 'main', [{ branch }], { activeAgentIds: new Set() });
 
-    expect(result).toMatchObject({ cleaned: ['feat/rebased'], skipped: [] });
+    expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
     expect(existsSync(path)).toBe(false);
-    expect(await branches()).not.toContain('feat/rebased');
+    expect(await branches()).not.toContain(branch);
   });
 
   it('retires a no-ff merged branch from an idle checkout outside the managed roots', async () => {
