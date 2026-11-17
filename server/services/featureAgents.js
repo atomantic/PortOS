@@ -25,22 +25,6 @@ const withLock = createMutex();
 // Event name prefix
 const EVT = 'feature-agent';
 
-// Backoff constants
-const MIN_BACKOFF_MS = 60 * 60 * 1000;       // 1 hour
-const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;  // 24 hours
-
-/**
- * Exponential idle backoff, doubling per consecutive idle run and capped at
- * MAX_BACKOFF_MS. `consecutiveIdles` is 1-indexed (the first idle run yields
- * MIN_BACKOFF_MS, not half of it).
- */
-export function calculateBackoff(consecutiveIdles) {
-  return Math.min(
-    MIN_BACKOFF_MS * Math.pow(2, consecutiveIdles - 1),
-    MAX_BACKOFF_MS
-  );
-}
-
 /**
  * Read the feature agents data file
  */
@@ -93,7 +77,6 @@ export async function createFeatureAgent(input) {
       lastRunAt: null,
       runCount: 0,
       currentAgentId: null,
-      backoff: null,
       createdAt: now,
       updatedAt: now
     };
@@ -240,7 +223,6 @@ export async function resumeFeatureAgent(id) {
     if (data.agents[idx].status !== 'paused') return data.agents[idx];
 
     data.agents[idx].status = 'active';
-    data.agents[idx].backoff = null; // Reset backoff on resume
     data.agents[idx].updatedAt = new Date().toISOString();
     await writeData(data);
 
@@ -261,7 +243,6 @@ export async function stopFeatureAgent(id) {
 
     data.agents[idx].status = 'draft';
     data.agents[idx].currentAgentId = null;
-    data.agents[idx].backoff = null;
     data.agents[idx].updatedAt = new Date().toISOString();
     await writeData(data);
 
@@ -290,7 +271,6 @@ export async function triggerFeatureAgent(id) {
     const idx = data.agents.findIndex(a => a.id === id);
     if (idx === -1) return null;
     if (data.agents[idx].currentAgentId) return data.agents[idx];
-    data.agents[idx].backoff = null;
     data.agents[idx].lastRunAt = null;
     data.agents[idx].updatedAt = new Date().toISOString();
     await writeData(data);
@@ -351,12 +331,6 @@ export async function getDueFeatureAgents() {
     if (agent.autonomyLevel === 'standby') continue; // Standby agents only run when manually triggered
     if (agent.currentAgentId) continue; // Already running
 
-    // Check backoff
-    if (agent.backoff?.currentDelayMs) {
-      const nextAllowed = new Date(agent.backoff.lastIdleAt).getTime() + agent.backoff.currentDelayMs;
-      if (now < nextAllowed) continue;
-    }
-
     const lastRun = agent.lastRunAt ? new Date(agent.lastRunAt).getTime() : 0;
     const mode = agent.schedule?.mode || 'continuous';
 
@@ -412,21 +386,6 @@ export async function recordRunCompletion(id, runData) {
     agent.runCount = (agent.runCount || 0) + 1;
     agent.currentAgentId = null;
     agent.updatedAt = new Date().toISOString();
-
-    // Handle idle detection for backoff
-    if (runData.status === 'idle-no-work') {
-      const consecutiveIdles = (agent.backoff?.consecutiveIdles || 0) + 1;
-      const currentDelayMs = calculateBackoff(consecutiveIdles);
-      agent.backoff = {
-        currentDelayMs,
-        consecutiveIdles,
-        lastIdleAt: new Date().toISOString()
-      };
-      console.log(`😴 Feature agent ${agent.name} idle (backoff: ${Math.round(currentDelayMs / 60000)}min)`);
-    } else {
-      // Reset backoff on productive work
-      agent.backoff = null;
-    }
 
     data.agents[idx] = agent;
     await writeData(data);
@@ -539,16 +498,7 @@ ${skillTemplate ? `## Skill Guidelines\n${skillTemplate}\n` : ''}
 3. Make targeted changes within your feature scope
 4. Test changes when possible (run tests, check Playwright URLs)
 5. Commit with clear messages prefixed with the feature name
-6. If nothing actionable remains, report idle status
-
-## Structured Summary (REQUIRED at end)
-Always end your work with this format:
-\`\`\`
-Status: [working|idle-no-work|error]
-Files changed: [list of files]
-Summary: [what was done]
-Learnings: [anything discovered for next run]
-\`\`\`
+6. If nothing actionable remains, say so briefly and stop
 `;
 }
 
@@ -671,7 +621,7 @@ async function releasePendingTask(taskId) {
 // Provider/worktree setup can fail before a CoS agent record exists, so no
 // completion event will clear the temporary task pointer. Release that pointer
 // when the spawn path reports the task-level error. A held dispatch
-// (`task:held`) drops the unpersisted task the same way; lastRunAt and backoff
-// stay untouched so the agent is due again on the next dequeue.
+// (`task:held`) drops the unpersisted task the same way; lastRunAt
+// stays untouched so the agent is due again on the next dequeue.
 cosEvents.on('agent:error', (agentData) => releasePendingTask(agentData?.taskId));
 cosEvents.on('task:held', (held) => releasePendingTask(held?.taskId));

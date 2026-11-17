@@ -55,7 +55,6 @@ export default function RunsTab({ agent }) {
             {expanded[i] ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
             <span className={`text-xs px-2 py-0.5 rounded shrink-0 ${
               run.status === 'working' ? 'bg-port-success/10 text-port-success' :
-              run.status === 'idle-no-work' ? 'bg-port-warning/10 text-port-warning' :
               run.status === 'error' ? 'bg-port-error/10 text-port-error' :
               'bg-gray-500/10 text-gray-400'
             }`}>
