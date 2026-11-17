@@ -2,6 +2,70 @@
   "schemaVersion": 1,
   "observations": [
     {
+      "id": "openai-gpt-6.2-astra-pricing-2026-11-17-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-17)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:14:46.171017Z",
+          "methodology": "Publisher standard API list price in USD per million uncached input tokens for requests with at most 272K input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:14:46.171211Z",
+          "methodology": "Publisher standard API list price in USD per million output tokens for requests with at most 272K input tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official standard API token rates; not Codex subscription quota or measured task cost. Above 272K input tokens, input/cache rates double and output rates increase 1.5x for the full request. Cache writes, cached input, Batch, Fast and Ultrafast use separate rates. Reasoning is billed as output, not a separate surcharge. No verified Artificial Analysis effort-level score, task cost, latency or throughput was accessible during this refresh; these remain unknown rather than inheriting predecessor measurements."
+    },
+    {
+      "id": "openai-gpt-6.2-sol-pricing-2026-11-17-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-sol",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-17)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+          "retrievedAt": "2026-11-17T18:14:46.171214Z",
+          "methodology": "Publisher standard API list price in USD per million uncached input tokens for requests with at most 272K input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+          "retrievedAt": "2026-11-17T18:14:46.171215Z",
+          "methodology": "Publisher standard API list price in USD per million output tokens for requests with at most 272K input tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official standard API token rates; not Codex subscription quota or measured task cost. Above 272K input tokens, input/cache rates double and output rates increase 1.5x for the full request. Cache writes, cached input, Batch, Fast and Ultrafast use separate rates. Reasoning is billed as output, not a separate surcharge. No verified Artificial Analysis effort-level score, task cost, latency or throughput was accessible during this refresh; these remain unknown rather than inheriting predecessor measurements."
+    },
+    {
       "id": "openai-gpt-6.1-terra-pricing-2026-10-27-standard",
       "provider": "OpenAI",
       "model": "gpt-6.1-terra",

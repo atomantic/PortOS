@@ -98,6 +98,22 @@ it('exposes Terra pricing and measured effort scores to existing Codex installs'
   expect(ultra.needsResearch).toBe(true);
 });
 
+it('exposes shipped GPT-6.2 prices to existing installs without inventing benchmark measurements', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const result = await request(app).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const [model, input, output] of [['gpt-6.2-astra', 8, 40], ['gpt-6.2-sol', 2, 10]]) {
+    const rows = result.body.observations.filter(row => row.model === model);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      effort: 'unspecified', billing: 'api', quality: null, costPerTask: null,
+      inputPerMillion: { value: input, source: { url: `https://developers.openai.com/api/docs/models/${model}` } },
+      outputPerMillion: { value: output }, reasoningPerMillion: null,
+      responseSeconds: null, tokensPerSecond: null, quota: null,
+    });
+  }
+});
+
 it('exposes Fable 5.2 task costs and scores on the matching v5 workload without changing the legacy composite', async () => {
   await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
   const claudeApp = express();
