@@ -328,10 +328,14 @@ describe('pregate hidden-content invocation', () => {
     `);
     write('server/lib/expensive.test.js', 'export {};\n');
     write('scripts/run-ci-tests.js', `
-      import { appendFileSync } from 'fs';
+      import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'fs';
       import { resolve } from 'path';
       import { pathToFileURL } from 'url';
       const files = JSON.parse(process.env.CI_TEST_FILES);
+      // A guard wall time the case plants under the ignored cache, so it never enters the reuse key.
+      if (process.env.PORTOS_PREGATE_DURATIONS_PATH && existsSync('.cache/guard-ms')) {
+        writeFileSync(process.env.PORTOS_PREGATE_DURATIONS_PATH, JSON.stringify({ 'server/lib/moduleSummaries.test.js': Number(readFileSync('.cache/guard-ms', 'utf8')) }));
+      }
       const excluded = JSON.parse(process.env.PORTOS_PREGATE_GUARDS || '{}').files || [];
       const broad = process.env.CI_TEST_MODE !== 'files' || files.includes('server/lib/expensive.test.js');
       appendFileSync('.cache/events', JSON.stringify({ broad, excluded }) + '\\n');
@@ -507,6 +511,22 @@ describe('pregate hidden-content invocation', () => {
       expect(runReuse().status).toBe(0);
       expect(receipt().stages.filter(stage => stage.reusedFrom).map(stage => stage.reusedFrom))
         .toEqual(first.map(stage => stage.passedAt));
+    });
+
+    it('passes a guard over the time budget, reports it, and still reuses that pass (#16551)', () => {
+      prepare();
+      write('.cache/guard-ms', '9000');
+      const slow = runReuse();
+      expect(slow.status, slow.stderr).toBe(0);
+      expect(slow.stdout).toContain('🐢 server structural guards over the 3.0s per-guard budget hosted CI enforces: server/lib/moduleSummaries.test.js 9.0s.');
+      expect(slow.stdout).toContain('✔️ server structural guards passed');
+      expect(receipt().stages.find(stage => stage.guard)).toMatchObject({
+        status: 'passed', fileDurations: { 'server/lib/moduleSummaries.test.js': 9000 }, reuseKey: expect.any(String), passedAt: expect.any(String),
+      });
+
+      const reused = runReuse();
+      expect(reused.status, reused.stderr).toBe(0);
+      expect(reused.stdout).toContain('⏭️ server structural guards reused from');
     });
 
     it.each([

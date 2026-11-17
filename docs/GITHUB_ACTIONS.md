@@ -196,6 +196,14 @@ to every plan (client scanners ride any `client/src` js/jsx change).
 `TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
 reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
 
+Because they run on every PR, each always-run guard has a per-file time budget
+(`GUARD_BUDGET_MS` in `scripts/lib/guardBudget.js`). The Linux server job sets
+`CI_GUARD_BUDGET=enforce`, so `scripts/run-ci-tests.js` runs the always-run
+guards of its slice as their own Vitest pass, prints the slowest
+(`⏱️ Always-run guards, slowest of …`) and fails the job naming any file over the
+budget. This is the only place the budget fails a run: Windows, browser and DB
+jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+
 ### The bundled `lib/slashdo` submodule
 
 `server/lib/slashdoLoader.test.js` and `server/lib/slashdoInvocation.test.js`
