@@ -409,6 +409,9 @@ async function getGitlabState(repoPath, fullName) {
     inProgress: issues.rows.map(normalizeGitlabIssue),
     mergedPrs: merged.rows.map(normalizeGitlabMr),
     openPrs: open.rows.map(normalizeGitlabMr),
+    // One page only: a full page may hide the open MR that keeps a reservation live,
+    // so `reconcile` withholds reservation releases until the page is no longer full.
+    openPrsComplete: open.rows.length < GL_PER_PAGE,
   };
 }
 
@@ -543,6 +546,8 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
     fullName: state.fullName,
     repoSpec: state.repoSpec ?? null,
     ownerLogin: state.ownerLogin ?? null,
+    // GitHub withholds the whole scan when a list saturates, so only GitLab can report false.
+    openPrsComplete: state.openPrsComplete !== false,
     issues,
   };
 }
@@ -568,6 +573,12 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
   if (!gathered) return null;
   const classified = classifyIssues(gathered.issues);
   const reserved = classified.filter((c) => c.state === 'RESERVED');
+  const expired = reserved.filter((c) => isClaimStale(c.staleDays));
+  // An unseen open MR could be the live claim behind an expired-looking reservation.
+  const canRelease = gathered.openPrsComplete || expired.length === 0;
+  if (!canRelease) {
+    console.log(`⏭️ issue-reconcile: open change list for ${gathered.fullName} reached the page limit — holding ${expired.length} expired reservation(s) until it can be read in full`);
+  }
   return {
     forge: gathered.forge,
     fullName: gathered.fullName,
@@ -576,9 +587,9 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
     zombies: classified.filter((c) => c.state === 'ZOMBIE'),
     abandoned: [
       ...classified.filter((c) => c.state === 'ABANDONED'),
-      ...reserved.filter((c) => isClaimStale(c.staleDays)),
+      ...(canRelease ? expired : []),
     ],
-    reserved: reserved.filter((c) => !isClaimStale(c.staleDays)),
+    reserved: canRelease ? reserved.filter((c) => !isClaimStale(c.staleDays)) : reserved,
     stalled: classified.filter((c) => c.state === 'STALLED'),
     live: classified.filter((c) => c.state === 'LIVE'),
   };
@@ -599,7 +610,8 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
  * comment does not block the release.
  *
  * GitLab releases only expired RESERVATIONS (ABANDONED cannot occur there, see
- * `getGitlabState`), through `releaseGitlabReservations`. JIRA has neither state.
+ * `getGitlabState`), through `releaseGitlabReservations`, which removes the label
+ * before it comments. JIRA has neither state.
  *
  * @param {object[]} abandoned - classified ABANDONED or expired RESERVED issues
  * @param {{ forge:string, repoSpec:string|null, fullName:string, repoPath?:string }} ctx
@@ -642,8 +654,11 @@ function reservationReleaseNote(issue) {
 }
 
 /**
- * GitLab arm of `releaseAbandonedClaims`: note first (best effort), then remove the
- * label, the same two `glab` calls `unblockIssues` in blockedIssueReconcile.js makes.
+ * GitLab arm of `releaseAbandonedClaims`, using the same two `glab` calls as `unblockIssues`
+ * in blockedIssueReconcile.js. The label goes FIRST and the note only after it succeeds:
+ * a note refreshes `updated_at`, so a note followed by a failed unlabel would make the
+ * reservation look fresh and delay the retry by a whole stale window. A failed note after
+ * a successful unlabel still counts as released (the label change is in the issue history).
  * A reservation has no assignee, so there is nothing to unassign. `in-progress` is a
  * plain label, the same name the scan's `--label` filter selected, not a scoped one.
  */
@@ -656,13 +671,13 @@ async function releaseGitlabReservations(abandoned, { fullName, repoPath }) {
       console.log(`⏭️ issue-reconcile: not releasing #${number} in ${fullName}: only an expired reservation is released on GitLab (state ${issue.state})`);
       continue;
     }
-    const noted = await execGlab(['issue', 'note', number, '--message', reservationReleaseNote(issue)], repoPath);
-    if (noted === null) console.error(`❌ issue-reconcile: could not comment on expired reservation #${number} in ${fullName}`);
     const unlabeled = await execGlab(['issue', 'update', number, '--unlabel', IN_PROGRESS_LABEL], repoPath);
     if (unlabeled === null) {
       console.error(`❌ issue-reconcile: could not release expired reservation #${number} in ${fullName}`);
       continue;
     }
+    const noted = await execGlab(['issue', 'note', number, '--message', reservationReleaseNote(issue)], repoPath);
+    if (noted === null) console.error(`❌ issue-reconcile: could not comment on released reservation #${number} in ${fullName}`);
     released += 1;
     console.log(`🔓 issue-reconcile released #${number} in ${fullName}: reservation stale ${issue.staleDays}d, never claimed`);
   }
