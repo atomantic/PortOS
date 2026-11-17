@@ -84,7 +84,7 @@ export async function dispatchAgentRun(context, opts) {
 }
 
 async function runAgentDispatch(context, { spawnViaRunner } = {}) {
-  const { task, agentId, laneName, toolExecution, instanceId } = context;
+  const { task, agentId, instanceId } = context;
   const config = await getConfig();
   const resolution = await resolveAgentProviderAndModel(task);
   if (!resolution.ok) {
@@ -418,7 +418,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       model: selectedModel,
       mode: executionMode,
       cli: cliConfig.command,
-      lane: laneName,
       worktree: !!worktreeInfo,
     });
 
@@ -434,8 +433,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
         runId,
         tuiConfig: cliConfig,
         agentDir,
-        executionId: toolExecution.id,
-        laneName,
         leanMode,
         prOpenedBy,
         useDurableRunner: dispatchUseRunner,
@@ -444,7 +441,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       });
     }
     if (dispatchUseRunner) {
-      return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, executionId: toolExecution.id, laneName, securityScanGrant });
+      return await spawnViaRunner(agentId, dispatchedTask, { prompt, workspacePath, model: selectedModel, provider: runProvider, runId, cliConfig, securityScanGrant });
     }
     return await spawnDirectly({
       agentId,
@@ -456,8 +453,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       runId,
       cliConfig,
       agentDir,
-      executionId: toolExecution.id,
-      laneName,
       prOpenedBy,
       safetyProfile,
     });

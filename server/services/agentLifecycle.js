@@ -16,7 +16,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * here — they were extracted into leaf modules that nothing in the cluster is
  * imported by:
  *
- *   - `agentFinalization.js`       — finalizeAgent / releaseAgentLane (both spawners)
+ *   - `agentFinalization.js`       — finalizeAgent (both spawners)
  *   - `agentSummaryExtraction.js`  — extractFinalSummary / extractSimplifySummaries
  *   - `agentRunnerSync.js`         — syncRunnerAgents (agentManagement, subAgentSpawner)
  *   - `agentState.js`              — the shared in-memory agent maps
@@ -39,8 +39,6 @@ import { getTaskById, updateTask } from './cosTaskStore.js';
 import { spawnAgentViaRunner, getRunnerHealth, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { release } from './executionLanes.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../lib/gitCommitProbe.js';
@@ -58,7 +56,7 @@ import { createAgentSpawnContext, prepareAgentSpawn } from './agentSpawnPreparat
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { runAgentCompletionCleanup, replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
-import { finalizeAgent, releaseAgentLane, retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
+import { finalizeAgent, retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { extractFinalSummary } from './agentSummaryExtraction.js';
 import { handleOrphanedTask } from './agentManagement.js';
 
@@ -183,7 +181,7 @@ export async function waitForRunnerStability() {
  * Spawn agent via CoS Runner (isolated PM2 process).
  */
 export async function spawnViaRunner(agentId, task, opts) {
-  const { prompt, workspacePath, model, provider, runId, cliConfig, executionId, laneName } = opts;
+  const { prompt, workspacePath, model, provider, runId, cliConfig } = opts;
   // Wait for runner to be stable to prevent orphaned agents during rolling restarts
   await waitForRunnerStability();
 
@@ -196,8 +194,6 @@ export async function spawnViaRunner(agentId, task, opts) {
     hasStartedWorking: false,
     startedAt: Date.now(),
     initializationTimeout: null,
-    executionId,
-    laneName,
     workspacePath
   };
   runnerAgents.set(agentId, agentInfo);
@@ -306,7 +302,6 @@ export async function spawnViaRunner(agentId, task, opts) {
         reason: message,
       },
     });
-    releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
     // Finalize through the SAME chokepoint every other ending uses (#3632).
     // Finalizing the agent alone — which is all this used to do — left the TASK
     // sitting `in_progress` holding its federation claim until the 15-minute
@@ -378,7 +373,6 @@ export async function spawnViaRunner(agentId, task, opts) {
       accepted: true,
       pid: result.pid ?? null,
       providerId: provider.id,
-      laneName: laneName ?? null,
       // The acknowledgement was lost and the runner turned out to have the
       // agent anyway (#4615). The handoff DID land, so `accepted` stays true —
       // `adopted` is what says the server learned it by asking rather than by
@@ -550,7 +544,7 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     return completeUntrackedAgentFromCosState(agentId, exitCode, success, duration);
   }
 
-  const { task, runId, model, executionId, laneName } = agent;
+  const { task, runId, model } = agent;
 
   // withMapEntryCleanup drops the runnerAgents entry in a finally even if any
   // inner completion step throws — otherwise a memory-extraction crash etc.
@@ -600,11 +594,6 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
     // finished in that window must still finalize normally, and the untracked
     // settlement has nothing to work from without the record.
     if (agent.startupErrorAnalysis && !success && persistedAgent) {
-      if (laneName) release(agentId);
-      if (executionId) {
-        errorExecution(executionId, { message: agent.startupErrorAnalysis.message, code: exitCode });
-        completeExecution(executionId, { success: false });
-      }
       return completeUntrackedAgentFromCosState(agentId, exitCode, false, duration, { interruptedStartup: agent.startupErrorAnalysis });
     }
 
@@ -618,12 +607,6 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
       }
       if (!task.metadata) task.metadata = {};
     }
-
-    // Release the execution lane immediately — `release` is a sync Map
-    // mutation, so this just frees the slot for other tasks in the same
-    // lane. Tool-execution tracking is deferred until effectiveSuccess is
-    // known (the post-exit commit check can flip it false→true).
-    if (laneName) release(agentId);
 
     // Read output from agent directory
     const agentDir = join(AGENTS_DIR, agentId);
@@ -645,18 +628,6 @@ async function handleAdmittedAgentCompletion(agentId, exitCode, success, duratio
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;
-      }
-    }
-
-    // Complete tool-execution tracking with effectiveSuccess so a
-    // commit-found promotion records consistently with completeAgent +
-    // updateTask below.
-    if (executionId) {
-      if (effectiveSuccess) {
-        completeExecution(executionId, { success: true, duration });
-      } else {
-        errorExecution(executionId, { message: `Agent exited with code ${exitCode}`, code: exitCode });
-        completeExecution(executionId, { success: false });
       }
     }
 

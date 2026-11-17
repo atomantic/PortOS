@@ -2,13 +2,12 @@
  * The finalize sequence both in-process agent spawners share.
  *
  * Shared by the direct-CLI `handleClose` and the TUI `finish` (#6619). Skipping the
- * paused return before `releaseAgentLane` re-releases an executionId; skipping the
+ * paused return finalizes a paused run; skipping the
  * `userTerminatedAgents` consume records a killed run as a success. Canonical
  * order: **the paused return runs before the abandon gate**.
  */
 
 import { activeAgents, userTerminatedAgents, pausedAgents, consumePausedAgentExit, unregisterSpawnedAgent } from './agentState.js';
-import { releaseAgentLane } from './agentFinalization.js';
 import { shouldAbandonForHostShutdown } from '../lib/hostShutdown.js';
 
 /** Recorded on a run the user killed, whatever exit code the process reported. */
@@ -34,21 +33,15 @@ export function shouldAbandonAgentRun({ agentId, sentinelPresent = false }) {
 }
 
 /**
- * Run the shared finalize sequence and report which path the run took. On
- * `'finalize'` the lane is already released, BEFORE the caller's error-analysis
- * chain; `'paused'` and `'abandoned'` release nothing.
+ * Run the shared finalize sequence and report which path the run took. `'paused'`
+ * and `'abandoned'` leave the record for the caller.
  *
  * @param {object} params
  * @param {string} params.agentId
- * @param {object|null} [params.agentData] - the `activeAgents` record; its ids win over the outer-scope fallbacks
+ * @param {object|null} [params.agentData] - the `activeAgents` record; its pid backs up the registry
  * @param {boolean} [params.success] - the caller's verdict BEFORE the user-termination override
  * @param {string|null} [params.error] - the caller's error, same proviso.
- * @param {number|null} [params.exitCode]
- * @param {number} [params.duration]
- * @param {string|null} [params.executionId] - outer-scope fallback
- * @param {string|null} [params.laneName] - outer-scope fallback
  * @param {boolean} [params.sentinelPresent] - the run wrote its own `.agent-done`
- * @param {string} [params.errorExecutionFallback] - message for a run that failed without one
  * @returns {{outcome: 'paused'}
  *   | {outcome: 'abandoned'}
  *   | {outcome: 'finalize', finalSuccess: boolean, finalError: string|null, terminatedByUser: boolean}}
@@ -58,15 +51,8 @@ export function finalizeAgentRunCommon({
   agentData = null,
   success = false,
   error = null,
-  exitCode = null,
-  duration = 0,
-  executionId = null,
-  laneName = null,
   sentinelPresent = false,
-  errorExecutionFallback = undefined,
 }) {
-  // `markAgentPaused` already released the lane + execution; return BEFORE
-  // `releaseAgentLane` to avoid a spurious "Invalid state transition".
   if (pausedAgents.has(agentId)) {
     consumePausedAgentExit(agentId);
     // Fall back to the caller's record for an entry `killAgent` cleared early.
@@ -91,15 +77,6 @@ export function finalizeAgentRunCommon({
   const finalSuccess = terminatedByUser ? false : success;
   const finalError = terminatedByUser ? USER_TERMINATED_ERROR : error;
 
-  releaseAgentLane({
-    agentId,
-    success: finalSuccess,
-    duration,
-    exitCode,
-    executionId: agentData?.executionId || executionId,
-    laneName: agentData?.laneName || laneName,
-    errorExecutionMessage: finalError || errorExecutionFallback,
-  });
 
   return { outcome: 'finalize', finalSuccess, finalError, terminatedByUser };
 }

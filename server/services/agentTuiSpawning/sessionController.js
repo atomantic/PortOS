@@ -212,8 +212,6 @@ export function createTuiSessionController({
   tuiConfig,
   cwd,
   rawFile,
-  executionId,
-  laneName,
   launchShape,
   prOwnership,
   mergeGateIsOwed,
@@ -850,12 +848,7 @@ export function createTuiSessionController({
       agentData,
       success,
       error,
-      exitCode,
-      duration,
-      executionId,
-      laneName,
       sentinelPresent: wroteSentinel,
-      errorExecutionFallback: `TUI agent ended: ${reason}`,
     });
 
     if (finalizeOutcome.outcome === 'paused') { await persistence.releaseRunRecord(agentData?.pid ?? null); return; }

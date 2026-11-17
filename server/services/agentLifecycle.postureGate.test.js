@@ -72,7 +72,6 @@ vi.mock('./agentRunTracking.js', () => ({
 vi.mock('./agentFinalization.js', () => ({
   dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn(),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
 vi.mock('./cosEvents.js', () => ({
@@ -131,17 +130,6 @@ vi.mock('./agentErrorAnalysis.js', () => ({
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
-  startExecution: vi.fn(),
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn(),
-}));
-vi.mock('./executionLanes.js', () => ({
-  determineLane: vi.fn(() => 'standard'),
-  acquire: vi.fn(() => ({ success: true })),
-  release: vi.fn(),
-}));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
 vi.mock('./modelAbuseGuard.js', () => ({
   materializePublicReviewInput: vi.fn(),
@@ -237,9 +225,8 @@ beforeEach(() => {
 afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
 describe('spawn setup failure after the worktree exists', () => {
-  it('blocks private setup errors and releases the lane without publishing source details', async () => {
+  it('blocks private setup errors without publishing source details', async () => {
     const { getConfig } = await import('./cosState.js');
-    const { release } = await import('./executionLanes.js');
     const { emitLog } = await import('./cosEvents.js');
     const { registerAgent } = await import('./cosAgentLifecycle.js');
     getConfig.mockRejectedValueOnce(new Error('synthetic sensitive source details'));
@@ -248,7 +235,6 @@ describe('spawn setup failure after the worktree exists', () => {
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({
       status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'private-security-setup-failed' }),
     }), 'internal');
-    expect(release).toHaveBeenCalled();
     expect(registerAgent).not.toHaveBeenCalled();
     expect(spawnDirectly).not.toHaveBeenCalled();
     expect(JSON.stringify(emitLog.mock.calls)).not.toContain('synthetic sensitive source details');
