@@ -77,7 +77,7 @@ export default function CharacterProfile({ record, draft, owner, gates, typeDef,
       <fieldset disabled={readOnly || characterActionBusy}><CatalogFormsEditor type={record.type} payload={payload} onChange={updatePayload} videoDescriptionLimit={videoDescriptionLimit} /></fieldset>
       <RevealTimingField entry={{ ...payload, id: record.id }} editable={!readOnly && !characterActionBusy && payload.locked !== true}
         onPatch={patchPayload} />
-      {showReferenceSheet && <ReferenceSheetPanel payload={payload} universeRef={universeRef} />}
+      {showReferenceSheet && <ReferenceSheetPanel payload={payload} recordId={record.id} />}
       <div className="bg-port-card border border-port-border rounded-lg p-3">
         <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Character LoRA</div>
         <CharacterLoraChip ingredientId={record.id} />

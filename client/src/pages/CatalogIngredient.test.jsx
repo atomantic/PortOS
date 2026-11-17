@@ -854,11 +854,11 @@ describe('CatalogIngredient — character sheet', () => {
     expect(patch.payload.stats).toContainEqual({ label: 'Charisma', value: '7' });
   });
 
-  it('shows a render-reference-sheet deep-link when none exists and a universe ref is present', async () => {
+  it('links to the Casting Sheets tab when no reference sheet exists', async () => {
     await renderPage();
-    await waitFor(() => expect(screen.getByText(/Render in Universe Builder/i)).toBeTruthy());
-    const link = screen.getByText(/Render in Universe Builder/i).closest('a');
-    expect(link.getAttribute('href')).toContain('/universes/u-1');
+    await waitFor(() => expect(screen.getByText(/Render in Casting/i)).toBeTruthy());
+    const link = screen.getByText(/Render in Casting/i).closest('a');
+    expect(link.getAttribute('href')).toBe(`/casting/${encodeURIComponent(CHAR_FIXTURE.id)}/sheets`);
   });
 
   it('shows an existing reference sheet image when payload carries one', async () => {
@@ -871,7 +871,7 @@ describe('CatalogIngredient — character sheet', () => {
       const img = screen.getByAltText('standard reference sheet');
       expect(img.getAttribute('src')).toBe('/data/image-refs/sheet-123.png');
     });
-    expect(screen.getByText(/Re-render in Universe Builder/i)).toBeTruthy();
+    expect(screen.getByText(/Manage in Casting/i)).toBeTruthy();
   });
 
   it('composes the prompt from name + visual fields + tags, then renders and sets the portrait', async () => {
