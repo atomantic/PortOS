@@ -121,7 +121,7 @@ export default function VoiceWidgetGate({ children }) {
         if (mountedRef.current) setWidget(() => mod.default);
       },
       async (err) => {
-        // Not latched: the next start request or enable event tries again.
+        // Not latched: a reconnect or the next start request tries again.
         loadRequestedRef.current = false;
         if (isStaleChunkError(err, { duringImport: true }) && await reloadOnceForStaleChunk()) return;
         console.warn(`⚠️ voice widget failed to load: ${err?.message || err}`);
@@ -134,35 +134,25 @@ export default function VoiceWidgetGate({ children }) {
 
   const { enabled, hotkey } = config;
 
+  // Voice is on and the widget is not mounted yet: load it, and stand in for
+  // its start controls until it listens for itself. These listeners detach in
+  // the same commit that attaches the widget's own, so a request is heard
+  // exactly once. While voice is off nothing here loads or listens.
   useEffect(() => {
-    if (enabled) requestWidget();
-    // Turning voice off withdraws a start nobody has claimed yet, so it cannot
-    // open the mic whenever voice is next turned on.
-    else pendingStartRef.current = false;
-  }, [enabled, requestWidget]);
-
-  // Until the widget mounts and listens for itself, hold a start request here
-  // so it survives the chunk load. These listeners detach in the same commit
-  // that attaches the widget's own, so a request is heard exactly once.
-  useEffect(() => {
+    if (!enabled) {
+      // Turning voice off withdraws a start nobody has claimed yet, so it
+      // cannot open the mic whenever voice is next turned on.
+      pendingStartRef.current = false;
+      return undefined;
+    }
     if (Widget) return undefined;
     const onEngage = () => {
       pendingStartRef.current = true;
       requestWidget();
     };
     const onDisengage = () => { pendingStartRef.current = false; };
-    window.addEventListener(ENGAGE_EVENT, onEngage);
-    window.addEventListener(DISENGAGE_EVENT, onDisengage);
-    return () => {
-      window.removeEventListener(ENGAGE_EVENT, onEngage);
-      window.removeEventListener(DISENGAGE_EVENT, onDisengage);
-    };
-  }, [Widget, requestWidget]);
-
-  // The push-to-talk hotkey is a toggle, so over the same window a second
-  // press withdraws the request, as it would stop a live capture.
-  useEffect(() => {
-    if (Widget || !enabled) return undefined;
+    // The push-to-talk hotkey is a toggle, so a second press withdraws the
+    // request, as it would stop a live capture.
     const onKey = (event) => {
       if (!isPushToTalkKey(event, hotkey)) return;
       event.preventDefault();
@@ -170,9 +160,19 @@ export default function VoiceWidgetGate({ children }) {
       pendingStartRef.current = !pendingStartRef.current;
       requestWidget();
     };
+    requestWidget();
+    window.addEventListener(ENGAGE_EVENT, onEngage);
+    window.addEventListener(DISENGAGE_EVENT, onDisengage);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [Widget, enabled, hotkey, requestWidget]);
+    // A chunk that failed to load is asked for again once the network is back.
+    socket.on('connect', requestWidget);
+    return () => {
+      window.removeEventListener(ENGAGE_EVENT, onEngage);
+      window.removeEventListener(DISENGAGE_EVENT, onDisengage);
+      window.removeEventListener('keydown', onKey);
+      socket.off('connect', requestWidget);
+    };
+  }, [enabled, Widget, hotkey, requestWidget]);
 
   const claimPendingStart = useCallback(() => {
     const pending = pendingStartRef.current;
