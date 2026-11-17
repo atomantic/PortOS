@@ -186,8 +186,8 @@ describe('ShotTimeline', () => {
     expect(screen.getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
   });
 
-  // Uniquely catches a dragged end saving the wrong field (or moving the start), and a swap or selection that never replays the moment.
-  it('trims an in-shot effect by its end, swaps its style in place, and loops the preview over it', async () => {
+  // Uniquely catches a dragged end saving the wrong field (or moving the start), and a selection that autoplays, a play/pause control that misses the loop, and a loop that never jumps back.
+  it('trims an in-shot effect by its end, swaps its style in place, cues it without playing, and loops it once played', async () => {
     const onEditShot = vi.fn();
     const onPreview = vi.fn();
     let clock = { t: 0, playing: false };
@@ -206,17 +206,24 @@ describe('ShotTimeline', () => {
     const body = document.querySelector('[data-effect-id="s2:0"]');
     fireEvent.pointerDown(body, { clientX: 125, pointerId: 2, button: 0 });
     fireEvent.pointerUp(body, { clientX: 125, pointerId: 2 });
-    // Selecting it plays from just before it.
-    expect(onPreview).toHaveBeenLastCalledWith(5.25);
+    // Selecting it cues the player just before it, without playing.
+    expect(onPreview).toHaveBeenLastCalledWith(5.25, false);
     const styles = screen.getByRole('group', { name: 'Style of effect 1' });
     const other = within(styles).getAllByRole('button', { pressed: false })[0];
     fireEvent.click(other);
     expect(onEditShot).toHaveBeenLastCalledWith('s2', { glitches: [{ atSec: 2, style: expect.not.stringMatching(/^gate-jump$/), lengthSec: 1 }] });
     expect(onPreview).toHaveBeenCalledTimes(2);
+    // Play from a playhead outside the loop starts the loop; Space does the same as the button.
+    fireEvent.keyDown(window, { code: 'Space', key: ' ' });
+    expect(onPreview).toHaveBeenLastCalledWith(5.25, true);
     // Playing past the effect (0:06 + 1 s + the lead) jumps back before it.
     clock = { t: 7.9, playing: true };
-    await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(3));
-    expect(onPreview).toHaveBeenLastCalledWith(5.25);
+    await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(4));
+    expect(onPreview).toHaveBeenLastCalledWith(5.25, true);
+    // While it plays the button pauses where the playhead is.
+    clock = { t: 6.5, playing: true };
+    fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+    expect(onPreview).toHaveBeenLastCalledWith(6.5, false);
   });
 
   // Uniquely catches the library adding to the wrong shot or time, and the controls failing to reach the page's inspector panel.

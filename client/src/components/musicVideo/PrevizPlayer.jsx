@@ -55,6 +55,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
     if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
+    else if (seekRequest.pause) audioRef.current.pause?.();
   }, [seekRequest]);
   const seekTo = useCallback((t) => {
     if (!audioRef.current) return;

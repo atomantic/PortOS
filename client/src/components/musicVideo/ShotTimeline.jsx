@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Repeat, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Pause, Play, Repeat, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import useKeyCapture from '../../hooks/useKeyCapture.js';
 import { scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { buildBeatGridPoints } from '../../lib/beatGrid.js';
@@ -40,6 +41,7 @@ const tickLabel = (t, stepSec) => {
 };
 // A picture path inside a CSS url("…"): only the characters that would end the string are escaped.
 const round2 = (n) => Math.round(n * 100) / 100;
+const roundMs = (t) => Math.round(t * 1000) / 1000;
 const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURIComponent(ch))}")`;
 
 /**
@@ -74,9 +76,11 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * opens that shot's effect controls under the timeline.
  * `onEditShot(sceneId, patch)` saves them, lets an in-shot effect be dragged
  * along its shot or trimmed at either end, and adds one at the playhead from
- * the toolbar. Tapping an in-shot effect selects it: `onPreview(t)` plays the
- * song from `t`, so the selected effect plays from just before it and, with
- * Loop on, again each time playback passes it; a style swap replays it too.
+ * the toolbar. `onPreview(t, play)` moves the player to `t` and plays (true) or
+ * pauses (false) there: the toolbar's play button and the space bar use it.
+ * Tapping an in-shot effect selects it and cues the player just before it,
+ * without starting playback; once playing, with Loop on, playback that passes
+ * it jumps back, so a style swap is seen on the next pass.
  *
  * The effect controls show under the timeline, or in `inspectorEl` when the
  * page gives one; with `libraryEl` an effects library fills it, whose styles
@@ -105,6 +109,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const [viewWidth, setViewWidth] = useState(0);
   const [zoom, setZoom] = useState(null);
   const [onScreenId, setOnScreenId] = useState(null);
+  const [playing, setPlaying] = useState(false);
   useLayoutEffect(() => {
     const scroller = scrollerRef.current;
     if (!scroller) return undefined;
@@ -173,6 +178,8 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
       const { pxPerSec: px, shots: list, songClock: clock, durationSec: total } = live.current;
       const reading = clock?.() || null;
       const t = Math.min(Math.max(0, reading?.t ?? timeRef.current), total);
+      const isPlaying = !!reading?.playing;
+      setPlaying((current) => (current === isPlaying ? current : isPlaying));
       const moved = t !== drawn.t;
       if (moved || px !== drawn.px) {
         timeRef.current = t;
@@ -321,7 +328,9 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   const effectsShot = effectOptions ? savedShots.find((shot) => shot.sceneId === effectsOfId) || null : null;
   const playheadShot = savedShots.find((shot) => shot.sceneId === onScreenId) || null;
   const playheadGlitches = Array.isArray(playheadShot?.scene.glitches) ? playheadShot.scene.glitches : [];
-  // A new in-shot effect at the playhead, selected and played.
+  // Move the player to `t` without changing whether it plays.
+  const cue = (t) => onPreview?.(roundMs(Math.max(0, t)), playing);
+  // A new in-shot effect at the playhead, selected and cued.
   const addEffect = (style = NEW_GLITCH_STYLE) => {
     const t = timeRef.current;
     const shot = timelineShotAt(savedShots, t);
@@ -332,7 +341,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     onEditShot(shot.sceneId, { glitches: [...glitches, { atSec, style }] });
     setEffectsOfId(shot.sceneId);
     setSelectedFx({ sceneId: shot.sceneId, index: glitches.length });
-    onPreview?.(Math.round(Math.max(0, shot.startSec + atSec - LOOP_LEAD_SEC) * 1000) / 1000);
+    cue(shot.startSec + atSec - LOOP_LEAD_SEC);
   };
   const nameOf = (shot) => (shotName ? shotName(shot.scene) : `Shot ${shot.number}`);
   const effectLanes = useMemo(() => (effectOptions ? timelineEffectLanes(shots, effectOptions) : null), [shots, effectOptions]);
@@ -349,14 +358,30 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     const end = Math.min(fxShot.endSec, last + (fxGlitch.lengthSec || effectNaturalSec(fxGlitch.style)));
     return { start: Math.max(0, start - LOOP_LEAD_SEC), end: Math.min(durationSec, end + LOOP_LEAD_SEC) };
   })() : null;
-  loopRef.current = loopOn && loopRange && onPreview ? { ...loopRange, jump: (t) => onPreview(Math.round(t * 1000) / 1000) } : null;
-  const preview = () => { if (loopRange) onPreview?.(Math.round(loopRange.start * 1000) / 1000); };
+  loopRef.current = loopOn && loopRange && onPreview ? { ...loopRange, jump: (t) => onPreview(roundMs(t), true) } : null;
+  const preview = () => { if (loopRange) cue(loopRange.start); };
+  // Play or pause where the playhead is; with a selected effect looping, play starts its loop when the playhead is outside it.
+  const togglePlay = () => {
+    if (!onPreview) return;
+    const t = timeRef.current;
+    if (playing) { onPreview(roundMs(t), false); return; }
+    const loop = loopRef.current;
+    onPreview(roundMs(loop && (t < loop.start || t >= loop.end) ? loop.start : t), true);
+  };
+  useKeyCapture({
+    enabled: !!onPreview,
+    onKeyDown: (event) => {
+      if (event.code !== 'Space' || event.metaKey || event.ctrlKey || event.altKey) return false;
+      if (!event.repeat) togglePlay();
+      return true;
+    },
+  });
   const selectEffect = (sceneId, index) => {
     setEffectsOfId(sceneId);
     setSelectedFx({ sceneId, index });
     const shot = savedShots.find((entry) => entry.sceneId === sceneId);
     const at = shot?.scene.glitches?.[index]?.atSec;
-    if (Number.isFinite(at)) onPreview?.(Math.round(Math.max(0, shot.startSec + at - LOOP_LEAD_SEC) * 1000) / 1000);
+    if (Number.isFinite(at)) cue(shot.startSec + at - LOOP_LEAD_SEC);
   };
   const spanRow = (kind) => (
     <TimelineEffectSpans lanes={effectLanes.lanes} kind={kind} pxPerSec={pxPerSec} shotName={shotName}
@@ -385,6 +410,11 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   return (
     <section aria-label="Timeline" className="min-w-0 rounded-lg border border-port-border bg-port-card">
       <div className="flex min-w-0 items-center gap-2 px-2 py-1">
+        {onPreview && (
+          <button type="button" className={zoomButtonCls} onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} title={playing ? 'Pause (Space)' : 'Play (Space)'}>
+            {playing ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
+          </button>
+        )}
         <output ref={readoutRef} aria-label="Playhead time" className="text-sm font-medium tabular-nums text-port-text">{formatTimecode(0)}</output>
         <span className="text-xs tabular-nums text-port-text-muted">/ {formatTimecode(durationSec)}</span>
         {cutDrag && draggedCut && (
