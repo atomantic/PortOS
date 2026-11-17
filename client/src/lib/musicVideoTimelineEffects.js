@@ -9,10 +9,18 @@
 import { sceneCutEffect } from './musicVideoCutEffects.js';
 import { sceneImageEffect } from './musicVideoImageEffects.js';
 import { shotEffectLabel } from './musicVideoShotEffects.js';
-import { MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_TRANSITIONS, applyCameraCutDefaults, sceneTransitions } from './musicVideoTransitions.js';
+import {
+  MUSIC_VIDEO_GLITCH_REPEAT_LIMIT, MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_STYLES, applyCameraCutDefaults, sceneTransitions,
+} from './musicVideoTransitions.js';
 
 const FPS = 24;
 const round3 = (n) => Math.round(n * 1000) / 1000;
+/** The longest an in-shot effect may run: the server's own bound on `lengthSec`. */
+export const EFFECT_MAX_LENGTH_SEC = 4;
+const FRAME_SEC = 1 / FPS;
+
+/** How long a style plays when no length is set: its own frames, once, at the render's 24 fps. */
+export const effectNaturalSec = (style) => (MUSIC_VIDEO_TRANSITION_STYLES[style]?.frames.length || 1) / FPS;
 
 /**
  * One timeline shot's effects, one entry per kind so each draws on its own row:
@@ -23,7 +31,8 @@ const round3 = (n) => Math.round(n * 1000) / 1000;
  * - `image`: a still's image effect over the whole shot, `{ label, startSec, endSec }`, or null;
  * - `markers`: its in-shot effects, `{ id, index, atSec, t, lengthSec, repeats, label, off }`:
  *   `index` into `scene.glitches`, `atSec` from the shot's start, `t` and `repeats` on the song's
- *   clock, `off` when its strength is zero.
+ *   clock, `off` when its strength is zero; `lengthSec` is the set length or null, `playSec` how
+ *   long it plays (the set length, else the style's own).
  * `options` are `shotEffects`' own (`{ layered, planned, cameras }`).
  */
 export function timelineShotEffects(shot, options = {}) {
@@ -54,6 +63,7 @@ export function timelineShotEffects(shot, options = {}) {
     markers.push({
       id: `${shot.sceneId}:${index}`, index, atSec, t: shot.startSec + atSec,
       lengthSec: Number.isFinite(glitch.lengthSec) && glitch.lengthSec > 0 ? glitch.lengthSec : null,
+      playSec: Number.isFinite(glitch.lengthSec) && glitch.lengthSec > 0 ? glitch.lengthSec : effectNaturalSec(glitch.style),
       repeats, label: shotEffectLabel(glitch.style), off: glitch.strength === 0,
     });
   });
@@ -78,5 +88,30 @@ export function effectTimeAt(shot, t, points = [], toleranceSec = 0) {
   return { atSec: round3(Math.min(Math.max(0, Math.round((t - shot.startSec) * FPS) / FPS), lastFrame)), snapped: false };
 }
 
-/** A shot's saved effects with the one at `index` moved to `atSec`. */
-export const glitchesWithMove = (glitches, index, atSec) => glitches.map((glitch, i) => (i === index ? { ...glitch, atSec } : glitch));
+/**
+ * Where an in-shot effect lands when one of its ends is dragged to song time
+ * `t` (`edge` 'start' or 'end'): the other end stays put, the dragged one lands
+ * on a frame (or a snap point within `toleranceSec`), and the effect keeps at
+ * least a frame and at most `EFFECT_MAX_LENGTH_SEC`, inside its shot. Returns
+ * `{ atSec, lengthSec, snapped }`.
+ */
+export function effectTrimAt(shot, marker, edge, t, points = [], toleranceSec = 0) {
+  const span = shot.endSec - shot.startSec;
+  const startSec = marker.atSec;
+  const endSec = marker.atSec + marker.playSec;
+  let nearest = null;
+  for (const point of points) {
+    const distance = Math.abs(point - t);
+    if (distance <= toleranceSec && (nearest == null || distance < Math.abs(nearest - t))) nearest = point;
+  }
+  const at = nearest != null ? nearest - shot.startSec : Math.round((t - shot.startSec) * FPS) / FPS;
+  if (edge === 'end') {
+    const end = Math.min(Math.max(at, startSec + FRAME_SEC), startSec + EFFECT_MAX_LENGTH_SEC, span);
+    return { atSec: startSec, lengthSec: round3(Math.max(FRAME_SEC, end - startSec)), snapped: nearest != null && Math.abs(end - at) < 1e-6 };
+  }
+  const start = Math.max(0, endSec - EFFECT_MAX_LENGTH_SEC, Math.min(at, endSec - FRAME_SEC));
+  return { atSec: round3(start), lengthSec: round3(endSec - start), snapped: nearest != null && Math.abs(start - at) < 1e-6 };
+}
+
+/** A shot's saved effects with the one at `index` changed by `patch`. */
+export const glitchesWithEdit = (glitches, index, patch) => glitches.map((glitch, i) => (i === index ? { ...glitch, ...patch } : glitch));

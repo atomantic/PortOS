@@ -3,7 +3,8 @@ import { X, Zap } from 'lucide-react';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
-import { effectTimeAt, glitchesWithMove, timelineShotEffects } from '../../lib/musicVideoTimelineEffects.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
+import { effectTimeAt, effectTrimAt, glitchesWithEdit, timelineShotEffects } from '../../lib/musicVideoTimelineEffects.js';
 
 // An effect at least this wide shows its name.
 const LABEL_MIN_PX = 48;
@@ -13,6 +14,8 @@ const SNAP_PX = 6;
 const DRAG_PX = 3;
 // The narrowest an effect draws, so a short one can still be seen and grabbed.
 const MARKER_MIN_PX = 8;
+// An effect at least this wide shows its two ends as handles to drag.
+const TRIM_MIN_PX = 20;
 
 /**
  * Each timeline shot's effects by kind (`timelineShotEffects`), and which of
@@ -72,27 +75,32 @@ export function TimelineEffectSpans({ lanes, kind, pxPerSec, shotName, selectedI
 
 /**
  * The in-shot effects row: under each clip a lane (tap it to configure that
- * shot's effects, again to close them) with a marker at each in-shot effect,
- * as long as the effect runs, and a dot at each of its repeats; one switched
- * off is greyed.
+ * shot's effects, again to close them) with each in-shot effect as a bar as
+ * long as it plays, and a dot at each of its repeats; one switched off is greyed.
  *
- * Tapping a marker opens its shot's effect controls (`onSelect(sceneId,
- * toggle)`: a lane tapped again closes them, a marker only ever opens them).
- * With `onEditShot(sceneId, patch)` a marker can be dragged along its shot (it
- * lands on a frame, pulled onto a nearby beat or lyric line) or nudged a frame
- * with the arrow keys; the shot's `glitches` are saved with that one moved.
+ * Tapping an effect selects it (`onSelectEffect(sceneId, index)`). With
+ * `onEditShot(sceneId, patch)` its middle drags it along its shot and its two
+ * ends drag to change when it starts or stops (each lands on a frame, pulled
+ * onto a nearby beat or lyric line); arrow keys do the same a frame at a time.
+ * The shot's `glitches` are saved with that one changed.
  */
-export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = null, onSelect, onEditShot = null, snapPoints = [] }) {
+export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = null, selectedEffect = null, onSelect, onSelectEffect, onEditShot = null, snapPoints = [] }) {
   const [drag, setDrag] = useState(null);
   const pointer = useRef(null);
-  const move = (shot, marker, atSec) => {
-    if (Math.abs(atSec - marker.atSec) > 1e-4) onEditShot(shot.sceneId, { glitches: glitchesWithMove(shot.scene.glitches, marker.index, atSec) });
+  const save = (shot, marker, next) => {
+    const patch = {};
+    if (Math.abs(next.atSec - marker.atSec) > 1e-4) patch.atSec = next.atSec;
+    if (next.lengthSec != null && Math.abs(next.lengthSec - marker.playSec) > 1e-4) patch.lengthSec = next.lengthSec;
+    if (Object.keys(patch).length) onEditShot(shot.sceneId, { glitches: glitchesWithEdit(shot.scene.glitches, marker.index, patch) });
   };
-  const onDown = (event, shot, marker) => {
+  const landing = (shot, marker, mode, t, snap = true) => (mode === 'move'
+    ? { ...effectTimeAt(shot, t, snap ? snapPoints : [], snap ? SNAP_PX / pxPerSec : 0), lengthSec: null }
+    : effectTrimAt(shot, marker, mode, t, snap ? snapPoints : [], snap ? SNAP_PX / pxPerSec : 0));
+  const onDown = (event, shot, marker, mode) => {
     if (event.button != null && event.button !== 0) return;
     event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    pointer.current = { pointerId: event.pointerId, startX: event.clientX, shot, marker, dragging: false };
+    pointer.current = { pointerId: event.pointerId, startX: event.clientX, shot, marker, mode, dragging: false };
   };
   const onMove = (event) => {
     const press = pointer.current;
@@ -100,25 +108,29 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
     const dx = event.clientX - press.startX;
     if (!press.dragging && Math.abs(dx) < DRAG_PX) return;
     press.dragging = true;
-    setDrag({ id: press.marker.id, ...effectTimeAt(press.shot, press.marker.t + dx / pxPerSec, snapPoints, SNAP_PX / pxPerSec) });
+    const { marker, mode } = press;
+    const from = mode === 'end' ? marker.t + marker.playSec : marker.t;
+    setDrag({ id: marker.id, mode, ...landing(press.shot, marker, mode, from + dx / pxPerSec) });
   };
   const onUp = (event, cancelled = false) => {
     const press = pointer.current;
     if (!press || press.pointerId !== event.pointerId) return;
     pointer.current = null;
-    const landed = drag?.id === press.marker.id ? drag.atSec : null;
+    const landed = drag?.id === press.marker.id ? drag : null;
     setDrag(null);
     if (cancelled) return;
-    if (!press.dragging) onSelect?.(press.shot.sceneId);
-    else if (landed != null) move(press.shot, press.marker, landed);
+    if (!press.dragging) onSelectEffect?.(press.shot.sceneId, press.marker.index);
+    else if (landed) save(press.shot, press.marker, landed);
   };
-  const onKey = (event, shot, marker) => {
-    if (event.key === 'Enter') { onSelect?.(shot.sceneId); return; }
+  const onKey = (event, shot, marker, mode) => {
+    if (event.key === 'Enter') { onSelectEffect?.(shot.sceneId, marker.index); return; }
     const dir = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
     if (!dir || !onEditShot) return;
     event.preventDefault();
-    move(shot, marker, effectTimeAt(shot, marker.t + dir * (event.shiftKey ? 1 : 1 / 24)).atSec);
+    const from = mode === 'end' ? marker.t + marker.playSec : marker.t;
+    save(shot, marker, landing(shot, marker, mode, from + dir * (event.shiftKey ? 1 : 1 / 24), false));
   };
+  const handleCls = 'absolute inset-y-1 z-20 w-2 touch-none select-none cursor-ew-resize bg-port-text/80 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-text pointer-coarse:w-4';
   return (
     <>
       {lanes.map(({ shot, effects }) => {
@@ -134,26 +146,42 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
       {lanes.flatMap(({ shot, effects }) => effects.markers.flatMap((marker) => {
         const dragged = drag?.id === marker.id ? drag : null;
         const atSec = dragged ? dragged.atSec : marker.atSec;
+        const playSec = dragged?.lengthSec ?? marker.playSec;
         const shift = (atSec - marker.atSec) * pxPerSec;
         const name = shotName ? shotName(shot.scene) : `shot ${shot.number}`;
+        const selected = selectedEffect?.sceneId === shot.sceneId && selectedEffect.index === marker.index;
         const tone = dragged?.snapped ? 'bg-port-success' : marker.off ? 'bg-port-text-muted/50' : 'bg-port-accent';
+        const left = (shot.startSec + atSec) * pxPerSec;
+        const width = Math.max(MARKER_MIN_PX, playSec * pxPerSec);
+        const span = Math.round((shot.endSec - shot.startSec) * 100) / 100;
+        const edges = onEditShot && width >= TRIM_MIN_PX;
         return [
           ...marker.repeats.map((t) => (
             <span key={`${marker.id}:${t}`} aria-hidden="true" className={`pointer-events-none absolute top-1/2 z-10 h-1.5 w-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-60 ${tone}`}
               style={{ left: t * pxPerSec + shift }} />
           )),
           <div key={marker.id} role="slider" tabIndex={0} aria-orientation="horizontal" data-effect-id={marker.id}
-            aria-label={`${marker.label} in ${name}`} aria-valuemin={0} aria-valuemax={Math.round((shot.endSec - shot.startSec) * 100) / 100}
-            aria-valuenow={Math.round(atSec * 100) / 100} aria-valuetext={`${atSec.toFixed(2)}s into the shot`}
-            title={`${marker.label} at ${atSec.toFixed(2)}s${onEditShot ? ' · drag to move' : ''}`}
-            onPointerDown={(event) => onDown(event, shot, marker)} onPointerMove={onMove}
+            aria-label={`${marker.label} in ${name}`} aria-valuemin={0} aria-valuemax={span}
+            aria-valuenow={Math.round(atSec * 100) / 100} aria-valuetext={`${atSec.toFixed(2)}s into the shot, ${playSec.toFixed(2)}s long`}
+            title={`${marker.label} at ${atSec.toFixed(2)}s for ${playSec.toFixed(2)}s${onEditShot ? ' · drag to move' : ''}`}
+            onPointerDown={(event) => onDown(event, shot, marker, 'move')} onPointerMove={onMove}
             onPointerUp={onUp} onPointerCancel={(event) => onUp(event, true)}
-            onKeyDown={(event) => onKey(event, shot, marker)}
-            className={`group absolute inset-y-0 z-10 flex min-w-5 -translate-x-1.5 touch-none select-none items-center px-1.5 focus:outline-none pointer-coarse:min-w-8 pointer-coarse:-translate-x-3 pointer-coarse:px-3 ${onEditShot ? 'cursor-ew-resize' : 'cursor-pointer'}`}
-            style={{ left: (shot.startSec + atSec) * pxPerSec }}>
-            <span className={`h-3.5 rounded-sm ring-port-text group-hover:ring-1 group-focus-visible:ring-1 ${tone}`}
-              style={{ width: Math.max(MARKER_MIN_PX, (marker.lengthSec || 0) * pxPerSec) }} />
+            onKeyDown={(event) => onKey(event, shot, marker, 'move')}
+            className={`absolute inset-y-1 z-10 touch-none select-none overflow-hidden rounded-sm text-[10px] leading-none text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-port-text pointer-coarse:min-h-11 ${tone} ${selected ? 'ring-2 ring-port-text' : ''} ${onEditShot ? 'cursor-grab' : 'cursor-pointer'}`}
+            style={{ left, width }}>
+            {width >= LABEL_MIN_PX + 16 && <span aria-hidden="true" className="block truncate px-2.5 pt-1.5 pointer-coarse:pt-4">{marker.label}</span>}
           </div>,
+          ...(edges ? ['start', 'end'].map((edge) => (
+            <div key={`${marker.id}:${edge}`} role="slider" tabIndex={0} aria-orientation="horizontal"
+              aria-label={`${edge === 'start' ? 'Start' : 'End'} of ${marker.label} in ${name}`}
+              aria-valuemin={0} aria-valuemax={span} aria-valuenow={Math.round((edge === 'start' ? atSec : atSec + playSec) * 100) / 100}
+              title={edge === 'start' ? 'Drag to start it earlier or later' : 'Drag to make it longer or shorter'}
+              onPointerDown={(event) => onDown(event, shot, marker, edge)} onPointerMove={onMove}
+              onPointerUp={onUp} onPointerCancel={(event) => onUp(event, true)}
+              onKeyDown={(event) => onKey(event, shot, marker, edge)}
+              className={`${handleCls} ${edge === 'start' ? 'rounded-l-sm' : 'rounded-r-sm -translate-x-full'}`}
+              style={{ left: edge === 'start' ? left : left + width }} />
+          )) : []),
         ];
       }))}
     </>
@@ -161,11 +189,64 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
 }
 
 /**
+ * The effects library: every in-shot effect style, each a button that adds it
+ * at the playhead to the shot on screen (`onAdd(style)`, null when nothing can
+ * take one).
+ */
+export function TimelineEffectLibrary({ onAdd, shotName }) {
+  return (
+    <div className="space-y-2 p-2">
+      <div className="flex items-baseline justify-between gap-2 px-1">
+        <h3 className="text-sm font-medium text-port-text">Effects</h3>
+        <span className="truncate text-xs text-port-text-muted">{onAdd ? `Tap to add to ${shotName} at the playhead` : 'Move the playhead onto a shot to add one'}</span>
+      </div>
+      <ul className="grid grid-cols-2 gap-1">
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => (
+          <li key={style}>
+            <button type="button" onClick={() => onAdd?.(style)} disabled={!onAdd}
+              aria-label={`Add ${MUSIC_VIDEO_TRANSITION_LABELS[style]} at the playhead`}
+              className="flex min-h-[44px] w-full items-center gap-1.5 rounded border border-port-border bg-port-bg px-2 text-left text-xs text-port-text hover:border-port-accent disabled:opacity-50 pointer-fine:min-h-[32px]">
+              <Zap size={12} aria-hidden="true" className="shrink-0 text-port-accent" />
+              <span className="truncate">{MUSIC_VIDEO_TRANSITION_LABELS[style]}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * The selected in-shot effect's style as a row of one-tap swaps: each tap saves
+ * the new style and replays the moment (`onPreview()`), so styles can be tried
+ * one after another while the preview loops over it.
+ */
+function EffectStyleSwap({ glitch, index, onSwap }) {
+  return (
+    <div role="group" aria-label={`Style of effect ${index + 1}`} className="space-y-1">
+      <p className="text-xs text-port-text-muted">Effect {index + 1}: tap a style to swap it</p>
+      <div className="flex flex-wrap gap-1">
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => (
+          <button key={style} type="button" onClick={() => onSwap(style)} aria-pressed={glitch.style === style} disabled={!onSwap}
+            className={`min-h-[44px] rounded border px-2 text-xs pointer-fine:sm:min-h-[28px] disabled:opacity-50 ${glitch.style === style ? 'border-port-accent bg-port-accent/15 text-port-text' : 'border-port-border text-port-text-muted hover:text-port-text'}`}>
+            {MUSIC_VIDEO_TRANSITION_LABELS[style]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
  * One shot's effects, configured under the timeline with the shot card's own
  * controls: the effect over each cut, how it hands over to the next shot, and
- * its in-shot effects. `onChange(patch)` saves the shot's fields.
+ * its in-shot effects. `onChange(patch)` saves the shot's fields. With an
+ * in-shot effect selected (`selectedIndex`) its style swaps lead, each swap
+ * replaying it (`onPreview`).
  */
-export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, onClose }) {
+export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, onClose, selectedIndex = null, onPreview = null }) {
+  const glitches = Array.isArray(scene.glitches) ? scene.glitches : [];
+  const selected = selectedIndex != null ? glitches[selectedIndex] : null;
   // The shot card may be open on the same shot in the drawer: its field ids stay its own.
   const fieldId = (field) => `mv-timeline-${scene.sceneId}-${field}`;
   const camera = (options.cameras || []).find((entry) => entry?.id && entry.id === scene.shotSheet?.cameraId) || null;
@@ -180,6 +261,10 @@ export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, o
           <X size={14} aria-hidden="true" />
         </button>
       </div>
+      {selected && (
+        <EffectStyleSwap glitch={selected} index={selectedIndex}
+          onSwap={onChange ? (style) => { onChange({ glitches: glitchesWithEdit(glitches, selectedIndex, { style }) }); onPreview?.(); } : null} />
+      )}
       <SceneTransitions fieldId={fieldId} scene={scene} defaults={camera?.cuts || null} onChange={onChange} isLast={isLast} disabled={!onChange} />
       <SceneCutEffect fieldId={fieldId} scene={scene} isLast={isLast} onChange={onChange} planned={options.planned?.get(scene.sceneId)} disabled={!onChange} />
       <SceneGlitches fieldId={fieldId} scene={scene} onChange={onChange} disabled={!onChange} />
