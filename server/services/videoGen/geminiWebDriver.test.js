@@ -9,7 +9,7 @@ const { renderOnGeminiWeb } = await import('./geminiWebDriver.js');
 
 // Just enough of a Playwright page to stand in for the Gemini composer. Each test
 // scripts what the app shows: the consent dialog, and the chat's answers in order.
-function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
+function fakeGemini({ consent = false, uploadClickFails = false, duplicateUploader = false, url = 'https://gemini.google.com/app', answers = [], video = { status: 200, type: 'video/mp4' } } = {}) {
   const log = { clicks: [], files: null, typed: '', closed: false, front: 0 };
   let chooserResolve;
   let chooserReject;
@@ -32,7 +32,12 @@ function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://
     goto: async () => {},
     url: () => url,
     getByRole: (role, { name } = {}) => control(role === 'dialog' ? 'dialog' : role === 'menuitemradio' ? 'mode' : String(name)),
-    locator: () => control('uploader'),
+    locator: (selector) => {
+      if (duplicateUploader && !selector.endsWith(':visible')) {
+        return { click: async () => { throw new Error('strict mode violation: uploader resolved to 2 elements'); } };
+      }
+      return control('uploader');
+    },
     waitForEvent: () => chooserEvent,
     keyboard: { insertText: async (text) => { log.typed = text; } },
     evaluate: async () => answers.shift() ?? { responded: false },
@@ -80,6 +85,14 @@ describe('renderOnGeminiWeb', () => {
     expect(phases.slice(0, 3)).toEqual(['open', 'attach', 'send']);
     expect(phases.at(-1)).toBe('fetch');
     expect(fake.log.closed).toBe(true);
+  });
+
+  it('ignores the hidden duplicate upload item and still attaches before sending once', async () => {
+    const fake = fakeGemini({ duplicateUploader: true, answers: [CLIP] });
+    await render(fake);
+    expect(fake.log.files).toEqual(['/example/frame.png', '/example/sheet.png']);
+    expect(sends(fake.log)).toBe(1);
+    expect(fake.log.clicks.indexOf('uploader')).toBeLessThan(fake.log.clicks.indexOf('Send message'));
   });
 
   it('leaves the mode picker alone and uses the composer default', async () => {
