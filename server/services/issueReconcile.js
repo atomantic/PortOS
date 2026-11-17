@@ -606,8 +606,11 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
  * Both markers go in ONE `gh issue edit`: every issue here is label-filtered to
  * carry `in-progress` and only its current assignees are removed, so neither
  * removal can fail the call. It never closes an issue.
- * The explanatory comment is posted FIRST so a release is never silent; a failed
- * comment does not block the release.
+ * The edit runs FIRST and the explanatory comment only after it succeeds: a comment
+ * refreshes `updatedAt`, so a comment followed by a failed edit would make the issue
+ * look fresh and delay the retry by a whole stale window. A failed edit posts no
+ * comment and counts as not released; a failed comment after a successful edit still
+ * counts as released (the label change is in the issue timeline).
  *
  * GitLab releases only expired RESERVATIONS (ABANDONED cannot occur there, see
  * `getGitlabState`), through `releaseGitlabReservations`, which removes the label
@@ -628,10 +631,6 @@ export async function releaseAbandonedClaims(abandoned, { forge, repoSpec, fullN
     const note = isReservation
       ? reservationReleaseNote(issue)
       : `Releasing the \`${IN_PROGRESS_LABEL}\` claim: this issue has had no linked pull request, no claim branch, and no activity for ${issue.staleDays} days. It is back in the queue — comment again to pick it up.`;
-    await execGh(['issue', 'comment', number, '--repo', repoSpec, '--body', note])
-      .catch((err) => {
-        console.error(`❌ issue-reconcile: could not comment on abandoned #${number} in ${fullName}: ${err.message}`);
-      });
     const unassign = issue.assignees.flatMap((login) => ['--remove-assignee', login]);
     const ok = await execGh(['issue', 'edit', number, '--repo', repoSpec,
       '--remove-label', IN_PROGRESS_LABEL, ...unassign])
@@ -640,15 +639,18 @@ export async function releaseAbandonedClaims(abandoned, { forge, repoSpec, fullN
         console.error(`❌ issue-reconcile: could not release abandoned #${number} in ${fullName}: ${err.message}`);
         return false;
       });
-    if (ok) {
-      released += 1;
-      console.log(`🔓 issue-reconcile released #${number} in ${fullName}: ${isReservation ? 'reservation' : 'claim'} stale ${issue.staleDays}d, ${isReservation ? 'never claimed' : 'nothing shipped'}`);
-    }
+    if (!ok) continue;
+    released += 1;
+    console.log(`🔓 issue-reconcile released #${number} in ${fullName}: ${isReservation ? 'reservation' : 'claim'} stale ${issue.staleDays}d, ${isReservation ? 'never claimed' : 'nothing shipped'}`);
+    await execGh(['issue', 'comment', number, '--repo', repoSpec, '--body', note])
+      .catch((err) => {
+        console.log(`⏭️ issue-reconcile: released #${number} in ${fullName} but could not comment: ${err.message}`);
+      });
   }
   return released;
 }
 
-/** The comment posted before an expired reservation's `in-progress` label is removed, on either forge. */
+/** The comment posted after an expired reservation's `in-progress` label is removed, on either forge. */
 function reservationReleaseNote(issue) {
   return `Releasing the \`${IN_PROGRESS_LABEL}\` reservation: this issue was reserved for a batch run but has had no assignee, no claim branch, no open pull request, and no activity for ${issue.staleDays} days. It is back in the queue.`;
 }
