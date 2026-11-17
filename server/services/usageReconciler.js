@@ -901,6 +901,27 @@ export function resolveFamilyProvider(providers, family, measured = null) {
 }
 
 /**
+ * The token counts a run's provider reported in its own response, as ledger
+ * fields, or `null`. A bounded API completion (`services/apiCompletionRun.js`)
+ * stamps them on its run record as `reportedUsage`; they replace the chars
+ * estimate for that run, so it is counted once, as measured. Read from the
+ * record rather than passed alongside it, so a later backfill of the same run
+ * sees the same numbers.
+ */
+function reportedRunUsage(run) {
+  const reported = run?.reportedUsage;
+  if (!reported || typeof reported !== 'object' || Array.isArray(reported)) return null;
+  const fields = {};
+  for (const key of [...TOKEN_FIELDS, ...LONG_USAGE_FIELDS]) {
+    // One record is one message; a stamp cannot claim otherwise.
+    if (key === 'messages') continue;
+    const value = reported[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) fields[key] = value;
+  }
+  return Object.keys(fields).length ? { ...fields, source: 'measured' } : null;
+}
+
+/**
  * Measured counts for a completed run, or the caller's estimate when no
  * transcript can be attributed. Always resolves — a transcript read must never
  * fail the run it describes — and always returns a usable record, so a run with
@@ -950,7 +971,11 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
     });
 
   const family = transcriptFamily({ providerId: run?.providerId, command: run?.command });
-  const measured = family ? await readFamily(family) : null;
+  // A run carrying its provider's own counts wrote no session file, so no
+  // transcript is read (or claimed) for it even when its provider id names a
+  // CLI family (an API record called `grok-api`).
+  const reported = reportedRunUsage(run);
+  const measured = family && !reported ? await readFamily(family) : null;
   const parent = measured
     ? recordsFromMeasured(run?.providerId ?? null, run?.model ?? null, measured, 'parent')
     : {
@@ -962,11 +987,14 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
       tokensOut: Math.max(0, estimate?.tokensOut || 0),
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
-      source: estimateSource ?? 'estimate'
+      source: estimateSource ?? 'estimate',
+      ...(reported || {})
     };
 
   const siblings = [];
-  for (const sibling of Array.isArray(providers) && providers.length ? TRANSCRIPT_FAMILIES : []) {
+  // A single HTTP request cannot have launched a CLI, so a self-reported run
+  // has no nested session to look for.
+  for (const sibling of !reported && Array.isArray(providers) && providers.length ? TRANSCRIPT_FAMILIES : []) {
     if (sibling === family) continue;
     // Resolve BEFORE reading. No enabled provider for this family means the
     // session is skipped rather than opened as an `unknown` bucket the cost
@@ -1013,7 +1041,10 @@ export async function recordCompletedRunUsage(metadata, output, opts) {
     // Only completions that can claim the same transcripts wait for each other.
     // Otherwise a later Codex delta could depend on an uncommitted high-water
     // mark and make rolling back the earlier failed write impossible.
-    await admitCompletion(metadata, opts, () => recordCompletedRunUsageUnguarded(metadata, output, opts));
+    // A self-reported run reads and claims no transcript, so it neither waits
+    // behind other completions in its workspace nor makes them wait.
+    if (reportedRunUsage(metadata)) await recordCompletedRunUsageUnguarded(metadata, output, opts);
+    else await admitCompletion(metadata, opts, () => recordCompletedRunUsageUnguarded(metadata, output, opts));
   } catch (err) {
     maintenance.markCurrentUnsettled();
     console.error(`❌ Failed to record usage: ${err.message}`);
@@ -1048,16 +1079,21 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   // where the toolkit singleton is never initialized — that path is handed its
   // providers through `workerData` instead, and must not drag the provider
   // graph in at import time.
-  const resolved = providers ?? await import('./providers.js')
+  // A self-reported run (see `reportedRunUsage`) needs neither the provider
+  // list nor the Codex claim ledger: `reconcileRunUsage` reads no transcript
+  // for it. Its sibling pass is settled by definition, which also keeps the
+  // backfill from scanning for it later.
+  const selfReported = Boolean(reportedRunUsage(metadata));
+  const resolved = selfReported ? null : providers ?? await import('./providers.js')
     .then((module) => module.listProviders())
     .catch(() => null);
   // Same condition `reconcileRunUsage` scans siblings under.
-  const siblingsScanned = Array.isArray(resolved) && resolved.length > 0;
+  const siblingsScanned = selfReported || (Array.isArray(resolved) && resolved.length > 0);
   // Restore only nearby completions from the existing ledger. Exact observed
   // counters, unlike replaying a window through its later commit timestamp,
   // cannot consume transcript growth that arrived while accounting awaited.
   const since = Date.parse(metadata.startTime) - 2 * WINDOW_SLACK_MS;
-  if (Number.isFinite(since)) {
+  if (!selfReported && Number.isFinite(since)) {
     mergeUsageClaims({ codexHighWater: await getRecentCodexUsageClaims(since) });
   }
   const codexClaims = [];
