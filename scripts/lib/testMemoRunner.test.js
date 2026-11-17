@@ -183,6 +183,16 @@ describe('planTestMemo and recordTestMemo', () => {
     const related = plan({ mode: 'related', repoFiles: ['server/lib/c.test.js'], repoSources: ['server/lib/lazy.js'] });
     expect(related.selected).toEqual(['server/lib/b.test.js', 'server/lib/c.test.js']);
     expect(plan({ mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
+    // Sibling shards whose memo state selects different related lists still
+    // own each test by the candidate set alone, so none falls between them.
+    const related2 = (repoFiles, index) => plan({ mode: 'related', repoFiles, repoSources: [], shard: { index, count: 2 } });
+    const all = TESTS.map((t) => `server/${t}`);
+    const owners = [1, 2].map((index) => related2(all, index).slice);
+    expect(owners.flat().sort()).toEqual(all);
+    // Each one-test selection lands on the shard that owns it in the wide list.
+    for (const test of all) {
+      expect([1, 2].map((index) => related2([test], index).slice)).toEqual(owners.map((own) => (own.includes(test) ? [test] : [])));
+    }
 
     // The memo off: nothing is read, nothing is skipped.
     writeMemoEntry(memoDir, plan().verdicts.get('server/lib/c.test.js').floor.key, { test: 'server/lib/c.test.js', workspace: 'server', source: 'local' });

@@ -114,7 +114,18 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   const selected = mode === 'related'
     ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
     : candidates;
-  const slice = shard ? shardSlice(selected, { repoRoot, scope, ...shard }) : selected;
+  // A related selection depends on each shard's restored memo records, which
+  // can differ between sibling shards (a trusted save landing between their
+  // restores). Slicing that list by rank could then hand a test to neither
+  // shard, so a related plan slices the memo-independent candidate set and
+  // keeps the selected tests that fall in it: ownership never moves.
+  let slice = selected;
+  if (shard && mode === 'related') {
+    const owned = new Set(shardSlice(candidates, { repoRoot, scope, ...shard }));
+    slice = selected.filter((test) => owned.has(test));
+  } else if (shard) {
+    slice = shardSlice(selected, { repoRoot, scope, ...shard });
+  }
 
   const skipped = [];
   const reasons = new Map();
