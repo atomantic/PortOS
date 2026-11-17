@@ -387,6 +387,15 @@ describe('shared guidance', () => {
     expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('stay OPTIONAL');
   });
 
+  it('batches light same-area findings into one checklist issue, with standalone exceptions', () => {
+    const [batch] = MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n').filter(line => line.startsWith('Batch light findings'));
+    expect(batch).toContain('`model:light` + `effort:low` findings sharing an `area` label');
+    expect(batch).toContain('ONE checklist issue of up to 10 `- [ ]` items, shipped as one PR');
+    // The three exceptions: these must never be buried inside a batch.
+    expect(batch).toContain('A `bug`, security or data-safety finding still gets its own standalone issue');
+    expect(batch).toContain('Every finding is still tracked and fixed');
+  });
+
   it('keeps Jira complete-label guidance mandatory without changing optional Jira callers', () => {
     expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).toContain('REQUIRED on every issue you file');
     expect(MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE).toContain('model-light|model-medium|model-heavy');

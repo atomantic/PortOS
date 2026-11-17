@@ -13,8 +13,8 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "ff5a5685634b28bbe357564c2dfccb28",
-    "claim-issue-gitlab": "78cd1e2b88ced728279e1049e8aaaf89",
+    "claim-issue": "37405c6c46555d94722daba3316feb21",
+    "claim-issue-gitlab": "ebab18498424421df9c66205e1ef8572",
     "claim-issue-jira": "8eb786c1ffbb0e589d7959ff829ed875",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "0f3459ff958f97ace12f61430ede70d7",
@@ -33,7 +33,7 @@
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "d5300180b45a1019326ab740ce1a3c28",
     "infrastructure": "f019bab508f95278ea00c33d69f85818",
-    "issue-reconcile": "1ecd57af9e923a33e28570aa1888f494",
+    "issue-reconcile": "4be2226696a5b58b53b9b9fc4a70b5ad",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9e4f35b5a9372c4f50f1e10f7ec8050d",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
@@ -82,8 +82,8 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 65,
-    "claim-issue-gitlab": 57,
+    "claim-issue": 66,
+    "claim-issue-gitlab": 58,
     "claim-issue-jira": 29,
     "code-quality": 6,
     "code-reviewer-a": 1,
@@ -102,7 +102,7 @@
     "feature-completeness": 1,
     "feature-ideas": 12,
     "infrastructure": 3,
-    "issue-reconcile": 11,
+    "issue-reconcile": 12,
     "jira-sprint-manager": 1,
     "jira-status-report": 2,
     "media-render-research": 1,
@@ -262,7 +262,8 @@
       "86db6485a66c180077d61bd540d400fa",
       "79054dd4f4b099a61df308eefa80a405",
       "f0e63fc0a9b53bab74f5b28d72c34c0f",
-      "4c61f5490c7d13161dfd0e3e1dda1b81"
+      "4c61f5490c7d13161dfd0e3e1dda1b81",
+      "ff5a5685634b28bbe357564c2dfccb28"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -320,7 +321,8 @@
       "188ffd2e5546234c0b92b5015624b449",
       "d9dc33d452b9fe5b9c74599e43fb5a54",
       "5fd42d061786a5563f19ffa06f56ab0a",
-      "4ab72e1d1197ce97e360ef57b92aeaa5"
+      "4ab72e1d1197ce97e360ef57b92aeaa5",
+      "78cd1e2b88ced728279e1049e8aaaf89"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -463,7 +465,8 @@
       "541afc6566aa012ebc400ccff391ce2b",
       "716c87476d77d7e4f98613dadc06f228",
       "ae2b1937dff6e5e8276de04d436880a0",
-      "468b7b725c343775eebd9f57d2a53d1f"
+      "468b7b725c343775eebd9f57d2a53d1f",
+      "1ecd57af9e923a33e28570aa1888f494"
     ],
     "jira-status-report": [
       "9d374a9d8ccb92c5c8fd0aa9899e79a5"
