@@ -42,6 +42,12 @@ export const ANCESTRY_RETIREMENT_IDLE_MS = 60 * 60 * 1000;
 const COMMIT_SHA = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const ISSUE_CLAIM_BRANCH = /^(?:next|claim)\/issue-([1-9]\d*)$/;
 
+/** The holds `mergedOwnershipHold` reports: a sweep logs each one, since none names a failure. */
+export const MERGED_OWNERSHIP_HOLDS = new Set([
+  'branch-has-no-own-commits', 'branch-own-commits-unreadable', 'published-claim-unmerged', 'branch-publication-unreadable',
+  'claim-issue-reserved', 'claim-issue-unverified', 'checkout-process-active', 'checkout-recently-touched', 'checkout-idle-unreadable',
+]);
+
 /** The issue number a `/do:next` or `/claim` branch reserves, or null. */
 export const claimIssueOfBranch = branch => ISSUE_CLAIM_BRANCH.exec(branch || '')?.[1] ?? null;
 const shortBranch = ref => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);

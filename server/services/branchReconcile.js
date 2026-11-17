@@ -1,6 +1,6 @@
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
-import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, claimIssueOfBranch, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
+import { MERGED_OWNERSHIP_HOLDS, STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, claimIssueOfBranch, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
  *
@@ -1113,6 +1113,9 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
     });
     if (!retired.ok) {
       const { ok, ...failure } = retired;
+      if (MERGED_OWNERSHIP_HOLDS.has(failure.reason)) {
+        console.log(`⏭️ branch-reconcile: kept ${b.branch}${b.worktreePath ? ` and ${b.worktreePath}` : ''}: ${failure.reason}${failure.retryAt ? ` until ${failure.retryAt}` : ''}`);
+      }
       skipped.push({ branch: b.branch, ...(failure.reason !== 'not-merged-on-recheck' && b.worktreePath && { path: b.worktreePath }), ...failure });
       continue;
     }

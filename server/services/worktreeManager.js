@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { MERGED_OWNERSHIP_HOLDS, claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -2280,6 +2280,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       idleMs: async () => (await import('./branchReconcile.js')).checkoutIdleMs(wt.path),
     });
     if (scan.hold) {
+      if (MERGED_OWNERSHIP_HOLDS.has(scan.hold.reason)) console.log(`⏭️ Kept merged worktree ${wt.path} (branch ${scan.branch}): ${scan.hold.reason}`);
       // Named so a caller can say WHICH branch a hold kept, not just which path.
       skipped.push({ path: wt.path, ...(scan.branch && { branch: scan.branch }), reason: scan.hold.reason });
       continue;
