@@ -149,9 +149,13 @@ A variable segment is now one of three things:
   value (up to 64 combinations) and each file is an ordinary input. No
   directory is keyed, and a helper nothing calls contributes nothing. A
   parameter or loop variable shadows a module-level binding of the same name.
-  A literal URL spec is read as the URL parser reads it (`%20` is a space,
-  `?raw` is not part of the path), and a value that names different files on
-  Windows (`a\b`, `C:`) is not resolved.
+  A resolved value is then read by JavaScript's own rules: text after a path
+  continues its last segment unless a separator is written, `join()` keeps a
+  trailing separator and `resolve()` does not, a URL spec is parsed (`%20` is
+  a space, `?raw` is not part of the path), a module path is completed the
+  way the loader completes it, and a glob pattern keys the directory in front
+  of its first wildcard. A value that names different files on Windows
+  (`a\b`, `C:`) is not resolved.
 - **Contained.** The variable is an unchanged entry of a `readdir`/
   `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
   `randomUUID()` from `node:crypto`, or the path is built with `pathWithin(dir, ...segments)`
@@ -175,8 +179,9 @@ A test that reads a file it cannot name in its own source (a name from a table
 in another module, a value parsed out of a file) stays memoizable by joining
 with `pathWithin()`. The analyzer accepts the call only when the name is
 imported from that module. A file that mocks `fs`, `crypto` or `pathWithin.js`
-(`vi.mock`, a `vi.spyOn` of the member, a write to the `fs` namespace), or a
-workspace setup file that does, decides what they return, and a parameter or
+(`vi.mock`, a `vi.spyOn` of the member, any use of the `fs` namespace but a
+call through it), or that imports a helper or runs under a workspace setup
+file that does, decides what they return, and a parameter or
 local named `readdirSync`, `randomUUID` or `pathWithin` is not the import, so
 nothing is inferred from them there.
 
