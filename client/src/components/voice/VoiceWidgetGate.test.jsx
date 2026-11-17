@@ -379,6 +379,42 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
     expect(mocks.startContinuous).not.toHaveBeenCalled();
   });
 
+  it('keeps the mic closed for a held dictation once the controls are hidden', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const chunk = deferWidgetChunk();
+    renderGate();
+    const hide = await screen.findByRole('button', { name: DISENGAGE });
+
+    act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
+    // Hiding the controls stops a live capture; it must also stop a held one,
+    // or the mic would open with nothing on screen to show it.
+    fireEvent.click(hide);
+    await chunk.release();
+    await settle();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+
+    // Dictation itself is still on, so showing the controls again says so.
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
+    expect(await screen.findByText(/Dictating to Daily Log/)).toBeInTheDocument();
+  });
+
+  it('asks for the widget again when dictation starts after a load that failed', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localStorage.setItem(HIDDEN_KEY, '0');
+    mocks.loadWidget.mockRejectedValueOnce(new Error('network unreachable'));
+    renderGate();
+    await screen.findByRole('button', { name: DISENGAGE });
+    await settle();
+    expect(mocks.loadWidget).toHaveBeenCalledOnce();
+
+    act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
+
+    await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
+    expect(mocks.loadWidget).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText(/Dictating to Daily Log/)).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
   it('still opens the mic for a held dictation when the first load fails and a retry succeeds', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     localStorage.setItem(HIDDEN_KEY, '0');
