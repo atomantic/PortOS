@@ -182,12 +182,14 @@ describe('ci.yml required checks', () => {
   it('requires full primary coverage and the supported Windows native contract set for the full gate', () => {
     // Release reuse needs both full primary suites and the native Windows
     // job; primary-only full plans leave windows_mode at skip.
-    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
-    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.windows_mode == 'files'/);
+    // The impact result comes first: fromJSON of a failed or skipped impact
+    // job's empty output is an expression error, not a skip.
+    expect(jobs['full-gate']).toMatch(/if: always\(\) && needs\.impact\.result == 'success' && /);
+    expect(jobs['full-gate']).toMatch(/fromJSON\(needs\.impact\.outputs\.plan\)\.full && /);
+    expect(jobs['full-gate']).toMatch(/fromJSON\(needs\.impact\.outputs\.plan\)\.windows_mode == 'files'/);
     // A push whose native jobs were gated on its diff ran a partial native set,
     // and verify-ci-status.js would reuse its marker for an identical tree.
-    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.native_gated != 'true'/);
-    expect(jobs.impact).toContain('native_gated: ${{ steps.plan.outputs.native_gated }}');
+    expect(jobs['full-gate']).toMatch(/!fromJSON\(needs\.impact\.outputs\.plan\)\.native_gated && /);
   });
 
 });

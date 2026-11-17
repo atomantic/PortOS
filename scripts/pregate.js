@@ -895,15 +895,15 @@ function runCiTestPlan(baseSha, changedFiles) {
   return JSON.parse(planned.stdout);
 }
 
-/** Decode the planner's step outputs (JSON-encoded lists) into the plan shape the stages consume. */
+/** Map the planner's printed plan (githubPlanOutput() keys) into the plan shape the stages consume. */
 function pregatePlanFromRaw(raw) {
   return {
     full: raw.full,
     reason: raw.reason,
-    server: { mode: raw.server_mode, files: JSON.parse(raw.server_files), sources: JSON.parse(raw.server_sources) },
-    client: { mode: raw.client_mode, files: JSON.parse(raw.client_files), sources: JSON.parse(raw.client_sources) },
-    lint: { mode: raw.lint_mode, files: JSON.parse(raw.lint_files) },
-    browser: { files: JSON.parse(raw.browser_files ?? '[]') },
+    server: { mode: raw.server_mode, files: raw.server_files, sources: raw.server_sources },
+    client: { mode: raw.client_mode, files: raw.client_files, sources: raw.client_sources },
+    lint: { mode: raw.lint_mode, files: raw.lint_files },
+    browser: { files: raw.browser_files },
     db: raw.db,
     windows: raw.windows,
     build: raw.build,
@@ -913,7 +913,7 @@ function pregatePlanFromRaw(raw) {
     supercolliderLive: raw.supercollider_live,
     dockerContainmentLive: raw.docker_containment_live,
     macosNative: raw.macos_native,
-    suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
+    suiteReasons: raw.suite_reasons,
   };
 }
 
