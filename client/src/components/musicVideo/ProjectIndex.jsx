@@ -30,7 +30,8 @@ export default function ProjectIndex({
           className="min-w-0 w-full sm:w-64 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
         />
       </div>
-      {projectGroups.length === 0 && (
+      {!summaries.loaded && summaries.loading && <p className="text-sm text-port-text-muted">Searching projects…</p>}
+      {summaries.loaded && projectGroups.length === 0 && (
         <p className="text-sm text-port-text-muted">{nameQuery.trim()
           ? <>No projects match &ldquo;{nameQuery}&rdquo;.</>
           : statusFilter === 'all' ? 'No music video projects yet. Create your first project above to get started.'

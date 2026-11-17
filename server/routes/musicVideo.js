@@ -95,7 +95,10 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const filter = query.statusFilter ? (project) => (project.status === 'complete') === (query.statusFilter === 'completed') : undefined;
+    const needle = (query.q || '').trim().toLowerCase();
+    const matchesStatus = query.statusFilter ? (project) => (project.status === 'complete') === (query.statusFilter === 'completed') : null;
+    const matchesName = needle ? (project) => String(project.name || '').toLowerCase().includes(needle) : null;
+    const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
     const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
