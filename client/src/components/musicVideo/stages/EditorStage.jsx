@@ -143,12 +143,11 @@ export default function EditorStage({ board }) {
         // One screen: the top row takes what the docked timeline leaves.
         <div ref={setScreenEl} style={screenHeight ? { height: screenHeight } : undefined}
           className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-3rem)] min-h-[32rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
-          {/* The preview takes the width its height allows; the side panel takes the rest, so no column sits empty. */}
+          {/* A narrow side panel, then the preview centered in the rest, as wide as the row's height allows. */}
           <div className="flex min-h-0 gap-3">
-            <section ref={setLibraryEl} aria-label="Effects" className={`${panelCls} min-w-[20rem] flex-1`} />
-            {/* The player's controls sit under its picture; its width is held to what the row's height allows. */}
-            <div ref={setPreviewCell} className="min-h-0 w-[45%] min-w-[20rem] shrink overflow-hidden" style={previewWidth ? { width: previewWidth } : undefined}>
-              <div className="w-full">{board.previewDock}</div>
+            <section ref={setLibraryEl} aria-label="Effects" className={`${panelCls} w-[24rem] shrink-0`} />
+            <div ref={setPreviewCell} className="flex min-h-0 min-w-0 flex-1 items-start justify-center overflow-hidden">
+              <div className="w-full min-w-[20rem]" style={previewWidth ? { maxWidth: previewWidth } : undefined}>{board.previewDock}</div>
             </div>
           </div>
           <div className="max-h-[45dvh] min-h-0 overflow-y-auto">{timeline}</div>

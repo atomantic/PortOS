@@ -95,9 +95,12 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
           {[frame.world ? worldClockText(frame.clockMinutes) : null, placeName, frame.storyCamera?.name, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
         </p>}
       </div>
-      <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />
-      <FrameStepper time={time} fps={PREVIZ_FPS} maxSec={Number(project.audioAnalysis?.durationSec) || null} onSeek={stepFrame} label={label} keys />
+      <div data-preview-controls className="space-y-2">
+        <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />
+        <FrameStepper time={time} fps={PREVIZ_FPS} maxSec={Number(project.audioAnalysis?.durationSec) || null} onSeek={stepFrame} label={label} keys />
+      </div>
       <audio
+        data-preview-scrub
         ref={audioRef}
         src={audioUrl}
         controls
