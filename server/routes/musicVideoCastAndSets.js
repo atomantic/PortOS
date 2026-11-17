@@ -121,13 +121,13 @@ router.post('/:id/cast-and-sets/resume', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/cast-and-sets/inspect', asyncHandler(async (req, res) => {
-  const { musicVideoCastSetsInspectSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
+  const { musicVideoCastSetsInspectSchema } = await import('../lib/musicVideo/musicVideoCastSetsInspectionValidation.js');
   const input = validateRequest(musicVideoCastSetsInspectSchema, req.body || {});
   res.json(await reinspectCastAndSetsImages(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res) => {
-  const { musicVideoCastSetsAcknowledgeSchema } = await import('../lib/musicVideoCastSetsInspectionValidation.js');
+  const { musicVideoCastSetsAcknowledgeSchema } = await import('../lib/musicVideo/musicVideoCastSetsInspectionValidation.js');
   const input = validateRequest(musicVideoCastSetsAcknowledgeSchema, req.body || {});
   const reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   res.json(await acknowledgeCastAndSetsImage(req.params.id, input, reviewer));
