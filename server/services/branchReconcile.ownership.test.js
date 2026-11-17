@@ -359,14 +359,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await attachBareOrigin(scratch, repo);
     const sibling = await addTree(join(scratch, 'next-issue-7'), 'next/issue-7');
     await execGit(['push', '-u', 'origin', 'next/issue-7'], sibling);
+    const log = vi.spyOn(console, 'log');
 
     const result = await reconcileWithoutOwners();
+    const kept = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('next/issue-7'));
+    log.mockRestore();
 
     expect(result.cleaned).toEqual([]);
     expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'next/issue-7', reason: 'branch-has-no-own-commits' }));
     expect(existsSync(sibling)).toBe(true);
     expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain(`branch refs/heads/next/issue-7`);
     expect(await branches()).toContain('next/issue-7');
+    // The hold is named on stdout: a deliberate keep, not a failure.
+    expect(kept).toContainEqual(expect.stringMatching(/^⏭️ branch-reconcile: kept next\/issue-7 and .*next-issue-7: branch-has-no-own-commits$/));
   });
 
   it('retires a new published branch once a PR merged exactly its head', async () => {

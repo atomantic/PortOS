@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
   decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
-  claimIssueOfBranch, mergedOwnershipHold, recoveryWorktreeReason, supersededPolicyHold,
+  claimIssueOfBranch, MERGED_OWNERSHIP_HOLDS, mergedOwnershipHold, recoveryWorktreeReason, supersededPolicyHold,
   ANCESTRY_RETIREMENT_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
@@ -200,6 +200,8 @@ describe('mergedOwnershipHold', () => {
     ['a branch with no checkout needs no checkout activity', { checkoutPath: null, facts: { checkoutProcess: undefined, idleMs: undefined } }, 'retire'],
   ])('%s', (_name, overrides, expected) => {
     expect(verdict(own(overrides))).toBe(expected);
+    // Every hold is one the sweeps log as a deliberate keep.
+    if (expected !== 'retire') expect(MERGED_OWNERSHIP_HOLDS.has(expected)).toBe(true);
   });
 
   it('dates a recent-activity hold for when the idle window lapses', () => {
