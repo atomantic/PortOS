@@ -35,7 +35,7 @@ export default function GsdDocumentsPanel({ appId, selectedDoc, onSelectDoc }) {
     setLoading(true);
     api.getGsdDocument(appId, selectedDoc)
       .then(data => {
-        if (!cancelled) setContent(data?.content || null);
+        if (!cancelled) setContent(data?.content ?? null);
       })
       .catch(() => {
         if (!cancelled) setContent(null);
@@ -136,20 +136,20 @@ export default function GsdDocumentsPanel({ appId, selectedDoc, onSelectDoc }) {
                 spellCheck={false}
               />
             </div>
-          ) : content ? (
+          ) : (
             <div>
               <div className="flex justify-end mb-2">
                 <button
                   onClick={enterEditMode}
                   className="px-3 py-1.5 bg-port-border hover:bg-port-border/80 text-white rounded-lg text-xs flex items-center gap-1"
                 >
-                  <Pencil size={14} /> Edit
+                  <Pencil size={14} /> {content === null ? 'Create' : 'Edit'}
                 </button>
               </div>
-              <MarkdownOutput content={content} />
+              {content ? <MarkdownOutput content={content} /> : (
+                <p className="text-gray-500 text-sm">{content === null ? 'Document not found' : 'Document is empty'}</p>
+              )}
             </div>
-          ) : (
-            <p className="text-gray-500 text-sm">Document not found or empty</p>
           )}
         </div>
       </div>

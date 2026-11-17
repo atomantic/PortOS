@@ -9,7 +9,7 @@ export const getDigitalTwinStatus = (options) => request('/digital-twin', option
 
 // Digital Twin - Documents
 export const getDigitalTwinDocuments = (options = {}) => request('/digital-twin/documents', options);
-export const getDigitalTwinDocument = (id) => request(`/digital-twin/documents/${id}`);
+export const getDigitalTwinDocument = (id, options = {}) => request(`/digital-twin/documents/${id}`, options);
 export const createDigitalTwinDocument = (data, options = {}) => request('/digital-twin/documents', {
   method: 'POST',
   body: JSON.stringify(data),

@@ -46,7 +46,9 @@ function BirthDateSection({ birthDate, onUpdate }) {
         <Calendar size={18} className="text-port-accent" />
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Birth Date</h3>
       </div>
-      {editing ? (
+      {editing || !birthDate ? (
+        <div>
+        {!birthDate && <p className="text-gray-500 text-sm mb-3">No birth date set. Required for life calendar and death clock calculations.</p>}
         <div className="flex items-center gap-3">
           <input
             type="date"
@@ -63,15 +65,18 @@ function BirthDateSection({ birthDate, onUpdate }) {
           >
             <Check size={16} />
           </button>
-          <button
-            aria-label="Cancel"
-            onClick={handleCancel}
-            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
-          >
-            <X size={16} />
-          </button>
+          {birthDate && (
+            <button
+              aria-label="Cancel"
+              onClick={handleCancel}
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded bg-port-error/20 text-port-error hover:bg-port-error/30"
+            >
+              <X size={16} />
+            </button>
+          )}
         </div>
-      ) : birthDate ? (
+        </div>
+      ) : (
         <div className="flex items-center gap-4">
           <div>
             <p className="text-2xl font-mono font-bold text-white">{birthDate}</p>
@@ -92,16 +97,6 @@ function BirthDateSection({ birthDate, onUpdate }) {
             className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 rounded text-gray-500 hover:text-gray-300 hover:bg-port-border/50"
           >
             <Pencil size={14} />
-          </button>
-        </div>
-      ) : (
-        <div>
-          <p className="text-gray-500 text-sm mb-3">No birth date set. Required for life calendar and death clock calculations.</p>
-          <button
-            onClick={() => setEditing(true)}
-            className="px-4 py-2 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 text-sm"
-          >
-            Set Birth Date
           </button>
         </div>
       )}
