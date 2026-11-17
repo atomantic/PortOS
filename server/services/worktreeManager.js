@@ -17,7 +17,7 @@ import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fi
 import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
-import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
+import { hasProcessCwdInside, probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -2284,7 +2284,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       published: () => readBranchPublished(sourceWorkspace, scannedBranch),
       claimReserved: async () => (await import('./claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
       checkoutPresent: () => readCheckoutPresence(wt.path),
-      checkoutProcess: () => hasProcessCwdInside(wt.path),
+      checkoutProcess: () => probeProcessCwdInside(wt.path),
       idleMs: async () => (await import('./branchReconcile.js')).checkoutIdleMs(wt.path),
     });
     if (scan.hold) {

@@ -26,7 +26,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const { injected, freshInjection } = vi.hoisted(() => {
-  const fresh = () => ({ statusPath: null, beforeRemove: new Map(), owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, occupied: new Set(), gitSpawns: [], gitInFlight: new Set() });
+  const fresh = () => ({ statusPath: null, beforeRemove: new Map(), owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, occupied: new Set(), unprobed: new Set(), gitSpawns: [], gitInFlight: new Set() });
   return { injected: fresh(), freshInjection: fresh };
 });
 vi.mock('../lib/execGit.js', async (importOriginal) => {
@@ -95,7 +95,11 @@ vi.mock('./prProbe.js', async (importOriginal) => ({
 }));
 // lsof is absent on some CI hosts and fails closed there; a checkout a process
 // sits in is named per test instead.
-vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async dir => injected.occupied.has(dir) }));
+// A checkout in `unprobed` is one the probe cannot see into (Windows, no lsof).
+vi.mock('../lib/processCwdProbe.js', () => {
+  const probe = async dir => (injected.unprobed.has(dir) ? null : injected.occupied.has(dir));
+  return { probeProcessCwdInside: probe, hasProcessCwdInside: async dir => await probe(dir) !== false };
+});
 
 // Keep the run hermetic: the verdict ledger otherwise reads this install's
 // real CoS data directory.
@@ -438,6 +442,10 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await idle(occupied);
     injected.occupied.add(await gitCheckoutPath(occupied));
     const touched = await addMergedTree(join(external, 'touched'), 'feat/touched', 'no-ff');
+    // Quiet for two hours, but no probe can see into it: a day is required.
+    const unprobed = await addMergedTree(join(external, 'unprobed'), 'feat/unprobed', 'no-ff');
+    await idle(unprobed);
+    injected.unprobed.add(await gitCheckoutPath(unprobed));
     // The hermetic origin is no GitHub repository, so the issue reservation is unreadable.
     const claim = await addMergedTree(join(external, 'next-issue-9'), 'next/issue-9', 'no-ff');
     await idle(claim);
@@ -446,14 +454,14 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     // `git gc` expires every reflog entry of a branch idle past gc.reflogExpire.
     await execGit(['reflog', 'expire', '--expire=now', '--expire-unreachable=now', 'refs/heads/feat/expired'], repo);
     const cases = [['feat/published', 'published-claim-unmerged'], ['feat/occupied', 'checkout-process-active'],
-      ['feat/touched', 'checkout-recently-touched'], ['next/issue-9', 'claim-issue-unverified'], ['feat/expired', 'branch-own-commits-unreadable']];
+      ['feat/touched', 'checkout-recently-touched'], ['feat/unprobed', 'checkout-process-unverified'], ['next/issue-9', 'claim-issue-unverified'], ['feat/expired', 'branch-own-commits-unreadable']];
 
     const result = await cleanupMerged(repo, 'main', cases.map(([branch]) => ({ branch })), { activeAgentIds: new Set() });
 
     expect(result.cleaned).toEqual([]);
     expect(result.skipped.map(({ branch, reason }) => [branch, reason])).toEqual(cases);
     expect(result.skipped.find(row => row.branch === 'feat/touched').retryAt).toEqual(expect.any(String));
-    for (const path of [published, occupied, touched, claim, expired]) expect(existsSync(path)).toBe(true);
+    for (const path of [published, occupied, touched, unprobed, claim, expired]) expect(existsSync(path)).toBe(true);
     expect(await branches()).toEqual(expect.arrayContaining(cases.map(([branch]) => branch)));
   });
 

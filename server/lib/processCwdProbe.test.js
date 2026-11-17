@@ -1,7 +1,21 @@
 import { describe, it, expect } from 'vitest';
-import { hasProcessCwdInside } from './processCwdProbe.js';
+import { hasProcessCwdInside, probeProcessCwdInside } from './processCwdProbe.js';
 
 const listing = (...cwds) => async () => ({ stdout: cwds.map((c, i) => `p${i + 1}\nn${c}\n`).join('') });
+
+// Merged retirement substitutes a longer quiet period for an unknown answer (#16625),
+// so unknown must stay distinct from both occupied and empty.
+describe('probeProcessCwdInside', () => {
+  const opts = (run, platform = 'linux') => ({ platform, run });
+  it('answers true, false, or null when the probe cannot tell', async () => {
+    expect(await probeProcessCwdInside('/work/wt', opts(listing('/', '/work/wt')))).toBe(true);
+    expect(await probeProcessCwdInside('/work/wt', opts(listing('/')))).toBe(false);
+    expect(await probeProcessCwdInside('/work/wt', opts(async () => { throw new Error('spawn lsof ENOENT'); }))).toBeNull();
+    expect(await probeProcessCwdInside('/work/wt', opts(listing()))).toBeNull();
+    expect(await probeProcessCwdInside('/work/wt', opts(listing('/'), 'win32'))).toBeNull();
+    expect(await probeProcessCwdInside('', opts(listing('/')))).toBeNull();
+  });
+});
 
 describe('hasProcessCwdInside', () => {
   const opts = (run, platform = 'linux') => ({ platform, run });

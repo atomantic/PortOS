@@ -39,13 +39,19 @@ export const SHIPPED_CLAIM_IDLE_MS = 60 * 60 * 1000;
 // merged by ancestry retire on a later pass the same day.
 export const ANCESTRY_RETIREMENT_IDLE_MS = 60 * 60 * 1000;
 
+// Why a day: where no process probe can see into a checkout (Windows, a host
+// without lsof, a failed listing), only a long quiet period stands in for it.
+// Holding such a checkout forever would strand merged branches on a supported
+// platform; a day outlasts any session paused in a clean, merged tree.
+export const UNPROBED_CHECKOUT_IDLE_MS = 24 * 60 * 60 * 1000;
+
 const COMMIT_SHA = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const ISSUE_CLAIM_BRANCH = /^(?:next|claim)\/issue-([1-9]\d*)$/;
 
 /** The holds `mergedOwnershipHold` reports: a sweep logs each one, since none names a failure. */
 export const MERGED_OWNERSHIP_HOLDS = new Set([
   'branch-has-no-own-commits', 'branch-own-commits-unreadable', 'published-claim-unmerged', 'branch-publication-unreadable',
-  'claim-issue-reserved', 'claim-issue-unverified', 'checkout-presence-unreadable', 'checkout-process-active', 'checkout-recently-touched', 'checkout-idle-unreadable',
+  'claim-issue-reserved', 'claim-issue-unverified', 'checkout-presence-unreadable', 'checkout-process-active', 'checkout-process-unverified', 'checkout-recently-touched', 'checkout-idle-unreadable',
 ]);
 
 /** The issue number a `/do:next` or `/claim` branch reserves, or null. */
@@ -105,6 +111,8 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  *    reads `'patch'` and skips this): a reserved issue claim, a process with its
  *    working directory in the checkout, or activity there within
  *    ANCESTRY_RETIREMENT_IDLE_MS holds, because a live owner outranks ancestry.
+ *    Where the process probe cannot tell, UNPROBED_CHECKOUT_IDLE_MS of quiet
+ *    stands in for it (`checkout-process-unverified` until then).
  *    A checkout directory proven absent has neither, so it skips those two.
  *
  * Each hold lifts only when the forge reports a PR merged at exactly this head
@@ -137,11 +145,14 @@ function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }
   // prunes a stale registration and its merged branch.
   if (!facts.checkoutPresent) return null;
   if (facts.checkoutProcess === undefined) return { need: 'checkoutProcess' };
-  if (facts.checkoutProcess !== false) return unlessShipped('checkout-process-active');
+  if (facts.checkoutProcess === true) return unlessShipped('checkout-process-active');
+  // An unknown probe answer (null) needs the longer quiet period instead.
+  const probed = facts.checkoutProcess === false;
+  const window = probed ? ANCESTRY_RETIREMENT_IDLE_MS : UNPROBED_CHECKOUT_IDLE_MS;
   if (facts.idleMs === undefined) return { need: 'idleMs' };
   if (!Number.isFinite(facts.idleMs)) return unlessShipped('checkout-idle-unreadable');
-  if (facts.idleMs < ANCESTRY_RETIREMENT_IDLE_MS) {
-    return unlessShipped('checkout-recently-touched', new Date(nowMs + ANCESTRY_RETIREMENT_IDLE_MS - facts.idleMs).toISOString());
+  if (facts.idleMs < window) {
+    return unlessShipped(probed ? 'checkout-recently-touched' : 'checkout-process-unverified', new Date(nowMs + window - facts.idleMs).toISOString());
   }
   return null;
 }

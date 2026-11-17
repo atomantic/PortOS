@@ -1,8 +1,10 @@
 /**
- * Whether a GitHub issue's claim reservation (an assignee or the `in-progress` label on an open issue) still stands, as a tri-state read for the retirement gates.
+ * Whether an issue's claim reservation (an assignee or the `in-progress` label on an open issue) still stands on GitHub or GitLab, as a tri-state read for the retirement gates.
  */
 import { execGh } from './github.js';
-import { githubRepoSpec } from '../lib/workTracker.js';
+import { execGlab } from './gitlab.js';
+import { withGlabJson } from '../lib/glabArgs.js';
+import { githubRepoSpec, hostToWorkTracker } from '../lib/workTracker.js';
 import { IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
@@ -30,9 +32,27 @@ export async function readClaimIssueReservation(target, issue, forgeExec) {
 }
 
 /**
- * `readClaimIssueReservation` for a repository path, resolving its origin and
- * gh credential overlay first (a caller without branch-reconcile's per-cycle
- * resolution: the early merged-worktree reaper, or the Git page's cleanup).
+ * The same reservation on GitLab, through `glab` in the repository (it resolves
+ * the project from `origin`). GitLab labels are plain strings and its states
+ * are `opened`/`closed`; a view for another issue is unreadable, not an answer.
+ *
+ * @returns {Promise<boolean|null>}
+ */
+async function readGitlabClaimIssueReservation(repoPath, issue) {
+  const view = safeJSONParse(await execGlab(withGlabJson(['issue', 'view', String(issue)]), repoPath), null);
+  if (!view || typeof view !== 'object' || Array.isArray(view) || Number(view.iid) !== Number(issue)
+    || !Array.isArray(view.labels) || !Array.isArray(view.assignees)) return null;
+  if (view.state === 'closed') return false;
+  if (view.state !== 'opened') return null;
+  return view.assignees.length > 0 || view.labels.some(label => (typeof label === 'string' ? label : label?.name) === IN_PROGRESS_LABEL);
+}
+
+/**
+ * The reservation for a repository path, read from the tracker its origin
+ * names: GitHub (resolving the gh credential overlay) or GitLab. Any other
+ * origin has no tracker to ask and reads unknown. For a caller without
+ * branch-reconcile's per-cycle credential: the early merged-worktree reaper, the
+ * Git page's cleanup, and reconcile on a non-GitHub origin.
  *
  * @param {string} repoPath
  * @param {string|number} issue
@@ -41,7 +61,7 @@ export async function readClaimIssueReservation(target, issue, forgeExec) {
  */
 export async function readRepoClaimIssueReservation(repoPath, issue, { forgeAccount = null } = {}) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  if (!githubRepoSpec(origin)) return null;
+  if (!githubRepoSpec(origin)) return hostToWorkTracker(origin?.host) === 'gitlab' ? readGitlabClaimIssueReservation(repoPath, issue) : null;
   const forgeExec = await resolveForgeExecOptions(repoPath, { forgeAccount }).catch(() => null);
   return readClaimIssueReservation(origin, issue, forgeExec);
 }
