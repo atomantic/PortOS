@@ -10,7 +10,7 @@ import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideoRe
  * root is held by the page so it survives opening a project and coming back.
  */
 export default function ProjectIndex({
-  projects, nameQuery, onNameQueryChange, summaries, pickedVersion, onPickVersion, trackName,
+  projects, statusFilter, nameQuery, onNameQueryChange, summaries, pickedVersion, onPickVersion, trackName,
   onSelect, onClone, deletion, cloningId, onRename,
 }) {
   const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
@@ -31,7 +31,10 @@ export default function ProjectIndex({
         />
       </div>
       {projectGroups.length === 0 && (
-        <p className="text-sm text-port-text-muted">No projects match &ldquo;{nameQuery}&rdquo;.</p>
+        <p className="text-sm text-port-text-muted">{nameQuery.trim()
+          ? <>No projects match &ldquo;{nameQuery}&rdquo;.</>
+          : statusFilter === 'all' ? 'No music video projects yet. Create your first project above to get started.'
+            : statusFilter === 'completed' ? 'No completed projects.' : 'No projects in progress.'}</p>
       )}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
         {projectGroups.map(({ rootId, versions }) => {
