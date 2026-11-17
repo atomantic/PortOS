@@ -114,7 +114,7 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  *   facts: `lineage`, `published`, `claimReserved`, `checkoutProcess`, `idleMs`, `mergedPrAtHead`
  * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | null}
  */
-export function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }) {
+function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }) {
   const unlessShipped = (reason, retryAt) => {
     if (facts.mergedPrAtHead === undefined) return { need: 'mergedPrAtHead' };
     return facts.mergedPrAtHead === true ? null : holdOn(reason, retryAt);
