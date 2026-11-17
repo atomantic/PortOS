@@ -70,7 +70,8 @@ async function attachFiles(page, files) {
   await page.getByRole('button', { name: 'Upload & tools' }).click({ timeout: STEP_TIMEOUT_MS });
   // Settled from the start: a failed click below closes the page, which rejects this waiter.
   const chooser = page.waitForEvent('filechooser', { timeout: STEP_TIMEOUT_MS }).then((value) => ({ chooser: value }), (error) => ({ error }));
-  await page.locator('[data-test-id=local-images-files-uploader-button]').click({ timeout: STEP_TIMEOUT_MS });
+  // Gemini keeps a hidden copy of this menu item in the DOM alongside the open menu.
+  await page.locator('[data-test-id=local-images-files-uploader-button]:visible').click({ timeout: STEP_TIMEOUT_MS });
   const consent = page.getByRole('dialog').filter({ hasText: CONSENT_TITLE });
   const picked = await Promise.race([
     chooser,
