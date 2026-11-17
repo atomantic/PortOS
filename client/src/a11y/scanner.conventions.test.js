@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: the JSX scanner and wrapper recognizer the other guards stand on.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

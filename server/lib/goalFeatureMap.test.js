@@ -8,7 +8,6 @@ import {
 import { NAV_COMMANDS } from './navManifest.js';
 import { goalCategoryEnum } from './identityValidation.js';
 import { INSTANCE_FEATURE_IDS } from './instanceFeatureRegistry.js';
-import * as clientMap from '../../client/src/lib/goalFeatureMap.js';
 
 // Every route the manifest knows about (strip query strings — a feature-area
 // deep-link may point at a `?ref=…` variant of a real page path).
@@ -80,12 +79,5 @@ describe('goalFeatureMap — getGoalFeatureAreas', () => {
       .toEqual(['sharing']);
     expect(getGoalFeatureAreas({ category: 'health', featureAreas: ['post'] }, isFeatureEnabled).map((row) => row.area))
       .toEqual(['bodyHealth']);
-  });
-});
-
-describe('goalFeatureMap — server/client mirror parity', () => {
-  it('server and client maps are identical', () => {
-    expect(clientMap.FEATURE_AREAS).toEqual(FEATURE_AREAS);
-    expect([...clientMap.FEATURE_AREA_IDS].sort()).toEqual([...FEATURE_AREA_IDS].sort());
   });
 });

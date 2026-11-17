@@ -572,7 +572,6 @@ async function teardownDaemon() {
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-runtime-verification');
   cancelEvent('cos-pending-merge-sweep');
-  cancelEvent('cos-initialized-retirement-recovery');
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 

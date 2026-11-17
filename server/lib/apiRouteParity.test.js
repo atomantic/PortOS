@@ -22,7 +22,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildApiRouteCatalog } from './apiRouteGraph.js';
+import { getApiRouteCatalog } from './apiRouteGraph.js';
 import { findUncalledServerRoutes, findUnmountedClientPaths, scanClientApiPaths } from './clientApiPaths.js';
 import { ROUTE_CALLER_CLASSES, UNCALLED_ROUTE_ALLOWLIST } from './apiRouteCallerAllowlist.js';
 
@@ -53,7 +53,7 @@ const describeRoute = (route) => `${route.methods.join('/')} ${route.path}`;
 
 const describeSite = (site) => `${site.file}: ${site.expression}`;
 
-const catalog = buildApiRouteCatalog({ repoRoot: REPO_ROOT });
+const catalog = getApiRouteCatalog();
 const serverPaths = catalog.routes.map((route) => route.path);
 const { paths: clientPaths, unresolved } = scanClientApiPaths({ repoRoot: REPO_ROOT });
 

@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: overlay, switch and switch hit-area rules.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

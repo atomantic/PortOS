@@ -3125,7 +3125,6 @@ describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
     expect(String(result.metadata.challengeCount)).toBe('1');
     expect(result.metadata.challenge.reason).toBe('reviewer misread the diff');
     expect(result.metadata.challenge.reviewer).toBe('ollama');
-    expect(mock.events.some(e => e.name === 'task:challenged')).toBe(true);
   });
 
   it('refuses a second dispute on the same task (bounded to one)', async () => {

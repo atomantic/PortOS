@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import {
   FileText,
   Plus,
   Trash2,
   Save,
   X,
-  Edit2,
   ToggleLeft,
   ToggleRight,
   Scale,
@@ -14,6 +14,8 @@ import {
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import Modal from '../../ui/Modal';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../../ui/CollapsibleListItem';
 import { FormField } from '../../ui/FormField';
 import ListLoadError from '../../ui/ListLoadError';
 import useListResource from '../../../hooks/useListResource';
@@ -24,54 +26,72 @@ import { timeAgo } from '../../../utils/formatters';
 const fetchDocuments = () => api.getDigitalTwinDocuments({ silent: true });
 
 export default function DocumentsTab({ onRefresh }) {
-  const { items: documents, state: documentsState, error: documentsError, retry: loadDocuments } = useListResource(fetchDocuments);
+  const { items: documents, state: documentsState, error: documentsError, retry: loadDocuments, setItems: setDocuments } = useListResource(fetchDocuments);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const docId = searchParams.get('doc');
   const [selectedDoc, setSelectedDoc] = useState(null);
-  const [editMode, setEditMode] = useState(false);
   const [editContent, setEditContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [newDoc, setNewDoc] = useState({ filename: '', title: '', category: 'core', content: '' });
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [removingId, setRemovingId] = useState(null);
+  const dirty = !!selectedDoc && editContent !== selectedDoc.content;
 
-  const loadDocument = async (id) => {
-    const doc = await api.getDigitalTwinDocument(id);
-    setSelectedDoc(doc);
-    setEditContent(doc.content);
-    setEditMode(false);
+  const selectDoc = (id) => setSearchParams(id ? { doc: id } : {}, { replace: !id });
+
+  // ?doc=<id> is the source of truth for the selection; the body is fetched once per id.
+  useEffect(() => {
+    setConfirmingDelete(false);
+    if (!docId) { setSelectedDoc(null); return undefined; }
+    let active = true;
+    api.getDigitalTwinDocument(docId, { silent: true })
+      .then((doc) => {
+        if (!active) return;
+        setSelectedDoc(doc);
+        setEditContent(doc.content);
+      })
+      .catch(() => {
+        if (!active) return;
+        toast.error('Could not load document');
+        setSearchParams({}, { replace: true });
+      });
+    return () => { active = false; };
+  }, [docId, setSearchParams]);
+
+  // Apply a PUT response in place: the sidebar row keeps its metadata, the open body is replaced.
+  const applyUpdated = (doc, saved) => {
+    const { content: _content, ...meta } = saved || {};
+    setDocuments((items) => items.map((item) => (item.id === doc.id ? { ...item, ...meta } : item)));
+    setSelectedDoc((current) => (current?.id === doc.id ? { ...current, ...meta } : current));
   };
 
   const handleSave = async () => {
-    if (!selectedDoc) return;
+    if (!selectedDoc || !dirty) return;
     setSaving(true);
     // request() already toasted a failure; release Save either way so the unsaved
     // edit can be retried instead of stranding the editor behind a disabled button.
-    const saved = await api.updateSoulDocument(selectedDoc.id, { content: editContent }).then(() => true, () => false);
+    const saved = await api.updateSoulDocument(selectedDoc.id, { content: editContent }).then((doc) => doc || {}, () => null);
     setSaving(false);
     if (!saved) return;
     toast.success('Document saved');
-    loadDocuments();
-    await loadDocument(selectedDoc.id);
-    setEditMode(false);
+    applyUpdated(selectedDoc, saved);
+    setSelectedDoc((current) => (current?.id === selectedDoc.id ? { ...current, content: saved.content ?? editContent } : current));
+    setEditContent(saved.content ?? editContent);
     onRefresh();
   };
 
   const handleToggleEnabled = async (doc, enabled) => {
-    await api.updateSoulDocument(doc.id, { enabled });
+    const saved = await api.updateSoulDocument(doc.id, { enabled });
     toast.success(enabled ? 'Document enabled' : 'Document disabled');
-    loadDocuments();
-    if (selectedDoc?.id === doc.id) {
-      await loadDocument(doc.id);
-    }
+    applyUpdated(doc, saved?.id ? saved : { enabled });
     onRefresh();
   };
 
   const handleWeightChange = async (doc, weight) => {
-    await api.updateSoulDocument(doc.id, { weight });
+    const saved = await api.updateSoulDocument(doc.id, { weight });
     toast.success(`Weight set to ${weight}`);
-    loadDocuments();
-    if (selectedDoc?.id === doc.id) {
-      setSelectedDoc({ ...selectedDoc, weight });
-    }
+    applyUpdated(doc, saved?.id ? saved : { weight });
     onRefresh();
   };
 
@@ -100,11 +120,9 @@ export default function DocumentsTab({ onRefresh }) {
   const handleDelete = async (id) => {
     await api.deleteSoulDocument(id);
     toast.success('Document deleted');
-    if (selectedDoc?.id === id) {
-      setSelectedDoc(null);
-    }
-    setDeleteConfirm(null);
-    loadDocuments();
+    setConfirmingDelete(false);
+    setRemovingId(id);
+    if (selectedDoc?.id === id) selectDoc(null);
     onRefresh();
   };
 
@@ -119,7 +137,7 @@ export default function DocumentsTab({ onRefresh }) {
   return (
     <div className="flex flex-col lg:flex-row h-full gap-4">
       {/* Document List Sidebar */}
-      <div className={`${selectedDoc ? 'hidden lg:flex' : 'flex'} w-full lg:w-72 shrink-0 bg-port-card rounded-lg border border-port-border overflow-hidden flex-col`}>
+      <div className={`${docId ? 'hidden lg:flex' : 'flex'} w-full lg:w-72 shrink-0 bg-port-card rounded-lg border border-port-border overflow-hidden flex-col`}>
         <div className="p-3 border-b border-port-border flex items-center justify-between">
           <h3 className="font-medium text-white">Documents</h3>
           <button
@@ -151,9 +169,14 @@ export default function DocumentsTab({ onRefresh }) {
                     {config.label}
                   </div>
                   {categoryDocs.map(doc => (
-                    <button
+                    <CollapsibleListItem
                       key={doc.id}
-                      onClick={() => loadDocument(doc.id)}
+                      removing={removingId === doc.id}
+                      spacing="0"
+                      onExited={() => { setDocuments((items) => items.filter((item) => item.id !== doc.id)); setRemovingId(null); }}
+                    >
+                    <button
+                      onClick={() => selectDoc(doc.id)}
                       className={`w-full px-3 py-3 min-h-[44px] text-left hover:bg-port-border transition-colors ${
                         selectedDoc?.id === doc.id ? 'bg-port-accent/10 border-l-2 border-port-accent' : ''
                       }`}
@@ -168,6 +191,7 @@ export default function DocumentsTab({ onRefresh }) {
                         {timeAgo(doc.lastModified)}
                       </div>
                     </button>
+                    </CollapsibleListItem>
                   ))}
                 </div>
               );
@@ -177,8 +201,10 @@ export default function DocumentsTab({ onRefresh }) {
       </div>
 
       {/* Document Editor */}
-      <div className={`${selectedDoc ? 'flex' : 'hidden lg:flex'} flex-1 bg-port-card rounded-lg border border-port-border overflow-hidden flex-col`}>
-        {selectedDoc ? (
+      <div className={`${docId ? 'flex' : 'hidden lg:flex'} flex-1 bg-port-card rounded-lg border border-port-border overflow-hidden flex-col`}>
+        {docId && !selectedDoc ? (
+          <div className="flex-1 flex items-center justify-center text-gray-500">Loading document...</div>
+        ) : selectedDoc ? (
           <>
             {/* Editor Header */}
             <div className="p-3 border-b border-port-border">
@@ -187,7 +213,7 @@ export default function DocumentsTab({ onRefresh }) {
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   {/* Back button for mobile */}
                   <button
-                    onClick={() => setSelectedDoc(null)}
+                    onClick={() => selectDoc(null)}
                     className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 lg:hidden p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                     title="Back to list" aria-label="Back to list"
                   >
@@ -225,7 +251,7 @@ export default function DocumentsTab({ onRefresh }) {
                   >
                     {selectedDoc.enabled ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}
                   </button>
-                  {editMode ? (
+                  {dirty && (
                     <>
                       <button
                         onClick={handleSave}
@@ -236,33 +262,29 @@ export default function DocumentsTab({ onRefresh }) {
                         <Save size={18} />
                       </button>
                       <button
-                        onClick={() => {
-                          setEditContent(selectedDoc.content);
-                          setEditMode(false);
-                        }}
+                        onClick={() => setEditContent(selectedDoc.content)}
+                        disabled={saving}
                         className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                        title="Cancel" aria-label="Cancel"
+                        title="Discard changes" aria-label="Discard changes"
                       >
                         <X size={18} />
                       </button>
                     </>
+                  )}
+                  {confirmingDelete ? (
+                    <ConfirmButtonPair
+                      prompt="Delete?"
+                      onConfirm={() => handleDelete(selectedDoc.id)}
+                      onCancel={() => setConfirmingDelete(false)}
+                    />
                   ) : (
-                    <>
-                      <button
-                        onClick={() => setEditMode(true)}
-                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
-                        title="Edit" aria-label="Edit"
-                      >
-                        <Edit2 size={18} />
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirm(selectedDoc.id)}
-                        className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 transition-colors"
-                        title="Delete" aria-label="Delete"
-                      >
-                        <Trash2 size={18} />
-                      </button>
-                    </>
+                    <button
+                      onClick={() => setConfirmingDelete(true)}
+                      className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-red-400 transition-colors"
+                      title="Delete" aria-label="Delete"
+                    >
+                      <Trash2 size={18} />
+                    </button>
                   )}
                 </div>
               </div>
@@ -285,19 +307,13 @@ export default function DocumentsTab({ onRefresh }) {
 
             {/* Editor Content */}
             <div className="flex-1 overflow-auto">
-              {editMode ? (
-                <textarea
-                  aria-label="Soul document"
-                  value={editContent}
-                  onChange={(e) => setEditContent(e.target.value)}
-                  className="w-full h-full p-4 bg-port-bg text-white font-mono text-sm resize-none focus:outline-hidden"
-                  placeholder="Write your soul document here..."
-                />
-              ) : (
-                <pre className="p-4 text-sm text-gray-300 whitespace-pre-wrap break-words font-mono">
-                  {selectedDoc.content}
-                </pre>
-              )}
+              <textarea
+                aria-label="Soul document"
+                value={editContent}
+                onChange={(e) => setEditContent(e.target.value)}
+                className="w-full h-full p-4 bg-port-bg text-white font-mono text-sm resize-none focus:outline-hidden"
+                placeholder="Write your soul document here..."
+              />
             </div>
           </>
         ) : (
@@ -387,34 +403,6 @@ export default function DocumentsTab({ onRefresh }) {
             className="px-4 py-3 min-h-[44px] bg-port-accent text-white rounded-lg hover:bg-port-accent/80 disabled:opacity-50"
           >
             {saving ? 'Creating...' : 'Create'}
-          </button>
-        </div>
-      </Modal>
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        open={!!deleteConfirm}
-        onClose={() => setDeleteConfirm(null)}
-        size="sm"
-        ariaLabel="Delete Document?"
-        panelClassName="bg-port-card rounded-lg border border-port-border p-4 sm:p-6"
-      >
-        <h2 className="text-lg font-semibold text-white mb-2">Delete Document?</h2>
-        <p className="text-gray-400 mb-6">
-          This action cannot be undone. The document will be permanently deleted.
-        </p>
-        <div className="flex flex-col-reverse sm:flex-row justify-end gap-3">
-          <button
-            onClick={() => setDeleteConfirm(null)}
-            className="px-4 py-3 min-h-[44px] text-gray-400 hover:text-white transition-colors"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => handleDelete(deleteConfirm)}
-            className="px-4 py-3 min-h-[44px] bg-port-error text-white rounded-lg hover:bg-port-error/80"
-          >
-            Delete
           </button>
         </div>
       </Modal>

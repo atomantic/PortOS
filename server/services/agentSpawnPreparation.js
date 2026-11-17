@@ -7,8 +7,6 @@ import { getTaskById, updateTask } from './cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { isRetryHeld } from '../lib/taskRetryHold.js';
-import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
-import { determineLane, acquire, release } from './executionLanes.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { getAppWorkspace } from './agentPromptBuilder.js';
 import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
@@ -27,9 +25,6 @@ export function createAgentSpawnContext(task) {
     task,
     instanceId: null,
     agentId: null,
-    laneName: null,
-    toolExecution: null,
-    laneAcquired: false,
     claimAcquired: false,
     spawnWorktree: null,
     // A server-provisioned claim checkout (claimCheckoutProvision.js). Its
@@ -40,11 +35,6 @@ export function createAgentSpawnContext(task) {
   };
 
   context.cleanupOnError = async (error) => {
-    if (context.laneAcquired) release(context.agentId);
-    if (context.toolExecution) {
-      errorExecution(context.toolExecution.id, { message: error });
-      completeExecution(context.toolExecution.id, { success: false });
-    }
     if (context.claimAcquired) {
       await updateTask(context.task.id, { metadata: buildRelease() }, context.task.taskType || 'user').catch((err) => {
         emitLog('warn', `Failed to release claim for task ${context.task.id}: ${err.message}`, { taskId: context.task.id });
@@ -179,21 +169,6 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
   }
 
   context.agentId = `agent-${uuidv4().slice(0, 8)}`;
-  context.laneName = determineLane(task);
-  const laneResult = acquire(context.laneName, context.agentId, { taskId: task.id });
-  if (!laneResult.success) {
-    emitLog('warn', `Failed to tag lane ${context.laneName}: ${laneResult.error}`, { taskId: task.id });
-    await context.cleanupOnError(`Failed to tag lane ${context.laneName}`);
-    return null;
-  }
-  context.laneAcquired = true;
-
-  context.toolExecution = createToolExecution('agent-spawn', context.agentId, {
-    taskId: task.id,
-    lane: context.laneName,
-    priority: task.priority,
-  });
-  startExecution(context.toolExecution.id);
 
   const fresh = await getTaskById(task.id).then(value => ({ value }), () => ({ failed: true }));
   const freshTask = fresh.value;

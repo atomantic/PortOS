@@ -78,8 +78,6 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
 
   while (url) {
     page++;
-    io?.emit('calendar:sync:event', { accountId: account.id, current: events.length, page });
-
     const response = await fetchWithTimeout(url, {
       headers: { Authorization: `Bearer ${token}`, Prefer: 'outlook.body-content-type="Text"' }
     }, GRAPH_API_TIMEOUT_MS);
@@ -142,10 +140,6 @@ export async function syncOutlookCalendarApi(account, _cache, io, options = {}) 
     }
 
     url = data['@odata.nextLink'] || null;
-  }
-
-  if (io && events.length > 0) {
-    io.emit('calendar:sync:event', { accountId: account.id, events });
   }
 
   // Declined/cancelled filtering handled universally by calendarSync.filterDeclinedAndCancelled at read time

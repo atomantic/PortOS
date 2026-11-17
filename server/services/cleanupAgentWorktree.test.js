@@ -68,7 +68,7 @@ vi.mock('./cos.js', () => ({
 
 vi.mock('./appActivity.js', () => ({
   startAppCooldown: vi.fn(),
-  markAppReviewCompleted: vi.fn()
+  updateAppActivity: vi.fn()
 }));
 
 vi.mock('./cosRunnerClient.js', () => ({
@@ -147,21 +147,7 @@ vi.mock('./apps.js', () => ({
   getAppById: vi.fn()
 }));
 
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(),
-  startExecution: vi.fn(),
-  updateExecution: vi.fn(),
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn(),
-  getExecution: vi.fn(),
-  getStats: vi.fn()
-}));
 
-vi.mock('./executionLanes.js', () => ({
-  determineLane: vi.fn(),
-  acquire: vi.fn(() => ({ success: true })),
-  release: vi.fn()
-}));
 
 vi.mock('./taskConflict.js', () => ({
   detectConflicts: vi.fn(() => [])

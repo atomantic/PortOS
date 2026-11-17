@@ -718,7 +718,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
 
     it('keeps the build shortcut disabled while creative setup is being edited, then runs after Cancel', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'story');
-      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Set up creative direction' })); });
+      await act(async () => {});
       const build = screen.getByRole('button', { name: 'Build the publishing kit' });
       expect(build).toBeDisabled();
       expect(build).toHaveAttribute('title', 'Save or cancel the creative setup before building the publishing kit.');

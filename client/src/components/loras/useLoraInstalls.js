@@ -83,7 +83,7 @@ export default function useLoraInstalls({ refresh, setView, discoverView }) {
         toast.success(`Installed ${sidecar.name}`);
         setLastInstalled(sidecar.name);
         setInstallUrl('');
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => {
         // Early-access content is gated by Civitai membership, not by API
@@ -156,7 +156,7 @@ export default function useLoraInstalls({ refresh, setView, discoverView }) {
         setLastInstalled(sidecar.name);
         setHfUrl('');
         setHfFamilyPrompt(null);
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => {
         // Autodetection failed but the install is otherwise valid — offer an
@@ -203,7 +203,7 @@ export default function useLoraInstalls({ refresh, setView, discoverView }) {
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
         setLastInstalled(sidecar.name);
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
       .finally(() => { setInstallingVideoKey(null); setHfProgress(null); });

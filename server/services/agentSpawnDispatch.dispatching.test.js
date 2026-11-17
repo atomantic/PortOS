@@ -70,7 +70,7 @@ import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/host
 
 const task = { id: 'task-example', taskType: 'user', description: 'example', metadata: {} };
 const newContext = () => ({
-  task, agentId: 'agent-x', instanceId: 'instance-example', toolExecution: { id: 'exec-example' }, laneName: 'standard',
+  task, agentId: 'agent-x', instanceId: 'instance-example',
   blockAndBail: vi.fn(async () => null),
   cleanupOnError: vi.fn(async () => null),
 });

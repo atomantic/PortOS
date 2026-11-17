@@ -3177,10 +3177,9 @@ describe('taskSchedule', () => {
         expect(record.parkCounts).toEqual({ heldBackMerged: 4 })
       })
 
-      // The record, the log line and the schedule:perpetual-parked event all read
-      // from one value. Bounding only the record's copy would keep publishing the
+      // The record and the log line read from one value. Bounding only the record's copy would keep publishing the
       // un-shortened time — a "parked until" the task no longer honours.
-      it('parkPerpetual publishes the SHORTENED time on the parked event, not the raw cadence', async () => {
+      it('parkPerpetual records the SHORTENED time, not the raw cadence', async () => {
         parseCronToNextRun.mockReturnValue(null)
         cosEvents.emit.mockClear()
         mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
@@ -3188,9 +3187,7 @@ describe('taskSchedule', () => {
         const record = await parkPerpetual('branch-reconcile', 'app-1', {
           reason: 'merged-branches-held-back', actionableCount: 0, signature: null, notLaterThan: soon
         })
-        const parked = cosEvents.emit.mock.calls.find(([name]) => name === 'schedule:perpetual-parked')
-        expect(parked?.[1].parkedUntil).toBe(soon)
-        expect(parked[1].parkedUntil).toBe(record.parkedUntil)
+        expect(record.parkedUntil).toBe(soon)
       })
 
       // A cadence edit restamps every un-elapsed park. Without the bound

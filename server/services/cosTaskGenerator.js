@@ -49,7 +49,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown, updateAppActivity } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown, updateAppActivity } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides, getAppById } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
@@ -919,7 +919,6 @@ export async function evaluateTasks(options) {
       `All ${state.config.maxConcurrentAgents} agent slots occupied`,
       { running: runningAgents, max: state.config.maxConcurrentAgents }
     );
-    cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
     return;
   }
 
@@ -1068,10 +1067,6 @@ export async function evaluateTasks(options) {
   // Emit awaiting approval count if any
   if (cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
-    cosEvents.emit('evaluation', {
-      message: 'Tasks awaiting approval',
-      awaitingApproval: cosTaskData.awaitingApproval.length
-    });
   }
 
   if (tasksToSpawn.length === 0) {
@@ -1087,7 +1082,6 @@ export async function evaluateTasks(options) {
       idleReason,
       { pendingUser: pendingUserCount, pendingSystem: pendingSystemCount, awaitingApproval: awaitingCount, runningAgents }
     );
-    cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
   }
 }
 
@@ -1121,15 +1115,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
       // (no claimable PLAN item, watcher no-op, precondition skip), in which
       // case binding here would strand `activeAgentId` and leave the app stuck
       // reading "in review" until stale-agent cleanup (issue #978).
-      await markIdleReviewStarted();
       await markAppReviewCooldown(nextApp.id);
-
-      // Update lastIdleReview timestamp
-      await withStateLock(async () => {
-        const s = await loadState();
-        s.stats.lastIdleReview = new Date().toISOString();
-        await saveState(s);
-      });
 
       const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart });
       // Only bind the active marker once a real task exists.

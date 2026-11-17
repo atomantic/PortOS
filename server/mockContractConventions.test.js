@@ -8,7 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { exportNames, mask, mockDrift } from '../scripts/lib/mockContractScan.js';
+import { exportNames, mask, mockDrift, unusedAllowed } from '../scripts/lib/mockContractScan.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -16,10 +16,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const ALLOWED = new Map([
   ['server/services/memoryBackend.test.js|./memory.js|__backend', 'sentinel the suite reads to assert which backend was selected'],
   ['server/services/memoryBackend.test.js|./memoryDB.js|__backend', 'sentinel the suite reads to assert which backend was selected'],
-  ['server/routes/peerAdministration.test.js|../services/pm2.js|restartProcess', 'dead guard double; replacing it is tracked in #11873'],
 ]);
 
-const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED });
+const used = new Set();
+const drift = (testFile, source) => mockDrift(testFile, source, { root: ROOT, allowed: ALLOWED, used });
 
 function trackedTests() {
   return execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', 'server', 'scripts', 'lib', 'autofixer'], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
@@ -65,5 +65,6 @@ describe('vi.mock factory contract conventions', () => {
     expect(files.length).toBeGreaterThan(100);
     const violations = files.flatMap((f) => drift(join(ROOT, f), readFileSync(join(ROOT, f), 'utf8')));
     expect(violations, 'delete the dead key, or point the mock at the module that really exports it').toEqual([]);
+    expect(unusedAllowed(ALLOWED, used), 'delete the stale ALLOWED entry').toEqual([]);
   });
 });

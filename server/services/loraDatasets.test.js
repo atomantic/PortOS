@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { trainingEvents } from './loraTraining/events.js';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'lora-datasets-test-'));
@@ -38,14 +37,11 @@ describe('retained dataset records', () => {
     expect(loaded.training).toMatchObject({ loraFilename: 'example.safetensors', lastRunId: 'run-1' });
   });
 
-  it('updateDataset merges a mutation, stamps updatedAt and announces the change', async () => {
+  it('updateDataset merges a mutation, stamps updatedAt', async () => {
     await seed('ds-2', { status: 'training' });
-    const changed = vi.fn();
-    trainingEvents.once('dataset:changed', changed);
     const next = await updateDataset('ds-2', (current) => ({ ...current, status: 'trained' }));
     expect(next.status).toBe('trained');
     expect(next.updatedAt).toEqual(expect.any(String));
-    expect(changed).toHaveBeenCalledWith({ datasetId: 'ds-2' });
     expect((await loraDatasetStore.loadOne('ds-2')).status).toBe('trained');
   });
 

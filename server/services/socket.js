@@ -17,11 +17,7 @@ import { appsEvents } from './apps.js';
 import { errorEvents, sanitizeContext } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
 import { notificationEvents } from './notifications.js';
-import { agentPersonalityEvents } from './agentPersonalities.js';
-import { platformAccountEvents } from './platformAccounts.js';
 import { updateEvents } from './updateChecker.js';
-import { scheduleEvents } from './automationScheduler.js';
-import { activityEvents } from './agentActivity.js';
 import { digitalTwinEvents } from './digital-twin-meta.js';
 import { brainEvents, BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { moltworldWsEvents } from './moltworldWs.js';
@@ -401,7 +397,6 @@ function setupEventForwarding() {
   setupErrorEventForwarding();
   setupAppsEventForwarding();
   setupNotificationEventForwarding();
-  setupAgentEventForwarding();
   setupBrainEventForwarding();
   setupDigitalTwinEventForwarding();
   setupMoltworldWsEventForwarding();
@@ -596,7 +591,6 @@ function setupCosEventForwarding() {
   cosEvents.on('agent:completed', (data) => broadcastToCos('cos:agent:completed', toAgentListItem(data)));
   cosEvents.on('agent:output', (data) => broadcastToCos('cos:agent:output', data));
   cosEvents.on('agent:feedback', (data) => broadcastToCos('cos:agent:feedback', data));
-  cosEvents.on('agent:btw', (data) => broadcastToCos('cos:agent:btw', data));
   cosEvents.on('persistent-mind:status', (data) => broadcastToCos('cos:mind:status', data));
 
   // Memory events
@@ -613,19 +607,11 @@ function setupCosEventForwarding() {
 
   // Health events
   cosEvents.on('health:check', (data) => broadcastToCos('cos:health:check', data));
-  cosEvents.on('health:critical', (data) => broadcastToCos('cos:health:critical', data));
 
-  // Evaluation events
-  cosEvents.on('evaluation', (data) => broadcastToCos('cos:evaluation', data));
-  cosEvents.on('task:ready', (data) => broadcastToCos('cos:task:ready', data));
 
   // Feature agent events
   cosEvents.on('feature-agent:status', (data) => broadcastToCos('cos:feature-agent:status', data));
-  cosEvents.on('feature-agent:output', (data) => broadcastToCos('cos:feature-agent:output', data));
   cosEvents.on('feature-agent:run-complete', (data) => broadcastToCos('cos:feature-agent:run-complete', data));
-
-  // Watcher events
-  cosEvents.on('watcher:stopped', (data) => broadcastToCos('cos:watcher:stopped', data));
 
   // A user-initiated on-demand "Run" that produced no task — the client toasts
   // this so an explicit trigger that finds no actionable work (parked) isn't a
@@ -692,23 +678,6 @@ function setupNotificationEventForwarding() {
 
 // Broadcast to agent subscribers only
 function broadcastToAgents(event, data) { broadcastToSet(agentSubscribers, event, data); }
-
-// Set up agent event forwarding
-function setupAgentEventForwarding() {
-  // Personality events
-  agentPersonalityEvents.on('changed', (data) => broadcastToAgents('agents:personality:changed', data));
-
-  // Account events
-  platformAccountEvents.on('changed', (data) => broadcastToAgents('agents:account:changed', data));
-
-  // Schedule events
-  scheduleEvents.on('changed', (data) => broadcastToAgents('agents:schedule:changed', data));
-  scheduleEvents.on('execute', (data) => broadcastToAgents('agents:schedule:execute', data));
-
-  // Activity events
-  activityEvents.on('activity', (data) => broadcastToAgents('agents:activity', data));
-  activityEvents.on('activity:updated', (data) => broadcastToAgents('agents:activity:updated', data));
-}
 
 // Forward only invalidations, never private traits, interview text or settings.
 // All status/settings writers save meta; sync also signals after document I/O.
@@ -952,9 +921,6 @@ function setupMediaGenEventForwarding() {
   });
   mediaJobEvents.on('changed', () => {
     ioInstance?.emit('media-jobs:changed', {});
-  });
-  trainingEvents.on('dataset:changed', ({ datasetId }) => {
-    ioInstance?.emit('training:dataset:changed', { datasetId });
   });
   trainingEvents.on('checkpoints:changed', ({ runId }) => {
     ioInstance?.emit('training:checkpoints:changed', { runId });

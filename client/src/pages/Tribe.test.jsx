@@ -30,6 +30,7 @@ vi.mock('../services/socket', () => ({
 
 import Tribe from './Tribe';
 import * as api from '../services/api';
+import socket from '../services/socket';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -203,6 +204,25 @@ describe('Tribe care filter', () => {
       { silent: true },
     ));
     expect(await screen.findByText('Last 2026-01-01')).toBeTruthy();
+  });
+
+  it('keeps the page mounted while a tribe:changed reload is in flight', async () => {
+    api.getTribePeople.mockResolvedValue({ people: PEOPLE });
+    renderAt('/tribe');
+    const card = await screen.findByText('Example Person');
+
+    let release;
+    api.getTribePeople.mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    const handler = socket.on.mock.calls.find(([event]) => event === 'tribe:changed')[1];
+    act(() => { handler(); });
+
+    // A reload must not swap the body for the spinner (that unmounted
+    // OutreachQueue drafts and the sub-panels on every save).
+    expect(screen.queryByText('Loading Tribe')).toBeNull();
+    expect(card.isConnected).toBe(true);
+
+    await act(async () => { release({ people: PEOPLE }); });
+    expect(card.isConnected).toBe(true);
   });
 });
 

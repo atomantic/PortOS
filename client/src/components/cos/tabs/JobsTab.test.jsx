@@ -167,4 +167,16 @@ describe('JobsTab / JobCard Run Now disable behavior (#4036)', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     expect(api.getApps).toHaveBeenCalledTimes(2);
   });
+
+  it('applies a toggle response in place without re-reading the job list', async () => {
+    api.getCosJobs.mockResolvedValue({ jobs: [mockJob], stats: { enabled: 1, total: 1, totalRuns: 0 } });
+    api.toggleCosJob.mockResolvedValue({ success: true, job: { ...mockJob, enabled: false } });
+    render(<JobsTab apps={[]} providers={[]} />);
+    await screen.findByText('Test Job');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable job' }));
+    expect(await screen.findByRole('button', { name: 'Enable job' })).toBeInTheDocument();
+    expect(screen.getByText('0 enabled / 1 total')).toBeInTheDocument();
+    expect(api.getCosJobs).toHaveBeenCalledTimes(1);
+  });
 });

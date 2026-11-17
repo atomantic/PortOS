@@ -79,7 +79,6 @@ vi.mock('./cosRunnerClient.js', () => ({
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([])
 }));
 
-vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 vi.mock('./shell.js', () => ({ writeToSession: vi.fn(), killSession: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
@@ -132,7 +131,6 @@ beforeEach(() => {
   persist();
   forceSpawnTask.mockImplementation(async taskId => {
     await dispatchAgentRun({ task: f.tasks[taskId], agentId: 'replacement-agent', instanceId: 'instance-example',
-      toolExecution: { id: 'exec-example' }, laneName: 'standard',
       blockAndBail: message => { throw new Error(JSON.stringify(message)); },
       cleanupOnError: message => { throw new Error(message); },
     });
@@ -207,7 +205,7 @@ it('pins a security scanner grant to effective CLI settings and registers aliase
   const task = f.tasks.original = { id: 'original', taskType: 'security', description: 'Synthetic source audit',
     metadata: { useWorktree: false, openPR: false, effort: 'medium' } };
   const spawnViaRunner = vi.fn();
-  await dispatchAgentRun({ task, agentId: 'agent-scanner', instanceId: 'instance-example', toolExecution: { id: 'exec-example' }, laneName: 'standard',
+  await dispatchAgentRun({ task, agentId: 'agent-scanner', instanceId: 'instance-example',
     blockAndBail: message => { throw new Error(JSON.stringify(message)); }, cleanupOnError: message => { throw new Error(message); },
   }, { spawnViaRunner });
   expect(spawnViaRunner).toHaveBeenCalledWith('agent-scanner', task, expect.objectContaining({

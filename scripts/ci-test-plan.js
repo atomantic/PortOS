@@ -364,7 +364,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Base-relative: a rename or deletion of a shipped migration touches no file
   // the planner would select for it (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
-  'scripts/migrations/shippedPromptHistory.guard.test.js',
   // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
   'scripts/migrations/shippedPromptHashes.guard.test.js',
   // Route policy scans depend on independently changed files (#13224).

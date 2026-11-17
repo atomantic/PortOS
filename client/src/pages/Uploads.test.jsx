@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
   listUploads: vi.fn(),
@@ -14,7 +14,7 @@ vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: v
 import Uploads from './Uploads';
 
 const oneFile = {
-  uploads: [{ filename: 'a.txt', mimeType: 'text/plain', sizeFormatted: '1 B', createdAt: '2026-01-01T00:00:00Z' }],
+  uploads: [{ filename: 'a.txt', mimeType: 'text/plain', sizeFormatted: '1 B', size: 1, createdAt: '2026-01-01T00:00:00Z' }],
   count: 1,
   totalSizeFormatted: '1 B',
 };
@@ -52,5 +52,24 @@ describe('Uploads inventory states', () => {
     api.listUploads.mockResolvedValueOnce(oneFile);
     fireEvent.click(screen.getByText('Retry upload inventory'));
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  it('applies delete and upload responses in place without re-reading the inventory', async () => {
+    api.listUploads.mockResolvedValueOnce(oneFile);
+    api.deleteUpload.mockResolvedValue({ success: true, filename: 'a.txt', size: 1 });
+    api.uploadFile.mockResolvedValue({ filename: 'b.txt', mimeType: 'text/plain', sizeFormatted: '2 B', size: 2, createdAt: '2026-01-02T00:00:00Z' });
+    const { container } = render(<Uploads />);
+    await screen.findByText('a.txt');
+
+    fireEvent.change(container.querySelector('input[type="file"]'), { target: { files: [new File(['xx'], 'b.txt')] } });
+    expect(await screen.findByText('b.txt')).toBeTruthy();
+    expect(screen.getByText('2 files (3 B)')).toBeTruthy();
+
+    fireEvent.click(screen.getAllByLabelText('Delete')[1]);
+    fireEvent.click(within(await screen.findByLabelText('Confirm delete a.txt')).getByRole('button', { name: /delete/i }));
+    await waitFor(() => expect(api.deleteUpload).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText('a.txt')).toBeNull());
+    expect(screen.getByText('1 file (2 B)')).toBeTruthy();
+    expect(api.listUploads).toHaveBeenCalledTimes(1);
   });
 });

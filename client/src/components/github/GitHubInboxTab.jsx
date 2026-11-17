@@ -3,7 +3,7 @@ import { useParams } from 'react-router';
 import { Bot, CheckCheck, CheckCircle2, Inbox, Layers, RefreshCw, ShieldAlert } from 'lucide-react';
 import GitHubThreadDrawer from './GitHubThreadDrawer';
 import GitHubNotificationCard from './GitHubNotificationCard';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import CollapsibleListItem from '../ui/CollapsibleListItem';
@@ -91,6 +91,8 @@ function RepoFilter({ repos, repo, onSelect, total }) {
   );
 }
 
+const INBOX_EVENTS = ['github:notifications:changed'];
+
 export default function GitHubInboxTab() {
   const { accountId: routeAccountId, threadId } = useParams();
   const [accounts, setAccounts] = useState(null);
@@ -98,28 +100,26 @@ export default function GitHubInboxTab() {
   const [view, setView] = useState('needs-you');
   const [repo, setRepo] = useState(null);
   const [data, setData] = useState(null);
-  const [loadFailed, setLoadFailed] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [removing, setRemoving] = useState(() => new Set());
-  const [syncTick, setSyncTick] = useState(0);
-  const requestRef = useRef(0);
   const syncRequestRef = useRef(0);
 
   const keyOf = (row) => `${row.accountId}/${row.threadId}`;
 
-  const loadList = useCallback(async () => {
-    const requestId = ++requestRef.current;
-    const result = await getGitHubNotifications({ accountId, view }, { silent: true }).catch(() => null);
-    if (requestId !== requestRef.current) return;
-    if (!result) {
-      setLoadFailed(true);
-      return;
-    }
-    setLoadFailed(false);
+  // Stored rows show at once; each finished sync, and every server-side change
+  // (a scheduled check, an action from another tab), re-reads them. A failed
+  // read keeps the last good rows beside the retry row.
+  const { data: loaded, error: loadError, refetch: loadList } = useSocketResource(
+    () => getGitHubNotifications({ accountId, view }, { silent: true }),
+    { events: INBOX_EVENTS, resourceKey: `${accountId}|${view}` },
+  );
+  const loadFailed = Boolean(loadError);
+  useEffect(() => {
+    if (!loaded) return;
     setRemoving(new Set());
-    setData(result);
-  }, [accountId, view]);
+    setData(loaded);
+  }, [loaded]);
 
   const refresh = useCallback(async () => {
     const request = ++syncRequestRef.current;
@@ -130,26 +130,14 @@ export default function GitHubInboxTab() {
     // A newer sync (account switched mid-check) owns the spinner and the reload.
     if (request !== syncRequestRef.current) return;
     setSyncing(false);
-    setSyncTick((tick) => tick + 1);
-  }, [accountId]);
+    loadList();
+  }, [accountId, loadList]);
 
   useEffect(() => {
     // Accounts only label rows and add a filter; without them the inbox still works.
     getGitHubAccounts({ silent: true }).then(setAccounts).catch(() => {});
   }, []);
 
-  // Stored rows show at once; each finished sync, and every server-side change
-  // (a scheduled check, an action from another tab), re-reads them.
-  useEffect(() => { loadList(); }, [loadList, syncTick]);
-  useEffect(() => {
-    const reload = () => setSyncTick((tick) => tick + 1);
-    socket.on('github:notifications:changed', reload);
-    socket.on('connect', reload);
-    return () => {
-      socket.off('github:notifications:changed', reload);
-      socket.off('connect', reload);
-    };
-  }, []);
   useEffect(() => { refresh(); }, [refresh]);
 
   const applyUpdate = (row, updated) => {

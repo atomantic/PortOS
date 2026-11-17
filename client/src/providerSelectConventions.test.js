@@ -19,11 +19,9 @@ const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const SHARED_SELECTOR = 'src/components/ProviderModelSelector.jsx';
 const NOT_AI_PROVIDERS = ['src/components/sprites/AnimationProviderPicker.jsx'];
-/** Legacy bespoke selects awaiting migration — shrink-only, never grow. */
-const LEGACY_BESPOKE = [];
 // Filters cannot compose execution presets or fetch unrelated provider configuration.
 const READ_ONLY_FILTERS = ['src/components/models/ModelComparison.jsx'];
-const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...READ_ONLY_FILTERS, ...LEGACY_BESPOKE];
+const ALLOWED = [SHARED_SELECTOR, ...NOT_AI_PROVIDERS, ...READ_ONLY_FILTERS];
 
 const SELECT_BLOCK = /<select\b[\s\S]*?<\/select>/g;
 const PROVIDER_MAP = /\b(\w*[pP]roviders?\w*)\.map\(/;
@@ -77,7 +75,7 @@ describe('AI provider pickers go through ProviderModelSelector', () => {
 
   // The allowlist must keep naming files that exist and still carry the
   // shape — a migrated file left on it would be silent dead config, and the
-  // list is meant to shrink to nothing.
+  // list stays minimal.
   it('allowlists only files that exist and still render a bespoke provider select', () => {
     for (const file of ALLOWED) {
       expect(files, `${file} is allowlisted but not a tracked .jsx file`).toContain(file);

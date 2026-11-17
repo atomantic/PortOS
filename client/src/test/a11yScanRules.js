@@ -2,11 +2,7 @@ import { trackedJsxFiles, maskedSourceOf, rawSourceOf, forEachOpeningTag, skipSt
 import { attributeValue, normalizedAttributeValue } from './a11yScanNames.js';
 import { isNamedByWrapper, hasAccessibleControlName, controlSourceAnchor } from './a11yScanWrappers.js';
 
-// Empty by design: every <input> carries an accessible name. A new unnamed <input> is fixed at the control,
-// never added here (and never via an `aria-label` that shadows a visible label).
-export const PREEXISTING_INPUT_NAME_ALLOWLIST = new Set([]);
-
-// The <select>/<textarea> half. The four rows are the limit of a source-level scan, which cannot follow a name across a component boundary:
+// The <select>/<textarea> allowlist. The four rows are the limit of a source-level scan, which cannot follow a name across a component boundary:
 //   * ArtistPicker / AuthorPicker forward an `id` prop to their <select>; call sites render them inside a FormField whose <label htmlFor> names it.
 //   * AutoSizeTextarea / ProseEditor spread `{...rest}` onto their <textarea>, so the caller supplies the name; hardcoding one would mask a caller that passes none.
 // Empty the list by teaching the scan to follow `id`/`{...rest}`, not by inventing names. A new unnamed control is named, not listed.
@@ -16,10 +12,6 @@ export const PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST = new Set([
   "src/components/ui/AutoSizeTextarea.jsx|textarea|value=value|ref=ref",
   "src/components/ui/ProseEditor.jsx|textarea|placeholder=placeholder|value=value|ref=ref",
 ]);
-
-// The <a> half. "Anchor" is the ELEMENT; rows are still `controlSourceAnchor` strings. Empty and stays empty: a link with no accessible name
-// is announced as bare "link" and `title` alone does not fill that gap, so fix an offender with an `aria-label`, never a row here.
-export const PREEXISTING_ANCHOR_NAME_ALLOWLIST = new Set([]);
 
 // --- keyboard activation on non-interactive elements ---
 // A `<div onClick>` takes no focus and ignores Enter/Space; `lib/a11yKeyboard.js`'s `clickableProps(handler)` (role + tabIndex + Enter/Space `onKeyDown`) is the repair.
@@ -220,13 +212,14 @@ export const unnamedControlAnchors = (tagName) => {
   return anchors;
 };
 
-// One rule per tag so a failure names the tag and each backlog burns down independently. `remedy` rides on the rule because the fix differs
-// (a form control wants a `<label>`, a link wants its own text; `aria-label` is the fallback for both).
+// One rule per tag so a failure names the tag. `remedy` rides on the rule because the fix differs (a form control wants a `<label>`, a link
+// wants its own text; `aria-label` is the fallback for both). A rule with no `allowlist` has none by design: every <input> and <a> is named
+// at the control (never via an `aria-label` that shadows a visible label, and a link's `title` alone is not a name).
 export const CONTROL_NAME_RULES = [
-  { tag: 'input', listName: 'PREEXISTING_INPUT_NAME_ALLOWLIST', allowlist: PREEXISTING_INPUT_NAME_ALLOWLIST, issue: '#4297', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden"' },
+  { tag: 'input', issue: '#4297', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>, or exclude type="hidden"' },
   { tag: 'select', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>' },
   { tag: 'textarea', listName: 'PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST', allowlist: PREEXISTING_SELECT_TEXTAREA_NAME_ALLOWLIST, issue: '#4309', remedy: 'add aria-label/aria-labelledby or an explicit/implicit <label>' },
-  { tag: 'a', listName: 'PREEXISTING_ANCHOR_NAME_ALLOWLIST', allowlist: PREEXISTING_ANCHOR_NAME_ALLOWLIST, issue: '#5674', remedy: 'an icon-only link is announced as bare "link" — give it visible text or an aria-label naming the destination; a title alone is not read as the accessible name, and an aria-hidden icon leaves the name empty' },
+  { tag: 'a', issue: '#5674', remedy: 'an icon-only link is announced as bare "link" — give it visible text or an aria-label naming the destination; a title alone is not read as the accessible name, and an aria-hidden icon leaves the name empty' },
 ];
 
 // Fixtures are scanned as if they lived here so relative imports like `../ui/FormField` resolve against real components; only the directory matters.

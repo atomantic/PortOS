@@ -58,8 +58,6 @@ vi.mock('./providerStatus.js', () => ({
   markProviderUnavailable: (...a) => markProviderUnavailableMock(...a),
 }));
 
-vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 // Partial mock: the two finalize-path helpers are stubbed, but `analyzeAgentFailure`
 // passes through to the REAL detector so the banner tests below exercise what ships.
 vi.mock('./agentErrorAnalysis.js', async (importOriginal) => ({

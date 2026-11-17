@@ -27,7 +27,48 @@ afterEach(() => {
   }
 });
 
+// Server-emitted events with no client reference today. Each is either an
+// external consumer (a federated peer server, not the browser) or tracked debt:
+// an unlistened emit is either dead and should be deleted, or a missing client
+// feature. The guard below pins this list exactly so it can only shrink on
+// purpose and a NEW unlistened emit fails the suite instead of landing silently.
+const EXTERNAL_CONSUMER_EVENTS = [
+  'cos:subscribe', // peerSocketRelay acts as the socket client toward a remote PortOS
+  'peer:sync:available', // consumed by peer servers through peerSyncEventBus
+  'peer:sync:event',
+  'peer:sync:subscribe',
+];
+const TRACKED_UNLISTENED_EVENTS = [
+  'audio-gen:completed', 'audio-gen:failed', 'audio-gen:progress', 'audio-gen:started',
+  'calendar:sync:failed', 'calendar:sync:started',
+  'health:xml:complete',
+  'messages:sync:auth-required', 'messages:sync:failed', 'messages:sync:progress', 'messages:sync:started',
+  'provider:error',
+];
+const isAckOrTemplate = (event) => /:(?:un)?subscribed$/.test(event) || /[{}]/.test(event);
+
 describe('Socket.IO event inventory', () => {
+  it('flags a server emit that no client source names, and accepts constant-array listeners', async () => {
+    const root = makeTempRoot('portos-socket-parity-');
+    write(root, 'server/services/socket.js', `io.emit('demo:orphan', {}); io.emit('demo:listened', {}); io.emit('demo:array', {});`);
+    write(root, 'client/src/demo.jsx', `socket.on('demo:listened', h); const EVENTS = ['demo:array']; socket.on('demo:clientonly', h);`);
+    const { events } = await buildSocketEventInventory({ repoRoot: root });
+    const byName = Object.fromEntries(events.map((event) => [event.event, event]));
+    expect(byName['demo:orphan']).toMatchObject({ serverEmitted: true, clientReferenced: false });
+    expect(byName['demo:listened']).toMatchObject({ serverEmitted: true, clientReferenced: true });
+    expect(byName['demo:array']).toMatchObject({ serverEmitted: true, clientReferenced: true });
+    expect(byName['demo:clientonly']).toMatchObject({ serverEmitted: false, clientReferenced: true });
+  });
+
+  it('every server-to-client event emitted by server/ has a client listener or an explicit exemption', async () => {
+    const { events } = await buildSocketEventInventory();
+    const unlistened = events
+      .filter((event) => event.serverEmitted && !event.clientReferenced && !isAckOrTemplate(event.event))
+      .map((event) => event.event)
+      .sort();
+    expect(unlistened).toEqual([...EXTERNAL_CONSUMER_EVENTS, ...TRACKED_UNLISTENED_EVENTS].sort());
+  });
+
   it('merges client/server declarations and normalizes bounded template events', async () => {
     const root = makeTempRoot('portos-socket-inventory-');
     write(root, 'server/services/socket.js', `

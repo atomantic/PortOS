@@ -1259,8 +1259,11 @@ describe('MusicVideo Blender film render style', () => {
     expect(within(dock).getByRole('option', { name: 'Film (live)' })).toBeEnabled();
     const playing = within(dock).getByLabelText('Film preview').querySelector('video:not([aria-hidden="true"])');
     expect(playing.getAttribute('src')).toBe('/api/music-video/mv-test/blender/media?path=s010%2Ffinal%2Fshot.mp4');
-    // The film panel (its own shot player and cuts) follows the player, and comes before the scene board.
-    expect(dock.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The player docks beside the step (first, above it, on a narrow screen), and the film panel
+    // (its own shot player and cuts) comes before the scene board in the step.
+    expect(dock.closest('#mv-stage-produce')).toBeNull();
+    expect(document.getElementById('mv-stage-produce').contains(panel)).toBe(true);
+    expect(dock.closest('.max-xl\\:order-first')).toBeTruthy();
     const board = screen.getByLabelText('Storyboard thumbnails');
     expect(panel.compareDocumentPosition(board) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 

@@ -23,8 +23,10 @@ export default function SchedulesTab({ agentId }) {
   });
   const [runningId, setRunningId] = useState(null);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
+  // `background` refreshes over the rendered list without swapping it for the
+  // spinner (used after Run Now, whose result only the server knows).
+  const fetchData = useCallback(async ({ background = false } = {}) => {
+    if (!background) setLoading(true);
     setLoadError(false);
     await Promise.all([
       api.getAutomationSchedules(agentId, null, { silent: true }),
@@ -71,26 +73,26 @@ export default function SchedulesTab({ agentId }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    await api.createAutomationSchedule(formData);
+    const created = await api.createAutomationSchedule(formData);
     resetForm();
-    fetchData();
+    setSchedules(prev => [...prev.filter(s => s.id !== created.id), created]);
   };
 
   const handleDelete = async (id) => {
     await api.deleteAutomationSchedule(id);
-    fetchData();
+    setSchedules(prev => prev.filter(s => s.id !== id));
   };
 
   const handleToggle = async (id, enabled) => {
-    await api.toggleAutomationSchedule(id, enabled);
-    fetchData();
+    const updated = await api.toggleAutomationSchedule(id, enabled);
+    setSchedules(prev => prev.map(s => (s.id === id ? { ...s, ...updated } : s)));
   };
 
   const handleRunNow = async (id) => {
     setRunningId(id);
     try {
       await api.runAutomationScheduleNow(id);
-      fetchData();
+      fetchData({ background: true });
     } catch {
       // The request helper already shows the failure toast.
     } finally {

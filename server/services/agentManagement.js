@@ -56,8 +56,6 @@ import { buildInvestigationFingerprint } from '../lib/investigationTasks.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
 import * as shellService from './shell.js';
 
 import { exec } from '../lib/childProcess.js';
@@ -247,11 +245,6 @@ async function markAgentPaused(agentId, agentInfo, pausedAt, reason) {
     at: pausedAt,
     data: { reason: reason || null, workspacePath: agentInfo?.workspacePath ?? null },
   });
-  release(agentId);
-  if (agentInfo?.executionId) {
-    errorExecution(agentInfo.executionId, { message: reason ? `Agent paused by user: ${reason}` : 'Agent paused by user', code: 'agent-paused' });
-    completeExecution(agentInfo.executionId, { success: false, paused: true });
-  }
 }
 
 /**

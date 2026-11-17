@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Bot, Pencil, Play, Undo2, X } from 'lucide-react';
 import Pill from '../ui/Pill';
@@ -6,7 +6,7 @@ import ListLoadError from '../ui/ListLoadError';
 import LoadFailedState from '../ui/LoadFailedState';
 import PageSkeleton from '../ui/PageSkeleton';
 import { timeAgo } from '../../utils/formatters';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import {
   deleteGitHubLearnedRule,
   getGitHubAutomationActivity,
@@ -216,6 +216,18 @@ function RuleList({ rules, onDelete }) {
   );
 }
 
+const AUTOMATION_EVENTS = ['github:notifications:changed'];
+
+// A failed read resolves to null so one broken list never hides the others.
+const readAutomations = async () => {
+  const [result, activity, learned] = await Promise.all([
+    getGitHubAutomations({ silent: true }).catch(() => null),
+    getGitHubAutomationActivity({ silent: true }).catch(() => null),
+    getGitHubLearnedRules({ silent: true }).catch(() => null),
+  ]);
+  return { result, activity, learned };
+};
+
 export default function GitHubAutomationsTab() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rulePrefill = rulePrefillFrom(searchParams);
@@ -235,21 +247,18 @@ export default function GitHubAutomationsTab() {
   // last good list on screen beside a Retry row instead of the "nothing yet"
   // copy, which would hide every Undo for actions Assist took on GitHub.
   const [failed, setFailed] = useState({ activity: false, rules: false });
-  const loadRequestRef = useRef(0);
   const [savingModeId, setSavingModeId] = useState(null);
   const [savingRulesId, setSavingRulesId] = useState(null);
   const [undoingId, setUndoingId] = useState(null);
 
   // Every github:notifications:changed event reloads, and one check emits once
-  // per account, so only the newest request may write.
-  const load = useCallback(async () => {
-    const request = ++loadRequestRef.current;
-    const [result, activity, learned] = await Promise.all([
-      getGitHubAutomations({ silent: true }).catch(() => null),
-      getGitHubAutomationActivity({ silent: true }).catch(() => null),
-      getGitHubLearnedRules({ silent: true }).catch(() => null),
-    ]);
-    if (request !== loadRequestRef.current) return;
+  // per account; useSocketResource single-flights and drops stale reads.
+  const { data: loaded, refetch: load, updateData: keepData } = useSocketResource(readAutomations, { events: AUTOMATION_EVENTS });
+
+  // Each read applies per list: a failed list keeps its last good copy.
+  useEffect(() => {
+    if (!loaded) return;
+    const { result, activity, learned } = loaded;
     const activityOk = Array.isArray(activity?.actions);
     const rulesOk = Array.isArray(learned?.rules);
     setFailed({ activity: !activityOk, rules: !rulesOk });
@@ -261,17 +270,11 @@ export default function GitHubAutomationsTab() {
     }
     setLoadFailed(false);
     setOverview(result);
-  }, []);
+  }, [loaded]);
 
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    socket.on('github:notifications:changed', load);
-    socket.on('connect', load);
-    return () => {
-      socket.off('github:notifications:changed', load);
-      socket.off('connect', load);
-    };
-  }, [load]);
+  // A local mutation result is newer than any read already in flight; an identity
+  // update makes that read obsolete without touching the loaded snapshot.
+  const supersedeReads = () => keepData((prev) => prev);
 
   const runNow = async (accountId) => {
     setRunningId(accountId);
@@ -286,6 +289,7 @@ export default function GitHubAutomationsTab() {
     const updated = await updateGitHubAccount(accountId, patch).catch(() => null);
     setSavingModeId(null);
     if (!updated) return false;
+    supersedeReads();
     setOverview((prev) => ({
       ...prev,
       accounts: prev.accounts.map((account) => (account.id === accountId
@@ -302,6 +306,7 @@ export default function GitHubAutomationsTab() {
     const updated = await updateGitHubAccount(accountId, { agentRules }).catch(() => null);
     setSavingRulesId(null);
     if (!updated) return false;
+    supersedeReads();
     setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, agentRules: updated.agentRules || [] } : account)) }));
     return true;
   };
@@ -315,6 +320,7 @@ export default function GitHubAutomationsTab() {
 
   const forgetRule = async (id) => {
     const removed = await deleteGitHubLearnedRule(id).catch(() => null);
+    if (removed) supersedeReads();
     if (removed) setRules((prev) => prev.filter((rule) => rule.id !== id));
   };
 
@@ -323,7 +329,7 @@ export default function GitHubAutomationsTab() {
     const next = overview.cadence === 'weekdays-15m' ? 'off' : 'weekdays-15m';
     const updated = await setGitHubNotificationCadence(next).catch(() => null);
     setSavingCadence(false);
-    if (updated) setOverview(updated);
+    if (updated) { supersedeReads(); setOverview(updated); }
   };
 
   if (loadFailed && !overview) return <LoadFailedState title="Could not load GitHub automations." hint="Retry the local read." onRetry={load} />;

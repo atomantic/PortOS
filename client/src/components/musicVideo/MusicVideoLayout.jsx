@@ -151,8 +151,9 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * to show in place of the title. `cancelRender` (`{ onCancel, cancelling }`, or
  * null) puts a stop control beside a running final render's progress.
  * `lead` (the step checklist) opens the step; `review` is the step's approval.
- * With `playerFirst` the player and the approval sit together at the top of the
- * step; otherwise the player docks at the side and the approval closes the step.
+ * With `playerFirst` and a `review` the player and the approval sit together at
+ * the top of the step; otherwise the player docks at the side and any approval
+ * closes the step.
  * `previewExpanded` gives that side player the main column above the step.
  */
 export default function MusicVideoLayout({
@@ -164,9 +165,11 @@ export default function MusicVideoLayout({
   const headerRef = useRef(null);
   const rootRef = useRef(null);
   const dockRef = useRef(null);
-  // On a step reviewed by watching (Shots, Final render) the player is the main
+  // On a step reviewed by watching with an approval (Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
-  const sideDock = !!dock && !playerFirst;
+  // A watched step with no approval panel (Shots) docks the player at the side too, so the
+  // checklist, the shot sheet and the board flow down beside it instead of under an empty gap.
+  const sideDock = !!dock && (!playerFirst || !review);
   const expandedDock = sideDock && previewExpanded;
   useEffect(() => {
     if (expandedDock) dockRef.current?.scrollIntoView?.({ block: 'start' });
@@ -179,7 +182,7 @@ export default function MusicVideoLayout({
     if (!header || !root || typeof ResizeObserver === 'undefined') return undefined;
     // The dock's height fits the page's scroll area, which is shorter than the window whenever
     // the app shows a bar above it; sized to the window, the dock's last panel sat out of reach.
-    const scroller = root.closest('main');
+    const scroller = root.closest(`#${MUSIC_VIDEO_SCROLL_ID}`) || root.closest('main');
     const apply = () => {
       root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
       if (scroller) root.style.setProperty('--mv-scroll-h', `${scroller.clientHeight}px`);
@@ -363,15 +366,9 @@ export default function MusicVideoLayout({
             {/* The step checklist already says what done means, item by item; the line stands in only without one. */}
             {stageEntry?.doneWhen && !lead && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
-          {/* A player-first step without a review panel (Shots) keeps its checklist beside the player, sized like the other steps' side preview. */}
-          {playerFirst && dock && !review && lead ? (
-            <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,24rem)]">
-              <div className="min-w-0">{lead}</div>
-              <div className="min-w-0">{dock}</div>
-            </div>
-          ) : lead}
-          {playerFirst && (dock || review) && !(dock && !review && lead) && (
-            <div className={`grid min-w-0 items-start gap-3 ${dock && review ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
+          {lead}
+          {playerFirst && review && (
+            <div className={`grid min-w-0 items-start gap-3 ${dock ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
               {dock && <div className="min-w-0">{dock}</div>}
               {review}
             </div>

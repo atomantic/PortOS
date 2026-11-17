@@ -1101,10 +1101,6 @@ describe('autonomousJobs', () => {
 
       expect(job.lastRun).toBeDefined()
       expect(job.runCount).toBe(1)
-      expect(cosEvents.emit).toHaveBeenCalledWith('jobs:executed', {
-        id: 'job-test-1',
-        runCount: 1
-      })
     })
 
     it('returns null for non-existent job', async () => {
@@ -1254,10 +1250,6 @@ describe('autonomousJobs', () => {
 
       expect(checkAndPrompt).toHaveBeenCalled()
       expect(result).toEqual({ prompted: true, prompt: { id: 'test-1', text: 'test' } })
-      expect(cosEvents.emit).toHaveBeenCalledWith('jobs:script-executed', {
-        id: 'job-autobiography-prompt',
-        result: { prompted: true, prompt: { id: 'test-1', text: 'test' } }
-      })
     })
 
     it('executeScriptJob throws for non-script jobs', async () => {

@@ -44,14 +44,7 @@ vi.mock('./cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('./executionLanes.js', () => ({
-  release: vi.fn()
-}));
 
-vi.mock('./toolStateMachine.js', () => ({
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn()
-}));
 
 vi.mock('./agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn().mockReturnValue(null),
@@ -81,7 +74,6 @@ vi.mock('./ollamaAgentContext.js', () => ({
 
 vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn()
 }));
 
 vi.mock('./codeReview.js', () => ({
@@ -732,8 +724,6 @@ describe('spawnTuiAgent runtime', () => {
     const runId = overrides.runId ?? 'run-1';
     const tuiConfig = overrides.tuiConfig ?? defaultTuiConfig;
     const agentDir = overrides.agentDir ?? '/tmp/agentdir';
-    const executionId = overrides.executionId ?? null;
-    const laneName = overrides.laneName ?? null;
     const helpers = overrides.helpers ?? {};
     return spawnTuiAgent({
       agentId,
@@ -745,8 +735,6 @@ describe('spawnTuiAgent runtime', () => {
       runId,
       tuiConfig,
       agentDir,
-      executionId,
-      laneName,
       prOpenedBy: overrides.prOpenedBy ?? stampPrOpenedBy(overrides, task, provider),
       leanMode: overrides.leanMode ?? false,
       useDurableRunner: overrides.useDurableRunner ?? false,
@@ -3914,10 +3902,9 @@ describe('spawnTuiAgent runtime', () => {
       resetHostShutdownFlagForTests();
     });
 
-    // A paused run was already finalized (and lane-released) by markAgentPaused.
-    // Re-releasing the same executionId logs a spurious "Invalid state
-    // transition", so the paused gate must win over the host-shutdown gate.
-    it('paused run exiting during host shutdown takes the paused path, releasing no lane and writing no interrupted marker', async () => {
+    // A paused run was already settled by markAgentPaused, so the paused gate
+    // must win over the host-shutdown gate.
+    it('paused run exiting during host shutdown takes the paused path, writing no interrupted marker', async () => {
       const spawnPromise = runSpawn();
       await flushMicrotasks();
 
@@ -3928,7 +3915,6 @@ describe('spawnTuiAgent runtime', () => {
       await spawnPromise;
 
       expect(consumePausedAgentExit).toHaveBeenCalledWith('agent-1');
-      expect(agentLifecycle.releaseAgentLane).not.toHaveBeenCalled();
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
       expect(activeAgents.has('agent-1')).toBe(false);
       expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
@@ -3954,18 +3940,13 @@ describe('spawnTuiAgent runtime', () => {
         success: false,
         error: 'Agent terminated by user',
       }));
-      expect(agentLifecycle.releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({
-        success: false,
-        errorExecutionMessage: 'Agent terminated by user',
-      }));
       // Consumed, so a later resume of the same agent id is not misread as a kill.
       expect(userTerminatedAgents.has('agent-1')).toBe(false);
     });
 
     // pm2's TreeKill took the PTY down with portos-server. The run has no
-    // outcome: leave the record `running` for the next boot's orphan sweep and
-    // do NOT release the lane through the finalize path.
-    it('run interrupted by host shutdown with no sentinel is abandoned without releasing its lane', async () => {
+    // outcome: leave the record `running` for the next boot's orphan sweep.
+    it('run interrupted by host shutdown with no sentinel is abandoned without finalizing', async () => {
       const spawnPromise = runSpawn();
       await flushMicrotasks();
 
@@ -3977,7 +3958,6 @@ describe('spawnTuiAgent runtime', () => {
       expect(vi.mocked(cosAgentLifecycle.updateAgent).mock.calls.some(
         ([, patch]) => patch?.metadata?.phase === 'interrupted' && patch?.metadata?.interruptedBy === 'host-shutdown'
       )).toBe(true);
-      expect(agentLifecycle.releaseAgentLane).not.toHaveBeenCalled();
       expect(agentLifecycle.finalizeAgent).not.toHaveBeenCalled();
       // A restart the operator caused, preserved for resume, is the normal path: info, never warn.
       expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('interrupted by a PortOS host restart'), expect.any(Object));

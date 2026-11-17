@@ -8,7 +8,7 @@ import { getUniverse, updateUniverse, listUniverses, joinInfluenceList } from '.
 import { extractBible } from './bibleExtractor.js';
 import {
   BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, BIBLE_LIMITS, mergeExtractedBible,
-  listSheetPointers, applySheetPointerToCharacter, isSeriesScopedCanonEntry,
+  isSeriesScopedCanonEntry,
   SANITIZERS, SERVER_OWNED_CHARACTER_FIELDS,
 } from '../lib/storyBible.js';
 import { runStagedLLM } from './stageRunner.js';
@@ -972,51 +972,4 @@ export async function purgeImageRefFromAllUniverses(filename) {
     removed += perUniverse;
   }
   return { removed };
-}
-
-/**
- * Null out any server-stamped sheet pointer (legacy `referenceSheetImageRef`
- * field OR any key in the `referenceSheets` map) whose value matches
- * `filename`, on every character across every universe. Mirrors
- * `purgeImageRefFromAllUniverses` but targets per-variant sheet pointers and
- * is variant-agnostic — the filename is the lookup key, the storage slot it
- * happens to live in is implementation detail.
- *
- * Wired into the sheet-delete route so the eager pointer-clear lands the same
- * moment the file is unlinked. The GET-time lazy `pruneStaleReferenceSheets`
- * is still the safety net for files deleted out-of-band (filesystem cleanup,
- * sample-data resets) — this helper is the eager path.
- *
- * Uses `updateUniverse`'s mutator form because both `referenceSheetImageRef`
- * and `referenceSheets` are in `SERVER_OWNED_CHARACTER_FIELDS` — a literal-
- * object PATCH would be guarded against clobbering the server-stamped value
- * (the guard preserves cur's value when its file still resolves on disk).
- * The purge IS the server-side writer, so it has to bypass that guard via
- * the mutator form.
- */
-export async function purgeReferenceSheetFromAllUniverses(filename) {
-  if (!filename || typeof filename !== 'string') return { cleared: 0 };
-  const universes = await listUniverses();
-  let cleared = 0;
-  // No pre-check: the mutator returns null when no characters matched, so
-  // updateUniverse skips the write. Single pass per universe instead of two.
-  for (const universe of universes) {
-    if (!Array.isArray(universe.characters)) continue;
-    await updateUniverse(universe.id, (cur) => {
-      const list = Array.isArray(cur.characters) ? cur.characters : [];
-      let touched = false;
-      const nextList = list.map((entry) => {
-        let next = entry;
-        for (const { variant, filename: f } of listSheetPointers(entry)) {
-          if (f !== filename) continue;
-          next = applySheetPointerToCharacter(next, variant, null);
-          cleared += 1;
-          touched = true;
-        }
-        return next;
-      });
-      return touched ? { characters: nextList } : null;
-    });
-  }
-  return { cleared };
 }

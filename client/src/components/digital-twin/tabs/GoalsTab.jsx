@@ -164,16 +164,18 @@ export default function GoalsTab({ onRefresh }) {
                 {derivingLongevity ? 'Deriving...' : 'Re-derive'}
               </button>
             )}
-            <button
-              onClick={() => setShowBirthDate(!showBirthDate)}
-              className="text-xs px-2 py-1 rounded bg-port-border text-gray-300 hover:bg-gray-600"
-            >
-              {hasBirthDate ? 'Update Birth Date' : 'Set Birth Date'}
-            </button>
+            {hasBirthDate && (
+              <button
+                onClick={() => setShowBirthDate(!showBirthDate)}
+                className="text-xs px-2 py-1 rounded bg-port-border text-gray-300 hover:bg-gray-600"
+              >
+                Update Birth Date
+              </button>
+            )}
           </div>
         </div>
 
-        {showBirthDate && (
+        {(showBirthDate || !hasBirthDate) && (
           <div className="flex gap-2 mb-3">
             <input
               type="date"

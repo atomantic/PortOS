@@ -15,7 +15,7 @@ vi.mock('./cosState.js', async (importOriginal) => ({
 }));
 vi.mock('./appActivity.js', () => ({
   startAppCooldown: vi.fn().mockResolvedValue(undefined),
-  markAppReviewCompleted: vi.fn().mockResolvedValue(undefined)
+  updateAppActivity: vi.fn().mockResolvedValue(undefined)
 }));
 vi.mock('./cosEvents.js', () => ({
   emitLog: vi.fn()
@@ -42,7 +42,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
       metadata: { analysisType: 'private-security-assessment', app: 'example' },
     }, true, 'private evidence '.repeat(20));
     expect(extractAndStoreMemories).not.toHaveBeenCalled();
-    expect(appActivity.markAppReviewCompleted).not.toHaveBeenCalled();
     expect(appActivity.startAppCooldown).not.toHaveBeenCalled();
   });
 
@@ -54,7 +53,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
     };
     await processAgentCompletion('agent-1', task, true, 'output text...');
 
-    expect(appActivity.markAppReviewCompleted).toHaveBeenCalledWith('portos-default', 1, 1);
     expect(appActivity.startAppCooldown).toHaveBeenCalledWith('portos-default', 1800000);
   });
 
@@ -79,7 +77,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
     };
     await processAgentCompletion('agent-2', task, true, 'output');
 
-    expect(appActivity.markAppReviewCompleted).not.toHaveBeenCalled();
     expect(appActivity.startAppCooldown).not.toHaveBeenCalled();
   });
 
@@ -92,7 +89,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
     };
     await processAgentCompletion('agent-3', task, true, 'output');
 
-    expect(appActivity.markAppReviewCompleted).not.toHaveBeenCalled();
     expect(appActivity.startAppCooldown).not.toHaveBeenCalled();
   });
 
@@ -104,7 +100,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
     };
     await processAgentCompletion('agent-4', task, true, 'output');
 
-    expect(appActivity.markAppReviewCompleted).toHaveBeenCalled();
     expect(appActivity.startAppCooldown).toHaveBeenCalled();
   });
 
@@ -116,7 +111,6 @@ describe('processAgentCompletion - cooldown handling for recovery tasks', () => 
     };
     await processAgentCompletion('agent-5', task, true, 'output');
 
-    expect(appActivity.markAppReviewCompleted).not.toHaveBeenCalled();
     expect(appActivity.startAppCooldown).not.toHaveBeenCalled();
   });
 });

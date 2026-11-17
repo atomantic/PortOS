@@ -94,26 +94,24 @@ function SheetPreviewActions({ bad, busy, onRemove }) {
 }
 
 // The untabbed (/catalog/character/:id) read-only view of a character's
-// universe sheets, with a deep-link to the Universe Builder canon section
-// (`#canon`, the anchor its hash-scroll resolves).
-export function ReferenceSheetPanel({ payload, universeRef }) {
+// universe sheets, with a deep-link to the Casting Sheets tab, where sheets
+// are rendered and managed (Universe Builder's character grid has no sheet controls).
+export function ReferenceSheetPanel({ payload, recordId }) {
   const variants = pointerSheetsOf(payload);
   const hasSheet = variants.length > 0;
-  const universePath = universeCanonPath(universeRef);
+  const castingPath = `/casting/${encodeURIComponent(recordId)}/sheets`;
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <h2 className="text-sm font-semibold text-white flex items-center gap-1.5">
           <ImageIcon size={14} aria-hidden="true" /> Reference sheet
         </h2>
-        {universePath && (
-          <Link to={universePath}
-            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
-            <Sparkles size={12} aria-hidden="true" />
-            {hasSheet ? 'Re-render in Universe Builder' : 'Render in Universe Builder'}
-            <ExternalLink size={11} aria-hidden="true" />
-          </Link>
-        )}
+        <Link to={castingPath}
+          className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border border-port-border text-gray-300 hover:text-white hover:border-port-accent">
+          <Sparkles size={12} aria-hidden="true" />
+          {hasSheet ? 'Manage in Casting' : 'Render in Casting'}
+          <ExternalLink size={11} aria-hidden="true" />
+        </Link>
       </div>
       {hasSheet ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -121,10 +119,7 @@ export function ReferenceSheetPanel({ payload, universeRef }) {
         </div>
       ) : (
         <p className="text-xs text-gray-500">
-          No reference sheet rendered yet.
-          {universePath
-            ? ' Render one from the linked universe (it carries the style data the renderer needs).'
-            : ' Link this character to a universe to render a reference sheet from its style data.'}
+          No reference sheet rendered yet. Render one from the Sheets tab in Casting.
         </p>
       )}
     </section>

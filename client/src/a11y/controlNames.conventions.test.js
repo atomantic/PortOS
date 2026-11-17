@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: accessible names for controls and clickable elements.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
@@ -166,11 +167,11 @@ describe('a11y conventions: controlNames', () => {
       // already renders — a paired `<label htmlFor>`, or the anchor's own text;
       // aria-label is for the compact rows (peer management, inline filters,
       // icon-only action links) where visible text breaks the layout.
-      const offenders = [...unnamedControlAnchors(tag)].filter((anchor) => !allowlist.has(anchor));
+      const offenders = [...unnamedControlAnchors(tag)].filter((anchor) => !allowlist?.has(anchor));
       expect(offenders, `<${tag}> without an accessible name — ${remedy}:\n${offenders.join('\n')}`).toEqual([]);
     });
 
-    it(`keeps no stale <${tag}> entries in ${listName} (${issue})`, () => {
+    if (allowlist) it(`keeps no stale <${tag}> entries in ${listName} (${issue})`, () => {
       // The allowlists only shrink. An entry whose control has since been named —
       // or deleted, or renamed so its anchor no longer resolves — is dead weight
       // that quietly re-exempts the next control to land on that same anchor.

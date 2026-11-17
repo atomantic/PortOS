@@ -495,11 +495,9 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | cos-report-summary | Generate daily summary |
 | cos-self-improvement | Analyze and suggest improvements |
 
-## Hybrid memory search, execution lanes and local models
+## Hybrid memory search and local models
 
-Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/memoryBM25.js`) with vector search by Reciprocal Rank Fusion, weighted 40% BM25 and 60% vector. `server/services/eventScheduler.js` runs cron-expression events with timeout-safe timers (clamped to 2^31-1), and `server/services/toolStateMachine.js` tracks tool execution state.
-
-`server/services/executionLanes.js` bounds concurrent work: `critical` (1 slot, emergency fixes), `standard` (2, normal development) and `background` (3, self-improvement and documentation).
+Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/memoryBM25.js`) with vector search by Reciprocal Rank Fusion, weighted 40% BM25 and 60% vector. `server/services/eventScheduler.js` runs cron-expression events with timeout-safe timers (clamped to 2^31-1).
 
 `server/services/lmStudioManager.js` provides LM Studio discovery, health and model management; the only REST route is `POST /api/lmstudio/unload`, and the rest goes through `/api/local-llm`.
 
