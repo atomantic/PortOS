@@ -129,7 +129,8 @@ describe('floor key', () => {
   it('fails closed on a directory input past the limit and accepts one under it', () => {
     const fixtures = {};
     for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) fixtures[`server/lib/fixtures/f${i}.json`] = '{}';
-    const test = ["import { it } from 'vitest';", "const read = (name) => readFileSync(join(__dirname, 'fixtures', name), 'utf8');", 'it(\'x\', () => {});'].join('\n');
+    // The helper is called with the directory's own entry names: a helper nothing calls reads nothing (#16602).
+    const test = ["import { it } from 'vitest';", "import { readdirSync, readFileSync } from 'node:fs';", "const read = (name) => readFileSync(join(__dirname, 'fixtures', name), 'utf8');", "const all = readdirSync(join(__dirname, 'fixtures')).map(read);", 'it(\'x\', () => {});'].join('\n');
     expect(keyOf({ ...TREE, ...fixtures, 'server/lib/a.test.js': test }).floor).toMatchObject({ memoizable: false, reason: expect.stringContaining('directory input too large') });
     const small = { ...TREE, 'server/lib/fixtures/f0.json': '{}', 'server/lib/a.test.js': test };
     const before = keyOf(small).floor;
@@ -209,15 +210,18 @@ describe('floor key', () => {
     });
 
     it('keeps failing closed when the directory is only the prefix of a path with a variable segment', () => {
-      // The read may land anywhere: `read('../../server/lib/nav.js')` leaves the prefix, and a
-      // template URL keeps only the importing file's directory. Past the limit that was always refused.
+      // Past the limit a prefix is never keyed from the listing. An unbounded read may land anywhere
+      // (`read('../../server/lib/nav.js')` leaves the prefix, and a template URL names another
+      // directory altogether), and a listed name is refused there as it always was.
+      const HERE = 'const HERE = dirname(fileURLToPath(import.meta.url));';
       for (const read of [
-        "const HERE = dirname(fileURLToPath(import.meta.url));\nconst read = (p) => readFileSync(join(HERE, p), 'utf8');",
-        'const shipped = (name) => readFileSync(new URL(`../../../server/lib/${name}`, import.meta.url));',
+        `${HERE}\nconst read = (p) => readFileSync(join(HERE, p), 'utf8');\nread(process.argv[2]);`,
+        'const shipped = (name) => readFileSync(new URL(`../../../server/lib/${name}`, import.meta.url));\nshipped(process.argv[2]);',
+        `${HERE}\nfor (const name of readdirSync(HERE)) readFileSync(join(HERE, name), 'utf8');`,
       ]) {
         const guessed = { ...files };
         for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) guessed[`client/src/pages/p${i}.json`] = '{}';
-        guessed[one] = `import { it } from 'vitest';\n${read}\nit('one', () => {});\n`;
+        guessed[one] = `import { it } from 'vitest';\nimport { readdirSync, readFileSync } from 'node:fs';\n${read}\nit('one', () => {});\n`;
         expect(floorOf(guessed), read).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client/src/pages` });
       }
     });
@@ -398,22 +402,229 @@ describe('floor key', () => {
 // #16602: a path with a variable segment was keyed as the directory the source
 // still names, as if the read had to land inside it. A helper called with
 // '../../client/src/limits.js' leaves that directory, so the key held a tree the
-// test never read and missed the file it did.
+// test never read and missed the file it did. A variable segment now has to be
+// resolved to its literal values, proven to stay under the prefix, or the test
+// (or the `scripts/` member) is refused.
 describe('a read whose variable segment can leave the directory the source names', () => {
   const test = 'server/lib/a.test.js';
-  const OUTSIDE = { 'client/src/limits.js': 'export const LIMIT = 1;\n', 'data.reference/templates/a.png': 'png v1\n' };
-  const tree = (body, extra = {}) => ({ ...TREE, ...OUTSIDE, ...extra, [test]: `import { it } from 'vitest';\n${body}\nit('x', () => {});\n` });
-  const floorOf = (files) => keyOf(files, test).floor;
-  const HERE = 'const HERE = dirname(fileURLToPath(import.meta.url));';
+  const EXTRA = {
+    'client/src/limits.js': 'export const LIMIT = 1;\n',
+    'data.reference/templates/a.png': 'png v1\n',
+    'data.reference/templates/b.png': 'png v1\n',
+    'server/lib/fixtures/f0.json': '{}',
+    'server/lib/fixtures/f1.json': '{}',
+    'scripts/lib/pathWithin.js': 'export const pathWithin = (dir, ...segments) => join(dir, ...segments);\n',
+  };
+  const PREAMBLE = [
+    "import { it } from 'vitest';",
+    "import { existsSync, readdirSync, readFileSync } from 'node:fs';",
+    "import { readdir } from 'node:fs/promises';",
+    "import * as fs from 'node:fs';",
+    "import { randomUUID } from 'node:crypto';",
+    "import { pathWithin } from '../../scripts/lib/pathWithin.js';",
+    'const HERE = dirname(fileURLToPath(import.meta.url));',
+    "const FIXTURES = join(HERE, 'fixtures');",
+  ].join('\n');
+  const tree = (body, extra = {}) => ({ ...TREE, ...EXTRA, ...extra, [test]: `${PREAMBLE}\n${body}\nit('x', () => {});\n` });
+  const floorOf = (body, extra) => keyOf(tree(body, extra), test).floor;
+  /** True when the test is keyed and its key moves with `rel`. */
+  const keyedOn = (body, rel) => {
+    const before = floorOf(body);
+    return before.memoizable && floorOf(body, { [rel]: 'changed\n' }).key !== before.key;
+  };
+  const refusal = (body) => floorOf(body).reason;
+  const leaves = (dir) => `${test}: reads a path with a variable segment that can leave ${dir}`;
+  const through = (helper, dir) => `${test}: reads a path through ${helper}() that the analyzer cannot resolve (under ${dir})`;
 
-  it.fails.each([
-    ['a helper that joins its parameter', `${HERE}\nconst read = (p) => readFileSync(join(HERE, p), 'utf8');\nconst limits = read('../../client/src/limits.js');`, 'client/src/limits.js'],
-    ['a template URL', 'const template = (name) => readFileSync(new URL(`../../data.reference/templates/${name}`, import.meta.url));\nconst png = template(process.env.TEMPLATE);', 'data.reference/templates/a.png'],
-  ])('%s never keeps its key after the file it reads changes', (_label, body, read) => {
-    const before = floorOf(tree(body));
-    const after = floorOf(tree(body, { [read]: 'changed\n' }));
-    // Sound either way: refused, or keyed with the file actually read.
-    expect(before.memoizable && before.key === after.key).toBe(false);
+  it('keys the file a helper is called with, not the directory the helper names', () => {
+    const helper = "const read = (p) => readFileSync(join(HERE, p), 'utf8');\nconst limits = read('../../client/src/limits.js');";
+    expect(keyedOn(helper, 'client/src/limits.js')).toBe(true);
+    // The directory guess is gone: a neighbour the helper is never called with is not an input.
+    expect(floorOf(helper).memoizable).toBe(true);
+    expect(keyedOn(helper, 'server/lib/unrelated.js')).toBe(false);
+    const template = 'const template = (name) => readFileSync(new URL(`../../data.reference/templates/${name}`, import.meta.url));\nconst png = template(\'a.png\');';
+    expect(keyedOn(template, 'data.reference/templates/a.png')).toBe(true);
+    expect(keyedOn(template, 'data.reference/templates/b.png')).toBe(false);
+  });
+
+  it('refuses a helper called with anything but a literal, naming the helper and the literal directory it kept', () => {
+    expect(floorOf("const read = (p) => readFileSync(join(HERE, p), 'utf8');\nread(process.argv[2]);")).toMatchObject({ memoizable: false, key: null, reason: through('read', 'server/lib') });
+    // The template's literal directories are kept, where the importing file's directory used to stand in for them.
+    expect(refusal('const template = (name) => readFileSync(new URL(`../../data.reference/templates/${name}`, import.meta.url));\ntemplate(process.env.TEMPLATE);'))
+      .toBe(through('template', 'data.reference/templates'));
+    expect(refusal("function load(name) { return readFileSync(join(FIXTURES, `${name}.json`), 'utf8'); }\nload('f0'); load(pick());")).toBe(through('load', 'server/lib/fixtures'));
+  });
+
+  it('resolves every call of a helper, every row of a literal table and every pair of two variables', () => {
+    const cases = {
+      'two calls': "const read = (p) => readFileSync(join(FIXTURES, p), 'utf8');\nread('f0.json'); read('f1.json');",
+      'a function declaration': "function read(p) { return readFileSync(join(FIXTURES, p), 'utf8'); }\nread('f0.json'); read('f1.json');",
+      'a literal table': "it.each(['f0.json', 'f1.json'])('%s', (name) => { readFileSync(join(FIXTURES, name)); });",
+      'a constant array': "const NAMES = ['f0.json', 'f1.json'];\nfor (const name of NAMES) readFileSync(`${FIXTURES}/${name}`);",
+      'a frozen array handed on': "const NAMES = Object.freeze(['f0', 'f1']);\nregister(NAMES);\nNAMES.forEach((name) => readFileSync(join(FIXTURES, name + '.json')));",
+      'two variables': "const read = (dir, name) => readFileSync(join(HERE, dir, name));\nread('fixtures', 'f0.json'); read('.', 'fixtures/f1.json');",
+      'a helper called by another helper': "const read = (name) => readFileSync(join(FIXTURES, name));\nconst both = (stem) => read(`${stem}.json`);\nboth('f0'); both('f1');",
+      'a binding inside the helper': "const read = (name) => { const file = join(FIXTURES, name); return readFileSync(file); };\nread('f0.json'); read('f1.json');",
+    };
+    for (const [label, body] of Object.entries(cases)) {
+      expect(keyedOn(body, 'server/lib/fixtures/f0.json'), label).toBe(true);
+      expect(keyedOn(body, 'server/lib/fixtures/f1.json'), label).toBe(true);
+      // Exact files, no directory: a new neighbour is not an input.
+      expect(floorOf(body, { 'server/lib/fixtures/f2.json': '{}' }).key, label).toBe(floorOf(body).key);
+    }
+    // A helper nothing calls reads nothing.
+    expect(keyedOn("const read = (p) => readFileSync(join(FIXTURES, p), 'utf8');", 'server/lib/fixtures/f0.json')).toBe(false);
+    expect(floorOf("const read = (p) => readFileSync(join(FIXTURES, p), 'utf8');").memoizable).toBe(true);
+  });
+
+  it('keys the directory for a name that provably stays inside it', () => {
+    const cases = {
+      'a listing mapped over': "const all = readdirSync(FIXTURES).filter((f) => f.endsWith('.json')).map((f) => readFileSync(join(FIXTURES, f), 'utf8'));",
+      'a listing kept in a constant': "const FILES = readdirSync(FIXTURES).filter((f) => f.endsWith('.json')).sort();\nexpect(FILES.length).toBeGreaterThan(0);\nfor (const file of FILES) readFileSync(join(FIXTURES, file));",
+      'a helper handed to the listing': "const read = (f) => readFileSync(join(FIXTURES, f));\nconst all = readdirSync(FIXTURES).map(read);",
+      'a helper called with a listed name': "const read = (f) => readFileSync(join(FIXTURES, f));\nfor (const f of fs.readdirSync(FIXTURES)) read(f);",
+      'an awaited listing': "for (const f of (await readdir(FIXTURES)).slice(0, 5)) readFileSync(`${HERE}/fixtures/${f}`);",
+      'a literal directory in the joined text': "readdirSync(FIXTURES).forEach((f) => readFileSync(join(HERE, `fixtures/${f}`)));",
+      'a literal directory concatenated': "readdirSync(FIXTURES).forEach((f) => readFileSync(HERE + '/fixtures/' + f));",
+      'the parent of a listed entry': "readdirSync(FIXTURES).forEach((f) => readdirSync(dirname(join(FIXTURES, f))));",
+      'a generated name': "const probe = existsSync(join(FIXTURES, `${randomUUID()}.json`));",
+      'a guarded join': "const read = (...parts) => readFileSync(pathWithin(FIXTURES, ...parts));\nread(process.argv[2]);",
+      'a guarded join handed on': "const read = (name) => load(pathWithin(FIXTURES, name));\nread(process.argv[2]);",
+    };
+    for (const [label, body] of Object.entries(cases)) {
+      expect(keyedOn(body, 'server/lib/fixtures/f0.json'), label).toBe(true);
+      expect(floorOf(body, { 'server/lib/fixtures/new.json': '{}' }).key, label).not.toBe(floorOf(body).key);
+      // The directory keyed is the one the literal text names, not the file's own.
+      expect(keyedOn(body, 'server/lib/unrelated.js'), label).toBe(false);
+    }
+    // All literal, a guarded join is the one file.
+    const literal = "readFileSync(pathWithin(FIXTURES, 'f0.json'));";
+    expect(keyedOn(literal, 'server/lib/fixtures/f0.json')).toBe(true);
+    expect(keyedOn(literal, 'server/lib/fixtures/f1.json')).toBe(false);
+    // It joins as path.join does: a leading separator is a plain segment.
+    expect(keyedOn("readFileSync(pathWithin(HERE, '/fixtures/f0.json'));", 'server/lib/fixtures/f0.json')).toBe(true);
+  });
+
+  it('refuses every shape that only looks bounded', () => {
+    const listed = (use) => `readdirSync(FIXTURES).forEach((f) => ${use});`;
+    const cases = {
+      // The helper has callers this file does not show.
+      'an exported helper': ["export const read = (p) => readFileSync(join(FIXTURES, p));\nread('f0.json');", leaves('server/lib/fixtures')],
+      'a helper handed on': ["const read = (p) => readFileSync(join(FIXTURES, p));\nread('f0.json'); register(read);", through('read', 'server/lib/fixtures')],
+      'a helper stored': ["const read = (p) => readFileSync(join(FIXTURES, p));\nconst api = { read };\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a helper declared twice': ["let read = (p) => readFileSync(join(FIXTURES, p));\nread('f0.json');\nif (flag) { const read = other; }", through('read', 'server/lib/fixtures')],
+      'a spread call': ["const read = (p) => readFileSync(join(FIXTURES, p));\nread(...args);", through('read', 'server/lib/fixtures')],
+      'a call with no argument': ["const read = (p) => readFileSync(join(FIXTURES, p));\nread();", through('read', 'server/lib/fixtures')],
+      'a default parameter': ["const read = (name, dir = 'fixtures') => readFileSync(join(HERE, dir, name));\nread('f0.json');", leaves('server/lib')],
+      'a destructured parameter': ["const read = ({ name }) => readFileSync(join(FIXTURES, name));\nread({ name: 'f0.json' });", leaves('server/lib/fixtures')],
+      'a parameter reassigned by an inner declaration': ["const read = (p) => { if (flag) { const p = pick(); return readFileSync(join(FIXTURES, p)); } };\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a parameter assigned in the body': ["const read = (p) => { p = pick(); return readFileSync(join(FIXTURES, p)); };\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a parameter appended to in the body': ["const read = (p) => { p += '/../../a.js'; return readFileSync(join(FIXTURES, p)); };\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'the same name bound twice, one inside the other': ["const read = (f) => ['f1.json'].map((f) => readFileSync(join(FIXTURES, f)));\nread('f0.json');", leaves('server/lib/fixtures')],
+      'a parameter redeclared by an inner pattern': ["const read = (p) => { if (flag) { const { p } = pick(); return readFileSync(join(FIXTURES, p)); } };\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a spread before the argument': ["const read = (label, name) => readFileSync(join(FIXTURES, name));\nread(...labels, 'f0.json');", through('read', 'server/lib/fixtures')],
+      'a literal argument with a method call on it': ["const read = (p) => readFileSync(join(FIXTURES, p));\nread('xf0.json'.slice(1));", through('read', 'server/lib/fixtures')],
+      'a literal row with a method call on it': ["for (const name of ['xf0.json'.slice(1)]) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      // Not a literal and not a listed name.
+      'a property of something': ["readFileSync(join(FIXTURES, entry.file));", leaves('server/lib/fixtures')],
+      'a call result': ["readFileSync(join(FIXTURES, pick()));", leaves('server/lib/fixtures')],
+      'a table row that is not a string': ["it.each([['f0.json', 1]])('%s', (name) => { readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'a table of something that is not the test API': ["rows.each(['f0.json'])('%s', (name) => { readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'the index a callback is given, not the element': ["['f0.json'].forEach((name, other) => readFileSync(join(FIXTURES, other)));", leaves('server/lib/fixtures')],
+      'a table with a computed row': ["for (const name of ['f0.json', pick()]) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array that gains an element': ["const NAMES = ['f0.json'];\nNAMES.push(process.argv[2]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array with an element assigned': ["const NAMES = ['f0.json'];\nNAMES[0] = process.argv[2];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array handed to unknown code': ["const NAMES = ['f0.json'];\nfill(NAMES);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an exported array': ["export const NAMES = ['f0.json'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a rebindable array': ["let NAMES = ['f0.json'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'more values than are worth resolving': [`const NAMES = [${Array.from({ length: 65 }, (_, i) => `'f${i}.json'`).join(', ')}];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));`, leaves('server/lib/fixtures')],
+      // A listed name that is changed, replaced or followed by a climb.
+      'a listed name rewritten': [listed("readFileSync(join(FIXTURES, f.replace('a', '../')))"), leaves('server/lib/fixtures')],
+      'a listed name indexed': [listed('readFileSync(join(FIXTURES, f[0]))'), leaves('server/lib/fixtures')],
+      'a listed name in a ternary': [listed("readFileSync(join(FIXTURES, f === 'f0.json' ? '../../a.js' : f))"), leaves('server/lib/fixtures')],
+      'a listed name and-ed away': [listed('readFileSync(join(FIXTURES, f && other))'), leaves('server/lib/fixtures')],
+      'a listed name in a template hole with more in it': [listed('readFileSync(`${FIXTURES}/${f || other}`)'), leaves('server/lib/fixtures')],
+      'a climb after a listed name': [listed("readFileSync(join(FIXTURES, f, '..', '..', 'a.js'))"), leaves('server/lib/fixtures')],
+      'a climb written into the template': [listed('readFileSync(`${FIXTURES}/${f}/../../a.js`)'), leaves('server/lib/fixtures')],
+      'a climb split across two literals': [listed("readFileSync(join(FIXTURES, f + '/.' + './../a.js'))"), leaves('server/lib/fixtures')],
+      'a windows climb after a listed name': [listed("readFileSync(join(FIXTURES, f + '\\\\..\\\\..\\\\a.js'))"), leaves('server/lib/fixtures')],
+      'a windows climb written before a listed name': [listed("readFileSync(join(HERE, 'fixtures\\\\..\\\\..\\\\' + f))"), leaves('server/lib')],
+      'a listed name assigned in its loop': ["for (let f of readdirSync(FIXTURES)) { f = process.argv[2]; readFileSync(join(FIXTURES, f)); }", leaves('server/lib/fixtures')],
+      'a listed name after an unknown directory': [listed('readFileSync(join(FIXTURES, entry.dir, f))'), leaves('server/lib/fixtures')],
+      'a climbing URL relative to a listed entry': [listed("readFileSync(new URL('../../a.js', pathToFileURL(join(FIXTURES, f))))"), leaves('server/lib/fixtures')],
+      'a listed name glued to the directory': [listed('readFileSync(`${FIXTURES}${f}`)'), leaves('server/lib/fixtures')],
+      'a listed name as a URL': [listed('readFileSync(new URL(f, import.meta.url))'), leaves('server/lib')],
+      'a listed name under a URL directory': [listed('readFileSync(new URL(`./fixtures/${f}`, import.meta.url))'), leaves('server/lib/fixtures')],
+      'mapped names': ["readdirSync(FIXTURES).map((f) => f.slice(1)).forEach((f) => readFileSync(join(FIXTURES, f)));", leaves('server/lib/fixtures')],
+      'directory entries, not names': ["for (const f of readdirSync(FIXTURES, { withFileTypes: true })) readFileSync(join(FIXTURES, f));", leaves('server/lib/fixtures')],
+      'a listing by some other readdir': ["for (const f of store.readdir()) readFileSync(join(FIXTURES, f));", leaves('server/lib/fixtures')],
+      'a listing by a shadowed readdirSync': ["function listAll(readdirSync) { for (const f of readdirSync(FIXTURES)) readFileSync(join(FIXTURES, f)); }", leaves('server/lib/fixtures')],
+      'a listed array that gains an element': ["const FILES = readdirSync(FIXTURES);\nFILES.unshift(process.argv[2]);\nfor (const f of FILES) readFileSync(join(FIXTURES, f));", leaves('server/lib/fixtures')],
+      // A guard is trusted only around the directory it guards.
+      'a guarded join under an unknown directory': ["readFileSync(pathWithin(join(FIXTURES, entry.dir), 'f0.json'));", leaves('server/lib/fixtures')],
+      'a guarded join with a climb after it': ["readFileSync(join(pathWithin(FIXTURES, process.argv[2]), '..', '..', 'a.js'));", leaves('server/lib/fixtures')],
+    };
+    for (const [label, [body, reason]] of Object.entries(cases)) {
+      expect(floorOf(body), label).toMatchObject({ memoizable: false, key: null });
+      expect(floorOf(body).reasons, label).toContain(reason);
+    }
+  });
+
+  it('trusts readdir, randomUUID and pathWithin only as imported from the modules that define them', () => {
+    const guessed = (...lines) => [...new Set(extractFileFacts(lines.join('\n'), { fileRel: test, cwdRel: 'server' }).dirs
+      .filter((dir) => dir.guessed).map((dir) => `${dir.rel}: ${dir.open ? 'unbounded' : 'contained'}`))];
+    const contained = ['server/lib/fixtures: contained'];
+    const unbounded = ['server/lib/fixtures: unbounded'];
+    const listing = "for (const f of readdirSync(join(__dirname, 'fixtures'))) readFileSync(join(__dirname, 'fixtures', f));";
+    expect(guessed("import { readdirSync, readFileSync } from 'node:fs';", listing)).toEqual(contained);
+    expect(guessed("import { readdirSync as list } from 'fs';", listing.replace('readdirSync(', 'list('))).toEqual(contained);
+    expect(guessed("const { readdirSync } = require('node:fs');", listing)).toEqual(contained);
+    expect(guessed("import { promises as fsp } from 'node:fs';", listing.replace('readdirSync(', 'await fsp.readdir('))).toEqual(contained);
+    expect(guessed(listing)).toEqual(unbounded);
+    expect(guessed("import { readdirSync } from './fakeFs.js';", listing)).toEqual(unbounded);
+    expect(guessed("import { readdirSync } from 'node:fs';", listing.replace('readdirSync(', 'store.readdirSync('))).toEqual(unbounded);
+    const named = "const probe = existsSync(join(__dirname, 'fixtures', `${randomUUID()}.json`));";
+    expect(guessed("import { randomUUID } from 'node:crypto';", named)).toEqual(contained);
+    expect(guessed("import { randomUUID } from './ids.js';", named)).toEqual(unbounded);
+    expect(guessed("import { randomUUID as id } from 'node:crypto';", named)).toEqual(unbounded);
+    const guard = "const read = (name) => readFileSync(pathWithin(join(__dirname, 'fixtures'), name));\nread(process.argv[2]);";
+    expect(guessed("import { pathWithin } from '../../scripts/lib/pathWithin.js';", guard)).toEqual(contained);
+    // Any other function of that name is an unknown call, as it always was: no directory is claimed for it.
+    for (const imported of ["import { pathWithin } from './pathWithin.js';", "import { join as pathWithin } from '../../scripts/lib/pathWithin.js';", 'const pathWithin = (dir, name) => join(dir, name);']) {
+      expect(guessed(imported, guard), imported).toEqual([]);
+    }
+  });
+
+  it('refuses the recorded key too, and a script the test imports, but not a product module', () => {
+    const open = "const read = (p) => readFileSync(join(HERE, p), 'utf8');\nread(process.argv[2]);";
+    const recorded = keyOf(tree(open), test, { records: new Map([[test, [test]]]) }).recorded;
+    expect(recorded).toMatchObject({ memoizable: false, reason: through('read', 'server/lib') });
+    const member = (rel) => ({ [rel]: "export const read = (p) => readFileSync(new URL(`./fixtures/${p}`, import.meta.url));\n" });
+    const tooling = floorOf("import { read } from '../../scripts/tool.js';", { ...member('scripts/tool.js'), 'scripts/fixtures/s0.json': '{}' });
+    expect(tooling).toMatchObject({ memoizable: false, reason: 'scripts/tool.js: reads a path with a variable segment that can leave scripts/fixtures' });
+    // A library module builds the path from what its caller passes and reads it only when a test
+    // calls it: it keeps the prefix it was keyed with, as it keeps an oversized read (`gather`).
+    const library = "import { read } from './reader.js';";
+    expect(floorOf(library, member('server/lib/reader.js')).memoizable).toBe(true);
+    expect(keyedOn(library, 'server/lib/fixtures/f0.json')).toBe(false);
+    const withModule = (extra, module = member('server/lib/reader.js')) => keyOf(tree(library, { ...module, ...extra }), test).floor.key;
+    expect(withModule({ 'server/lib/fixtures/f0.json': 'changed\n' })).not.toBe(withModule({}));
+    // Never a narrower guess: the literal directory is added to the importing file's directory, which
+    // is what such a template was keyed with before, and a template that names another directory keys that too.
+    expect(withModule({ 'server/lib/unrelated.js': 'export const unrelated = 2;\n' })).not.toBe(withModule({}));
+    const elsewhere = { 'server/lib/reader.js': 'export const read = (p) => readFileSync(new URL(`../../data.reference/templates/${p}`, import.meta.url));\n' };
+    expect(withModule({ 'data.reference/templates/a.png': 'changed\n' }, elsewhere)).not.toBe(withModule({}, elsewhere));
+    expect(withModule({ 'server/lib/unrelated.js': 'export const unrelated = 2;\n' }, elsewhere)).not.toBe(withModule({}, elsewhere));
+  });
+
+  it('follows a variable module path only as far as it is bounded', () => {
+    const load = (call) => `const load = (f) => import(pathToFileURL(join(HERE, 'mods', f)).href);\n${call}`;
+    const mods = { 'server/lib/mods/m0.js': 'export const m = 0;\n' };
+    const listed = load("await Promise.all(readdirSync(join(HERE, 'mods')).map(load));");
+    expect(floorOf(listed, mods).memoizable).toBe(true);
+    expect(floorOf(listed, { 'server/lib/mods/m0.js': 'export const m = 1;\n' }).key).not.toBe(floorOf(listed, mods).key);
+    // Unbounded, the module may be anywhere: an edge the floor key does not know.
+    expect(floorOf(load('load(process.argv[2]);'), mods)).toMatchObject({ memoizable: false, reason: `${test}: import() with a non-literal specifier` });
   });
 });
 

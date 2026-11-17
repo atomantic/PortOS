@@ -27,6 +27,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { pathWithin } from '../../../scripts/lib/pathWithin.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const html = readFileSync(join(CLIENT_ROOT, 'index.html'), 'utf8');
@@ -83,7 +84,8 @@ describe('self-hosted webfonts', () => {
   it('resolves every @font-face url to a file that exists in public/', () => {
     expect(fontUrls.length).toBeGreaterThan(0);
 
-    const missing = fontUrls.filter((u) => !existsSync(join(CLIENT_ROOT, 'public', u)));
+    // pathWithin: the urls are parsed out of index.css, so the test memo keys public/ for them.
+    const missing = fontUrls.filter((u) => !existsSync(pathWithin(join(CLIENT_ROOT, 'public'), u)));
 
     expect(missing).toEqual([]);
   });

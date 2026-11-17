@@ -18,14 +18,16 @@ import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 
 import migration, { applyMigration, ACCEPTED_OLD_MD5, NEW_SHIPPED_MD5 } from './027-text-stage-prompts-entities-summary.js';
+import { pathWithin } from '../lib/pathWithin.js';
 
 const md5 = (str) => createHash('md5')
   .update(str.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
   .digest('hex');
 
 const repoRoot = join(import.meta.dirname || dirname(fileURLToPath(import.meta.url)), '..', '..');
+// pathWithin: the names are the migration's own keys, so the test memo keys the stages directory for them.
 const sampleBody = (filename) =>
-  readFileSync(join(repoRoot, 'data.reference', 'prompts', 'stages', filename), 'utf-8');
+  readFileSync(pathWithin(join(repoRoot, 'data.reference', 'prompts', 'stages'), filename), 'utf-8');
 
 const customizedBody = (filename) => `# CUSTOMIZED ${filename}\n\nuser-modified content not matching any shipped hash\n`;
 

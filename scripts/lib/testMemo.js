@@ -42,7 +42,10 @@
  * limit and the listing cannot stand in for it (the repository root, a tree
  * that is spawned or may be loaded natively, a nested repository), when a
  * test or `scripts/` member reads machine-local state (`data/`,
- * the home directory), when the `// test-memo: never` marker is present, when
+ * the home directory) or a path with a variable segment nothing bounds
+ * (`join(HERE, name)`: `createScopes` resolves the variable to its literal
+ * values or proves it stays under the prefix, else the read may land
+ * anywhere), when the `// test-memo: never` marker is present, when
  * the test is a tree guard (`*.guard.test.js`), in the planner's always-run
  * set or in `TEST_MEMO_NEVER`, or —
  * for the floor key only — when a module edge is non-literal or unresolvable.
@@ -260,8 +263,91 @@ const normalizeRel = (value) => {
 const pathValue = (v, extra = {}) => ({ k: 'path', v: normalizeRel(v), partial: false, isDir: false, ...extra });
 const dirValue = (v) => pathValue(v, { isDir: true });
 
+/**
+ * A path with a variable part (`partial`) names only its literal prefix `v`.
+ * Whether a read of it can land outside that prefix is its containment:
+ *
+ * - `open: false`: every variable part is a directory-entry name (`PLAIN_NAME`)
+ *   or went through `pathWithin()`, so the path is inside `v`.
+ * - `open: true` with `vars`: each variable part is a parameter or loop
+ *   variable with a known set of literal values (`Binder.domain`); the
+ *   expression is evaluated again once per combination, exactly.
+ * - `open: true` with `vars: null`: nothing bounds it. `via` names the helper
+ *   whose parameter it is, for the reason a test is refused with.
+ */
+const CONTAINED = Object.freeze({ open: false, vars: null, via: null });
+const UNBOUNDED = Object.freeze({ open: true, vars: null, via: null });
+const containmentOf = ({ open, vars = null, via = null }) => (open ? { open, vars, via } : CONTAINED);
+/** Two variable parts in one path: inside only when both are; resolvable only when both are. */
+function bothContainments(a, b) {
+  if (!a.open) return containmentOf(b);
+  if (!b.open) return containmentOf(a);
+  const vars = a.vars === null || b.vars === null ? null : [...a.vars, ...b.vars.filter((binder) => !a.vars.includes(binder))];
+  return { open: true, vars, via: a.via ?? b.via };
+}
+const partialPath = (base, v, containment) => ({ ...base, v: normalizeRel(v), partial: true, sep: false, ...containmentOf(containment) });
+/**
+ * A partial path under the literal directories of unknown text: `lit/${x}`
+ * joined to `base` is under `base/lit`. `outer` keeps `base`, the prefix
+ * such a path was keyed with before its literal directories were read: where
+ * nothing bounds the variable part neither directory is proven, so a member
+ * that is not refused for it keys both rather than a narrower guess.
+ */
+function underLiteral(base, baseDir, piece, containment = piece) {
+  const dir = piece.lit.slice(0, piece.lit.lastIndexOf('/') + 1);
+  const under = partialPath(base, posix.join(baseDir, dir), containment);
+  return dir === '' ? under : { ...under, outer: normalizeRel(baseDir) };
+}
+
+/**
+ * Text that starts with the literal `lit` and continues with something the
+ * source does not spell out: `\`../fixtures/${name}\``, `name + '.json'`. `post`
+ * is the literal text written after the last unknown piece. Containment as
+ * for a partial path, read for the unknown pieces only.
+ */
+const tailValue = (lit, containment = UNBOUNDED, post = '') => ({ k: 'tail', lit, post, ...containmentOf(containment) });
+/**
+ * Text that cannot climb out of a directory: an unchanged entry name from a
+ * directory listing (never empty, `.` or `..`, and with no `..` segment even
+ * from a recursive listing) or a generated id (`randomUUID()`). Joined under
+ * a directory it stays inside it, and so does any run of such names.
+ */
+const PLAIN_NAME = Object.freeze(tailValue('', CONTAINED));
+/** Literal text that can climb out of a directory when it follows a variable part: a `..` segment, under either separator. */
+const CLIMBS = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
+/** A parameter or loop variable the source never spells out (`identifierValue`): unknown, with the containment a path built from it gets. */
+const variableValue = (containment) => ({ k: 'unknown', ...containmentOf(containment) });
+/** A value that is not a literal, as unknown text: `ext`, `home` and a plain `unknown` bound nothing. */
+const asTail = (value) => (value.k === 'tail' ? value : tailValue('', value.k === 'unknown' && value.open ? value : UNBOUNDED));
+/** Unknown text or a variable: the kinds a later operator turns into something else. */
+const isVariableText = (value) => value.k === 'tail' || (value.k === 'unknown' && value.open === true);
+
+/** `tail` followed by literal text or by another unknown piece. */
+function extendTail(tail, next) {
+  if (next.k === 'str') {
+    const post = tail.post + next.v;
+    // Text after a listed name keeps it inside unless it climbs: `name + '/../../x'`.
+    return tailValue(tail.lit, !tail.open && CLIMBS.test(post) ? UNBOUNDED : tail, post);
+  }
+  const piece = asTail(next);
+  const head = piece.lit === '' ? tail : extendTail(tail, str(piece.lit));
+  return tailValue(head.lit, bothContainments(head, piece), piece.post);
+}
+
+/** One more segment on a path that already has a variable part. */
+function joinPartial(base, segment) {
+  if (segment.k === 'str') {
+    // A resolvable path is evaluated again in full, so only a contained one can be lost here.
+    return base.open || !(CLIMBS.test(segment.v) || segment.v.startsWith('/')) ? base : partialPath(base, base.v, UNBOUNDED);
+  }
+  // `resolve(partial, ROOT)` restarts at ROOT; an external or home segment is unknown text.
+  const piece = segment.k === 'path' ? tailValue('') : asTail(segment);
+  const climbs = CLIMBS.test(piece.lit) || piece.lit.startsWith('/');
+  return partialPath(base, base.v, bothContainments(base, climbs && !piece.open ? UNBOUNDED : piece));
+}
+
 function joinPath(base, segment) {
-  if (base.partial) return base;
+  if (base.partial) return joinPartial(base, segment);
   if (segment.k === 'str') {
     if (segment.v.startsWith('/')) return EXTERNAL;
     const leaf = posix.basename(segment.v);
@@ -270,20 +356,34 @@ function joinPath(base, segment) {
   }
   if (segment.k === 'path') return segment;
   if (segment.k === 'ext') return EXTERNAL;
-  return { ...base, partial: true };
+  const piece = asTail(segment);
+  // A leading slash restarts `resolve()` at the filesystem root and is a plain segment to `join()`;
+  // a Windows separator in the literal part can spell a climb this reading does not see.
+  if (piece.lit.startsWith('/') || (!piece.open && piece.lit.includes('\\'))) return partialPath(base, base.v, UNBOUNDED);
+  return underLiteral(base, base.v, piece);
 }
 
 /** `${dir}/x` and `dir + '/x'`: the separator belongs to the join, not to an absolute path. */
 function appendPath(base, text) {
   if (text === '') return base;
-  return joinPath(base, str(text.replace(/^\/+/, '')));
+  const joined = joinPath(base, str(text.replace(/^\/+/, '')));
+  // `${dir}/` ends in a separator, so what follows is a new segment (`concatValue`).
+  return text.endsWith('/') && joined.k === 'path' ? { ...joined, sep: true } : joined;
 }
 
 function concatValue(left, right) {
   if (left.k === 'str' && right.k === 'str') return str(left.v + right.v);
   if (left.k === 'str' && left.v === '') return right;
-  if (left.k === 'path') return right.k === 'str' ? appendPath(left, right.v) : joinPath(left, right);
+  if (left.k === 'path') {
+    if (right.k === 'str') return appendPath(left, right.v);
+    // `${DIR}/${name}` is a join. `${DIR}${name}` glues unknown text onto the last segment and may name a
+    // sibling of DIR. (An external segment keeps its older reading, in `joinPath`: outside the repository.)
+    return left.sep || left.partial || right.k === 'ext' ? joinPath(left, right) : partialPath(left, left.v, UNBOUNDED);
+  }
   if (left.k === 'ext' || left.k === 'home') return left;
+  if (right.k === 'path') return UNKNOWN;
+  if (left.k === 'str') return extendTail(tailValue(left.v, CONTAINED), right);
+  if (isVariableText(left)) return extendTail(asTail(left), right);
   return UNKNOWN;
 }
 
@@ -296,19 +396,31 @@ function urlValue(args) {
   const [spec, base] = args;
   if (base.k === 'ext' || base.k === 'home') return base;
   if (base.k !== 'path') return UNKNOWN;
-  if (base.partial) return base;
+  const elsewhere = (text) => /^[a-z]+:/i.test(text) || text.startsWith('/');
+  if (spec.k === 'str' && elsewhere(spec.v)) return EXTERNAL;
+  if (spec.k === 'path') return spec;
+  // A URL decodes `%2e%2e` and reads `\` as a separator, so not even a listed name is provably inside.
+  const piece = spec.k === 'str' ? null : asTail(spec);
+  const unlisted = piece === null || piece.open ? piece : UNBOUNDED;
+  if (base.partial) {
+    // A resolvable base is evaluated again in full; a contained one stays so under a literal that does not climb.
+    if (spec.k === 'str') return base.open || !CLIMBS.test(spec.v) ? base : partialPath(base, base.v, UNBOUNDED);
+    return partialPath(base, base.v, bothContainments(base, unlisted));
+  }
   const baseDir = base.isDir ? base.v : posix.dirname(base.v);
   if (spec.k === 'str') {
-    if (/^[a-z]+:/i.test(spec.v) || spec.v.startsWith('/')) return EXTERNAL;
-    return pathValue(posix.join(baseDir, spec.v), { isDir: spec.v.endsWith('/') });
+    // A URL that names a directory serializes with a trailing separator.
+    return pathValue(posix.join(baseDir, spec.v), { isDir: spec.v.endsWith('/'), sep: spec.v !== '' && /(?:^|\/)\.{0,2}$/.test(spec.v) });
   }
-  if (spec.k === 'path') return spec;
-  return { ...dirValue(baseDir), partial: true };
+  if (elsewhere(piece.lit)) return EXTERNAL;
+  // The literal directories of the spec are kept: `new URL(\`../fixtures/${name}\`, here)` is under ../fixtures.
+  return underLiteral(dirValue(baseDir), baseDir, piece, unlisted);
 }
 
 function dirnameValue(value) {
   if (value.k !== 'path') return value.k === 'ext' ? EXTERNAL : UNKNOWN;
-  if (value.partial) return UNKNOWN;
+  // The parent of a path under a prefix is the prefix or below it: the containment is unchanged.
+  if (value.partial) return value;
   return dirValue(posix.dirname(value.v));
 }
 
@@ -327,6 +439,33 @@ function foldJoin(args) {
     acc = joinPath(acc, arg);
   }
   return acc;
+}
+
+/** The repository module whose `pathWithin(dir, ...segments)` joins like `path.join()` and throws when the result is outside `dir`. */
+const PATH_WITHIN_MODULE = 'scripts/lib/pathWithin.js';
+
+/** True when the file imports `name`, under that name, from a module `accepts(specifier)` vouches for. */
+function importsNamed(tokens, match, name, accepts) {
+  return tokens.some((token, i) => {
+    if (!isWord(token, 'import') || !isPunct(tokens[i + 1], '{') || match[i + 1] === undefined) return false;
+    const close = match[i + 1];
+    if (!isWord(tokens[close + 1], 'from') || tokens[close + 2]?.t !== 's' || !accepts(tokens[close + 2].v)) return false;
+    return tokens.slice(i + 2, close).some((imported, at, names) => isWord(imported, name) && !isWord(names[at - 1], 'as') && !isWord(names[at + 1], 'as'));
+  });
+}
+
+/**
+ * `pathWithin(dir, ...segments)`: the call throws unless the joined path is
+ * inside `dir`, so a run that passed read nothing outside it, whatever the
+ * segments were. Literal segments still resolve exactly.
+ */
+function guardedJoin(args) {
+  const [dir, ...segments] = args;
+  if (dir?.k !== 'path') return UNKNOWN;
+  if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
+  if (!segments.every((segment) => segment.k === 'str')) return partialPath({ ...dir, isDir: true }, dir.v, CONTAINED);
+  // `join()` semantics: a leading separator is a plain segment.
+  return segments.reduce((path, segment) => appendPath(path, segment.v), dir);
 }
 
 function evaluateArgs(tokens, match, open, ctx, depth) {
@@ -355,7 +494,12 @@ function evaluate(tokens, match, start, ctx, depth = 0) {
     value = concatValue(value, rhs.value);
     end = rhs.end;
   }
-  return { value, end };
+  // `name && other`, `name ? a : b`, `name[0]`, `name.replace(…)`: what follows decides the value, so a
+  // listed name or a variable with known values is no longer either. (A path keeps the older reading:
+  // an input either way.)
+  const next = tokens[end];
+  const continues = next !== undefined && (next.t === 'p' ? ![',', ';', ')', ']', '}'].includes(next.v) : next.t === 'id' && (next.v === 'in' || next.v === 'instanceof'));
+  return { value: continues && isVariableText(value) ? UNKNOWN : value, end };
 }
 
 const closeOf = (match, open) => (match[open] ?? open) + 1;
@@ -437,9 +581,463 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
     if (PATH_DIRNAME.has(token.v)) return { value: dirnameValue(args[0] ?? UNKNOWN), end };
     if (PATH_IDENTITY.has(token.v)) return { value: args[0] ?? UNKNOWN, end };
     if (token.v === 'URL') return { value: urlValue(args), end };
+    if (token.v === 'pathWithin' && ctx.guarded) return { value: guardedJoin(args), end };
+    // 36 characters of hex and dashes: a name, wherever it is joined.
+    if (token.v === 'randomUUID' && args.length === 0 && ctx.uuid) return { value: PLAIN_NAME, end };
     return { value: UNKNOWN, end };
   }
-  return { value: bindingValue(token.v, ctx, depth), end: start + 1 };
+  return { value: identifierValue(token, ctx, depth), end: start + 1 };
+}
+
+// ---------------------------------------------------------------------------
+// Parameters and loop variables: where a variable path segment comes from.
+// ---------------------------------------------------------------------------
+
+/** Array methods that call their first argument with each element. */
+const ELEMENT_CALLBACKS = new Set(['map', 'forEach', 'filter', 'flatMap', 'some', 'every', 'find', 'findLast', 'findIndex', 'findLastIndex']);
+/** Array methods whose result holds only elements of the receiver. */
+const ELEMENT_PRESERVING = new Set(['filter', 'sort', 'slice', 'reverse', 'toSorted', 'toReversed']);
+/** Array methods that can put a new element into the receiver. */
+const ELEMENT_ADDING = new Set(['push', 'unshift', 'splice', 'fill', 'copyWithin']);
+/** Callees that only read an array handed to them. */
+const ARRAY_READERS = new Set(['each', 'expect', 'Set', 'from', 'freeze', 'isArray', 'stringify', 'toEqual', 'toStrictEqual', 'toContain', 'arrayContaining']);
+const READDIR_CALLEES = new Set(['readdirSync', 'readdir']);
+const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises']);
+const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
+/** Keywords an operand follows, so the token after one continues the expression. */
+const OPERAND_KEYWORDS = new Set(['await', 'typeof', 'new', 'yield', 'void', 'delete', 'async', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof']);
+/** Keywords after which `function` starts an expression, or an exported declaration other modules can call. */
+const BEFORE_FUNCTION_EXPRESSION = new Set([...OPERAND_KEYWORDS, 'export', 'default']);
+/** The elements of an array are directory-entry names (`PLAIN_NAME`); a finite set is a `string[]`. */
+const LISTED = Object.freeze({ listed: true });
+/** How many combinations of variable values one path expression is evaluated for before it counts as unbounded. */
+const VARIABLE_VALUES_LIMIT = 64;
+/** One `binder -> text` map per combination of the variables' values, or null when there is no finite set or too many. */
+function variableCombinations(vars) {
+  if (vars === null || vars.reduce((count, binder) => count * binder.domain.length, 1) > VARIABLE_VALUES_LIMIT) return null;
+  return vars.reduce((all, binder) => all.flatMap((chosen) => binder.domain.map((text) => new Map([...chosen, [binder, text]]))), [new Map()]);
+}
+
+const isPunct = (token, ...values) => token?.t === 'p' && values.includes(token.v);
+const isWord = (token, ...values) => token?.t === 'id' && values.includes(token.v);
+/**
+ * True when the tokens from `index` assign: `=`, or a compound operator and
+ * `=` (`+=`, `||=`). `==` does not; `<=` is read as one, which only costs a
+ * resolution.
+ */
+function assignsAt(tokens, index) {
+  let at = index;
+  while (at < index + 3 && isPunct(tokens[at], '+', '-', '*', '/', '%', '|', '&', '?', '^', '<', '>')) at += 1;
+  return isPunct(tokens[at], '=') && !isPunct(tokens[at + 1], '=');
+}
+
+/** Every token array of a file with its bracket matches: the top level and each template hole, recursively. */
+function tokenArrays(tokens, match, out = []) {
+  out.push({ arr: tokens, m: match });
+  for (const token of tokens) if (token.t === 'tpl') for (const inner of token.exprs) tokenArrays(inner, matchBrackets(inner), out);
+  return out;
+}
+
+/**
+ * Index of the token that ends the expression starting at `start`: a
+ * top-level `,` `;` or closer, or the first token of the next statement where
+ * the semicolon was left out (an operand directly after a complete operand).
+ */
+function expressionEnd(tokens, match, start) {
+  for (let i = start; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.t === 'p') {
+      if (OPENERS[token.v]) {
+        if (match[i] === undefined) return tokens.length;
+        i = match[i];
+      } else if ([',', ';', ')', ']', '}'].includes(token.v)) return i;
+      continue;
+    }
+    if (i === start || isWord(token, 'in', 'of', 'instanceof', 'as')) continue;
+    const prev = tokens[i - 1];
+    if (prev.t === 'p' ? [')', ']', '}'].includes(prev.v) : !(prev.t === 'id' && OPERAND_KEYWORDS.has(prev.v))) return i;
+  }
+  return tokens.length;
+}
+
+/** Top-level comma-separated `[from, to)` ranges between an opener and its closer; a trailing comma adds none. */
+function listRanges(tokens, match, open) {
+  const close = match[open];
+  const ranges = [];
+  let from = open + 1;
+  for (let i = open + 1; i <= close; i += 1) {
+    const token = tokens[i];
+    if (i < close && token.t === 'p' && OPENERS[token.v] && match[i] !== undefined) { i = match[i]; continue; }
+    if (i === close || isPunct(token, ',')) {
+      if (from < i || i < close) ranges.push([from, i]);
+      from = i + 1;
+    }
+  }
+  return ranges;
+}
+
+/**
+ * The identifier tokens a parameter list or destructuring pattern binds.
+ * Property keys and default values are not bindings: counting one would hide
+ * a module-level path constant of that name inside the function.
+ */
+function boundNames(tokens, match, from, to, out = []) {
+  let i = from;
+  while (i < to) {
+    let at = i;
+    let end = at;
+    while (end < to && !isPunct(tokens[end], ',')) end = isPunct(tokens[end], '(', '[', '{') && match[end] !== undefined ? match[end] + 1 : end + 1;
+    if (isPunct(tokens[at], '...')) at += 1;
+    // `key: target`: the target is what is bound.
+    if ((tokens[at]?.t === 'id' || tokens[at]?.t === 's') && isPunct(tokens[at + 1], ':')) at += 2;
+    else if (isPunct(tokens[at], '[') && match[at] !== undefined && isPunct(tokens[match[at] + 1], ':')) at = match[at] + 2;
+    if (isPunct(tokens[at], '{', '[') && match[at] !== undefined && match[at] < end) boundNames(tokens, match, at + 1, match[at], out);
+    else if (tokens[at]?.t === 'id' && at < end) out.push(tokens[at]);
+    i = end + 1;
+  }
+  return out;
+}
+
+/**
+ * The parameters and `for…of` variables of one file, and what each can hold.
+ *
+ * `binderAt(name, offset)` is the binder a use of `name` at a source offset
+ * refers to, or null when it is a module-level name. `domainOf(binder)` is
+ * `LISTED` (unchanged entries of a directory listing), a `string[]` (every
+ * value the source can pass), or null. A domain is only claimed where the
+ * source proves it: a parameter of a function declared once in this file,
+ * never exported or handed on, whose every call passes a literal or such a
+ * variable; the callback of an array method on a literal or listed array; a
+ * `for…of` over one. Anything else is null, and a path built from it has no
+ * bound (`UNBOUNDED`).
+ */
+function createScopes(ctx) {
+  const arrays = tokenArrays(ctx.tokens, ctx.match);
+  const binders = new Map(); // name -> Binder[]
+  const declared = new Map(); // name -> source offsets of const/let/var/function/class declarations
+  const loopVariables = new Set(); // the tokens a `for…of` head declares: binders, counted as such
+  const declare = (token) => { if (!loopVariables.has(token)) declared.set(token.v, [...(declared.get(token.v) ?? []), token.i]); };
+  const bind = (token, extent, detail) => binders.set(token.v, [...(binders.get(token.v) ?? []), { name: token.v, ...extent, ...detail, domain: undefined }]);
+
+  /** What a function is to the code around it: a name every caller uses, an argument, or neither. */
+  const roleOf = (arr, m, head, nameToken = null) => {
+    let before = head - 1;
+    if (isWord(arr[before], 'async')) before -= 1;
+    const prev = arr[before];
+    if (nameToken !== null) {
+      const expression = prev !== undefined && (prev.t === 'p' ? ![';', '}', '{', ')'].includes(prev.v) : prev.t === 'id' && BEFORE_FUNCTION_EXPRESSION.has(prev.v));
+      return expression ? { kind: 'other' } : { kind: 'named', nameToken };
+    }
+    if (isPunct(prev, '=') && arr[before - 1]?.t === 'id' && isWord(arr[before - 2], 'const', 'let', 'var')) {
+      return isWord(arr[before - 3], 'export') ? { kind: 'other' } : { kind: 'named', nameToken: arr[before - 1] };
+    }
+    return isPunct(prev, '(', ',') ? { kind: 'callback', arr, m, at: before } : { kind: 'other' };
+  };
+  const bindParameters = (arr, m, open, extent, role) => {
+    listRanges(arr, m, open).forEach(([from, to], index) => {
+      // Only a plain positional parameter has a domain: a default, a pattern or a rest element does not.
+      const plain = to === from + 1 && arr[from].t === 'id';
+      for (const token of boundNames(arr, m, from, to)) bind(token, extent, plain ? { kind: 'param', role, index } : { kind: 'opaque' });
+    });
+  };
+  const bodyExtent = (arr, m, from, bodyStart) => {
+    if (isPunct(arr[bodyStart], '{') && m[bodyStart] !== undefined) return { from, to: arr[m[bodyStart]].i };
+    const end = expressionEnd(arr, m, bodyStart);
+    return { from, to: end < arr.length ? arr[end].i : Infinity };
+  };
+
+  for (const { arr, m } of arrays) {
+    const functionParens = new Set();
+    for (let i = 0; i < arr.length; i += 1) {
+      const token = arr[i];
+      if (isWord(token, 'const', 'let', 'var')) {
+        if (arr[i + 1]?.t === 'id') declare(arr[i + 1]);
+        else if (isPunct(arr[i + 1], '{', '[') && m[i + 1] !== undefined) boundNames(arr, m, i + 2, m[i + 1]).forEach(declare);
+      } else if (isWord(token, 'class') && arr[i + 1]?.t === 'id') declare(arr[i + 1]);
+      else if (isWord(token, 'function') && !isPunct(arr[i - 1], '.', '?.')) {
+        let open = isPunct(arr[i + 1], '*') ? i + 2 : i + 1;
+        const nameToken = arr[open]?.t === 'id' ? arr[open] : null;
+        if (nameToken !== null) { declare(nameToken); open += 1; }
+        if (!isPunct(arr[open], '(') || m[open] === undefined || !isPunct(arr[m[open] + 1], '{')) continue;
+        functionParens.add(open);
+        bindParameters(arr, m, open, bodyExtent(arr, m, arr[open].i, m[open] + 1), roleOf(arr, m, i, nameToken));
+      } else if (isPunct(token, '=>')) {
+        const open = isPunct(arr[i - 1], ')') && m[i - 1] !== undefined ? m[i - 1] : null;
+        if (open === null && arr[i - 1]?.t !== 'id') continue;
+        const head = open ?? i - 1;
+        const extent = bodyExtent(arr, m, arr[head].i, i + 1);
+        const role = roleOf(arr, m, head);
+        if (open !== null) bindParameters(arr, m, open, extent, role);
+        else bind(arr[head], extent, { kind: 'param', role, index: 0 });
+      } else if (isWord(token, 'for') && !isPunct(arr[i - 1], '.', '?.')) {
+        const open = isWord(arr[i + 1], 'await') ? i + 2 : i + 1;
+        if (!isPunct(arr[open], '(') || m[open] === undefined) continue;
+        let of = open + 1;
+        while (of < m[open] && !isWord(arr[of], 'of', 'in')) of = OPENERS[arr[of].v] && arr[of].t === 'p' && m[of] !== undefined ? m[of] + 1 : of + 1;
+        if (of >= m[open]) continue; // `for (;;)`: its `let i = 0` is an ordinary binding
+        const from = isWord(arr[open + 1], 'const', 'let', 'var') ? open + 2 : open + 1;
+        const plain = of === from + 1 && arr[from].t === 'id' && arr[of].v === 'of';
+        const extent = bodyExtent(arr, m, arr[open].i, m[open] + 1);
+        for (const name of boundNames(arr, m, from, of)) {
+          loopVariables.add(name);
+          bind(name, extent, plain ? { kind: 'loop', iter: { arr, m, from: of + 1, to: m[open] } } : { kind: 'opaque' });
+        }
+      } else if (isPunct(token, ')') && isPunct(arr[i + 1], '{') && m[i] !== undefined && m[i + 1] !== undefined && !functionParens.has(m[i])) {
+        // A method (`name(a) {`) or a catch clause: nothing in this file says what it is called with.
+        const callee = arr[m[i] - 1];
+        if (callee?.t === 'id' && !BLOCK_KEYWORDS.has(callee.v)) {
+          for (const name of boundNames(arr, m, m[i] + 1, i)) bind(name, { from: arr[m[i]].i, to: arr[m[i + 1]].i }, { kind: 'opaque' });
+        }
+      }
+    }
+  }
+
+  // Local names of node's directory listers. A `readdir` of any other origin (a wrapper, a store
+  // method) can return anything, so only an import or require of fs vouches for the name.
+  const listers = new Set();
+  const fsNamespaces = new Set();
+  const fromFs = (token) => token?.t === 's' && FS_MODULES.has(token.v);
+  const main = ctx.tokens;
+  const addFsNames = (open, alias) => {
+    for (const [from, to] of listRanges(main, ctx.match, open)) {
+      const local = isWord(main[from + 1], alias) || isPunct(main[from + 1], alias) ? main[from + 2] : main[from];
+      if (local?.t !== 'id' || main[from].t !== 'id' || to - from > 3) continue;
+      if (READDIR_CALLEES.has(main[from].v)) listers.add(local.v);
+      else if (main[from].v === 'promises' || main[from].v === 'default') fsNamespaces.add(local.v);
+    }
+  };
+  for (let i = 0; i < main.length; i += 1) {
+    if (isWord(main[i], 'import') && !isPunct(main[i + 1], '(', '.')) {
+      let from = i + 1;
+      while (from < main.length && !isWord(main[from], 'from') && !isPunct(main[from], ';')) from = isPunct(main[from], '{') && ctx.match[from] !== undefined ? ctx.match[from] + 1 : from + 1;
+      if (!isWord(main[from], 'from') || !fromFs(main[from + 1])) continue;
+      for (let at = i + 1; at < from; at += 1) {
+        if (isPunct(main[at], '{') && ctx.match[at] !== undefined) { addFsNames(at, 'as'); at = ctx.match[at]; }
+        else if (main[at].t === 'id' && main[at].v !== 'as') fsNamespaces.add(main[at].v); // a default import, or the name after `* as`
+      }
+    } else if (isWord(main[i], 'const', 'let', 'var')) {
+      const pattern = isPunct(main[i + 1], '{') && ctx.match[i + 1] !== undefined;
+      const eq = pattern ? ctx.match[i + 1] + 1 : i + 2;
+      if (!isPunct(main[eq], '=') || !isWord(main[eq + 1], 'require') || !isPunct(main[eq + 2], '(') || !fromFs(main[eq + 3])) continue;
+      if (pattern) addFsNames(i + 1, ':');
+      else if (main[i + 1]?.t === 'id') fsNamespaces.add(main[i + 1].v);
+    }
+  }
+  const shadowed = (name) => binders.has(name) || (declared.get(name) ?? []).length > 1;
+  /** True when the call whose callee ends at `callee` (a dotted path from `head`) is node's readdir. */
+  const listsDirectory = (arr, head, callee) => {
+    if (shadowed(arr[head].v)) return false;
+    if (callee === head) return listers.has(arr[head].v);
+    return fsNamespaces.has(arr[head].v) && READDIR_CALLEES.has(arr[callee].v) && (callee === head + 2 || (callee === head + 4 && arr[head + 2].v === 'promises'));
+  };
+
+  const binderAt = (name, offset) => {
+    const candidates = binders.get(name);
+    if (candidates === undefined) return null;
+    let found = null;
+    for (const binder of candidates) if (binder.from <= offset && offset < binder.to && (found === null || binder.from > found.from)) found = binder;
+    return found;
+  };
+
+  /**
+   * The values of the array expression in `arr[from, to)`: a literal of
+   * strings, a directory listing, a `const` bound to one, with any chain of
+   * element-preserving methods after it. `.map()` and every other method
+   * produce new elements, which says nothing about them.
+   */
+  const elementsOf = (arr, m, from, to, depth = 0) => {
+    let i = from;
+    while (i < to && isWord(arr[i], 'await')) i += 1;
+    if (i >= to || depth > 6) return null;
+    let domain;
+    const head = arr[i];
+    if (isPunct(head, '(') && m[i] !== undefined && m[i] < to) {
+      domain = elementsOf(arr, m, i + 1, m[i], depth + 1);
+      i = m[i] + 1;
+    } else if (isPunct(head, '[') && m[i] !== undefined && m[i] < to) {
+      domain = [];
+      for (const [a, b] of listRanges(arr, m, i)) {
+        if (a === b) continue;
+        const { value, end } = evaluate(arr, m, a, ctx);
+        if (value.k !== 'str' || end !== b) return null;
+        domain.push(value.v);
+      }
+      i = m[i] + 1;
+    } else if (head.t === 'id') {
+      // `fs.readdirSync(`, `fs.promises.readdir(`, `Object.freeze(`: the callee is the last name of the dotted path.
+      let callee = i;
+      while (isPunct(arr[callee + 1], '.') && arr[callee + 2]?.t === 'id') callee += 2;
+      const open = callee + 1;
+      const calls = isPunct(arr[open], '(') && m[open] !== undefined && m[open] < to;
+      if (calls && listsDirectory(arr, i, callee)) {
+        // `withFileTypes` yields Dirent objects, not names.
+        if (arr.slice(open + 1, m[open]).some((token) => isWord(token, 'withFileTypes'))) return null;
+        domain = LISTED;
+        i = m[open] + 1;
+      } else if (calls && callee === i + 2 && head.v === 'Object' && arr[callee].v === 'freeze') {
+        domain = elementsOf(arr, m, open + 1, m[open], depth + 1);
+        i = m[open] + 1;
+      } else {
+        domain = arrayBinding(head, depth);
+        i += 1;
+      }
+    } else return null;
+    while (domain !== null && i < to) {
+      if (!isPunct(arr[i], '.', '?.') || arr[i + 1]?.t !== 'id' || !ELEMENT_PRESERVING.has(arr[i + 1].v) || !isPunct(arr[i + 2], '(') || m[i + 2] === undefined) return null;
+      i = m[i + 2] + 1;
+    }
+    return domain;
+  };
+
+  /** The elements of a module-level `const` array, when nothing in the file can add one to it. */
+  const arrayBinding = (token, depth) => {
+    const name = token.v;
+    const start = ctx.bindings.get(name);
+    if (start === undefined || binderAt(name, token.i) !== null || !isWord(ctx.tokens[start - 3], 'const')) return null;
+    const frozen = isWord(ctx.tokens[start], 'Object') && isWord(ctx.tokens[start + 2], 'freeze');
+    // A frozen array cannot change. Any other must only be read: an export or an alias can reach `push()`.
+    if (!frozen && (isWord(ctx.tokens[start - 4], 'export') || !arrays.every(({ arr, m }) => arr.every((use, at) => use.t !== 'id' || use.v !== name || use === ctx.tokens[start - 2] || readsArray(arr, m, at))))) return null;
+    return elementsOf(ctx.tokens, ctx.match, start, expressionEnd(ctx.tokens, ctx.match, start), depth + 1);
+  };
+  const readsArray = (arr, m, at) => {
+    const prev = arr[at - 1];
+    const next = arr[at + 1];
+    if (isPunct(prev, '.', '?.')) return true; // a property of that name on something else
+    if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
+    if (isPunct(next, '.', '?.')) return arr[at + 2]?.t === 'id' && !ELEMENT_ADDING.has(arr[at + 2].v);
+    if (isPunct(next, '[') && m[at + 1] !== undefined) {
+      // `NAMES[0] = x` and `NAMES[0] += x` write an element; `NAMES[0] === x` does not.
+      return !assignsAt(arr, m[at + 1] + 1);
+    }
+    if (isPunct(prev, '(', ',') && isPunct(next, ')', ',')) {
+      const open = enclosingOpen(arr, m, at);
+      return open !== null && isPunct(arr[open], '(') && ARRAY_READERS.has(calleeName(arr, open) ?? '');
+    }
+    return false;
+  };
+
+  /** Start of the member/call chain that ends just before `end`, or null. */
+  const operandStart = (arr, m, end) => {
+    let i = end - 1;
+    for (;;) {
+      const token = arr[i];
+      if (token === undefined) return null;
+      if (isPunct(token, ')', ']')) {
+        if (m[i] === undefined) return null;
+        i = m[i];
+        const before = arr[i - 1];
+        // A call or an index continues leftwards to its callee; a parenthesized head or an array literal starts here.
+        if (isPunct(before, ')', ']') || (before?.t === 'id' && !OPERAND_KEYWORDS.has(before.v))) { i -= 1; continue; }
+        return i;
+      }
+      if (token.t !== 'id') return null;
+      if (!isPunct(arr[i - 1], '.', '?.')) return i;
+      i -= 2;
+    }
+  };
+
+  const unionOf = (parts) => {
+    if (parts.includes(null)) return null;
+    if (parts.every((part) => part !== LISTED)) return [...new Set(parts.flat())];
+    return parts.every((part) => part === LISTED) ? LISTED : null;
+  };
+
+  /** What argument `index` of the call opened at `open` can be. */
+  const argumentDomain = (arr, m, open, index) => {
+    const ranges = listRanges(arr, m, open);
+    if (index >= ranges.length || ranges.slice(0, index + 1).some(([from]) => isPunct(arr[from], '...'))) return null;
+    const [from, to] = ranges[index];
+    const { value, end } = evaluate(arr, m, from, ctx);
+    if (end !== to) return null;
+    if (value.k === 'str') return [value.v];
+    // A listed name passed on unchanged.
+    if (value === PLAIN_NAME) return LISTED;
+    // Text built from other resolved variables (`read(\`${stem}.json\`)`): one value per combination of theirs.
+    const texts = isVariableText(value) ? variableCombinations(value.vars)?.map((chosen) => evaluate(arr, m, from, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value) : null;
+    return texts?.every((text) => text.k === 'str') ? texts.map((text) => text.v) : null;
+  };
+
+  /** Every value parameter `index` of the function named by `nameToken` is called with, or null when a use is not a plain call. */
+  const callSiteDomain = (nameToken, index) => {
+    const name = nameToken.v;
+    if ((declared.get(name) ?? []).length !== 1 || binders.has(name)) return null;
+    const parts = [];
+    for (const { arr, m } of arrays) {
+      for (let at = 0; at < arr.length; at += 1) {
+        const use = arr[at];
+        if (use.t !== 'id' || use.v !== name || use === nameToken) continue;
+        const prev = arr[at - 1];
+        const next = arr[at + 1];
+        if (isPunct(prev, '.', '?.') || (isPunct(next, ':') && isPunct(prev, '{', ','))) continue; // another object's property
+        if (isPunct(next, '(') && m[at + 1] !== undefined) parts.push(argumentDomain(arr, m, at + 1, index));
+        else if (index === 0 && isPunct(prev, '(') && isPunct(next, ')') && arr[at - 2]?.t === 'id' && ELEMENT_CALLBACKS.has(arr[at - 2].v) && isPunct(arr[at - 3], '.', '?.')) {
+          // `NAMES.map(read)`: called with each element.
+          const start = operandStart(arr, m, at - 3);
+          parts.push(start === null ? null : elementsOf(arr, m, start, at - 3));
+        } else return null; // exported, aliased, stored or handed on: its callers are not all in view
+        if (parts.at(-1) === null) return null;
+      }
+    }
+    return unionOf(parts);
+  };
+
+  /** The first parameter of a callback handed to an array method or to `it.each(table)`. */
+  const callbackDomain = ({ arr, m, at }, index) => {
+    if (index !== 0) return null;
+    const open = isPunct(arr[at], '(') ? at : enclosingOpen(arr, m, at);
+    if (open === null || !isPunct(arr[open], '(')) return null;
+    const position = listRanges(arr, m, open).findIndex(([from, to]) => from <= at + 1 && at + 1 < to);
+    const callee = arr[open - 1];
+    if (position === 0 && callee?.t === 'id' && ELEMENT_CALLBACKS.has(callee.v) && isPunct(arr[open - 2], '.', '?.')) {
+      const start = operandStart(arr, m, open - 2);
+      return start === null ? null : elementsOf(arr, m, start, open - 2);
+    }
+    // `it.each(TABLE)('title', (row) => …)`: one call per row; a row that is itself an array is spread, and is no string.
+    if (position >= 1 && isPunct(callee, ')') && m[open - 1] !== undefined && isWord(arr[m[open - 1] - 1], 'each')) {
+      let root = m[open - 1] - 1;
+      while (isPunct(arr[root - 1], '.') && arr[root - 2]?.t === 'id') root -= 2; // `it.skip.each`, `describe.each`
+      if (isWord(arr[root], 'it', 'test', 'describe') && !shadowed(arr[root].v) && !declared.has(arr[root].v)) return elementsOf(arr, m, m[open - 1] + 1, open - 1);
+    }
+    return null;
+  };
+
+  const domainOf = (binder) => {
+    if (binder.domain !== undefined) return binder.domain;
+    binder.domain = null; // a value that flows back into itself resolves to nothing
+    // Two binders of one name where one is inside the other, or a declaration of the name inside
+    // the body: which one a use means depends on scoping this pass does not model.
+    const inside = (offset) => binder.from <= offset && offset < binder.to;
+    const ambiguous = binders.get(binder.name).some((other) => other !== binder && (inside(other.from) || (other.from <= binder.from && binder.from < other.to)))
+      || (declared.get(binder.name) ?? []).some(inside);
+    // `p = other()` or `p++` in the body: the variable no longer holds what it was given.
+    const reassigned = arrays.some(({ arr }) => arr.some((use, at) => use.t === 'id' && use.v === binder.name && inside(use.i) && !isPunct(arr[at - 1], '.', '?.')
+      && (assignsAt(arr, at + 1) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--'))));
+    if (ambiguous || reassigned) return null;
+    if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
+    else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
+    else if (binder.kind === 'param' && binder.role.kind === 'callback') binder.domain = callbackDomain(binder.role, binder.index);
+    return binder.domain;
+  };
+
+  return { binderAt, domainOf };
+}
+
+/**
+ * A bare identifier. An enclosing parameter or loop variable shadows a
+ * module-level binding of the same name, and evaluates to what the source
+ * proves about it (`createScopes`): an entry of a directory listing, one of a
+ * known set of literal values (substituted when `ctx.overrides` names it), or
+ * unknown, named after the helper it is a parameter of.
+ */
+function identifierValue(token, ctx, depth) {
+  ctx.shared.scopes ??= createScopes(ctx.shared.root);
+  const binder = ctx.shared.scopes.binderAt(token.v, token.i);
+  if (binder === null) return bindingValue(token.v, ctx, depth);
+  if (ctx.overrides?.has(binder)) return str(ctx.overrides.get(binder));
+  const domain = ctx.shared.scopes.domainOf(binder);
+  if (domain === LISTED) return PLAIN_NAME;
+  if (domain !== null) return variableValue({ open: true, vars: [binder] });
+  return binder.role?.kind === 'named' ? variableValue({ open: true, via: binder.role.nameToken.v }) : UNKNOWN;
 }
 
 /** The evaluated initializer of a `const`/`let`/`var` binding, memoized per file. */
@@ -512,7 +1110,7 @@ function enclosingOpen(tokens, match, index) {
  * tool (`handedDirs`). `member` marks any other object-literal value
  * (`key: <expr>` or the shorthand `{ name }`), which a block's `{` is not.
  */
-function widestPathExpression(tokens, match, index) {
+function widestPathExpression(tokens, match, index, guarded = false) {
   let start = index;
   for (;;) {
     while (tokens[start - 1]?.t === 'p' && tokens[start - 1].v === '+') {
@@ -526,7 +1124,7 @@ function widestPathExpression(tokens, match, index) {
     const callee = calleeStart(tokens, parent);
     const name = calleeName(tokens, parent);
     const isNew = tokens[callee]?.t === 'id' && tokens[callee].v === 'new';
-    if ((isNew && name === 'URL') || name === 'URL' || PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name)) {
+    if ((isNew && name === 'URL') || name === 'URL' || PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name) || (guarded && name === 'pathWithin')) {
       start = callee;
       continue;
     }
@@ -567,7 +1165,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
     paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
-    dirs: [], // { rel, walk, guessed } — repo-relative directory prefixes whose tree is an input; guessed: the prefix of a path with a variable segment
+    dirs: [], // { rel, walk, guessed, open, via } — repo-relative directory prefixes whose tree is an input; guessed: the prefix of a path with a variable segment; open: nothing proves that segment stays under the prefix (via: the helper whose parameter it is)
     scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
     unresolvedEdges: [], // the module graph is not fully known from source
@@ -586,7 +1184,12 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     return facts;
   }
   const match = matchBrackets(tokens);
-  const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set() };
+  const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set(),
+    guarded: importsNamed(tokens, match, 'pathWithin', (spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)) === PATH_WITHIN_MODULE),
+    uuid: importsNamed(tokens, match, 'randomUUID', (spec) => spec === 'crypto' || spec === 'node:crypto'),
+  };
+  // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
+  ctx.shared = { root: ctx, scopes: undefined };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
   // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
   // `const pyBin = resolveTestPython()` makes `pyBin` the python interpreter.
@@ -624,6 +1227,19 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     return last?.k === 'str' && /\.(?:c?js|mjs|json|node)$/.test(last.v) ? posix.basename(last.v) : null;
   };
 
+  /**
+   * The values of the expression at `index`. A path whose variable parts each
+   * have a known set of literal values is evaluated once per combination, so
+   * `read('../../client/x.js')` contributes that file and not a directory the
+   * read never touches. A helper that is never called contributes nothing.
+   */
+  const valuesAt = (index) => {
+    const { value } = evaluate(tokens, match, index, ctx);
+    const combinations = value.k === 'path' && value.partial && value.open ? variableCombinations(value.vars) : null;
+    if (combinations === null) return [value];
+    return combinations.map((chosen) => evaluate(tokens, match, index, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value);
+  };
+
   const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
     if (option !== null) {
       // The value of a rooting option is not read here; a directory is still what the tool works from.
@@ -652,7 +1268,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
         else if (consumer !== null || member) facts.handedDirs.push(value.v);
         return true;
       }
-      facts.dirs.push({ rel: value.v, walk, guessed: value.partial });
+      const open = value.partial && value.open;
+      for (const rel of open && value.outer !== undefined ? [value.v, value.outer] : [value.v]) facts.dirs.push({ rel, walk, guessed: value.partial, open, via: value.via ?? null });
       return true;
     }
     facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v), read: consumer !== null && READ_CALLEES.has(consumer) });
@@ -667,8 +1284,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (token.t === 'tpl') {
       // `${ROOT}/docs/x.md`: the hole holds the anchor, the template is the expression.
       if (!token.exprs.some(anchorInside)) continue;
-      const widest = widestPathExpression(tokens, match, i);
-      if (widest !== null) record(evaluate(tokens, match, widest.index, ctx).value, widest);
+      const widest = widestPathExpression(tokens, match, i, ctx.guarded);
+      if (widest !== null) for (const value of valuesAt(widest.index)) record(value, widest);
       continue;
     }
     if (token.t !== 'id') continue;
@@ -683,18 +1300,25 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       const arg = literalArg(open);
       if (arg.kind === 'literal') { facts.edges.push({ spec: arg.value, kind }); continue; }
       if (arg.kind === 'none') continue;
-      const { value } = evaluate(tokens, match, arg.index, ctx);
-      if (value.k === 'path' && !value.partial && !value.isDir) { facts.paths.push({ rel: value.v, walk: true }); continue; }
-      if (value.k === 'path') { facts.dirs.push({ rel: value.v, walk: true }); continue; }
-      // `require(PACKAGE_CONSTANT)`: a module-level string is a specifier like a literal one.
-      if (value.k === 'str') { facts.edges.push({ spec: value.v, kind }); continue; }
-      // `require(join(<unknown dir>, 'ecosystem.config.cjs'))`: the directory is a parameter or an
-      // install root, the basename is fixed, so every tracked file of that name is an input
-      // (tests only load in-repo files, so keying by tracked basename covers the real target).
-      const scoped = kind === 'require' ? joinedBasename(arg.index) : null;
-      if (scoped !== null) { facts.scopedNames.push(scoped); continue; }
-      if (kind === 'require') facts.nativeUnresolved = true;
-      facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
+      for (const value of valuesAt(arg.index)) {
+        if (value.k === 'path') {
+          if (!value.partial && !value.isDir) { facts.paths.push({ rel: value.v, walk: true }); continue; }
+          facts.dirs.push({ rel: value.v, walk: true });
+          if (!(value.partial && value.open)) continue;
+          // Unbounded, the module may be anywhere, under the prefix or not: an edge the source does not name.
+          if (value.outer !== undefined) facts.dirs.push({ rel: value.outer, walk: true });
+        } else {
+          // `require(PACKAGE_CONSTANT)`: a module-level string is a specifier like a literal one.
+          if (value.k === 'str') { facts.edges.push({ spec: value.v, kind }); continue; }
+          // `require(join(<unknown dir>, 'ecosystem.config.cjs'))`: the directory is a parameter or an
+          // install root, the basename is fixed, so every tracked file of that name is an input
+          // (tests only load in-repo files, so keying by tracked basename covers the real target).
+          const scoped = kind === 'require' ? joinedBasename(arg.index) : null;
+          if (scoped !== null) { facts.scopedNames.push(scoped); continue; }
+        }
+        if (kind === 'require') facts.nativeUnresolved = true;
+        facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
+      }
       continue;
     }
     if (isMember && receiver?.t === 'id' && receiver.v === 'vi' && open !== null && MOCK_CALLEES.has(token.v)) {
@@ -715,7 +1339,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
         else if (program === 'ffmpeg' || program === 'ffprobe') facts.tools.add('ffmpeg');
       } else if (arg.kind === 'expr') {
         const { value } = evaluate(tokens, match, arg.index, ctx);
-        if (value.k === 'path') record(value, { walk: true, consumer: token.v });
+        for (const program of valuesAt(arg.index)) if (program.k === 'path') record(program, { walk: true, consumer: token.v });
         // `spawn(process.env.PORTOS_TEST_PYTHON || 'python3', …)`, `spawn(pyBin, …)` with
         // `const pyBin = resolveTestPython()`: the program expression names python.
         let python = false;
@@ -724,7 +1348,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
           if ((t.t === 'id' && (t.v === 'PORTOS_TEST_PYTHON' || pythonNames.has(t.v) || PYTHON_NAME.test(t.v))) || (t.t === 's' && /^python3?$/.test(t.v))) python = true;
         }
         if (python) facts.tools.add('python');
-        else if (value.k === 'unknown' || value.k === 'ext') {
+        else if (value.k === 'unknown' || value.k === 'ext' || value.k === 'tail') {
           // An unknown program handed a .py file is an interpreter the key cannot name.
           for (let j = open + 1; j < match[open]; j += 1) {
             const literal = tokens[j].t === 's' ? tokens[j].v : tokens[j].t === 'tpl' ? tokens[j].quasis.join('') : '';
@@ -744,9 +1368,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       if (arg.kind === 'literal') {
         if (!(arg.value.startsWith('/') || /^[a-z]+:/i.test(arg.value))) facts.cwdLiterals.push({ value: arg.value, walk: false, dir: DIR_READ_CALLEES.test(token.v) });
       } else if (arg.kind === 'expr') {
-        const { value } = evaluate(tokens, match, arg.index, ctx);
         // An unanchored variable is a temp path or runtime data, not a repository read.
-        record(value, { consumer: token.v });
+        for (const value of valuesAt(arg.index)) record(value, { consumer: token.v });
       }
       continue;
     }
@@ -762,7 +1385,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (open !== null && token.v === 'toMatchFileSnapshot') {
       const arg = literalArg(open);
       if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(posix.dirname(fileRel), arg.value)), walk: false });
-      else if (arg.kind === 'expr') record(evaluate(tokens, match, arg.index, ctx).value, { consumer: token.v });
+      else if (arg.kind === 'expr') for (const value of valuesAt(arg.index)) record(value, { consumer: token.v });
       continue;
     }
 
@@ -776,10 +1399,9 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (prev?.t === 'id' && (prev.v === 'const' || prev.v === 'let' || prev.v === 'var')) continue;
     // Nor is a property key that happens to share a binding's name (`{ root: client }` beside `const root`).
     if (tokens[i + 1]?.t === 'p' && tokens[i + 1].v === ':' && prev?.t === 'p' && (prev.v === '{' || prev.v === ',')) continue;
-    const widest = widestPathExpression(tokens, match, i);
+    const widest = widestPathExpression(tokens, match, i, ctx.guarded);
     if (widest === null) continue;
-    const { value } = evaluate(tokens, match, widest.index, ctx);
-    record(value, widest);
+    for (const value of valuesAt(widest.index)) record(value, widest);
   }
   return facts;
 }
@@ -1020,6 +1642,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       nativeUnresolved: false,
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
+      openReads: new Set(), // reads whose variable segment is not proven to stay under the prefix that was keyed
     };
     facts.set(rel, resolved);
     const bytes = fs.read(rel);
@@ -1076,7 +1699,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     };
     const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
-    const addDir = (dirRel, walk, guessed = false) => {
+    const addDir = (dirRel, walk, guessed = false, open = false, via = null) => {
+      // Wherever the prefix is, the read may land outside it. The prefix tree is still added
+      // below, so a member that does not own the rule (`gather`) keys what it keyed before.
+      if (open) resolved.openReads.add(via === null ? `reads a path with a variable segment that can leave ${dirRel || '<repo root>'}` : `reads a path through ${via}() that the analyzer cannot resolve (under ${dirRel || '<repo root>'})`);
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
       if (underGit(dirRel)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
@@ -1126,7 +1752,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
     for (const target of eager) resolved.lazyModules.delete(target);
     for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
-    for (const { rel: dirRel, walk, guessed } of raw.dirs) addDir(dirRel, walk, guessed === true);
+    for (const { rel: dirRel, walk, guessed, open, via } of raw.dirs) addDir(dirRel, walk, guessed === true, open === true, via ?? null);
     for (const { value, walk, dir } of raw.cwdLiterals) {
       const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
       for (const base of bases) {
@@ -1245,6 +1871,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);
       for (const dir of f.oversized) if (ownsTrees) unresolvedInputs.push(`${rel}: directory input too large: ${dir}`);
+      // A variable path segment nothing bounds can name any file, so the prefix that was keyed
+      // is a guess. Same ownership as the two rules above: a library member builds such a path
+      // from what its caller passes, and reads it only when a test calls it.
+      for (const reason of ownsTrees ? f.openReads : []) unresolvedInputs.push(`${rel}: ${reason}`);
       for (const dir of ownsTrees ? f.dataTrees : []) {
         const data = dataTree(dir);
         if (data === null) { unresolvedInputs.push(`${rel}: directory input too large: ${dir}`); continue; }
