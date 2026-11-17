@@ -5,6 +5,11 @@ vi.mock('../../services/api', async (importOriginal) => ({
   ...await importOriginal(),
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
 }));
+// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [], groups: [] }),
+}));
 
 import SectionNav from './SectionNav';
 import { TABS, SECTION_GROUPS, groupSections, sectionGroupId } from './constants';

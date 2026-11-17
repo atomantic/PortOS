@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ getReviewQueue: vi.fn(), handlers: new Map() }));
-vi.mock('../services/api', () => ({ getReviewQueue: mocks.getReviewQueue }));
+vi.mock('../services/apiReview.js', () => ({ getReviewQueue: mocks.getReviewQueue }));
 vi.mock('../services/socket', () => ({ default: {
   on: (event, handler) => mocks.handlers.set(event, handler),
   off: (event) => mocks.handlers.delete(event),

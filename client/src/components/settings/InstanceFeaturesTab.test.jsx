@@ -11,6 +11,11 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/api', () => mock);
+// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: mock.getInstanceFeatures,
+}));
 
 import { INSTANCE_FEATURES_CHANGED } from '../../constants/events.js';
 import { __resetInstanceFeatureCache } from '../../hooks/useInstanceFeatures.js';

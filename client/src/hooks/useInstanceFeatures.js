@@ -11,7 +11,7 @@
 
 import { useCallback, useSyncExternalStore } from 'react';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
-import * as api from '../services/api';
+import * as systemApi from '../services/apiSystem.js';
 
 // One snapshot and event bridge for every mounted consumer. `null` means not
 // loaded (or failed), while [] is a successfully loaded empty feature list.
@@ -31,8 +31,8 @@ const loadInstanceFeatures = () => {
   if (!inFlight) {
     const requested = generation;
     let fetcher;
-    try { fetcher = api.getInstanceFeatures; } catch { fetcher = undefined; }
-    const request = (typeof fetcher === 'function' ? fetcher.call(api, { silent: true }) : Promise.reject(new Error('getInstanceFeatures unavailable')))
+    try { fetcher = systemApi.getInstanceFeatures; } catch { fetcher = undefined; }
+    const request = (typeof fetcher === 'function' ? fetcher.call(systemApi, { silent: true }) : Promise.reject(new Error('getInstanceFeatures unavailable')))
       .then((data) => ({
         features: Array.isArray(data?.features) ? data.features : [],
         // Feature GROUPS (#40) — Settings > Features is the only consumer that

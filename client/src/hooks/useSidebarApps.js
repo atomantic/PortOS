@@ -5,7 +5,7 @@
  */
 
 import { useMemo } from 'react';
-import * as api from '../services/api';
+import { getApps } from '../services/apiApps.js';
 import { useSocketResource } from './useSocketResource';
 
 const APPS_EVENTS = ['apps:changed'];
@@ -18,7 +18,7 @@ const NO_APPS = [];
 export function useSidebarApps({ includeDetails = false } = {}) {
   const { data } = useSocketResource(
     async () => {
-      const result = await api.getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) });
+      const result = await getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) });
       return (result || [])
         .filter((a) => !a.archived)
         .sort((a, b) => (a.name || '').localeCompare(b.name || ''));

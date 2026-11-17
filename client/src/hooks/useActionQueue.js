@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from 'react';
-import * as api from '../services/api';
+import { getReviewQueue } from '../services/apiReview.js';
 import socket from '../services/socket';
 import { subscribeVisibility } from './useVisibilityEvent';
 import { ACTION_QUEUE_CHANGED, INSTANCE_FEATURES_CHANGED } from '../constants/events';
@@ -42,7 +42,7 @@ function queueStore(view) {
     if (inFlight) return inFlight;
     if (!force && Date.now() - refreshedAt < 1000) return Promise.resolve();
     const started = generation;
-    inFlight = api.getReviewQueue({ view, silent: true }).then((data) => {
+    inFlight = getReviewQueue({ view, silent: true }).then((data) => {
       if (!Array.isArray(data?.items) || typeof data.partial !== 'boolean') {
         throw new Error('Invalid Actions response');
       }

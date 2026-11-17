@@ -8,6 +8,11 @@ import { TABS } from '../components/settings/SettingsTabsHeader';
 vi.mock('../services/api', () => ({
   getInstanceFeatures: vi.fn().mockResolvedValue({ features: [] }),
 }));
+// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: [] }),
+}));
 
 // The remaining Settings tabs this test distinguishes between.
 vi.mock('../components/settings/GeneralTab', () => ({

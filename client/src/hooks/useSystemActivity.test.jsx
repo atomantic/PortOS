@@ -21,7 +21,7 @@ vi.mock('../services/socket', () => ({
 }));
 
 const getSystemActivity = vi.fn();
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiSystem.js', () => ({
   getSystemActivity: (...args) => getSystemActivity(...args),
 }));
 

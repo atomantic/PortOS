@@ -13,6 +13,12 @@ vi.mock('../services/api', () => ({
   detectSoulContradictions: vi.fn(),
   updateSoulSettings: vi.fn(),
 }));
+// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
+// never provided getInstanceFeatures, so keep the hook on its fail-open path.
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
+}));
 vi.mock('../components/ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../components/digital-twin/SoulWizard', () => ({ default: () => null }));
 vi.mock('../components/digital-twin/PersonalityMap', () => ({ default: ({ traits }) => <div data-testid="map">{traits ? 'traits' : 'no-traits'}</div> }));

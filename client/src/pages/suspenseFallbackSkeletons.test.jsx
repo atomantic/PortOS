@@ -31,6 +31,12 @@ vi.mock('../services/api', () => ({
   getDigitalTwinSettings: vi.fn(() => Promise.resolve({})),
   getGoalsTree: vi.fn(() => Promise.resolve({ flat: [], tree: [] })),
 }));
+// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
+// never provided getInstanceFeatures, so keep the hook on its fail-open path.
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
+}));
 
 const renderAt = async (path, routePath, Page) => {
   render(

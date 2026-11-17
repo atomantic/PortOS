@@ -24,6 +24,11 @@ vi.mock('../../services/api', () => ({
   getGpuTelemetry: (...args) => mockGetGpuTelemetry(...args),
   cancelMediaJob: (...args) => mockCancelMediaJob(...args),
 }));
+// useSystemActivity reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSystemActivity: (...args) => mockGetSystemActivity(...args),
+}));
 
 let intersecting = true;
 class FakeObserver {

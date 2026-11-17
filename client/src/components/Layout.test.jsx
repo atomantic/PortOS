@@ -3,7 +3,6 @@ import { render, screen, within, act, fireEvent, waitFor } from '@testing-librar
 import { MemoryRouter, Routes, Route, createMemoryRouter, RouterProvider, useLocation } from 'react-router';
 import { reloadOnceForStaleChunk } from '../utils/staleChunkReload';
 import { PINNED_KEY, RECENT_KEY } from '../utils/navWorkingSet.js';
-import * as api from '../services/api';
 import socket from '../services/socket';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import { CMD_K_SEARCH_OPEN_EVENT } from '../hooks/useCmdKSearch.js';
@@ -88,7 +87,8 @@ const allFeaturesOn = () => [
 ];
 const featureMock = vi.hoisted(() => ({ features: null }));
 
-vi.mock('../services/api', () => ({
+// The sidebar hooks import their specific API modules, never the barrel (#16562).
+const api = vi.hoisted(() => ({
   getApps: vi.fn(() => Promise.resolve([])),
   listPipelineSeriesNames: vi.fn(() => Promise.resolve([])),
   listUniverseNames: vi.fn(() => Promise.resolve([])),
@@ -96,6 +96,14 @@ vi.mock('../services/api', () => ({
   getReviewQueue: vi.fn(() => new Promise(() => {})),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
+vi.mock('../services/apiApps.js', () => ({ getApps: api.getApps }));
+vi.mock('../services/apiNavNames.js', () => ({
+  listPipelineSeriesNames: api.listPipelineSeriesNames,
+  listMusicVideoProjectNames: api.listMusicVideoProjectNames,
+}));
+vi.mock('../services/apiUniverseBuilder.js', () => ({ listUniverseNames: api.listUniverseNames }));
+vi.mock('../services/apiReview.js', () => ({ getReviewQueue: api.getReviewQueue }));
+vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: api.getInstanceFeatures }));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 
