@@ -21,12 +21,12 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import {
-  validateRequest,
   insightRefreshSchema,
   scorecardComputeSchema,
   scorecardSettingsSchema,
   scorecardRulesSchema,
-} from '../lib/validation.js';
+} from '../lib/insightsValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as insightsService from '../services/insightsService.js';
 import * as goalScorecard from '../services/goalScorecard.js';
 
