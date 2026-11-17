@@ -738,6 +738,13 @@ const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED
  */
 const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, not amount of work: \`${p}medium\` is normal, \`${p}low\` for mechanical steps, \`${p}high\` when a step hinges on a hard argument, \`${p}xhigh\`/\`${p}max\` rarely. Breadth is not effort: list a wide sweep's call sites in the body.`;
 
+/**
+ * The batching exception for producers whose own steps say "one item per
+ * finding" (the file-issues audit mode, the UX audit). Tracker-neutral wording,
+ * because a Jira run spells the labels `model-light` / `effort-low` (#16569).
+ */
+export const LIGHT_FINDINGS_BATCH_EXCEPTION = 'findings dispatched light and low-effort (`model:light` + `effort:low`, or that tracker\'s spelling) that share an area go into ONE checklist item of up to 10 entries instead; a bug, security or data-safety finding always stays its own item';
+
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
@@ -755,7 +762,7 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It records the AUTHOR; `model:`/`effort:` say how to RUN the work.',
   // A separate issue per light finding cost each one a full claim/review/CI/merge
   // cycle for a ~30-line PR (#16569); batching changes the shipping unit only.
-  'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue of up to 10 `- [ ]` items, shipped as one PR, because every issue pays a full claim, review, CI and merge cycle. A `bug`, security or data-safety finding still gets its own standalone issue. Every finding is still tracked and fixed.',
+  'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue (up to 10 `- [ ]` items, one PR), since every issue costs a full claim-to-merge cycle. `bug`, security and data-safety findings stay standalone; every finding is still fixed.',
   'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick and read back again. Do not report filing complete until both axes are present; report a labeling failure explicitly if repair fails. Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
