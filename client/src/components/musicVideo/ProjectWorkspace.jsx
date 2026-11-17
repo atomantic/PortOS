@@ -82,6 +82,14 @@ const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, previz: PrevizStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
   assets: AssetsStage, cleanup: CleanupStage, editor: EditorStage,
 };
+// Rendered inside a stage's Suspense boundary, so its effect fires only once that panel has
+// committed (a lazy panel commits after its chunk loads) and again whenever the kept-alive
+// Story panel is shown again. Anchor links wait for it, or they would look for their target
+// while the fallback is still on screen.
+function StageReady({ stage, active, onReady }) {
+  useEffect(() => { if (active) onReady(stage); }, [stage, active, onReady]);
+  return null;
+}
 
 /**
  * Everything that belongs to ONE open project — its approvals, drafts, the
@@ -336,9 +344,12 @@ export default function ProjectWorkspace({
   // A header action that lands on a control (Attach a track, Set up production)
   // scrolls to and focuses it once its stage has rendered.
   const location = useLocation();
+  // The stage whose panel has committed. Landing waits for it so it runs exactly once per link:
+  // a second pass would press a React-state fold toggle again and close what the first opened.
+  const [readyStage, setReadyStage] = useState(null);
   useEffect(() => {
     const anchor = location.hash.slice(1);
-    if (!anchor || !selected) return;
+    if (!anchor || !selected || readyStage !== activeStage) return;
     const el = document.getElementById(anchor);
     if (!el) return;
     // An anchor inside a folded section (Production review, a Publish card or
@@ -350,7 +361,7 @@ export default function ProjectWorkspace({
     };
     if (unfoldToAnchor(el)) requestAnimationFrame(land);
     else land();
-  }, [activeStage, location.key, selectedId, !!selected]);
+  }, [activeStage, readyStage, location.key, selectedId, !!selected]);
   // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel; in the editor, in its inspector.
   const editShot = (sceneId) => {
     if (!selected) return;
@@ -699,10 +710,11 @@ export default function ProjectWorkspace({
             )}
             dock={dock && !ownDock ? withTitleCard(dock) : null}
           >
-            {storyVisited.current && <div hidden={activeStage !== 'story'}><Suspense fallback={stageFallback}><StoryStage board={board} active={activeStage === 'story'} /></Suspense></div>}
+            {storyVisited.current && <div hidden={activeStage !== 'story'}><Suspense fallback={stageFallback}><StoryStage board={board} active={activeStage === 'story'} /><StageReady stage="story" active={activeStage === 'story'} onReady={setReadyStage} /></Suspense></div>}
             {activeStage !== 'story' && (
               <Suspense fallback={stageFallback}>
                 <StageView board={ownDock ? { ...board, previewDock: dock, songClock: () => songClockRef.current?.() ?? null } : board} />
+                <StageReady key={activeStage} stage={activeStage} active onReady={setReadyStage} />
               </Suspense>
             )}
           </MusicVideoLayout>
