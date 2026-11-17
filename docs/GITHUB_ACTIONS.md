@@ -225,12 +225,12 @@ carry contract suites that exercise the real bundled renderer in
 `lib/slashdo` (see AGENTS.md "Slashdo Commands"). A git diff reports only the
 gitlink pointer at that path, never the files inside it, so the planner can't
 detect a relevant change the way it does an ordinary source edit.
-`needsSlashdoSubmodule()` in `ci-test-plan.js` sets the `slashdo` output
+`needsSlashdoSubmodule()` in `ci-test-plan.js` sets the `slashdo` plan key
 whenever the plan is full, the gitlink itself changed, or either contract
 suite (or the loader/adapter source it exercises) is selected. The `server`
 job's "Initialize slashdo submodule" step runs `git submodule update --init
-lib/slashdo` only when that output is true, so an unrelated scoped PR pays
-nothing for the fetch. When the output is true, the two contract suites fail
+lib/slashdo` only when that key is true, so an unrelated scoped PR pays
+nothing for the fetch. When the key is true, the two contract suites fail
 the job instead of silently skipping if the submodule still isn't there
 (`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
 CI run that never needed it — they keep the documented skip.
@@ -594,7 +594,7 @@ The selected work is split across parallel jobs:
   that every prompt body ever shipped is current or retired in
   `data.reference/prompts/shipped-hashes.json`.
   On a pull request it runs only when the impact planner's `prompt_history`
-  output is true: the diff touches `scripts/migrations/`,
+  plan key is true: the diff touches `scripts/migrations/`,
   `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
   prompt-hash regenerator, `ci.yml`, or any module the guard statically
   imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
@@ -603,7 +603,7 @@ The selected work is split across parallel jobs:
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
-  the `linux_containment` output is true: the diff touches the static import
+  the `linux_containment` plan key is true: the diff touches the static import
   closure of those tests and the server Vitest harness, `server/package.json`,
   `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
   head tree on every run, so a new dependency is gated without a list edit.
@@ -617,7 +617,7 @@ The selected work is split across parallel jobs:
   validate phase, registry-only egress in the install phase, kill-and-remove on
   timeout, and lifecycle writes kept out of the host worktree. It is part of
   `CI Gate`. On a pull request it runs only when the
-  `docker_containment_live` output is true: the diff touches the static import
+  `docker_containment_live` plan key is true: the diff touches the static import
   closure of the live suite and the server Vitest harness,
   `server/package.json`, `server/package-lock.json` or `ci.yml`
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
@@ -626,7 +626,7 @@ The selected work is split across parallel jobs:
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
-  pull request only when the `macos_native` output is true; see
+  pull request only when the `macos_native` plan key is true; see
   "macOS native release-agent supervision" below.
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
@@ -634,7 +634,7 @@ The selected work is split across parallel jobs:
   native amd64 and arm64 runners. It is the only run of the container boundary
   for untrusted generated `sclang` source, and it is part of `CI Gate`: a red
   run blocks the merge, a skipped one passes. On a pull request it runs only
-  when the `supercollider_live` output is true: the diff touches the static
+  when the `supercollider_live` plan key is true: the diff touches the static
   import closure of the live test, `scripts/setup-supercollider.js` and the
   server Vitest harness (so the spawn, kill and child-environment helpers it
   depends on select it), `docker/supercollider/`, a `package.json` or
@@ -789,7 +789,7 @@ checks and also runs in the Windows contract set.
 
 macOS runners are the scarcest hosted capacity, so the job is gated by an
 explicit path list (`MACOS_NATIVE_PATH_RE`), not an application import closure. On a pull request the
-`macos_native` output is true only when the diff touches
+`macos_native` plan key is true only when the diff touches
 `server/lib/windowsAgentProcess*.js`, `server/lib/darwinAgentSupervisor.py`,
 the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
@@ -1078,6 +1078,8 @@ successor run".
 
 ### Impact-planner safety rules
 
+- Jobs read decisions as `fromJSON(needs.impact.outputs.plan).<key>`
+  (`githubPlanOutput()`); only `*_shards` and `db_image` are separate outputs.
 - A directory feature such as `server/services/sprites/` additively selects
   tests carrying the same feature segment across server and client. The feature
   name never identifies all consumers (a nested leaf can be imported by a
@@ -1271,7 +1273,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

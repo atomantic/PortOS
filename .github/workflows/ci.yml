@@ -53,36 +53,11 @@ jobs:
       contents: read
       actions: read
     outputs:
-      full: ${{ steps.plan.outputs.full }}
-      reason: ${{ steps.plan.outputs.reason }}
-      server_mode: ${{ steps.plan.outputs.server_mode }}
-      server_files: ${{ steps.plan.outputs.server_files }}
-      server_sources: ${{ steps.plan.outputs.server_sources }}
-      client_mode: ${{ steps.plan.outputs.client_mode }}
-      client_files: ${{ steps.plan.outputs.client_files }}
-      client_sources: ${{ steps.plan.outputs.client_sources }}
-      db: ${{ steps.plan.outputs.db }}
-      browser_files: ${{ steps.plan.outputs.browser_files }}
-      lint_mode: ${{ steps.plan.outputs.lint_mode }}
-      lint_files: ${{ steps.plan.outputs.lint_files }}
-      build: ${{ steps.plan.outputs.build }}
-      smoke: ${{ steps.plan.outputs.smoke }}
-      slashdo: ${{ steps.plan.outputs.slashdo }}
-      # Path-gated single-purpose jobs: true on a forced-full run, else only
-      # when the diff reaches the job's import closure or, for macos_native
-      # and node_minimum, its explicit path list (scripts/ci-test-plan.js). A
-      # push to main decides them, all but prompt_history, from its diff against
-      # the last green push or schedule run, and runs them all when that cannot
-      # be resolved.
-      prompt_history: ${{ steps.plan.outputs.prompt_history }}
-      linux_containment: ${{ steps.plan.outputs.linux_containment }}
-      supercollider_live: ${{ steps.plan.outputs.supercollider_live }}
-      docker_containment_live: ${{ steps.plan.outputs.docker_containment_live }}
-      macos_native: ${{ steps.plan.outputs.macos_native }}
-      windows: ${{ steps.plan.outputs.windows }}
-      windows_mode: ${{ steps.plan.outputs.windows_mode }}
-      windows_files: ${{ steps.plan.outputs.windows_files }}
-      windows_sources: ${{ steps.plan.outputs.windows_sources }}
+      # Every planner decision as one JSON object, read as
+      # `fromJSON(needs.impact.outputs.plan).<key>` (githubPlanOutput() in
+      # scripts/ci-test-plan.js; a test fails on a key it does not emit). A
+      # new gated job adds a key there and reads it in its own `if:`.
+      plan: ${{ steps.plan.outputs.plan }}
       # JSON arrays of shard indexes — `[1]` for a scoped plan, `[1..n]` for a
       # full one. Each leaf job builds its matrix from these, because a
       # job-level `if` cannot read `matrix` and so cannot skip extra shards on
@@ -90,11 +65,6 @@ jobs:
       server_shards: ${{ steps.plan.outputs.server_shards }}
       client_shards: ${{ steps.plan.outputs.client_shards }}
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
-      suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
-      node_minimum: ${{ steps.plan.outputs.node_minimum }}
-      # true when a push to main gated the native jobs on its diff; such a run
-      # is not complete-run evidence, so it publishes no Full CI Gate.
-      native_gated: ${{ steps.plan.outputs.native_gated }}
       # The DB job's `services:` image cannot run a script, so it reads the
       # reference docker-compose.yml pins through this job's output.
       db_image: ${{ steps.db-image.outputs.image }}
@@ -155,55 +125,6 @@ jobs:
           CI_BASE_REF: ${{ github.base_ref }}
         run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
 
-      - name: Publish plan summary
-        env:
-          PLAN_REASON: ${{ steps.plan.outputs.reason }}
-          SERVER_MODE: ${{ steps.plan.outputs.server_mode }}
-          CLIENT_MODE: ${{ steps.plan.outputs.client_mode }}
-          DB_MODE: ${{ steps.plan.outputs.db }}
-          BROWSER_FILES: ${{ steps.plan.outputs.browser_files }}
-          LINT_MODE: ${{ steps.plan.outputs.lint_mode }}
-          BUILD_MODE: ${{ steps.plan.outputs.build }}
-          SMOKE_MODE: ${{ steps.plan.outputs.smoke }}
-          SLASHDO_MODE: ${{ steps.plan.outputs.slashdo }}
-          PROMPT_HISTORY_MODE: ${{ steps.plan.outputs.prompt_history }}
-          LINUX_CONTAINMENT_MODE: ${{ steps.plan.outputs.linux_containment }}
-          SUPERCOLLIDER_LIVE_MODE: ${{ steps.plan.outputs.supercollider_live }}
-          DOCKER_CONTAINMENT_LIVE_MODE: ${{ steps.plan.outputs.docker_containment_live }}
-          MACOS_NATIVE_MODE: ${{ steps.plan.outputs.macos_native }}
-          NODE_MINIMUM_MODE: ${{ steps.plan.outputs.node_minimum }}
-          WINDOWS_MODE: ${{ steps.plan.outputs.windows }}
-          WINDOWS_TEST_MODE: ${{ steps.plan.outputs.windows_mode }}
-          SERVER_SHARDS: ${{ steps.plan.outputs.server_shards }}
-          CLIENT_SHARDS: ${{ steps.plan.outputs.client_shards }}
-          WINDOWS_SHARDS: ${{ steps.plan.outputs.windows_shards }}
-          SUITE_REASONS: ${{ steps.plan.outputs.suite_reasons }}
-        run: |
-          node scripts/ci-impact-diagnostics.js summary -- bash --noprofile --norc -e -o pipefail -s <<'PORTOS_IMPACT_SCRIPT'
-          {
-            echo "### CI impact plan"
-            echo
-            echo "- Reason: \`${PLAN_REASON}\`"
-            echo "- Server tests: \`${SERVER_MODE}\` (shards \`${SERVER_SHARDS}\`)"
-            echo "- Client tests: \`${CLIENT_MODE}\` (shards \`${CLIENT_SHARDS}\`)"
-            echo "- DB tests: \`${DB_MODE}\`"
-            echo "- Cross-workspace browser suites: \`${BROWSER_FILES}\`"
-            echo "- Client lint: \`${LINT_MODE}\`"
-            echo "- Client build: \`${BUILD_MODE}\`"
-            echo "- Server smoke: \`${SMOKE_MODE}\`"
-            echo "- Slashdo submodule: \`${SLASHDO_MODE}\`"
-            echo "- Shipped prompt history: \`${PROMPT_HISTORY_MODE}\`"
-            echo "- Linux worker containment: \`${LINUX_CONTAINMENT_MODE}\`"
-            echo "- SuperCollider live containment: \`${SUPERCOLLIDER_LIVE_MODE}\`"
-            echo "- Docker containment live: \`${DOCKER_CONTAINMENT_LIVE_MODE}\`"
-            echo "- macOS native release-agent supervision: \`${MACOS_NATIVE_MODE}\`"
-            echo "- Node minimum compatibility: \`${NODE_MINIMUM_MODE}\`"
-            echo "- Windows server tests: \`${WINDOWS_MODE}\` (\`${WINDOWS_TEST_MODE}\`, shards \`${WINDOWS_SHARDS}\`)"
-            echo "- Native jobs gated against last green main run: \`${CI_GATED_BASE_SHA:-none}\`"
-            echo "- Suite selection reasons: \`${SUITE_REASONS}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-          PORTOS_IMPACT_SCRIPT
-
       # `autofixer/` is a real install target — its own package.json, its own
       # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
       # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
@@ -238,7 +159,7 @@ jobs:
   prompt-history:
     name: Shipped prompt history
     needs: impact
-    if: needs.impact.outputs.prompt_history == 'true'
+    if: fromJSON(needs.impact.outputs.plan).prompt_history
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -263,7 +184,7 @@ jobs:
     # transform-artifact cache key carries the shard so parallel saves don't race.
     name: Server tests (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.server_mode != 'skip'
+    if: fromJSON(needs.impact.outputs.plan).server_mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -301,7 +222,7 @@ jobs:
       # tells the two contract suites to fail instead of skip if this step
       # somehow leaves the checkout without it.
       - name: Initialize slashdo submodule
-        if: needs.impact.outputs.slashdo == 'true'
+        if: fromJSON(needs.impact.outputs.plan).slashdo
         run: git submodule update --init lib/slashdo
 
       # scripts/align_lyrics_ctc_test.py skips its Viterbi cases without numpy
@@ -309,7 +230,7 @@ jobs:
       # throwaway venv with the repo's numpy pin and make the suite fail rather
       # than skip if no numpy interpreter resolves. Never touches system Python.
       - name: Provide numpy for the CTC Viterbi tests
-        if: needs.impact.outputs.server_mode == 'full' || (needs.impact.outputs.server_mode == 'files' && contains(needs.impact.outputs.server_files, 'scripts/align_lyrics_ctc.test.js'))
+        if: fromJSON(needs.impact.outputs.plan).server_mode == 'full' || (fromJSON(needs.impact.outputs.plan).server_mode == 'files' && contains(fromJSON(needs.impact.outputs.plan).server_files, 'scripts/align_lyrics_ctc.test.js'))
         run: |
           pin="$(grep -m1 -E '^numpy==' scripts/requirements-acestep-mlx.txt)"
           python3 -m venv "$RUNNER_TEMP/ctc-venv"
@@ -330,16 +251,16 @@ jobs:
 
       - name: Run server tests
         id: server-tests
-        if: needs.impact.outputs.server_mode != 'skip'
+        if: fromJSON(needs.impact.outputs.plan).server_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           PORTOS_CI_BROWSER_OWNER: unit
-          CI_TEST_MODE: ${{ needs.impact.outputs.server_mode }}
-          CI_TEST_FILES: ${{ needs.impact.outputs.server_files }}
-          CI_TEST_SOURCES: ${{ needs.impact.outputs.server_sources }}
+          CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).server_mode }}
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_files) }}
+          CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).server_sources) }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-          CI_EXPECT_SLASHDO_SUBMODULE: ${{ needs.impact.outputs.slashdo }}
+          CI_EXPECT_SLASHDO_SUBMODULE: ${{ fromJSON(needs.impact.outputs.plan).slashdo }}
           # The always-run guards' per-file time budget is enforced here, on the
           # uniform Linux runner, and nowhere else: local pregate only reports it
           # (scripts/lib/guardBudget.js, #16551).
@@ -368,7 +289,7 @@ jobs:
       # backend. It does need the native rebuild (server boot loads node-pty),
       # which is why it lives on this job rather than a third installer.
       - name: Smoke-boot server
-        if: needs.impact.outputs.smoke == 'true' && matrix.shard == 1
+        if: fromJSON(needs.impact.outputs.plan).smoke && matrix.shard == 1
         run: npm run smoke
 
       - name: Retain frozen candidate invocation evidence
@@ -382,7 +303,7 @@ jobs:
     # Lint is deliberately NOT here — it has its own job.
     name: Client tests and build (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.client_mode != 'skip' || needs.impact.outputs.build == 'true'
+    if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip' || fromJSON(needs.impact.outputs.plan).build
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -420,12 +341,12 @@ jobs:
       # and retain its duration alongside the fixtures' existing phase timings.
       # A passing launch is a non-reproduction, not proof of the startup cause.
       - name: Warm the Chrome install for client fixtures
-        if: needs.impact.outputs.client_mode != 'skip'
+        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
         run: bash scripts/ci-warm-test-chrome.sh
 
       - name: Restore the test memo
         id: test-memo
-        if: needs.impact.outputs.client_mode != 'skip'
+        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
         uses: ./.github/actions/test-memo
         with:
           suite: client
@@ -435,13 +356,13 @@ jobs:
 
       - name: Run client tests
         id: client-tests
-        if: needs.impact.outputs.client_mode != 'skip'
+        if: fromJSON(needs.impact.outputs.plan).client_mode != 'skip'
         env:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
-          CI_TEST_MODE: ${{ needs.impact.outputs.client_mode }}
-          CI_TEST_FILES: ${{ needs.impact.outputs.client_files }}
-          CI_TEST_SOURCES: ${{ needs.impact.outputs.client_sources }}
+          CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).client_mode }}
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).client_files) }}
+          CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).client_sources) }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: node scripts/run-ci-tests.js client
 
@@ -453,7 +374,7 @@ jobs:
           key: ${{ steps.test-memo.outputs.key }}
 
       - name: Build client
-        if: needs.impact.outputs.build == 'true' && matrix.shard == 1
+        if: fromJSON(needs.impact.outputs.plan).build && matrix.shard == 1
         run: npm run build --prefix client
 
       - name: Retain frozen candidate invocation evidence
@@ -480,7 +401,7 @@ jobs:
     # setup-client action's cache, so on a hit it is skipped entirely.
     name: Lint client
     needs: impact
-    if: needs.impact.outputs.lint_mode != 'skip'
+    if: fromJSON(needs.impact.outputs.plan).lint_mode != 'skip'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -497,8 +418,8 @@ jobs:
 
       - name: Lint client
         env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+          CI_LINT_MODE: ${{ fromJSON(needs.impact.outputs.plan).lint_mode }}
+          CI_LINT_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).lint_files) }}
         run: node scripts/run-ci-lint.js
 
       # GitHub silently skips a workflow it rejects, so a bad file never fails a
@@ -520,8 +441,8 @@ jobs:
 
       - name: Lint workflows with actionlint
         env:
-          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
-          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+          CI_LINT_MODE: ${{ fromJSON(needs.impact.outputs.plan).lint_mode }}
+          CI_LINT_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).lint_files) }}
         run: node scripts/run-actionlint.js
 
       # Proves the check still bites: the #15657 shape must be rejected with the
@@ -540,7 +461,7 @@ jobs:
     # set the run's length more often than any other job.
     name: DB tests
     needs: impact
-    if: needs.impact.outputs.db == 'true'
+    if: fromJSON(needs.impact.outputs.plan).db
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -637,7 +558,7 @@ jobs:
     # the independent 720-second watchdog on either runner.
     name: Browser suites (${{ matrix.shard }}/${{ strategy.job-total }})
     needs: impact
-    if: needs.impact.outputs.browser_files != '[]'
+    if: fromJSON(needs.impact.outputs.plan).browser
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -703,7 +624,7 @@ jobs:
           CI_TEST_MODE: files
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_CI_BROWSER_OWNER: browser
-          CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}
           PORTOS_REQUIRE_BROWSER_SUITES: '1'
           PORTOS_TEST_QUIET: 1
         run: node scripts/watch-ci-tests.js server
@@ -758,7 +679,7 @@ jobs:
     # in the primary server/client jobs. The planner emits one Windows runner.
     name: Windows native contracts
     needs: impact
-    if: needs.impact.outputs.windows == 'true'
+    if: fromJSON(needs.impact.outputs.plan).windows
     runs-on: windows-latest
     timeout-minutes: 40
     strategy:
@@ -806,9 +727,9 @@ jobs:
           PORTOS_TEST_MEMO_DIR: ${{ runner.temp }}/portos-test-memo
           PORTOS_CI_DIAGNOSTICS_DIR: ${{ runner.temp }}/portos-ci-diagnostics
           # Outside the launcher's disposable temp root; recoverable after exit.
-          CI_TEST_MODE: ${{ needs.impact.outputs.windows_mode }}
-          CI_TEST_FILES: ${{ needs.impact.outputs.windows_files }}
-          CI_TEST_SOURCES: ${{ needs.impact.outputs.windows_sources }}
+          CI_TEST_MODE: ${{ fromJSON(needs.impact.outputs.plan).windows_mode }}
+          CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).windows_files) }}
+          CI_TEST_SOURCES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).windows_sources) }}
           CI_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
           PORTOS_TEST_QUIET: 1
           PGPASSWORD: portos
@@ -843,7 +764,7 @@ jobs:
   node-minimum:
     name: Node minimum compatibility
     needs: impact
-    if: needs.impact.outputs.node_minimum == 'true'
+    if: fromJSON(needs.impact.outputs.plan).node_minimum
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -886,7 +807,7 @@ jobs:
   linux-containment:
     name: Linux worker containment
     needs: impact
-    if: needs.impact.outputs.linux_containment == 'true'
+    if: fromJSON(needs.impact.outputs.plan).linux_containment
     # 22.04 allows unprivileged user namespaces without changing the runner's
     # AppArmor policy. Restricted hosts must remain fail-closed in the product.
     runs-on: ubuntu-22.04
@@ -916,7 +837,7 @@ jobs:
     needs: impact
     # Path-gated by the impact planner's static import closure of the live
     # suite (DOCKER_CONTAINMENT_LIVE_ENTRIES), and part of CI Gate.
-    if: needs.impact.outputs.docker_containment_live == 'true'
+    if: fromJSON(needs.impact.outputs.plan).docker_containment_live
     # Native Docker Engine on a hosted runner. Docker Desktop on macOS is
     # verified manually (docs/CONTAINMENT.md); CI has no macOS Docker.
     runs-on: ubuntu-24.04
@@ -947,7 +868,7 @@ jobs:
     needs: impact
     # Path-gated by the impact planner's MACOS_NATIVE_PATH_RE, and part of CI
     # Gate. These suites skip on every other platform (#14781).
-    if: needs.impact.outputs.macos_native == 'true'
+    if: fromJSON(needs.impact.outputs.plan).macos_native
     runs-on: macos-latest
     timeout-minutes: 20
     permissions:
@@ -977,7 +898,7 @@ jobs:
     needs: impact
     # Path-gated by the impact planner's static import closure of the live
     # suite and setup script, and part of CI Gate: a red run blocks the merge.
-    if: needs.impact.outputs.supercollider_live == 'true'
+    if: fromJSON(needs.impact.outputs.plan).supercollider_live
     permissions:
       contents: read
     defaults:
@@ -1166,7 +1087,7 @@ jobs:
     # Windows contract set. A primary-only full plan with Windows skipped
     # cannot supply the release-reuse marker, and neither can a push whose
     # native jobs were gated on its diff (native_gated).
-    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'files' && needs.impact.outputs.native_gated != 'true' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
+    if: always() && needs.impact.result == 'success' && fromJSON(needs.impact.outputs.plan).full && fromJSON(needs.impact.outputs.plan).windows_mode == 'files' && !fromJSON(needs.impact.outputs.plan).native_gated && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
     needs: [impact, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
