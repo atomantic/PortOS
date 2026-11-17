@@ -166,7 +166,7 @@ describe('run record and usage for one call', () => {
     expect(run.output).toBe('a real answer');
     expect(run.metadata).toMatchObject({
       providerId: 'example-api', providerName: 'Example API', model: 'model-1', source: 'goal-check-in',
-      success: true, exitCode: 0, executionKind: 'api', finishReason: 'stop',
+      success: true, exitCode: 0, executionKind: 'api', finishReason: 'stop', selfContainedUsage: true,
       outputSize: Buffer.byteLength('a real answer'), promptLength: 'a prompt'.length,
     });
     expect(usage.recordSession).toHaveBeenCalledTimes(1);
@@ -191,6 +191,9 @@ describe('run record and usage for one call', () => {
     const result = await callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'goal-check-in' });
 
     expect(result.usage).toBeUndefined();
+    // Still stamped: a run with no counts must not go looking for CLI sessions.
+    expect((await record()).metadata).toMatchObject({ selfContainedUsage: true });
+    expect((await record()).metadata.reportedUsage).toBeUndefined();
     await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
     expect(usage.recordRunUsage.mock.calls[0][0]).toMatchObject({ providerId: 'example-api', source: 'estimate', messages: 1 });
     expect(usage.recordRunUsage.mock.calls[0][0].tokensOut).toBeGreaterThan(0);

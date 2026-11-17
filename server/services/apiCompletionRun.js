@@ -112,6 +112,9 @@ export async function executeApiCompletionRun({
     startTime,
     reportFailure: false,
     extras: {
+      // One HTTP request: no CLI transcript and no nested session can belong to
+      // it, whether or not the provider reported counts (usageReconciler).
+      selfContainedUsage: true,
       ...(reply.model && reply.model !== model ? { model: reply.model } : {}),
       ...(reply.finishReason ? { finishReason: reply.finishReason } : {}),
       ...(reply.reportedUsage ? { reportedUsage: reply.reportedUsage } : {}),
