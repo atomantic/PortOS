@@ -215,52 +215,10 @@ CI run that never needed it — they keep the documented skip.
 
 ### Local equivalent: `npm run pregate`
 
-`scripts/pregate.js` runs the same planner over the committed and uncommitted
-diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural
-guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
-including untracked tests, without expanding through transitive imports.
-
-`npm run pregate -- --full` opts into the CI-selected broad suites locally:
-server and client tests, the client build, the
-boot smoke, browser suites (smoke profile, prerequisites required rather than
-skipped), and the serial `portos_test` DB suite last and alone. Each stage
-receives the environment the matching job sets. A suite the machine cannot run
-(no reachable test Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
-`--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
-as not run — in the summary and in the receipt `.cache/pregate/report.json`,
-which records the plan, stage outcomes and durations, the skipped suites, the
-base and HEAD SHAs, and the hash of the exact working tree validated. The
-shipped prompt-history guard runs locally when selected; the Windows job and
-the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
-contract: `docs/CONTRIBUTING.md`.
-
-The early guards use the same always-run and diff-selected structural selection
-as CI and `--guards-only`. They run before broad tests and resource probes.
-Successful guards are reused within this invocation only when the working tree,
-index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. The receipt records guard outcomes, reuse proofs and per-file guard
-durations (`fileDurations`). A guard file over 3s fails the stage by name
-(`scripts/lib/guardBudget.js`; there are no per-file exceptions, and enforcement
-is skipped while host load exceeds the core count, since Vitest wall time is
-then meaningless). `scripts/ensure-deps.test.js`
-is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
-`update.ps1` and the lockfiles. Persistent test
-memo rules, required stages and worker caps remain the same. Downgraded full
-plans and `--guards-only` run the guard selection once; `--full` runs it before
-the full suites.
-
-`npm run pregate:merged -- --merged-with <base-ref>` (the same as
-`node scripts/pregate.js --guards-only --merged-with <base-ref>`) runs the
-structural guards on HEAD merged with a fetched base in an isolated temporary
-repository. It is an opt-in diagnostic for investigating an integration break,
-not a merge precondition: no PortOS merge path runs it. The pending-merge sweep
-and the quality-snapshot publisher merge when the forge reports the PR mergeable
-with its required checks green, pinned to the recorded or published head. CI
-already tests each pull request on its merge ref, skips every runner for a
-`.quality.json`-only change because no guard reads that file, and scheduled CI
-on `main` publishes `Full CI Gate` as the post-merge backstop.
-
+`scripts/pregate.js` runs the same planner as CI over the committed, uncommitted
+and untracked diff and hands its plan to the same runners. What it selects, its
+`--full` plan and receipt, interrupt and Windows behavior, and test process
+containment: [PREGATE.md](PREGATE.md).
 
 ### Browser workload partition
 
