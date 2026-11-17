@@ -8,6 +8,16 @@ const RESTART_SEC = 1;
 // A seek lands a hair off the start it aimed at; this much counts as being on it.
 const ON_START_SEC = 0.05;
 
+// The film's frame rate: a shot shows from the first whole frame at or after its start.
+const FPS = 24;
+
+/**
+ * The song time of a shot's first frame. A start between frames (5.37 s at 24
+ * fps sits inside frame 128, which still shows the shot before) rounds up to
+ * the next frame, so a jump to a shot shows that shot.
+ */
+export const shotStartFrameSec = (startSec, fps = FPS) => Math.max(0, Math.ceil(startSec * fps - 1e-6)) / fps;
+
 // A shot before the song (the cold open) keeps no place on the song's clock.
 const onSongClock = (scene) => Number.isFinite(scene?.startSec) && !isPreMusicShot(scene);
 
@@ -30,8 +40,8 @@ export function shotSteps(scenes, t, range = null) {
   starts.forEach((start, i) => { if (start <= t + ON_START_SEC) current = i; });
   const back = current < 0
     ? null
-    : t - starts[current] > RESTART_SEC || current === 0 ? starts[current] : starts[current - 1];
-  const next = starts[current + 1] ?? null;
+    : shotStartFrameSec(t - starts[current] > RESTART_SEC || current === 0 ? starts[current] : starts[current - 1]);
+  const next = current + 1 < starts.length ? shotStartFrameSec(starts[current + 1]) : null;
   return { back, next, index: current + 1, count: starts.length, scene: current < 0 ? null : shots[current] };
 }
 
