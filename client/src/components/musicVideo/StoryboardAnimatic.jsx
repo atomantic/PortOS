@@ -1008,7 +1008,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       {documentVariant && !nativeDrawing && (
         <p className="text-xs text-port-text-muted">The template's beat reactions, cards and HUD show only in the paused frame for now.</p>
       )}
-      <figure ref={figureRef} aria-label={pictureLabel} className={`relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black ${filmFrame ? 'mx-auto' : ''}`}
+      <figure ref={figureRef} data-preview-picture aria-label={pictureLabel} className={`relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black ${filmFrame ? 'mx-auto' : ''}`}
         style={nativeDrawing ? { aspectRatio: `${nativeData.render.width} / ${nativeData.render.height}` } : filmFrame || undefined}>
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
         <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * fps)}

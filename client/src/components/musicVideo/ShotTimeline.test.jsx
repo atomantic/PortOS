@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import ShotTimeline from './ShotTimeline.jsx';
 
+// The effect tiles paint with the render's canvas painter, which needs a real 2D canvas.
+vi.mock('../../lib/musicVideoGlitchCanvas.js', () => ({ createMusicVideoGlitchPainter: () => () => {} }));
+
 const project = {
   id: 'mv-1',
   audioAnalysis: { durationSec: 20, sections: [{ label: 'Verse', startSec: 0, endSec: 10 }] },
@@ -226,22 +229,23 @@ describe('ShotTimeline', () => {
     expect(onPreview).toHaveBeenLastCalledWith(6.5, false);
   });
 
-  // Uniquely catches the library adding to the wrong shot or time, and the controls failing to reach the page's inspector panel.
-  it('puts the effects library and the selected effect\'s controls in the panels the page gives it', async () => {
+  // Uniquely catches the library adding to the wrong shot or time, and the selected effect's settings failing to take the library's place (and give it back).
+  it('fills the page\'s side panel with the effects library, and swaps in the selected effect\'s settings', async () => {
     const onEditShot = vi.fn();
-    const library = document.createElement('div');
-    const inspector = document.createElement('div');
-    document.body.append(library, inspector);
+    const panel = document.createElement('div');
+    document.body.append(panel);
     render(<ShotTimeline project={project} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} effectOptions={{}} onEditShot={onEditShot}
-      onPreview={() => {}} songClock={() => ({ t: 6, playing: false })} libraryEl={library} inspectorEl={inspector} />);
-    expect(within(inspector).getByText(/Tap an effect on the timeline/)).toBeInTheDocument();
-    const add = within(library).getAllByRole('button', { name: /^Add .+ at the playhead$/ })[0];
+      onPreview={() => {}} songClock={() => ({ t: 6, playing: false })} libraryEl={panel} />);
+    const add = within(panel).getAllByRole('button', { name: /^Add .+ at the playhead$/ })[0];
     await waitFor(() => expect(add).toBeEnabled());
+    expect(within(panel).getByText(/to Shot s2 at the playhead/)).toBeInTheDocument();
     fireEvent.click(add);
     expect(onEditShot).toHaveBeenCalledWith('s2', { glitches: [{ atSec: 2, style: expect.any(String) }] });
-    expect(within(inspector).getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
-    library.remove();
-    inspector.remove();
+    expect(within(panel).getByRole('region', { name: 'Effects of Shot s2' })).toBeInTheDocument();
+    expect(within(panel).queryByRole('button', { name: /^Add .+ at the playhead$/ })).toBeNull();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Back to the effects library' }));
+    expect(within(panel).getAllByRole('button', { name: /^Add .+ at the playhead$/ }).length).toBeGreaterThan(0);
+    panel.remove();
   });
 
   // Uniquely catches the scissors splitting the wrong shot or off a frame, and the song's loudness row going missing.

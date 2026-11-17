@@ -54,6 +54,7 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
       {/* The height limit caps the width, not the height alone: a capped height
           over a full-width box made it wider than 16:9 and pillarboxed the video. */}
       <video
+        data-preview-picture
         ref={videoRef}
         src={source.src}
         controls
@@ -133,8 +134,9 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * Blender film's `useMusicVideoBlender` reading: its live composite plays the
  * shots' renders from that state, so a render that lands shows without a reload.
  * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
+ * `compact` drops the title for a page that frames the player itself (the editor).
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const playable = sources.filter((entry) => !entry.disabled);
@@ -177,8 +179,9 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
     <aside ref={dockRef} aria-label="Preview" className="@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2"
       onPlayCapture={sounding(solo.started)} onPauseCapture={sounding(solo.stopped)} onEndedCapture={sounding(solo.stopped)}>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-port-text-muted">
-        <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />
-        <span className="text-sm font-medium text-port-text">Preview</span>
+        {/* Compact (the editor): no title row of its own, the source picker is the header. */}
+        {!compact && <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />}
+        {!compact && <span className="text-sm font-medium text-port-text">Preview</span>}
         {sources.length > 1 ? (
           <>
             <label htmlFor={pickerId} className="sr-only">Preview source</label>
@@ -186,7 +189,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
               id={pickerId}
               value={source?.id || ''}
               onChange={(e) => pick(e.target.value)}
-              className="order-last min-h-[44px] min-w-0 basis-full truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px] @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1"
+              className={`${compact ? 'flex-1' : 'order-last basis-full @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1'} min-h-[44px] min-w-0 truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px]`}
             >
               {sources.map((entry) => (
                 <option key={entry.id} value={entry.id} disabled={!!entry.disabled}>

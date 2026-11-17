@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
-import { X, Zap } from 'lucide-react';
+import { ChevronLeft, X, Zap } from 'lucide-react';
+import EffectThumb from './EffectThumb.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import SceneGlitches from './SceneGlitches.jsx';
 import SceneTransitions from './SceneTransitions.jsx';
@@ -189,50 +190,63 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
 }
 
 /**
- * The effects library: every in-shot effect style, each a button that adds it
- * at the playhead to the shot on screen (`onAdd(style)`, null when nothing can
- * take one).
+ * Every in-shot effect style as a tile with a live picture of it (`EffectThumb`
+ * over `picture`, the shot it would land on): hovering or focusing a tile plays
+ * the effect. `onPick(style)` (null disables the tiles); `selected` marks the
+ * current style as pressed; `labelFor(label)` names each tile's action;
+ * `dense` fits three to a row.
  */
-export function TimelineEffectLibrary({ onAdd, shotName }) {
+function EffectStyleGrid({ onPick, picture, selected = null, labelFor, dense = false }) {
+  const [playing, setPlaying] = useState(null);
   return (
-    <div className="space-y-2 p-2">
-      <div className="flex items-baseline justify-between gap-2 px-1">
-        <h3 className="text-sm font-medium text-port-text">Effects</h3>
-        <span className="truncate text-xs text-port-text-muted">{onAdd ? `Tap to add to ${shotName} at the playhead` : 'Move the playhead onto a shot to add one'}</span>
-      </div>
-      <ul className="grid grid-cols-2 gap-1">
-        {MUSIC_VIDEO_TRANSITIONS.map((style) => (
-          <li key={style}>
-            <button type="button" onClick={() => onAdd?.(style)} disabled={!onAdd}
-              aria-label={`Add ${MUSIC_VIDEO_TRANSITION_LABELS[style]} at the playhead`}
-              className="flex min-h-[44px] w-full items-center gap-1.5 rounded border border-port-border bg-port-bg px-2 text-left text-xs text-port-text hover:border-port-accent disabled:opacity-50 pointer-fine:min-h-[32px]">
-              <Zap size={12} aria-hidden="true" className="shrink-0 text-port-accent" />
-              <span className="truncate">{MUSIC_VIDEO_TRANSITION_LABELS[style]}</span>
+    <ul className={`grid gap-1.5 ${dense ? 'grid-cols-3' : 'grid-cols-2'}`}>
+      {MUSIC_VIDEO_TRANSITIONS.map((style) => {
+        const label = MUSIC_VIDEO_TRANSITION_LABELS[style];
+        const on = () => setPlaying(style);
+        const off = () => setPlaying((current) => (current === style ? null : current));
+        return (
+          <li key={style} className="min-w-0">
+            <button type="button" onClick={() => onPick?.(style)} disabled={!onPick} title={label}
+              aria-label={labelFor(label)} aria-pressed={selected == null ? undefined : selected === style}
+              onPointerEnter={on} onPointerLeave={off} onFocus={on} onBlur={off}
+              className={`w-full space-y-1 rounded border p-1 text-left ${dense ? 'text-[11px]' : 'text-xs'} text-port-text hover:border-port-accent disabled:opacity-50 ${selected === style ? 'border-port-accent bg-port-accent/15' : 'border-port-border bg-port-bg'}`}>
+              <EffectThumb style={style} src={picture} playing={playing === style} />
+              <span className="block break-words px-0.5 leading-tight">{label}</span>
             </button>
           </li>
-        ))}
-      </ul>
+        );
+      })}
+    </ul>
+  );
+}
+
+/**
+ * The effects library: every in-shot effect style, each a tile that adds it at
+ * the playhead to the shot on screen (`onAdd(style)`, null when nothing can
+ * take one), its picture that shot's (`picture`).
+ */
+export function TimelineEffectLibrary({ onAdd, shotName, picture = null }) {
+  return (
+    <div className="space-y-2 p-2">
+      <div className="px-1">
+        <h3 className="text-sm font-medium text-port-text">Effects</h3>
+        <p className="text-xs text-port-text-muted">{onAdd ? `Tap one to add it to ${shotName} at the playhead.` : 'Move the playhead onto a shot to add one.'}</p>
+      </div>
+      <EffectStyleGrid onPick={onAdd} picture={picture} labelFor={(label) => `Add ${label} at the playhead`} />
     </div>
   );
 }
 
 /**
- * The selected in-shot effect's style as a row of one-tap swaps: each tap saves
- * the new style and replays the moment (`onPreview()`), so styles can be tried
- * one after another while the preview loops over it.
+ * The selected in-shot effect's style as the same tiles: each tap saves the
+ * new style and cues the moment (`onPreview()`), so styles can be tried one
+ * after another while the preview loops over it.
  */
-function EffectStyleSwap({ glitch, index, onSwap }) {
+function EffectStyleSwap({ glitch, index, onSwap, picture }) {
   return (
     <div role="group" aria-label={`Style of effect ${index + 1}`} className="space-y-1">
       <p className="text-xs text-port-text-muted">Effect {index + 1}: tap a style to swap it</p>
-      <div className="flex flex-wrap gap-1">
-        {MUSIC_VIDEO_TRANSITIONS.map((style) => (
-          <button key={style} type="button" onClick={() => onSwap(style)} aria-pressed={glitch.style === style} disabled={!onSwap}
-            className={`min-h-[44px] rounded border px-2 text-xs pointer-fine:sm:min-h-[28px] disabled:opacity-50 ${glitch.style === style ? 'border-port-accent bg-port-accent/15 text-port-text' : 'border-port-border text-port-text-muted hover:text-port-text'}`}>
-            {MUSIC_VIDEO_TRANSITION_LABELS[style]}
-          </button>
-        ))}
-      </div>
+      <EffectStyleGrid onPick={onSwap} picture={picture} selected={glitch.style} labelFor={(label) => label} dense />
     </div>
   );
 }
@@ -242,27 +256,28 @@ function EffectStyleSwap({ glitch, index, onSwap }) {
  * controls: the effect over each cut, how it hands over to the next shot, and
  * its in-shot effects. `onChange(patch)` saves the shot's fields. With an
  * in-shot effect selected (`selectedIndex`) its style swaps lead, each swap
- * replaying it (`onPreview`).
+ * cueing it (`onPreview`), pictured on `picture`. `inPanel` (in the page's side
+ * panel, in place of the library) makes Close a way back to the library.
  */
-export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, onClose, selectedIndex = null, onPreview = null }) {
+export function TimelineEffectsPanel({ scene, name, options, isLast, onChange, onClose, selectedIndex = null, onPreview = null, picture = null, inPanel = false }) {
   const glitches = Array.isArray(scene.glitches) ? scene.glitches : [];
   const selected = selectedIndex != null ? glitches[selectedIndex] : null;
   // The shot card may be open on the same shot in the drawer: its field ids stay its own.
   const fieldId = (field) => `mv-timeline-${scene.sceneId}-${field}`;
   const camera = (options.cameras || []).find((entry) => entry?.id && entry.id === scene.shotSheet?.cameraId) || null;
   return (
-    <section aria-label={`Effects of ${name}`} className="space-y-2 border-t border-port-border px-2 py-2">
+    <section aria-label={`Effects of ${name}`} className={`space-y-2 px-2 py-2 ${inPanel ? '' : 'border-t border-port-border'}`}>
       <div className="flex items-center justify-between gap-2">
         <h3 className="flex min-w-0 items-center gap-1 text-sm font-medium text-port-text">
           <Zap size={14} aria-hidden="true" className="shrink-0 text-port-accent" /> <span className="truncate">{name}</span>
         </h3>
-        <button type="button" onClick={onClose} aria-label="Close effects" title="Close effects"
+        <button type="button" onClick={onClose} aria-label={inPanel ? 'Back to the effects library' : 'Close effects'} title={inPanel ? 'Back to the effects library' : 'Close effects'}
           className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]">
-          <X size={14} aria-hidden="true" />
+          {inPanel ? <ChevronLeft size={14} aria-hidden="true" /> : <X size={14} aria-hidden="true" />}
         </button>
       </div>
       {selected && (
-        <EffectStyleSwap glitch={selected} index={selectedIndex}
+        <EffectStyleSwap glitch={selected} index={selectedIndex} picture={picture}
           onSwap={onChange ? (style) => { onChange({ glitches: glitchesWithEdit(glitches, selectedIndex, { style }) }); onPreview?.(); } : null} />
       )}
       <SceneTransitions fieldId={fieldId} scene={scene} defaults={camera?.cuts || null} onChange={onChange} isLast={isLast} disabled={!onChange} />

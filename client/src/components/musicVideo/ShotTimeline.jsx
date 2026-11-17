@@ -86,11 +86,11 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * the playhead in two there (on a frame). The song's loudness, when analyzed,
  * draws as a waveform row at the bottom.
  *
- * The effect controls show under the timeline, or in `inspectorEl` when the
- * page gives one; with `libraryEl` an effects library fills it, whose styles
- * add at the playhead.
+ * With `libraryEl` (a side panel the page gives) an effects library fills it,
+ * whose styles add at the playhead, and a selected effect's controls take its
+ * place there until closed; without it the controls show under the timeline.
  */
-export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null, inspectorEl = null }) {
+export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null }) {
   const { shots: savedShots, off } = useMemo(() => timelineShots(project), [project]);
   const durationSec = timelineDurationSec(project, savedShots);
   // A cut being dragged, or one let go and still saving, shows where it will land.
@@ -388,6 +388,9 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     const at = shot?.scene.glitches?.[index]?.atSec;
     if (Number.isFinite(at)) cue(shot.startSec + at - LOOP_LEAD_SEC);
   };
+  // The side panel starts at its top whenever it changes between the library and a shot's settings.
+  const panelKey = effectsShot ? `${effectsShot.sceneId}:${selectedFx?.index ?? ''}` : '';
+  useEffect(() => { if (libraryEl) libraryEl.scrollTop = 0; }, [libraryEl, panelKey]);
   const spanRow = (kind) => (
     <TimelineEffectSpans lanes={effectLanes.lanes} kind={kind} pxPerSec={pxPerSec} shotName={shotName}
       selectedId={effectsShot?.sceneId ?? null} onSelect={selectEffects} />
@@ -414,7 +417,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
 
   return (
     <section aria-label="Timeline" className="min-w-0 rounded-lg border border-port-border bg-port-card">
-      <div className="flex min-w-0 items-center gap-2 px-2 py-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 px-2 py-1">
         {onPreview && (
           <button type="button" className={zoomButtonCls} onClick={togglePlay} aria-label={playing ? 'Pause' : 'Play'} title={playing ? 'Pause (Space)' : 'Play (Space)'}>
             {playing ? <Pause size={14} aria-hidden="true" /> : <Play size={14} aria-hidden="true" />}
@@ -581,23 +584,24 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
         </div>
       </div>
       </div>
-      {libraryEl && effectOptions && createPortal(
-        <TimelineEffectLibrary onAdd={onEditShot && playheadShot ? (style) => addEffect(style) : null} shotName={playheadShot ? nameOf(playheadShot) : null} />,
-        libraryEl,
-      )}
-      {inspectorEl && effectOptions && !effectsShot && createPortal(
-        <p className="p-3 text-sm text-port-text-muted">Tap an effect on the timeline, or a shot's in-shot effects lane, to set it here.</p>,
-        inspectorEl,
-      )}
-      {effectsShot && (() => {
-        const panel = (
-        <TimelineEffectsPanel scene={effectsShot.scene} name={nameOf(effectsShot)} options={effectOptions}
-          isLast={project.scenes[project.scenes.length - 1]?.sceneId === effectsShot.sceneId}
-          onChange={onEditShot ? (patch) => onEditShot(effectsShot.sceneId, patch) : null}
-          selectedIndex={selectedFx?.sceneId === effectsShot.sceneId && fxGlitch ? selectedFx.index : null} onPreview={preview}
-          onClose={() => { setEffectsOfId(null); setSelectedFx(null); }} />
-        );
-        return inspectorEl ? createPortal(panel, inspectorEl) : panel;
+      {(() => {
+        const picture = (shot) => (shot ? posters?.get(shot.sceneId) ?? scenePosterSrc(shot.scene, project.scenes) : null);
+        if (effectsShot) {
+          const panel = (
+            <TimelineEffectsPanel scene={effectsShot.scene} name={nameOf(effectsShot)} options={effectOptions}
+              isLast={project.scenes[project.scenes.length - 1]?.sceneId === effectsShot.sceneId}
+              onChange={onEditShot ? (patch) => onEditShot(effectsShot.sceneId, patch) : null}
+              selectedIndex={selectedFx?.sceneId === effectsShot.sceneId && fxGlitch ? selectedFx.index : null} onPreview={preview}
+              picture={picture(effectsShot)} inPanel={!!libraryEl}
+              onClose={() => { setEffectsOfId(null); setSelectedFx(null); }} />
+          );
+          return libraryEl ? createPortal(panel, libraryEl) : panel;
+        }
+        return libraryEl && effectOptions ? createPortal(
+          <TimelineEffectLibrary onAdd={onEditShot && playheadShot ? (style) => addEffect(style) : null}
+            shotName={playheadShot ? nameOf(playheadShot) : null} picture={picture(playheadShot)} />,
+          libraryEl,
+        ) : null;
       })()}
       {off.length > 0 && (
         <div role="group" aria-label="Shots off the timeline" className="flex min-w-0 flex-wrap items-center gap-1 border-t border-port-border px-2 py-1 text-xs">
