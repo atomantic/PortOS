@@ -2806,7 +2806,7 @@ export const promptVariableKeySchema = z.string().regex(/^[A-Za-z0-9_-]+$/, 'inv
 
 // =============================================================================
 // ROUTE BODY SCHEMAS (#9950) — handlers that used to read `req.body` by hand.
-// `routeValidationConventions.test.js` fails any body-bearing POST/PUT/PATCH
+// `routeValidationConventions.guard.test.js` fails any body-bearing POST/PUT/PATCH
 // handler that skips `validateRequest`. A bodyless POST (a bare "run now"
 // button) still parses an optional-field object: pass `req.body ?? {}`.
 // =============================================================================

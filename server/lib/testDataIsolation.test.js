@@ -1,7 +1,7 @@
 /**
  * Contract for the runtime write backstop (#6176).
  *
- * The sibling `testDataIsolation.guards.test.js` is the static half — it scans
+ * The sibling `testDataIsolation.guard.test.js` is the static half — it scans
  * test SOURCE for a forbidden path spelling. This file exercises the runtime
  * half: the primitive actually refuses the write, and only the writes it should.
  *

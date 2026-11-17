@@ -42,7 +42,7 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  *
  * Adding a new DB-backed test? Add it to `DB_TEST_INCLUDE` in scripts/lib/dbTestFiles.js — the
  * `*.db.test.js` naming convention is documentation, not a glob match, so a new
- * suite silently never runs until it's listed. db.guards.test.js fails if a
+ * suite silently never runs until it's listed. db.inventory.guard.test.js fails if a
  * checkHealth consumer is left out.
  */
 const config = defineConfig({
