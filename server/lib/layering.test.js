@@ -20,19 +20,10 @@ import { fileURLToPath } from 'url';
 
 const LIB_ROOT = dirname(fileURLToPath(import.meta.url));
 
-// Modules that still import upward into services. Each row is a real layering
-// inversion awaiting its slice of #4901 — NOT a permanent exemption. Fix the
-// module, delete the row. Never add a row for new code.
-// EMPTY — the burn-down is complete (#4901). Every server/lib module that
-// imported upward into services has been resolved, each on its own merits:
-// pure vocabularies were pushed DOWN into lib, and genuine orchestration
-// (runners, the HF download stack, aiProvider) was promoted UP into services.
-//
-// Do NOT add a row here. An empty list means the rule is now simply enforced:
-// if you need a service from lib, either the dependency belongs below (move the
-// constant/helper down) or the module belongs above (promote it). Adding a row
-// re-opens a backlog that took six PRs to close.
-const PREEXISTING_LIB_TO_SERVICES_ALLOWLIST = new Set([]);
+// The #4901 burn-down is complete: no server/lib module may import upward into
+// services, and there is no allowlist to grow. If you need a service from lib,
+// either the dependency belongs below (move the constant/helper down) or the
+// module belongs above (promote it).
 
 // Permanently exempt — NOT burn-down rows. Both reach into services through a
 // DYNAMIC import for a documented structural reason, and turning either into a
@@ -74,20 +65,11 @@ const offenders = () => libSourceFiles()
   .map(({ rel }) => rel);
 
 describe('server/lib layering', () => {
-  it('has no lib -> services imports outside the burn-down allowlist', () => {
-    const unlisted = offenders().filter((f) => !PREEXISTING_LIB_TO_SERVICES_ALLOWLIST.has(f));
+  it('has no lib -> services imports (#4901)', () => {
+    const unlisted = offenders();
     expect(
       unlisted,
       `server/lib modules importing upward into services — move the dependency below, or promote the module into services (#4901):\n${unlisted.join('\n')}`,
-    ).toEqual([]);
-  });
-
-  it('keeps no stale entries in PREEXISTING_LIB_TO_SERVICES_ALLOWLIST (#4901)', () => {
-    const current = new Set(offenders());
-    const stale = [...PREEXISTING_LIB_TO_SERVICES_ALLOWLIST].filter((f) => !current.has(f));
-    expect(
-      stale,
-      `allowlist rows whose module no longer imports services — delete them so the burn-down stays honest:\n${stale.join('\n')}`,
     ).toEqual([]);
   });
 });

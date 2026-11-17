@@ -5,7 +5,12 @@ import {
   universeMarkdownFilename,
   universeToMarkdown,
 } from './universeMarkdown.js';
-import { UNIVERSE_MARKDOWN_FILENAME_CASES } from '../../client/src/lib/universeMarkdownFilename.cases.js';
+
+const UNIVERSE_MARKDOWN_FILENAME_CASES = [
+  ['The Bright World / V2!', 'the-bright-world-v2', 'the-bright-world-v2.md'],
+  ['Café', 'cafe', 'cafe.md'],
+  ['!!!', 'universe', 'universe.md'],
+];
 
 describe('universeToMarkdown', () => {
   it('serializes the full world-bible shape in stored order', () => {
@@ -128,7 +133,7 @@ describe('universeToMarkdown', () => {
 });
 
 describe('universe markdown filenames', () => {
-  it.each(UNIVERSE_MARKDOWN_FILENAME_CASES)('matches the client-safe contract for %j', (name, slug, filename) => {
+  it.each(UNIVERSE_MARKDOWN_FILENAME_CASES)('matches the safe-filename contract for %j', (name, slug, filename) => {
     expect(slugifyUniverseName(name)).toBe(slug);
     expect(universeMarkdownFilename(name)).toBe(filename);
   });

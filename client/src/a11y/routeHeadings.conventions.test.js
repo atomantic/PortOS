@@ -202,18 +202,4 @@ describe('a11y conventions: routeHeadings', () => {
       });
     expect(stale, `routed-heading exemption entries that no longer match a heading-less routed element — delete them:\n${stale.join('\n')}`).toEqual([]);
   });
-
-  // --- shared tab bar primitive (#7244) --------------------------------------
-  //
-  // `role="tablist"` promises the WAI-ARIA tabs contract — one tab stop per
-  // bar, Arrow/Home/End moving between tabs — and only
-  // `components/ui/TabPills.jsx` implements it (roving tabindex
-  // `tabIndex={active ? 0 : -1}` plus `handleTabKeyDown`, which also skips
-  // `disabled` tabs). A hand-rolled bar puts every tab in the tab order and
-  // answers the promised keys with nothing (WCAG 4.1.2); the four audited
-  // surfaces in #7244 are exactly the drift #6910's primitive never reached.
-  // client/src/AGENTS.md already says "reuse it, never roll a new tab bar" —
-  // this scan is the backstop that keeps the next hand-rolled tab bar from
-  // shipping the same gap again.
-
 });

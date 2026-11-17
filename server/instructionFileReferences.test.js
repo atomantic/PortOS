@@ -27,14 +27,6 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const git = (...args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const gitLines = (...args) => git(...args).split('\n').filter(Boolean);
 
-/**
- * Names that are intentionally cited as history: the prose says they are gone
- * and names them so a reader recognizes the retired file in old commits. This
- * list may only shrink — a new stale name gets fixed in the prose, not parked
- * here — and `pins the retired allowlist` below enforces that.
- */
-export const RETIRED_NAMES = Object.freeze([]);
-
 const FILE_TOKEN = /^(?:\.\/|~\/|<repo-root>\/)?([\w.][\w./-]*\.(?:jsx?|[cm]js|md|json|ya?ml))$/;
 /** Example names the prose uses as stand-ins (`foo.js:412`), never real files. */
 const PLACEHOLDER_STEM = /^(?:foo|bar|baz|qux|x|y|example)$/;
@@ -75,13 +67,13 @@ const sourceMentions = (name) => {
   }
 };
 
-export const findStaleReferences = ({ files, tracked, mentions = sourceMentions, retired = RETIRED_NAMES }) => {
+export const findStaleReferences = ({ files, tracked, mentions = sourceMentions }) => {
   const stale = [];
   for (const file of files) {
     const text = readFileSync(join(REPO_ROOT, file), 'utf8');
     for (const { line, path } of extractFileTokens(text)) {
       const name = basename(path);
-      if (retired.includes(name) || tracked.has(name) || mentions(name)) continue;
+      if (tracked.has(name) || mentions(name)) continue;
       stale.push(`${file}:${line} \`${path}\` (no tracked file has this basename and no tracked source names it)`);
     }
   }
@@ -102,15 +94,6 @@ describe('instruction file references', () => {
     expect(findStaleReferences({ files, tracked })).toEqual([]);
   });
 
-  it('pins the retired allowlist: still absent, still cited, never growing', () => {
-    expect(RETIRED_NAMES).toEqual([]);
-    const cited = new Set(files.flatMap((f) => extractFileTokens(readFileSync(join(REPO_ROOT, f), 'utf8')).map((t) => basename(t.path))));
-    for (const name of RETIRED_NAMES) {
-      expect(tracked.has(name), `${name} is tracked again — drop it from RETIRED_NAMES`).toBe(false);
-      expect(cited.has(name), `${name} is no longer cited by any AGENTS.md — drop it from RETIRED_NAMES`).toBe(true);
-    }
-  });
-
   it('extracts file tokens and skips placeholders, globs, and anchors', () => {
     const text = [
       'Read `server/lib/real.js` and `routes/other.js#schema` at `third.jsx:412`, `./docs/X.md`.',
@@ -127,11 +110,11 @@ describe('instruction file references', () => {
     ]);
   });
 
-  it('reports a stale name with file:line, and a source mention or the retired list clears it', () => {
-    const noSource = findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => false, retired: [] });
+  it('reports a stale name with file:line, and a source mention clears it', () => {
+    const noSource = findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => false });
     expect(noSource.length).toBeGreaterThan(0);
     expect(noSource.every((s) => /^server\/AGENTS\.md:\d+ `[^`]+` \(no tracked file has this basename and no tracked source names it\)$/.test(s))).toBe(true);
     expect(noSource.some((s) => s.includes('`server/lib/pgJson.js`'))).toBe(true);
-    expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true, retired: [] })).toEqual([]);
+    expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true })).toEqual([]);
   });
 });

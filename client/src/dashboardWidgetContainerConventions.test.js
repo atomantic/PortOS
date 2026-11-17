@@ -1,6 +1,6 @@
 /**
  * Rule: Components reachable from `WIDGETS` in `widgetRegistry.jsx` must use `@container` + `@sm:`/`@md:`/`@lg:` container queries, never bare viewport breakpoints (see `client/src/components/dashboard/AGENTS.md`).
- * Fix: Put `@container` on the component's root and prefix layout classes with `@sm:`/`@md:`/`@lg:`, or add genuinely device-specific exceptions to `ALLOWED` with a reason.
+ * Fix: Put `@container` on the component's root and prefix layout classes with `@sm:`/`@md:`/`@lg:`.
  * What this guard cannot see:
  *   - Scoped to `widgetRegistry.jsx`'s own modules, not their transitive import closure.
  */
@@ -13,13 +13,6 @@ import { lineOf, maskComments, stringLiterals } from './test/classNameScan.js';
 
 const SRC_ROOT = dirname(fileURLToPath(import.meta.url));
 const REGISTRY = 'components/dashboard/widgetRegistry.jsx';
-
-/**
- * Widgets that legitimately answer to the viewport, with the reason they do.
- * A row here is a design call about the *device* (pointer type, screen), never
- * a way past the guard for a layout that is really about the cell's width.
- */
-const ALLOWED = new Map();
 
 // `sm:` … `2xl:` at the head of a class token, but not `@sm:` (container) and
 // not the tail of some other variant (`group-hover:`, `max-sm:`).
@@ -77,14 +70,7 @@ describe('dashboard widget container-query conventions', () => {
   });
 
   it('never sizes a widget by the viewport', () => {
-    const violations = files
-      .filter((file) => !ALLOWED.has(file))
-      .flatMap((file) => findViolations(file));
+    const violations = files.flatMap((file) => findViolations(file));
     expect(violations).toEqual([]);
-  });
-
-  it('keeps the allowlist honest — every exempt widget still has the variant it was exempted for', () => {
-    const stale = [...ALLOWED.keys()].filter((file) => findViolations(file).length === 0);
-    expect(stale).toEqual([]);
   });
 });
