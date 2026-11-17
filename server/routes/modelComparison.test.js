@@ -103,7 +103,7 @@ it('exposes shipped GPT-6.2 prices to existing installs without inventing benchm
   const result = await request(app).get('/comparison');
   expect(result.status).toBe(200);
   for (const [model, input, output] of [['gpt-6.2-astra', 8, 40], ['gpt-6.2-sol', 2, 10]]) {
-    const rows = result.body.observations.filter(row => row.model === model);
+    const rows = result.body.observations.filter(row => row.model === model && row.benchmark.startsWith('Official API pricing'));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       effort: 'unspecified', billing: 'api', quality: null, costPerTask: null,
@@ -111,6 +111,21 @@ it('exposes shipped GPT-6.2 prices to existing installs without inventing benchm
       outputPerMillion: { value: output }, reasoningPerMillion: null,
       responseSeconds: null, tokensPerSecond: null, quota: null,
     });
+  }
+});
+
+it('ships measured GPT-6.2 coding efforts without treating evaluation totals as per-task metrics', async () => {
+  const result = await request(app).get('/comparison');
+  expect(result.status).toBe(200);
+  const measured = model => result.body.observations.filter(row => row.model === model && row.benchmark.startsWith('ModelDial'));
+  expect(measured('gpt-6.2-astra').map(row => [row.effort, row.quality.value])).toEqual([
+    ['low', 87.1], ['medium', 86.15], ['high', 89.4], ['xhigh', 92.05], ['max', 93],
+  ]);
+  expect(measured('gpt-6.2-sol').map(row => [row.effort, row.quality.value])).toEqual([['max', 88.9]]);
+  for (const row of [...measured('gpt-6.2-astra'), ...measured('gpt-6.2-sol')]) {
+    expect(row.costPerTask).toBeNull();
+    expect(row.responseSeconds).toBeNull();
+    expect(row.quality.source.url).toBe(`https://modeldial.com/en/models/${row.model}`);
   }
 });
 
