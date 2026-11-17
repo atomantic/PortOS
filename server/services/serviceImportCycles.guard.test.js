@@ -104,6 +104,8 @@ function facadeBackEdges(graph, read, facade) {
 const AGENT_ORCHESTRATORS = ['agentLifecycle.js', 'agentCliSpawning.js', 'agentTuiSpawning.js', 'agentManagement.js', 'subAgentSpawner.js'];
 const FACADE = 'agentOrchestrator.js';
 
+const promptSectionsOf = (graph) => [...graph.keys()].filter(file => file.startsWith('promptSections/'));
+
 /** Each `from` module must have no static edge to any `to` module. */
 const noBackEdgeRules = (graph) => [
   {
@@ -116,7 +118,7 @@ const noBackEdgeRules = (graph) => [
   },
   {
     why: 'prompt section modules stay leaves under agentPromptBuilder (#4896)',
-    from: [...graph.keys()].filter(file => file.startsWith('promptSections/')),
+    from: promptSectionsOf(graph),
     to: ['agentPromptBuilder.js'],
   },
   {
@@ -162,7 +164,7 @@ describe('server/services — static import graph (#5693)', () => {
     expect(graph.size, 'services graph looks empty — did the scan root move?').toBeGreaterThan(500);
     expect([...graph.values()].filter(deps => deps.length > 0).length,
       'no module has any resolved edge — the specifier resolver is broken').toBeGreaterThan(100);
-    expect(backEdgeRules[1].from.length, 'prompt section extraction is missing').toBeGreaterThan(5);
+    expect(promptSectionsOf(graph).length, 'prompt section extraction is missing').toBeGreaterThan(5);
     const named = [
       ...backEdgeRules.flatMap(({ from, to }) => [...from, ...(to === ANY ? [] : to)]),
       ...NO_DEFERRED_IMPORT.flatMap(({ from, to }) => [from, to]),
