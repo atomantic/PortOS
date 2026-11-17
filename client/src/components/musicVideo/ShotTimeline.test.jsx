@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/react';
 import ShotTimeline from './ShotTimeline.jsx';
 
 // The effect tiles paint with the render's canvas painter, which needs a real 2D canvas.
@@ -24,7 +24,10 @@ let clientWidth;
 beforeEach(() => {
   clientWidth = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(400);
 });
-afterEach(() => clientWidth.mockRestore());
+afterEach(() => {
+  vi.useRealTimers();
+  clientWidth.mockRestore();
+});
 
 describe('ShotTimeline', () => {
   // Uniquely catches a clip drawn out of song order or off its span, and a tap that stops opening the shot.
@@ -190,7 +193,10 @@ describe('ShotTimeline', () => {
   });
 
   // Uniquely catches a dragged end saving the wrong field (or moving the start), and a selection that autoplays, a play/pause control that misses the loop, and a loop that never jumps back.
-  it('trims an in-shot effect by its end, swaps its style in place, cues it without playing, and loops it once played', async () => {
+  it('trims an in-shot effect by its end, swaps its style in place, cues it without playing, and loops it once played', () => {
+    // The playhead loop runs on animation frames and times its loop-back jump with performance.now(); both are driven by hand so no wall-clock or machine load decides the outcome (#16580).
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'performance'] });
+    const frames = (ms) => act(() => { vi.advanceTimersByTime(ms); });
     const onEditShot = vi.fn();
     const onPreview = vi.fn();
     let clock = { t: 0, playing: false };
@@ -221,11 +227,13 @@ describe('ShotTimeline', () => {
     expect(onPreview).toHaveBeenLastCalledWith(5.25, true);
     // Playing past the effect (0:06 + 1 s + the lead) jumps back before it.
     clock = { t: 7.9, playing: true };
-    await waitFor(() => expect(onPreview).toHaveBeenCalledTimes(4));
+    frames(100);
+    expect(onPreview).toHaveBeenCalledTimes(4);
     expect(onPreview).toHaveBeenLastCalledWith(5.25, true);
     // While it plays the button pauses where the playhead is.
     clock = { t: 6.5, playing: true };
-    fireEvent.click(await screen.findByRole('button', { name: 'Pause' }));
+    frames(100);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
     expect(onPreview).toHaveBeenLastCalledWith(6.5, false);
   });
 
