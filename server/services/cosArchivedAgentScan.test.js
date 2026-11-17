@@ -40,6 +40,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 const { getFeedbackStats } = await import('./cosAgentFeedback.js');
 const { getReviewerVerdictStats } = await import('./reviewerVerdicts.js');
 const { invalidateArchivedRecord } = await import('./cosAgentIndex.js');
+const { scanArchivedAgents } = await import('./cosArchivedAgentScan.js');
 
 fixture.root = mkdtempSync(join(tmpdir(), 'portos-archive-scan-'));
 afterAll(() => {
@@ -89,6 +90,16 @@ describe('Learning tab archive reads (#16593)', () => {
     const [, newVerdicts] = await openLearningTab();
     expect(newVerdicts.reports).toBe(2);
     expect(takeReads()).toEqual({ 'agent-new': 1 });
+  });
+
+  it('retains only the fields the stats use, not whole archived metadata', async () => {
+    archive('agent-rated', { id: 'agent-rated', summary: 'x'.repeat(4096), metadata: { taskDescription: 'Fix the example bug', taskType: 'user', output: 'y'.repeat(4096), reviewVerdicts: [verdict] }, feedback: { rating: 'positive', submittedAt: '2026-10-01T10:00:00Z' } });
+    const { byId } = await scanArchivedAgents();
+    expect(byId.get('agent-rated')).toEqual({
+      date: '2026-10-01',
+      verdicts: [verdict],
+      feedbackAgent: { id: 'agent-rated', feedback: { rating: 'positive', submittedAt: '2026-10-01T10:00:00Z' }, metadata: { taskDescription: 'Fix the example bug' }, feedbackTaskType: 'user-task' },
+    });
   });
 
   it('keeps an unreadable record distinct from an empty archive and retries it', async () => {

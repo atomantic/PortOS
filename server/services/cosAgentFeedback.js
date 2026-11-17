@@ -37,8 +37,7 @@ import {
   removePendingAgentFeedbackRef,
   upsertPendingAgentFeedbackRef,
 } from './cosAgentFeedbackStore.js';
-import { extractTaskType } from './taskLearning/store.js';
-import { scanArchivedAgents } from './cosArchivedAgentScan.js';
+import { feedbackTaskType, scanArchivedAgents } from './cosArchivedAgentScan.js';
 
 const hasValidFeedback = hasValidAgentFeedback;
 
@@ -329,11 +328,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       taskId: response.agent?.taskId ?? null,
       rating: feedbackData.rating,
       comment: feedbackData.comment,
-      taskType: extractTaskType({
-        description: response.agent?.metadata?.taskDescription,
-        metadata: response.agent?.metadata,
-        taskType: response.agent?.metadata?.taskType,
-      }),
+      taskType: feedbackTaskType(response.agent),
     },
     source: { service: 'cosAgentFeedback', fn: 'submitAgentFeedback' },
     happenedAt: feedbackData.submittedAt,
@@ -366,11 +361,8 @@ export async function getFeedbackStats() {
   // Group by task type
   const byTaskType = {};
   withFeedback.forEach(a => {
-    const taskType = extractTaskType({
-      description: a.metadata?.taskDescription,
-      metadata: a.metadata,
-      taskType: a.metadata?.taskType,
-    });
+    // Archived projections carry their type precomputed; live records are classified here.
+    const taskType = a.feedbackTaskType ?? feedbackTaskType(a);
     const bucket = bucketFor(byTaskType, taskType, () => ({ positive: 0, negative: 0, neutral: 0, total: 0 }));
     if (!bucket) return;
     bucket[a.feedback.rating]++;
