@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -37,6 +38,33 @@ export default function RunsTab() {
   );
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
   const loading = runsState === 'loading';
+
+  // Every run lifecycle transition (start, completion, failure, cancellation,
+  // and the post-listen boot close of runs a previous process left open,
+  // #16557) arrives as an `llm` system-activity invalidation. Re-read the page
+  // in place so a row never sits on Running after its run ended, and again on
+  // reconnect for frames missed while offline. A failed re-read keeps the last
+  // successful rows on screen; only the newest re-read may land.
+  const runsReady = useRef(false);
+  runsReady.current = runsState === 'ready';
+  const refreshGeneration = useRef(0);
+  useEffect(() => {
+    const refresh = () => {
+      if (!runsReady.current) return;
+      const current = ++refreshGeneration.current;
+      fetchRuns().then((list) => {
+        if (current === refreshGeneration.current && runsReady.current) setRuns(list);
+      }, () => {});
+    };
+    const onActivity = (frame) => { if (frame?.source === 'llm') refresh(); };
+    socket.on('system:activity', onActivity);
+    socket.on('connect', refresh);
+    return () => {
+      refreshGeneration.current += 1;
+      socket.off('system:activity', onActivity);
+      socket.off('connect', refresh);
+    };
+  }, [fetchRuns, setRuns]);
 
   // Filter runs by source and status
   const filteredRuns = runs.filter(run => {

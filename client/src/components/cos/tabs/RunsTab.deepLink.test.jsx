@@ -12,7 +12,17 @@ const api = vi.hoisted(() => ({
   getProcessLogs: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: vi.fn((event, handler) => handlers.set(event, handler)),
+    off: vi.fn((event) => handlers.delete(event)),
+    fire: (event, payload) => handlers.get(event)?.(payload),
+  };
+});
+
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/ProcessLogModal', () => ({
   default: () => null,
 }));
@@ -44,6 +54,29 @@ describe('RunsTab ?run= deep link', () => {
     expect(await screen.findByText('full output for run-b')).toBeInTheDocument();
     expect(api.getRunPrompt).toHaveBeenCalledWith('run-b');
     expect(api.getRunOutput).toHaveBeenCalledWith('run-b');
+  });
+
+  it('moves a Running row to its end state when a run lifecycle invalidation arrives (#16557)', async () => {
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] });
+    renderTab('/cos/runs');
+    expect(await within(await screen.findByTestId('run-row-recovering')).findByText('Running')).toBeVisible();
+
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: false, canceled: true }] });
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'media', phase: 'completion' }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(1);
+
+    await act(async () => { socket.fire('system:activity', { seq: 2, source: 'llm', phase: 'cancellation' }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByTestId('run-row-recovering')).queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loaded rows when an invalidation re-read fails', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    api.getRuns.mockRejectedValue(new Error('offline'));
+    await act(async () => { socket.fire('connect'); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('first prompt')).toBeInTheDocument();
   });
 
   it('expands nothing when no ?run= param is present', async () => {
