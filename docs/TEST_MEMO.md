@@ -119,8 +119,10 @@ spawns, imports or requires through a variable path; for a directory that is
 only the known prefix of a path with a variable segment (`join(HERE, p)`:
 the read may land outside it); for a test with a
 non-literal `require()`, which could load the tree natively where no
-recording shows it; for a tree holding a submodule or nested repository (one
-listed entry, whatever it contains); and outside a git checkout. A product
+recording shows it (a browser suite therefore loads its driver with
+`import { chromium } from 'playwright-core'`, never through
+`require(require.resolve(…))`, #16586); for a tree holding a submodule or
+nested repository (one listed entry, whatever it contains); and outside a git checkout. A product
 module's own oversized read is still ignored, as before: only a tree-scanning
 guard calls those walkers, and the planner keeps those always-run.
 
@@ -180,7 +182,7 @@ was refused:
 
 ```
 🧠 Test memo: recorded 12 green entries for 14 passed files.
-🧠   not recorded: client/src/components/CmdKSearch.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
+🧠   not recorded: client/src/components/Example.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
 🧠   not recorded: 3 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).
 ```
 
