@@ -1076,30 +1076,10 @@ supersession, and the account-billing check that confirms the upstream cause
 are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md) under "CI cancelled with no
 successor run".
 
-### The impact plan output
-
-The `impact` job publishes one `plan` output: the JSON object
-`githubPlanOutput()` in `scripts/ci-test-plan.js` builds. Jobs read a decision
-as `fromJSON(needs.impact.outputs.plan).<key>`. Values keep their JSON types,
-so a boolean key is tested bare (`if: fromJSON(needs.impact.outputs.plan).db`):
-after `fromJSON`, `true == 'true'` is false. A file list reaches a script as
-`${{ toJSON(fromJSON(needs.impact.outputs.plan).server_files) }}`. The planner
-also writes the "CI impact plan" step summary. Four other outputs remain:
-`server_shards`, `client_shards` and `windows_shards`, because a
-`strategy.matrix` needs a bare JSON array, and `db_image`, which the DB job's
-`services:` image reads.
-
-To add a gated job, add its key to `githubPlanOutput()` and a line to
-`formatPlanSummary()`, give the job `if: fromJSON(needs.impact.outputs.plan).<key>`,
-and list it in `CI Gate`'s `needs` and `CI_GATE_RESULT_*` env.
-`scripts/ci-test-plan.test.js` fails when `ci.yml` reads a key the planner
-does not emit or compares a boolean key with a string. A job that reads the plan
-under `always()` checks `needs.impact.result == 'success'` first, as
-`Full CI Gate` does: `fromJSON` of a failed or skipped impact job's empty
-output is an expression error, not a skip.
-
 ### Impact-planner safety rules
 
+- Jobs read decisions as `fromJSON(needs.impact.outputs.plan).<key>`
+  (`githubPlanOutput()`); only `*_shards` and `db_image` are separate outputs.
 - A directory feature such as `server/services/sprites/` additively selects
   tests carrying the same feature segment across server and client. The feature
   name never identifies all consumers (a nested leaf can be imported by a

@@ -125,7 +125,6 @@ jobs:
           CI_BASE_REF: ${{ github.base_ref }}
         run: node scripts/ci-impact-diagnostics.js plan -- node scripts/ci-test-plan.js
 
-
       # `autofixer/` is a real install target — its own package.json, its own
       # tracked lockfile, its own .npmrc — installed by `npm run setup` and by
       # scripts/ensure-deps.js on every `npm start`. Nothing else in CI resolves
