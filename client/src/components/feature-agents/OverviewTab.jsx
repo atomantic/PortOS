@@ -1,4 +1,4 @@
-import { Play, Pause, Square, Zap, Clock, Target, GitBranch, AlertTriangle } from 'lucide-react';
+import { Play, Pause, Square, Zap, Clock, Target, GitBranch } from 'lucide-react';
 import { STATUS_COLORS, STATUS_BG, PRIORITY_COLORS, SCHEDULE_LABELS, AUTONOMY_LABELS, timeAgo } from './constants';
 
 export default function OverviewTab({ agent, onStart, onPause, onResume, onStop, onTrigger }) {
@@ -64,13 +64,6 @@ export default function OverviewTab({ agent, onStart, onPause, onResume, onStop,
             <div className="text-sm text-white">{timeAgo(agent.createdAt)}</div>
           </div>
         </div>
-
-        {agent.backoff && (
-          <div className="mt-4 flex items-center gap-2 text-sm text-port-warning bg-port-warning/10 rounded-lg px-3 py-2">
-            <AlertTriangle size={14} />
-            <span>Backoff active: {Math.round(agent.backoff.currentDelayMs / 60000)}min delay ({agent.backoff.consecutiveIdles} consecutive idle runs)</span>
-          </div>
-        )}
       </div>
 
       {/* Persona */}
@@ -131,7 +124,6 @@ export default function OverviewTab({ agent, onStart, onPause, onResume, onStop,
               <div key={i} className="flex items-center gap-3 text-sm py-1.5 border-b border-port-border last:border-0">
                 <span className={`text-xs px-2 py-0.5 rounded ${
                   run.status === 'working' ? 'bg-port-success/10 text-port-success' :
-                  run.status === 'idle-no-work' ? 'bg-port-warning/10 text-port-warning' :
                   'bg-port-error/10 text-port-error'
                 }`}>
                   {run.status}
