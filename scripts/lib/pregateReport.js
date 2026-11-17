@@ -13,9 +13,9 @@
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 
 /** Repo-relative location of the receipt; gitignored under `/.cache/`. */
 export const PREGATE_REPORT_PATH = '.cache/pregate/report.json';
@@ -125,11 +125,73 @@ function addIgnoredEntry(root, rel, digest, budget) {
   for (const name of readdirSync(join(root, path)).sort()) addIgnoredEntry(root, `${path}/${name}`, digest, budget);
 }
 
+const within = (root, target) => target === root || target.startsWith(`${root}${sep}`);
+
+/**
+ * True when a symlink resolves to a file outside the checkout, whose bytes the
+ * tree hash never sees. A link to anything else outside it refuses reuse. A
+ * dangling link that points inside (an uninitialized submodule's target) is
+ * covered by the checkout's own state.
+ */
+function symlinkLeavesCheckout(cwd, path) {
+  const link = join(cwd, path);
+  let target;
+  try {
+    target = realpathSync(link);
+  } catch {
+    if (within(resolve(cwd), resolve(dirname(link), readlinkSync(link)))) return false;
+    throw new Error(`symlink ${path} points outside the checkout at a missing target`);
+  }
+  if (within(realpathSync(cwd), target)) return false;
+  if (!statSync(target).isFile()) throw new Error(`symlink ${path} points outside the checkout at a non-file`);
+  return true;
+}
+
+/** Attributes under which Git stores content other than the working-tree bytes. */
+const CONTENT_ATTRIBUTES = ['filter', 'ident', 'working-tree-encoding'];
+
+/**
+ * The tree hash is Git's normalized content: an eol conversion (`text=auto
+ * eol=lf`, `*.cmd eol=crlf`) or a clean filter leaves it unchanged while the
+ * bytes a guard reads (a size budget, a CR-sensitive pattern) differ. Hash the
+ * raw bytes of every path Git may have converted, and of any symlink target
+ * outside the checkout.
+ */
+function addRawContentInputs(cwd, git, digest) {
+  const paths = [];
+  const candidates = new Set();
+  for (const entry of git(['ls-files', '--eol', '--cached', '--others', '--exclude-standard', '-z'])) {
+    const tab = entry.indexOf('\t');
+    const path = entry.slice(tab + 1);
+    paths.push(path);
+    const worktree = entry.slice(0, tab).split(/\s+/).find((field) => field.startsWith('w/'));
+    // `w/lf` and `w/none` hold no CR for a conversion to remove; `w/` is a symlink, gitlink or deleted path.
+    if (worktree && !['w/lf', 'w/none', 'w/'].includes(worktree)) candidates.add(path);
+    else if (worktree === 'w/') {
+      let stat = null;
+      try { stat = lstatSync(join(cwd, path)); } catch { /* deleted: the tree hash records the deletion */ }
+      if (stat?.isSymbolicLink() && symlinkLeavesCheckout(cwd, path)) candidates.add(path);
+    }
+  }
+  if (paths.length > 0) {
+    const attributes = execFileSync('git', ['check-attr', '-z', '--stdin', ...CONTENT_ATTRIBUTES], {
+      cwd, input: `${paths.join('\0')}\0`, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    }).toString('utf8').split('\0');
+    for (let index = 0; index + 2 < attributes.length; index += 3) {
+      if (!['unspecified', 'unset'].includes(attributes[index + 2])) candidates.add(attributes[index]);
+    }
+  }
+  for (const path of [...candidates].sort()) {
+    digest.update(`raw ${path} ${sha256(readFileSync(join(cwd, path)))}\0`);
+  }
+}
+
 function addCheckoutInputs(cwd, digest, depth, budget) {
   const git = (args) => execFileSync('git', args, {
     cwd, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
   }).toString('utf8').split('\0').filter(Boolean);
   digest.update(`tree ${validatedTreeHash(cwd)}\0`);
+  addRawContentInputs(cwd, git, digest);
   const submodules = [];
   for (const entry of git(['ls-files', '--stage', '-z'])) {
     const tab = entry.indexOf('\t');
@@ -166,7 +228,8 @@ function addCheckoutInputs(cwd, digest, depth, budget) {
  * can be reused by a later invocation (`guardReuseStageKey` adds the stage
  * itself and the base). Unlike `guardInputSnapshot` it omits HEAD and refs:
  * every guard stage receives `CI_BASE_SHA`, and the HEAD/ref reads in guards
- * are fallbacks taken only without it. It covers the exact working tree,
+ * are fallbacks taken only without it. It covers the exact working tree
+ * (with the raw bytes of any path Git normalizes),
  * tracked paths with their modes and symlink/gitlink entries, Git config,
  * ignored paths (stat) outside the test memo's non-input set, each installed
  * dependency tree's manifest, initialized submodules recursively, the Node

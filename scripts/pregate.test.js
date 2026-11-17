@@ -513,11 +513,14 @@ describe('pregate hidden-content invocation', () => {
       ['an edited tracked file', () => { write('docs/tracked note.md', '# Edited\n'); }],
       ['git add of a new file', () => { git('add', 'docs/new.md'); }],
       ['a changed ignored file outside caches', () => { write('local.secret', 'two\n'); }],
+      // Git normalizes CRLF away, so only the raw bytes a guard reads change.
+      ['a line-ending-only edit', () => { write('docs/tracked note.md', '# Example\r\n'); }],
     ])('reruns every guard and lint stage after %s', (_label, mutate) => {
       prepare();
       write('docs/new.md', 'new\n');
       writeFileSync(join(root, '.git', 'info', 'exclude'), 'local.secret\n');
       write('local.secret', 'one\n');
+      writeFileSync(join(root, '.git', 'info', 'attributes'), '* text=auto eol=lf\n');
       firstRun();
       mutate();
       const result = runReuse();
