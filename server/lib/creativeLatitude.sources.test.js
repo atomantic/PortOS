@@ -20,6 +20,37 @@ const CALL_WINDOW = 900;
 const SOURCE_LITERAL = /source:\s*'([^']+)'/g;
 const SKIP_DIRS = new Set(['node_modules', 'aiToolkit']);
 
+// `callProviderAISimple` falls back to an operational tag when a caller names
+// none, so a creative call site that loses its `source` would go out without
+// the clause and with every other test green. Each call site is listed with
+// the tag it passes (`null` when it passes none).
+const SIMPLE_CALL = /\bcallProviderAISimple\s*\(/g;
+const SIMPLE_CALL_HOME = join(SERVER_ROOT, 'services', 'aiProvider.js');
+
+function collectSimpleCallSites(dir, found = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name)) collectSimpleCallSites(join(dir, entry.name), found);
+      continue;
+    }
+    if (!entry.name.endsWith('.js') || entry.name.includes('.test.')) continue;
+    const path = join(dir, entry.name);
+    // The helper's own definition and its fallback re-entry forward `options`.
+    if (path === SIMPLE_CALL_HOME) continue;
+    const text = readFileSync(path, 'utf-8');
+    for (const call of text.matchAll(SIMPLE_CALL)) {
+      // Up to the next call, so one site never borrows its neighbour's tag.
+      const next = text.indexOf('callProviderAISimple', call.index + 1);
+      const window = text.slice(call.index, Math.min(call.index + CALL_WINDOW, next === -1 ? text.length : next));
+      // A mention in a comment or an import is not a call with options.
+      if (!/^\s*callProviderAISimple\s*\(\s*[\w{]/.test(window) || /^callProviderAISimple\s*\(\s*\)/.test(window)) continue;
+      const hit = /source:\s*'([^']+)'/.exec(window);
+      found.push({ file: path.slice(SERVER_ROOT.length + 1), source: hit ? hit[1] : null });
+    }
+  }
+  return found;
+}
+
 function collectSourceLiterals(dir, found = new Map()) {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
@@ -60,6 +91,29 @@ describe('run-source census (IP-latitude clause)', () => {
       'unclassified run sources — add each to CREATIVE_PREFIXES / CREATIVE_NAMES '
       + `or OPERATIONAL_RUN_SOURCES in creativeLatitude.js: ${unclassified.join(', ')}`,
     ).toEqual([]);
+  });
+
+  it('names a run source at every callProviderAISimple call site', () => {
+    const sites = collectSimpleCallSites(SERVER_ROOT);
+    // Eight services, fifteen call sites when this guard was written; a rename
+    // of the helper would empty the scan and pass vacuously.
+    expect(sites.length).toBeGreaterThanOrEqual(15);
+    expect(sites.filter((site) => site.source === null).map((site) => site.file)).toEqual([]);
+  });
+
+  it('keeps the latitude clause on exactly the callProviderAISimple call sites that write creative text', () => {
+    const creative = collectSimpleCallSites(SERVER_ROOT)
+      .filter((site) => isCreativeRunSource(site.source))
+      .map((site) => `${site.file}: ${site.source}`)
+      .sort();
+    // Reclassifying one of these, or stamping a new one, changes the prompt a
+    // provider receives, so it has to be a deliberate edit here too.
+    expect(creative).toEqual([
+      'services/autobiography.js: autobiography-weave',
+      'services/taste-questionnaire.js: taste-deep-question',
+      'services/taste-questionnaire.js: taste-summary',
+      'services/taste-questionnaire.js: taste-summary',
+    ]);
   });
 
   it('keeps the operational list free of entries the creative table already claims', () => {

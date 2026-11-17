@@ -47,7 +47,8 @@ const runsDir = join(tempRoot, 'runs');
 const spies = {
   onRunCreated: vi.fn((metadata) => usage.recordSession(metadata.providerId, metadata.providerName, metadata.model)),
   onRunStarted: vi.fn(),
-  onRunCompleted: vi.fn((metadata, output) => recordCompletedRunUsage(metadata, output)),
+  // `home` is where CLI transcripts would be looked for; never the real one.
+  onRunCompleted: vi.fn((metadata, output) => recordCompletedRunUsage(metadata, output, { home: tempRoot })),
   onRunFailed: vi.fn(),
   onRunCanceled: vi.fn(),
 };
