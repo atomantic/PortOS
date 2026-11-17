@@ -290,7 +290,7 @@ npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 
 `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on
 Windows runs the DB suite when the plan selects it, after every other stage,
-against `portos_test` only. For release validation by
+against `portos_test` only. When running the DB suite by
 hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
 the database restore suite drains a timed-out case before the next one touches
