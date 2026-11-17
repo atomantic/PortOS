@@ -388,7 +388,7 @@ describe('validation.js stops growing (#16559)', () => {
     expect(ownExportNames(`${barrelSrc}\nexport const plantedSchema = z.string();\n`).size).toBe(ownNames.size + 1);
   });
 
-  it('no server source imports only names declared outside validation.js through it', () => {
+  it('no server source statically imports only names declared outside validation.js through it', () => {
     const offenders = [];
     for (const rel of trackedFiles(repoRoot, ['server/**/*.js', 'server/**/*.jsx'])) {
       if (/\.test\.jsx?$/.test(rel)) continue;
