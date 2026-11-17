@@ -24,6 +24,7 @@ const clearRestoredMediaTombstones = vi.fn(async () => ({ videos: [], images: []
 vi.mock('../mediaRestoreTombstones.js', () => ({ clearRestoredMediaTombstones }));
 
 import { imageGenEvents } from '../imageGenEvents.js';
+import { peerSyncBus } from '../peerSyncEventBus.js';
 import { videoGenEvents } from '../videoGen/events.js';
 
 beforeEach(() => {
@@ -108,11 +109,20 @@ describe('reconcileMediaAssetIndexAtBoot (post-listen sweep, #16556)', () => {
     expect(clearRestoredMediaTombstones).not.toHaveBeenCalled();
   });
 
-  it('reconciles + clears restored tombstones once per armed boot', async () => {
+  it('reconciles + clears restored tombstones once per armed boot, then tells open lists to refetch', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    const notices = [];
+    const onNotice = (payload) => notices.push(payload);
+    peerSyncBus.on('media-history-changed', onNotice);
     const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
     await initMediaAssetIndex();
     await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: true, indexed: 0, pruned: 0 });
+    peerSyncBus.off('media-history-changed', onNotice);
+    // Galleries do not poll: one that opened mid-sweep would show stale rows.
+    expect(notices).toEqual([
+      { kind: 'image', op: 'reconcile', ids: [] },
+      { kind: 'video', op: 'reconcile', ids: [] },
+    ]);
     await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: false, reason: 'not-armed' });
     expect(reconcileMediaAssets).toHaveBeenCalledTimes(1);
     // Boot is where a Put Back from the OS Trash sheds its delete record.
@@ -123,9 +133,13 @@ describe('reconcileMediaAssetIndexAtBoot (post-listen sweep, #16556)', () => {
     vi.stubEnv('NODE_ENV', 'production');
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     reconcileMediaAssets.mockRejectedValueOnce(new Error('disk gone'));
+    const onNotice = vi.fn();
+    peerSyncBus.on('media-history-changed', onNotice);
     const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
     await initMediaAssetIndex();
     await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: false, reason: 'reconcile-failed' });
+    peerSyncBus.off('media-history-changed', onNotice);
+    expect(onNotice).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('Media asset index boot reconcile failed: disk gone'));
     expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
     errSpy.mockRestore();
