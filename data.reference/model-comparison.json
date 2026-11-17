@@ -2,6 +2,220 @@
   "schemaVersion": 1,
   "observations": [
     {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-astra-low",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "low",
+      "configuration": "ModelDial five-dimension coding evaluation; low",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 87.1,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:20:30.959340Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 25m 20s, API cost $1.01. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-astra-medium",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "medium",
+      "configuration": "ModelDial five-dimension coding evaluation; medium",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 86.15,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:20:30.959553Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 28m 12s, API cost $1.28. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-astra-high",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "high",
+      "configuration": "ModelDial five-dimension coding evaluation; high",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 89.4,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:20:30.959557Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 37m 47s, API cost $2.96. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-astra-xhigh",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "xhigh",
+      "configuration": "ModelDial five-dimension coding evaluation; xhigh",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 92.05,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:20:30.959559Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 53m 57s, API cost $5.31. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-astra-max",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "max",
+      "configuration": "ModelDial five-dimension coding evaluation; max",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 93.0,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:20:30.959561Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 94m 34s, API cost $16.64. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "modeldial-coding-2026-11-16-gpt-6.2-sol-max",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-sol",
+      "effort": "max",
+      "configuration": "ModelDial five-dimension coding evaluation; max",
+      "billing": "api",
+      "benchmark": "ModelDial Coding Rankings (five dimensions, 2026-11-16)",
+      "quality": {
+        "value": 88.9,
+        "source": {
+          "url": "https://modeldial.com/en/models/gpt-6.2-sol",
+          "retrievedAt": "2026-11-17T18:20:30.959563Z",
+          "methodology": "Published weighted coding score, 0-100; https://modeldial.com/en/method."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Full evaluation: 47m 41s, API cost unpublished. Not per-task cost or response latency. Snapshot 2026-11-16; private tasks."
+    },
+    {
+      "id": "openai-gpt-6.2-astra-pricing-2026-11-17-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-astra",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-17)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:14:46.171017Z",
+          "methodology": "Publisher standard API list price in USD per million uncached input tokens for requests with at most 272K input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+          "retrievedAt": "2026-11-17T18:14:46.171211Z",
+          "methodology": "Publisher standard API list price in USD per million output tokens for requests with at most 272K input tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official standard API token rates; not Codex subscription quota or measured task cost. Above 272K input tokens, input/cache rates double and output rates increase 1.5x for the full request. Cache writes, cached input, Batch, Fast and Ultrafast use separate rates. Reasoning is billed as output, not a separate surcharge. No verified Artificial Analysis effort-level score, task cost, latency or throughput was accessible during this refresh; these remain unknown rather than inheriting predecessor measurements."
+    },
+    {
+      "id": "openai-gpt-6.2-sol-pricing-2026-11-17-standard",
+      "provider": "OpenAI",
+      "model": "gpt-6.2-sol",
+      "effort": "unspecified",
+      "configuration": "OpenAI API standard tier; uncached input / output tokens, context at or below the standard-rate threshold",
+      "billing": "api",
+      "benchmark": "Official API pricing (2026-11-17)",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+          "retrievedAt": "2026-11-17T18:14:46.171214Z",
+          "methodology": "Publisher standard API list price in USD per million uncached input tokens for requests with at most 272K input tokens."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+          "retrievedAt": "2026-11-17T18:14:46.171215Z",
+          "methodology": "Publisher standard API list price in USD per million output tokens for requests with at most 272K input tokens."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Official standard API token rates; not Codex subscription quota or measured task cost. Above 272K input tokens, input/cache rates double and output rates increase 1.5x for the full request. Cache writes, cached input, Batch, Fast and Ultrafast use separate rates. Reasoning is billed as output, not a separate surcharge. No verified Artificial Analysis effort-level score, task cost, latency or throughput was accessible during this refresh; these remain unknown rather than inheriting predecessor measurements."
+    },
+    {
       "id": "openai-gpt-6.1-terra-pricing-2026-10-27-standard",
       "provider": "OpenAI",
       "model": "gpt-6.1-terra",
