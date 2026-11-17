@@ -565,7 +565,8 @@ const COMPLETION_ARGS = new Set([
  *   `source`, `model`, `timeout`, `signal`, `cwd`, `onRunCreated` and `onRunSettled`; any other
  *   argument is refused, never silently ignored. Resolves with `usage`,
  *   `tokens` and `retried` beside the usual fields; rejects with the reply's own error text and
- *   `completionFailure`, the failed reply itself (`{ error, status?, body?, stallPhase?, model, retried }`).
+ *   `completionFailure`, the failed reply itself (`{ error, status?, body?, stallPhase?, model, retried }`,
+ *   with `canceled: true` when the run was stopped).
  * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, coercedResponse?: boolean, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
  *   — `model` is the model that actually executed. `provider` is the provider that actually ran,
  *   reflecting createRun's proactive swap (`usedFallback`/`fallbackProvider` cover only the retry

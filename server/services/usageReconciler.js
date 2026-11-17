@@ -909,7 +909,7 @@ export function resolveFamilyProvider(providers, family, measured = null) {
  * provider having reported counts; a run that got none keeps its estimate and
  * still must not claim another run's session.
  */
-const isSelfContainedRun = (run) => run?.selfContainedUsage === true;
+export const isSelfContainedRun = (run) => run?.selfContainedUsage === true;
 
 /**
  * The token counts a run's provider reported in its own response, as ledger
