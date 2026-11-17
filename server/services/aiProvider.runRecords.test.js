@@ -69,7 +69,7 @@ const providerStatusService = {
 let runnerService;
 const loadToolkit = () => {
   runnerService = createRunnerService({ dataDir: tempRoot, providerService, providerStatusService, hooks });
-  setAIToolkit({ services: { runner: runnerService, providerStatus: providerStatusService, errorDetection: { analyzeError } } }, { dataDir: tempRoot, hooks });
+  setAIToolkit({ services: { providers: providerService, runner: runnerService, providerStatus: providerStatusService, errorDetection: { analyzeError } } }, { dataDir: tempRoot, hooks });
 };
 
 const provider = { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'https://api.example.com/v1', enabled: false };
@@ -546,5 +546,97 @@ describe('runPromptThroughProvider completion requests', () => {
     expect(failure.message).toBe('Provider returned 429: slow down');
     expect(failure.completionFailure).toEqual({ error: 'Provider returned 429: slow down', status: 429, body: 'slow down', model: 'model-1', retried: false });
     expect(failure.runId).not.toBe(ok.runId);
+  });
+});
+
+
+describe('tracked ChatGPT subscription calls', () => {
+  const subscription = { id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
+    textTransport: 'codex-app-server', textTransportEnabled: true, textTransportReadRiskAcknowledged: true,
+    defaultModel: 'example-codex', effort: 'high' };
+  let transport;
+  beforeEach(async () => {
+    transport = await import('./codexAppServer.js');
+    vi.spyOn(transport, 'getCodexTextTransportBench').mockReturnValue(null);
+    vi.spyOn(transport, 'runCodexTextTurn');
+    vi.spyOn(transport, 'benchCodexTextTransport');
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['api', 'subscription'])('honors Stop as soon as the %s record is published, before dispatch', async (kind) => {
+    let stopped;
+    spies.onRunCreated.mockImplementationOnce(metadata => {
+      void usage.recordSession(metadata.providerId, metadata.providerName, metadata.model);
+      stopped = stopRun(metadata.id);
+    });
+    const fetch = respondWith(completion('unexpected answer'));
+    transport.runCodexTextTurn.mockImplementation(({ signal }) => {
+      if (signal.aborted) throw Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' });
+      return Promise.resolve({ text: 'unexpected answer' });
+    });
+    const result = await callProviderAISimple(kind === 'api' ? provider : subscription, 'example-model', 'Summarize.');
+    expect(await stopped).toBe(true);
+    expect(result).toMatchObject({ canceled: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await record()).metadata).toMatchObject({ canceled: true, success: false });
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
+  });
+
+  it('records the exact stamped prompt and effective effort, opens one session and bills ephemeral tokens once', async () => {
+    transport.runCodexTextTurn.mockImplementation(async () => {
+      expect(await runnerService.getActiveRunCount()).toBe(1);
+      expect(getDirectProviderCallCount()).toBe(0);
+      return { text: 'subscription answer', model: 'effective-codex', effort: 'medium', effortClamped: true,
+        clampReason: 'example clamp', usage: { inputTokens: 12, cachedInputTokens: 4, outputTokens: 3 } };
+    });
+    const result = await callProviderAISimple(subscription, subscription.defaultModel, 'Describe a landscape.', { source: 'taste-summary' });
+    expect(result).toMatchObject({ text: 'subscription answer', effort: 'medium', effortClamped: true });
+    const run = await record();
+    expect(run.prompt).toBe(transport.runCodexTextTurn.mock.calls[0][0].prompt);
+    expect(run.prompt.split(CREATIVE_LATITUDE_HEADING)).toHaveLength(2);
+    expect(run.output).toBe(result.text);
+    expect(run.metadata).toMatchObject({ success: true, source: 'taste-summary', model: 'effective-codex', effort: 'medium',
+      selfContainedUsage: true, nativeUsageUnpersisted: true, reportedUsage: { tokensIn: 8, tokensOut: 3, cacheReadTokens: 4 } });
+    expect(usage.recordSession).toHaveBeenCalledTimes(1);
+    expect(spies.onRunCompleted).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    expect(usage.recordRunUsage.mock.calls[0][0]).toMatchObject({ tokensIn: 8, tokensOut: 3, cacheReadTokens: 4, nativeUsageUnpersisted: true, source: 'measured' });
+  });
+
+  it('finalizes a failed subscription attempt before an explicit API fallback opens its own run', async () => {
+    const fallback = { ...provider, enabled: true };
+    providerService.getAllProviders.mockResolvedValueOnce({ providers: [subscription, fallback] });
+    transport.runCodexTextTurn.mockRejectedValue(Object.assign(new Error('Subscription limit reached.'), { code: 'CODEX_TURN_RATE_LIMIT' }));
+    respondWith(completion('fallback answer', { usage: { prompt_tokens: 10, completion_tokens: 2 } }));
+    const result = await callProviderAISimple({ ...subscription, fallbackProvider: fallback.id }, 'example-codex', 'Summarize.', { source: 'goal-check-in' });
+    expect(result).toMatchObject({ text: 'fallback answer' });
+    const ids = await runIds();
+    expect(ids).toHaveLength(2);
+    const records = await Promise.all(ids.map(async id => JSON.parse(await readFile(join(runsDir, id, 'metadata.json'), 'utf8'))));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: 'codex', success: false, error: 'Subscription limit reached.' }),
+      expect.objectContaining({ providerId: fallback.id, success: true }),
+    ]));
+    expect(usage.recordSession).toHaveBeenCalledTimes(2);
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(['Stop', 'caller abort', 'delete'])('interrupts the turn for %s and records cancellation without benching or fallback', async (action) => {
+    const caller = new AbortController();
+    transport.runCodexTextTurn.mockImplementation(({ signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' })), { once: true });
+    }));
+    const pending = callProviderAISimple({ ...subscription, fallbackProvider: 'example-api' }, 'example-codex', 'Summarize.', { signal: caller.signal });
+    await vi.waitFor(() => expect(transport.runCodexTextTurn).toHaveBeenCalledTimes(1));
+    const [id] = await runIds();
+    if (action === 'caller abort') caller.abort();
+    else if (action === 'delete') await serializeRunDeletion(runnerService.deleteRun.bind(runnerService))(id);
+    else await stopRun(id);
+    expect(await pending).toEqual({ error: 'The Codex turn was cancelled.', canceled: true });
+    if (action === 'delete') expect(await runIds()).toEqual([]);
+    else expect((await record()).metadata).toMatchObject({ success: false, canceled: true, completionReason: 'canceled', errorCategory: ERROR_CATEGORIES.CANCELED });
+    expect(transport.benchCodexTextTransport).not.toHaveBeenCalled();
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
   });
 });
