@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { execFile } from '../../../lib/childProcess.js';
 import { findFfmpeg } from '../../../lib/ffmpeg.js';
-import { assembleBlenderVideo } from './assemble.js';
+import { assembleBlenderVideo } from '../../film/assemble.js';
 import { blenderCutEffects } from '../../../lib/musicVideoCutEffects.js';
 import { blenderFinishFilter } from './finishFilter.js';
 

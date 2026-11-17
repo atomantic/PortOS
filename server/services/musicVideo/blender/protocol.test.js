@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBlenderDriverLine } from './protocol.js';
+import { parseBlenderDriverLine } from '../../film/protocol.js';
 
 const line = (event) => `PORTOS_BLENDER ${JSON.stringify(event)}`;
 

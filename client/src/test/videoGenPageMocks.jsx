@@ -197,7 +197,6 @@ vi.mock('../services/api', () => ({
   setVideoHidden: vi.fn(async () => ({})),
   extractLastFrame: vi.fn(async () => ({})),
   upscaleVideo: vi.fn(async () => ({})),
-  listImageGallery: vi.fn(async () => []),
   patchSettingsSlice: vi.fn(async () => ({})),
   getActiveVideoJob: vi.fn(async () => ({ activeJob: state.activeJob })),
   getSettings: vi.fn(async () => state.settings ?? ({ imageGen: { grok: { enabled: false } } })),

@@ -419,23 +419,6 @@ describe('ollamaManager HF pull recovery', () => {
 
   const exists = (p) => stat(p).then(() => true, () => false)
 
-  describe('isPullDeadlineError', () => {
-    it('matches Ollama’s Go deadline error', async () => {
-      const { isPullDeadlineError } = await loadManager()
-      expect(isPullDeadlineError('context deadline exceeded')).toBe(true)
-      expect(isPullDeadlineError('Post "https://…": context deadline exceeded')).toBe(true)
-    })
-    it('does NOT match the transient class or unrelated errors', async () => {
-      const { isPullDeadlineError } = await loadManager()
-      // Must stay disjoint from isTransientPullError — a plain retry can't fix a
-      // deadline, and the recovery path must not swallow real network blips.
-      expect(isPullDeadlineError('EOF')).toBe(false)
-      expect(isPullDeadlineError('read ECONNRESET')).toBe(false)
-      expect(isPullDeadlineError('pull model manifest: file does not exist')).toBe(false)
-      expect(isPullDeadlineError(null)).toBe(false)
-    })
-  })
-
   describe('listStoredModels', () => {
     it('enumerates manifests from disk while the daemon is stopped', async () => {
       await mkdir(join(modelsDir, 'manifests', 'registry.ollama.ai', 'library', 'example'), { recursive: true })
@@ -455,11 +438,33 @@ describe('ollamaManager HF pull recovery', () => {
     })
   })
 
+  // Recovery is private to pullModel: script /api/pull to fail with Ollama's
+  // deadline error after 100%, let the registry stub serve the rest, and read
+  // the recovery's verdict from the result (success) or its decline warning.
+  async function finalizeHuggingFacePull(modelId) {
+    const registryFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url, ...rest) => {
+      if (String(url).endsWith('/api/pull')) {
+        return makeStreamResponse([{ status: 'pulling', total: 100, completed: 100 }, { error: 'context deadline exceeded' }])
+      }
+      return registryFetch(url, ...rest)
+    }))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { pullModel } = await loadManager()
+      const result = await pullModel(modelId)
+      if (result.success) return { success: true }
+      const declined = warn.mock.calls.map(([line]) => String(line)).find((line) => line.includes('pull recovery declined'))
+      return { success: false, error: declined?.split(': ').slice(1).join(': ') }
+    } finally {
+      warn.mockRestore()
+    }
+  }
+
   describe('finalizeHuggingFacePull', () => {
     it('fetches the missing config blob and writes the manifest Ollama never wrote', async () => {
       await placeWeights()
       stubRegistry()
-      const { finalizeHuggingFacePull } = await loadManager()
 
       expect(await finalizeHuggingFacePull(HF_ID)).toEqual({ success: true })
       expect(await readFile(blobPath(configDigest))).toEqual(configBody)
@@ -471,20 +476,20 @@ describe('ollamaManager HF pull recovery', () => {
       hfTokenMock.token = 'hf_example_token'
       await placeWeights()
       const urls = stubRegistry()
-      const { finalizeHuggingFacePull } = await loadManager()
 
       await finalizeHuggingFacePull(HF_ID)
 
       // Both the manifest and the blob request need the bearer — a 401 on either
       // would make the recovery decline every time for a gated model.
-      expect(urls.inits.every((init) => init?.headers?.Authorization === 'Bearer hf_example_token')).toBe(true)
+      const registryInits = urls.inits.filter((_, i) => urls[i].startsWith(HF_BASE))
+      expect(registryInits).toHaveLength(2)
+      expect(registryInits.every((init) => init?.headers?.Authorization === 'Bearer hf_example_token')).toBe(true)
       hfTokenMock.token = null
     })
 
     it('keeps the already-downloaded weight layer instead of re-fetching 30GB', async () => {
       await placeWeights()
       const urls = stubRegistry()
-      const { finalizeHuggingFacePull } = await loadManager()
 
       await finalizeHuggingFacePull(HF_ID)
 
@@ -499,7 +504,6 @@ describe('ollamaManager HF pull recovery', () => {
       await writeFile(partial, Buffer.alloc(481))
       await writeFile(partialPart, '{"N":0,"Offset":0,"Size":481,"Completed":0}\n')
       stubRegistry()
-      const { finalizeHuggingFacePull } = await loadManager()
 
       await finalizeHuggingFacePull(HF_ID)
 
@@ -511,7 +515,6 @@ describe('ollamaManager HF pull recovery', () => {
     it('refuses to write the manifest when a downloaded blob fails digest verification', async () => {
       await placeWeights()
       stubRegistry({ blobBody: Buffer.from('corrupted bytes from a bad CDN edge') })
-      const { finalizeHuggingFacePull } = await loadManager()
 
       const result = await finalizeHuggingFacePull(HF_ID)
 
@@ -530,7 +533,6 @@ describe('ollamaManager HF pull recovery', () => {
       const big = manifest()
       big.layers[0].size = 29_787_701_792
       stubRegistry({ manifestDoc: big })
-      const { finalizeHuggingFacePull } = await loadManager()
 
       const result = await finalizeHuggingFacePull(HF_ID)
 
@@ -545,7 +547,6 @@ describe('ollamaManager HF pull recovery', () => {
       const noSize = manifest()
       delete noSize.layers[0].size
       stubRegistry({ manifestDoc: noSize })
-      const { finalizeHuggingFacePull } = await loadManager()
 
       const result = await finalizeHuggingFacePull(HF_ID)
 
@@ -558,7 +559,6 @@ describe('ollamaManager HF pull recovery', () => {
       await placeWeights()
       await writeFile(blobPath(configDigest), Buffer.from('truncated')) // wrong size
       const urls = stubRegistry()
-      const { finalizeHuggingFacePull } = await loadManager()
 
       expect(await finalizeHuggingFacePull(HF_ID)).toEqual({ success: true })
       expect(urls).toContain(`${HF_BASE}/blobs/${configDigest}`)
@@ -568,7 +568,6 @@ describe('ollamaManager HF pull recovery', () => {
     it('surfaces a failed blob fetch without writing a partial manifest', async () => {
       await placeWeights()
       stubRegistry({ failBlob: true })
-      const { finalizeHuggingFacePull } = await loadManager()
 
       const result = await finalizeHuggingFacePull(HF_ID)
 
@@ -577,15 +576,8 @@ describe('ollamaManager HF pull recovery', () => {
       expect(await exists(manifestPath())).toBe(false)
     })
 
-    it('declines a non-Hugging-Face ref (no OCI registry to fetch from)', async () => {
-      const { finalizeHuggingFacePull } = await loadManager()
-      const result = await finalizeHuggingFacePull('gpt-oss:20b')
-      expect(result).toEqual({ success: false, error: 'not a Hugging Face model ref' })
-    })
-
     it('declines a manifest that lists no blobs', async () => {
       stubRegistry({ manifestDoc: { schemaVersion: 2 } })
-      const { finalizeHuggingFacePull } = await loadManager()
       const result = await finalizeHuggingFacePull(HF_ID)
       expect(result.success).toBe(false)
       expect(result.error).toMatch(/no blobs/)
@@ -594,7 +586,7 @@ describe('ollamaManager HF pull recovery', () => {
 
   describe('pullModel deadline recovery', () => {
     // Script /api/pull to fail with the deadline error, then let the recovery run.
-    function stubPullThenRegistry(registryOpts) {
+    function stubPullThenRegistry(registryOpts, pullError = 'context deadline exceeded') {
       const inner = stubRegistry(registryOpts)
       const registryFetch = globalThis.fetch
       let pulls = 0
@@ -604,7 +596,7 @@ describe('ollamaManager HF pull recovery', () => {
           return makeStreamResponse([
             { status: 'pulling manifest' },
             { status: 'pulling', total: 100, completed: 100 },
-            { error: 'context deadline exceeded' }
+            { error: pullError }
           ])
         }
         return registryFetch(url, ...rest)
@@ -641,6 +633,21 @@ describe('ollamaManager HF pull recovery', () => {
       expect(result.error).toBe('context deadline exceeded')
     })
 
+    it('leaves an unrelated pull failure alone instead of attempting a recovery', async () => {
+      // Only Ollama's deadline error means "weights landed, manifest missing";
+      // a missing upstream manifest must fail plainly, not look like a recovery.
+      const { urls } = stubPullThenRegistry({}, 'pull model manifest: file does not exist')
+      const { pullModel } = await loadManager()
+      const onProgress = vi.fn()
+
+      const result = await pullModel(HF_ID, onProgress)
+
+      expect(result.success).toBe(false)
+      expect(result.error).toBe('pull model manifest: file does not exist')
+      expect(onProgress).not.toHaveBeenCalledWith(expect.objectContaining({ finalizing: true }))
+      expect(urls.some((u) => u.startsWith(HF_BASE))).toBe(false)
+    })
+
     it('does not announce a recovery for a non-HF ref it could never finish', async () => {
       // registry.ollama.ai has no OCI endpoint PortOS can complete a pull from,
       // so a deadline there must fail plainly — no "finishing install…" banner
@@ -657,32 +664,6 @@ describe('ollamaManager HF pull recovery', () => {
     })
   })
 })
-
-describe('ollamaManager.isBootstrapConflictError', () => {
-  it('matches the launchctl bootstrap-5 / EIO failures brew surfaces', async () => {
-    const { isBootstrapConflictError } = await import('./ollamaManager.js')
-    expect(isBootstrapConflictError('Bootstrap failed: 5: Input/output error')).toBe(true)
-    expect(isBootstrapConflictError('Error: Failure while executing; `/bin/launchctl bootstrap gui/501 …` exited with 5.')).toBe(true)
-    expect(isBootstrapConflictError('service already loaded')).toBe(true)
-  })
-
-  it('does NOT match unrelated failures (no false bootout/retry)', async () => {
-    const { isBootstrapConflictError } = await import('./ollamaManager.js')
-    expect(isBootstrapConflictError('Permission denied')).toBe(false)
-    expect(isBootstrapConflictError('ollama: command not found')).toBe(false)
-    expect(isBootstrapConflictError('')).toBe(false)
-    expect(isBootstrapConflictError(undefined)).toBe(false)
-  })
-
-  it('requires bootstrap context — a bare EIO / exit-5 unrelated to bootstrap is not a conflict', async () => {
-    const { isBootstrapConflictError } = await import('./ollamaManager.js')
-    // A generic disk EIO during an unrelated brew step must not trip the bootout.
-    expect(isBootstrapConflictError('Error: write failed: Input/output error')).toBe(false)
-    // Some other command exiting 5 with no bootstrap involved.
-    expect(isBootstrapConflictError('Error: `brew cleanup` exited with 5.')).toBe(false)
-  })
-})
-
 
 // A controllable `ollama create` child: tests drive its output and exit, and
 // record the signals PortOS sends it.
@@ -1167,7 +1148,11 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) })))
   }
 
-  it('boots out a stale launchd registration and retries when start fails with bootstrap-5', async () => {
+  it.each([
+    'Bootstrap failed: 5: Input/output error',
+    'Error: Failure while executing; `/bin/launchctl bootstrap gui/501 …` exited with 5.',
+    'service already loaded',
+  ])('boots out a stale launchd registration and retries when start fails with %j', async (failure) => {
     stubReachable()
     const calls = []
     let startAttempts = 0
@@ -1178,8 +1163,8 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
       if (cmd === 'brew' && a === 'services start ollama') {
         startAttempts++
         if (startAttempts === 1) {
-          const e = new Error('Bootstrap failed: 5: Input/output error')
-          e.stderr = 'Bootstrap failed: 5: Input/output error'
+          const e = new Error(failure)
+          e.stderr = failure
           return cb(e)
         }
         return cb(null, { stdout: '', stderr: '' })
@@ -1231,7 +1216,13 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
     expect(second).toBe(first)
   })
 
-  it('does NOT bootout/retry when start fails for an unrelated reason', async () => {
+  it.each([
+    'Permission denied',
+    'ollama: command not found',
+    // A bare EIO or exit-5 with no bootstrap involved must not trip the bootout.
+    'Error: write failed: Input/output error',
+    'Error: `brew cleanup` exited with 5.',
+  ])('does NOT bootout/retry when start fails for an unrelated reason: %j', async (failure) => {
     stubReachable()
     let startAttempts = 0
     let stopCalled = false
@@ -1240,8 +1231,8 @@ describe('ollamaManager.startPersistentService bootstrap recovery (homebrew)', (
       if (cmd === 'brew' && a === '--version') return cb(null, { stdout: 'Homebrew 4.0.0', stderr: '' })
       if (cmd === 'brew' && a === 'services start ollama') {
         startAttempts++
-        const e = new Error('Permission denied')
-        e.stderr = 'Permission denied'
+        const e = new Error(failure)
+        e.stderr = failure
         return cb(e)
       }
       if (cmd === 'brew' && a === 'services stop ollama') { stopCalled = true; return cb(null, { stdout: '', stderr: '' }) }
@@ -2080,6 +2071,7 @@ describe('ollamaManager service status cache (homebrew)', () => {
       return cb(new Error(`unexpected ${cmd} ${a}`))
     }
     ollamaManager = await loadManager()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
   })
   afterEach(() => {
     restorePlatform()
@@ -2088,26 +2080,27 @@ describe('ollamaManager service status cache (homebrew)', () => {
     execMock.impl = () => {}
   })
 
+  // The service state is private to getStatus(), which reports it as `service`.
+  const serviceStatus = async () => (await ollamaManager.getStatus()).service
+
   it('spawns brew services list once within the TTL and again after it expires', async () => {
-    const [a, b] = await Promise.all([ollamaManager.getServiceStatus(), ollamaManager.getServiceStatus()])
-    await ollamaManager.getServiceStatus()
+    const [a, b] = await Promise.all([serviceStatus(), serviceStatus()])
+    await serviceStatus()
     expect(a.running).toBe(true)
     expect(b).toBe(a)
     expect(listCalls).toBe(1)
 
     vi.advanceTimersByTime(10_001)
-    await ollamaManager.getServiceStatus()
+    await serviceStatus()
     expect(listCalls).toBe(2)
   })
 
-  it('reads live when forced and drops the cache after stopPersistentService', async () => {
-    await ollamaManager.getServiceStatus()
-    await ollamaManager.getServiceStatus(true)
-    expect(listCalls).toBe(2)
+  it('drops the cache after stopPersistentService', async () => {
+    await serviceStatus()
+    expect(listCalls).toBe(1)
 
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('ECONNREFUSED') }))
     const result = await ollamaManager.stopPersistentService()
     expect(result.service.running).toBe(false)
-    expect((await ollamaManager.getServiceStatus()).running).toBe(false)
+    expect((await serviceStatus()).running).toBe(false)
   })
 })

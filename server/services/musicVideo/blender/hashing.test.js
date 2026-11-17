@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MUSIC_VIDEO_BLENDER_DEFAULT_SETTINGS as DEFAULTS } from '../../../lib/musicVideoBlender.js';
-import { blenderSettingsHash, blenderShotHash } from './hashing.js';
+import { blenderSettingsHash, blenderShotHash } from '../../film/hashing.js';
 
 const files = (entries) => new Map(Object.entries(entries));
 const tree = { 'film.py': 'a1', 'kit/stage.py': 'b1', 'kit/look.py': 'c1', 'shots/s010.py': 'd1', 'shots/s020.py': 'e1', 'kitchen.py': 'f1' };

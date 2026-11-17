@@ -17,7 +17,6 @@ const mockRemoveMediaCollectionItem = vi.fn();
 const mockLocalizeMediaCollection = vi.fn();
 
 vi.mock('../services/api', () => ({
-  listImageGallery: (...args) => mockListImageGallery(...args),
   listVideoHistory: (...args) => mockListVideoHistory(...args),
   listMediaCollections: (...args) => mockListMediaCollections(...args),
   getMediaCollection: (...args) => mockGetMediaCollection(...args),

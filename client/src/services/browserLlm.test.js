@@ -2,7 +2,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  isBrowserLlmApiPresent, nanoAvailability, isNanoReady, promptNano,
+  nanoAvailability, promptNano,
   destroyNanoSession, warmNano, NANO_AVAILABILITY,
 } from './browserLlm';
 
@@ -27,16 +27,12 @@ afterEach(() => {
 
 describe('detection', () => {
   it('reports no-api when neither shape is present', async () => {
-    expect(isBrowserLlmApiPresent()).toBe(false);
     expect(await nanoAvailability()).toBe(NANO_AVAILABILITY.NO_API);
-    expect(await isNanoReady()).toBe(false);
   });
 
   it('detects the modern global LanguageModel', async () => {
     globalThis.LanguageModel = { availability: vi.fn().mockResolvedValue('available') };
-    expect(isBrowserLlmApiPresent()).toBe(true);
     expect(await nanoAvailability()).toBe('available');
-    expect(await isNanoReady()).toBe(true);
   });
 
   it('falls back to the bare availability() call on older builds', async () => {
