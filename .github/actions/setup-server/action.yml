@@ -37,10 +37,10 @@ runs:
     # 26.x release. The transform-artifact cache below keeps its own key and
     # its own restore-keys; this one is about dependencies.
     #
-    # Hit rate comes from the nightly full run: there is no push trigger on
-    # `main`, so the 09:17 UTC schedule is what seeds these caches on the
-    # default branch, which is the only scope every PR branch can read.
-    # See docs/GITHUB_ACTIONS.md.
+    # Hit rate comes from the runs on `main`, the only scope every PR branch
+    # can read: every push seeds the Linux entry, and both daily schedule runs
+    # seed every OS (a push runs the Windows and macOS jobs only when its diff
+    # reaches them). See docs/GITHUB_ACTIONS.md.
     - name: Cache server node_modules
       id: server-modules
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

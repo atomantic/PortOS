@@ -2,9 +2,9 @@ import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { resolveBaseSha } from './ci-base-sha.js';
+import { CI_WORKFLOW_FILE, pickGatedBaseSha, resolveBaseSha, resolveGatedBaseSha } from './ci-base-sha.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
 
@@ -42,6 +42,92 @@ describe('resolveBaseSha', () => {
 
   it('emits nothing when git cannot resolve the parent at all', () => {
     expect(resolveBaseSha({ eventName: 'pull_request', revParse: () => null })).toBeNull();
+  });
+});
+
+describe('resolveGatedBaseSha', () => {
+  const GREEN = 'c'.repeat(40);
+  const OLDER = 'd'.repeat(40);
+  const run = (fields) => ({ event: 'push', conclusion: 'success', head_branch: 'main', head_sha: GREEN, ...fields });
+  const ENV = { CI_GATED_BASE_LOOKUP: 'true', GITHUB_TOKEN: 'test-token', GITHUB_REPOSITORY: 'example/repo', GITHUB_API_URL: 'https://api.example.com' };
+  const quiet = () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    return () => { warn.mockRestore(); log.mockRestore(); };
+  };
+  const respond = (body, { ok = true, status = 200 } = {}) => vi.fn(async () => ({ ok, status, json: async () => body }));
+
+  it('takes the newest successful push or schedule run on main', () => {
+    expect(pickGatedBaseSha({ workflow_runs: [run({}), run({ head_sha: OLDER })] })).toBe(GREEN);
+    expect(pickGatedBaseSha({ workflow_runs: [run({ event: 'schedule' })] })).toBe(GREEN);
+    // A pull request from a fork's `main`, a dispatch of any tree, a red run
+    // and a malformed entry are never a green main tree.
+    expect(pickGatedBaseSha({ workflow_runs: [
+      run({ event: 'pull_request' }), run({ event: 'workflow_dispatch' }), run({ conclusion: 'failure' }),
+      run({ head_branch: 'release' }), run({ head_sha: 'not-a-sha' }), null, run({ head_sha: OLDER }),
+    ] })).toBe(OLDER);
+    for (const listing of [{ workflow_runs: [] }, {}, null, { workflow_runs: 'x' }]) expect(pickGatedBaseSha(listing)).toBeNull();
+  });
+
+  it('lists green ci.yml runs on main, fetches the head at depth 1 and returns it', async () => {
+    const restore = quiet();
+    try {
+      const fetchImpl = respond({ workflow_runs: [run({})] });
+      const git = vi.fn(() => true);
+      expect(await resolveGatedBaseSha({ env: ENV, fetchImpl, git })).toBe(GREEN);
+      const [url, init] = fetchImpl.mock.calls[0];
+      expect(url).toBe(`https://api.example.com/repos/example/repo/actions/workflows/${CI_WORKFLOW_FILE}/runs?branch=main&status=success&per_page=20`);
+      expect(init.headers.Authorization).toBe('Bearer test-token');
+      expect(git.mock.calls).toEqual([[['fetch', '--no-tags', '--depth=1', 'origin', GREEN]], [['cat-file', '-e', `${GREEN}^{commit}`]]]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('fails open to every native job on any lookup or fetch failure', async () => {
+    const restore = quiet();
+    try {
+      const git = vi.fn(() => true);
+      const failures = [
+        { fetchImpl: vi.fn(async () => { throw new Error('network down'); }), git },
+        { fetchImpl: respond({}, { ok: false, status: 403 }), git },
+        { fetchImpl: vi.fn(async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad json'); } })), git },
+        { fetchImpl: respond({ workflow_runs: [] }), git },
+        { fetchImpl: respond({ workflow_runs: [run({})] }), git: vi.fn(() => false) },
+        { fetchImpl: respond({ workflow_runs: [run({})] }), git: vi.fn((args) => args[0] === 'fetch') },
+      ];
+      for (const [index, deps] of failures.entries()) {
+        expect(await resolveGatedBaseSha({ env: ENV, ...deps }), `failure ${index}`).toBeNull();
+      }
+      const fetchImpl = respond({ workflow_runs: [run({})] });
+      expect(await resolveGatedBaseSha({ env: { ...ENV, GITHUB_TOKEN: '' }, fetchImpl, git })).toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      restore();
+    }
+  });
+
+  it('never calls the API unless the run opted in', async () => {
+    const fetchImpl = respond({ workflow_runs: [run({})] });
+    const git = vi.fn(() => true);
+    for (const flag of [undefined, '', 'false']) {
+      expect(await resolveGatedBaseSha({ env: { ...ENV, CI_GATED_BASE_LOOKUP: flag }, fetchImpl, git })).toBeNull();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(git).not.toHaveBeenCalled();
+  });
+
+  it('opts in only the impact job of a push to main, never a schedule, dispatch, pull request or release call', () => {
+    const jobs = readCiJobs();
+    const lookup = '${{ github.event_name == \'push\' && github.ref == \'refs/heads/main\' && inputs.full != true }}';
+    expect(jobs.impact).toContain(`CI_GATED_BASE_LOOKUP: ${lookup}`);
+    expect(jobs.impact).toMatch(/permissions:\n {6}contents: read\n {6}actions: read\n/);
+    for (const [id, body] of Object.entries(jobs)) {
+      if (id !== 'impact') expect(body, id).not.toContain('CI_GATED_BASE_LOOKUP');
+    }
+    // The planner reads the exported sha, and a forced-full run stays forced.
+    expect(jobs.impact).toContain("CI_FORCE_FULL: ${{ github.event_name != 'pull_request' || inputs.full == true }}");
+    expect(WORKFLOW).toMatch(/^on:\n {2}push:\n {4}branches: \[main\]\n/m);
   });
 });
 
