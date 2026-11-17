@@ -346,6 +346,56 @@ describe('VoiceWidgetGate — a start requested before the chunk resolves', () =
     expect(mocks.startContinuous).not.toHaveBeenCalled();
   });
 
+  it('opens the mic for a Daily Log dictation that began while the widget was loading', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const chunk = deferWidgetChunk();
+    renderGate();
+    await screen.findByRole('button', { name: DISENGAGE });
+
+    // The server answers Daily Log's Dictate button once; nobody repeats it.
+    act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
+    await chunk.release();
+
+    await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/Dictating to Daily Log/)).toBeInTheDocument();
+    await settle();
+    expect(mocks.startContinuous).toHaveBeenCalledOnce();
+  });
+
+  it('forgets a dictation, and the start it implied, that ended before the widget loaded', async () => {
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const chunk = deferWidgetChunk();
+    renderGate();
+    fireEvent.click(await screen.findByRole('button', { name: DISENGAGE }));
+    fireEvent.click(screen.getByRole('button', { name: ENGAGE }));
+
+    act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
+    act(() => emitSocket('voice:dictation', { enabled: false }));
+    await chunk.release();
+    await screen.findByRole('button', { name: WIDGET_MIC });
+    await settle();
+
+    expect(screen.queryByText(/Dictating to Daily Log/)).toBeNull();
+    expect(mocks.startContinuous).not.toHaveBeenCalled();
+  });
+
+  it('still opens the mic for a held dictation when the first load fails and a retry succeeds', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    localStorage.setItem(HIDDEN_KEY, '0');
+    const chunk = deferWidgetChunk();
+    renderGate();
+    await screen.findByRole('button', { name: DISENGAGE });
+
+    act(() => emitSocket('voice:dictation', { enabled: true, date: '2026-01-02' }));
+    await chunk.fail(new Error('network unreachable'));
+    expect(mocks.toast.error).toHaveBeenCalledExactlyOnceWith('Voice controls could not load. Try again.');
+
+    act(() => emitSocket('connect'));
+    await waitFor(() => expect(mocks.startContinuous).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/Dictating to Daily Log/)).toBeInTheDocument();
+    warn.mockRestore();
+  });
+
   it('says so and tries again on the next press when the chunk fails to load', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const chunk = deferWidgetChunk();
