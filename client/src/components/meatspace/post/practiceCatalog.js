@@ -10,7 +10,7 @@
  *
  * EVERYTHING here is derived, never re-typed: topic groups come from
  * `POST_TOPICS` (server-owned, mirrored into `constants.js`), and the surfaces
- * that aren't POST drill types come from each trainer's own exported mode list.
+ * that aren't POST drill types come from each trainer's mode list (trainerModes.js).
  * That is the point — a page whose job is "nothing is undiscoverable" must not
  * be the one place that has to be remembered when a mode is added.
  *
@@ -25,20 +25,20 @@ import {
   DRILL_DESCRIPTIONS,
   DRILL_PRACTICE_LINKS,
 } from './constants';
-// The trainers own their own mode lists; the catalog derives from them rather
-// than keeping a second copy. These are plain data arrays — importing them pulls
-// in the trainer modules, which PostTab already loads on this route, so nothing
-// new lands in the bundle. Consequence for tests: a suite that `vi.mock`s one of
-// these trainers must also return its mode array, or this module fails to load
-// (see PostTab.continueRoutine.test.jsx).
-import { RHETORIC_MODES } from './RhetoricTrainer';
-import { MODES as MEMORY_PRACTICE_MODES } from './MemoryPractice';
-import { PRACTICE_MODES as ELEMENTS_PRACTICE_MODES } from './ElementsSong';
-import { REFERENCE_VIEWS as MORSE_REFERENCE_VIEWS } from './MorseTrainer';
+// The trainers own their mode lists; the catalog derives from the same tables
+// rather than keeping a second copy. They live in trainerModes.js, not in the
+// trainer modules, so listing them never pulls a lazily loaded trainer into
+// the POST route chunk.
+import {
+  RHETORIC_MODES,
+  MEMORY_PRACTICE_MODES,
+  ELEMENTS_PRACTICE_MODES,
+  MORSE_REFERENCE_VIEWS,
+} from './trainerModes';
 import { tokenizeQuery, matchHaystack } from '../../../lib/mediaSearch.js';
 
 // One line per Morse reference chart. The chart list itself comes from
-// MorseTrainer; only this "what am I looking at" copy is catalog-owned, because
+// MORSE_REFERENCE_VIEWS; only this "what am I looking at" copy is catalog-owned, because
 // the trainer's tab bar has room for a one-word label and nothing more.
 const MORSE_REFERENCE_DESCRIPTIONS = {
   tree: 'The dichotomic dit/dah binary tree.',

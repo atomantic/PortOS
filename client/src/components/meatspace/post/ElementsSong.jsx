@@ -1,10 +1,11 @@
 import { shuffle } from '../../../../../server/lib/arrayUtils.js';
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, Layers, RotateCw, ShieldCheck } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, RotateCw, ShieldCheck } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem, attestMemoryMastery } from '../../../services/api';
 import { RapidReaderModal } from '../../RapidReader';
 import { clickableProps, onActivateKeyDown } from '../../../lib/a11yKeyboard';
 import PostCompletionActions from './PostCompletionActions';
+import { ELEMENTS_PRACTICE_MODES as PRACTICE_MODES } from './trainerModes';
 
 // Standard periodic table layout: [row][col] = symbol or null
 const PERIODIC_TABLE = [
@@ -42,23 +43,6 @@ function getCategory(sym) {
 }
 
 const ROW_LABELS = [null, null, null, null, null, null, null, 'Lanthanides', 'Actinides'];
-
-// Exported so the nav-manifest contract test (server/lib/navManifest.test.js)
-// reads these ids as the source of truth for which /post/memory/elements/:mode
-// deep links must be registered.
-export const PRACTICE_MODES = [
-  { id: 'learn', label: 'Learn Lyrics', icon: BookOpen, desc: 'Read through the song verse by verse' },
-  // Study (flip-to-reveal) before the recall test, mirroring the study→test
-  // split of Morse (copy vs head-copy) and MemoryPractice (learn vs recall).
-  { id: 'element-study', label: 'Flash Cards', icon: Layers, desc: 'Study element name ↔ symbol pairings' },
-  { id: 'element-flash', label: 'Element Flash', icon: Zap, desc: 'Name elements from symbols or vice versa' },
-  { id: 'fill-blank', label: 'Fill the Lyrics', icon: Target, desc: 'Fill in missing element names from the lyrics' },
-];
-
-// The routable practice modes (`/post/memory/elements/:mode`). PostTab validates
-// the URL segment against this list and degrades an unknown one to the mode
-// picker, mirroring MorseTrainer's MORSE_MODE_IDS (issue #3249).
-export const ELEMENTS_MODE_IDS = PRACTICE_MODES.map(m => m.id);
 
 export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount, mode, onSelectMode, onExitMode, onContinue }) {
   const [loadedItem, setLoadedItem] = useState(null);

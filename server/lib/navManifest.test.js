@@ -46,11 +46,11 @@ const TABBED_PAGES = [
   // path, which is how the two-deep Elements modes are declared.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
     nestedIdSources: [
-      { parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' },
+      { parent: 'morse', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'MORSE_MODES' },
       { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
-      { parent: 'memory/elements', file: 'client/src/components/meatspace/post/ElementsSong.jsx', constName: 'PRACTICE_MODES' },
+      { parent: 'memory/elements', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'ELEMENTS_PRACTICE_MODES' },
       { parent: 'wordplay', file: 'client/src/components/meatspace/post/WordplayTrainer.jsx', constName: 'GAME_MODES' },
-      { parent: 'rhetoric', file: 'client/src/components/meatspace/post/RhetoricTrainer.jsx', constName: 'RHETORIC_MODES' },
+      { parent: 'rhetoric', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'RHETORIC_MODES' },
       { parent: 'progress', file: 'client/src/components/meatspace/post/PostProgress.jsx', constName: 'PROGRESS_SUBROUTES' },
     ] },
 ];
