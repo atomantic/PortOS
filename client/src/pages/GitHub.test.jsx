@@ -890,6 +890,10 @@ describe('GitHub automations tab', () => {
     expect(screen.getAllByRole('button', { name: /Undo/ })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: /Undo/ }));
     await waitFor(() => expect(mock.undoGitHubAutomationAction).toHaveBeenCalledWith('41'));
+    // The post-undo reload settles before the rule is forgotten; the static
+    // mock would otherwise serve the rule again to a read that starts later.
+    await waitFor(() => expect(mock.getGitHubLearnedRules).toHaveBeenCalledTimes(2));
+    await act(async () => {});
 
     fireEvent.click(screen.getByRole('button', { name: 'Forget rule for octocat/hello' }));
     await waitFor(() => expect(screen.queryByText('octocat/hello', { selector: 'span' })).toBeNull());

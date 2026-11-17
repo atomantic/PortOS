@@ -253,7 +253,7 @@ export default function GitHubAutomationsTab() {
 
   // Every github:notifications:changed event reloads, and one check emits once
   // per account; useSocketResource single-flights and drops stale reads.
-  const { data: loaded, refetch: load } = useSocketResource(readAutomations, { events: AUTOMATION_EVENTS });
+  const { data: loaded, refetch: load, updateData: keepData } = useSocketResource(readAutomations, { events: AUTOMATION_EVENTS });
 
   // Each read applies per list: a failed list keeps its last good copy.
   useEffect(() => {
@@ -272,6 +272,10 @@ export default function GitHubAutomationsTab() {
     setOverview(result);
   }, [loaded]);
 
+  // A local mutation result is newer than any read already in flight; an identity
+  // update makes that read obsolete without touching the loaded snapshot.
+  const supersedeReads = () => keepData((prev) => prev);
+
   const runNow = async (accountId) => {
     setRunningId(accountId);
     // A failed check is recorded on the account and shown on its card.
@@ -285,6 +289,7 @@ export default function GitHubAutomationsTab() {
     const updated = await updateGitHubAccount(accountId, patch).catch(() => null);
     setSavingModeId(null);
     if (!updated) return false;
+    supersedeReads();
     setOverview((prev) => ({
       ...prev,
       accounts: prev.accounts.map((account) => (account.id === accountId
@@ -301,6 +306,7 @@ export default function GitHubAutomationsTab() {
     const updated = await updateGitHubAccount(accountId, { agentRules }).catch(() => null);
     setSavingRulesId(null);
     if (!updated) return false;
+    supersedeReads();
     setOverview((prev) => ({ ...prev, accounts: prev.accounts.map((account) => (account.id === accountId ? { ...account, agentRules: updated.agentRules || [] } : account)) }));
     return true;
   };
@@ -314,6 +320,7 @@ export default function GitHubAutomationsTab() {
 
   const forgetRule = async (id) => {
     const removed = await deleteGitHubLearnedRule(id).catch(() => null);
+    if (removed) supersedeReads();
     if (removed) setRules((prev) => prev.filter((rule) => rule.id !== id));
   };
 
@@ -322,7 +329,7 @@ export default function GitHubAutomationsTab() {
     const next = overview.cadence === 'weekdays-15m' ? 'off' : 'weekdays-15m';
     const updated = await setGitHubNotificationCadence(next).catch(() => null);
     setSavingCadence(false);
-    if (updated) setOverview(updated);
+    if (updated) { supersedeReads(); setOverview(updated); }
   };
 
   if (loadFailed && !overview) return <LoadFailedState title="Could not load GitHub automations." hint="Retry the local read." onRetry={load} />;
