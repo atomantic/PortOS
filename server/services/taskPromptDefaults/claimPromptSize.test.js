@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { PATHS } from '../../lib/paths.js';
 import { composeClaimIssuePrompt } from './prompts.js';
 import { buildClaimFlowCompletionSection } from '../promptSections/completion.js';
+import { deferClaimEpicSection } from '../promptSections/claimEpic.js';
 
 // Prompts name repo files by absolute path (PATHS.root), so the checkout's location would change
 // the size: a CoS claim worktree's longer path failed every completion variant. Measure with the
@@ -26,12 +27,20 @@ const SHAPES = {
   'pinned-provisioned': { target: 123, preverified: true, nonEpic: true, serverCheckout: true },
 };
 
-const claimIssueVariants = () => {
+// A host with file tools gets the epic phase as a pointer to a staged copy (#16573);
+// the shapes that can still land on an epic carry that pointer.
+const ON_DEMAND_SHAPES = new Set(['unpinned', 'pinned-epic']);
+const STAGED_EPIC = '/install/data/cos/slashdo-resolved/claim-epic-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.md';
+const onDemand = async (text) => (await deferClaimEpicSection({ description: text }, async () => STAGED_EPIC)).description;
+
+const claimIssueVariants = async () => {
   const variants = {};
   for (const forge of ['github', 'gitlab']) {
     for (const [shape, options] of Object.entries(SHAPES)) {
       for (const prCompletion of ['review-then-merge', 'merge-on-green', 'leave-open']) {
-        variants[`claim-issue ${forge} ${shape} ${prCompletion}`] = composeClaimIssuePrompt({ forge, prCompletion, ...options });
+        const name = `claim-issue ${forge} ${shape} ${prCompletion}`;
+        variants[name] = composeClaimIssuePrompt({ forge, prCompletion, ...options });
+        if (ON_DEMAND_SHAPES.has(shape)) variants[`${name} on-demand`] = await onDemand(variants[name]);
       }
     }
   }
@@ -50,9 +59,15 @@ const SIZE_CEILINGS = {
   'claim-issue github unpinned review-then-merge': 59167,
   'claim-issue github unpinned merge-on-green': 50791,
   'claim-issue github unpinned leave-open': 53833,
+  'claim-issue github unpinned review-then-merge on-demand': 49404,
+  'claim-issue github unpinned merge-on-green on-demand': 41518,
+  'claim-issue github unpinned leave-open on-demand': 44572,
   'claim-issue github pinned-epic review-then-merge': 54321,
   'claim-issue github pinned-epic merge-on-green': 45945,
   'claim-issue github pinned-epic leave-open': 48987,
+  'claim-issue github pinned-epic review-then-merge on-demand': 44558,
+  'claim-issue github pinned-epic merge-on-green on-demand': 36672,
+  'claim-issue github pinned-epic leave-open on-demand': 39726,
   'claim-issue github pinned-non-epic review-then-merge': 44816,
   'claim-issue github pinned-non-epic merge-on-green': 36440,
   'claim-issue github pinned-non-epic leave-open': 39549,
@@ -62,9 +77,15 @@ const SIZE_CEILINGS = {
   'claim-issue gitlab unpinned review-then-merge': 46740,
   'claim-issue gitlab unpinned merge-on-green': 38212,
   'claim-issue gitlab unpinned leave-open': 43526,
+  'claim-issue gitlab unpinned review-then-merge on-demand': 41840,
+  'claim-issue gitlab unpinned merge-on-green on-demand': 33802,
+  'claim-issue gitlab unpinned leave-open on-demand': 39126,
   'claim-issue gitlab pinned-epic review-then-merge': 43276,
   'claim-issue gitlab pinned-epic merge-on-green': 34748,
   'claim-issue gitlab pinned-epic leave-open': 40062,
+  'claim-issue gitlab pinned-epic review-then-merge on-demand': 38376,
+  'claim-issue gitlab pinned-epic merge-on-green on-demand': 30338,
+  'claim-issue gitlab pinned-epic leave-open on-demand': 35662,
   'claim-issue gitlab pinned-non-epic review-then-merge': 38493,
   'claim-issue gitlab pinned-non-epic merge-on-green': 29965,
   'claim-issue gitlab pinned-non-epic leave-open': 35342,
@@ -79,7 +100,7 @@ const SIZE_CEILINGS = {
 };
 
 const SIZES = Object.fromEntries(
-  Object.entries({ ...claimIssueVariants(), ...completionVariants() }).map(([name, text]) => [name, bytes(text)]),
+  Object.entries({ ...(await claimIssueVariants()), ...completionVariants() }).map(([name, text]) => [name, bytes(text)]),
 );
 
 describe('claim prompt size ratchet', () => {
