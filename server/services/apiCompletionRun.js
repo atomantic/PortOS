@@ -18,12 +18,13 @@
  *   - no `onRunFailed` report: these calls surface their own failure through
  *     `ai:status`, and the hook would add a second error toast and queue an
  *     auto-fix investigation, which is a provider call nobody asked for;
- *   - no context-window admission, local concurrency gate or fallback cascade.
+ *   - no context-window admission or fallback cascade.
  */
 
 import { createRun, finalizeRunRecord, patchRunMetadata, registerActiveRun, unregisterActiveRun, emitRunStarted } from './runner.js';
 import { runOwnership } from '../lib/aiToolkit/internal/runOwnership.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
+import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
 import { runChatCompletion } from './chatCompletionExchange.js';
 
 const notify = (hook, label, ...args) => {
@@ -81,18 +82,18 @@ export async function executeApiCompletionRun({
       runId, providerId: provider.id, providerName: provider.name || provider.id, model, providerType: provider.type,
     });
     emitRunStarted({ runId, provider, model });
-    reply = await runChatCompletion({
+    reply = await withLocalConcurrencyGate(provider, () => runChatCompletion({
       provider, model, prompt, timeout,
       temperature: completion.temperature,
       maxTokens: completion.maxTokens,
       recover: completion.recover,
       signal: stopped,
-    });
+    }), { signal: stopped });
   } catch (err) {
-    // The exchange reports its failures as a reply; a throw is the caller's
-    // `recover` step or the run registry. Record it, then let it propagate.
-    thrown = err;
-    reply = { error: err.message, model, retried: false };
+    // Queue cancellation uses the exchange's cancel reply contract. Other
+    // throws (the caller's recovery step or registry) retain their identity.
+    if (!stopped.aborted) thrown = err;
+    reply = { error: stopped.aborted ? 'Provider request failed: This operation was aborted' : err.message, model, retried: false };
   } finally {
     unregisterActiveRun(runId);
   }

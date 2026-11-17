@@ -41,6 +41,8 @@ const { getDirectProviderCallCount } = await import('../lib/providerCallActivity
 const { attachLlmActivityHooks, drainActivityNotesForTests } = await import('./systemActivityNotify.js');
 const { CREATIVE_LATITUDE_CLAUSE, CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 
+const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY, isLocalEndpointBusy } = await import('../lib/localLlmConcurrency.js');
+
 const runsDir = join(tempRoot, 'runs');
 // The same wiring `services/bootstrap.js` gives the toolkit: a usage session on
 // create, the usage ledger on completion, activity notes on every edge.
@@ -223,6 +225,92 @@ describe('run record and usage for one call', () => {
     await pending;
     expect(await runnerService.getActiveRunCount()).toBe(0);
     expect(getDirectProviderCallCount()).toBe(0);
+  });
+});
+
+describe('bounded completion endpoint budget', () => {
+  const local = { ...provider, endpoint: 'http://127.0.0.1:1234/v1' };
+  const call = (target = local, options = {}) => callProviderAISimple(target, 'model-1', 'a prompt', {
+    source: 'goal-check-in', allowModelRecovery: false, ...options,
+  });
+
+  it('caps concurrent bounded transports and keeps one run and session per call', async () => {
+    const releases = [];
+    let active = 0;
+    let peak = 0;
+    const fetch = vi.fn(() => new Promise(resolve => {
+      active += 1;
+      peak = Math.max(peak, active);
+      releases.push(() => { active -= 1; resolve(completion('ok')); });
+    }));
+    vi.stubGlobal('fetch', fetch);
+    const count = LOCAL_LLM_MAX_CONCURRENCY + 2;
+    const pending = Array.from({ length: count }, () => call());
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY));
+    await vi.waitFor(() => expect(usage.recordSession).toHaveBeenCalledTimes(count));
+    expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY);
+    for (let i = 0; i < count; i += 1) {
+      await vi.waitFor(() => expect(releases[i]).toBeTypeOf('function'));
+      releases[i]();
+    }
+    expect(await Promise.all(pending)).toEqual(Array.from({ length: count }, () => expect.objectContaining({ text: 'ok' })));
+    expect(peak).toBe(LOCAL_LLM_MAX_CONCURRENCY);
+    expect(await runIds()).toHaveLength(count);
+    expect(usage.recordSession).toHaveBeenCalledTimes(count);
+    expect(isLocalEndpointBusy(local.endpoint)).toBe(false);
+  });
+
+  it('does not serialize remote API transports', async () => {
+    const releases = [];
+    const fetch = vi.fn(() => new Promise(resolve => releases.push(() => resolve(completion('ok')))));
+    vi.stubGlobal('fetch', fetch);
+    const pending = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY + 1 }, () => call(provider));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(pending.length));
+    releases.forEach(release => release());
+    await Promise.all(pending);
+  });
+
+  const occupyEndpoint = async () => {
+    const releases = [];
+    const holders = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY }, () => withLocalConcurrencyGate(local,
+      () => new Promise(resolve => releases.push(resolve))));
+    await vi.waitFor(() => expect(releases).toHaveLength(holders.length));
+    return async () => { releases.forEach(release => release()); await Promise.all(holders); };
+  };
+
+  it.each(['signal', 'stop'])('cancels a queued completion through %s without sending or leaking a slot', async mode => {
+    const release = await occupyEndpoint();
+    const fetch = respondWith(completion('ok'));
+    const caller = new AbortController();
+    const pending = call(local, { signal: caller.signal });
+    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    if (mode === 'signal') caller.abort();
+    else expect(await stopRun((await runIds())[0])).toBe(true);
+    expect(await pending).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await record()).metadata).toMatchObject({ canceled: true, completionReason: 'canceled' });
+    expect(usage.recordSession).toHaveBeenCalledTimes(1);
+    await release();
+    expect(isLocalEndpointBusy(local.endpoint)).toBe(false);
+    expect(await call()).toMatchObject({ text: 'ok' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the streamed gate but starts the request deadline after queueing', async () => {
+    const release = await occupyEndpoint();
+    const fetch = respondWith(completion('ok'));
+    const pending = call({ ...local, timeout: 20 });
+    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await vi.advanceTimersByTimeAsync(40);
+      expect(fetch).not.toHaveBeenCalled();
+      await release();
+      expect(await pending).toMatchObject({ text: 'ok' });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
