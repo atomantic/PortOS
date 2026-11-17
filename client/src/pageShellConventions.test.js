@@ -8,11 +8,6 @@ import { NAV_COMMANDS } from '../../server/lib/navManifest.js';
 import { trackedSourceFiles } from './test/trackedFiles.js';
 import { maskComments, stringLiterals } from './test/classNameScan.js';
 
-// Full-bleed editors that intentionally have no title bar. Empty until a
-// Create destination's work surface is the chrome. A hand-rolled <h1> is
-// not an allowlist reason (#10994).
-const CREATE_PAGE_HEADER_ALLOWLIST = new Set();
-
 const root = dirname(fileURLToPath(import.meta.url));
 
 // App's lazy imports and Route declarations are the real page inventory. Resolve
@@ -92,13 +87,14 @@ function matchRoute(routeList, pathname) {
 
 // Create destinations without a tab group each render the shared title bar.
 // Tab-grouped siblings (Media Gen image, Music artists, …) share their
-// group's shell and are out of this check.
-export function createPagesMissingPageHeader(commands, routeList, readSource, allowlist = CREATE_PAGE_HEADER_ALLOWLIST) {
+// group's shell and are out of this check. A hand-rolled <h1> never substitutes for
+// PageHeader (#10994); there is no exemption list.
+export function createPagesMissingPageHeader(commands, routeList, readSource) {
   const failures = [];
   for (const command of commands) {
     if (command.section !== 'Create' || command.tabGroup) continue;
     const pathname = String(command.path || '').split('?')[0];
-    if (!pathname || allowlist.has(pathname)) continue;
+    if (!pathname) continue;
     const route = matchRoute(routeList, pathname);
     if (!route) {
       failures.push(`${command.path}: no route`);
@@ -164,10 +160,9 @@ describe('page shell conventions', () => {
       { path: '/probe-tab', component: 'ProbeTab' },
     ];
     const bare = () => '<main><h1>Probe</h1></main>';
-    expect(createPagesMissingPageHeader(commands, probeRoutes, bare, new Set())).toEqual([
+    expect(createPagesMissingPageHeader(commands, probeRoutes, bare)).toEqual([
       '/probe-create: ProbeCreate has no PageHeader',
     ]);
-    expect(createPagesMissingPageHeader(commands, probeRoutes, () => '<PageHeader title="Probe" />', new Set())).toEqual([]);
-    expect(createPagesMissingPageHeader(commands, probeRoutes, bare, new Set(['/probe-create']))).toEqual([]);
+    expect(createPagesMissingPageHeader(commands, probeRoutes, () => '<PageHeader title="Probe" />')).toEqual([]);
   });
 });

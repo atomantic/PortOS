@@ -103,11 +103,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Regenerable machine-local status cache: an unreadable file leaves update checks unverified until fresh observations rebuild it; it contains no user-authored records."
   },
   {
-    "key": "settings.js :: SETTINGS_FILE",
-    "reason": "Tolerant loadRaw serves display reads; partial writers must read strictly and refuse (fix in #12451, which also covers .env). Remove this entry if the scan stops reporting the pair.",
-    "issue": "#12451"
-  },
-  {
     "key": "sharing/buckets.js :: bucketJsonPath",
     "reason": "No non-strict write-back: the UI identity projection is tolerant; registration checks identity strictly before publishing."
   },

@@ -35,17 +35,11 @@ describe('a11y conventions: fileInputsToasts', () => {
     expect(offenders, `File input hidden from keyboard/AT — use components/ui/FilePickerButton.jsx (sr-only input + native <label for> activation), never className="hidden" / aria-hidden / tabIndex={-1} / display:none:\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  // A programmatic ref click is legitimate for a synthesized <a download> — the
-  // rule below is about file inputs, so real non-input uses get an escape hatch
-  // (mirroring MODAL_BACKDROP_ALLOWLIST) rather than a misleading failure.
-  const REF_CLICK_ALLOWLIST = new Set([]);
-
   it('never opens a file picker with a programmatic ref click', () => {
     // The other half of the same bug: even a correctly-focusable input is
     // unopenable in those engines if a button reaches over and clicks it.
     const offenders = [];
     for (const file of trackedSourceFiles()) {
-      if (REF_CLICK_ALLOWLIST.has(file)) continue;
       const src = rawSourceOf(file);
       const re = /\.current\s*\??\.\s*click\(\)/g;
       let m;
@@ -53,7 +47,7 @@ describe('a11y conventions: fileInputsToasts', () => {
         offenders.push(`${file}:${lineOf(src, m.index)}`);
       }
     }
-    expect(offenders, `Programmatic .click() on a ref — if it targets a file input the picker never opens in WebKit/PWA; use components/ui/FilePickerButton.jsx. If the ref is genuinely NOT a file input (e.g. a synthesized <a download>), add the file to REF_CLICK_ALLOWLIST above with a comment:\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `Programmatic .click() on a ref — if it targets a file input the picker never opens in WebKit/PWA; use components/ui/FilePickerButton.jsx. A synthesized <a download> click should go through a local variable, not a ref .current:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('names every never-dismissing toast that cannot name itself', () => {
