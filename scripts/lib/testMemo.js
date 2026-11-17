@@ -841,8 +841,16 @@ const gitRuleApplies = (rel, testRel) => rel === testRel || rel.startsWith('scri
  * (repo-relative posix paths), or null when it cannot say. It is asked at
  * most once per analyzer and only lets a directory input past
  * `DIRECTORY_INPUT_LIMIT` be keyed instead of failing closed (`listedTree`).
+ *
+ * `acceptVerdictsFrom` lists other run settings (`{ label, env, caseFilter }`,
+ * `env` overriding this run's values) whose green verdict also proves this
+ * run's cases. Each memoizable verdict then carries `acceptedKeys`: the key
+ * those settings would compute for the same inputs, differing only in the
+ * environment lines. They are lookup keys only; entries are written under
+ * `key` alone. The caller owns the claim that the other run's cases include
+ * this run's (`browserProfileAcceptedVerdicts`).
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], listFiles = null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null }) {
   const hashes = new Map();
   const facts = new Map();
   const trees = new Map();
@@ -1300,14 +1308,18 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return { inputs, problems };
   };
 
-  const environmentLines = [
+  const environmentLinesFor = (runEnv, runCaseFilter) => [
     `node ${nodeVersion} ${platform} ${arch}`,
-    ...TEST_MEMO_ENV.map((name) => `env ${name} ${env[name] === undefined ? '<unset>' : env[name]}`),
+    ...TEST_MEMO_ENV.map((name) => `env ${name} ${runEnv[name] === undefined ? '<unset>' : runEnv[name]}`),
     // Arguments that decide which cases of a file run (a browser profile's name
     // pattern). A green verdict covers only the cases that ran, so the filter is
     // an input; an unfiltered run adds no line and keeps its keys.
-    ...caseFilter.map((arg) => `case-filter ${arg}`),
+    ...runCaseFilter.map((arg) => `case-filter ${arg}`),
   ];
+  const environmentLines = environmentLinesFor(env, caseFilter);
+  // Node, platform and arch stay this run's: only the env and case filter may differ.
+  const acceptedEnvironments = acceptVerdictsFrom.map(({ label, env: overrides, caseFilter: otherFilter }) => (
+    { label, lines: environmentLinesFor({ ...env, ...overrides }, otherFilter) }));
 
   /**
    * The workspace-level inputs every key shares: the Vitest config closure and
@@ -1357,7 +1369,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     if (requireEdges) reasons.push(...gathered.unresolvedEdges);
     reasons.push(...gathered.unresolvedInputs, ...extra.problems);
     if (reasons.length) return { key: null, memoizable: false, reason: reasons[0], reasons, declared };
-    const lines = [...environmentLines];
+    const lines = [];
     // Suites that key the same tree from inside it hash the same file set, and an
     // entry names one test: without this line they would overwrite each other's entry.
     if (gathered.trees.size) lines.push(`test ${testRel}`);
@@ -1371,7 +1383,13 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const versions = new Map([...baseClosure.packages, ...gathered.packages]);
     for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
     for (const tool of [...gathered.tools].sort()) lines.push(`tool ${tool} ${toolVersion(tool) ?? 'absent'}`);
-    return { key: sha256(lines.join('\n')), memoizable: true, reasons: [] };
+    const keyWith = (head) => sha256([...head, ...lines].join('\n'));
+    return {
+      key: keyWith(environmentLines),
+      acceptedKeys: acceptedEnvironments.map(({ label, lines: head }) => ({ label, key: keyWith(head) })),
+      memoizable: true,
+      reasons: [],
+    };
   };
 
   /** The truncated content digest a v2 memo record stores per loaded module; null for a missing file. */

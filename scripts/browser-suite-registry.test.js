@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
-import { BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS } from './lib/browserTestProfiles.js';
+import { BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, localPerformanceTagViolations } from './lib/browserTestProfiles.js';
 import { existingPaths } from './lib/trackedFiles.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -46,5 +46,13 @@ describe('cross-workspace browser suite registry', () => {
       'propagates a deadline through a pending seek and waits for owned Chrome cleanup',
     ];
     for (const name of smokeNames) expect(documentSource).toContain(`('${name}',`);
+  });
+
+  // Smoke reuses a full-profile memo verdict (browserProfileAcceptedVerdicts),
+  // which is sound only while every case full skips is one smoke skips too.
+  it('tags every [local-performance] case [fidelity] too, so smoke runs a subset of full', () => {
+    const sources = Object.fromEntries(BROWSER_SUITES.map(file => [file, readFileSync(join(root, file), 'utf8')]));
+    expect(Object.values(sources).some(source => source.includes('[local-performance]'))).toBe(true);
+    expect(localPerformanceTagViolations(sources)).toEqual([]);
   });
 });

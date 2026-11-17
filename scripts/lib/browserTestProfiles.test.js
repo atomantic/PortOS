@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, browserTestProfileArgs, browserTestProfileFiles } from './browserTestProfiles.js';
+import { assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES, BROWSER_FIDELITY_TESTS, browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, localPerformanceTagViolations } from './browserTestProfiles.js';
 
 const smokeNames = [
   'generates and exports a Three.js scene with visible authored content',
@@ -58,6 +58,30 @@ describe('browser test profiles', () => {
       const report = completeReport(); mutate(report);
       expect(() => assertBrowserProfileExecuted('fidelity', report)).toThrow(/fidelity assertion/i);
     }
+  });
+
+  it('lets only smoke reuse a verdict, and only the full profile run that covers its cases', () => {
+    expect(browserProfileAcceptedVerdicts('smoke')).toEqual([
+      { label: 'full profile', env: { PORTOS_BROWSER_TEST_PROFILE: 'full' }, caseFilter: browserTestProfileArgs('full') },
+    ]);
+    expect(browserProfileAcceptedVerdicts('full')).toEqual([]);
+    expect(browserProfileAcceptedVerdicts('fidelity')).toEqual([]);
+    expect(() => browserProfileAcceptedVerdicts('')).toThrow('Unknown browser test profile');
+  });
+
+  it('reports a [local-performance] case that smoke would run and full would not', () => {
+    const file = 'server/lib/synthetic.browser.test.js';
+    const source = (lines) => ({ [file]: lines.join('\n') });
+    expect(localPerformanceTagViolations(source([
+      "it('[fidelity] [local-performance] covered by both exclusions', () => {});",
+      "it('plain smoke case', () => {});",
+    ]))).toEqual([]);
+    expect(localPerformanceTagViolations(source([
+      "it('plain smoke case', () => {});",
+      "it('[local-performance] only skipped by full', () => {});",
+    ]))).toEqual([`${file}:2`]);
+    // A tag kept out of the title literal is reported where it is written.
+    expect(localPerformanceTagViolations(source(["const PERF = '[local-performance]';", 'it(`[fidelity] ${PERF} x`, () => {});']))).toEqual([`${file}:1`]);
   });
 
 
