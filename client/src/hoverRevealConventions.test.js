@@ -1,3 +1,4 @@
+// @vitest-environment node
 // test-memo: never (tree-wide scanner)
 
 /**

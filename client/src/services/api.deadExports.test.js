@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -149,8 +150,12 @@ function findDeadExports({ extraModule } = {}) {
 }
 
 describe('client API wrappers have callers', () => {
+  // The default scan walks and reads the whole client tree; run it once for both uses below.
+  let defaultDead;
+  const defaultDeadExports = () => (defaultDead ??= findDeadExports());
+
   it('lists no export referenced nowhere outside its module and the barrels', () => {
-    const dead = findDeadExports();
+    const dead = defaultDeadExports();
     expect(dead, `caller-less wrappers:\n${dead.join('\n')}`).toEqual([]);
   });
 
@@ -175,4 +180,3 @@ describe('client API wrappers have callers', () => {
     expect(collectNamedExports(socketSrc).has('CLIENT_BUILD_ID')).toBe(true);
   });
 });
-// @vitest-environment node

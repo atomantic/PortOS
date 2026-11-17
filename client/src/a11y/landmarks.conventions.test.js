@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: tablists, menus, live regions, landmarks and coarse-pointer text.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

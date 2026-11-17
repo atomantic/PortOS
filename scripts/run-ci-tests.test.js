@@ -120,7 +120,7 @@ it('hands only real client fixture consumers to Vitest for a shared browser clea
   const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
   try {
     installFakeNpm(fixture, REPORTING_NPM);
-    const unused = 'scripts/lib/setupDbChoice.js';
+    const unused = 'scripts/lib/releaseTitle.js';
     const source = 'scripts/lib/ownedBrowserCleanup.js';
     // One whole-repository walk for both plans: the collected maps are keyed per
     // source/test/suite, so each single-source plan reads only its own entries.

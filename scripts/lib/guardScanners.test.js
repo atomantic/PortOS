@@ -19,6 +19,12 @@ describe('guard scanner detectors (#5055, #6363, #8723)', () => {
     expect(scansTrackedTree("rmSync(dir, { recursive: true, force: true });")).toBe(false);
   });
 
+  it('ignores scan shapes quoted as fixture strings, but not a real call', () => {
+    const fixtureOnly = 'it("x", () => { expect(scansTrackedTree("execFileSync(\'git\', [\'ls-files\'])")).toBe(true); });';
+    expect(scansTrackedTree(fixtureOnly)).toBe(false);
+    expect(scansTrackedTree(`${fixtureOnly}\nconst f = execFileSync('git', ['ls-files'], o);`)).toBe(true);
+  });
+
   it('detects the unnamed-cross-root-read shape it registers, and leaves a named read alone (#6363)', () => {
     // Bypass probe: proves the detector bites before the assertions below rely
     // on it having stopped matching anything.

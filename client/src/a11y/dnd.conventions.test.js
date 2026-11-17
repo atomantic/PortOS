@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: dnd-kit keyboard sensors and native drag-and-drop.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.

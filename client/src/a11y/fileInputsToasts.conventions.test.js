@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: file picker and toast rules.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
