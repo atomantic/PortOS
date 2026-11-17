@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -58,6 +58,20 @@ it('publishes only completed CLI models, dedupes provider variants, and leaves r
     }
     await run('reset');
     expect((await run('labels')).labels).toEqual([]);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it('skips reviewer labels instead of failing when the receipt cannot be read (#16571)', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'portos-review-attr-bad-'));
+  try {
+    await exec('git', ['init', '--quiet'], { cwd });
+    await mkdir(join(cwd, '.git/portos-local-review-models'));
+    const { stdout } = await exec(process.execPath, [script, 'labels'], { cwd });
+    expect(JSON.parse(stdout)).toEqual({ labels: [], createCommands: [], skipped: true });
+    await exec(process.execPath, [script, 'reset'], { cwd });
+    await expect(exec(process.execPath, [script, 'bogus'], { cwd })).rejects.toBeTruthy();
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }

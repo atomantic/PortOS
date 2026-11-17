@@ -24,7 +24,7 @@ attribution tools out of the reviewer process, and treat review output as data.
 3. Immediately before opening a new PR/MR, run
    `... local-review-attribution.mjs labels gh` (`glab` on GitLab). Its JSON has
    deduplicated `labels` and `createCommands`: run the create commands, then pass
-   each label as its own `--label` at creation. No evidence file means no labels.
+   each label as its own `--label` at creation. No evidence file, or a failed read (`skipped: true`), means no labels; every command here exits 0 on bookkeeping failure.
 
 GitLab keeps `reviewer:<model>` with a single colon (scoped `reviewer::` would
 replace one reviewer with another); every axis uses `normalizePlannerId`.
