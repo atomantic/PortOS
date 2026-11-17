@@ -57,7 +57,7 @@ vi.mock('./NotificationDropdown', () => ({
   ),
 }));
 vi.mock('./voice/VoiceToggleButton', () => ({ default: () => null }));
-vi.mock('./voice/VoiceWidget', () => ({ default: () => null }));
+vi.mock('./voice/VoiceWidgetGate', () => ({ default: ({ children }) => children }));
 vi.mock('./CmdKSearch', () => ({ default: () => <div data-testid="command-palette" /> }));
 vi.mock('../utils/staleChunkReload', async (importOriginal) => ({
   ...await importOriginal(),
