@@ -30,7 +30,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'node:crypto';
-import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata } from '../lib/cosValidation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';

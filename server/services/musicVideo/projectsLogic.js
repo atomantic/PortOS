@@ -30,7 +30,7 @@ import {
   musicVideoMidiTranscriptionSchema,
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
-} from '../../lib/validation.js';
+} from '../../lib/musicVideoValidation.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';

@@ -9,10 +9,16 @@ import { PORTOS_API_URL, PORTOS_UI_URL } from '../lib/portosUrls.js';
 import { serveLocalFile } from '../lib/fileUtils.js';
 import { basename, dirname } from 'path';
 import {
-  beeperOAuthCallbackSchema, beeperOutboxCreateSchema, beeperOutboxListSchema,
-  beeperScopeInputSchema, beeperSavedScopesSchema,
-  beeperOutboxParamsSchema, beeperOutboxSendSchema, beeperPastedTokenSchema, validateRequest,
-} from '../lib/validation.js';
+  beeperOAuthCallbackSchema,
+  beeperOutboxCreateSchema,
+  beeperOutboxListSchema,
+  beeperScopeInputSchema,
+  beeperSavedScopesSchema,
+  beeperOutboxParamsSchema,
+  beeperOutboxSendSchema,
+  beeperPastedTokenSchema,
+} from '../lib/mediaValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { getBeeperStatus, checkBeeperConnection } from '../services/beeperStatus.js';
 import { completeBeeperOAuth, connectWithPastedToken, disconnectBeeper, startBeeperOAuth } from '../services/beeperOAuth.js';
 import { runBeeperSweep, createBeeperConversation } from '../services/beeperSync.js';

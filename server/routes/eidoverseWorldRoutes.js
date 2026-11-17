@@ -8,10 +8,8 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  eidoverseWorldConfigPatchSchema,
-  validateRequest,
-} from '../lib/validation.js';
+import { eidoverseWorldConfigPatchSchema } from '../lib/eidoverseValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   eidoverseFoundationIdParamSchema,
   eidoverseFoundationInputSchema,

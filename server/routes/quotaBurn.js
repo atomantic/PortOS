@@ -7,7 +7,8 @@
 import { Router } from 'express';
 import { refreshQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, quotaBurnConfigUpdateSchema, quotaBurnRearmSchema, quotaBurnRunSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { quotaBurnConfigUpdateSchema, quotaBurnRearmSchema, quotaBurnRunSchema } from '../lib/quotaBurnValidation.js';
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
 import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';

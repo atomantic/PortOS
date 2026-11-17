@@ -5,7 +5,7 @@
  * and persistence remain in cosTaskGenerator.js.
  */
 
-import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, buildReviewerMaxRoundsNote, isToolFreeReviewer } from '../lib/validation.js';
+import { CLAIM_OVERRIDE_CONTEXT_MAX_CHARS, buildReviewerEffortNote, buildReviewerMaxRoundsNote, isToolFreeReviewer } from '../lib/cosValidation.js';
 import { isCompleteIssueContext } from '../../lib/issueContext.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { shellQuote } from '../lib/shellQuote.js';
