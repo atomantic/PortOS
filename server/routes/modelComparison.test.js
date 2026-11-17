@@ -139,6 +139,37 @@ it('ships both GPT-6.2 models in the Codex preset lists', async () => {
   }
 });
 
+it('plots published GPT-6.2 v5 scores and task costs on an existing install without overwriting local research', async () => {
+  const local = { ...observation, id: 'local-research-v5', notes: 'Local research retained' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  await writeFile(join(dir, 'model-comparison.json'), localContents);
+  const codexApp = express();
+  codexApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'codex', name: 'Codex', command: 'codex', models: ['gpt-6.2-astra', 'gpt-6.2-sol'] },
+  ] }) }));
+  codexApp.use(errorMiddleware);
+  const result = await request(codexApp).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const [model, scores, costs] of [
+    ['gpt-6.2-astra', [46, 57, 60, 62, 62], [0.66, 1.62, 2.07, 2.52, 4]],
+    ['gpt-6.2-sol', [41, 53, 55, 56, 57], [0.18, 0.41, 0.56, 0.65, 1.01]],
+  ]) {
+    const rows = result.body.currentComposite.rows.filter(row => row.model === model);
+    for (const [index, effort] of ['low', 'medium', 'high', 'xhigh', 'max'].entries()) {
+      const row = rows.find(candidate => candidate.effort === effort);
+      expect(row.quality).toMatchObject({ value: scores[index], estimated: false });
+      expect(row.costPerTask).toMatchObject({ value: costs[index], estimated: false });
+      const evidence = result.body.observations.find(item => item.model === model && item.effort === effort && item.benchmark === 'Artificial Analysis Intelligence Index v5.0.1');
+      expect(evidence.quality.source.url).toBe(`https://artificialanalysis.ai/models/${model.replaceAll('.', '-')}`);
+      expect(evidence.costPerTask.source.methodology).toContain('rounded to cents');
+    }
+    expect(rows.find(row => row.effort === 'ultra').costPerTask).toBeNull();
+    expect(result.body.observations.some(row => row.model === model && row.effort === 'ultra' && row.benchmark === 'Artificial Analysis Intelligence Index v5.0.1')).toBe(false);
+  }
+  expect(result.body.observations).toContainEqual(local);
+  expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(localContents);
+});
+
 it('exposes shipped GPT-6.2 prices to existing installs without inventing benchmark measurements', async () => {
   await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
   const result = await request(app).get('/comparison');
