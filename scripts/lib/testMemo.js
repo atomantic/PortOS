@@ -267,23 +267,28 @@ const dirValue = (v) => pathValue(v, { isDir: true });
  * A path with a variable part (`partial`) names only its literal prefix `v`.
  * Whether a read of it can land outside that prefix is its containment:
  *
- * - `open: false`: every variable part is a directory-entry name (`PLAIN_NAME`)
+ * - `open: false`: every variable part is a directory-entry name (`LISTED_NAME`)
  *   or went through `pathWithin()`, so the path is inside `v`.
  * - `open: true` with `vars`: each variable part is a parameter or loop
  *   variable with a known set of literal values (`Binder.domain`); the
  *   expression is evaluated again once per combination, exactly.
  * - `open: true` with `vars: null`: nothing bounds it. `via` names the helper
  *   whose parameter it is, for the reason a test is refused with.
+ *
+ * `trust` lists what a contained path took on trust: `fs` (a directory
+ * listing), `crypto` (`randomUUID`), `guard` (`pathWithin`). A member of the
+ * closure that mocks one of them takes the proof away (`gather`).
  */
-const CONTAINED = Object.freeze({ open: false, vars: null, via: null });
-const UNBOUNDED = Object.freeze({ open: true, vars: null, via: null });
-const containmentOf = ({ open, vars = null, via = null }) => (open ? { open, vars, via } : CONTAINED);
+const CONTAINED = Object.freeze({ open: false, vars: null, via: null, trust: Object.freeze([]) });
+const UNBOUNDED = Object.freeze({ open: true, vars: null, via: null, trust: Object.freeze([]) });
+const containmentOf = ({ open, vars = null, via = null, trust = [] }) => (open ? { open, vars, via, trust: [] } : { ...CONTAINED, trust });
 /** Two variable parts in one path: inside only when both are; resolvable only when both are. */
 function bothContainments(a, b) {
+  if (!a.open && !b.open) return { ...CONTAINED, trust: [...new Set([...(a.trust ?? []), ...(b.trust ?? [])])] };
   if (!a.open) return containmentOf(b);
   if (!b.open) return containmentOf(a);
   const vars = a.vars === null || b.vars === null ? null : [...a.vars, ...b.vars.filter((binder) => !a.vars.includes(binder))];
-  return { open: true, vars, via: a.via ?? b.via };
+  return { open: true, vars, via: a.via ?? b.via, trust: [] };
 }
 const partialPath = (base, v, containment) => ({ ...base, v: normalizeRel(v), partial: true, sep: false, ...containmentOf(containment) });
 /**
@@ -312,7 +317,8 @@ const tailValue = (lit, containment = UNBOUNDED, post = '') => ({ k: 'tail', lit
  * from a recursive listing) or a generated id (`randomUUID()`). Joined under
  * a directory it stays inside it, and so does any run of such names.
  */
-const PLAIN_NAME = Object.freeze(tailValue('', CONTAINED));
+const LISTED_NAME = Object.freeze(tailValue('', { open: false, trust: ['fs'] }));
+const GENERATED_NAME = Object.freeze(tailValue('', { open: false, trust: ['crypto'] }));
 /** Literal text that can climb out of a directory when it follows a variable part: a `..` segment, under either separator. */
 const CLIMBS = /(?:^|[\\/])\.\.(?:[\\/]|$)/;
 /** A parameter or loop variable the source never spells out (`identifierValue`): unknown, with the containment a path built from it gets. */
@@ -556,7 +562,7 @@ function guardedJoin(args) {
   if (dir?.k !== 'path') return UNKNOWN;
   if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
   // `maybeSelf`: with an empty segment the result is the directory itself, so text glued onto it names a sibling.
-  if (!segments.every((segment) => segment.k === 'str')) return { ...partialPath({ ...dir, isDir: true }, dir.v, CONTAINED), maybeSelf: true };
+  if (!segments.every((segment) => segment.k === 'str')) return { ...partialPath({ ...dir, isDir: true }, dir.v, { open: false, trust: ['guard'] }), maybeSelf: true };
   // `join()` semantics: a leading separator is a plain segment.
   return segments.reduce((path, segment) => joinPath(path, str(segment.v.replace(/^\/+/, ''))), dir);
 }
@@ -687,9 +693,8 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
       if (ctx.shared.scopes.shadowed(token.v) || (token.v === 'pathWithin' && ctx.replaced.guard)) {
         return { value: token.v === 'pathWithin' && args[0]?.k === 'path' ? partialPath(args[0], args[0].v, UNBOUNDED) : UNKNOWN, end };
       }
-      ctx.shared.trusted[token.v === 'pathWithin' ? 'guard' : 'crypto'] = true;
       // A UUID is 36 characters of hex and dashes: a name, wherever it is joined.
-      return { value: token.v === 'pathWithin' ? guardedJoin(args) : PLAIN_NAME, end };
+      return { value: token.v === 'pathWithin' ? guardedJoin(args) : GENERATED_NAME, end };
     }
     return { value: UNKNOWN, end };
   }
@@ -722,7 +727,7 @@ const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
 const OPERAND_KEYWORDS = new Set(['await', 'typeof', 'new', 'yield', 'void', 'delete', 'async', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof', 'function', 'class', 'extends']);
 /** Keywords after which `function` starts an expression, or an exported declaration other modules can call. */
 const BEFORE_FUNCTION_EXPRESSION = new Set([...OPERAND_KEYWORDS, 'export', 'default']);
-/** The elements of an array are directory-entry names (`PLAIN_NAME`); a finite set is a `string[]`. */
+/** The elements of an array are directory-entry names (`LISTED_NAME`); a finite set is a `string[]`. */
 const LISTED = Object.freeze({ listed: true });
 /** How many combinations of variable values one path expression is evaluated for before it counts as unbounded. */
 const VARIABLE_VALUES_LIMIT = 64;
@@ -1234,7 +1239,7 @@ function createScopes(ctx) {
     if (end !== to) return null;
     if (value.k === 'str') return [value.v];
     // A listed name passed on unchanged.
-    if (value === PLAIN_NAME) return LISTED;
+    if (value === LISTED_NAME) return LISTED;
     // Text built from other resolved variables (`read(\`${stem}.json\`)`): one value per combination of theirs.
     const texts = isVariableText(value) ? variableCombinations(value.vars)?.map((chosen) => evaluate(arr, m, from, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value) : null;
     return texts?.every((text) => text.k === 'str') ? texts.map((text) => text.v) : null;
@@ -1319,7 +1324,7 @@ function identifierValue(token, ctx, depth) {
   if (binder === null) return bindingValue(token.v, ctx, depth);
   if (ctx.overrides?.has(binder)) return str(ctx.overrides.get(binder));
   const domain = ctx.shared.scopes.domainOf(binder);
-  if (domain === LISTED) { ctx.shared.trusted.fs = true; return PLAIN_NAME; }
+  if (domain === LISTED) return LISTED_NAME;
   if (domain !== null) return variableValue({ open: true, vars: [binder] });
   return binder.role?.kind === 'named' ? variableValue({ open: true, via: binder.role.nameToken.v }) : UNKNOWN;
 }
@@ -1491,9 +1496,10 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   ctx.src = src;
   ctx.uuid = !ctx.replaced.crypto && importsNamed(tokens, match, 'randomUUID', isCryptoModule);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
-  // `trusted`: the sources a contained path of this file relied on, for a mock registered by another member (`gather`).
-  ctx.shared = { root: ctx, scopes: undefined, trusted: { fs: false, crypto: false, guard: false } };
-  facts.trusted = ctx.shared.trusted;
+  ctx.shared = { root: ctx, scopes: undefined };
+  // The sources a contained read of this file relies on, for a mock registered by another member (`gather`).
+  facts.trusted = { fs: false, crypto: false, guard: false };
+  const trusts = (value) => { if (value.partial && !value.open) for (const source of value.trust ?? []) facts.trusted[source] = true; };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
   // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
   // `const pyBin = resolveTestPython()` makes `pyBin` the python interpreter.
@@ -1582,6 +1588,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
         return true;
       }
       const open = value.partial && value.open;
+      trusts(value);
       for (const rel of open && value.outer !== undefined ? [value.v, value.outer] : [value.v]) facts.dirs.push({ rel, walk, guessed: value.partial, open, via: value.via ?? null });
       return true;
     }
@@ -1618,6 +1625,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
           // A complete path: a file, a directory, or a name the loader completes (`./mod` is `./mod.js`).
           if (!value.partial) { facts.paths.push({ rel: value.v, walk: true }); continue; }
           facts.dirs.push({ rel: value.v, walk: true });
+          trusts(value);
           if (!(value.partial && value.open)) continue;
           // Unbounded, the module may be anywhere, under the prefix or not: an edge the source does not name.
           if (value.outer !== undefined) facts.dirs.push({ rel: value.outer, walk: true });
@@ -2214,8 +2222,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // is a guess. Same ownership as the two rules above: a library member builds such a path
       // from what its caller passes, and reads it only when a test calls it.
       for (const reason of ownsTrees ? f.openReads : []) unresolvedInputs.push(`${rel}: ${reason}`);
-      if (f.replaces) for (const source of Object.keys(replacedBy)) if (f.replaces[source]) replacedBy[source] ??= rel;
-      if (ownsTrees && f.trusted) trusting.push({ rel, trusted: f.trusted });
+      if (ownsTrees && f.trusted && (f.trusted.fs || f.trusted.crypto || f.trusted.guard)) trusting.push({ rel, trusted: f.trusted });
       for (const dir of ownsTrees ? f.dataTrees : []) {
         const data = dataTree(dir);
         if (data === null) { unresolvedInputs.push(`${rel}: directory input too large: ${dir}`); continue; }
@@ -2230,6 +2237,18 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     }
     // A mock registered by any member (a helper the test imports) replaces the module for the test too:
     // what a listing, a generated id or the guard returns is then that member's to decide.
+    // Only a member that runs registers one: a test file another member lists or reads as text does not.
+    const running = [...roots].map((rel) => ({ rel, walkEdges: walk }));
+    const ran = new Set();
+    while (trusting.length && running.length) {
+      const { rel, walkEdges } = running.pop();
+      if (ran.has(rel) || stop?.has(rel)) continue;
+      ran.add(rel);
+      const f = factsFor(rel);
+      if (f.replaces) for (const source of Object.keys(replacedBy)) if (f.replaces[source]) replacedBy[source] ??= rel;
+      if (walkEdges) for (const dep of f.modules) running.push({ rel: dep, walkEdges: true });
+      for (const side of f.sideModules) if (!f.dataModules.has(side)) running.push({ rel: side, walkEdges: true });
+    }
     const SOURCE_NAMES = { fs: 'a directory listing', crypto: 'randomUUID()', guard: 'pathWithin()' };
     for (const { rel, trusted } of trusting) {
       for (const source of Object.keys(replacedBy)) {
