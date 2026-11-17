@@ -135,7 +135,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   live.current = { pxPerSec, shots, songClock, durationSec };
   // The loop the frame loop enforces: playback that runs past the selected effect jumps back before it.
   const loopRef = useRef(null);
-  const loopJump = useRef(0);
+  const loopJump = useRef(-Infinity); // never jumped; 0 would read as a jump at clock zero and mute the first loop-back for LOOP_SETTLE_MS
   const timeRef = useRef(0);
 
   // A zoom keeps one moment of the song under the same point of the view.

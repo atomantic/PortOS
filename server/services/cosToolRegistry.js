@@ -39,8 +39,11 @@ import {
 import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldSaySchema,
-  eidoverseChatReadSchema, eidoverseTravelVisitSchema, eidoverseVisitChatSchema, eidoverseVisitLeaveSchema,
-} from '../lib/validation.js';
+  eidoverseChatReadSchema,
+  eidoverseTravelVisitSchema,
+  eidoverseVisitChatSchema,
+  eidoverseVisitLeaveSchema,
+} from '../lib/eidoverseValidation.js';
 import { detailFoundation, eidoverseFoundationIdParamSchema, eidoverseFoundationInputSchema, eidoverseFoundationTargetSchema, summarizeFoundation } from '../lib/eidoverseFoundations.js';
 import { eidoverseControllerArmSchema, eidoverseControllerIdParamSchema, eidoverseControllerInstallSchema, eidoverseRiddleActionSchema, summarizeControllerInstall } from '../lib/eidoverseControllers.js';
 import {

@@ -7,7 +7,8 @@
 import { Router } from 'express';
 import { platformAccountsQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, platformAccountSchema, accountRegistrationSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { platformAccountSchema, accountRegistrationSchema } from '../lib/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { logAction } from '../services/history.js';

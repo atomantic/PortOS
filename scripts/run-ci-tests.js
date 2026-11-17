@@ -15,7 +15,7 @@ import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
-import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
+import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
   memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
@@ -592,13 +592,15 @@ async function main() {
   // related set can exceed the Windows command-line limit.
   if (memoDir) clearVitestDependencies(repoRoot, scope);
   const caseFilter = browserProfileArgs();
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter,
+  const acceptVerdictsFrom = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+    ? browserProfileAcceptedVerdicts(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
     ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
-      for (const { test, via } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key)`);
+      for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
   }
   // Pregate supplies only guards that passed earlier in this invocation, after

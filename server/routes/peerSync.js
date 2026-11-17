@@ -30,8 +30,8 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
   peerSubscribeSchema,
   peerSyncPushSchema,
   peerSyncRecordSchema,
@@ -48,7 +48,7 @@ import {
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
-} from '../lib/validation.js';
+} from '../lib/peerSyncValidation.js';
 import {
   listPeerSubscriptions,
   subscribePeer,

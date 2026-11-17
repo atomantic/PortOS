@@ -384,6 +384,10 @@ Pipeline orchestration: `server/services/voice/pipeline.js`. The pipeline emits 
 
 Barge-in works by aborting the shared `AbortController` tied to the current turn — the LLM stream is torn down and any queued TTS is discarded.
 
+### Client loading
+
+Voice is off by default, so the browser does not download the voice client until it is needed. The app shell mounts only `client/src/components/voice/VoiceWidgetGate.jsx`, which reads the voice config once, follows `voice:config:changed`, and loads the widget chunk (`VoiceWidget.jsx`, `voiceClient.js`, the fast path, the DOM index and the audio helpers) the first time voice is enabled. Turning voice on in Settings therefore takes effect without a reload. A sidebar mic press or push-to-talk key that lands while the chunk is still loading is held and replayed once the widget mounts, and so is a Daily Log dictation started in that window. A tab registers as a proactive-speech recipient when the voice client loads, and claims that role right then if it is the focused tab.
+
 ## Endpoints
 
 | Method | Path | Purpose |

@@ -43,7 +43,7 @@ export async function renderSceneFrames(project, { sceneId, sceneIds, ...input }
       const built = await buildSceneFrameGenerateBody(project, scene, input);
       const { castInputs, ...body } = built;
       const { executeImageGenerate, generateSchema } = await import('../../routes/imageGen.js');
-      const { validateRequest } = await import('../../lib/validation.js');
+      const { validateRequest } = await import('../../lib/validateRequest.js');
       const data = validateRequest(generateSchema, body);
       const rendered = await executeImageGenerate({ baseUrl: '/api/image-gen', method: 'POST', route: { path: '/generate' } }, data);
       results.push({ sceneId: id, ok: true, ...rendered.body, castInputs: rendered.params?.musicVideo?.castInputs || castInputs });

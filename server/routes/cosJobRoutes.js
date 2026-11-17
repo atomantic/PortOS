@@ -11,7 +11,7 @@ import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/validation.js';
+import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/cosValidation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { describeReaimedValues } from '../lib/jobFormFields.js';

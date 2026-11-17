@@ -38,7 +38,7 @@ import { peerBaseUrl } from '../../lib/peerUrl.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
-import { peerEidoverseFoundationsSchema } from '../../lib/validation.js';
+import { peerEidoverseFoundationsSchema } from '../../lib/peerSyncValidation.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
 import { getPeers } from '../instances.js';
 import { FORCE_REVALIDATE_EVERY } from './peerSyncShared.js';

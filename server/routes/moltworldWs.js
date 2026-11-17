@@ -7,13 +7,13 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
   moltworldWsConnectSchema,
   moltworldWsMoveSchema,
   moltworldWsThinkSchema,
-  moltworldWsInteractSchema
-} from '../lib/validation.js';
+  moltworldWsInteractSchema,
+} from '../lib/agentValidation.js';
 import * as moltworldWs from '../services/moltworldWs.js';
 
 const router = Router();

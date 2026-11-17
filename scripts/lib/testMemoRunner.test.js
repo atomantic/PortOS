@@ -18,6 +18,7 @@ import {
 import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
+import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -375,6 +376,46 @@ describe('planTestMemo and recordTestMemo', () => {
     writeFileSync(join(root, 'server/lib/onlyFast.js'), 'export const fast = 2;\n');
     expect(filteredPlan().skipped).toEqual([]);
   }, 120000);
+
+  // Pull requests run the smoke profile and only trusted runs, on the full
+  // profile, save the memo (#16546). Every key input but the profile's env value
+  // and case filter must still match, and the reuse runs one way only.
+  it('lets a smoke run skip a file on a trusted full-profile entry, never the reverse', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-profile-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-profile-store-'));
+    writeRepo(root, FILES);
+    const test = 'server/lib/a.test.js';
+    const profilePlan = (profile, overrides = {}) => plan({
+      repoFiles: [test], listTests: () => ['lib/a.test.js'],
+      env: { NODE_ENV: 'test', PORTOS_BROWSER_TEST_PROFILE: profile }, caseFilter: browserTestProfileArgs(profile),
+      acceptVerdictsFrom: browserProfileAcceptedVerdicts(profile), ...overrides,
+    });
+    const recordGreen = (planned) => recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: planned, passed: [test], source: 'ci', commit: 'abc',
+      dependencies: new Map([[test, [test, 'server/lib/a.js']]]) });
+
+    expect(recordGreen(profilePlan('full'))).toEqual({ written: 2, unrecorded: [] });
+    expect(profilePlan('full').skipped).toEqual([{ test, via: 'recorded' }]);
+    expect(profilePlan('smoke').skipped).toEqual([{ test, via: 'recorded', from: 'full profile' }]);
+    expect(profilePlan('smoke', { readRecord: () => null }).skipped).toEqual([{ test, via: 'floor', from: 'full profile' }]);
+    // Without the accepted full verdict, the profile line alone keeps smoke from matching.
+    expect(profilePlan('smoke', { acceptVerdictsFrom: [] }).skipped).toEqual([]);
+    expect(profilePlan('fidelity').skipped).toEqual([]);
+    // The rest of the key is this run's: Node, platform, another keyed env var, and the file's bytes.
+    expect(profilePlan('smoke', { nodeVersion: '24.2.0' }).skipped).toEqual([]);
+    expect(profilePlan('smoke', { platform: 'darwin' }).skipped).toEqual([]);
+    expect(profilePlan('smoke', { env: { NODE_ENV: 'test', PORTOS_BROWSER_TEST_PROFILE: 'smoke', CI: 'true' } }).skipped).toEqual([]);
+    writeFileSync(join(root, 'server/lib/a.js'), 'export const a = 2;\n');
+    expect(profilePlan('smoke').skipped).toEqual([]);
+    expect(profilePlan('smoke', { readRecord: () => null }).skipped).toEqual([]);
+
+    // A smoke verdict skipped the fidelity cases, so it never vouches for a full run.
+    rmSync(memoDir, { recursive: true, force: true });
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-profile-store-'));
+    expect(recordGreen(profilePlan('smoke'))).toEqual({ written: 2, unrecorded: [] });
+    expect(profilePlan('smoke').skipped).toEqual([{ test, via: 'recorded' }]);
+    expect(profilePlan('full').skipped).toEqual([]);
+    expect(profilePlan('full', { readRecord: () => null }).skipped).toEqual([]);
+  });
 
   it('seeds every project name the workspace configs run files under', () => {
     const projects = vitestCaptureProjects({ include: [], exclude: [] }, { cacheDir: 'x' }).map((project) => project.test.name);

@@ -8,6 +8,11 @@
 // Shell code imports the specific `apiX.js` module instead; pages are lazy and
 // may keep using the barrel. The large page modules are listed too: the sidebar
 // reads their name lists through `services/apiNavNames.js`.
+//
+// The voice stack is held out the same way (#16563): voice is off by default,
+// so `components/voice/VoiceWidgetGate.jsx` is the only voice code the shell
+// imports, and it loads the widget (and with it the voice client and the audio
+// helpers) on demand.
 
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -18,6 +23,14 @@ import { stripComments } from './test/stripComments.js';
 const SRC = dirname(fileURLToPath(import.meta.url));
 const ENTRY = resolve(SRC, 'main.jsx');
 const PAGE_ONLY_MODULES = ['services/api.js', 'services/apiMusicVideo.js', 'services/apiPipeline.js'];
+const VOICE_STACK_MODULES = [
+  'components/voice/VoiceWidget.jsx',
+  'services/voiceClient.js',
+  'services/voiceFastPath.js',
+  'services/domIndex.js',
+  'lib/audioRecorder.js',
+  'lib/audioContext.js',
+];
 const CODE_EXT = /\.(?:jsx?|mjs|tsx?)$/;
 const RESOLVE_SUFFIXES = ['', '.js', '.jsx', '.ts', '.tsx', '/index.js', '/index.jsx'];
 
@@ -60,11 +73,25 @@ function findStaticPath(entry, target, { read = (file) => readFileSync(file, 'ut
   return null;
 }
 
+const chainFromEntry = (module) => {
+  const chain = findStaticPath(ENTRY, resolve(SRC, module));
+  return chain ? chain.map((file) => file.slice(SRC.length + 1)).join(' -> ') : null;
+};
+
 describe('cold-load entry closure (#16562)', () => {
   it.each(PAGE_ONLY_MODULES)('main.jsx never statically reaches %s', (module) => {
-    const chain = findStaticPath(ENTRY, resolve(SRC, module));
-    const shown = chain?.map((file) => file.slice(SRC.length + 1)).join(' -> ');
-    expect(shown ?? null, 'import a narrower services/apiX.js module, or load this one lazily').toBeNull();
+    expect(chainFromEntry(module), 'import a narrower services/apiX.js module, or load this one lazily').toBeNull();
+  });
+
+  it.each(VOICE_STACK_MODULES)('main.jsx never statically reaches the voice stack through %s', (module) => {
+    expect(
+      chainFromEntry(module),
+      'shell code reads voice state from components/voice/VoiceWidgetGate.jsx; anything that needs this module loads it lazily',
+    ).toBeNull();
+  });
+
+  it('still reaches the gate that loads the voice stack on demand', () => {
+    expect(chainFromEntry('components/voice/VoiceWidgetGate.jsx')).not.toBeNull();
   });
 
   it('follows static imports and re-exports, but not dynamic import()', () => {

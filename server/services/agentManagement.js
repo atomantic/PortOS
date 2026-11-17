@@ -34,7 +34,7 @@ import { forceSpawnTask } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no

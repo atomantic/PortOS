@@ -401,6 +401,19 @@ socket.on('disconnect', () => {
   notifyVoiceOutputPrimary();
 });
 
+// Register this tab as a voice-output candidate, and claim output when it is
+// the tab the user is looking at. Only a visible+focused tab claims, so a
+// backgrounded tab never steals output from the foreground one. Both emits are
+// no-ops while the socket is down.
+const joinVoiceOutput = () => {
+  announceVoiceOutputAvailable();
+  if (typeof document !== 'undefined'
+    && document.visibilityState === 'visible'
+    && (document.hasFocus?.() ?? true)) {
+    claimVoiceOutput();
+  }
+};
+
 // Claim on focus / visibility so proactive audio follows the active tab. Reuse
 // the shared visibility singleton (one document-level listener for the whole
 // app) rather than adding another `visibilitychange` handler. `focus` has no
@@ -409,9 +422,11 @@ socket.on('disconnect', () => {
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   window.addEventListener('focus', claimVoiceOutput);
   subscribeVisibility((state) => { if (state === 'visible') claimVoiceOutput(); });
-  // The socket may already be connected by the time this module loads; the
-  // connect handler below re-announces on every (re)connect.
-  announceVoiceOutputAvailable();
+  // This module loads lazily (the first time voice is on), usually after the
+  // socket connected, so the `connect` handler below has already been missed:
+  // join now, or the focused tab stays unclaimed until its next focus event
+  // and the first reminder can go to whichever tab announced last.
+  joinVoiceOutput();
 }
 
 // voice:transcript marks the start of a new turn's outputs — any pending
@@ -567,18 +582,10 @@ socket.on('connect', () => {
   if (lastDictationRequest.enabled) {
     socket.emit('voice:dictation:set', lastDictationRequest);
   }
-  // Re-register as a voice-output candidate on every (re)connect — a fresh
-  // socket has no server-side candidacy until this tab announces again.
-  announceVoiceOutputAvailable();
-  // On (re)connect, re-claim voice output if this tab is the one the user is
-  // looking at — otherwise a reconnect could leave audio pointed at a stale
-  // primary. Only a visible+focused tab claims so a backgrounded reconnect
-  // doesn't steal output from the foreground tab.
-  if (typeof document !== 'undefined'
-    && document.visibilityState === 'visible'
-    && (document.hasFocus?.() ?? true)) {
-    claimVoiceOutput();
-  }
+  // A fresh socket has no server-side candidacy until this tab announces
+  // again, and a reconnect could otherwise leave audio pointed at a stale
+  // primary.
+  joinVoiceOutput();
 });
 
 export const interrupt = () => {
