@@ -15,6 +15,7 @@ import * as mediaValidation from './mediaValidation.js';
 import * as pipelineValidation from './pipelineValidation.js';
 import * as spriteValidation from './spriteValidation.js';
 import * as sharedSchemas from './sharedSchemas.js';
+import * as githubValidation from './githubValidation.js';
 
 // Issues #1151 and #1831 split validation.js's domain schema groups into per-
 // domain files, with validation.js re-exporting them so existing deep imports
@@ -106,7 +107,7 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
   });
 
   it('the new #1831 domain files do NOT import back from validation.js (cycle guard)', () => {
-    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation]) {
+    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation, githubValidation]) {
       // validateRequest / parsePagination live only in validation.js — if a
       // domain file re-imported the barrel they'd leak through `export *`.
       expect(mod.validateRequest).toBeUndefined();
@@ -349,9 +350,10 @@ describe('validateRequest imports go to the leaf (#16096)', () => {
 // only shrink. New schemas land in a domain `*Validation.js` file, and a caller
 // that needs nothing declared in the barrel imports the declaring module.
 // Own exports are the barrel's `export const|function|…` declarations and its
-// local `export { … }` lists; `export … from` re-exports are not counted, since
-// moving a domain out keeps one so existing deep imports still resolve.
-const OWN_EXPORT_CEILING = 310;
+// local `export { … }` lists; `export … from` re-exports are not counted: a moved domain
+// may keep one for existing deep imports, or drop it once every importer is
+// re-pointed (githubValidation.js, #16604).
+const OWN_EXPORT_CEILING = 285;
 const OWN_DECLARATION_RE = /^export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm;
 const LOCAL_EXPORT_LIST_RE = /^export\s*\{([^}]*)\}\s*(?:;|$)/gm;
 

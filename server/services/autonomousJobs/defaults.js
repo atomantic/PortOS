@@ -234,7 +234,7 @@ Phase 4 — Report:
     // for the whole install, so a System task rather than a per-app scheduled
     // task. Off by default so other installs do not start polling GitHub on
     // upgrade; the GitHub Automations tab turns it on in one tap. The cron is
-    // GITHUB_NOTIFICATION_CADENCES['weekdays-15m'] (lib/validation.js).
+    // GITHUB_NOTIFICATION_CADENCES['weekdays-15m'] (lib/githubValidation.js).
     id: 'job-github-notifications',
     name: 'GitHub Notifications Check',
     description: 'Check each GitHub account on Dev Tools › GitHub for new notifications and apply its triage rules. Observe accounts record decisions and mark closed or merged threads done; Assist and Autopilot accounts also act. Never polls faster than GitHub allows.',

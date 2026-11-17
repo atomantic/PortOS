@@ -13,13 +13,9 @@
  * field existed simply contribute nothing.
  */
 
-import { join } from 'node:path';
-import { safeJSONParse, tryReadFileStrict } from '../lib/fileUtils.js';
-
 // Bounds one run's record: a review loop that somehow reports past this keeps
 // its earliest rounds, which are the ones the clean-rate question is about.
 const MAX_REVIEW_VERDICTS_PER_RUN = 200;
-const ARCHIVE_READ_BATCH_SIZE = 50;
 
 /** Inclusive upper bounds on reviewed added+deleted lines; the last bucket is open. */
 const REVIEW_SIZE_BUCKETS = [
@@ -117,43 +113,14 @@ function summarizeReviewerVerdicts(agents) {
   return { runs, reports: reviewers.reduce((sum, r) => sum + r.reports, 0), byReviewer: reviewers, bySize: sizes };
 }
 
-// Archived records' verdicts, kept between requests so a verdict event in every
-// open Learning tab does not re-read the whole archive. Verdicts are appended
-// only while a run is live (and live state wins below), so an archived record's
-// verdicts do not change once indexed; a new or re-dated index entry is read
-// fresh, and a restore or other invalidating archive write bumps the archive
-// epoch, which resets the cache. Holds only verdict arrays, never whole records.
-let archiveCache = { epoch: -1, index: null, byId: new Map() };
-
-async function readArchivedVerdicts({ loadAgentIndex, getAgentDir, archivedRecordCacheEpoch }) {
-  const epoch = archivedRecordCacheEpoch();
-  const index = await loadAgentIndex();
-  if (archiveCache.epoch !== epoch || archiveCache.index !== index) archiveCache = { epoch, index, byId: new Map() };
-  const cache = archiveCache;
-  for (const agentId of cache.byId.keys()) if (!index.has(agentId)) cache.byId.delete(agentId);
-  const missing = [...index.entries()].filter(([agentId, date]) => cache.byId.get(agentId)?.date !== date);
-  let unreadable = 0;
-  for (let i = 0; i < missing.length; i += ARCHIVE_READ_BATCH_SIZE) {
-    await Promise.all(missing.slice(i, i + ARCHIVE_READ_BATCH_SIZE).map(async ([agentId, date]) => {
-      const { ok, value } = await tryReadFileStrict(join(getAgentDir(agentId, date), 'metadata.json'));
-      // An unreadable or unparseable file is counted, not cached, so it is retried next time.
-      if (!ok) { unreadable++; return; }
-      const raw = value ? safeJSONParse(value, null, { allowArray: false }) : null;
-      if (value && !raw) { unreadable++; return; }
-      const verdicts = Array.isArray(raw?.metadata?.reviewVerdicts) ? raw.metadata.reviewVerdicts : null;
-      cache.byId.set(agentId, { date, verdicts });
-    }));
-  }
-  return { byId: cache.byId, unreadable };
-}
-
 /**
  * Live working set plus the dated archive, de-duplicated by agent id (live wins).
  * `unreadableRuns` counts archived records that could not be read this time.
  */
 export async function getReviewerVerdictStats() {
-  const [{ loadState }, indexApi] = await Promise.all([import('./cosState.js'), import('./cosAgentIndex.js')]);
-  const { byId: archived, unreadable } = await readArchivedVerdicts(indexApi);
+  // Lazy imports keep the archive and CoS state out of this module's static graph.
+  const [{ loadState }, { scanArchivedAgents }] = await Promise.all([import('./cosState.js'), import('./cosArchivedAgentScan.js')]);
+  const { byId: archived, unreadable } = await scanArchivedAgents();
   const state = await loadState();
   const byId = new Map();
   for (const [agentId, { verdicts }] of archived) {

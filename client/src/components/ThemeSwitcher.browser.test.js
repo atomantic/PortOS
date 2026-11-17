@@ -1,19 +1,14 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { chromium } from 'playwright-core';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { THEME_IDS } from '../themes/portosThemes.js';
 import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
 
-const require = createRequire(import.meta.url);
-const { chromium } = require(require.resolve('playwright-core', { paths: [
-  fileURLToPath(new URL('../..', import.meta.url)),
-  fileURLToPath(new URL('../../../server', import.meta.url)),
-] }));
 const chrome = resolveTestChrome();
 
 describe.skipIf(!chrome)('theme chooser in short viewports', () => {
