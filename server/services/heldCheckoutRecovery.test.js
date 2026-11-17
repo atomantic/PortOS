@@ -33,7 +33,7 @@ vi.mock('./prProbe.js', async importOriginal => ({ ...await importOriginal(),
 vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => forge.delivery }));
 vi.mock('./apps.js', () => ({ getAppById: async (id) => (injected.app?.id === id ? injected.app : null) }));
 // lsof is absent on some CI hosts and fails closed there; no process sits in these checkouts.
-vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async () => false }));
+vi.mock('../lib/processCwdProbe.js', () => ({ probeProcessCwdInside: async () => false, hasProcessCwdInside: async () => false }));
 
 import { describeHeldCheckoutRecovery, it, beforeEach, scratch, repo, external, noOwners, heldCheckout, mergedCheckout, registered, lockText, retire, makeClean } from './_heldCheckoutRecoveryFixture.js';
 const { retireInventoriedCheckout, retirePendingMergeCheckout, retireCompletedCheckouts } = await import('./heldCheckoutRecovery.js');

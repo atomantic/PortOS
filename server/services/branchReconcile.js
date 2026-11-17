@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches, readBranchLineage, readBranchPublished } from './git.js';
 import { readClaimIssueReservation, readRepoClaimIssueReservation } from './claimIssueReservation.js';
-import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
+import { probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readCheckoutPresence, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
@@ -1290,11 +1290,11 @@ async function retireBranch(repoPath, b, opts) {
     }
     const issue = claimIssueOfBranch(b.branch);
     if (issue && lineage === 'ancestry') {
-      // A standalone caller (the Git page) passes no credential overlay: resolve
-      // it here. Reconcile's explicit null (no GitHub origin) stays unreadable.
-      const claimReserved = opts.forgeExec === undefined
-        ? await readRepoClaimIssueReservation(repoPath, issue, { forgeAccount: opts.forgeAccount ?? null })
-        : await readClaimIssueReservation(opts.origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : opts.origin, issue, opts.forgeExec);
+      // Reconcile's per-cycle gh credential when it has one; otherwise (the Git
+      // page passes none, a GitLab origin has none) read the origin's tracker.
+      const claimReserved = opts.forgeExec
+        ? await readClaimIssueReservation(opts.origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : opts.origin, issue, opts.forgeExec)
+        : await readRepoClaimIssueReservation(repoPath, issue, { forgeAccount: opts.forgeAccount ?? null });
       opts = { ...opts, claimReserved };
     }
   }
@@ -1349,7 +1349,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     published: () => b.published === true || readBranchPublished(repoPath, b.branch),
     claimReserved: () => claimReserved,
     checkoutPresent: (facts, path) => readCheckoutPresence(path),
-    checkoutProcess: (facts, path) => hasProcessCwdInside(path),
+    checkoutProcess: (facts, path) => probeProcessCwdInside(path),
     mergedPrAtHead: facts => Boolean(shippedHead) && shippedHead === facts.head,
   };
   const facts = {};

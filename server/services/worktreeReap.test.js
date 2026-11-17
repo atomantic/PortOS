@@ -52,7 +52,9 @@ vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ 
 // lsof is absent on some CI hosts and fails closed there; a checkout a process
 // sits in is named per test instead.
 const occupiedCheckouts = new Set();
-vi.mock('../lib/processCwdProbe.js', () => ({ hasProcessCwdInside: async dir => occupiedCheckouts.has(dir) }));
+vi.mock('../lib/processCwdProbe.js', () => ({
+  probeProcessCwdInside: async dir => occupiedCheckouts.has(dir), hasProcessCwdInside: async dir => occupiedCheckouts.has(dir),
+}));
 
 /**
  * Why `wantedPath` was skipped, matched separator-insensitively — `skipped[].path`

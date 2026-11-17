@@ -12,7 +12,7 @@ import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
   decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
   claimIssueOfBranch, MERGED_OWNERSHIP_HOLDS, recoveryWorktreeReason, supersededPolicyHold,
-  ANCESTRY_RETIREMENT_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
+  ANCESTRY_RETIREMENT_IDLE_MS, UNPROBED_CHECKOUT_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
@@ -202,7 +202,8 @@ describe('mergedOwnershipHold', () => {
     ['a checkout directory proven absent needs no activity read', { facts: { checkoutPresent: false, checkoutProcess: null, idleMs: null } }, 'retire'],
     ['an unreadable checkout directory holds', { facts: { checkoutPresent: null } }, 'checkout-presence-unreadable'],
     ['a process in the checkout holds an ancestry merge', { facts: { checkoutProcess: true } }, 'checkout-process-active'],
-    ['an unreadable process probe holds', { facts: { checkoutProcess: null } }, 'checkout-process-active'],
+    ['a probe that cannot tell needs a day of quiet, not an hour', { facts: { checkoutProcess: null } }, 'checkout-process-unverified'],
+    ['a quiet day retires a checkout no probe can see into', { facts: { checkoutProcess: null, idleMs: 25 * HOUR } }, 'retire'],
     ['recent activity holds an ancestry merge', { facts: { idleMs: 10 * 60 * 1000 } }, 'checkout-recently-touched'],
     ['unreadable activity holds', { facts: { idleMs: null } }, 'checkout-idle-unreadable'],
     ['a PR merged at this head outranks recent activity', { facts: { idleMs: 0, mergedPrAtHead: true } }, 'retire'],
@@ -219,6 +220,7 @@ describe('mergedOwnershipHold', () => {
 
   it('dates a recent-activity hold for when the idle window lapses', () => {
     expect(own({ facts: { idleMs: 10 * 60 * 1000 } }).hold.retryAt).toBe(new Date(NOW + ANCESTRY_RETIREMENT_IDLE_MS - 10 * 60 * 1000).toISOString());
+    expect(own({ facts: { checkoutProcess: null } }).hold.retryAt).toBe(new Date(NOW + UNPROBED_CHECKOUT_IDLE_MS - IDLE).toISOString());
   });
 
   it('reads the forge only once a hold would apply, and checkout activity only for an ancestry merge', () => {
