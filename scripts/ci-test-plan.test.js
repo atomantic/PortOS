@@ -2532,8 +2532,9 @@ describe('path-gated single-purpose jobs', () => {
 // single-purpose jobs follow the tree diff since the last green push or
 // schedule run (CI_GATED_BASE_SHA from scripts/ci-base-sha.js), so a client
 // change no longer queues the macOS, Windows and SuperCollider runners.
+// Prompt history is history-sensitive and stays unconditional.
 describe('native jobs on a push to main', () => {
-  const NATIVE_OUTPUTS = ['prompt_history', 'linux_containment', 'supercollider_live', 'docker_containment_live',
+  const NATIVE_OUTPUTS = ['linux_containment', 'supercollider_live', 'docker_containment_live',
     'macos_native', 'node_minimum', 'windows'];
   const nativeOutputs = (outputs) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, outputs[name]]));
   const allNative = (value) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, value]));
@@ -2545,10 +2546,10 @@ describe('native jobs on a push to main', () => {
     });
   };
   const gates = (plan) => ({
-    promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
+    linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
     dockerContainmentLive: plan.dockerContainmentLive, macosNative: plan.macosNative, nodeMinimum: plan.nodeMinimum, windows: plan.windows,
   });
-  const none = { promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false,
+  const none = { linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false,
     macosNative: false, nodeMinimum: false, windows: false };
 
   it('plans the push through the CLI from the diff against the last green main commit, and falls back to every job', () => {
@@ -2586,6 +2587,8 @@ describe('native jobs on a push to main', () => {
       expect(clientOnly).toMatchObject({ full: true, server_mode: 'full', client_mode: 'full', db: true, build: true, smoke: true });
       expect(nativeOutputs(clientOnly)).toEqual(allNative(false));
       expect(clientOnly.windows_mode).toBe('skip');
+      // Gated, so not complete-run evidence; prompt history still runs.
+      expect(clientOnly).toMatchObject({ native_gated: true, prompt_history: true });
 
       write('server/lib/darwinAgentSupervisor.py', 'print("changed")\n');
       commit();
@@ -2594,7 +2597,7 @@ describe('native jobs on a push to main', () => {
       // A base git cannot diff against (a failed fetch) fails open.
       const unresolvable = plan('0'.repeat(40));
       expect(nativeOutputs(unresolvable)).toEqual(allNative(true));
-      expect(unresolvable.windows_mode).toBe('files');
+      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false, prompt_history: true });
       // As does a push whose lookup exported nothing.
       expect(nativeOutputs(plan(''))).toEqual(allNative(true));
     } finally {
@@ -2607,7 +2610,6 @@ describe('native jobs on a push to main', () => {
     expect(gates(gatedPlan([]))).toEqual(none);
     expect(gates(gatedPlan(['server/lib/darwinAgentSupervisor.py']))).toEqual({ ...none, macosNative: true });
     expect(gates(gatedPlan(['server/lib/codeAnimationContainment.js']))).toMatchObject({ linuxContainment: true, macosNative: false, nodeMinimum: false, windows: false });
-    expect(gates(gatedPlan(['data.reference/prompts/stages/example.md']))).toEqual({ ...none, promptHistory: true });
     expect(gates(gatedPlan(['server/services/dockerEngine.js']))).toMatchObject({ dockerContainmentLive: true, macosNative: false });
     expect(gates(gatedPlan(['package.json']))).toMatchObject({ nodeMinimum: true, supercolliderLive: true, macosNative: false });
     expect(gates(gatedPlan(['server/lib/bufferedSpawn.js']))).toMatchObject({ windows: true, supercolliderLive: true, macosNative: false });
@@ -2630,6 +2632,12 @@ describe('native jobs on a push to main', () => {
     expect(gatedPlan([LOCK], { gatedDependencyChanges: { [LOCK]: sensitive } }).windows).toBe(true);
     // No comparison available fails closed.
     expect(gatedPlan([LOCK]).windows).toBe(true);
+  });
+
+  it('always runs prompt history on a push, because a reverted prompt change leaves no tree diff', () => {
+    for (const files of [[], ['client/src/App.jsx'], ['data.reference/prompts/stages/example.md']]) {
+      expect(gatedPlan(files).promptHistory, files.join()).toBe(true);
+    }
   });
 
   it('runs every native job when forced full without a gated diff', () => {

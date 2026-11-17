@@ -184,6 +184,10 @@ describe('ci.yml required checks', () => {
     // job; primary-only full plans leave windows_mode at skip.
     expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.full == 'true'/);
     expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.windows_mode == 'files'/);
+    // A push whose native jobs were gated on its diff ran a partial native set,
+    // and verify-ci-status.js would reuse its marker for an identical tree.
+    expect(jobs['full-gate']).toMatch(/needs\.impact\.outputs\.native_gated != 'true'/);
+    expect(jobs.impact).toContain('native_gated: ${{ steps.plan.outputs.native_gated }}');
   });
 
 });

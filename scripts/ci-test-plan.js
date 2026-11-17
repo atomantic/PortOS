@@ -560,8 +560,8 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 // The narrow CI jobs below observe a small, enumerable input set, so a pull
 // request that touches none of it skips them, and so does a push to `main`
 // whose tree diff against the last green push or schedule run touches none of
-// it (CI_GATED_BASE_SHA). Schedule, dispatch, workflow_call and release-base
-// runs always run every one. A gate takes one of two forms:
+// it (CI_GATED_BASE_SHA), except prompt history (see buildCiTestPlan). Schedule,
+// dispatch, workflow_call and release-base runs always run every one. A gate takes one of two forms:
 // - the head tree's static import closure of the job's entry points, computed
 //   per run so it cannot drift from a hand-kept list, plus the non-module
 //   inputs named by the job's pattern (prompt-history, linux-containment,
@@ -994,6 +994,10 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  * schedule run is known (`CI_GATED_BASE_SHA`). Then the gated jobs and the
  * Windows native job are decided from that diff exactly as a pull request
  * would decide them, while the primary suites stay full. null keeps them all.
+ * Prompt history is the exception: its guard reads every committed prompt
+ * body, so a change reverted between the base and HEAD leaves no trace in a
+ * tree diff yet still needs checking, and the shallow impact clone cannot
+ * walk the intervening commits. It always runs on a forced-full plan.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
@@ -1025,7 +1029,10 @@ export function buildCiTestPlan(changedFiles, options = {}) {
     ...plan,
     ...gatedWindows,
     ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
-    promptHistory: gate((files) => touchesJobInputs(files, promptHistoryInputs, PROMPT_HISTORY_PATH_RE)),
+    // A gated push still is not complete-run evidence: ci.yml withholds the
+    // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
+    nativeGated: gatedFull,
+    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
     linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
     supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
     dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
@@ -1454,6 +1461,7 @@ export function emitGitHubPlan(plan) {
     docker_containment_live: plan.dockerContainmentLive,
     macos_native: plan.macosNative,
     node_minimum: plan.nodeMinimum,
+    native_gated: plan.nativeGated,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
