@@ -13,6 +13,7 @@ vi.mock('./apps.js', async (actual) => ({
 }));
 vi.mock('./appActivity.js', async (actual) => ({
   ...await actual(), getNextAppForReview: async () => mocks.app,
+  markAppReviewCooldown: async () => {}, bindAppReviewAgent: async () => {},
   updateAppActivity: (...args) => mocks.updateAppActivity(...args),
 }));
 vi.mock('./cosState.js', async (actual) => ({
