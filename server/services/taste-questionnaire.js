@@ -750,11 +750,12 @@ Respond with a concise profile in this exact structure:
 - [1-2 direct quotes that capture their taste]`;
 
   const result = await callProviderAISimple(provider, modelId, prompt, {
+    // A creative source (lib/creativeLatitude.js): the whole point is to cite
+    // the named films/albums/artists the user mentioned; a model that
+    // genericizes them produces a useless profile.
+    source: 'taste-summary',
     temperature: 0.3,
     max_tokens: 1000,
-    // The whole point is to cite the named films/albums/artists the user
-    // mentioned; a model that genericizes them produces a useless profile.
-    creative: true,
     op: `taste-summary:${sectionId}`,
     opLabel: `Generating ${config.label} taste summary`
   });
@@ -827,9 +828,9 @@ ${allTranscripts}
 [5-8 descriptive tags like: "brutalist minimalist", "atmospheric storyteller", "texture-obsessed", etc.]`;
 
   const result = await callProviderAISimple(provider, modelId, prompt, {
+    source: 'taste-summary',
     temperature: 0.3,
     max_tokens: 1500,
-    creative: true,
     op: 'taste-summary:overall',
     opLabel: 'Generating unified taste profile'
   });
@@ -1013,9 +1014,9 @@ ${transcript || '(No responses yet for this section)'}
 Generate exactly ONE question. Do not include any preamble, numbering, or explanation. Just the question text itself. Keep it under 150 words. Make it feel like a question from someone who genuinely knows and is curious about this person.`;
 
   const result = await callProviderAISimple(provider, modelId, prompt, {
+    source: 'taste-deep-question',
     temperature: 0.8,
     max_tokens: 200,
-    creative: true,
     op: `taste-deep-question:${sectionId}`,
     opLabel: `Crafting a deeper ${config.label} question`
   });

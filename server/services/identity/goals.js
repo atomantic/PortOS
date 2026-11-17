@@ -703,7 +703,7 @@ Respond with a JSON array only (no markdown fences, no explanation). Each elemen
 - "targetDate": string (YYYY-MM-DD format)
 - "order": number (0-based index)`;
 
-  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 2000 });
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { source: 'goal-phases', max_tokens: 2000 });
   if (result.error) throw new ServerError(`AI generation failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
 
   let parsed;
@@ -785,7 +785,7 @@ Respond with a JSON array only (no markdown fences, no explanation). Each elemen
 ${goal.targetDate ? '- "targetDate": string (YYYY-MM-DD format)\n' : ''}- "order": number (0-based index)
 - "tasks": array of { "title": string, "priority": "low"|"medium"|"high", "estimateMinutes": number (whole minutes) }`;
 
-  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 4000, temperature: 0.4 });
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { source: 'goal-decomposition', max_tokens: 4000, temperature: 0.4 });
   if (result.error) throw new ServerError(`AI decomposition failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
 
   let parsed;
@@ -912,7 +912,7 @@ Respond with JSON only (no markdown fences). The response must be an object with
 - "suggestedSubApex": array of { "title": string, "description": string, "category": string, "suggestedParentId": string|null } — suggest 0-3 sub-apex goals if the existing goals don't cover major life pillars well. Set suggestedParentId to the apex goal's existingId or "__new_apex__" if suggesting a new apex.
 - "analysis": string — 2-3 sentences summarizing the person's core purpose and how their goals connect.`;
 
-  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 3000, temperature: 0.4 });
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { source: 'goal-organization', max_tokens: 3000, temperature: 0.4 });
   if (result.error) throw new ServerError(`AI organization failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
 
   let parsed;
@@ -1047,7 +1047,7 @@ Respond with JSON only (no markdown fences). The response must be an object with
 - "recommendations": string[] — 2-4 specific, actionable next steps
 - "encouragement": string — 1 brief motivational sentence`;
 
-  const result = await callProviderAISimple(provider, selectedModel, prompt, { max_tokens: 1000, temperature: 0.5 });
+  const result = await callProviderAISimple(provider, selectedModel, prompt, { source: 'goal-check-in', max_tokens: 1000, temperature: 0.5 });
   if (result.error) throw new ServerError(`AI check-in failed: ${result.error}`, { status: 502, code: 'AI_ERROR' });
 
   let parsed;

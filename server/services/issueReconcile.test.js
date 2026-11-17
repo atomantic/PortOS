@@ -24,7 +24,10 @@ vi.mock('./github.js', () => ({
   execGh: vi.fn(async () => '[]'),
   ensureForgeReachable: (...args) => ensureForgeReachableMock(...args),
 }));
-vi.mock('./gitlab.js', () => ({ execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })) }));
+vi.mock('./gitlab.js', () => ({
+  execGlab: vi.fn(async () => ''),
+  execGlabJson: vi.fn(async () => ({ rows: [], reason: 'ok' })),
+}));
 vi.mock('./jira.js', () => ({ fetchMyCurrentSprintTickets: vi.fn(async () => []) }));
 vi.mock('../lib/gitRemote.js', () => ({
   getOriginInfo: vi.fn(async () => ({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' })),
@@ -49,13 +52,14 @@ import {
 } from './issueReconcile.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
-import { execGlabJson } from './gitlab.js';
+import { execGlab, execGlabJson } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+  execGlab.mockResolvedValue('');
   getOriginInfo.mockResolvedValue({ isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS' });
   readOriginRemoteUrl.mockResolvedValue('git@github.com:atomantic/PortOS.git');
 });
@@ -854,7 +858,7 @@ describe('swarm reservations (in-progress, no assignee)', () => {
     expect(result.reserved).toEqual([]);
   });
 
-  it('releases a stale reservation by comment + unlabel, never a close', async () => {
+  it('releases a stale reservation by unlabel + comment, never a close', async () => {
     mockGh({ issues: [issue({ updatedAt: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: mention, open: [] });
     const result = await reconcile('/repo', { now: NOW });
     expect(result.zombies).toEqual([]);
@@ -868,11 +872,48 @@ describe('swarm reservations (in-progress, no assignee)', () => {
     expect(released).toBe(1);
     const argvs = execGh.mock.calls.map(([argv]) => argv);
     expect(argvs).toHaveLength(2);
-    expect(argvs[0].slice(0, 3)).toEqual(['issue', 'comment', '2220']);
-    expect(argvs[0].at(-1)).toContain('reservation');
-    expect(argvs[0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
-    expect(argvs[1]).toEqual(['issue', 'edit', '2220', '--repo', 'github.com/atomantic/PortOS', '--remove-label', 'in-progress']);
+    expect(argvs[0]).toEqual(['issue', 'edit', '2220', '--repo', 'github.com/atomantic/PortOS', '--remove-label', 'in-progress']);
+    expect(argvs[1].slice(0, 3)).toEqual(['issue', 'comment', '2220']);
+    expect(argvs[1].at(-1)).toContain('reservation');
+    expect(argvs[1].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
     expect(argvs.some((argv) => argv.includes('close'))).toBe(false);
+  });
+
+  // #16623 — a failed unlabel must leave the issue as stale as it was, for both release kinds.
+  it.each([
+    ['an expired reservation', { assignees: [] }, 'RESERVED'],
+    ['an abandoned foreign claim', { assignees: [{ login: 'volunteer-a' }] }, 'ABANDONED'],
+  ])('retries %s on the next pass after a failed unlabel', async (_name, overrides, state) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const staleUpdatedAt = daysAgo(FOREIGN_CLAIM_STALE_DAYS + 1);
+      let updatedAt = staleUpdatedAt;
+      let editFails = true;
+      execGh.mockImplementation(async (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'list') {
+          return JSON.stringify([{ number: 2220, title: 't', url: 'u', labels: [{ name: 'in-progress' }], updatedAt, author: { login: 'trusted-author' }, ...overrides }]);
+        }
+        if (argv[0] === 'pr' && argv.includes('merged')) return '[]';
+        if (argv[0] === 'api' && argv.at(-1) === 'user') return JSON.stringify({ login: 'atomantic' });
+        if (argv[0] === 'api' && argv.at(-1).endsWith('/permission')) return JSON.stringify({ permission: 'write', user: { login: 'trusted-author' } });
+        if (argv[0] === 'issue' && argv[1] === 'comment') { updatedAt = new Date(NOW).toISOString(); return ''; }
+        if (argv[0] === 'issue' && argv[1] === 'edit' && editFails) throw new Error('HTTP 502');
+        return '[]';
+      });
+      const ctxOf = (r) => ({ forge: r.forge, repoSpec: r.repoSpec, fullName: r.fullName });
+
+      const first = await reconcile('/repo', { now: NOW });
+      expect(first.abandoned.map((a) => [a.number, a.state])).toEqual([[2220, state]]);
+      expect(await releaseAbandonedClaims(first.abandoned, ctxOf(first))).toBe(0);
+      expect(updatedAt).toBe(staleUpdatedAt);
+
+      const second = await reconcile('/repo', { now: NOW });
+      expect(second.abandoned.map((a) => [a.number, a.state])).toEqual([[2220, state]]);
+      editFails = false;
+      expect(await releaseAbandonedClaims(second.abandoned, ctxOf(second))).toBe(1);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('never releases a reservation whose activity time is unresolved', async () => {
@@ -937,6 +978,110 @@ describe('swarm reservations (in-progress, no assignee)', () => {
         log.mockRestore();
       }
     });
+
+    // #16608 — the gather → release boundary on GitLab, where `glab` is cwd-routed.
+    const release = (result) => releaseAbandonedClaims(result.abandoned, {
+      forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName, repoPath: '/repo',
+    });
+    const glabWrites = () => execGlab.mock.calls.map(([argv, cwd]) => [argv, cwd]);
+
+    it('releases a stale reservation with one unlabel and one note, never a close', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: glMention, open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies).toEqual([]);
+      expect(result.abandoned.map((a) => [a.number, a.state])).toEqual([[42, 'RESERVED']]);
+
+      expect(await release(result)).toBe(1);
+      const writes = glabWrites();
+      expect(writes).toHaveLength(2);
+      expect(writes[0][0]).toEqual(['issue', 'update', '42', '--unlabel', 'in-progress']);
+      expect(writes[1][0].slice(0, 4)).toEqual(['issue', 'note', '42', '--message']);
+      expect(writes[1][0].at(-1)).toContain('reservation');
+      expect(writes[1][0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
+      expect(writes.every(([, cwd]) => cwd === '/repo')).toBe(true);
+      expect(writes.some(([argv]) => argv.includes('close'))).toBe(false);
+      expect(execGh).not.toHaveBeenCalled();
+    });
+
+    it('holds a fresh reservation: nothing to release, nothing written', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(FOREIGN_CLAIM_STALE_DAYS - 1) })], merged: [], open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.reserved.map((r) => r.number)).toEqual([42]);
+      expect(await release(result)).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    });
+
+    it('never releases a reservation whose activity time is unresolved', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [], updated_at: undefined })], merged: [], open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.reserved.map((r) => [r.number, r.staleDays])).toEqual([[42, null]]);
+      expect(await release(result)).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    });
+
+    it('an unreadable assignee list is not "no assignee": a stale issue is never released', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ updated_at: daysAgo(400) })], merged: [], open: [] });
+        const result = await reconcile('/repo', { now: NOW });
+        expect(result.stalled.map((s) => [s.number, s.hasAssignee])).toEqual([[42, null]]);
+        expect(await release(result)).toBe(0);
+        expect(execGlab).not.toHaveBeenCalled();
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it('a failed note still counts as released once the label is gone', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: [] });
+        const result = await reconcile('/repo', { now: NOW });
+        execGlab.mockImplementation(async (argv) => (argv[1] === 'note' ? null : ''));
+        expect(await release(result)).toBe(1);
+        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['update', 'note']);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    // A note would refresh `updated_at`, making the next scan read the reservation as fresh.
+    it('a failed unlabel writes no note and reports 0, so the next scan retries it', async () => {
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: [] });
+        execGlab.mockImplementation(async (argv) => (argv[1] === 'update' ? null : ''));
+        expect(await release(await reconcile('/repo', { now: NOW }))).toBe(0);
+        expect(glabWrites().map(([argv]) => argv[1])).toEqual(['update']);
+
+        execGlab.mockReset();
+        execGlab.mockResolvedValue('');
+        const next = await reconcile('/repo', { now: NOW });
+        expect(next.abandoned.map((a) => a.number)).toEqual([42]);
+        expect(await release(next)).toBe(1);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('holds expired reservations while the open-MR page is full (an unseen MR may own one)', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const fullPage = Array.from({ length: 100 }, (_, i) => ({ iid: 1000 + i, source_branch: `b${i}`, description: '' }));
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage });
+        const result = await reconcile('/repo', { now: NOW });
+        expect(result.abandoned).toEqual([]);
+        expect(result.reserved.map((r) => r.number)).toEqual([42]);
+        expect(await release(result)).toBe(0);
+        expect(execGlab).not.toHaveBeenCalled();
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: open change list for .* reached the page limit/));
+
+        mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage.slice(1) });
+        expect((await reconcile('/repo', { now: NOW })).abandoned.map((a) => a.number)).toEqual([42]);
+      } finally {
+        log.mockRestore();
+      }
+    });
   });
 });
 
@@ -944,11 +1089,12 @@ describe('releaseAbandonedClaims', () => {
   const abandoned = [{ number: 2220, title: 't', url: 'u', assignees: ['volunteer-a'], staleDays: 20 }];
   const ctx = { forge: 'github', repoSpec: 'github.com/o/r', fullName: 'o/r' };
 
-  it('comments, then strips the marker and the stale assignee in one edit', async () => {
+  it('strips the marker and the stale assignee in one edit, then comments', async () => {
     execGh.mockResolvedValue('');
     const released = await releaseAbandonedClaims(abandoned, ctx);
     expect(released).toBe(1);
-    const [commentArgs, editArgs] = execGh.mock.calls.map(([argv]) => argv);
+    const [editArgs, commentArgs] = execGh.mock.calls.map(([argv]) => argv);
+    expect(execGh).toHaveBeenCalledTimes(2);
     expect(commentArgs.slice(0, 4)).toEqual(['issue', 'comment', '2220', '--repo']);
     expect(commentArgs.at(-1)).toContain('20 days');
     expect(editArgs).toEqual([
@@ -958,21 +1104,37 @@ describe('releaseAbandonedClaims', () => {
   });
 
   // The comment is courtesy; the release is the point. A repo with issue
-  // comments locked must still get its marker back.
-  it('still releases when the courtesy comment fails', async () => {
-    execGh.mockImplementation(async (argv) => {
-      if (argv[1] === 'comment') throw new Error('HTTP 403');
-      return '';
-    });
-    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(1);
+  // comments locked must still get its marker back, and the miss is not an error.
+  it('still releases when the courtesy comment fails, logged on stdout', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      execGh.mockImplementation(async (argv) => {
+        if (argv[1] === 'comment') throw new Error('HTTP 403');
+        return '';
+      });
+      expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(1);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: released #2220 .* but could not comment/));
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore(); error.mockRestore();
+    }
   });
 
-  it('reports zero when the edit itself fails, so the next pass retries', async () => {
-    execGh.mockImplementation(async (argv) => {
-      if (argv[1] === 'edit') throw new Error('HTTP 500');
-      return '';
-    });
-    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(0);
+  // A comment refreshes updatedAt, so commenting after a failed edit would hide the
+  // issue from the next scan for a full stale window.
+  it('reports zero and posts no comment when the edit fails, so the next pass retries', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      execGh.mockImplementation(async (argv) => {
+        if (argv[1] === 'edit') throw new Error('HTTP 500');
+        return '';
+      });
+      expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(0);
+      expect(execGh.mock.calls.some(([argv]) => argv[1] === 'comment')).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('writes nothing for a non-GitHub forge or an empty set', async () => {
@@ -981,6 +1143,20 @@ describe('releaseAbandonedClaims', () => {
     expect(await releaseAbandonedClaims([], ctx)).toBe(0);
     expect(await releaseAbandonedClaims(abandoned, { ...ctx, repoSpec: null })).toBe(0);
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  // GitLab has no ABANDONED state, and glab needs the checkout it resolves the project from.
+  it('on GitLab releases only a reservation, and only with a repo path', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const gl = { forge: 'gitlab', repoSpec: null, fullName: 'g/p', repoPath: '/repo' };
+      expect(await releaseAbandonedClaims([{ ...abandoned[0], state: 'ABANDONED' }], gl)).toBe(0);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: not releasing #2220/));
+      expect(await releaseAbandonedClaims([{ ...abandoned[0], state: 'RESERVED' }], { ...gl, repoPath: undefined })).toBe(0);
+      expect(execGlab).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   });
 });
 

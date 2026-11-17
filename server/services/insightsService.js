@@ -361,6 +361,7 @@ Example format:
 [{"title":"...","narrative":"...","evidence":[{"preference":"...","domain":"...","connection":"..."}],"strength":"strong"}]`;
 
   const result = await callProviderAISimple(provider, selectedModel, prompt, {
+    source: 'insights-taste-themes',
     temperature: 0.4,
     max_tokens: 2000
   });
@@ -469,6 +470,7 @@ Write a 2-3 paragraph analytical narrative in second person ("Your data shows...
 Respond with only the narrative text, no JSON, no headings, no markdown.`;
 
   const result = await callProviderAISimple(provider, selectedModel, prompt, {
+    source: 'insights-narrative',
     temperature: 0.5,
     max_tokens: 2000
   });

@@ -475,6 +475,13 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
   return { suppress, recoverAll, releaseForExistingInvestigation, escalateAndRelease, closeUnexpectedFailure };
 }
 
+// The `runPromptThroughProvider` arguments a `completion` request implements.
+// Every other argument is refused there, so an option added to the streamed
+// path later cannot silently do nothing on a completion.
+const COMPLETION_ARGS = new Set([
+  'provider', 'prompt', 'source', 'model', 'timeout', 'signal', 'cwd', 'completion', 'onRunCreated', 'onRunSettled',
+]);
+
 /**
  * Run a prompt through a provider; resolves with the streamed text + run id, rejects (strictest
  * discriminator) on any runner-reported failure. Per-call `model` overrides are dropped for providers
@@ -543,6 +550,23 @@ function createRecoveryInvestigationScope({ failed, failedModel, firstError }) {
  *   errors are logged as a decline. `phase:'response'` (response failed `responseSchema`): return
  *   `{ text }` to substitute, tried before built-in coercion. `phase:'request'` (schema/type
  *   failure): return `{ prompt }` to re-request the SAME provider, tried before the built-in prompt.
+ * @param {AbortSignal} [args.signal] — the caller's cancellation, for a `completion` request only
+ *   (any other request is refused rather than left running past an abort it never watched).
+ *   Aborting stops the in-flight request and finalizes the run as a cancel, as Stop on the Runs page
+ *   does; already aborted on entry means no run is created.
+ * @param {{ temperature?: number, maxTokens?: number, recover?: (failure: object) => Promise<string|null> }}
+ *   [args.completion] — ask for a BOUNDED completion instead of a streamed run: one non-streaming
+ *   `/chat/completions` request whose body is exactly `{ model, messages, temperature, max_tokens }`
+ *   with the caller's own sampling, `timeout` as a wall-clock deadline, and the provider's reported
+ *   token counts recorded as measured usage. API providers only. It is a pinned, routing-free run
+ *   (`services/apiCompletionRun.js` lists what it leaves out and why): the provider is executed as
+ *   passed, nothing falls back, and `model` goes on the wire verbatim. `recover` may repair a failed
+ *   first attempt and name a model for one retry inside the same run. It takes `provider`, `prompt`,
+ *   `source`, `model`, `timeout`, `signal`, `cwd`, `onRunCreated` and `onRunSettled`; any other
+ *   argument is refused, never silently ignored. Resolves with `usage`,
+ *   `tokens` and `retried` beside the usual fields; rejects with the reply's own error text and
+ *   `completionFailure`, the failed reply itself (`{ error, status?, body?, stallPhase?, model, retried }`,
+ *   with `canceled: true` when the run was stopped).
  * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object, usedFallback?: boolean, fixTier?: number, fixStrategy?: string, coercedResponse?: boolean, fallbackFrom?: { id: string, name: string }, fallbackProvider?: object }>}
  *   — `model` is the model that actually executed. `provider` is the provider that actually ran,
  *   reflecting createRun's proactive swap (`usedFallback`/`fallbackProvider` cover only the retry
@@ -586,6 +610,28 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
   const args = isCreativeRunSource(rawArgs.source)
     ? { ...rawArgs, prompt: withCreativeLatitude(rawArgs.prompt) }
     : rawArgs;
+
+  if (args.signal && !args.completion) {
+    throw new Error('runPromptThroughProvider: signal is honoured only for completion requests');
+  }
+  if (args.completion) {
+    if (args.provider.type !== PROVIDER_TYPES.API) {
+      throw new Error('runPromptThroughProvider: a completion request needs an API provider');
+    }
+    // Refused rather than dropped: a `beforeExecute` spending gate or a
+    // `callerPolicy` that silently did nothing would let through exactly the
+    // request it exists to stop.
+    const unsupported = Object.keys(args).filter((key) => !COMPLETION_ARGS.has(key) && args[key] !== undefined && args[key] !== null);
+    if (unsupported.length > 0) {
+      throw new Error(`runPromptThroughProvider: a completion request does not support ${unsupported.join(', ')}`);
+    }
+    // Lazy: only bounded-completion callers pay for the exchange's closure.
+    const { executeApiCompletionRun } = await import('./apiCompletionRun.js');
+    // Same precedence the streamed path gives `timeout`, resolved here so the
+    // executor takes one number.
+    const callerTimeout = typeof args.timeout === 'function' ? args.timeout(args.provider) : args.timeout;
+    return executeApiCompletionRun({ ...args, timeout: callerTimeout ?? args.provider.timeout ?? DEFAULT_TIMEOUT_MS });
+  }
 
   // Execute once, then decide whether the deterministic fallback cascade runs.
   // A transport-layer failure is caught into `firstError`. A transport SUCCESS

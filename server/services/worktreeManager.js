@@ -2404,6 +2404,9 @@ async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readO
         console.warn(`⚠️ External branch ${branchName} retained: head changed, new holder, or deletion refused`);
       }
       if (ok) {
+        // One line per removal so a vanished checkout is attributable to this sweep (#16618).
+        const evidence = externalDisposable ? 'PR merged at exactly this head' : `branch head contained in ${target}`;
+        console.log(`🌳 Removed external worktree ${worktreePath} (branch ${branchName} @ ${String(wt.head).slice(0, 12)}, repo ${parentRepo}): ${evidence}`);
         const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
         await recordWorkspaceCheckoutRetirement(parentRepo, {
           path: wt.path, branch: branchName, head: wt.head, branchDeleted: Boolean(deleted),

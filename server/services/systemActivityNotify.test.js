@@ -109,11 +109,13 @@ describe('system activity invalidation', () => {
 
     const hooks = attachLlmActivityHooks({
       onRunCompleted: () => 'kept',
+      onRunUnreported: () => 'unreported kept',
     });
     expect(hooks.onRunStarted({})).toBeUndefined();
     expect(hooks.onRunCompleted({}, '')).toBe('kept');
     hooks.onRunFailed({}, new Error('no'));
     hooks.onRunCanceled({ runId: 'run-1' });
+    expect(hooks.onRunUnreported({ runId: 'run-2' })).toBe('unreported kept');
 
     const io = { emit: vi.fn() };
     const app = { id: 'app-1', name: 'Example', repoPath: 'app-1' };
@@ -133,7 +135,7 @@ describe('system activity invalidation', () => {
       'start', 'completion', 'failure', 'cancellation', 'queued', 'drained',
     ]);
     expect(of('mind')).toEqual(['start', 'queued', 'completion', 'drained', 'start', 'cancellation', 'start', 'failure']);
-    expect(of('llm')).toEqual(['start', 'completion', 'failure', 'cancellation']);
+    expect(of('llm')).toEqual(['start', 'completion', 'failure', 'cancellation', 'failure']);
     expect(of('appOperations')).toEqual([
       'start', 'failure', 'drained', 'start', 'completion', 'drained', 'start', 'cancellation', 'drained',
     ]);
