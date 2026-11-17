@@ -923,6 +923,9 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
     // state issue-reconcile deliberately does NOT auto-heal. Surface them.
     emitLog('info', `🧟 issue-reconcile ${app.name}: ${result.stalled.length} stalled in-progress issue(s) with no merged PR (left for human/branch-reconcile)`, { appId: app.id, analysisType: taskType });
   }
+  if (result.reserved.length) {
+    emitLog('info', `⏭️ issue-reconcile ${app.name}: ${result.reserved.length} reserved in-progress issue(s) with no assignee (a batch run's reservation — left alone until stale)`, { appId: app.id, analysisType: taskType });
+  }
   if (result.zombies.length === 0) {
     await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null });
     emitLog('info', `🧟 issue-reconcile parked for ${app.name}: no zombie issues`, { appId: app.id });

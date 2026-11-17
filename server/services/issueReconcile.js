@@ -22,7 +22,12 @@
  * A narrower stuck state is handled WITHOUT the coordinator: an ABANDONED issue —
  * `in-progress`, held by a non-owner (a human volunteer), nothing shipped,
  * untouched for FOREIGN_CLAIM_STALE_DAYS. `releaseAbandonedClaims` is the one
- * write this module performs.
+ * write this module performs, and it also releases an expired RESERVATION.
+ *
+ * A RESERVATION is an `in-progress` issue with NO assignee: a `/do:next --swarm`
+ * run labels its later-wave issues before any worker claims them, and every real
+ * claim assigns its claimer first. It is never a zombie, however many merged PRs
+ * merely mention it (#16599).
  *
  * The scheduler runs this scan (gh/glab + git only — no LLM), then hands the
  * zombie set to a coordinator CoS agent that applies the partial-ship hybrid.
@@ -69,6 +74,9 @@ export function daysSince(iso, now = Date.now()) {
 }
 
 const normalizeLogin = (value) => String(value || '').trim().toLowerCase();
+
+/** The shared stale gate. An unresolved `staleDays` (`null`) never satisfies it; absent is not zero. */
+const isClaimStale = (staleDays) => Number.isFinite(staleDays) && staleDays >= FOREIGN_CLAIM_STALE_DAYS;
 
 /**
  * Extract the issue number a git ref claims, or null. Matches `issue-<num>` as a
@@ -153,8 +161,10 @@ export function prReferencesIssue(pr, num) {
 
 /**
  * Pure classifier: map one issue's facts to a reconcile state. First match wins.
- *   ZOMBIE    — merged PR/MR shipped for it, no live claim, no active agent → heal
  *   LIVE      — an open PR/MR / claim branch / active agent still owns it   → leave
+ *   RESERVED  — no assignee: a batch reservation, not a claim → leave while
+ *               fresh, release once stale (see `reconcile`)
+ *   ZOMBIE    — merged PR/MR shipped for it, no live claim, no active agent → heal
  *   ABANDONED — a foreign (volunteer) claim, nothing shipped, untouched for
  *               FOREIGN_CLAIM_STALE_DAYS                                    → release
  *   STALLED   — no merged PR/MR and no live claim (claimed but nothing shipped)→ report
@@ -162,14 +172,17 @@ export function prReferencesIssue(pr, num) {
  * narrower than STALLED: no local flow owns a foreign claim's release, and it is
  * stale enough that active work would show a branch, PR or comment. An unresolved
  * `staleDays` (`null`) never satisfies the gate; absent is not zero.
+ * RESERVED needs a RESOLVED `hasAssignee === false`: an unread assignee list
+ * (`null`, and always on JIRA) classifies exactly as it did before reservations.
  * @param {{ hasMergedPr:boolean, hasLiveClaim:boolean, hasActiveAgent:boolean,
- *   hasForeignClaim?:boolean, staleDays?:number|null }} input
- * @returns {'ZOMBIE'|'LIVE'|'ABANDONED'|'STALLED'}
+ *   hasAssignee?:boolean|null, hasForeignClaim?:boolean, staleDays?:number|null }} input
+ * @returns {'ZOMBIE'|'LIVE'|'RESERVED'|'ABANDONED'|'STALLED'}
  */
-export function classifyIssue({ hasMergedPr, hasLiveClaim, hasActiveAgent, hasForeignClaim, staleDays }) {
+export function classifyIssue({ hasMergedPr, hasLiveClaim, hasActiveAgent, hasAssignee, hasForeignClaim, staleDays }) {
   if (hasLiveClaim || hasActiveAgent) return 'LIVE';
+  if (hasAssignee === false) return 'RESERVED';
   if (hasMergedPr) return 'ZOMBIE';
-  if (hasForeignClaim && Number.isFinite(staleDays) && staleDays >= FOREIGN_CLAIM_STALE_DAYS) return 'ABANDONED';
+  if (hasForeignClaim && isClaimStale(staleDays)) return 'ABANDONED';
   return 'STALLED';
 }
 
@@ -232,6 +245,9 @@ function normalizeGithubIssue(issue) {
     url: issue.url || '',
     labels: Array.isArray(issue.labels) ? issue.labels.map((l) => l.name).filter(Boolean) : [],
     assignees: Array.isArray(issue.assignees) ? issue.assignees.map((a) => a.login).filter(Boolean) : [],
+    // Counted from the RAW list so a malformed entry still reads as "someone holds it";
+    // null when the field itself is unreadable, never collapsed into "no assignees".
+    hasAssignee: Array.isArray(issue.assignees) ? issue.assignees.length > 0 : null,
     updatedAt: issue.updatedAt || '',
   };
 }
@@ -317,6 +333,16 @@ async function getGithubState(repoSpec, fullName, apiHost = null) {
   };
 }
 
+/**
+ * Whether a raw GitLab issue is assigned: `assignees` (array), else the legacy
+ * single `assignee` field; null when neither was returned.
+ */
+function gitlabHasAssignee(issue) {
+  if (Array.isArray(issue.assignees)) return issue.assignees.length > 0;
+  if (Object.hasOwn(issue, 'assignee')) return issue.assignee != null;
+  return null;
+}
+
 /** Normalize a raw GitLab issue: number on `iid`, string labels, `{ username }` assignees. */
 function normalizeGitlabIssue(issue) {
   return {
@@ -329,6 +355,7 @@ function normalizeGitlabIssue(issue) {
     assignees: Array.isArray(issue.assignees)
       ? issue.assignees.map((a) => a?.username).filter(Boolean)
       : [],
+    hasAssignee: gitlabHasAssignee(issue),
     updatedAt: issue.updated_at || '',
   };
 }
@@ -483,6 +510,11 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
       ? null
       : (state.openPrs.find((pr) => prReferencesIssue(pr, id)) || null);
     const hasMergedPr = isJira ? Boolean(issue.shipped) : Boolean(mergedPr);
+    // JIRA has no label marker, so no reservation either: null keeps today's classification.
+    const hasAssignee = !isJira && typeof issue.hasAssignee === 'boolean' ? issue.hasAssignee : null;
+    if (!isJira && hasAssignee === null) {
+      console.log(`⏭️ issue-reconcile: assignees unreadable for #${id} in ${state.fullName} — skipping the reservation check for it`);
+    }
     return {
       number: id,
       title: issue.title || '',
@@ -496,6 +528,7 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
       // Live claim = an OPEN PR/MR, a claim branch, or an active CoS agent.
       hasLiveClaim: Boolean(openPr) || liveClaimIds.has(id),
       hasActiveAgent: activeAgentIssueNums.has(id),
+      hasAssignee,
       // Held by an account that is not this install's. Needs a RESOLVED owner login: with
       // `ownerLogin` null this stays false, so an identity blip can't release a live claim.
       hasForeignClaim: Boolean(state.ownerLogin)
@@ -516,25 +549,35 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
 /**
  * Full reconcile: gather → classify → split into the zombie set (for the
  * coordinator), the abandoned set (for `releaseAbandonedClaims`), plus
- * stalled/live for reporting. All I/O is in gatherIssueState.
+ * reserved/stalled/live for reporting. All I/O is in gatherIssueState.
+ *
+ * `abandoned` is every claim to release now: ABANDONED foreign claims plus
+ * RESERVED issues past the shared stale gate (a swarm that died leaves its
+ * reservation with nothing else to heal it). `reserved` holds the fresh ones,
+ * which are left alone.
  *
  * @param {string} [repoPath=PATHS.root]
  * @param {{ activeAgentIssueNums?: Set<number|string>, jira?: { instanceId:string, projectKey:string }, app?: object }} [opts]
  * @returns {Promise<{ forge:string, fullName:string, repoSpec:string|null, ownerLogin:string|null,
- *   zombies:object[], abandoned:object[], stalled:object[], live:object[] }|null>}
+ *   zombies:object[], abandoned:object[], reserved:object[], stalled:object[], live:object[] }|null>}
  *   null on unsupported remote or transient failure (skip, don't park).
  */
 export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = new Set(), jira = null, app = null, now = Date.now() } = {}) {
   const gathered = await gatherIssueState(repoPath, { activeAgentIssueNums, jira, app, now });
   if (!gathered) return null;
   const classified = classifyIssues(gathered.issues);
+  const reserved = classified.filter((c) => c.state === 'RESERVED');
   return {
     forge: gathered.forge,
     fullName: gathered.fullName,
     repoSpec: gathered.repoSpec,
     ownerLogin: gathered.ownerLogin,
     zombies: classified.filter((c) => c.state === 'ZOMBIE'),
-    abandoned: classified.filter((c) => c.state === 'ABANDONED'),
+    abandoned: [
+      ...classified.filter((c) => c.state === 'ABANDONED'),
+      ...reserved.filter((c) => isClaimStale(c.staleDays)),
+    ],
+    reserved: reserved.filter((c) => !isClaimStale(c.staleDays)),
     stalled: classified.filter((c) => c.state === 'STALLED'),
     live: classified.filter((c) => c.state === 'LIVE'),
   };
@@ -542,20 +585,22 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
 
 /**
  * Release the `in-progress` marker (and the stale assignee) on an ABANDONED
- * foreign claim.
+ * foreign claim or an expired RESERVATION (which has no assignee to remove).
  *
  * The ONLY effectful WRITE in this module, deliberately: the ABANDONED facts are
  * already the decision, so a coordinator agent would spend an LLM call re-deriving
  * them (a zombie's partial ship, by contrast, needs a reader).
  *
  * Both markers go in ONE `gh issue edit`: every issue here is label-filtered to
- * carry `in-progress` and has an assignee, so neither removal can fail the call.
+ * carry `in-progress` and only its current assignees are removed, so neither
+ * removal can fail the call. It never closes an issue.
  * The explanatory comment is posted FIRST so a release is never silent; a failed
  * comment does not block the release.
  *
- * GitHub-only: no GitLab or JIRA issue is ever classified ABANDONED.
+ * GitHub-only: a GitLab reservation is left RESERVED (never zombied) but not
+ * released, and JIRA has neither state.
  *
- * @param {object[]} abandoned - classified issues in the ABANDONED state
+ * @param {object[]} abandoned - classified ABANDONED or expired RESERVED issues
  * @param {{ forge:string, repoSpec:string, fullName:string }} ctx
  * @returns {Promise<number>} how many issues were actually released
  */
@@ -564,8 +609,11 @@ export async function releaseAbandonedClaims(abandoned, { forge, repoSpec, fullN
   let released = 0;
   for (const issue of abandoned) {
     const number = String(issue.number);
-    await execGh(['issue', 'comment', number, '--repo', repoSpec, '--body',
-      `Releasing the \`${IN_PROGRESS_LABEL}\` claim: this issue has had no linked pull request, no claim branch, and no activity for ${issue.staleDays} days. It is back in the queue — comment again to pick it up.`])
+    const isReservation = issue.state === 'RESERVED';
+    const note = isReservation
+      ? `Releasing the \`${IN_PROGRESS_LABEL}\` reservation: this issue was reserved for a batch run but has had no assignee, no claim branch, no open pull request, and no activity for ${issue.staleDays} days. It is back in the queue.`
+      : `Releasing the \`${IN_PROGRESS_LABEL}\` claim: this issue has had no linked pull request, no claim branch, and no activity for ${issue.staleDays} days. It is back in the queue — comment again to pick it up.`;
+    await execGh(['issue', 'comment', number, '--repo', repoSpec, '--body', note])
       .catch((err) => {
         console.error(`❌ issue-reconcile: could not comment on abandoned #${number} in ${fullName}: ${err.message}`);
       });
@@ -579,7 +627,7 @@ export async function releaseAbandonedClaims(abandoned, { forge, repoSpec, fullN
       });
     if (ok) {
       released += 1;
-      console.log(`🔓 issue-reconcile released #${number} in ${fullName}: claim stale ${issue.staleDays}d, nothing shipped`);
+      console.log(`🔓 issue-reconcile released #${number} in ${fullName}: ${isReservation ? 'reservation' : 'claim'} stale ${issue.staleDays}d, ${isReservation ? 'never claimed' : 'nothing shipped'}`);
     }
   }
   return released;

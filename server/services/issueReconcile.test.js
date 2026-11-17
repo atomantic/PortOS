@@ -3,7 +3,7 @@
  *
  * - issueNumberFromRef / bodyReferencesIssue / prReferencesIssue — the boundary-
  *   safe reference matchers (no `issue-222` matching inside `issue-2220`).
- * - classifyIssue / classifyIssues — the pure ZOMBIE/LIVE/ABANDONED/STALLED state machine.
+ * - classifyIssue / classifyIssues — the pure LIVE/RESERVED/ZOMBIE/ABANDONED/STALLED state machine.
  * - reconcile / gatherIssueState — end-to-end over mocked gh/glab + git: an
  *   in-progress issue with a merged PR/MR and no live claim is a ZOMBIE; an open
  *   PR/MR or a live claim branch or an active agent keeps it LIVE. Runs the SAME
@@ -201,6 +201,21 @@ describe('classifyIssue', () => {
       hasForeignClaim: false, staleDays: 365,
     })).toBe('STALLED');
   });
+  // #16599 — a `/do:next --swarm` reservation is `in-progress` with no assignee and no
+  // branch yet; a sibling PR that merely mentions it must not make it a zombie.
+  it('an unassigned issue is RESERVED even with a merged PR', () => {
+    expect(classifyIssue({ hasMergedPr: true, hasLiveClaim: false, hasActiveAgent: false, hasAssignee: false })).toBe('RESERVED');
+  });
+  it('an assigned issue with a merged PR is still a ZOMBIE', () => {
+    expect(classifyIssue({ hasMergedPr: true, hasLiveClaim: false, hasActiveAgent: false, hasAssignee: true })).toBe('ZOMBIE');
+  });
+  it('an unread assignee list (null) classifies as it did before reservations', () => {
+    expect(classifyIssue({ hasMergedPr: true, hasLiveClaim: false, hasActiveAgent: false, hasAssignee: null })).toBe('ZOMBIE');
+    expect(classifyIssue({ hasMergedPr: false, hasLiveClaim: false, hasActiveAgent: false, hasAssignee: null })).toBe('STALLED');
+  });
+  it('a live claim wins over a reservation', () => {
+    expect(classifyIssue({ hasMergedPr: true, hasLiveClaim: true, hasActiveAgent: false, hasAssignee: false })).toBe('LIVE');
+  });
   it('a live claim wins over the abandoned gate', () => {
     expect(classifyIssue({
       hasMergedPr: false, hasLiveClaim: true, hasActiveAgent: false,
@@ -328,7 +343,7 @@ describe('reconcile', () => {
 
   it('no merged PR and no live claim → STALLED (not healed here)', async () => {
     mockGh({
-      issues: [{ number: 2220, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      issues: [{ number: 2220, title: 't', labels: [{ name: 'in-progress' }], assignees: [{ login: 'atomantic' }], url: 'u' }],
       merged: [],
       open: [],
     });
@@ -405,7 +420,7 @@ describe('reconcile', () => {
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'git.example-corp.com', fullName: 'acme/widget' });
     readOriginRemoteUrl.mockResolvedValue('git@git.example-corp.com:acme/widget.git');
     mockGh({
-      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [{ login: 'atomantic' }], url: 'u' }],
       merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
       open: [],
     });
@@ -424,7 +439,7 @@ describe('reconcile', () => {
     getOriginInfo.mockResolvedValue({ isGithub: false, host: 'git.example-corp.com', fullName: 'acme/widget' });
     readOriginRemoteUrl.mockResolvedValue('git@git.example-corp.com:acme/widget.git');
     mockGlab({
-      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [{ username: 'adam' }], web_url: 'u' }],
       merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42', web_url: 'm' }],
       open: [],
     });
@@ -441,7 +456,7 @@ describe('reconcile', () => {
     // Claim button acts on, but refusing to scan here would park a scheduled
     // issue-reconcile task that reconciles this repo fine today.
     mockGh({
-      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [{ login: 'atomantic' }], url: 'u' }],
       merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
       open: [],
     });
@@ -527,7 +542,7 @@ describe('reconcile (GitLab forge)', () => {
 
   it('matches the MR by its claim/issue-<iid> source branch (head ref)', async () => {
     mockGlab({
-      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [{ username: 'adam' }], web_url: 'u' }],
       merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'no trailer here', web_url: 'm' }],
       open: [],
     });
@@ -560,7 +575,7 @@ describe('reconcile (GitLab forge)', () => {
 
   it('no merged MR and no live claim → STALLED', async () => {
     mockGlab({
-      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [{ username: 'adam' }], web_url: 'u' }],
       merged: [],
       open: [],
     });
@@ -620,7 +635,7 @@ describe('reconcile (GitLab forge)', () => {
     });
     readOriginRemoteUrl.mockResolvedValue('git@gitlab.com:group/subgroup/project.git');
     mockGlab({
-      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [], web_url: 'u' }],
+      issues: [{ iid: 42, title: 't', labels: ['in-progress'], assignees: [{ username: 'adam' }], web_url: 'u' }],
       merged: [{ iid: 7, source_branch: 'claim/issue-42', description: 'Refs #42' }],
       open: [],
     });
@@ -643,6 +658,20 @@ function jiraTicket({ key, status, statusCategory, summary = 't', url = 'u' }) {
 }
 
 describe('reconcile (JIRA tracker)', () => {
+  // JIRA has no label marker, so no reservation: its empty assignee list must not read as one.
+  it('never classifies a JIRA ticket RESERVED and logs no unreadable-assignee skip', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      fetchMyCurrentSprintTickets.mockResolvedValue([jiraTicket({ key: 'PROJ-1', status: 'In Review', statusCategory: 'In Progress' })]);
+      const result = await reconcile('/repo', { jira: JIRA });
+      expect(result.zombies.map((z) => z.number)).toEqual(['PROJ-1']);
+      expect(result.reserved).toEqual([]);
+      expect(log.mock.calls.some(([msg]) => String(msg).includes('assignees unreadable'))).toBe(false);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('flags an In-Review ticket with no live claim branch as a ZOMBIE', async () => {
     fetchMyCurrentSprintTickets.mockResolvedValue([
       jiraTicket({ key: 'PROJ-42', status: 'In Review', statusCategory: 'In Progress', summary: 'JIRA zombie', url: 'https://j/PROJ-42' }),
@@ -765,11 +794,14 @@ describe('abandoned volunteer claims', () => {
     expect(result.stalled.map((sIssue) => sIssue.number)).toEqual([2220]);
   });
 
-  it('leaves an unassigned in-progress issue STALLED — there is no claim to release', async () => {
+  // #16599 — an unassigned in-progress issue is a reservation. A swarm that died
+  // leaves it stranded, so past the same stale gate it is released like a claim.
+  it('releases an unassigned in-progress issue once it is stale (an expired reservation)', async () => {
     mockGh({ issues: [staleIssue({ assignees: [] })], merged: [], open: [] });
     const result = await reconcile('/repo', { now: NOW });
-    expect(result.abandoned).toHaveLength(0);
-    expect(result.stalled).toHaveLength(1);
+    expect(result.abandoned.map((a) => [a.number, a.state])).toEqual([[2220, 'RESERVED']]);
+    expect(result.reserved).toHaveLength(0);
+    expect(result.stalled).toHaveLength(0);
   });
 
   // The load-bearing degrade: an unresolved identity must not read as "every
@@ -794,6 +826,117 @@ describe('abandoned volunteer claims', () => {
     expect(result.forge).toBe('gitlab');
     expect(result.abandoned).toHaveLength(0);
     expect(result.stalled).toHaveLength(1);
+  });
+});
+
+// #16599 — the gather→classify boundary for a swarm reservation.
+describe('swarm reservations (in-progress, no assignee)', () => {
+  const issue = (overrides = {}) => ({
+    number: 2220, title: 't', url: 'u', labels: [{ name: 'in-progress' }],
+    assignees: [], updatedAt: daysAgo(1), ...overrides,
+  });
+  // A sibling PR that only mentions the issue — what made a reservation look shipped.
+  const mention = [{ number: 2234, headRefName: 'next/issue-2219', body: 'Also unblocks #2220.', url: 'p' }];
+
+  it('keeps a fresh reservation out of the zombie set the coordinator receives', async () => {
+    mockGh({ issues: [issue()], merged: mention, open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.zombies).toEqual([]);
+    expect(result.abandoned).toEqual([]);
+    expect(result.reserved.map((r) => [r.number, r.state])).toEqual([[2220, 'RESERVED']]);
+    expect(result.reserved[0].hasMergedPr).toBe(true);
+  });
+
+  it('still heals the same facts as a ZOMBIE when the issue is assigned', async () => {
+    mockGh({ issues: [issue({ assignees: [{ login: 'atomantic' }] })], merged: mention, open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.zombies.map((z) => z.number)).toEqual([2220]);
+    expect(result.reserved).toEqual([]);
+  });
+
+  it('releases a stale reservation by comment + unlabel, never a close', async () => {
+    mockGh({ issues: [issue({ updatedAt: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: mention, open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.zombies).toEqual([]);
+    expect(result.abandoned.map((a) => a.number)).toEqual([2220]);
+
+    execGh.mockReset();
+    execGh.mockResolvedValue('');
+    const released = await releaseAbandonedClaims(result.abandoned, {
+      forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName,
+    });
+    expect(released).toBe(1);
+    const argvs = execGh.mock.calls.map(([argv]) => argv);
+    expect(argvs).toHaveLength(2);
+    expect(argvs[0].slice(0, 3)).toEqual(['issue', 'comment', '2220']);
+    expect(argvs[0].at(-1)).toContain('reservation');
+    expect(argvs[0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
+    expect(argvs[1]).toEqual(['issue', 'edit', '2220', '--repo', 'github.com/atomantic/PortOS', '--remove-label', 'in-progress']);
+    expect(argvs.some((argv) => argv.includes('close'))).toBe(false);
+  });
+
+  it('never releases a reservation whose activity time is unresolved', async () => {
+    mockGh({ issues: [issue({ updatedAt: undefined })], merged: mention, open: [] });
+    const result = await reconcile('/repo', { now: NOW });
+    expect(result.reserved.map((r) => [r.number, r.staleDays])).toEqual([[2220, null]]);
+    expect(result.abandoned).toEqual([]);
+  });
+
+  it('a missing assignee field is not "no assignees": classifies as before and logs on stdout', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      execGh.mockImplementation(async (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'list') {
+          return JSON.stringify([{ number: 2220, title: 't', url: 'u', labels: [{ name: 'in-progress' }], updatedAt: daysAgo(30), author: { login: 'trusted-author' } }]);
+        }
+        if (argv[0] === 'pr' && argv.includes('merged')) return JSON.stringify(mention);
+        if (argv[0] === 'api' && argv.at(-1).endsWith('/permission')) return JSON.stringify({ permission: 'write', user: { login: 'trusted-author' } });
+        return '[]';
+      });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies.map((z) => [z.number, z.hasAssignee])).toEqual([[2220, null]]);
+      expect(result.reserved).toEqual([]);
+      expect(result.abandoned).toEqual([]);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: assignees unreadable for #2220/));
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore(); warn.mockRestore(); error.mockRestore();
+    }
+  });
+
+  describe('GitLab', () => {
+    beforeEach(useGitlabOrigin);
+    const glIssue = (overrides = {}) => ({ iid: 42, title: 't', labels: ['in-progress'], web_url: 'u', updated_at: daysAgo(1), ...overrides });
+    const glMention = [{ iid: 7, source_branch: 'x', description: 'Also unblocks #42.' }];
+
+    it('an unassigned GitLab issue is a reservation, not a zombie', async () => {
+      mockGlab({ issues: [glIssue({ assignees: [] })], merged: glMention, open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies).toEqual([]);
+      expect(result.reserved.map((r) => r.number)).toEqual([42]);
+    });
+
+    it('reads the legacy single `assignee` field when `assignees` is absent', async () => {
+      mockGlab({ issues: [glIssue({ assignee: { username: 'adam' } }), { ...glIssue({ assignee: null }), iid: 43 }], merged: [...glMention, { iid: 8, source_branch: 'y', description: '#43' }], open: [] });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies.map((z) => z.number)).toEqual([42]);
+      expect(result.reserved.map((r) => r.number)).toEqual([43]);
+    });
+
+    it('neither assignee field → unresolved, classified as before', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        mockGlab({ issues: [glIssue()], merged: glMention, open: [] });
+        const result = await reconcile('/repo', { now: NOW });
+        expect(result.zombies.map((z) => z.number)).toEqual([42]);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('assignees unreadable for #42'));
+      } finally {
+        log.mockRestore();
+      }
+    });
   });
 });
 
