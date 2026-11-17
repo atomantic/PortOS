@@ -8,6 +8,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/paths.js';
 import { createModelComparisonRoutes } from './modelComparison.js';
 import { importModelComparison } from '../services/modelComparison.js';
+import codex62Migration from '../../scripts/migrations/462-codex-gpt-62.js';
 
 let dir;
 let originalData;
@@ -96,6 +97,46 @@ it('exposes Terra pricing and measured effort scores to existing Codex installs'
   expect(ultra.quality.method).toContain('Nearest effort of this exact model');
   expect(ultra.costPerTask).toBeNull();
   expect(ultra.needsResearch).toBe(true);
+});
+
+it('exposes every supported GPT-6.2 effort after upgrading an existing Codex catalog', async () => {
+  await mkdir(join(dir, 'data'));
+  const local = { ...observation, id: 'local-research', notes: 'Local research retained' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  await writeFile(join(dir, 'model-comparison.json'), localContents);
+  await writeFile(join(dir, 'data/providers.json'), JSON.stringify({ providers: {
+    codex: { id: 'codex', name: 'Codex', command: 'codex', models: ['custom'], defaultModel: 'custom' },
+  } }));
+  await codex62Migration.up({ rootDir: dir });
+  const { providers } = JSON.parse(await readFile(join(dir, 'data/providers.json'), 'utf8'));
+  const codexApp = express();
+  codexApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [providers.codex] }) }));
+  codexApp.use(errorMiddleware);
+
+  const result = await request(codexApp).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const model of ['gpt-6.2-astra', 'gpt-6.2-sol']) {
+    const expected = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    expect(result.body.inventory[0].models.find(row => row.model === model).efforts).toEqual(expected);
+    const rows = result.body.composite.rows.filter(row => row.model === model);
+    expect(rows.map(row => row.effort)).toEqual(expected);
+    for (const row of rows) {
+      expect(row.quality).toMatchObject({ estimated: true });
+      expect(row.needsResearch).toBe(true);
+      expect(row.costPerTask).toBeNull();
+    }
+    expect(result.body.observations.some(row => row.model === model && row.benchmark.startsWith('Official API pricing'))).toBe(true);
+  }
+  expect(result.body.observations).toContainEqual(local);
+  expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(localContents);
+  expect(providers.codex.defaultModel).toBe('custom');
+});
+
+it('ships both GPT-6.2 models in the Codex preset lists', async () => {
+  const { providers } = JSON.parse(await readFile(join(PATHS.root, 'data.reference/providers.json'), 'utf8'));
+  for (const id of ['codex', 'codex-tui']) {
+    expect(providers[id].models).toEqual(expect.arrayContaining(['gpt-6.2-astra', 'gpt-6.2-sol']));
+  }
 });
 
 it('exposes shipped GPT-6.2 prices to existing installs without inventing benchmark measurements', async () => {
