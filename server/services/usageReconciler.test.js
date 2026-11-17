@@ -517,18 +517,22 @@ describe('reconcileRunUsage', () => {
     });
   });
 
-  it('does not read a CLI transcript for a run that reported its own counts', async () => {
-    // An API record whose id names a CLI family: the session in this workspace
-    // and window belongs to some other run and must stay unclaimed.
+  it.each([
+    ['with provider-reported counts', { reportedUsage: { tokensIn: 7, tokensOut: 3 } }, { tokensIn: 7, tokensOut: 3, cacheReadTokens: 0, source: 'measured' }],
+    ['with no counts from the provider', {}, { tokensIn: 1, tokensOut: 1, cacheReadTokens: 0, source: 'estimate' }],
+  ])('reads no CLI transcript for a self-contained run %s', async (_label, stamp, billed) => {
+    // An API record whose id names a CLI family, with a CLI provider of another
+    // family configured: the sessions in this workspace and window belong to
+    // some other run and must stay unclaimed, counts or no counts.
     await writeClaudeSession('a.jsonl', [
       claudeAssistant({ id: 'm1', timestamp: '2026-07-01T10:05:00.000Z', input: 10, cacheWrite: 100, cacheRead: 1000, output: 50 })
     ]);
-    const reported = await reconcileRunUsage(
-      { ...run, reportedUsage: { tokensIn: 7, tokensOut: 3 } },
-      { tokensIn: 1, tokensOut: 1 },
-      { home }
-    );
-    expect(reported).toMatchObject({ tokensIn: 7, tokensOut: 3, cacheReadTokens: 0, source: 'measured' });
+    const providers = [{ id: 'claude-code', type: 'cli', enabled: true, command: 'claude' }];
+    const selfContained = { ...run, selfContainedUsage: true, ...stamp };
+    const asOwnFamily = await reconcileRunUsage(selfContained, { tokensIn: 1, tokensOut: 1 }, { home, providers });
+    expect(asOwnFamily).toMatchObject(billed);
+    const asSibling = await reconcileRunUsage({ ...selfContained, providerId: 'example-api' }, { tokensIn: 1, tokensOut: 1 }, { home, providers });
+    expect(asSibling).toMatchObject({ ...billed, providerId: 'example-api', role: 'parent' });
     // The session is still there for the run it does belong to.
     const owner = await reconcileRunUsage(run, { tokensIn: 1, tokensOut: 1 }, { home });
     expect(owner).toEqual([expect.objectContaining({ tokensOut: 50, cacheReadTokens: 1000 })]);
@@ -594,7 +598,7 @@ describe('recordCompletedRunUsage', () => {
     })]);
   });
 
-  it('bills a self-reported run once, without scanning for nested sessions or queueing behind its workspace', async () => {
+  it('bills a self-contained run once, without scanning for nested sessions or queueing behind its workspace', async () => {
     // A CLI session sits in this workspace and window, and a CLI provider of its
     // family is configured: a run that could have launched it would bill it as
     // a sibling. One HTTP request cannot have.
@@ -604,6 +608,7 @@ describe('recordCompletedRunUsage', () => {
     const run = {
       id: 'run-self-reported', providerId: 'example-api', model: 'example-model', workspacePath: WORKSPACE, promptLength: 400,
       startTime: '2026-07-01T10:00:00.000Z', endTime: '2026-07-01T10:10:00.000Z',
+      selfContainedUsage: true,
       reportedUsage: { tokensIn: 34, tokensOut: 9, cacheReadTokens: 6, cacheWriteTokens: 0, source: 'measured' }
     };
     recordRunUsage.mockClear();
@@ -612,7 +617,7 @@ describe('recordCompletedRunUsage', () => {
     // accounting must not hold this one up.
     let releaseEarlier;
     recordRunUsage.mockImplementationOnce(() => new Promise((resolve) => { releaseEarlier = resolve; }));
-    const earlier = recordCompletedRunUsage({ ...run, id: 'run-earlier', providerId: 'ollama', reportedUsage: undefined }, 'x', { home, providers: [] });
+    const earlier = recordCompletedRunUsage({ ...run, id: 'run-earlier', providerId: 'ollama', selfContainedUsage: false, reportedUsage: undefined }, 'x', { home, providers: [] });
     await vi.waitFor(() => expect(releaseEarlier).toBeTypeOf('function'));
 
     await recordCompletedRunUsage(run, 'an answer', { home, providers: [{ id: 'claude-code', type: 'cli', enabled: true, command: 'claude' }] });
