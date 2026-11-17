@@ -427,20 +427,19 @@ async function runTrackedCompletion({ provider, model, prompt, source, temperatu
 
 /** Record a bounded subscription turn without changing its transport/fallback contract. */
 async function runTrackedCodexTurn({ provider, source, workspacePath, turnOptions, runCodexTextTurn }) {
-  const { createRun, patchRunMetadata, registerActiveRun, unregisterActiveRun, emitRunStarted, finalizeRunRecord } = await import('./runner.js');
+  const { createRun, patchRunMetadata, unregisterActiveRun, emitRunStarted, finalizeRunRecord } = await import('./runner.js');
   const { runOwnership } = await import('../lib/aiToolkit/internal/runOwnership.js');
   const startTime = Date.now();
-  const { runId } = await createRun({
-    providerId: provider.id, provider, model: turnOptions.model, effort: turnOptions.effort,
-    prompt: turnOptions.prompt, source, allowFallback: false,
-    ...(workspacePath ? { workspacePath } : {}),
-  });
   const controller = new AbortController();
   const signal = anyAbortSignal([controller.signal, turnOptions.signal]);
+  const { runId } = await createRun({
+    providerId: provider.id, provider, model: turnOptions.model, effort: turnOptions.effort,
+    prompt: turnOptions.prompt, source, allowFallback: false, externalRun: controller,
+    ...(workspacePath ? { workspacePath } : {}),
+  });
   let turn;
   let failure;
   try {
-    registerActiveRun(runId, controller);
     await patchRunMetadata(runId, runOwnership('api'));
     emitRunStarted({ runId, provider, model: turnOptions.model });
     turn = await runCodexTextTurn({ ...turnOptions, signal });

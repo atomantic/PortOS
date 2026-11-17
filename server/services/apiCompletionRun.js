@@ -21,7 +21,7 @@
  *   - no context-window admission, local concurrency gate or fallback cascade.
  */
 
-import { createRun, finalizeRunRecord, patchRunMetadata, registerActiveRun, unregisterActiveRun, emitRunStarted } from './runner.js';
+import { createRun, finalizeRunRecord, patchRunMetadata, unregisterActiveRun, emitRunStarted } from './runner.js';
 import { runOwnership } from '../lib/aiToolkit/internal/runOwnership.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
 import { runChatCompletion } from './chatCompletionExchange.js';
@@ -54,6 +54,9 @@ export async function executeApiCompletionRun({
   if (signal?.aborted) throw canceledError('Run canceled before dispatch');
   const startTime = Date.now();
 
+  // Registration happens inside createRun before its record becomes visible.
+  const controller = new AbortController();
+  const stopped = anyAbortSignal([controller.signal, signal]);
   const { runId } = await createRun({
     providerId: provider.id,
     provider,
@@ -61,13 +64,11 @@ export async function executeApiCompletionRun({
     prompt,
     source,
     ...(typeof cwd === 'string' && cwd ? { workspacePath: cwd } : {}),
-    allowFallback: false,
+    allowFallback: false, externalRun: controller,
   });
 
   // The run's Stop: `stopRun` aborts this controller through the external
   // registry, and the caller's own signal is combined with it.
-  const controller = new AbortController();
-  const stopped = anyAbortSignal([controller.signal, signal]);
   // Not awaited before the request: ownership only matters to boot recovery,
   // and the write would sit in front of every call. It is settled before the
   // record is finalized, so it can never overwrite the finished record.
@@ -76,7 +77,6 @@ export async function executeApiCompletionRun({
   let reply;
   let thrown = null;
   try {
-    registerActiveRun(runId, controller);
     notify(onRunCreated, 'start', runId, {
       runId, providerId: provider.id, providerName: provider.name || provider.id, model, providerType: provider.type,
     });

@@ -475,6 +475,25 @@ describe('tracked ChatGPT subscription calls', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
+  it.each(['api', 'subscription'])('honors Stop as soon as the %s record is published, before dispatch', async (kind) => {
+    let stopped;
+    spies.onRunCreated.mockImplementationOnce(metadata => {
+      void usage.recordSession(metadata.providerId, metadata.providerName, metadata.model);
+      stopped = stopRun(metadata.id);
+    });
+    const fetch = respondWith(completion('unexpected answer'));
+    transport.runCodexTextTurn.mockImplementation(({ signal }) => {
+      if (signal.aborted) throw Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' });
+      return Promise.resolve({ text: 'unexpected answer' });
+    });
+    const result = await callProviderAISimple(kind === 'api' ? provider : subscription, 'example-model', 'Summarize.');
+    expect(await stopped).toBe(true);
+    expect(result).toMatchObject({ canceled: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await record()).metadata).toMatchObject({ canceled: true, success: false });
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
+  });
+
   it('records the exact stamped prompt and effective effort, opens one session and bills ephemeral tokens once', async () => {
     transport.runCodexTextTurn.mockImplementation(async () => {
       expect(await runnerService.getActiveRunCount()).toBe(1);
