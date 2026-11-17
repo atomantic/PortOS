@@ -24,7 +24,7 @@ import { resolveMemoDir } from './lib/testMemoStore.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards } from './lib/guardBudget.js';
+import { CI_GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards } from './lib/guardBudget.js';
 import { getAlwaysRunTests } from './ci-test-plan.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -500,17 +500,17 @@ export async function spawnNpm(scope, script, extraArgs, label, {
 }
 
 /**
- * 1 when an always-run guard in `files` ran over GUARD_BUDGET_MS, naming each
+ * 1 when an always-run guard in `files` ran over CI_GUARD_BUDGET_MS, naming each
  * one; 0 otherwise. A guard with no reading (it crashed, or ran nothing) is
  * left to the test status, which already fails that run.
  */
 function guardBudgetStatus(files, durations) {
   const timed = Object.fromEntries(files.filter(file => typeof durations[file] === 'number').map(file => [file, durations[file]]));
   const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
-  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
-  const over = overBudgetGuards(timed);
+  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
+  const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
   if (over.length === 0) return 0;
-  const detail = `${describeGuardDurations(over)} over the ${(GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
+  const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
   console.error(`❌ Always-run guard over its time budget: ${detail}`);
   console.error(formatErrorAnnotation('Always-run guard over its time budget', detail));
   return 1;

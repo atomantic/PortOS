@@ -2,16 +2,25 @@
  * Per-file time budget for the always-run structural guards (#16086, #16551).
  *
  * The guards run on every push, docs-only ones included, so one slow scanner
- * taxes every change. Hosted CI enforces the budget on its uniform Linux runner
- * (`scripts/run-ci-tests.js` under `CI_GUARD_BUDGET=enforce`). Local pregate
- * only reports a guard over it: wall time on a developer machine running
- * several agent gates at once measures the host, not the guard.
+ * taxes every change. Hosted CI enforces CI_GUARD_BUDGET_MS on its uniform Linux
+ * runner (`scripts/run-ci-tests.js` under `CI_GUARD_BUDGET=enforce`). Local
+ * pregate only reports a guard over GUARD_BUDGET_MS: wall time on a developer
+ * machine running several agent gates at once measures the host, not the guard.
  *
  * Builtins only: `scripts/pregate.js` loads this from its own fixture checkouts.
  */
 import { readFileSync } from 'node:fs';
 
+/** Per-file target on a developer machine, where pregate reports (never fails) a guard over it. */
 export const GUARD_BUDGET_MS = 3000;
+
+/**
+ * The enforced budget on hosted CI's ubuntu-latest runner. Its isolated guard
+ * pass runs ~1.5x slower than a developer machine: the slowest guards measured
+ * 3.0-3.5s there when this was set (#16551). 6s leaves room for runner variance
+ * while still failing a guard that doubles its cost.
+ */
+export const CI_GUARD_BUDGET_MS = 6000;
 
 /** `{ file, durationMs, budgetMs }` for every guard over its budget, slowest first. */
 export function overBudgetGuards(fileDurations, budgetMs = GUARD_BUDGET_MS) {

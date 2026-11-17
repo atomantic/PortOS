@@ -197,7 +197,8 @@ to every plan (client scanners ride any `client/src` js/jsx change).
 reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
 
 Because they run on every PR, each always-run guard has a per-file time budget
-(`GUARD_BUDGET_MS` in `scripts/lib/guardBudget.js`). The Linux server job sets
+(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
+runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets
 `CI_GUARD_BUDGET=enforce`, so `scripts/run-ci-tests.js` runs the always-run
 guards of its slice as their own Vitest pass, prints the slowest
 (`⏱️ Always-run guards, slowest of …`) and fails the job naming any file over the

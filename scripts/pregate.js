@@ -24,7 +24,7 @@ import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
+import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
 import { buildPregateReport, guardInputSnapshot, guardReuseInputs, guardReuseStageKey, PREGATE_REPORT_PATH, readReusableStagePasses, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -831,14 +831,14 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Name the guard files of a passed stage that ran over the per-file budget.
+ * Name the guard files of a passed stage that ran over the per-file target.
  * Report only: local wall time measures this host's contention as much as the
  * guard, so hosted CI enforces the budget on its uniform runner (#16551).
  */
 function reportSlowGuards(result) {
   const over = overBudgetGuards(result.fileDurations);
   if (over.length > 0) {
-    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard budget hosted CI enforces: ${describeGuardDurations(over)}.`);
+    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (hosted CI fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}).`);
   }
 }
 
