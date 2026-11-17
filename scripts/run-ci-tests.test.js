@@ -484,7 +484,8 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     };
     // The listing a directory past the limit is keyed from: tracked files and
     // untracked ones a commit would pick up, never what git ignores; no answer outside a checkout.
-    writeFileSync(join(root, '.gitignore'), 'ignored.log\n');
+    // The fixture states its own ignore rules: a runner has no global one for installs or caches.
+    writeFileSync(join(root, '.gitignore'), 'ignored.log\nnode_modules\n/server/.cache/\n');
     writeFileSync(join(root, 'ignored.log'), 'local\n');
     writeFileSync(join(root, 'untracked.js'), 'export {};\n');
     const listed = listRepositoryFiles(root);
