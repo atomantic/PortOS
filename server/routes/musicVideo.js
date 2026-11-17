@@ -17,6 +17,7 @@ import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
+import spendRoutes from './musicVideoSpend.js';
 import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -337,6 +338,7 @@ router.use('/', storyRoutes);
 router.use('/', festivalPacketRoutes);
 router.use('/', researchSeedRoutes);
 router.use('/', blenderRoutes);
+router.use('/', spendRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to

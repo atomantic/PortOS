@@ -165,6 +165,7 @@ import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
 import { initMusicVideoSequenceVideoHook } from './musicVideoSequenceVideoHook.js';
 import { initMusicVideoSequenceTakeHook } from './musicVideoSequenceTakeHook.js';
 import { initMusicVideoCollectionHook } from './musicVideoCollectionHook.js';
+import { initMusicVideoRenderSpendHook } from './musicVideoRenderSpendHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
 import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
@@ -772,6 +773,8 @@ const initMediaJobDependentHooks = () => {
   // Music Video collection hook — files every render that names a music video
   // (a shot's, Cast & Sets, or a tagged Image/Video Gen request) into its collection.
   initMusicVideoCollectionHook();
+  // Music Video render spend hook (#16506) — records every paid render a project's jobs complete.
+  initMusicVideoRenderSpendHook();
   // Music Video Cast & Sets hook — files a queued check-in reference image
   // (character sheet, looks, set plates, in-set tests) onto its stage key.
   // It only listens: nothing is generated at boot.

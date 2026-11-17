@@ -1328,6 +1328,15 @@ CREATE TABLE IF NOT EXISTS media_prompt_examinations (
 
 CREATE INDEX IF NOT EXISTS idx_media_prompt_examinations_created ON media_prompt_examinations (created_at DESC, id DESC);
 
+CREATE TABLE IF NOT EXISTS music_video_render_spend (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+CREATE INDEX IF NOT EXISTS idx_music_video_render_spend_project ON music_video_render_spend (project_id, created_at);
+
 CREATE TABLE IF NOT EXISTS creative_director_projects (
       id TEXT PRIMARY KEY,
       status VARCHAR(32) NOT NULL DEFAULT 'draft',

@@ -10,10 +10,14 @@
  * the saving cannot be spent again (a ceiling higher than needed is allowed).
  */
 import { describe, expect, it } from 'vitest';
+import { PATHS } from '../../lib/paths.js';
 import { composeClaimIssuePrompt } from './prompts.js';
 import { buildClaimFlowCompletionSection } from '../promptSections/completion.js';
 
-const bytes = (text) => Buffer.byteLength(text, 'utf8');
+// Prompts name repo files by absolute path (PATHS.root), so the checkout's location would change
+// the size: a CoS claim worktree's longer path failed every completion variant. Measure with the
+// root replaced by a fixed placeholder so a ceiling tracks only the prompt's own text.
+const bytes = (text) => Buffer.byteLength(text.replaceAll(PATHS.root, '<repo-root>'), 'utf8');
 
 const SHAPES = {
   unpinned: {},
@@ -67,11 +71,11 @@ const SIZE_CEILINGS = {
   'claim-issue gitlab pinned-provisioned review-then-merge': 38303,
   'claim-issue gitlab pinned-provisioned merge-on-green': 29775,
   'claim-issue gitlab pinned-provisioned leave-open': 35152,
-  'claim-flow completion default': 3379,
-  'claim-flow completion agent review': 9110,
+  'claim-flow completion default': 3293,
+  'claim-flow completion agent review': 9024,
   'claim-flow completion agent merge-on-green': 7005,
-  'claim-flow completion agent leave-open': 7315,
-  'claim-flow completion agent tui': 12958,
+  'claim-flow completion agent leave-open': 7229,
+  'claim-flow completion agent tui': 12872,
 };
 
 const SIZES = Object.fromEntries(

@@ -205,9 +205,12 @@ export default function MusicVideo() {
   ) : null;
   // A full record replaces its summary in the index list; the project card
   // derives from whichever it holds, so no summary-only field can go stale.
+  // `renderSpend` is attached only when the server presents a read (#16506); a mutation or run
+  // event's record without it keeps the one already held until the next read or spend event.
   const replaceProject = (next) => {
-    setSelectedProject((prev) => (prev?.id === next.id ? next : prev));
-    summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+    const withSpend = (prev) => (next.renderSpend || !prev?.renderSpend ? next : { ...next, renderSpend: prev.renderSpend });
+    setSelectedProject((prev) => (prev?.id === next.id ? withSpend(prev) : prev));
+    summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? withSpend(p) : p)));
   };
   // Open a project the page just received whole (created, forked, started).
   const openProject = (proj) => {
@@ -281,7 +284,15 @@ export default function MusicVideo() {
     };
     const events = ['music-video:autonomous', 'music-video:production'];
     events.forEach((e) => socket.on(e, onRunEvent));
-    return () => events.forEach((e) => socket.off(e, onRunEvent));
+    // A paid render landed in a project's spend ledger, or an adjustment changed it.
+    const onRenderSpend = ({ projectId, renderSpend }) => {
+      if (projectId && renderSpend) setSelectedProject((prev) => (prev?.id === projectId ? { ...prev, renderSpend } : prev));
+    };
+    socket.on('music-video:render-spend', onRenderSpend);
+    return () => {
+      events.forEach((e) => socket.off(e, onRunEvent));
+      socket.off('music-video:render-spend', onRenderSpend);
+    };
   }, []);
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.

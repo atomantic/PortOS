@@ -377,6 +377,8 @@ const SIMPLE_BRIDGES = [
   { emitter: musicVideoEvents, event: 'cover-art', channel: 'music-video:cover-art' },
   // A shot's cached render segment rendering, rendered, or failed (shotSegments.js).
   { emitter: musicVideoEvents, event: 'render-cleanup', channel: 'music-video:render-cleanup' },
+  // A paid render reached a project's spend ledger, or a spend adjustment changed (#16506).
+  { emitter: musicVideoEvents, event: 'render-spend', channel: 'music-video:render-spend' },
   { emitter: musicVideoEvents, event: 'shot-render', channel: 'music-video:shot-render' },
   // A Blender film job (sync, shot render, cut) advancing, or the film's state changing outside a job.
   { emitter: musicVideoEvents, event: 'blender', channel: 'music-video:blender' },

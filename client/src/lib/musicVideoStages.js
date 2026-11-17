@@ -21,6 +21,9 @@ import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
 import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
 import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideoPreviz.js';
 import { blenderShotsReady } from '../../../server/lib/musicVideoBlender.js';
+import { projectSpend as sharedProjectSpend } from '../../../server/lib/musicVideoSpend.js';
+
+export { SPEND_ADJUSTMENT_LANES, spendLaneLabel } from '../../../server/lib/musicVideoSpend.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -104,30 +107,12 @@ export const projectServicesSummary = (project) => [
 ].join(' · ');
 
 /**
- * What the project has spent on paid generation across its production runs,
- * against the cap that applies now: the live/latest run's, else the autopilot
- * brief's budget. `capUsd` is null when nothing caps it.
+ * What the project has spent on paid generation (server/lib/musicVideoSpend.js): production runs,
+ * shot takes and, once the server attaches its render ledger (`renderSpend`), every paid render
+ * for the project by lane with its unpriced renders counted (#16506). Capped by the live/latest
+ * run's cap, else the autopilot brief's budget; `capUsd` is null when nothing caps it.
  */
-export function projectSpend(project) {
-  const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-  const autopilot = runs.reduce((sum, run) => sum + num(run?.usage?.spentUsd), 0);
-  // #10157: board-started fal takes record the estimate they were priced at.
-  let manual = 0;
-  let autoReview = 0;
-  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
-    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
-      if (take?.spendKind === 'autoReview') autoReview += num(take.costUsd);
-      else if (take?.spendKind === 'manual') manual += num(take.costUsd);
-    }
-  }
-  const spentUsd = autopilot + manual + autoReview;
-  const run = currentProductionRun(project);
-  const runCap = run?.limits?.spendCapUsd;
-  const briefCap = project?.automation?.budgetUsd;
-  const capUsd = runCap != null ? runCap : (briefCap != null ? briefCap : null);
-  return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
-}
+export const projectSpend = (project) => sharedProjectSpend(project, currentProductionRun(project));
 
 /**
  * What the project has spent on fal.ai, by model, from the estimates its paid

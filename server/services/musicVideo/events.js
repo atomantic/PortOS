@@ -17,6 +17,9 @@ import { EventEmitter } from 'events';
 //     identifies one render attempt on every 'rendering' event; `failedAt` (ISO)
 //     and `error` ride on 'failed'. GET /shot-renders returns that failure until
 //     the shot renders or restarts.
+//   'render-spend' -> { projectId, renderSpend }
+//     A paid render reached the project's spend ledger, or an adjustment changed it (#16506).
+//     `renderSpend` is the summary a project read carries (lib/musicVideoSpend.js).
 //   'excerpt-render' -> { projectId, excerptId, status }   (server-only)
 //     A draft excerpt render settled; an auto-review run waiting on it continues.
 //   'auto-review' -> { projectId, runId, run, action, project }

@@ -217,7 +217,20 @@ export default function MusicVideoLayout({
   });
   // The phone bar ends with the pages (Assets), icon only like the steps.
   const tabs = [...stepTabs, ...MUSIC_VIDEO_PAGES.map((entry) => ({ id: entry.id, label: entry.label, icon: STAGE_ICONS[entry.id] }))];
-  const showSpend = spend.spentUsd > 0 || spend.capUsd > 0;
+  const showSpend = spend.spentUsd > 0 || spend.capUsd > 0 || spend.unpriced > 0;
+  const spendTitle = `Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · shot takes and tests ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)}${spend.unpriced ? ` · ${spend.unpriced} unpriced` : ''} (estimates)`;
+  const spendPill = (
+    <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
+      {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}{spend.unpriced ? ' +' : ''}
+    </Pill>
+  );
+  // The pill opens Project settings › Spend: the lanes behind it and the true-up.
+  const spendBadge = onOpenSettings ? (
+    <button type="button" onClick={() => onOpenSettings('spend')} title={spendTitle} aria-label={`Spend ${formatUsd(spend.spentUsd)}: open the breakdown`}
+      className="inline-flex shrink-0 items-center rounded-full focus-visible:ring-2 focus-visible:ring-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
+      {spendPill}
+    </button>
+  ) : <span title={spendTitle}>{spendPill}</span>;
   const stageEntry = [...progress.stages, ...MUSIC_VIDEO_PAGES].find((entry) => entry.id === stage);
   // Play runs something; an arrow goes somewhere (a step, or a Project settings tab).
   const ActionIcon = nextAction?.kind === 'run' ? Play : ArrowRight;
@@ -311,13 +324,7 @@ export default function MusicVideoLayout({
               <span className="hidden sm:inline">{autopilot.label}</span>
             </button>
           )}
-          {showSpend && (
-            <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
-              <span title={`Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · manual takes ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)} (estimates)`}>
-                {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}
-              </span>
-            </Pill>
-          )}
+          {showSpend && spendBadge}
           {attention}
         </div>
         {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}

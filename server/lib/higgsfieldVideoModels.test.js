@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHiggsfieldVideoRequest, higgsfieldVideoLengths, getHiggsfieldVideoModel, higgsfieldCapabilityHint, higgsfieldShotRequestFields } from './higgsfieldVideoModels.js';
+import { buildHiggsfieldVideoRequest, higgsfieldVideoLengths, getHiggsfieldVideoModel, higgsfieldCapabilityHint, higgsfieldShotRequestFields, higgsfieldVideoClipQuote } from './higgsfieldVideoModels.js';
 
 describe('buildHiggsfieldVideoRequest', () => {
   it('routes by the inputs present: text, start frame, or references', () => {
@@ -106,5 +106,21 @@ describe('Kling 4 wire bodies', () => {
     expect(image.body).toEqual({ duration: 20, prompt: 'a', resolution: '720p', image_url: 'u1' });
     expect(() => build('kling-video/v4.0-flash', { imageUrl: 'u1', endImageUrl: 'u2' })).toThrow(/no end frame/);
     expect(build('kling-video/v4.0-flash', { referenceImageUrls: ['r1'], width: 1000, height: 1000 }).body.aspect_ratio).toBe('1:1');
+  });
+});
+
+describe('higgsfieldVideoClipQuote', () => {
+  it('prices the billed length at the route and tier rate, with the sound surcharge where Higgsfield lists one', () => {
+    expect(higgsfieldVideoClipQuote({ modelId: 'bytedance/seedance-2.5', route: 'reference', seconds: 4, resolution: '1080p' }).costUsd).toBe(3.1432);
+    expect(higgsfieldVideoClipQuote({ modelId: 'kling-video/v3.0/std', route: 'image', seconds: 10 }).costUsd).toBe(0.714);
+    expect(higgsfieldVideoClipQuote({ modelId: 'kling-video/v3.0/std', route: 'image', seconds: 10, generateAudio: true }).costUsd).toBe(1.071);
+    // The request's estimate is the quote for the length and tier it actually sends (clamped to 15 s here).
+    expect(buildHiggsfieldVideoRequest({ modelId: 'kling-video/v3.0/pro', prompt: 'a', imageUrl: 'u1', seconds: 40 }).estimatedCostUsd).toBe(1.443);
+  });
+
+  it('prices an unlisted route as unknown rather than zero', () => {
+    expect(higgsfieldVideoClipQuote({ modelId: 'kling-video/v4.0-flash', route: 'reference', seconds: 5, resolution: '720p' })).toBeNull();
+    expect(buildHiggsfieldVideoRequest({ modelId: 'kling-video/v4.0-flash', prompt: 'a', referenceImageUrls: ['r1'] }).estimatedCostUsd).toBeNull();
+    expect(higgsfieldVideoClipQuote({ modelId: 'unknown/model', route: 'text', seconds: 5 })).toBeNull();
   });
 });

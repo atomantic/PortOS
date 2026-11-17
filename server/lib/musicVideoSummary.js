@@ -16,6 +16,7 @@ import { latestMusicVideoReviewDraft } from './musicVideoReviewDraft.js';
 import { supersededStillsCheckpoint } from './musicVideoAutonomous.js';
 import { finishedOutsideCovers } from './musicVideoFinishedOutside.js';
 import { blenderShotsReady } from './musicVideoBlender.js';
+import { projectSpend } from './musicVideoSpend.js';
 
 /**
  * True when the project's word timings came from the full mix but a vocal
@@ -38,27 +39,11 @@ const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : nu
 const imageSrc = (assetId) => (/^(https?:|data:|blob:)/i.test(assetId) || assetId.startsWith('/') ? assetId : `/data/images/${assetId}`);
 const imageFallback = (assetId) => (assetId.includes('.') ? null : `/data/images/${assetId}.png`);
 
-const currentRun = (project) => {
+/** The live production run, else the latest: the run whose cap and status a project shows. */
+export const currentRun = (project) => {
   const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
   return runs.find((r) => RESUMABLE_RUN_STATUSES.has(r.status)) || runs[runs.length - 1] || null;
 };
-
-function projectSpend(project, run) {
-  const runs = Array.isArray(project.productionRuns) ? project.productionRuns : [];
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-  const autopilot = runs.reduce((sum, r) => sum + num(r?.usage?.spentUsd), 0);
-  let manual = 0;
-  let autoReview = 0;
-  for (const scene of Array.isArray(project.scenes) ? project.scenes : []) {
-    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
-      if (take?.spendKind === 'autoReview') autoReview += num(take.costUsd);
-      else if (take?.spendKind === 'manual') manual += num(take.costUsd);
-    }
-  }
-  const spentUsd = autopilot + manual + autoReview;
-  const capUsd = run?.limits?.spendCapUsd ?? project.automation?.budgetUsd ?? null;
-  return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
-}
 
 function composeDone(project, mode) {
   const composition = project.composition || {};

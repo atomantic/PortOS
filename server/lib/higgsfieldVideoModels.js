@@ -13,8 +13,11 @@
  * The user picks a FAMILY; the builder routes to its text-to-video,
  * image-to-video or reference-to-video endpoint from the inputs the render
  * carries. Schemas were read from docs.higgsfield.ai workflow pages on
- * 2026-11-10. Prices there are "from" rates only (open.higgsfield.ai/pricing),
- * so `priceNote` is shown as a hint and the per-clip estimate stays unknown.
+ * 2026-11-10. `rates` are the per-second list prices by route and resolution that
+ * open.higgsfield.ai/pricing published on HIGGSFIELD_VIDEO_PRICING_VERIFIED_AT;
+ * `higgsfieldVideoClipQuote` prices one clip from them, so Music Video spend
+ * counts Higgsfield renders (#16506). They are estimates: the account balance
+ * is the final word, and a tier with no listed rate prices as unknown.
  *
  * Model input is sent as written (root AGENTS.md): no endpoint here takes a
  * negative prompt, so one rides as a visible "Avoid:" clause, and Wan's
@@ -28,8 +31,8 @@ const KLING4_TEXT_RATIOS = Object.freeze(['21:9', '16:9', '9:16', '1:1']);
 const KLING4_REFERENCE_RATIOS = Object.freeze([...KLING4_TEXT_RATIOS, 'adaptive']);
 
 // Kling 4 families share every field but length, resolution tiers and end-frame support.
-const klingV4 = ({ id, resolutions, maxSec, endFrameField, ...label }) => Object.freeze({
-  id, ...label,
+const klingV4 = ({ id, resolutions, maxSec, endFrameField, rates, ...label }) => Object.freeze({
+  id, ...label, rates: freezeRates(rates),
   endpoints: Object.freeze({ text: `${id}/text-to-video`, image: `${id}/image-to-video`, reference: `${id}/reference-to-video` }),
   duration: Object.freeze({ min: 3, max: maxSec, defaultSec: 5 }),
   resolutions: Object.freeze(resolutions), defaultResolution: resolutions.at(-1),
@@ -38,6 +41,13 @@ const klingV4 = ({ id, resolutions, maxSec, endFrameField, ...label }) => Object
   audio: null, seed: null, promptMax: null, fixed: Object.freeze({}),
 });
 const TIERS = Object.freeze(['480p', '720p', '1080p']);
+
+export const HIGGSFIELD_VIDEO_PRICING_VERIFIED_AT = '2026-11-16';
+// A family with no resolution tier keys its one rate by NO_TIER.
+const NO_TIER = 'default';
+function freezeRates(rates) {
+  return Object.freeze(Object.fromEntries(Object.entries(rates).map(([route, byTier]) => [route, Object.freeze({ ...byTier })])));
+}
 
 /**
  * Per family:
@@ -50,6 +60,9 @@ const TIERS = Object.freeze(['480p', '720p', '1080p']);
  *  - `maxReferenceImages` — the reference route's `image_urls` cap (0 = none).
  *  - `audio` — how native audio is toggled: 'generate_audio' | 'sound' | null.
  *  - `seed` — `{ min, max }` or null; `promptMax` — characters, or null.
+ *  - `rates` — `{ text, image, reference }`, each USD per second by resolution
+ *     (`default` for a family with no tier); a missing route or tier is unpriced.
+ *  - `soundRateMultiplier` — the rate factor with native audio on, when listed.
  */
 export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
   Object.freeze({
@@ -64,14 +77,27 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     textRatios: SEEDANCE_RATIOS, referenceRatios: SEEDANCE_RATIOS,
     endFrameField: 'end_image_url', maxReferenceImages: 30, maxReferenceAudio: 10,
     audio: 'generate_audio', seed: null, promptMax: null, fixed: Object.freeze({}),
+    // The reference route's 720p rate is the one its other reference-input routes list (video edit, extend).
+    rates: freezeRates({
+      text: { '480p': 0.1177, '720p': 0.2647, '1080p': 0.6518 },
+      image: { '480p': 0.1177, '720p': 0.2647, '1080p': 0.6518 },
+      reference: { '480p': 0.1387, '720p': 0.3264, '1080p': 0.7858 },
+    }),
   }),
   // Kling 4: schemas read from console.higgsfield.ai model pages on 2026-11-13. It has no
   // audio toggle, and the image route takes no aspect ratio. Reference video_urls and
   // Kling element ids are not offered. Flash's endpoints reject unknown fields.
-  klingV4({ id: 'kling-video/v4.0', label: 'Kling 4.0', priceNote: 'from ~$0.126/s', maxSec: 30, resolutions: ['720p', '1080p'], endFrameField: 'end_image_url' }),
-  klingV4({ id: 'kling-video/v4.0-flash', label: 'Kling 4.0 Flash', priceNote: 'from ~$0.063/s', maxSec: 20, resolutions: ['720p'], endFrameField: null }),
+  klingV4({
+    id: 'kling-video/v4.0', label: 'Kling 4.0', priceNote: 'from ~$0.126/s', maxSec: 30, resolutions: ['720p', '1080p'], endFrameField: 'end_image_url',
+    rates: { text: { '720p': 0.1257, '1080p': 0.1879 }, image: { '720p': 0.1257, '1080p': 0.1879 }, reference: { '720p': 0.1544, '1080p': 0.1879 } },
+  }),
+  klingV4({
+    id: 'kling-video/v4.0-flash', label: 'Kling 4.0 Flash', priceNote: '~$0.094/s', maxSec: 20, resolutions: ['720p'], endFrameField: null,
+    // Higgsfield lists no reference-route rate for Flash, so a reference take prices as unknown.
+    rates: { text: { '720p': 0.094 }, image: { '720p': 0.094 } },
+  }),
   Object.freeze({
-    id: 'kling-video/v3.0/pro', label: 'Kling 3.0 Pro', priceNote: '~$0.084/s',
+    id: 'kling-video/v3.0/pro', label: 'Kling 3.0 Pro', priceNote: '~$0.096/s',
     endpoints: Object.freeze({
       text: 'kling-video/v3.0/pro/text-to-video', image: 'kling-video/v3.0/pro/image-to-video', reference: null,
     }),
@@ -81,9 +107,11 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     endFrameField: 'last_image_url', maxReferenceImages: 0,
     // Kling truncates a longer prompt silently, so PortOS refuses past it instead.
     audio: 'sound', seed: null, promptMax: 2500, fixed: Object.freeze({}),
+    // Higgsfield lists $0.0962–$0.1443/s; the top of the range is the 1.5x Kling charges with sound on.
+    rates: freezeRates({ text: { [NO_TIER]: 0.0962 }, image: { [NO_TIER]: 0.0962 } }), soundRateMultiplier: 1.5,
   }),
   Object.freeze({
-    id: 'kling-video/v3.0/std', label: 'Kling 3.0 Standard', priceNote: '~$0.063/s',
+    id: 'kling-video/v3.0/std', label: 'Kling 3.0 Standard', priceNote: '~$0.071/s',
     endpoints: Object.freeze({
       text: 'kling-video/v3.0/std/text-to-video', image: 'kling-video/v3.0/std/image-to-video', reference: null,
     }),
@@ -92,9 +120,10 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     textRatios: KLING_RATIOS, referenceRatios: null,
     endFrameField: 'last_image_url', maxReferenceImages: 0,
     audio: 'sound', seed: null, promptMax: 2500, fixed: Object.freeze({}),
+    rates: freezeRates({ text: { [NO_TIER]: 0.0714 }, image: { [NO_TIER]: 0.0714 } }), soundRateMultiplier: 1.5,
   }),
   Object.freeze({
-    id: 'alibaba/wan-3.0', label: 'Wan 3.0', priceNote: 'from ~$0.05/s',
+    id: 'alibaba/wan-3.0', label: 'Wan 3.0', priceNote: 'from ~$0.0375/s',
     endpoints: Object.freeze({
       text: 'alibaba/wan-3.0/text-to-video',
       image: 'alibaba/wan-3.0/image-to-video',
@@ -106,6 +135,12 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     endFrameField: 'end_image_url', maxReferenceImages: 10,
     audio: 'generate_audio', seed: Object.freeze({ min: 1, max: 2_147_483_647 }), promptMax: null,
     fixed: Object.freeze({ enable_thinking: false }),
+    // The reference route lists 480p and 1080p at the other routes' rates; 720p follows them too.
+    rates: freezeRates({
+      text: { '480p': 0.0375, '720p': 0.075, '1080p': 0.15 },
+      image: { '480p': 0.0375, '720p': 0.075, '1080p': 0.15 },
+      reference: { '480p': 0.0375, '720p': 0.075, '1080p': 0.15 },
+    }),
   }),
 ]);
 
@@ -128,6 +163,19 @@ export function higgsfieldCapabilityHint(model) {
     model.endFrameField ? 'end frame' : null,
     model.maxReferenceAudio ? 'audio refs' : null,
   ].filter(Boolean).join(' · ');
+}
+
+/**
+ * The list price of one clip: `{ costUsd, ratePerSec }`, or null when the family,
+ * route or tier has no listed rate. `seconds` is the billed length the request sends.
+ */
+export function higgsfieldVideoClipQuote({ modelId, route, seconds, resolution = null, generateAudio = false } = {}) {
+  const model = getHiggsfieldVideoModel(modelId);
+  const base = model?.rates?.[route]?.[model.resolutions ? resolution : NO_TIER];
+  const sec = Number(seconds);
+  if (!Number.isFinite(base) || !(sec > 0)) return null;
+  const ratePerSec = generateAudio === true && model.soundRateMultiplier ? base * model.soundRateMultiplier : base;
+  return { costUsd: Math.round(ratePerSec * sec * 1e4) / 1e4, ratePerSec };
 }
 
 /**
@@ -161,7 +209,8 @@ export const higgsfieldVideoPromptText = (prompt = '', negativePrompt = '') => {
  * placeholders for a dry run; the route is chosen from which are present.
  * Throws a 400-shaped error rather than dropping or truncating an input.
  *
- * @returns {{ model, route, endpointId, body, seconds, resolution, generateAudio, estimatedCostUsd: null, frameAsReference, silentNotice }}
+ * @returns {{ model, route, endpointId, body, seconds, resolution, generateAudio, estimatedCostUsd, frameAsReference, silentNotice }}
+ *   `estimatedCostUsd` is the list price (`higgsfieldVideoClipQuote`), or null when unlisted.
  */
 export function buildHiggsfieldVideoRequest({
   modelId = HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
@@ -218,8 +267,9 @@ export function buildHiggsfieldVideoRequest({
   if (model.audio === 'sound') body.sound = audio ? 'on' : 'off';
   const seedNum = typeof seed === 'number' ? seed : (typeof seed === 'string' && seed.trim() ? Number(seed) : NaN);
   if (model.seed && Number.isInteger(seedNum) && seedNum >= model.seed.min && seedNum <= model.seed.max) body.seed = seedNum;
+  const estimatedCostUsd = higgsfieldVideoClipQuote({ modelId: model.id, route, seconds: sec, resolution: tier, generateAudio: audio })?.costUsd ?? null;
   return {
-    model, route, endpointId: model.endpoints[route], body, seconds: sec, resolution: tier, generateAudio: audio, estimatedCostUsd: null, frameAsReference, silentNotice,
+    model, route, endpointId: model.endpoints[route], body, seconds: sec, resolution: tier, generateAudio: audio, estimatedCostUsd, frameAsReference, silentNotice,
   };
 }
 

@@ -1,4 +1,4 @@
-import { Bot, FolderOpen, Music, SlidersHorizontal } from 'lucide-react';
+import { Bot, CircleDollarSign, FolderOpen, Music, SlidersHorizontal } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import ProjectOptionsPanel from './ProjectOptionsPanel.jsx';
 import SongRevisionPanel from './SongRevisionPanel.jsx';
@@ -10,11 +10,13 @@ import AutopilotPanel from './AutopilotPanel.jsx';
 import DevArtifactsPanel from './DevArtifactsPanel.jsx';
 import HandoffControls from './HandoffControls.jsx';
 import MakingOfExportPanel from './MakingOfExportPanel.jsx';
+import ProjectSpendPanel from './ProjectSpendPanel.jsx';
 
 const SETTINGS_TABS = [
   { id: 'project', label: 'Project', icon: SlidersHorizontal },
   { id: 'audio', label: 'Audio', icon: Music },
   { id: 'autopilot', label: 'Autopilot', icon: Bot },
+  { id: 'spend', label: 'Spend', icon: CircleDollarSign },
   { id: 'files', label: 'Files', icon: FolderOpen },
 ];
 export const SETTINGS_TAB_IDS = SETTINGS_TABS.map((tab) => tab.id);
@@ -24,7 +26,7 @@ export const SETTINGS_TAB_IDS = SETTINGS_TABS.map((tab) => tab.id);
  * out of the six steps so each step shows only its own work: the render style,
  * media and services (Project), song forks, stems, MIDI and timing revisions
  * (Audio), the automation brief, production runs and the autonomous run log
- * (Autopilot), and every development file, the external handoff and the
+ * (Autopilot), what its paid renders cost by lane with manual true-ups (Spend), and every development file, the external handoff and the
  * making-of export (Files). `tab` is the open tab, held in the page URL.
  * `manageActions` (fork and delete) leads the Project tab.
  */
@@ -95,6 +97,7 @@ export default function ProjectSettingsDrawer({ open, tab, onTabChange, onClose,
           </fieldset>
         </div>
       )}
+      {tab === 'spend' && <ProjectSpendPanel key={`spend-${project.id}`} project={project} onProjectUpdated={board.replaceProject} />}
       {tab === 'files' && (
         <div className="space-y-3">
           <div id="mv-review-development">
