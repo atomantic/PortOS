@@ -14,7 +14,7 @@ import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+import { attachBareOrigin, materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
@@ -309,6 +309,23 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(next.remaining).toContainEqual(recreated);
     expect(next).not.toHaveProperty('retirementObligations');
     expect(existsSync(path)).toBe(true);
+  });
+
+  // A `/do:next` claim: a sibling checkout on a pushed branch that has no
+  // commits yet. Its head equals main, so ancestry alone reads it as merged;
+  // reconcile used to retire it and delete the local branch (#16625).
+  it('holds a fresh published sibling claim checkout that has no commits of its own', async () => {
+    await attachBareOrigin(scratch, repo);
+    const sibling = await addTree(join(scratch, 'next-issue-7'), 'next/issue-7');
+    await execGit(['push', '-u', 'origin', 'next/issue-7'], sibling);
+
+    const result = await reconcileWithoutOwners();
+
+    expect(result.cleaned).toEqual([]);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'next/issue-7', reason: 'branch-has-no-own-commits' }));
+    expect(existsSync(sibling)).toBe(true);
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain(`branch refs/heads/next/issue-7`);
+    expect(await branches()).toContain('next/issue-7');
   });
 
   it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {
