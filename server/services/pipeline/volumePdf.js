@@ -15,7 +15,6 @@
  * so the route surfaces a 409 with ERR_NO_VOLUME_COVER instead.
  */
 
-import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
@@ -113,6 +112,8 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
       .catch((err) => ({ filename, kind, err })),
   ));
 
+  // Loaded here, not at module top: only an export pays for the PDF library (#16558).
+  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib');
   const pdf = await PDFDocument.create();
   const volTitle = season.title || `Volume ${season.number || 1}`;
   pdf.setTitle(`${series.name || 'Untitled'} — ${volTitle}`.trim());

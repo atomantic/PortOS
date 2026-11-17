@@ -18,7 +18,6 @@
 
 import { createHash } from 'crypto';
 import { hostname } from 'os';
-import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { createZip } from '../lib/zipWriter.js';
 import { getCurrentVersion } from './updateChecker.js';
 import { exportDigitalTwin } from './digital-twin-export.js';
@@ -622,6 +621,8 @@ function wrapLine(text, font, size, maxWidth) {
  * @returns {Promise<{ bytes: Uint8Array, pageCount: number }>}
  */
 export async function buildLegacyPdf(contentFiles, { portosVersion = '0.0.0', generatedAt = '' } = {}) {
+  // Loaded here, not at module top: only an export pays for the PDF library (#16558).
+  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib');
   const pdf = await PDFDocument.create();
   pdf.setTitle('PortOS Legacy Export');
   pdf.setProducer('PortOS');

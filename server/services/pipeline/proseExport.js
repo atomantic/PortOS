@@ -25,7 +25,6 @@
  * via `__testing` so the export shape is unit-tested without touching disk.
  */
 
-import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { createZip } from '../../lib/zipWriter.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { readImageFromMedia, detectImageKind } from '../../lib/pdfImageEmbed.js';
@@ -337,11 +336,11 @@ export function wrapText(text, font, size, maxWidth) {
   return lines;
 }
 
-const PDF_FONT_MAP = {
+const pdfFontMap = (StandardFonts) => ({
   times: { regular: StandardFonts.TimesRoman, bold: StandardFonts.TimesRomanBold, italic: StandardFonts.TimesRomanItalic },
   helvetica: { regular: StandardFonts.Helvetica, bold: StandardFonts.HelveticaBold, italic: StandardFonts.HelveticaOblique },
   courier: { regular: StandardFonts.Courier, bold: StandardFonts.CourierBold, italic: StandardFonts.CourierOblique },
-};
+});
 
 /**
  * Build the print-interior PDF as a Uint8Array. Trade-format interior: title
@@ -355,12 +354,15 @@ export async function buildProsePdf(seriesId) {
   const trim = TRIM_SIZES[settings.trimSize] || TRIM_SIZES[DEFAULT_TRIM_SIZE];
   const { width: pageW, height: pageH } = trim;
 
+  // Loaded here, not at module top: only an export pays for the PDF library (#16558).
+  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib');
   const pdf = await PDFDocument.create();
   pdf.setTitle(settings.titlePageTitle);
   if (settings.titlePageAuthor) pdf.setAuthor(settings.titlePageAuthor);
   if (settings.titlePageSubtitle) pdf.setSubject(settings.titlePageSubtitle);
   pdf.setProducer('PortOS');
 
+  const PDF_FONT_MAP = pdfFontMap(StandardFonts);
   const fontKey = PDF_FONT_MAP[settings.interiorFont] ? settings.interiorFont : 'times';
   const font = await pdf.embedFont(PDF_FONT_MAP[fontKey].regular);
   const fontBold = await pdf.embedFont(PDF_FONT_MAP[fontKey].bold);

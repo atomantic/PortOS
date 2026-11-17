@@ -7,7 +7,6 @@
  * route surfaces "X of Y rendered" to the user before download.
  */
 
-import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
@@ -68,6 +67,8 @@ export async function buildComicPdf(issueId, opts = {}) {
       .catch((err) => ({ filename, err })),
   ));
 
+  // Loaded here, not at module top: only an export pays for the PDF library (#16558).
+  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib');
   const pdf = await PDFDocument.create();
   if (series.name || issue.title) {
     pdf.setTitle(`${series.name || 'Untitled'} #${issue.number || 1} — ${issue.title || ''}`.trim());

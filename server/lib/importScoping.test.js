@@ -647,3 +647,19 @@ describe('shared provider type leaf', () => {
     expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
   });
 });
+
+// #16558: each heavy single-feature package is loaded where its feature runs, so
+// none of them is paid for by every boot. Control: the walk still sees a package
+// that is imported statically, so a resolver gap cannot make this look clean.
+describe('heavy single-feature packages stay out of the boot closure', () => {
+  const closure = staticImportClosure(abs('index.js'));
+  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three'])(
+    'does not reach %s through static imports from index.js',
+    (pkg) => {
+      expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);
+    },
+  );
+  it('still sees a package that index.js reaches statically', () => {
+    expect(closure.packages.has('express')).toBe(true);
+  });
+});
