@@ -10,7 +10,7 @@ vi.mock('./reviewInfrastructureFailure.js', () => ({ reportReviewInfrastructureF
  * spawn-local state, announce the outcome — and until now nothing verified any
  * of that. What pinned them was source-text grep in `agentLifecycle.test.js`
  * (`/if \(scanBlock\) \{[\s\S]*?status: 'blocked'/` and friends). A regex over
- * the file cannot tell whether a given copy still releases the execution lane,
+ * the file cannot tell whether a given copy still releases the claim,
  * still emits `agent:error`, or still releases the synthetic app-review marker
  * — and two of the copies deliberately DIVERGE on the emit (the public-review
  * scan/eligibility gates warn-log instead, because a fail-closed safety outcome
@@ -73,7 +73,6 @@ vi.mock('./agentRunTracking.js', () => ({
 vi.mock('./agentFinalization.js', () => ({
   dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn(),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
 vi.mock('./cosEvents.js', () => ({
@@ -128,17 +127,6 @@ vi.mock('./agentErrorAnalysis.js', () => ({
 }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolvedValue('instance-1') }));
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
-  startExecution: vi.fn(),
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn(),
-}));
-vi.mock('./executionLanes.js', () => ({
-  determineLane: vi.fn(() => 'standard'),
-  acquire: vi.fn(() => ({ success: true })),
-  release: vi.fn(),
-}));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
 vi.mock('./modelAbuseGuard.js', () => ({
   materializePublicReviewInput: vi.fn(),
@@ -165,7 +153,6 @@ import { getConfig } from './cosState.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { releaseAppReviewMarker } from './appActivity.js';
-import { acquire, release } from './executionLanes.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../lib/hostShutdown.js';
@@ -186,7 +173,7 @@ const OPENCODE_TUI = { id: 'opencode-tui', type: 'tui', command: 'opencode', env
 const APP = 'example-app';
 
 // The real spawn gate requires persisted provenance before reaching the
-// provider/lane gates covered below. Give each fixture a matching prior run.
+// provider gates covered below. Give each fixture a matching prior run.
 const spawnAgentForTask = task => {
   const epoch = '11111111-1111-4111-8111-111111111111';
   const count = task.metadata?.totalSpawnCount;
@@ -263,7 +250,6 @@ beforeEach(() => {
   runnerAgents.clear();
   setUseRunner(false);
   vi.mocked(isTuiProvider).mockReturnValue(true);
-  vi.mocked(acquire).mockReturnValue({ success: true });
   vi.mocked(spawnAgentViaRunner).mockResolvedValue({ pid: 4242 });
   vi.mocked(validatePublicReviewModel).mockResolvedValue({ ok: true });
   // Truthy: a falsy in_progress write is read as "the claim did not land".
@@ -302,18 +288,6 @@ describe('runAgentSpawn gates — max total spawns', () => {
     expect(spawningTasks.has(task.id)).toBe(false);
   });
 
-  // The gate runs before an agent id is minted, so there is no lane and no
-  // tool-execution to release. It must not invent one.
-  it('releases no execution lane, because none was ever acquired', async () => {
-    await spawnAgentForTask({
-      id: 'task-max-spawns-no-lane',
-      metadata: { app: APP, totalSpawnCount: MAX_TOTAL_SPAWNS + 1 },
-    });
-
-    expect(acquire).not.toHaveBeenCalled();
-    expect(vi.mocked(release).mock.calls).toEqual([]);
-  });
-
   it('spawns normally one dispatch below the cap', async () => {
     await spawnAgentForTask({
       id: 'task-under-cap',
@@ -321,25 +295,6 @@ describe('runAgentSpawn gates — max total spawns', () => {
     });
 
     expect(blockedWrites()).toEqual([]);
-  });
-});
-
-describe('runAgentSpawn gates — execution-lane acquire failure', () => {
-  // Not a block: the lane is a transient resource, so the task stays pending
-  // and retries. But the marker MUST still be released, or the app reads "in
-  // review" forever while the task waits.
-  it('releases the app-review marker without blocking the task', async () => {
-    vi.mocked(acquire).mockReturnValue({ success: false, error: 'lane is full' });
-
-    expect(await spawnAgentForTask({ id: 'task-lane-full', metadata: { app: APP } })).toBeNull();
-
-    expect(blockedWrites()).toEqual([]);
-    expect(agentErrors()).toEqual([]);
-    expect(markerReleasedFor(APP)).toBe(true);
-    expect(vi.mocked(emitLog).mock.calls.some(
-      ([level, message]) => level === 'warn' && message.includes('Failed to tag lane'),
-    )).toBe(true);
-    expect(registerAgent).not.toHaveBeenCalled();
   });
 });
 
@@ -381,7 +336,6 @@ describe('runAgentSpawn gates — provider-config resolution failure', () => {
     expect(blockedWrites()).toEqual([]);
     expect(agentErrors()).toEqual([{ taskId: 'task-transient', error: 'provider is briefly unreachable' }]);
     expect(markerReleasedFor(APP)).toBe(true);
-    expect(release).toHaveBeenCalled();
   });
 
   // The optional keys are spread conditionally; an absent provider id must not
@@ -669,7 +623,6 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
     expect(metadata).toMatchObject({ blockedCategory: 'provider-config', blockedReason: 'Execution speed is unsupported on this route.' });
     expect(agentErrors()).toEqual([]);
     expect(markerReleasedFor(APP)).toBe(true);
-    expect(release).toHaveBeenCalled();
   });
 
   // An ordinary task's setup failure is transient — it must stay pending and
@@ -682,7 +635,6 @@ describe('runAgentSpawn gates — spawn setup failure', () => {
     expect(blockedWrites()).toEqual([]);
     expect(agentErrors()).toEqual([{ taskId: 'task-ordinary-setup', error: 'transient config read failure' }]);
     expect(markerReleasedFor(APP)).toBe(true);
-    expect(release).toHaveBeenCalled();
   });
 
   // Pre-widening this was an uncaught throw the caller turned into
@@ -707,7 +659,6 @@ describe('host shutdown (#14170)', () => {
     expect(await runSpawnAgentForTask({ id: 'task-shutdown-early', metadata: { app: APP } })).toBeNull();
     expect(getTaskById).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
-    expect(acquire).not.toHaveBeenCalled();
   });
 
   it('releases a preparation that straddled the signal without registering or marking it in_progress', async () => {
@@ -724,6 +675,5 @@ describe('host shutdown (#14170)', () => {
     expect(vi.mocked(updateTask).mock.calls.filter(([, patch]) => patch?.status)).toEqual([]);
     expect(agentErrors()).toEqual([]);
     expect(markerReleasedFor(APP)).toBe(true);
-    expect(release).toHaveBeenCalled();
   });
 });

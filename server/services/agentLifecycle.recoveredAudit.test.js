@@ -96,8 +96,6 @@ vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn() }));
 vi.mock('./agentApiAuth.js', () => ({ resolveAgentApiEnv: vi.fn() }));
 vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn() }));
 vi.mock('./providerStatus.js', () => ({ markProviderUsageLimit: vi.fn(), markProviderUnavailable: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
-vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn(() => false) }));
 vi.mock('./jira.js', () => ({}));
 vi.mock('./git.js', () => ({}));

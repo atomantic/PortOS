@@ -19,12 +19,10 @@ import { cosEvents, emitLog } from './cosEvents.js';
 // `agentManagement.js`. This module is a LEAF that `agentLifecycle.js` imports,
 // which puts it inside the facade's closure, so the facade is out of reach here.
 import { updateAgent, completeAgent, createAgentOutputBatcher, appendAgentOutputLines } from './cosAgentLifecycle.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { appendRunEvent } from './agentRunEventLog.js';
-import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
+import { finalizeAgent } from './agentFinalization.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { finalizeAgentRunCommon } from './agentRunFinalize.js';
 import { activeAgents, pausedAgents, consumePausedAgentExit, registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
@@ -163,8 +161,6 @@ export async function spawnDirectly({
   runId,
   cliConfig,
   agentDir,
-  executionId,
-  laneName,
   prOpenedBy,
   safetyProfile = null,
 }) {
@@ -262,7 +258,6 @@ export async function spawnDirectly({
         // Keep sandbox paths out of shared diagnostics and fail closed locally.
         const message = 'Private assessment could not prepare its isolated local harness. Verify the CLI and macOS sandbox, then retry.';
         cleanupPromptFile();
-        releaseAgentLane({ agentId, success: false, exitCode: 1, executionId, laneName, errorExecutionMessage: message });
         await finalizeAgent({
           agentId, task, runId, providerId: provider.id, success: false, exitCode: 1,
           duration: 0, outputBuffer: '', workspacePath, prExpected: false,
@@ -358,9 +353,7 @@ export async function spawnDirectly({
       startedAt: Date.now(),
       runId,
       pid: spawnedPid,
-      providerId: provider.id,
-      executionId,
-      laneName
+      providerId: provider.id
     });
 
     // Store PID in persisted state for zombie detection only after spawn gave
@@ -608,17 +601,6 @@ export async function spawnDirectly({
       console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
       outputBatcher.push(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
-      // Release execution lane
-      if (laneName) {
-        release(agentId);
-      }
-
-      // Complete tool execution tracking with error
-      if (executionId) {
-        errorExecution(executionId, { message: err.message, category: 'spawn-error' });
-        completeExecution(executionId, { success: false });
-      }
-
       const agentDataErr = activeAgents.get(agentId);
       if (agentDataErr?.killTimer) {
         clearTimeout(agentDataErr.killTimer);
@@ -655,27 +637,13 @@ export async function spawnDirectly({
    *
    * Each persistence call is guarded on its own so a failure can't re-crash.
    */
-  const recoverFromCloseHandlerFailure = async (handlerErr, { code, laneReleased, outputBuffer }) => {
+  const recoverFromCloseHandlerFailure = async (handlerErr, { outputBuffer }) => {
     console.error(`❌ Agent ${agentId} close handler error: ${handlerErr.message}`);
     if (pausedAgents.has(agentId)) {
       consumePausedAgentExit(agentId);
       unregisterSpawnedAgent(claudeProcess.pid);
       activeAgents.delete(agentId);
       return;
-    }
-    if (!laneReleased) {
-      try {
-        releaseAgentLane({
-          agentId,
-          success: false,
-          exitCode: code,
-          executionId,
-          laneName,
-          errorExecutionMessage: `Agent close handler error: ${handlerErr.message}`,
-        });
-      } catch (releaseErr) {
-        console.error(`❌ Agent ${agentId} lane release failed during recovery: ${releaseErr.message}`);
-      }
     }
     try {
       await completeAgent(agentId, { success: false, error: `Close handler error: ${handlerErr.message}` });
@@ -696,9 +664,6 @@ export async function spawnDirectly({
     // analyzeAgentFailure, or finalizeAgent would re-escape this async handler
     // as an unhandled rejection and crash the process. The inner try/finally
     // only covers finalizeAgent's cleanup; this outer guard is the crash net.
-    // `laneReleased` lets the recovery path free a still-held execution lane
-    // (a throw before releaseAgentLane) without double-releasing one that ran.
-    let laneReleased = false;
     try {
     clearTimeout(initializationTimeout);
     cleanupPromptFile();
@@ -767,8 +732,7 @@ export async function spawnDirectly({
 
     // The teardown both in-process spawners share: paused early return, then
     // the host-shutdown abandon gate, the user-termination consume, the
-    // final success/error derivation, and the lane release (done before the
-    // error-analysis + state-write chain, since lanes serialize related work).
+    // final success/error derivation.
     // The transcript is already flushed and output.txt written above, so every
     // early-out below still leaves a complete record. See agentRunFinalize.js.
     const finalizeOutcome = finalizeAgentRunCommon({
@@ -776,10 +740,6 @@ export async function spawnDirectly({
       agentData,
       success: rawSuccess,
       error: null,
-      exitCode: code,
-      duration,
-      executionId,
-      laneName,
       sentinelPresent: completionSentinelPresent,
     });
 
@@ -799,7 +759,6 @@ export async function spawnDirectly({
     }
 
     const { finalSuccess, finalError, terminatedByUser } = finalizeOutcome;
-    laneReleased = true;
 
     const errorAnalysis = resolveCliErrorAnalysis({
       finalSuccess, task, model, rawStreamBuffer, outputBuffer, immediateFallbackAnalysis,
@@ -882,7 +841,7 @@ export async function spawnDirectly({
     maintenance.finishResource('agent', agentId);
     } catch (handlerErr) {
       maintenance.markResourceUnsettled('agent', agentId);
-      await recoverFromCloseHandlerFailure(handlerErr, { code, laneReleased, outputBuffer });
+      await recoverFromCloseHandlerFailure(handlerErr, { outputBuffer });
     }
   };
 

@@ -43,7 +43,6 @@ vi.mock('./cosAgentLifecycle.js', () => ({
 vi.mock('./agentFinalization.js', () => ({
   dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn(),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
   // `retireDeadAgent`'s own step-order/private-security contract is pinned for real
   // (mocked leaves) in `agentFinalization.retireDeadAgent.test.js`. This suite only

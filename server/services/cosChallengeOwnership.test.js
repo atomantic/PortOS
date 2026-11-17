@@ -35,13 +35,6 @@ vi.mock('./codeReview.js', () => ({ runLocalCodeReview: vi.fn(), getCodeReviewDe
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'instance-test') }));
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn(async () => {}) }));
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(() => ({ id: 'tool-test' })),
-  startExecution: vi.fn(), completeExecution: vi.fn(), errorExecution: vi.fn(),
-}));
-vi.mock('./executionLanes.js', () => ({
-  determineLane: () => 'background', acquire: () => ({ success: true }), release: vi.fn(),
-}));
 
 vi.mock('./cosEvents.js', () => ({
   cosEvents: {

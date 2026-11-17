@@ -8,10 +8,6 @@ vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, em
 vi.mock('./cosState.js', () => ({ loadState }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn(), updateTask: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(), startExecution: vi.fn(), completeExecution: vi.fn(), errorExecution: vi.fn(),
-}));
-vi.mock('./executionLanes.js', () => ({ determineLane: vi.fn(), acquire: vi.fn(), release: vi.fn() }));
 vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
@@ -22,9 +18,7 @@ vi.mock('./worktreeManager.js', () => ({ removeWorktree }));
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
-import { acquire, release } from './executionLanes.js';
 import { releaseAppReviewMarker } from './appActivity.js';
-import { createToolExecution } from './toolStateMachine.js';
 import { ensureInstanceId } from './instanceIdentity.js';
 import { newSpawnBudgetEpisode } from './spawnBudgetProof.js';
 
@@ -48,8 +42,6 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     loadState.mockResolvedValue({ agents: {} });
     hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local');
-    acquire.mockReturnValue({ success: true });
-    createToolExecution.mockReturnValue({ id: 'execution' });
     getTaskById.mockResolvedValue(task);
     validCleanupRefillSource.mockResolvedValue(false);
     const context = createAgentSpawnContext(task);
@@ -76,7 +68,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     } };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
-    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    
     updateTask.mockResolvedValue(task);
     const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
     expect(await prepareAgentSpawn(task, context)).toBe(context);
@@ -88,7 +80,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
-    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    
     updateTask.mockRejectedValueOnce(new Error('store unavailable')); emitLog.mockClear();
     const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
     expect(await prepareAgentSpawn(task, context)).toBeNull();
@@ -101,7 +93,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValueOnce(task).mockRejectedValueOnce(new Error('read failed'));
-    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    
     updateTask.mockClear(); emitLog.mockClear();
     const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
     expect(await prepareAgentSpawn(task, context)).toBeNull();
@@ -113,7 +105,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
-    acquire.mockReturnValue({ success: true }); createToolExecution.mockReturnValue({ id: 'execution' });
+    
     updateTask.mockRejectedValueOnce(null); emitLog.mockClear();
     const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
     expect(await prepareAgentSpawn(task, context)).toBeNull();
@@ -125,29 +117,27 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
 describe('createAgentSpawnContext — failed bookkeeping writes', () => {
   it('logs a rejected block write and still cleans up and emits agent:error', async () => {
     updateTask.mockReset().mockRejectedValue(new Error('store down'));
-    releaseAppReviewMarker.mockResolvedValue(); emitLog.mockClear(); release.mockClear(); cosEvents.emit.mockClear();
+    releaseAppReviewMarker.mockResolvedValue(); emitLog.mockClear(); cosEvents.emit.mockClear();
     const context = createAgentSpawnContext({ id: 'task-9', taskType: 'user', metadata: {} });
-    Object.assign(context, { laneAcquired: true, agentId: 'agent-9', claimAcquired: true });
+    Object.assign(context, { agentId: 'agent-9', claimAcquired: true });
 
     expect(await context.blockAndBail({ reason: 'no provider', category: 'config' })).toBeNull();
 
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Failed to persist blocked state for task task-9: store down'), { taskId: 'task-9' });
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Failed to release claim for task task-9: store down'), { taskId: 'task-9' });
-    expect(release).toHaveBeenCalledWith('agent-9');
     expect(cosEvents.emit).toHaveBeenCalledWith('agent:error', expect.objectContaining({ taskId: 'task-9' }));
   });
 
   it('records why an unpersisted hold leaves the task pending (#16177)', async () => {
-    updateTask.mockReset().mockResolvedValue({}); releaseAppReviewMarker.mockResolvedValue(); emitLog.mockClear(); release.mockClear();
+    updateTask.mockReset().mockResolvedValue({}); releaseAppReviewMarker.mockResolvedValue(); emitLog.mockClear();
     const context = createAgentSpawnContext({ id: 'task-10', taskType: 'internal', status: 'pending', metadata: {} });
-    Object.assign(context, { laneAcquired: true, agentId: 'agent-10' });
+    Object.assign(context, { agentId: 'agent-10' });
 
     expect(await context.blockAndBail({ reason: 'release-promotion-active: a pull request targeting the release branch is still open', persist: false })).toBeNull();
 
     expect(emitLog).toHaveBeenCalledWith('info',
       '⏸️ Task task-10 stays pending: release-promotion-active: a pull request targeting the release branch is still open', { taskId: 'task-10' });
     expect(updateTask).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledWith('agent-10');
   });
 });
 

@@ -98,8 +98,6 @@ vi.mock('./cosRunnerClient.js', () => ({
   getAgentStatsFromRunner: vi.fn(),
   getActiveAgentsFromRunner: vi.fn().mockResolvedValue([])
 }));
-vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 vi.mock('./shell.js', () => ({ writeToSession: vi.fn(), killSession: vi.fn() }));
 vi.mock('./agentWorktreeCleanup.js', () => ({
   cleanupAgentWorktree: vi.fn(),
@@ -1075,9 +1073,7 @@ describe('pauseAgent', () => {
       taskId: 'task-1',
       runId: 'run-1',
       pid: 123,
-      workspacePath: '/repo/worktree',
-      executionId: 'exec-1',
-      laneName: 'standard'
+      workspacePath: '/repo/worktree'
     });
     getTaskById.mockResolvedValue({
       id: 'task-1',
@@ -1179,8 +1175,7 @@ describe('pauseAgent — runner branch', () => {
       taskId: 'task-r1',
       task: { id: 'task-r1', taskType: 'user', description: 'Runner task', metadata: {} },
       workspacePath: '/repo/worktree-r1',
-      runId: 'run-r1',
-      executionId: 'exec-r1'
+      runId: 'run-r1'
     });
     getTaskById.mockResolvedValue({
       id: 'task-r1',
@@ -1275,8 +1270,7 @@ describe('pauseAgent — TUI branch', () => {
       tuiSessionId: sessionId,
       runId: 'run-tui-1',
       pid: 999,
-      workspacePath: '/repo/worktree-tui',
-      executionId: 'exec-tui-1'
+      workspacePath: '/repo/worktree-tui'
     });
     getTaskById.mockResolvedValue({
       id: 'task-tui-1',
@@ -1306,8 +1300,7 @@ describe('pauseAgent — TUI branch', () => {
       taskId: 'task-tui-2',
       tuiSessionId: 'tui-session-100',
       pid: 888,
-      workspacePath: '/repo/worktree-tui2',
-      executionId: 'exec-tui-2'
+      workspacePath: '/repo/worktree-tui2'
     });
     getTaskById.mockResolvedValue({
       id: 'task-tui-2',
@@ -2139,26 +2132,20 @@ describe('close-handler skip-finalization — source contract', () => {
   }
 
   // The canonical order the extraction made explicit: the paused return runs
-  // BEFORE the host-shutdown abandon gate, and both precede the lane release.
-  // Re-releasing an already-released executionId logs a spurious "Invalid state
-  // transition"; abandoning a paused run would skip the bookkeeping that the
-  // paused path owns. Nothing enforced this while the sequence was mirrored.
-  it('finalizeAgentRunCommon checks pausedAgents before the abandon gate and the lane release', () => {
+  // BEFORE the host-shutdown abandon gate: abandoning a paused run would skip the
+  // bookkeeping that the paused path owns. Nothing enforced this while the
+  // sequence was mirrored.
+  it('finalizeAgentRunCommon checks pausedAgents before the abandon gate', () => {
     const body = extractFunctionBody(AGENT_RUN_FINALIZE_SRC, 'export function finalizeAgentRunCommon(', '}) ');
     expect(body, 'finalizeAgentRunCommon must exist and be extractable').toBeTruthy();
 
     const guardPos = body.indexOf('pausedAgents.has(agentId)');
     expect(guardPos, 'pause guard must be present').toBeGreaterThan(-1);
 
-    for (const [label, marker] of [
-      ['host-shutdown abandon gate', 'shouldAbandonAgentRun('],
-      ['lane release', 'releaseAgentLane('],
-    ]) {
-      const pos = body.indexOf(marker);
-      expect(pos, `${marker} must exist in finalizeAgentRunCommon`).toBeGreaterThan(-1);
-      expect(guardPos, `pause guard must precede the ${label}`).toBeLessThan(pos);
-      expect(body.slice(guardPos, pos), `pause guard must return before the ${label}`).toMatch(/\breturn\b/);
-    }
+    const pos = body.indexOf('shouldAbandonAgentRun(');
+    expect(pos, 'shouldAbandonAgentRun( must exist in finalizeAgentRunCommon').toBeGreaterThan(-1);
+    expect(guardPos, 'pause guard must precede the host-shutdown abandon gate').toBeLessThan(pos);
+    expect(body.slice(guardPos, pos), 'pause guard must return before the host-shutdown abandon gate').toMatch(/\breturn\b/);
   });
 
   // The behavioral counterpart of this guard lives in

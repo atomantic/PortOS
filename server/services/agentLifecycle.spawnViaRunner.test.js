@@ -53,7 +53,6 @@ vi.mock('./agentRunTracking.js', () => ({
 vi.mock('./agentFinalization.js', () => ({
   dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn(),
   retireDeadAgent: vi.fn().mockResolvedValue({ success: false }),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
@@ -116,27 +115,15 @@ vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn().mockResolved
 vi.mock('../lib/gitCommitProbe.js', async importOriginal => ({
   ...(await importOriginal()), committedDuringRun: vi.fn(async () => true),
 }));
-vi.mock('./toolStateMachine.js', () => ({
-  createToolExecution: vi.fn(() => ({ id: 'exec-1' })),
-  startExecution: vi.fn(),
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn(),
-}));
-vi.mock('./executionLanes.js', () => ({
-  determineLane: vi.fn(() => 'standard'),
-  acquire: vi.fn(() => ({ success: true })),
-  release: vi.fn(),
-}));
 
 import { handleAgentCompletion, spawnViaRunner } from './agentLifecycle.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from './cosRunnerClient.js';
 import { completeAgent, updateAgent } from './cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { finalizeAgent, releaseAgentLane, retireDeadAgent } from './agentFinalization.js';
+import { finalizeAgent, retireDeadAgent } from './agentFinalization.js';
 import { getAgent, getAgentRecord } from './cosAgentLifecycle.js';
 import { getTaskById, updateTask } from './cosTaskStore.js';
-import { release } from './executionLanes.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { handleOrphanedTask } from './agentManagement.js';
@@ -157,7 +144,7 @@ it('settles an interrupted TUI startup as a restart interruption, charging the t
   vi.mocked(getTaskById).mockResolvedValue(task);
   runnerAgents.set('agent-interrupted', {
     task, runId: 'run-interrupted', workspacePath: '/tmp/ws', startedAt: Date.now(),
-    laneName: 'standard', startupErrorAnalysis, recoveredFromRunner: true,
+    startupErrorAnalysis, recoveredFromRunner: true,
   });
   await handleAgentCompletion('agent-interrupted', 143, false, 1000);
 
@@ -171,7 +158,6 @@ it('settles an interrupted TUI startup as a restart interruption, charging the t
   }));
   expect(handleOrphanedTask).toHaveBeenCalledWith('task-interrupted', 'agent-interrupted', getTaskById,
     expect.objectContaining({ interrupted: true }));
-  expect(release).toHaveBeenCalledWith('agent-interrupted');
   expect(committedDuringRun).not.toHaveBeenCalled();
   expect(runnerAgents.has('agent-interrupted')).toBe(false);
 });
@@ -235,8 +221,6 @@ function runnerOpts() {
     provider: { id: 'grok-cli', name: 'Grok Build CLI', command: 'grok', envVars: {} },
     runId: 'run-1',
     cliConfig: { command: 'grok', args: [] },
-    executionId: 'exec-1',
-    laneName: 'standard',
   };
 }
 
@@ -321,20 +305,6 @@ describe('spawnViaRunner — the runner rejects the spawn', () => {
     expect(runnerAgents.has('agent-1')).toBe(false);
   });
 
-  it('releases the lane and tool execution', async () => {
-    vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(refusal());
-
-    await spawnViaRunner('agent-1', { id: 'task-1' }, runnerOpts());
-
-    expect(releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({
-      agentId: 'agent-1',
-      success: false,
-      executionId: 'exec-1',
-      laneName: 'standard',
-      errorExecutionMessage: expect.stringContaining('Command not allowed: grok'),
-    }));
-  });
-
   it('cancels the 3s initialization timer so the record cannot flip to "working"', async () => {
     vi.useFakeTimers();
     vi.mocked(spawnAgentViaRunner).mockRejectedValueOnce(refusal());
@@ -391,7 +361,6 @@ describe('spawnViaRunner — an ambiguous spawn failure', () => {
     expect(updateAgent).toHaveBeenCalledWith('agent-1', { pid: 4242 });
     expect(finalizeAgent).not.toHaveBeenCalled();
     expect(releaseRetryHold).not.toHaveBeenCalled();
-    expect(releaseAgentLane).not.toHaveBeenCalled();
   });
 
   it('still finalizes as spawn-rejected when the runner does not have the agent', async () => {
