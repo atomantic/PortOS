@@ -27,7 +27,10 @@ describe('localModelHeuristics', () => {
         'lfm2.5-thinking:1.2b',
         'lfm3:1.7b',
         'lfm3-audio',
+        'lfm3-omni',
         'ornith:35b',
+        'ornith-1.5:35b',
+        'flint:40b',
         'muse-glimmer:30b',
         'north-mini-code-1.0',
         'olmo-3.1:32b-instruct',
@@ -87,7 +90,9 @@ describe('localModelHeuristics', () => {
         // Glues the `embedding` marker straight onto the family, so the anchored
         // marker alone misses it — it must never be offered for generation.
         'embeddinggemma:300m',
+        'embeddinggemma-2:270m',
         'lmstudio-community/embeddinggemma-300m-qat-GGUF',
+        'ggml-org/embeddinggemma-2-GGUF',
         // No `embed` marker anywhere in the id — matched by FAMILY, or the
         // assessment sweep benchmarks it and Ollama answers every sample with
         // `400 "all-minilm:latest" does not support chat`.
@@ -170,7 +175,11 @@ describe('localModelHeuristics', () => {
         'qwen3-vl:8b',
         'minicpm-v4.6:1b',
         'nemotron-3.5-bolt',
+        'nemotron-3.5-bolt:e4b',
+        'nemotron-3.5-super',
+        'ornith-1.5:9b',
         'lfm3-vl:2b',
+        'lfm3-omni',
       ]) {
         expect(isVisionModel(id), id).toBe(true);
       }
