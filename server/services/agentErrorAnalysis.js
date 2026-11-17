@@ -1486,15 +1486,6 @@ ${unblocks}`;
     loopReason
   });
 
-  cosEvents.emit('investigation:created', {
-    investigationTaskId: investigationTask.id,
-    failedAgentId: agentId,
-    originalTaskId: originalTask.id,
-    errorAnalysis,
-    approvalRequired,
-    loopReason
-  });
-
   return investigationTask;
 }
 

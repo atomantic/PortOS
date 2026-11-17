@@ -8,7 +8,6 @@
 
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import EventEmitter from 'events';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
 const ACCOUNTS_FILE = join(PATHS.agentPersonalities, 'accounts.json');
@@ -28,13 +27,7 @@ function maskAccountCredentials(credentials) {
   };
 }
 
-// Event emitter for account changes
-export const platformAccountEvents = new EventEmitter();
 export const invalidateCache = store.invalidateCache;
-
-export function notifyChanged(action = 'update', accountId = null) {
-  platformAccountEvents.emit('changed', { action, accountId, timestamp: Date.now() });
-}
 
 /**
  * Get all platform accounts
@@ -100,7 +93,6 @@ export async function createAccount(accountData) {
   };
 
   await store.mutate((data) => { data.accounts[id] = account; });
-  notifyChanged('create', id);
 
   console.log(`🔗 Created platform account: ${account.platform}/${account.credentials.username} (${id})`);
   return {
@@ -130,7 +122,6 @@ export async function updateAccountStatus(id, status, platformData = null) {
   });
 
   if (!found) return null;
-  notifyChanged('update', id);
 
   return getAccountById(id);
 }
@@ -164,7 +155,6 @@ export async function deleteAccount(id) {
   });
 
   if (!account) return false;
-  notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted platform account: ${account.platform}/${account.credentials.username} (${id})`);
   return true;

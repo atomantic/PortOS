@@ -714,10 +714,6 @@ async function completeTurn(turnId, result, generation) {
     },
   });
   emitMindStatus(updated.state);
-  cosEvents.emit('persistent-mind:turn-completed', {
-    turnId,
-    providerId: updated.state.lastCompletedTurnId === turnId ? result?.providerId || null : null,
-  });
 }
 
 // Admission refusals have no active turn to park. Waiting preserves the last

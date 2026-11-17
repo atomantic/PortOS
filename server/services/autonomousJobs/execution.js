@@ -14,7 +14,6 @@ import { spawn } from '../../lib/childProcess.js';import { PATHS } from '../../l
 import { prepareCliSpawn, killProcessTree } from '../../lib/bufferedSpawn.js'
 import { withSpawnCwdEnv } from '../../lib/spawnCwd.js'
 import { validateCommand, redactOutput, ALLOWED_COMMANDS_SORTED } from '../../lib/commandSecurity.js'
-import { cosEvents } from '../cosEvents.js'
 import { withLock } from './constants.js'
 import { loadJobs, saveJobs } from './store.js'
 import { recordJobExecution } from './crud.js'
@@ -57,7 +56,6 @@ async function executeScriptJobAdmitted(job, { manual = false } = {}) {
   await recordJobExecution(job.id).catch(err => { maintenance.markCurrentUnsettled(); throw err })
 
   console.log(`✅ Script job completed: ${job.name}`)
-  cosEvents.emit('jobs:script-executed', { id: job.id, result })
 
   return result
 }
@@ -149,12 +147,10 @@ async function executeShellJobAdmitted(job) {
             j.runCount = (j.runCount || 0) + 1
             j.updatedAt = j.lastRun
             await saveJobs(data)
-            cosEvents.emit('jobs:executed', { id: job.id, runCount: j.runCount })
           }
         })
       }
       persist().then(() => {
-        cosEvents.emit('jobs:shell-executed', { id: job.id, exitCode: code })
         if (code !== 0) {
           const message = killed ? `timed out after ${timeoutMs}ms`
             : spawnError ? `spawn error: ${spawnError.message}` : `exited with code ${code}: ${redactedOutput.substring(0, 500)}`

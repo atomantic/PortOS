@@ -919,7 +919,6 @@ export async function evaluateTasks(options) {
       `All ${state.config.maxConcurrentAgents} agent slots occupied`,
       { running: runningAgents, max: state.config.maxConcurrentAgents }
     );
-    cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
     return;
   }
 
@@ -1068,10 +1067,6 @@ export async function evaluateTasks(options) {
   // Emit awaiting approval count if any
   if (cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
-    cosEvents.emit('evaluation', {
-      message: 'Tasks awaiting approval',
-      awaitingApproval: cosTaskData.awaitingApproval.length
-    });
   }
 
   if (tasksToSpawn.length === 0) {
@@ -1087,7 +1082,6 @@ export async function evaluateTasks(options) {
       idleReason,
       { pendingUser: pendingUserCount, pendingSystem: pendingSystemCount, awaitingApproval: awaitingCount, runningAgents }
     );
-    cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
   }
 }
 

@@ -28,7 +28,6 @@ vi.mock('./userTimezone.js', () => ({
 const {
   createSchedule,
   init,
-  scheduleEvents,
   registerActionExecutor,
 } = await import('./automationScheduler.js');
 
@@ -131,7 +130,7 @@ describe('automationScheduler interval schedules across restarts (#12624)', () =
     };
 
     const executed = [];
-    scheduleEvents.on('execute', (e) => executed.push(e));
+    registerActionExecutor(async (e) => { executed.push(e); });
 
     // Boot 1 at T = 0
     await init();

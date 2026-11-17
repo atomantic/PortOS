@@ -9,7 +9,6 @@
 import { join } from 'path';
 import { dashboardEvents, scheduleDashboardExpiry } from './dashboardEvents.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { cosEvents } from './cosEvents.js';
 
 const DATA_DIR = PATHS.cos;
 const DECISION_FILE = join(DATA_DIR, 'decisions.json');
@@ -100,7 +99,6 @@ export async function recordDecision(type, reason, context = {}) {
     data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
 
     await saveDecisions(data);
-    cosEvents.emit('decision', { ...prev });
     return prev;
   }
 
@@ -126,9 +124,6 @@ export async function recordDecision(type, reason, context = {}) {
   data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
 
   await saveDecisions(data);
-
-  // Emit event for real-time updates
-  cosEvents.emit('decision', decision);
 
   return decision;
 }

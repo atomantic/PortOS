@@ -36,7 +36,6 @@ export const registerAppHandlers = (socket, io) => {
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [detect:start]: ${message}`);
-      socket.emit('error:server', { message });
       socket.emit('detect:complete', { success: false, error: message });
     }
   });
@@ -63,15 +62,13 @@ export const registerAppHandlers = (socket, io) => {
         overwriteEcosystem,
         onStep: ({ step, status, data }) => {
           socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
-        },
-        onAnalyzed: (payload) => socket.emit('standardize:analyzed', payload)
+        }
       }));
 
       socket.emit('standardize:complete', outcome);
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [standardize:start]: ${message}`);
-      socket.emit('error:server', { message });
       socket.emit('standardize:complete', { success: false, error: message });
     } finally {
       if (resource) standardizingRepos.delete(resource);

@@ -8,7 +8,6 @@
 import { readFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import EventEmitter from 'events';
 import { ensureDir, getDateString, atomicWrite, PATHS } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 
@@ -23,9 +22,6 @@ const DAY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.json$/;
 // concurrent logActivity calls for one file serialize (no lost entries) while
 // different agents or days still write in parallel.
 const queueActivityWrite = createKeyedFileWriteQueue();
-
-// Event emitter for activity events
-export const activityEvents = new EventEmitter();
 
 // Cache for today's activity (per account)
 const todayCache = new Map();
@@ -107,9 +103,6 @@ export async function logActivity(activity) {
 
   // Invalidate cache for this account
   todayCache.delete(`${accountId}-${action}`);
-
-  // Emit event
-  activityEvents.emit('activity', { agentId, ...entry });
 
   console.log(`📊 Activity logged: ${agentId}/${action} - ${status}`);
   return entry;

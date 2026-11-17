@@ -1,6 +1,6 @@
 /** Consecutive-failure backoff and auto-park state for scheduled task types. */
 
-import { cosEvents, emitLog } from './cosEvents.js';
+import { emitLog } from './cosEvents.js';
 // Resolves a pre-rename task type (TASK_TYPE_RENAMES) to the ledger key the
 // rename migration moved its history to.
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
@@ -130,7 +130,6 @@ export async function recordTaskTypeFailure(taskType, appId = null, { errorCateg
   );
 
   if (justParked) {
-    cosEvents.emit('schedule:failure-parked', { taskType, appId, consecutiveFailures: record.consecutiveFailures, reason: record.failureParkReason });
     await notifyTaskTypeFailurePark(taskType, appId, record).catch((err) => {
       emitLog('warn', `Failure-park notification failed for ${taskType}: ${err.message}`, { taskType, appId }, '📅 TaskSchedule');
     });

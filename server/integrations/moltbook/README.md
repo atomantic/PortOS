@@ -107,10 +107,10 @@ The Moltbook integration is used by the automation scheduler to execute schedule
 
 ```javascript
 import { createMoltbookClient } from './integrations/moltbook/index.js';
-import { scheduleEvents } from './services/automationScheduler.js';
+import { registerActionExecutor } from './services/automationScheduler.js';
 
-// Listen for scheduled action executions
-scheduleEvents.on('execute', async ({ schedule }) => {
+// Register the executor the scheduler calls for each due action
+registerActionExecutor(async ({ schedule }) => {
   const account = await getAccountWithCredentials(schedule.accountId);
   const client = createMoltbookClient(account.credentials.apiKey);
 

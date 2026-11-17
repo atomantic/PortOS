@@ -11,7 +11,6 @@ import { join, basename, resolve, relative, isAbsolute, sep } from 'path'
 import { existsSync } from 'fs'
 import { readdir, stat, copyFile, link, rm, rmdir } from 'fs/promises'
 import { dirSize, ensureDir } from '../lib/fileUtils.js'
-import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import {
   dirIsMlx, selectPrimaryGguf, selectProjectorGguf, isShardedGguf, lmStudioPublisherRepo
@@ -266,7 +265,6 @@ async function downloadModel(modelId) {
   }
 
   console.log(`📥 Downloading model: ${modelId}`)
-  cosEvents.emit('lmstudio:downloadRequested', { modelId })
 
   const response = await lmStudioRequest('/api/v1/models/download', {
     method: 'POST',
@@ -309,7 +307,6 @@ async function loadModel(modelId) {
   await getLoadedModels(true)
 
   console.log(`📦 Model loaded: ${modelId}`)
-  cosEvents.emit('lmstudio:modelLoaded', { modelId })
   invalidateModelObservation('loaded-models')
   invalidateModelObservation('provider-readiness')
 
@@ -401,7 +398,6 @@ async function loadModelWithArgs(modelId, args = []) {
   if (signature) tunedLoads.set(modelId, signature)
   else tunedLoads.delete(modelId)
   console.log(`📦 LM Studio loaded ${modelId}${signature ? ` (${signature})` : ` without ${carried}`}`)
-  cosEvents.emit('lmstudio:modelLoaded', { modelId })
   invalidateModelObservation('loaded-models')
   invalidateModelObservation('provider-readiness')
   return { success: true }
@@ -445,7 +441,6 @@ async function unloadModel(modelId) {
   // Whatever flags it was loaded with left with it.
   tunedLoads.delete(modelId)
   console.log(`📤 Model unloaded: ${modelId}`)
-  cosEvents.emit('lmstudio:modelUnloaded', { modelId })
   invalidateModelObservation('loaded-models')
   invalidateModelObservation('provider-readiness')
 
@@ -922,7 +917,6 @@ async function deleteModel(modelId) {
   // Prune the now-empty publisher dir (rmdir fails harmlessly if not empty).
   await rmdir(join(dir, '..')).catch(() => {})
   console.log(`🗑️ LM Studio deleted: ${modelId} (${dir})`)
-  cosEvents.emit('lmstudio:modelDeleted', { modelId })
   invalidateModelObservation('loaded-models')
   invalidateModelObservation('provider-readiness')
   return { success: true, modelId }

@@ -568,7 +568,6 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
       emitLog('info', `🔀 branch-reconcile retained ${row.branch || row.path || 'repository scan'}: ${row.reason}${row.nextAction ? ` — ${row.nextAction}` : ''}`, { appId });
     }
   }
-  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts, skipCauses });
   return record;
 }
 

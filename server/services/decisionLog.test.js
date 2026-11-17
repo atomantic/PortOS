@@ -44,7 +44,6 @@ describe('decisionLog.js', () => {
   let savedData;
   let writeFile;
   let readJSONFile;
-  let cosEvents;
   let recordDecision;
   let getRecentDecisions;
   let getDecisionSummary;
@@ -56,8 +55,6 @@ describe('decisionLog.js', () => {
     writeFile = fsPromises.writeFile;
     const fileUtils = await import('../lib/fileUtils.js');
     readJSONFile = fileUtils.readJSONFile;
-    const cosEventsModule = await import('./cosEvents.js');
-    cosEvents = cosEventsModule.cosEvents;
   });
 
   beforeEach(async () => {
@@ -91,8 +88,6 @@ describe('decisionLog.js', () => {
     writeFile = fsPromises.writeFile;
     const fileUtils = await import('../lib/fileUtils.js');
     readJSONFile = fileUtils.readJSONFile;
-    const cosEventsModule = await import('./cosEvents.js');
-    cosEvents = cosEventsModule.cosEvents;
     const decisionLogModule = await import('./decisionLog.js');
     recordDecision = decisionLogModule.recordDecision;
     getRecentDecisions = decisionLogModule.getRecentDecisions;
@@ -205,17 +200,6 @@ describe('decisionLog.js', () => {
 
       expect(savedData.stats.totalDecisions).toBe(1);
       expect(savedData.stats.byType[DECISION_TYPES.TASK_SKIPPED]).toBe(1);
-    });
-
-    it('should emit decision event', async () => {
-      readJSONFile.mockResolvedValue(makeDecisionData());
-
-      await recordDecision(DECISION_TYPES.TASK_SELECTED, 'Test', {});
-
-      expect(cosEvents.emit).toHaveBeenCalledWith('decision', expect.objectContaining({
-        type: DECISION_TYPES.TASK_SELECTED,
-        reason: 'Test'
-      }));
     });
   });
 

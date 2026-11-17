@@ -301,7 +301,6 @@ async function recordJobExecution(jobId) {
     await saveJobs(data)
 
     console.log(`🤖 Job executed: ${job.name} (run #${job.runCount})`)
-    cosEvents.emit('jobs:executed', { id: jobId, runCount: job.runCount })
 
     return job
   })
