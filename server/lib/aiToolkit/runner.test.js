@@ -21,7 +21,15 @@ vi.mock('child_process', async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
+// Passthrough, so the run-list tests can count metadata.json reads.
+vi.mock('fs/promises', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
+
 const { spawn } = await import('child_process');
+const fsPromises = await import('fs/promises');
+const { atomicWrite } = await import('./internal/atomicWrite.js');
 const { createRunnerService } = await import('./runner.js');
 const { createRunLifecycle } = await import('./internal/runLifecycle.js');
 const { streamTransportDispatcher } = await import('./internal/streamTransport.js');
@@ -2174,5 +2182,85 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     expect(persisted.errorCategory).toBe('spawn-error');
 
     await rm(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe('AI Toolkit run history listing (#16557)', () => {
+  const tempDirs = [];
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    for (const dir of tempDirs.splice(0)) await rm(dir, { recursive: true, force: true });
+  });
+
+  const setup = async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-run-list-'));
+    tempDirs.push(dataDir);
+    const runsDir = join(dataDir, 'runs');
+    const seed = async (id, patch = {}) => {
+      await mkdir(join(runsDir, id), { recursive: true });
+      const record = { id, source: 'devtools', startTime: '2026-01-01T00:00:00.000Z', endTime: '2026-01-01T00:01:00.000Z', success: true, ...patch };
+      await atomicWrite(join(runsDir, id, 'metadata.json'), record);
+      return record;
+    };
+    const metadataReads = () => fsPromises.readFile.mock.calls.filter(([path]) => String(path).endsWith('metadata.json')).length;
+    return { dataDir, runsDir, seed, metadataReads, runner: createRunnerService({ dataDir }) };
+  };
+  const minute = (n) => `2026-01-01T00:${String(n).padStart(2, '0')}:00.000Z`;
+
+  it('serves an unchanged run store from memory with the same page, order and totals', async () => {
+    const { seed, metadataReads, runner } = await setup();
+    for (let i = 0; i < 12; i++) await seed(`run-${i}`, { startTime: minute(i), source: i % 3 ? 'devtools' : 'pipeline' });
+    const first = await runner.listRuns(5, 2, 'all');
+    expect(first.total).toBe(12);
+    expect(first.runs.map(run => run.id)).toEqual(['run-9', 'run-8', 'run-7', 'run-6', 'run-5']);
+    const before = metadataReads();
+    expect(await runner.listRuns(5, 2, 'all')).toEqual(first);
+    expect((await runner.listRuns(50, 0, 'pipeline')).runs.map(run => run.id)).toEqual(['run-9', 'run-6', 'run-3', 'run-0']);
+    expect(metadataReads()).toBe(before);
+  });
+
+  it('reflects records finalized, patched, deleted or created since the last listing', async () => {
+    const { runsDir, seed, runner } = await setup();
+    await seed('finished', { startTime: minute(1) });
+    await seed('open', { startTime: minute(2), endTime: null, success: null });
+    await seed('failed', { startTime: minute(3), success: false });
+    await seed('doomed', { startTime: minute(4) });
+    await runner.listRuns();
+
+    // In-process finalize through the toolkit's own API run path.
+    const reader = { read: vi.fn(async () => ({ done: true })), cancel: vi.fn(), releaseLock: vi.fn() };
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, body: { getReader: () => reader } })));
+    const settled = new Promise(resolve => runner.executeApiRun({ runId: 'open',
+      provider: { id: 'example', endpoint: 'https://api.example.com/v1' }, prompt: 'Example', onSettled: resolve }));
+    await settled;
+    // A host service outside the toolkit patching an already-finished record.
+    const patched = JSON.parse(await readFile(join(runsDir, 'finished', 'metadata.json'), 'utf8'));
+    await atomicWrite(join(runsDir, 'finished', 'metadata.json'), { ...patched, qualityOutcome: 'accepted' });
+    await runner.deleteRun('doomed');
+    // Another process creating a run directory.
+    await seed('elsewhere', { startTime: minute(5) });
+
+    const { runs, total } = await runner.listRuns();
+    expect(total).toBe(4);
+    const byId = Object.fromEntries(runs.map(run => [run.id, run]));
+    expect(Object.keys(byId)).toEqual(['elsewhere', 'failed', 'open', 'finished']);
+    expect(byId.open.success).toBe(true);
+    expect(byId.open.endTime).toEqual(expect.any(String));
+    expect(byId.finished.qualityOutcome).toBe('accepted');
+
+    expect(await runner.deleteFailedRuns()).toBe(1);
+    expect((await runner.listRuns()).runs.map(run => run.id)).toEqual(['elsewhere', 'open', 'finished']);
+  });
+
+  it('keeps a record that was unreadable once visible after it is written, and hands out copies', async () => {
+    const { runsDir, seed, runner } = await setup();
+    await mkdir(join(runsDir, 'late'), { recursive: true });
+    await writeFile(join(runsDir, 'late', 'metadata.json'), '{"id": "la');
+    expect((await runner.listRuns()).total).toBe(0);
+    await seed('late');
+    const { runs } = await runner.listRuns();
+    expect(runs.map(run => run.id)).toEqual(['late']);
+    runs[0].success = false;
+    expect((await runner.listRuns()).runs[0].success).toBe(true);
   });
 });

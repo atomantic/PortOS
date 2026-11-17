@@ -99,7 +99,6 @@ export const runPreRouteSequence = async ({
   warmProviders,
   ensureLocalLlmBackend,
   registerRunners,
-  recoverInterruptedRuns,
   initAutoFixer,
   initTaskLearning,
   startSpawner
@@ -117,8 +116,6 @@ export const runPreRouteSequence = async ({
 
   registerRunners(aiToolkit);
   console.log('🔧 Registered PortOS CLI + TUI runners via aiToolkit runner extension points');
-
-  await bestEffort(recoverInterruptedRuns(), logFailure('Interrupted AI run recovery failed'));
 
   initAutoFixer();
   initTaskLearning();
@@ -465,11 +462,18 @@ export const runPostRouteSequence = ({
  * library is the slowest part of boot. Until it finishes the gallery serves the
  * previous boot's rows. Its completed-hooks were subscribed before `listen()`
  * (the database phase), so nothing generated meanwhile is missed.
+ *
+ * Interrupted-run recovery (#16557) starts beside it and is never awaited: it
+ * reads every AI run record, which grows without bound. It only closes runs
+ * whose owning process and child are proven dead, so nothing this process
+ * starts meanwhile can be touched, and a run list served before it finishes
+ * shows those runs as still open for a moment.
  */
 export const runPostListenSequence = ({
   announceListening,
   setupProcessErrorHandlers,
   reconcileMediaAssetIndex,
+  recoverInterruptedRuns,
   backfillOriginInstanceId,
   relayUnloggedBrainRecords,
   startPolling,
@@ -481,6 +485,7 @@ export const runPostListenSequence = ({
   announceListening();
   setupProcessErrorHandlers();
   bestEffort(reconcileMediaAssetIndex(), logFailure('Media asset index boot reconcile failed'));
+  bestEffort(recoverInterruptedRuns(), logFailure('Interrupted AI run recovery failed'));
   return bestEffort(
     Promise.resolve(backfillOriginInstanceId()).then(() => {
       if (isStopping()) return;

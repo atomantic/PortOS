@@ -1,6 +1,6 @@
 import { runOwnership, runChildIdentity } from './internal/runOwnership.js';
 import { resolveExecutionOptions, executionOptionsError } from './internal/executionOptions.js';
-import { mkdir, readFile, readdir, rm } from 'fs/promises';
+import { mkdir, readFile, readdir, rm, stat } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
 import { evaluateSecretEndpoint } from './endpointGuard.js';
 import { existsSync } from 'fs';
@@ -152,6 +152,57 @@ export function createRunnerService(config = {}) {
     if (!existsSync(RUNS_PATH)) {
       await mkdir(RUNS_PATH, { recursive: true });
     }
+  }
+
+  // Parsed run records keyed by id, each tagged with the stat signature of the
+  // metadata.json it came from. The run store is unbounded, so listing re-reads
+  // only records whose file changed since the last scan. Validation is by
+  // stat, not by "terminal records never change": host services outside this
+  // toolkit (usage reconcile, agent run tracking, migrations in another
+  // process) patch finished records, and a cache that trusted them would serve
+  // stale fields. atomicWrite renames a new file into place, so every rewrite
+  // changes the inode as well as the mtime.
+  const runRecordCache = new Map();
+  const RUN_SCAN_CONCURRENCY = 64;
+  const statSignature = (info) => `${info.ino}:${info.size}:${info.mtimeNs}`;
+
+  async function readRunRecord(runId) {
+    const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
+    const info = await stat(metadataPath, { bigint: true }).catch(() => null);
+    if (!info) {
+      runRecordCache.delete(runId);
+      return null;
+    }
+    const signature = statSignature(info);
+    const cached = runRecordCache.get(runId);
+    if (cached?.signature === signature) return cached.metadata;
+    const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+    // A record caught mid-write parses as {} and is not cached, so the next
+    // scan reads it again instead of hiding the run until its next rewrite.
+    if (!metadata.id) {
+      runRecordCache.delete(runId);
+      return null;
+    }
+    runRecordCache.set(runId, { signature, metadata });
+    return metadata;
+  }
+
+  // Every run record on disk as { runId, metadata }, in directory order. One
+  // readdir per call picks up directories created by other processes; ids that
+  // vanished are evicted.
+  async function scanRunRecords() {
+    await ensureRunsDir();
+    const entries = await readdir(RUNS_PATH, { withFileTypes: true });
+    const runIds = entries.filter(e => e.isDirectory()).map(e => e.name);
+    const present = new Set(runIds);
+    for (const runId of runRecordCache.keys()) if (!present.has(runId)) runRecordCache.delete(runId);
+    const records = [];
+    for (let i = 0; i < runIds.length; i += RUN_SCAN_CONCURRENCY) {
+      const batch = runIds.slice(i, i + RUN_SCAN_CONCURRENCY);
+      const parsed = await Promise.all(batch.map(readRunRecord));
+      parsed.forEach((metadata, j) => { if (metadata) records.push({ runId: batch[j], metadata }); });
+    }
+    return records;
   }
 
   function getMimeType(filepath) {
@@ -1000,19 +1051,7 @@ export function createRunnerService(config = {}) {
     },
 
     async listRuns(limit = 50, offset = 0, source = 'all') {
-      await ensureRunsDir();
-
-      const entries = await readdir(RUNS_PATH, { withFileTypes: true });
-      const runIds = entries.filter(e => e.isDirectory()).map(e => e.name);
-
-      const runs = [];
-      for (const runId of runIds) {
-        const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
-        if (existsSync(metadataPath)) {
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          if (metadata.id) runs.push(metadata);
-        }
-      }
+      const runs = (await scanRunRecords()).map(({ metadata }) => metadata);
 
       let filteredRuns = runs;
       if (source !== 'all') {
@@ -1024,9 +1063,10 @@ export function createRunnerService(config = {}) {
 
       filteredRuns.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
 
+      // Copies, so a caller that decorates a page cannot edit the cached records.
       return {
         total: filteredRuns.length,
-        runs: filteredRuns.slice(offset, offset + limit)
+        runs: filteredRuns.slice(offset, offset + limit).map(run => structuredClone(run))
       };
     },
 
@@ -1041,25 +1081,17 @@ export function createRunnerService(config = {}) {
       if (!runDir) return false;
 
       await withAssetPublication(() => rm(runDir, { recursive: true }));
+      runRecordCache.delete(runId);
       return true;
     },
 
     async deleteFailedRuns() {
-      await ensureRunsDir();
-
-      const entries = await readdir(RUNS_PATH, { withFileTypes: true });
-      const runIds = entries.filter(e => e.isDirectory()).map(e => e.name);
-
       let deletedCount = 0;
-      for (const runId of runIds) {
-        const metadataPath = join(RUNS_PATH, runId, 'metadata.json');
-        if (existsSync(metadataPath)) {
-          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-          if (metadata.success === false) {
-            await withAssetPublication(() => rm(join(RUNS_PATH, runId), { recursive: true }));
-            deletedCount++;
-          }
-        }
+      for (const { runId, metadata } of await scanRunRecords()) {
+        if (metadata.success !== false) continue;
+        await withAssetPublication(() => rm(join(RUNS_PATH, runId), { recursive: true }));
+        runRecordCache.delete(runId);
+        deletedCount++;
       }
 
       return deletedCount;

@@ -82,7 +82,6 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       warmProviders: step('warmProviders', () => Promise.resolve([])),
       ensureLocalLlmBackend: step('ensureLocalLlmBackend'),
       registerRunners: step('registerRunners'),
-      recoverInterruptedRuns: step('recoverInterruptedRuns', () => Promise.resolve()),
       initAutoFixer: step('initAutoFixer'),
       initTaskLearning: step('initTaskLearning'),
       startSpawner: step('startSpawner', () => Promise.resolve()),
@@ -102,7 +101,6 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       'warmProviders',
       'ensureLocalLlmBackend',
       'registerRunners',
-      'recoverInterruptedRuns',
       'initAutoFixer',
       'initTaskLearning',
       'startSpawner'
@@ -121,7 +119,6 @@ describe('runPreRouteSequence — pre-route boot order', () => {
       'registerToolkitShims',
       'warmProviders',
       'registerRunners',
-      'recoverInterruptedRuns',
       'initTaskLearning'
     ]);
   });
@@ -140,19 +137,6 @@ describe('runPreRouteSequence — pre-route boot order', () => {
     expect(deps.registerToolkitShims).toHaveBeenCalledWith(aiToolkit);
     expect(deps.warmProviders).toHaveBeenCalledWith(aiToolkit);
     expect(deps.registerRunners).toHaveBeenCalledWith(aiToolkit);
-  });
-
-  it('finishes local interrupted-run recovery before arming agents', async () => {
-    const recorder = createRecorder();
-    const gate = deferred();
-    const deps = buildDeps(recorder, { recoverInterruptedRuns: recorder.step('recoverInterruptedRuns', () => gate.promise) });
-    const done = runPreRouteSequence(deps);
-    await flush();
-    expect(recorder.calls.at(-1)).toBe('recoverInterruptedRuns');
-    expect(deps.startSpawner).not.toHaveBeenCalled();
-    gate.resolve();
-    await done;
-    expect(deps.startSpawner).toHaveBeenCalledOnce();
   });
 
   it('awaits the data migrations before the toolkit reads its config files', async () => {
@@ -945,6 +929,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       announceListening: step('announceListening'),
       setupProcessErrorHandlers: step('setupProcessErrorHandlers'),
       reconcileMediaAssetIndex: step('reconcileMediaAssetIndex', () => Promise.resolve()),
+      recoverInterruptedRuns: step('recoverInterruptedRuns', () => Promise.resolve()),
       backfillOriginInstanceId: step('backfillOriginInstanceId', () => Promise.resolve()),
       relayUnloggedBrainRecords: step('relayUnloggedBrainRecords', () => Promise.resolve(0)),
       startPolling: step('startPolling'),
@@ -961,6 +946,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
       'announceListening',
       'setupProcessErrorHandlers',
       'reconcileMediaAssetIndex',
+      'recoverInterruptedRuns',
       'backfillOriginInstanceId',
       'relayUnloggedBrainRecords',
       'startPolling',
@@ -972,7 +958,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
   it('under the boot smoke (#8343), never starts peer polling or sync', async () => {
     const recorder = createRecorder();
     await runPostListenSequence(gateStepsForSmokeBoot(buildDeps(recorder), 'postListen', true));
-    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'backfillOriginInstanceId']);
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'recoverInterruptedRuns', 'backfillOriginInstanceId']);
   });
 
   it('starts the media index sweep after listening and never waits on it (#16556)', async () => {
@@ -983,6 +969,27 @@ describe('runPostListenSequence — inside the listen callback', () => {
     }));
     expect(recorder.calls.indexOf('reconcileMediaAssetIndex')).toBeGreaterThan(recorder.calls.indexOf('announceListening'));
     expect(recorder.calls).toContain('startBrainScheduler');
+  });
+
+  it('recovers interrupted AI runs after listening and never waits on it (#16557)', async () => {
+    const recorder = createRecorder();
+    // A large run store must not hold back peer sync or scheduling.
+    await runPostListenSequence(buildDeps(recorder, {
+      recoverInterruptedRuns: recorder.step('recoverInterruptedRuns', () => deferred().promise)
+    }));
+    expect(recorder.calls.filter(call => call === 'recoverInterruptedRuns')).toHaveLength(1);
+    expect(recorder.calls.indexOf('recoverInterruptedRuns')).toBeGreaterThan(recorder.calls.indexOf('announceListening'));
+    expect(recorder.calls).toContain('startBrainScheduler');
+  });
+
+  it('logs an interrupted-run recovery failure and keeps booting', async () => {
+    const recorder = createRecorder();
+    await runPostListenSequence(buildDeps(recorder, {
+      recoverInterruptedRuns: recorder.step('recoverInterruptedRuns', () => Promise.reject(new Error('runs unreadable')))
+    }));
+    await flush();
+    expect(recorder.calls).toContain('startBrainScheduler');
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('Interrupted AI run recovery failed: runs unreadable'));
   });
 
   it('logs a media index sweep failure and keeps booting', async () => {
@@ -1020,7 +1027,7 @@ describe('runPostListenSequence — inside the listen callback', () => {
     stopping = true;
     gate.resolve();
     await done;
-    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'backfillOriginInstanceId']);
+    expect(recorder.calls).toEqual(['announceListening', 'setupProcessErrorHandlers', 'reconcileMediaAssetIndex', 'recoverInterruptedRuns', 'backfillOriginInstanceId']);
   });
 
   it('starts peer sync even when the brain relay sweep fails', async () => {
