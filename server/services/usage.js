@@ -1645,11 +1645,15 @@ export async function loadUsage() {
         if (!corrected.has(correction.runId)) continue;
         // Counts and their ledger marker committed first. If this secondary
         // marker fails, the ledger still prevents a duplicate on the next load.
-        const metadata = await readJSONFile(correction.metadataPath, null);
-        if (!metadata) continue;
-        await atomicWrite(correction.metadataPath, {
-          ...metadata, usageReconciled: true, usageReconciledAt: new Date().toISOString(),
-        }).catch((err) => console.error(`❌ Failed to mark usage for run ${correction.runId}: ${err.message}`));
+        try {
+          const metadata = await readJSONFile(correction.metadataPath, null, { strict: true });
+          if (!metadata) continue;
+          await atomicWrite(correction.metadataPath, {
+            ...metadata, usageReconciled: true, usageReconciledAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error(`❌ Failed to mark usage for run ${correction.runId}: ${err.message}`);
+        }
       }
       return committedUsage;
     });
