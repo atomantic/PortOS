@@ -467,6 +467,8 @@ describe('a read whose variable segment can leave the directory the source names
       'two variables': "const read = (dir, name) => readFileSync(join(HERE, dir, name));\nread('fixtures', 'f0.json'); read('.', 'fixtures/f1.json');",
       'a constant array iterated with its index': "const NAMES = ['f0.json', 'f1.json'];\nNAMES.forEach((name, i) => readFileSync(join(FIXTURES, name)));",
       'a constant array handed a one-parameter helper': "const NAMES = ['f0.json', 'f1.json'];\nconst read = (name) => readFileSync(join(FIXTURES, name));\nNAMES.forEach(read);",
+      'a suffix after the variable': "for (const stem of ['f0', 'f1']) readFileSync(`${FIXTURES}/${stem}.json`);",
+      'a suffix after a helper parameter': "const read = (stem) => readFileSync(HERE + '/fixtures/' + stem + '.json');\nread('f0'); read('f1');",
       'a helper called by another helper': "const read = (name) => readFileSync(join(FIXTURES, name));\nconst both = (stem) => read(`${stem}.json`);\nboth('f0'); both('f1');",
       'a binding inside the helper': "const read = (name) => { const file = join(FIXTURES, name); return readFileSync(file); };\nread('f0.json'); read('f1.json');",
     };
@@ -482,7 +484,24 @@ describe('a read whose variable segment can leave the directory the source names
       ["readFileSync(join(FIXTURES, 'LICENSE'));", 'server/lib/fixtures/LICENSE'],
       ["const read = (name) => readFileSync(new URL(name, import.meta.url));\nread('space%20name.txt');", 'server/lib/space name.txt'],
       ["const read = (name) => readFileSync(new URL(name, import.meta.url));\nread('./fixture.txt?raw');", 'server/lib/fixture.txt'],
+      // String concatenation continues the last segment unless a separator is written, and only join() keeps a trailing one.
+      ["readFileSync(`${join(FIXTURES, 'f0')}.json`);", 'server/lib/fixtures/f0.json'],
+      ["readFileSync(join(HERE, 'fixtures/') + 'f0.json');", 'server/lib/fixtures/f0.json'],
+      // A URL resolves beside a base that does not end in a separator, inside one that does.
+      ["readFileSync(new URL('fixture.txt', pathToFileURL(FIXTURES)));", 'server/lib/fixture.txt'],
+      ["readFileSync(new URL('f0.json', pathToFileURL(FIXTURES + '/')));", 'server/lib/fixtures/f0.json'],
+      // join() reads a leading separator as a plain segment.
+      ["const read = (p) => readFileSync(join(HERE, p));\nread('/fixture.txt');", 'server/lib/fixture.txt'],
+      ["readFileSync(join(HERE, '/fixture.txt'));", 'server/lib/fixture.txt'],
+      // A helper that only builds the path: what it returns is read, whoever reads it.
+      ["const dirOf = (name) => join(HERE, name);\nfor (const f of readdirSync(dirOf('fixtures'))) readFileSync(join(dirOf('fixtures'), f));", 'server/lib/fixtures/f0.json'],
+      ["const fixture = (name) => join(FIXTURES, name);\nreadFileSync(fixture('LICENSE'));", 'server/lib/fixtures/LICENSE'],
+      // A URL built from text is parsed like any other, and a second declarator is a binding too.
+      ["const read = (n) => readFileSync(new URL(pathToFileURL(FIXTURES).href + '/' + n));\nread('f0.json?raw');", 'server/lib/fixtures/f0.json'],
+      ["const read = (name) => { const a = 1, file = join(FIXTURES, name); return readFileSync(file); };\nread('f0.json');", 'server/lib/fixtures/f0.json'],
+      ["readFileSync(join(FIXTURES, '\\x66\\u0030.json'));", 'server/lib/fixtures/f0.json'],
     ]) expect(keyedOn(body, read), body).toBe(true);
+    expect(keyedOn("readFileSync(resolve(HERE, 'fixtures/') + 'f0.json');", 'server/lib/fixtures/f0.json')).toBe(false);
     // A helper nothing calls reads nothing.
     expect(keyedOn("const read = (p) => readFileSync(join(FIXTURES, p), 'utf8');", 'server/lib/fixtures/f0.json')).toBe(false);
     expect(floorOf("const read = (p) => readFileSync(join(FIXTURES, p), 'utf8');").memoizable).toBe(true);
@@ -497,7 +516,6 @@ describe('a read whose variable segment can leave the directory the source names
       'an awaited listing': "for (const f of (await readdir(FIXTURES)).slice(0, 5)) readFileSync(`${HERE}/fixtures/${f}`);",
       'a literal directory in the joined text': "readdirSync(FIXTURES).forEach((f) => readFileSync(join(HERE, `fixtures/${f}`)));",
       'a literal directory concatenated': "readdirSync(FIXTURES).forEach((f) => readFileSync(HERE + '/fixtures/' + f));",
-      'the parent of a listed entry': "readdirSync(FIXTURES).forEach((f) => readdirSync(dirname(join(FIXTURES, f))));",
       'a generated name': "const probe = existsSync(join(FIXTURES, `${randomUUID()}.json`));",
       'a guarded join': "const read = (...parts) => readFileSync(pathWithin(FIXTURES, ...parts));\nread(process.argv[2]);",
       'a guarded join handed on': "const read = (name) => load(pathWithin(FIXTURES, name));\nread(process.argv[2]);",
@@ -535,7 +553,18 @@ describe('a read whose variable segment can leave the directory the source names
       'a parameter overwritten by an array pattern': ["const read = (p) => { [p] = pick(); return readFileSync(join(FIXTURES, p)); };\nread('f0.json');", through('read', 'server/lib/fixtures')],
       'an argument bound by let and assigned again': ["let name = 'f0.json';\nname = 'f1.json';\nconst read = (p) => readFileSync(join(FIXTURES, p));\nread(name);", through('read', 'server/lib/fixtures')],
       'an argument whose name an inner scope declares again': ["const NAME = 'f0.json';\nconst read = (p) => readFileSync(join(FIXTURES, p));\nfunction run(row) { const { NAME } = row; read(NAME); }", through('read', 'server/lib/fixtures')],
+      'a segment assigned by a loop head': ["let name = 'f0.json';\nfor (name of [process.argv[2]]) { if (ok(name)) break; }\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a segment assigned by a pattern in a loop head': ["let name = 'f0.json';\nfor ({ name } of rows) { if (ok(name)) break; }\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a segment assigned in parentheses': ["let name = 'f0.json';\n(name) = process.argv[2];\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a segment a second declarator declares again': ["const name = 'f0.json';\nit('y', () => { const a = 1, name = process.argv[2]; readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'a segment an import also names': ["import { name } from './names.js';\nit('a', () => { const name = 'f0.json'; use(name); });\nit('b', () => { readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'a literal discarded by a comma': ["readFileSync(join(FIXTURES, ('f0.json', process.argv[2])));", leaves('server/lib/fixtures')],
+      'a module constant under a loop variable of its name': ["const name = 'f0.json';\nfor (const name of [process.argv[2]]) if (true) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a call the tokenizer reads as text': ["function read(name) { return readFileSync(join(FIXTURES, name)); }\nif (x) { read('f0.json'); }\n/[`]/.test(s) && read(process.argv[2]); const t = `x`;", through('read', 'server/lib/fixtures')],
+      'a call inside an eval': ["const read = (n) => readFileSync(join(FIXTURES, n));\nread('f0.json');\neval(\"read(process.argv[2])\");", through('read', 'server/lib/fixtures')],
       'a segment bound by let and assigned again': ["let name = 'f0.json';\nname = process.argv[2];\nreadFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a parameter of a function that touches arguments': ["function read(p) { arguments[0] = pick(); return readFileSync(join(FIXTURES, p)); }\nread('f0.json');", through('read', 'server/lib/fixtures')],
+      'a literal with a method call on it': ["readFileSync(join(FIXTURES, 'F0.JSON'.toLowerCase()));", leaves('server/lib/fixtures')],
       'the same name bound twice, one inside the other': ["const read = (f) => ['f1.json'].map((f) => readFileSync(join(FIXTURES, f)));\nread('f0.json');", leaves('server/lib/fixtures')],
       'a parameter redeclared by an inner pattern': ["const read = (p) => { if (flag) { const { p } = pick(); return readFileSync(join(FIXTURES, p)); } };\nread('f0.json');", through('read', 'server/lib/fixtures')],
       'a spread before the argument': ["const read = (label, name) => readFileSync(join(FIXTURES, name));\nread(...labels, 'f0.json');", through('read', 'server/lib/fixtures')],
@@ -560,6 +589,22 @@ describe('a read whose variable segment can leave the directory the source names
       'an array aliased by valueOf': ["const NAMES = ['f0.json'];\nconst same = NAMES.valueOf();\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'a frozen array an inner scope declares again': ["const NAMES = Object.freeze(['f0.json']);\nfunction run(row) { const { NAMES } = row; for (const name of NAMES) readFileSync(join(FIXTURES, name)); }", leaves('server/lib/fixtures')],
       'a value with a windows separator': ["const read = (p) => readFileSync(join(FIXTURES, p));\nread('sub\\\\f0.json');", leaves('server/lib/fixtures')],
+      'an array filtered by a callback that takes the array': ["['f0.json', 'f1.json'].filter((n, i, all) => { all[1] = process.argv[2]; return true; }).forEach((name) => readFileSync(join(FIXTURES, name)));", leaves('server/lib/fixtures')],
+      'an array iterated by a callback that takes the array': ["['f0.json', 'f1.json'].forEach((name, i, all) => { all[1] = process.argv[2]; readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'an array iterated by a function, which has arguments': ["['f0.json'].forEach(function (name) { arguments[2][1] = process.argv[2]; readFileSync(join(FIXTURES, name)); });", leaves('server/lib/fixtures')],
+      'a listing mapped by a helper that takes the array': ["const read = (f, i, all) => { all[i + 1] = process.argv[2]; return readFileSync(join(FIXTURES, f)); };\nconst texts = readdirSync(FIXTURES).map(read);", through('read', 'server/lib/fixtures')],
+      'an element assigned through a pattern': ["const NAMES = ['f0.json'];\n([NAMES[0]] = [process.argv[2]]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an adding method called by computed name': ["const NAMES = ['f0.json'];\nNAMES['push'](process.argv[2]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array handed to an each that is not the test API': ["const NAMES = ['f0.json'];\nrows.each(NAMES, grow);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an unfrozen copy of a frozen array': ["const NAMES = Object.freeze(['f0.json']).slice();\nNAMES.push(process.argv[2]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an optional call of an iteration method': ["const NAMES = ['f0.json'];\nNAMES.forEach?.((n, i, all) => { all.push(process.argv[2]); });\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an optional call by computed name': ["const NAMES = ['f0.json'];\nNAMES['push']?.(process.argv[2]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a callback that was given another function': ["const NAMES = ['f0.json'];\nlet cb = (n) => n;\ncb = (n, i, all) => { all.push(process.argv[2]); };\nNAMES.forEach(cb);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a replacer bound to the array': ["const NAMES = ['f0.json'];\nJSON.stringify(NAMES, function (k, v) { this.push?.(process.argv[2]); return v; });\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a mapper bound to the array': ["const NAMES = ['f0.json'];\nArray.from(NAMES, function () { this.push(process.argv[2]); }, NAMES);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'a local function named expect': ["const NAMES = ['f0.json'];\nfunction expect(list) { list.push(process.argv[2]); }\nexpect(NAMES);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array whose method was replaced': ["const NAMES = ['f0.json'];\nNAMES.map = (cb) => cb(process.argv[2]);\nNAMES.map((name) => readFileSync(join(FIXTURES, name)));", leaves('server/lib/fixtures')],
+      'an index into an object that only looks like an array': ["const table = { 'f0.json': [process.argv[2]] }\n['f0.json'].forEach((name) => readFileSync(join(FIXTURES, name)))", leaves('server/lib/fixtures')],
       'an array handed to unknown code': ["const NAMES = ['f0.json'];\nfill(NAMES);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'an exported array': ["export const NAMES = ['f0.json'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'a rebindable array': ["let NAMES = ['f0.json'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
@@ -580,6 +625,15 @@ describe('a read whose variable segment can leave the directory the source names
       'a listed name assigned in its loop': ["for (let f of readdirSync(FIXTURES)) { f = process.argv[2]; readFileSync(join(FIXTURES, f)); }", leaves('server/lib/fixtures')],
       'a listed name after an unknown directory': [listed('readFileSync(join(FIXTURES, entry.dir, f))'), leaves('server/lib/fixtures')],
       'a climbing URL relative to a listed entry': [listed("readFileSync(new URL('../../a.js', pathToFileURL(join(FIXTURES, f))))"), leaves('server/lib/fixtures')],
+      'the parent of a listed entry': [listed('readdirSync(dirname(join(FIXTURES, f)))'), leaves('server/lib/fixtures')],
+      'the grandparent of a listed entry': [listed("readFileSync(join(dirname(dirname(join(FIXTURES, f))), 'a.js'))"), leaves('server/lib/fixtures')],
+      'the parent of a guarded join': ["readFileSync(join(dirname(pathWithin(FIXTURES, pick())), 'a.js'));", leaves('server/lib/fixtures')],
+      'a URL beside a guarded join': ["readFileSync(new URL('a.js', pathToFileURL(pathWithin(FIXTURES, pick()))));", leaves('server/lib/fixtures')],
+      'an encoded climb relative to a listed entry': [listed("readFileSync(new URL('%2e%2e/a.js', pathToFileURL(join(FIXTURES, f))))"), leaves('server/lib/fixtures')],
+      'a climb spelled across three literals': [listed("readFileSync(join(FIXTURES, f) + '/.' + './.' + './a.js')"), leaves('server/lib/fixtures')],
+      'a listing by a second declarator of the imported name': ["it('y', () => { const a = 1, readdirSync = () => [pick()]; for (const f of readdirSync(FIXTURES)) readFileSync(join(FIXTURES, f)); });", leaves('server/lib/fixtures')],
+      'a listing through a namespace that was written to': ["fs.readdirSync = () => [pick()];\nfor (const f of fs.readdirSync(FIXTURES)) readFileSync(join(FIXTURES, f));", leaves('server/lib/fixtures')],
+      'a listing through a namespace that was handed on': ["Object.assign(fs, { readdirSync: () => [pick()] });\nfor (const f of fs.readdirSync(FIXTURES)) readFileSync(join(FIXTURES, f));", leaves('server/lib/fixtures')],
       'a listed name glued to the directory': [listed('readFileSync(`${FIXTURES}${f}`)'), leaves('server/lib/fixtures')],
       'a listed name as a URL': [listed('readFileSync(new URL(f, import.meta.url))'), leaves('server/lib')],
       'a listed name under a URL directory': [listed('readFileSync(new URL(`./fixtures/${f}`, import.meta.url))'), leaves('server/lib/fixtures')],
@@ -626,9 +680,20 @@ describe('a read whose variable segment can leave the directory the source names
     expect(guessed("import fs, { readdirSync } from 'node:fs';", "vi.spyOn(fs, 'readdirSync').mockReturnValue(['../../a.js']);", listing)).toEqual(unbounded);
     expect(guessed("import { randomUUID } from 'node:crypto';", "vi.mock('node:crypto', () => ({ randomUUID: () => '../../a' }));", named)).toEqual(unbounded);
     expect(guessed("import { pathWithin } from '../../scripts/lib/pathWithin.js';", "vi.mock('../../scripts/lib/pathWithin.js', () => ({ pathWithin: (dir, name) => join(dir, name) }));", guard)).toEqual([]);
+    // However the module is named: an import() promise, a template, a path with no extension.
+    expect(guessed("import { readdirSync, readFileSync } from 'node:fs';", "vi.mock(import('node:fs'), async (original) => ({ ...(await original()), readdirSync: () => ['../../a.js'] }));", listing)).toEqual(unbounded);
+    expect(guessed("import { randomUUID } from 'node:crypto';", "vi.mock(`node:crypto`, () => ({ randomUUID: () => '../../a' }));", named)).toEqual(unbounded);
+    expect(guessed("import { pathWithin } from '../../scripts/lib/pathWithin.js';", "vi.mock('../../scripts/lib/pathWithin', () => ({ pathWithin: (dir, name) => join(dir, name) }));", guard)).toEqual([]);
     for (const imported of ["import { pathWithin } from './pathWithin.js';", "import { join as pathWithin } from '../../scripts/lib/pathWithin.js';", 'const pathWithin = (dir, name) => join(dir, name);']) {
       expect(guessed(imported, guard), imported).toEqual([]);
     }
+  });
+
+  it('trusts nothing the workspace setup file mocks for every test', () => {
+    const generated = "const probe = existsSync(join(FIXTURES, `${randomUUID()}.json`));";
+    expect(floorOf(generated).memoizable).toBe(true);
+    expect(floorOf(generated, { 'server/vitest.setup.js': "vi.mock('node:crypto', () => ({ randomUUID: () => '../../a' }));\n" }))
+      .toMatchObject({ memoizable: false, reason: leaves('server/lib/fixtures') });
   });
 
   it('refuses the recorded key too, and a script the test imports, but not a product module', () => {
