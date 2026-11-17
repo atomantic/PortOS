@@ -2,6 +2,10 @@
  * The claim prompt's "Phase 1b — Decompose an epic" section (GitHub and GitLab),
  * and its on-demand delivery: a file-tool host gets a pointer to a staged copy,
  * an API provider keeps the section inline (#16573).
+ *
+ * This text is part of the shipped claim-issue prompts: changing it needs the
+ * PROMPT_VERSIONS bump and integrity-snapshot regen described in
+ * ../taskPromptDefaults/prompts.js.
  */
 
 import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLabelFlags } from '../../lib/dispatchLabels.js';
