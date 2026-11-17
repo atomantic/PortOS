@@ -10,7 +10,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { chromium } from 'playwright-core';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sleep } from '../../lib/fileUtils.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
@@ -314,6 +313,7 @@ const executeJob = async (job) => {
       });
     }
 
+    const { chromium } = await import('playwright-core');
     browser = await chromium.connectOverCDP(await cdpEndpoint(), {
       isLocal: true,
       noDefaults: true,

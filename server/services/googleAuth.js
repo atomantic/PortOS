@@ -1,10 +1,8 @@
-import { auth } from '@googleapis/calendar';
 import { join } from 'path';
 import { atomicWrite, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PORTS } from '../lib/ports.js';
 
-const { OAuth2: OAuth2Client } = auth;
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
 const CREDENTIALS_FILE = join(AUTH_DIR, 'credentials.json');
 const TOKENS_FILE = join(AUTH_DIR, 'tokens.json');
@@ -70,8 +68,10 @@ export async function clearAuth() {
   console.log('📅 Google OAuth tokens cleared');
 }
 
-function createOAuth2Client(credentials) {
-  return new OAuth2Client({
+// The Google SDK is loaded on first use, not at boot (#16558).
+async function createOAuth2Client(credentials) {
+  const { auth } = await import('@googleapis/calendar');
+  return new auth.OAuth2({
     clientId: credentials.clientId,
     clientSecret: credentials.clientSecret,
     redirectUri: credentials.redirectUri || OAUTH_REDIRECT_URI,
@@ -85,7 +85,7 @@ export async function getAuthUrl(returnTo = 'calendar') {
   const credentials = await getCredentials();
   if (!credentials) throw new ServerError('No Google OAuth credentials configured', { status: 400 });
 
-  const client = createOAuth2Client(credentials);
+  const client = await createOAuth2Client(credentials);
   const url = client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
@@ -102,7 +102,7 @@ export async function handleCallback(code) {
   const credentials = await getCredentials();
   if (!credentials) throw new ServerError('No credentials configured', { status: 400 });
 
-  const client = createOAuth2Client(credentials);
+  const client = await createOAuth2Client(credentials);
   const { tokens } = await client.getToken(code);
   await saveTokens(tokens);
   oAuth2Client = client;
@@ -122,7 +122,7 @@ export async function getAuthenticatedClient() {
   if (!tokens?.access_token) return null;
 
   if (!oAuth2Client) {
-    oAuth2Client = createOAuth2Client(credentials);
+    oAuth2Client = await createOAuth2Client(credentials);
     oAuth2Client.setCredentials(tokens);
 
     attachTokenPersistence(oAuth2Client);
