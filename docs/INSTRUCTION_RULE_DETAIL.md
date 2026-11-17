@@ -6,7 +6,7 @@ Root and nested `AGENTS.md` files carry a byte budget (`scripts/agent-instructio
 
 **API-provider agents get these files too, within a budget**: `getAgentInstructionsContext()` in `server/services/promptSections/instructions.js` splices `~/.claude/CLAUDE.md`, the root file, then nested `AGENTS.md` files (depth 5 / 10 files; dot-dirs, `node_modules/`, `data/`, build output and nested repos skipped). The root file is the only guaranteed-first slot: rules guarding data loss, destructive actions, privacy or spend belong here. `scripts/agent-instructions-files.test.js` caps root at 28 KB and each nested file at 12 KB; move task-specific procedure into a skill (`.claude/skills/`) or doc rather than raising them.
 
-The test also requires each file to stay at or below 90% of its ceiling (root 25,804 B, nested 11,059 B), so two small in-cap edits merged separately cannot land over the cap.
+The 28 KB / 12 KB ceilings are the only absolute failure. A file already above 90% of its ceiling at the merge base (`CI_BASE_SHA`, else the merge-base with the remote default branch; a missing base fails closed) may not grow in the change, so two small edits merged separately cannot land over the cap while files can still shrink back toward the line.
 
 Read the nested instructions before editing these trees (each an `AGENTS.md` with a bridge `CLAUDE.md`):
 
