@@ -50,11 +50,11 @@ output/`data/`, installed dependency manifests, submodules, base SHA, Node/Git
 toolchain, environment and the stage's own command and file list. HEAD is not part
 of it, so committing validated content keeps the pass. `--full`, `--guards-only`
 and `PORTOS_TEST_MEMO=off` always rerun them. The receipt records guard outcomes, reuse proofs and per-file guard
-durations (`fileDurations`). A guard file over the 3s per-file budget
+durations (`fileDurations`). A guard file over the 3s per-file target
 (`scripts/lib/guardBudget.js`) gets a `🐢` line naming it, but never fails local
 pregate: wall time on a machine running several agent gates measures the host,
-not the guard, and a slow pass stays reusable. Hosted CI enforces the budget on
-its Linux server job (`CI_GUARD_BUDGET=enforce`), where the always-run guards run
+not the guard, and a slow pass stays reusable. Hosted CI enforces a 6s budget,
+calibrated to its slower runner, on its Linux server job (`CI_GUARD_BUDGET=enforce`), where the always-run guards run
 as their own Vitest pass before the rest of the selection; there are no per-file
 exceptions. `scripts/ensure-deps.test.js`
 is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
