@@ -712,11 +712,13 @@ native selectors and never repeats a related-graph traversal. A scoped Linux pla
 (`fansOut()` in the planner) only when its explicit selection exceeds
 `MAX_TARGETED_TEST_FILES` (125). That cap keeps the scoped selection and only partitions it, so a server-only
 overflow does not start three client shards, the DB/browser
-suites, and a Windows run (#11871). Every other scoped plan, server `related`
-included, stays on one runner. A server `related` plan used to fan out
-unconditionally because lazy `import()` edges let one changed source select
-~1,300 suites; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) bounds that
-reach. The runner slices the selection itself and never hands Vitest
+suites, and a Windows run (#11871). A server `related` plan also fans out
+when its measured import reach (`serverReach.selected`, the suites the related
+walk will select) exceeds the same cap, even with few explicit selectors: one
+runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+The summary names that reach-based fan-out. Every other scoped plan stays on one
+runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
+each selected suite runs. The runner slices the selection itself and never hands Vitest
 `--shard`, so a shard whose slice is empty exits green. Once-only steps — smoke boot and the client build —
 pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
