@@ -159,10 +159,10 @@ describe('the request a tracked call sends', () => {
 
 // #16614: `/v1/chat/completions` cannot carry `num_ctx`, so an Ollama daemon
 // would run the call at its default window and drop the prompt's head. A
-// remote endpoint, so no local window probe consumes the stubbed transport.
+// loopback daemon, so a window probe would show up as an extra request.
 describe('an Ollama provider with a context window', () => {
   const ollama = {
-    id: 'example-ollama', name: 'Example Ollama', type: 'api', endpoint: 'http://ollama.example.com:11434/v1', numCtx: 1000,
+    id: 'example-ollama', name: 'Example Ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', numCtx: 1000,
   };
   const nativeReply = (content) => mockJsonResponse({
     model: 'model-1', message: { role: 'assistant', content }, done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 3,
@@ -173,7 +173,8 @@ describe('an Ollama provider with a context window', () => {
 
     const result = await callProviderAISimple(ollama, 'model-1', 'Summarize the week.', { source: 'goal-check-in', temperature: 0.4, max_tokens: 200 });
 
-    expect(sent(fetch).url).toBe('http://ollama.example.com:11434/api/chat');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/api/chat');
     expect(JSON.parse(sent(fetch).body)).toEqual({
       model: 'model-1',
       messages: [{ role: 'user', content: 'Summarize the week.' }],
@@ -190,7 +191,7 @@ describe('an Ollama provider with a context window', () => {
 
     await callProviderAISimple(plain, 'model-1', 'Summarize the week.', { source: 'goal-check-in' });
 
-    expect(sent(fetch).url).toBe('http://ollama.example.com:11434/v1/chat/completions');
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/v1/chat/completions');
     expect(sent(fetch).body).toBe(JSON.stringify({
       model: 'model-1', messages: [{ role: 'user', content: 'Summarize the week.' }], temperature: 0.3, max_tokens: 1000,
     }));
