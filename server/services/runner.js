@@ -1,5 +1,5 @@
 import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
-import { publishRuntimeFiles } from '../lib/runtimeFilePublication.js';
+import { publishRuntimeFiles, withRuntimeFileTurn } from '../lib/runtimeFilePublication.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
  * Compatibility shim for PortOS services that import from runner.js
@@ -109,16 +109,28 @@ export function getRunsPath() {
  * asked for. Same reasoning as the `canceled` branch below: the failure is the
  * caller's measurement, not evidence that a configured provider is broken.
  *
- * @returns the merged metadata object (also written to disk).
+ * `onlyIfRecorded: true` finalizes only a record that still exists when the
+ * turn starts, and returns null (no write, no hook) otherwise. Boot recovery
+ * uses it: it runs while requests are served, and a run deleted after recovery
+ * read it must not be recreated as an anonymous record. Deletion takes the same
+ * turn (`serializeRunDeletion`), so the check cannot go stale before the write.
+ *
+ * @returns the merged metadata object (also written to disk), or null when
+ *   `onlyIfRecorded` found no record.
  */
-export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras, identity, reportFailure = true }) {
+export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras, identity, reportFailure = true, onlyIfRecorded = false }) {
   const toolkit = requireToolkit();
   const runDir = join(getRunsPath(), runId);
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
 
   const metadata = await publishRuntimeFiles([outputPath, metadataPath], async () => {
-    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+    let recorded = true;
+    const metadataStr = await readFile(metadataPath, 'utf-8').catch((err) => {
+      if (err.code === 'ENOENT') recorded = false;
+      return '{}';
+    });
+    if (onlyIfRecorded && !recorded) return null;
     let metadata = {};
     try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
     // A caller that never went through toolkit `createRun` — or whose run record
@@ -182,6 +194,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
     await atomicWrite(metadataPath, metadata);
     return metadata;
   }).catch(error => { maintenance.markCurrentUnsettled(); throw error; });
+  if (metadata === null) return null;
   const canceled = metadata.canceled === true;
 
   // Guarded: these hooks are host-supplied, and every caller of this function
@@ -201,6 +214,16 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   }
 
   return metadata;
+}
+
+/**
+ * Wrap the toolkit's `deleteRun` so a delete waits for, and is waited on by,
+ * `finalizeRunRecord` on the same run. Without the shared turn a finalize that
+ * read the record before the delete rewrote it afterwards, recreating the
+ * deleted run.
+ */
+export function serializeRunDeletion(deleteRun) {
+  return (runId) => withRuntimeFileTurn(join(getRunsPath(), String(runId), 'output.txt'), () => deleteRun(runId));
 }
 
 /**

@@ -69,7 +69,7 @@ import { loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
-import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
+import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed, serializeRunDeletion } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
 import { startAutomaticUpdateReservationRecovery, stopAutomaticUpdateReservationRecovery } from './automaticUpdateReservationRecovery.js';
@@ -420,6 +420,9 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
           onSettled: () => permit.finish(),
         })).catch(err => { permit.markUnsettled(); throw err; });
       };
+      // Interrupted-run recovery finalizes records while DELETE /api/runs/:id is
+      // served; a delete shares finalizeRunRecord's per-run turn.
+      aiToolkit.services.runner.deleteRun = serializeRunDeletion(aiToolkit.services.runner.deleteRun.bind(aiToolkit.services.runner));
       aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },

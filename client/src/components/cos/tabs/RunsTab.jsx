@@ -44,29 +44,30 @@ export default function RunsTab() {
   // open, #16557) arrive as `system:activity` invalidations. The server
   // coalesces a burst into one frame naming only its last source, so every
   // frame re-reads the page in place; a reconnect re-reads frames missed while
-  // offline. A frame that lands while the list is loading is held and re-read
-  // once it is ready, because that load may have read the record before the
-  // change. A failed re-read keeps the last successful rows on screen, and only
-  // the newest re-read may land.
+  // offline. A frame that lands while the list is loading, or while a re-read
+  // is running, is held and read once that settles (that read may have seen
+  // the record before the change), so a burst costs at most one follow-up read.
+  // A failed re-read keeps the last successful rows on screen.
   const runsReady = useRef(false);
   runsReady.current = runsState === 'ready';
   const refreshGeneration = useRef(0);
   const refreshInFlight = useRef(false);
   const refreshPending = useRef(false);
   const refreshRuns = useCallback(() => {
-    if (!runsReady.current) {
+    if (!runsReady.current || refreshInFlight.current) {
       refreshPending.current = true;
       return;
     }
+    refreshPending.current = false;
     const current = ++refreshGeneration.current;
     refreshInFlight.current = true;
-    fetchRuns().then((list) => {
+    const settle = (list) => {
       if (current !== refreshGeneration.current) return;
       refreshInFlight.current = false;
-      if (runsReady.current) setRuns(list);
-    }, () => {
-      if (current === refreshGeneration.current) refreshInFlight.current = false;
-    });
+      if (list && runsReady.current) setRuns(list);
+      if (refreshPending.current) refreshRuns();
+    };
+    fetchRuns().then(settle, () => settle(null));
   }, [fetchRuns, setRuns]);
   // A confirmed delete must not be undone by a re-read that started before it:
   // drop that read and, if one was running, start a fresh one after the delete.

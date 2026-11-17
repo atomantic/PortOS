@@ -49,8 +49,10 @@ export async function recoverInterruptedRuns({ owner = getRunOwner(), isDead = i
         if (error.code === 'ENOENT') return '';
         throw error;
       });
-      await finalizeRunRecord({
-        runId: run.id, output, exitCode: null, success: false, startTime,
+      // The run list stays live during recovery, so the record may be deleted
+      // after this read; onlyIfRecorded leaves a deleted run deleted.
+      const finalized = await finalizeRunRecord({
+        runId: run.id, output, exitCode: null, success: false, startTime, onlyIfRecorded: true,
         error: 'Run interrupted by server exit; end observed during startup recovery',
         reportFailure: false,
         extras: {
@@ -59,7 +61,7 @@ export async function recoverInterruptedRuns({ owner = getRunOwner(), isDead = i
           endTimeSource: 'recovery-observation',
         },
       });
-      recovered += 1;
+      if (finalized) recovered += 1;
     } catch (error) {
       console.error(`❌ Interrupted run recovery could not inspect or finalize a record: ${error.message}`);
     }
