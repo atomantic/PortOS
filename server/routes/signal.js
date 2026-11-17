@@ -3,13 +3,10 @@ import { z } from 'zod';
 import * as signalManage from '../services/signalManage.js';
 
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as signalSync from '../services/signalSync.js';
 
 const router = Router();
-
-// The shared validation module re-exports every domain's schemas; load it when a
-// conversation handler runs so importing this route does not evaluate them all.
-const validateRequest = async (schema, data) => (await import('../lib/validateRequest.js')).validateRequest(schema, data);
 
 // Setup check — resolve the DB key, decrypt a snapshot, and probe the schema.
 // Reports an actionable error (missing install, key failure, unsupported schema)

@@ -1,10 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { visitorCancellationSchema, visitorAdmissionSchema, visitorScopeSchema, visitorActionSchema, visitorIdSchema } from '../lib/managedVisitorValidation.js';
 import { getManagedVisitorBroker } from '../services/managedVisitors.js';
-
-// Keep the large shared validation barrel off the broker's import-only path.
-export const validateRequest = async (schema, value) => (await import('../lib/validateRequest.js')).validateRequest(schema, value);
 
 export function createManagedVisitorRoutes(getBroker = getManagedVisitorBroker) {
   const router = Router();
