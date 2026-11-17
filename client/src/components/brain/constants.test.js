@@ -17,7 +17,7 @@ describe('Brain TABS ↔ nav manifest', () => {
   it('renders the brain tabGroup in page order with a presentation entry each', () => {
     expectPageNavTabs(TABS, [
       'inbox:Inbox', 'threads:Threads', 'ideas:Ideas', 'daily-log:Daily Log', 'links:Links',
-      'memory:Memory', 'notes:Notes', 'graph:Graph', 'digest:Digest',
+      'meditation:Meditation', 'memory:Memory', 'notes:Notes', 'graph:Graph', 'digest:Digest',
       'feeds:Feeds', 'trust:Trust', 'import:Import', 'spotify:Spotify',
       'youtube:YouTube', 'config:Config',
     ]);

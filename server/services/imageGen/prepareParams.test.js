@@ -12,9 +12,8 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
-import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 vi.mock('../../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-image-') }));
@@ -38,38 +37,6 @@ vi.mock('../storyboards/index.js', () => ({ getStoryboard: (...a) => getStoryboa
 
 const { prepareGenerateParams, selectLocalImageModel, selectLocalImageModelFromSettings } = await import('./prepareParams.js');
 const { AGY_IMAGEGEN_DEFAULT_MODEL } = await import('./modes.js');
-
-const SERVER_ROOT = join(dirname(fileURLToPath(import.meta.url)), '../..');
-const MODEL_PIN_READ = /\bimageGen\s*\??\.\s*local\s*\??\.\s*modelId\b/;
-const ALLOWED_PIN_READERS = new Set([
-  'services/imageGen/prepareParams.js',
-  'routes/settings.js',
-  'lib/validation.js',
-]);
-
-function findDirectLocalModelPinReads(root = SERVER_ROOT) {
-  const violations = [];
-  const walk = (directory) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory() && ['.git', 'build', 'data', 'dist', 'node_modules'].includes(entry.name)) continue;
-      if (entry.isSymbolicLink()) continue;
-      const absolutePath = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        walk(absolutePath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:js|mjs)$/.test(entry.name) || /\.test\.(?:js|mjs)$/.test(entry.name)) continue;
-      const file = relative(SERVER_ROOT, absolutePath).replaceAll('\\', '/');
-      if (ALLOWED_PIN_READERS.has(file)) continue;
-      const source = readFileSync(absolutePath, 'utf8')
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/^\s*\/\/.*$/gm, '');
-      if (MODEL_PIN_READ.test(source)) violations.push(file);
-    }
-  };
-  walk(root);
-  return violations.sort();
-}
 
 const CODEX_ON = { codex: { enabled: true, codexPath: '/bin/codex' } };
 const run = (data) => prepareGenerateParams({ data, files: undefined, referenceImageFields: [] });
@@ -180,12 +147,6 @@ describe('selectLocalImageModel', () => {
     const settings = { imageGen: { local: { modelId: 'install-pin' } } };
     expect(selectLocalImageModelFromSettings(settings, undefined, models, 'record-pin').id).toBe('install-pin');
     expect(selectLocalImageModelFromSettings(settings, undefined, models, 'dev').id).toBe('dev');
-  });
-});
-
-describe('local model pin ownership', () => {
-  it('allows direct install-pin reads only in its resolver and settings writers', () => {
-    expect(findDirectLocalModelPinReads()).toEqual([]);
   });
 });
 
@@ -600,7 +561,6 @@ it('leaves FableLoom authored intent for its compiler instead of composing photo
   expect(result.data.visualProfile).toBeUndefined();
   expect(result.data.visualProfileOverride).toBeDefined();
 });
-
 
 it('prepares catalog-linked frames from the live catalog without approval and refuses explicitly supplied historical sheets', async () => {
   const { PATHS } = await import('../../lib/paths.js');

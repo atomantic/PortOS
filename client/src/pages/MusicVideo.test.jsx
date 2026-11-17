@@ -47,7 +47,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
     );
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Connection unavailable');
-    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No projects in progress/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
     expect(screen.getByTestId('loc')).toHaveTextContent(path);
     if (path === '/music-video') {
@@ -66,7 +66,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
     fireEvent.click(retry);
     expect(path === '/music-video' ? listMusicVideoProjectSummaries : getMusicVideoProject).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No projects in progress/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
 
     await act(async () => resolveRetry([PROJECT_NO_CLIP]));
@@ -82,7 +82,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
   });
 
   it.each([
-    ['/music-video', /No music video projects yet/],
+    ['/music-video', /No projects in progress/],
     ['/music-video/missing-project', /Project not found/],
   ])('shows absence only after a successful read at %s', async (path, message) => {
     listMusicVideoProjects.mockResolvedValue(path === '/music-video' ? [] : [PROJECT_NO_CLIP]);
@@ -90,6 +90,51 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo project status filter', () => {
+  it('keeps index options available while the unfiltered picker loads', async () => {
+    let resolvePicker;
+    listMusicVideoProjectSummaries.mockImplementation(({ statusFilter }) => statusFilter
+      ? Promise.resolve({ items: [PROJECT_WITH_CLIP], total: 1, nextCursor: null })
+      : new Promise(resolve => { resolvePicker = resolve; }));
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: PROJECT_WITH_CLIP.name });
+    const picker = screen.getByLabelText('Project');
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    fireEvent.focus(picker);
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    await act(async () => resolvePicker({ items: [PROJECT_WITH_CLIP, { ...PROJECT_NO_CLIP, status: 'complete' }], total: 2, nextCursor: null }));
+    expect(within(picker).getByRole('option', { name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('filters before paging, switches accessible controls, and opens the selected project', async () => {
+    const projects = [
+      { ...PROJECT_WITH_CLIP, name: 'Working', status: 'ready' },
+      { ...PROJECT_NO_CLIP, name: 'Finished', status: 'complete' },
+      { ...PROJECT_NO_CLIP, id: 'mv-failed', name: 'Failed', status: 'failed' },
+    ];
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = projects.filter(p => !statusFilter || (p.status === 'complete') === (statusFilter === 'completed'));
+      return { items, total: items.length, nextCursor: null };
+    });
+    getMusicVideoProject.mockImplementation(async id => projects.find(p => p.id === id));
+    render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'In Progress', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Failed' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Finished' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Completed', pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Working' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-2'));
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
   });
 });
 
@@ -118,7 +163,7 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
         {MV_ROUTES}
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/No music video projects yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No projects in progress/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/));
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
   });
@@ -871,13 +916,15 @@ describe('MusicVideo main page project cards', () => {
       vocalStemFilename: 'electric-vocals.wav',
       midiTranscription: 'electric-midi.mid',
     };
-    listMusicVideoProjects.mockResolvedValueOnce([projectWithRender, PROJECT_NO_CLIP]);
+    listMusicVideoProjects.mockResolvedValue([projectWithRender, PROJECT_NO_CLIP]);
     renderMV();
 
     // The header's New project button is the only one (no duplicate card buttons)
     expect(await screen.findByRole('button', { name: /New project/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /New music video/i })).toBeNull();
 
+    // Completed projects are available under All.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
     // Project cards grid exists below new project card
     const grid = await screen.findByTestId('mv-project-grid');
     expect(grid).toBeInTheDocument();

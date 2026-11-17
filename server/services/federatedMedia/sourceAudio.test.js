@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { PATHS, sha256Text } from '../../lib/fileUtils.js';
-import { federatedMediaVideoJobSubmissionSchema } from '../../lib/validation.js';
+import { federatedMediaVideoJobSubmissionSchema } from '../../lib/federatedMediaValidation.js';
 import { storeFederatedMediaAsset, findFederatedMediaAsset } from './assetStore.js';
 import { assertCurrentSourceAudioWindow, pcmAudioInfo, prepareSourceAudioWindow, resolveSourceAudioPath } from './sourceAudio.js';
 import { applyRemoteInputAssets } from './inputAssets.js';

@@ -13,7 +13,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * caller's model nor provider.defaultModel applies). Log THIS `model`, not the value passed in.
  */
 
-import { LOCAL_LLM_MAX_CONCURRENCY, acquireLocalSlot, releaseLocalSlot } from '../lib/localLlmConcurrency.js';
+import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
@@ -89,33 +89,7 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
   };
 }
 
-// ── Local-backend concurrency gate ─────────────────────────────────────────
-// A local LLM server (Ollama / LM Studio) runs inference on one GPU; concurrent calls gain nothing
-// and, with OLLAMA_NUM_PARALLEL > 1, load N contexts and can OOM. So cap IN-FLIGHT calls per LOCAL
-// endpoint and queue the rest FIFO (default 1; LOCAL_LLM_MAX_CONCURRENCY lifts it). Local TUI
-// providers share the gate because their readiness hook can start the same daemon. Keyed by endpoint
-// so distinct servers run in parallel.
-//
-// The gate lives HERE so it covers every local execution: the selected provider, a proactive
-// createRun swap, AND a runtime fallback landing on a local backend.
 export const isLocalEndpoint = isLoopbackEndpoint;
-
-export { LOCAL_LLM_MAX_CONCURRENCY };
-
-// Run `fn` under the local-endpoint gate when `provider` is a local API or TUI
-// backend; otherwise run it immediately (cloud / non-local CLI/TUI are
-// unconstrained).
-export async function withLocalConcurrencyGate(provider, fn) {
-  const endpoint = provider?.endpoint;
-  const isLocalProvider = provider?.type === PROVIDER_TYPES.API || provider?.type === PROVIDER_TYPES.TUI;
-  if (!(isLocalProvider && isLocalEndpoint(endpoint))) return fn();
-  await acquireLocalSlot(endpoint);
-  try {
-    return await fn();
-  } finally {
-    releaseLocalSlot(endpoint);
-  }
-}
 
 /**
  * True when the runner+provider pair will honor a per-call `model` override. API providers take

@@ -638,10 +638,10 @@ describe('provider review preparation deadline', () => {
   });
 });
 
-describe('callProviderAISimple xAI usage ledger', () => {
+describe('callProviderAISimple toolkit-less usage', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('records cached and reasoning tokens from a successful xAI completion', async () => {
+  it('returns measured cached and reasoning counts without writing the server ledger', async () => {
     recordRunUsage.mockClear();
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -662,13 +662,6 @@ describe('callProviderAISimple xAI usage ledger', () => {
       'prompt',
     );
     expect(result.usage).toMatchObject({ inputTokens: 26, outputTokens: 103, cacheReadTokens: 6 });
-    await vi.waitFor(() => expect(recordRunUsage).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: 'grok',
-      model: 'grok-4.7',
-      tokensIn: 26,
-      tokensOut: 103,
-      cacheReadTokens: 6,
-      source: 'measured',
-    })));
+    expect(recordRunUsage).not.toHaveBeenCalled();
   });
 });

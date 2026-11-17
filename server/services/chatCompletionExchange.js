@@ -5,9 +5,8 @@
  *
  * This is the wire half only. It writes no run record and no usage: the shared
  * runner (`apiCompletionRun.js`, reached through
- * `promptRunner.runPromptThroughProvider({ completion })`) owns those. A process
- * with no AI toolkit (the local-review bridge script) has no run store to record
- * into, so `aiProvider.callProviderAISimple` calls this module directly there.
+ * `promptRunner.runPromptThroughProvider({ completion })`) owns those. Only
+ * toolkit-less callers use this exchange directly without a run store.
  *
  * The request body is exactly `{ model, messages, temperature, max_tokens }`.
  * The streaming executor adds `stream` and provider-level sampling defaults and
@@ -119,6 +118,7 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
 
   let response;
   try {
+    controller.signal.throwIfAborted();
     response = await fetch(wire.url, {
       method: 'POST',
       headers,

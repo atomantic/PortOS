@@ -95,7 +95,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
+    const filter = query.statusFilter ? (project) => (project.status === 'complete') === (query.statusFilter === 'completed') : undefined;
+    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
     // A deletion between header selection and hydration still consumes its slot.

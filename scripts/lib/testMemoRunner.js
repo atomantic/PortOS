@@ -39,6 +39,7 @@ import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
@@ -48,14 +49,15 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
 
 /**
  * True when the analyzer could only conclude "not memoizable" for `test`: it is
- * an always-run guard, is named in `TEST_MEMO_NEVER`, or carries the
+ * a tree guard (`*.guard.test.js`) or another always-run test, is named in
+ * `TEST_MEMO_NEVER`, or carries the
  * `// test-memo: never` marker itself. Deciding that here is what spares a
  * files-mode plan of tree-wide guards the closure walk (seconds per stage)
  * whose only possible answer is "run it". An unreadable file is not decided
  * here; the analyzer reports it.
  */
 const neverMemoized = (test, repoRoot, alwaysRun) => {
-  if (alwaysRun.has(test) || TEST_MEMO_NEVER[test]) return true;
+  if (alwaysRun.has(test) || isGuardTest(test) || TEST_MEMO_NEVER[test]) return true;
   try { return NEVER_MARKER.test(readFileSync(join(repoRoot, ...test.split('/')), 'utf8')); } catch { return false; }
 };
 
@@ -393,7 +395,7 @@ export function currentCommit(repoRoot, env = process.env) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-const DECLARED_NEVER = 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)';
+const DECLARED_NEVER = 'never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker)';
 const CHANGED_DURING_RUN = 'an input changed while the run was in flight';
 
 /**

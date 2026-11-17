@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -37,10 +37,16 @@ function deadExports(files, candidateNames = null) {
     }
   }
 
+  if (names.size === 0) return [];
+  // Match only candidate identifiers in C++ regex engine rather than allocating
+  // a RegExp match array for every word in the repository.
+  const needle = names.size <= 500
+    ? new RegExp(`\\b(?:${[...names].map(n => n.replace(/\$/g, '\\$')).join('|')})\\b`, 'g')
+    : WORD;
   const mentionedBy = new Map();
   for (const [file, source] of files) {
     if (/\.test\.[cm]?[jt]sx?$/.test(file) || /(^|\/)README\.md$/i.test(file)) continue;
-    for (const match of source.matchAll(WORD)) {
+    for (const match of source.matchAll(needle)) {
       if (!names.has(match[0])) continue;
       if (!mentionedBy.has(match[0])) mentionedBy.set(match[0], new Set());
       mentionedBy.get(match[0]).add(file);
@@ -106,19 +112,27 @@ function listTree(root) {
   return listing;
 }
 function readTree(root, file) {
-  if (root !== ROOT) return readFileSync(join(root, file), 'utf8');
-  if (!treeCache.sources.has(file)) treeCache.sources.set(file, readFileSync(join(root, file), 'utf8'));
+  if (root !== ROOT) {
+    try { return readFileSync(join(root, file), 'utf8'); } catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+  }
+  if (!treeCache.sources.has(file)) {
+    try { treeCache.sources.set(file, readFileSync(join(root, file), 'utf8')); }
+    catch (err) { if (err.code === 'ENOENT') treeCache.sources.set(file, null); else throw err; }
+  }
   return treeCache.sources.get(file);
 }
 
 function trackedFilesFrom(root) {
-  return listTree(root)
-    .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
+  const out = [];
+  for (const file of listTree(root)) {
+    if (!/\.(?:[cm]?[jt]sx?|json)$/.test(file)) continue;
     // deadExports() declares from, and counts mentions in, neither of these, and
     // they are most of the tree's bytes: don't read them.
-    .filter(file => !/\.test\.[cm]?[jt]sx?$/.test(file) && !/(^|\/)README\.md$/i.test(file))
-    .filter(file => existsSync(join(root, file)))
-    .map(file => [file, readTree(root, file)]);
+    if (/\.test\.[cm]?[jt]sx?$/.test(file) || /(^|\/)package-lock\.json$/.test(file)) continue;
+    const source = readTree(root, file);
+    if (source !== null) out.push([file, source]);
+  }
+  return out;
 }
 
 // --- Re-export shims and test hooks (#16230) -------------------------------
@@ -143,11 +157,13 @@ function stripComments(source) {
 // underscore hook (a test importer never keeps a re-export alive), so a test
 // file is reduced to its `_`-prefixed words.
 function codeFiles(root = ROOT) {
-  return listTree(root).filter(file => /^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file) && existsSync(join(root, file)))
-    .map(file => {
-      const source = readTree(root, file);
-      return [file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source];
-    });
+  const out = [];
+  for (const file of listTree(root)) {
+    if (!/^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file)) continue;
+    const source = readTree(root, file);
+    if (source !== null) out.push([file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source]);
+  }
+  return out;
 }
 
 // Lazy on purpose: this runs inside the structural-guard time budget, so words

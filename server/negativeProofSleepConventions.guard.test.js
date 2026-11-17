@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // This file spells the pattern out in its docs and recognizer fixtures.
-const SELF = 'server/negativeProofSleepConventions.test.js';
+const SELF = 'server/negativeProofSleepConventions.guard.test.js';
 
 const REAL_SLEEP = /await\s+new\s+Promise\s*\(\s*\(?\s*\w*\s*\)?\s*=>\s*setTimeout\s*\(\s*\w+\s*,\s*\d+\s*\)\s*\)/;
 const NEGATIVE_CALL = /\.not\.toHaveBeenCalled\b|toHaveBeenCalledTimes\(\s*0\s*\)/;
