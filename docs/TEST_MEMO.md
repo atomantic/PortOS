@@ -143,11 +143,15 @@ A variable segment is now one of three things:
   passes a literal (or another resolved variable; a `let` that is assigned
   again is not a literal); or it is the callback parameter or `for…of`
   variable of a literal array, an `it.each` table of strings, or a `const`
-  array nothing in the file can add to (no `push`, no element assignment, no
-  iteration callback that takes the array, not handed to unknown code). The path is evaluated once per
+  array nothing in the file can add to (no method that adds an element or
+  returns the array itself, no element assignment, no iteration callback that
+  takes the array, not handed to unknown code, declared once). The path is evaluated once per
   value (up to 64 combinations) and each file is an ordinary input. No
   directory is keyed, and a helper nothing calls contributes nothing. A
   parameter or loop variable shadows a module-level binding of the same name.
+  A literal URL spec is read as the URL parser reads it (`%20` is a space,
+  `?raw` is not part of the path), and a value that names different files on
+  Windows (`a\b`, `C:`) is not resolved.
 - **Contained.** The variable is an unchanged entry of a `readdir`/
   `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
   `randomUUID()` from `node:crypto`, or the path is built with `pathWithin(dir, ...segments)`
@@ -168,8 +172,9 @@ A test that reads a file it cannot name in its own source (a name from a table
 in another module, a value parsed out of a file) stays memoizable by joining
 with `pathWithin()`. The analyzer accepts the call only when the name is
 imported from that module. A file that mocks `fs`, `crypto` or `pathWithin.js`
-(`vi.mock`, or a `vi.spyOn` of the member) decides what they return, so
-nothing is inferred from them there.
+(`vi.mock`, or a `vi.spyOn` of the member) decides what they return, and a
+parameter or local named `readdirSync`, `randomUUID` or `pathWithin` is not
+the import, so nothing is inferred from them there.
 
 The rule belongs to the test file and to `scripts/`, like the git and
 oversized-tree rules. A library module builds such a path from what its caller
