@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   TIMELINE_MAX_PX_PER_SEC, clampPxPerSec, fitPxPerSec, lyricSpans, reorderedSceneIds, rulerStepSec, rulerTicks, shotsWithCutAt, snapCutTime,
-  timelineCuts, timelineDurationSec, timelineShotAt, timelineShots,
+  timelineCuts, timelineDurationSec, timelineShotAt, timelineShots, timelineSplitAt, waveformPath,
 } from './musicVideoTimeline.js';
 
 const project = {
@@ -129,5 +129,26 @@ describe('reorderedSceneIds', () => {
     expect(reorderedSceneIds(board, shots, 0, 1)).toEqual(['cold', 'b', 'a', 'untimed', 'c']);
     expect(reorderedSceneIds(board, shots, 1, 1)).toBeNull();
     expect(reorderedSceneIds(board, shots, 0, 3)).toBeNull();
+  });
+});
+
+describe('timelineSplitAt', () => {
+  const { shots } = timelineShots({ scenes: [{ sceneId: 'a', startSec: 0, endSec: 4 }, { sceneId: 'b', startSec: 4, endSec: 6 }] });
+  // Uniquely catches a split off a frame, or one leaving a sliver the server refuses.
+  it('cuts the shot under the playhead on a frame, never within a tenth of a second of its ends', () => {
+    expect(timelineSplitAt(shots, 1.01)).toEqual({ sceneId: 'a', atSec: 1 });
+    expect(timelineSplitAt(shots, 4.5)).toEqual({ sceneId: 'b', atSec: 4.5 });
+    expect(timelineSplitAt(shots, 3.95)).toBeNull();
+    expect(timelineSplitAt(shots, 4.02)).toBeNull();
+    expect(timelineSplitAt(shots, 7)).toBeNull();
+  });
+});
+
+describe('waveformPath', () => {
+  // Uniquely catches a waveform that drops quiet-to-loud peaks when columns merge, or draws one for an unanalyzed song.
+  it('keeps each column\'s loudest sample, mirrored about the middle, and is null without a loudness track', () => {
+    expect(waveformPath({ fps: 2, rms: [0.2, 1, 0, 0.4] }, 2)).toBe('M0 0.5L0 0L1 0.3L2 0.5L2 0.5L1 0.7L0 1Z');
+    expect(waveformPath({ fps: 2, rms: [] })).toBeNull();
+    expect(waveformPath(null)).toBeNull();
   });
 });

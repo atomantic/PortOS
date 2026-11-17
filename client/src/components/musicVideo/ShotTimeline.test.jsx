@@ -243,4 +243,18 @@ describe('ShotTimeline', () => {
     library.remove();
     inspector.remove();
   });
+
+  // Uniquely catches the scissors splitting the wrong shot or off a frame, and the song's loudness row going missing.
+  it('splits the shot under the playhead and draws the song as a waveform row', async () => {
+    const onSplitShot = vi.fn();
+    const analyzed = { ...project, audioAnalysis: { ...project.audioAnalysis, features: { envelopes: { fps: 1, rms: [0.2, 0.8, 0.4] } } } };
+    render(<ShotTimeline project={analyzed} shotName={shotName} onOpenShot={() => {}} onSeek={() => {}} onSplitShot={onSplitShot}
+      songClock={() => ({ t: 6.01, playing: false })} />);
+    const split = screen.getByRole('button', { name: 'Split the shot at the playhead' });
+    await waitFor(() => expect(split).toBeEnabled());
+    fireEvent.click(split);
+    expect(onSplitShot).toHaveBeenCalledWith('s2', 6);
+    expect(screen.getByTestId('shot-timeline-waveform').querySelector('path').getAttribute('d')).toMatch(/^M0 0\.5L0 0\.4L1 0\.1/);
+    expect(screen.getByText('Song')).toBeInTheDocument();
+  });
 });
