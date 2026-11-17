@@ -68,7 +68,7 @@ vi.mock('./cos.js', () => ({
 
 vi.mock('./appActivity.js', () => ({
   startAppCooldown: vi.fn(),
-  markAppReviewCompleted: vi.fn()
+  updateAppActivity: vi.fn()
 }));
 
 vi.mock('./cosRunnerClient.js', () => ({

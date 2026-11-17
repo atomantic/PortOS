@@ -48,7 +48,6 @@ vi.mock('./apps.js', async (importActual) => ({
 vi.mock('./appActivity.js', async (importActual) => ({
   ...(await importActual()),
   getNextAppForReview: vi.fn(async () => ({ id: 'example-app', name: 'Example App' })),
-  markIdleReviewStarted: vi.fn(async () => {}),
   markAppReviewCooldown: vi.fn(async () => {}),
   bindAppReviewAgent: vi.fn(async () => {}),
   updateAppActivity: vi.fn(async () => {}),
