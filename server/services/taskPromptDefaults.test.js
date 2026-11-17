@@ -12,7 +12,7 @@ import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromp
 import { EPIC_DECOMPOSED_LABEL } from './perpetualWork.js';
 // The claim prompts build their contributor-label release from this helper, so the
 // test asserts against the same source rather than re-typing the command text.
-import { HARDWARE_REQUIREMENT_GUIDANCE, MANDATORY_DISPATCH_HINT_GUIDANCE, DISPATCH_HINT_FANOUT_GUIDANCE, formatContributorLabelReleaseCommands, formatVolunteerClaimCommands } from '../lib/dispatchLabels.js';
+import { HARDWARE_REQUIREMENT_GUIDANCE, LIGHT_FINDINGS_BATCH_EXCEPTION, MANDATORY_DISPATCH_HINT_GUIDANCE, DISPATCH_HINT_FANOUT_GUIDANCE, formatContributorLabelReleaseCommands, formatVolunteerClaimCommands } from '../lib/dispatchLabels.js';
 import { FORGE_REVIEWER_WAIT_NOTE } from '../lib/reviewerConfig.js';
 
 // Hash snapshot of every exported prompt body and version. This pins the
@@ -126,13 +126,15 @@ describe('taskPromptDefaults integrity snapshot', () => {
   it('ux filings use tracker IDs instead of title slugs', () => {
     const current = DEFAULT_TASK_PROMPTS.ux;
 
-    expect(PROMPT_VERSIONS.ux).toBe(9);
+    expect(PROMPT_VERSIONS.ux).toBe(10);
     // v8 (#12090): route rotation reads the preloaded slice block, not only the tracker.
     expect(current).toMatch(/preloaded Recent audit slices block does not list/);
     expect(current).toContain('{trackerInstructions}');
     expect(current).toContain('short, human-readable title');
     expect(current).not.toContain('[ux-…]');
     expect(current).not.toContain('slug-tagged title');
+    // v10 (#16569): one item per finding, except light same-area findings batch.
+    expect(current).toContain(`**File ONE item per finding** (except that ${LIGHT_FINDINGS_BATCH_EXCEPTION})`);
   });
 
   it('ux checks wordy instructions, duplicate controls, and information hidden when needed', () => {

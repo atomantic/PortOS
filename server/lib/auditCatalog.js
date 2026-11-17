@@ -2,6 +2,7 @@
  * `getAuditScheduleMetadata` derives upgrade-safe display names and cluster labels.
  */
 
+import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { renderOrPrependSection } from './promptSectionRenderer.js';
 /**
@@ -73,7 +74,7 @@ Your deliverable is tracker items, not code. The run must end with the same \`gi
 2. **Complete a substantive review before filing.** Spend most of the available run budget investigating and validating candidates, reserving time for de-duplication, filing, and the final report. Within the bounded slice, inventory at least three distinct relevant paths or components (or all of them if fewer exist), then inspect their callers, consumers, tests, and relevant history. Finding or filing the first issue is NOT a stopping condition: continue through the remaining inventory, including when the first candidate is a duplicate or rejected. Stop when the inventory is reviewed, the configured run budget is nearly exhausted, or a concrete blocker prevents further review; do not idle to fill time or exceed the run budget.
 3. **Read the actual code.** Every finding must cite \`path/to/file.js:LINE\` and describe a concrete, reproducible impact: a reachable runtime/data failure, a CI or release failure, or recurring manual churn demonstrated by repository history. Delete subjective style preferences and any finding whose consequence you cannot prove.
 4. **De-duplicate before filing.** Follow the Inventory step under "Where to record findings" above. If it is already filed, skip it; comment on the existing item only when you have genuinely new evidence.
-5. **File every accepted finding in the reviewed slice as a separate item after the review.** One root cause per item — never split one problem to inflate the count. Bound the investigation, not the severity of findings you retain. Zero or one issue is valid when the reviewed evidence supports it. Bodies must be decision-complete:
+5. **File every accepted finding in the reviewed slice as a separate item after the review**, except that ${LIGHT_FINDINGS_BATCH_EXCEPTION}. One root cause per item or checklist entry — never split one problem to inflate the count. Bound the investigation, not the severity of findings you retain. Zero or one issue is valid when the reviewed evidence supports it. Bodies must be decision-complete:
    - **Problem** — what is wrong, with file:line references.
    - **Impact** — the observable consequence (runtime, data, CI/release, or recurring maintenance), not a code-smell label.
    - **Fix** — the approach you have DECIDED on, with the files it touches. If the only obstacle was a design choice, make the call and state it. Do not file a question.

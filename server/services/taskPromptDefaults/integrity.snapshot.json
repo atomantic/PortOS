@@ -13,8 +13,8 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "37405c6c46555d94722daba3316feb21",
-    "claim-issue-gitlab": "ebab18498424421df9c66205e1ef8572",
+    "claim-issue": "9338f1b822b8f8dd946582b8a444c3ec",
+    "claim-issue-gitlab": "e2e092442eebd235a07bf0687dfed04d",
     "claim-issue-jira": "8eb786c1ffbb0e589d7959ff829ed875",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "0f3459ff958f97ace12f61430ede70d7",
@@ -33,7 +33,7 @@
     "feature-completeness": "00d8916cc6032e74817657375375115b",
     "feature-ideas": "d5300180b45a1019326ab740ce1a3c28",
     "infrastructure": "f019bab508f95278ea00c33d69f85818",
-    "issue-reconcile": "4be2226696a5b58b53b9b9fc4a70b5ad",
+    "issue-reconcile": "649c772c59086698714e22d12c3dc470",
     "jira-sprint-manager": "3e63c8a3bdf0d5a05a30faaa2dc07980",
     "jira-status-report": "9e4f35b5a9372c4f50f1e10f7ec8050d",
     "media-render-research": "5164eda916760e6f3604b0c80a5f33ec",
@@ -65,7 +65,7 @@
     "ui-lifecycle": "d156882c73593a54c0fd5754eb4c6fa0",
     "upgrade-rehearsal": "7c6106afde09d7606dea62a5db372fe9",
     "user-action-review": "28c1b49e5ca806568077f56fe982ce08",
-    "ux": "7a717ced5a1c8df4d76c1f6987747792",
+    "ux": "19eb00a46482a1eac391b89fecc5eae3",
     "workflow-recovery": "005985edd090c7adc0a4a287bdda31eb"
   },
   "PROMPT_VERSIONS": {
@@ -131,7 +131,7 @@
     "ui-lifecycle": 3,
     "upgrade-rehearsal": 6,
     "user-action-review": 3,
-    "ux": 9,
+    "ux": 10,
     "workflow-recovery": 2
   },
   "REFERENCE_WATCH_AUDITED_VERSION": 5,
@@ -625,7 +625,8 @@
       "9f346b8be4408c5a8207d9a8b6080ff0",
       "bb8670c1e6eb28434ad2d45b6dc62177",
       "41b02e644f3dc5dcb713700c56a56454",
-      "14d790bd65e540d00786ecb4e787a61e"
+      "14d790bd65e540d00786ecb4e787a61e",
+      "7a717ced5a1c8df4d76c1f6987747792"
     ],
     "workflow-recovery": [
       "628d2ec51c3cd3d8bbd76eacb212dada"

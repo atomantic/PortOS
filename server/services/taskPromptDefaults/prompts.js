@@ -17,6 +17,7 @@ import {
   EPIC_DECOMPOSED_LABEL,
   EPIC_LABEL,
   ISSUE_QUALITY_GUIDANCE,
+  LIGHT_FINDINGS_BATCH_EXCEPTION,
   MANDATORY_DISPATCH_HINT_GUIDANCE,
   formatOptionalIssueLabelFlags,
   formatContributorLabelReleaseCommands,
@@ -1345,7 +1346,7 @@ keyboard-inaccessible icon") — and file it as the UX finding, not as the a11y 
       configuration and the page's root container with its siblings', and
       check that a detail route (\`/:id\`) gets the same shell as its index.
 
-5. **File ONE item per finding** using the "Record" mechanics under "Where to
+5. **File ONE item per finding** (except that ${LIGHT_FINDINGS_BATCH_EXCEPTION}) using the "Record" mechanics under "Where to
    record findings" above. Each finding must carry:
 
    - **A short, human-readable title** naming the screen and the problem. Do
@@ -3821,7 +3822,7 @@ function claimPublication(forge, { review, leaveOpen, draft }) {
     : '`glab mr view --output json` reports `draft: true`';
   return `## Phase 6 — Publish and validate
 
-Push \`claim/issue-\${NUM}\`, confirm \`git log --oneline @{u}..HEAD\` is empty, and open the ${change} non-interactively with ${create}. Summarize the change and test plan. For a complete fix use \`Closes #\${NUM}\`; for partial scope use \`Refs #\${NUM}\` and a Remaining section. Verify the published description contains the intended trailer, updating it if necessary.${draft ? ` Verify ${draftCheck}; if not, preserve the claim and report the publication failure.` : ''}
+Push \`claim/issue-\${NUM}\`, confirm \`git log --oneline @{u}..HEAD\` is empty, and open the ${change} non-interactively with ${create}. Summarize the change and test plan. For a complete fix use \`Closes #\${NUM}\`; for partial scope use \`Refs #\${NUM}\` and a Remaining section. Verify the published description contains the intended trailer, updating it if necessary.${draft ? ` Verify ${draftCheck}; if not, preserve the claim and report the publication failure.` : ''} This flow does NOT touch PLAN.md.
 
 ${review ? `${claimPublishedReview(forge)}
 

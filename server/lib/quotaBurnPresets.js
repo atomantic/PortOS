@@ -126,14 +126,12 @@ the window reading and tracing, and only then start filing.
    file OUTSIDE the repository — \`BODY=$(mktemp)\` — then create with repeated
    \`--label\` flags:
    \`gh issue create --title "..." --body-file "$BODY" --label ...\`. Keep scratch
-   files out of the working tree: you are running in the repository's OWN
-   checkout, on the branch it is currently on — not a throwaway copy — so
-   anything you leave behind is left in the user's working tree. Category
+   files out of the user's live checkout (step 10). Category
    labels (create each missing one immediately before applying it —
    \`gh label create <name> --color 0366D6 2>/dev/null || true\`):
    ${labels}. Then the required dispatch labels.
    ${MANDATORY_DISPATCH_HINT_GUIDANCE.split('\n').join(' ')} One problem per
-   issue — never a bundle. Do not relabel an existing issue you skipped as a
+   issue — never a bundle, except the light-findings checklist issue above. Do not relabel an existing issue you skipped as a
    duplicate.
 7. **Bodies must be decision-complete**, in this shape:
    - **Problem** — what is wrong, with file:line references.
@@ -146,8 +144,8 @@ the window reading and tracing, and only then start filing.
 8. **Cap yourself at 5 issues, and aim for two or three.** Depth is the
    deliverable: a handful of researched, ready-to-work issues is worth more than
    a wall of nits, and a long tail of low-value issues costs a human real triage
-   time. Fewer than 5 real problems? File fewer, and spend the time you save
-   going deeper on the ones you keep or widening the slice you researched.
+   time. Fewer than 5 real problems? File fewer, and go deeper on the ones you
+   keep.
 9. **Redact before you publish.** An issue is world-readable the moment it is
    filed. Never paste a secret, credential, token, hostname, IP address, absolute
    path containing a username, or any personal record into a title or body — cite
