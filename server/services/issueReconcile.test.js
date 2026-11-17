@@ -894,7 +894,7 @@ describe('swarm reservations (in-progress, no assignee)', () => {
           return JSON.stringify([{ number: 2220, title: 't', url: 'u', labels: [{ name: 'in-progress' }], updatedAt, author: { login: 'trusted-author' }, ...overrides }]);
         }
         if (argv[0] === 'pr' && argv.includes('merged')) return '[]';
-        if (argv[0] === 'api' && argv[1] === 'user') return JSON.stringify({ login: 'atomantic' });
+        if (argv[0] === 'api' && argv.at(-1) === 'user') return JSON.stringify({ login: 'atomantic' });
         if (argv[0] === 'api' && argv.at(-1).endsWith('/permission')) return JSON.stringify({ permission: 'write', user: { login: 'trusted-author' } });
         if (argv[0] === 'issue' && argv[1] === 'comment') { updatedAt = new Date(NOW).toISOString(); return ''; }
         if (argv[0] === 'issue' && argv[1] === 'edit' && editFails) throw new Error('HTTP 502');
