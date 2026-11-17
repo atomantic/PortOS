@@ -45,7 +45,7 @@ const ISSUE_CLAIM_BRANCH = /^(?:next|claim)\/issue-([1-9]\d*)$/;
 /** The holds `mergedOwnershipHold` reports: a sweep logs each one, since none names a failure. */
 export const MERGED_OWNERSHIP_HOLDS = new Set([
   'branch-has-no-own-commits', 'branch-own-commits-unreadable', 'published-claim-unmerged', 'branch-publication-unreadable',
-  'claim-issue-reserved', 'claim-issue-unverified', 'checkout-process-active', 'checkout-recently-touched', 'checkout-idle-unreadable',
+  'claim-issue-reserved', 'claim-issue-unverified', 'checkout-presence-unreadable', 'checkout-process-active', 'checkout-recently-touched', 'checkout-idle-unreadable',
 ]);
 
 /** The issue number a `/do:next` or `/claim` branch reserves, or null. */
@@ -105,13 +105,14 @@ function manualClaimShipped({ worktreeAgeMs, openPr, prStateUnavailable, nowMs }
  *    reads `'patch'` and skips this): a reserved issue claim, a process with its
  *    working directory in the checkout, or activity there within
  *    ANCESTRY_RETIREMENT_IDLE_MS holds, because a live owner outranks ancestry.
+ *    A checkout directory proven absent has neither, so it skips those two.
  *
  * Each hold lifts only when the forge reports a PR merged at exactly this head
  * (`mergedPrAtHead`, read only once something would hold). Every unreadable fact
  * holds under its own reason.
  *
  * @param {{ branch: string, checkoutPath: string|null, nowMs?: number, facts: object }} input
- *   facts: `lineage`, `published`, `claimReserved`, `checkoutProcess`, `idleMs`, `mergedPrAtHead`
+ *   facts: `lineage`, `published`, `claimReserved`, `checkoutPresent`, `checkoutProcess`, `idleMs`, `mergedPrAtHead`
  * @returns {{ need: string } | { hold: { reason: string, retryAt?: string } } | null}
  */
 function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }) {
@@ -130,6 +131,11 @@ function mergedOwnershipHold({ branch, checkoutPath, nowMs = Date.now(), facts }
     if (facts.claimReserved !== false) return unlessShipped(facts.claimReserved === null ? 'claim-issue-unverified' : 'claim-issue-reserved');
   }
   if (!checkoutPath) return null;
+  if (facts.checkoutPresent === undefined) return { need: 'checkoutPresent' };
+  if (facts.checkoutPresent === null) return unlessShipped('checkout-presence-unreadable');
+  // A directory proven gone holds no process and no activity: retiring it
+  // prunes a stale registration and its merged branch.
+  if (!facts.checkoutPresent) return null;
   if (facts.checkoutProcess === undefined) return { need: 'checkoutProcess' };
   if (facts.checkoutProcess !== false) return unlessShipped('checkout-process-active');
   if (facts.idleMs === undefined) return { need: 'idleMs' };

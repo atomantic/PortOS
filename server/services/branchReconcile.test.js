@@ -44,6 +44,7 @@ vi.mock('./worktreeManager.js', async () => {
   return {
     listWorktrees: vi.fn(async () => []),
     deleteCompletedLocalBranch: vi.fn(async () => true),
+    readCheckoutPresence: vi.fn(async () => true),
     forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
     readWorktreeStatus: async (path) => {

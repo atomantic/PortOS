@@ -671,13 +671,17 @@ async function discardLockfileChanges(worktreePath, dirt) {
   if (tracked.length) await execGit(['checkout', '--', ...tracked], worktreePath);
 }
 
+/** Whether a checkout directory exists: false only when proven absent, null when unreadable. */
+export async function readCheckoutPresence(worktreePath) {
+  return lstat(worktreePath).then(() => true, err => (err.code === 'ENOENT' || err.code === 'ENOTDIR' ? false : null));
+}
+
 /** A proven-absent directory is empty; an existing tree must identify itself.
  * Git can otherwise walk out of a broken linked checkout and report its parent
  * clean. null means unknown, including unreadable directories or status errors.
  */
 export async function readWorktreeStatus(worktreePath) {
-  const present = await lstat(worktreePath).then(() => true,
-    err => err.code === 'ENOENT' || err.code === 'ENOTDIR' ? false : null);
+  const present = await readCheckoutPresence(worktreePath);
   if (present === false) return '';
   if (present === null) return null;
   const top = await execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim()).catch(() => null);
@@ -2279,6 +2283,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       lineage: () => readBranchLineage(sourceWorkspace, scannedBranch, wt.head, target),
       published: () => readBranchPublished(sourceWorkspace, scannedBranch),
       claimReserved: async () => (await import('./claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
+      checkoutPresent: () => readCheckoutPresence(wt.path),
       checkoutProcess: () => hasProcessCwdInside(wt.path),
       idleMs: async () => (await import('./branchReconcile.js')).checkoutIdleMs(wt.path),
     });

@@ -31,7 +31,7 @@ import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemo
 import { readClaimIssueReservation, readRepoClaimIssueReservation } from './claimIssueReservation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
-import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
+import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readCheckoutPresence, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
 import { execGh, ensureForgeReachable, getIssueDispatchHint } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
@@ -1348,6 +1348,7 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     // The gather's ls-remote answer, else the local remote-tracking refs.
     published: () => b.published === true || readBranchPublished(repoPath, b.branch),
     claimReserved: () => claimReserved,
+    checkoutPresent: (facts, path) => readCheckoutPresence(path),
     checkoutProcess: (facts, path) => hasProcessCwdInside(path),
     mergedPrAtHead: facts => Boolean(shippedHead) && shippedHead === facts.head,
   };
