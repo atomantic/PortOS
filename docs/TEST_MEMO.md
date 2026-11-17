@@ -131,7 +131,7 @@ guard calls those walkers, and a guard (`*.guard.test.js`) is never memoized.
 `join(HERE, name)` names a directory and leaves the rest to run time. Until
 #16602 the key took that directory's tree, as if the read had to land in it.
 A helper called as `read('../../client/src/limits.js')` leaves it, and a
-template URL (`new URL(\`../../data.reference/templates/${name}\`, import.meta.url)`)
+template URL (``new URL(`../../data.reference/templates/${name}`, import.meta.url)``)
 was keyed as the importing file's own directory: the key held files the test
 never read and missed the one it did. `server/test/fixtures/ecosystemConfigCopy.js`
 was keyed that way in every suite that imports it.
@@ -139,19 +139,20 @@ was keyed that way in every suite that imports it.
 A variable segment is now one of three things:
 
 - **Resolved.** The variable is a parameter of a function declared once in
-  the file, never exported, stored or handed on, and every call passes a
-  literal (or another resolved variable); or it is the callback parameter or
+  the file, never exported, stored, handed on or reassigned, and every call
+  passes a literal (or another resolved variable); or it is the callback parameter or
   `for…of` variable of a literal array, an `it.each` table of strings, or a
   `const` array nothing in the file can add to. The path is evaluated once per
   value (up to 64 combinations) and each file is an ordinary input. No
-  directory is keyed, and a helper nothing calls contributes nothing.
+  directory is keyed, and a helper nothing calls contributes nothing. A
+  parameter or loop variable shadows a module-level binding of the same name.
 - **Contained.** The variable is an unchanged entry of a `readdir`/
   `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
   `randomUUID()`, or the path is built with `pathWithin(dir, ...segments)`
   (`scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
   the result is outside `dir`. The directory's tree is the input, as before.
   The literal directories in front of the variable are part of it:
-  `\`${HERE}/fixtures/${name}\`` keys `fixtures`, not `HERE`.
+  `` `${HERE}/fixtures/${name}` `` keys `fixtures`, not `HERE`.
 - **Unbounded.** Anything else: a property, a call result, an argument that is
   not a literal, a name that was rewritten (`name.replace(…)`), chosen
   (`cond ? a : name`), followed by a `..` segment, glued to the directory
@@ -170,8 +171,8 @@ The rule belongs to the test file and to `scripts/`, like the git and
 oversized-tree rules. A library module builds such a path from what its caller
 passes and reads it only when a test calls it, so it keeps the directory it
 was keyed with: for an unbounded template that is the importing file's
-directory and now the literal directory too, never less than before. A
-variable `import()` whose module path is unbounded is an unresolved edge for
+directory and now the literal directory too, never less than before (#16660
+tracks proving those reads). A variable `import()` whose module path is unbounded is an unresolved edge for
 the floor key, whichever member holds it.
 
 ## Never memoized (fails closed)
