@@ -258,9 +258,9 @@ function normalizeGithubIssue(issue) {
  * always full, so it suffices when its oldest merge predates every in-progress
  * issue's creation.
  */
-function listsAreComplete(inProgress, merged, open) {
-  if (inProgress.length >= GH_LIST_LIMIT || open.length >= GH_LIST_LIMIT) return false;
-  if (merged.length < GH_LIST_LIMIT) return true;
+function listsAreComplete(inProgress, merged, open, limit = GH_LIST_LIMIT) {
+  if (inProgress.length >= limit || open.length >= limit) return false;
+  if (merged.length < limit) return true;
   const oldestMerge = Math.min(...merged.map((pr) => Date.parse(pr.mergedAt)));
   const oldestIssue = Math.min(...inProgress.map((i) => Date.parse(i.createdAt)));
   if (!Number.isFinite(oldestMerge)) return false;
@@ -357,6 +357,7 @@ function normalizeGitlabIssue(issue) {
       : [],
     hasAssignee: gitlabHasAssignee(issue),
     updatedAt: issue.updated_at || '',
+    createdAt: issue.created_at || '',
   };
 }
 
@@ -366,6 +367,7 @@ function normalizeGitlabMr(mr) {
     number: mr.iid,
     headRefName: mr.source_branch || '',
     body: mr.description || '',
+    mergedAt: mr.merged_at || '',
     url: mr.web_url || '',
   };
 }
@@ -399,6 +401,13 @@ async function getGitlabState(repoPath, fullName) {
     console.error(`❌ issue-reconcile: glab mr list unavailable for ${fullName} (${merged.reason}/${open.reason}) — skipping this cycle`);
     return null;
   }
+  const inProgress = issues.rows.map(normalizeGitlabIssue);
+  const mergedPrs = merged.rows.map(normalizeGitlabMr);
+  const openPrs = open.rows.map(normalizeGitlabMr);
+  if (!listsAreComplete(inProgress, mergedPrs, openPrs, GL_PER_PAGE)) {
+    console.warn('⚠️ issue-reconcile: forge lists reached the completeness limit; withholding cleanup until the full claim state is available');
+    return null;
+  }
   return {
     forge: 'gitlab',
     fullName,
@@ -406,12 +415,9 @@ async function getGitlabState(repoPath, fullName) {
     // ABANDONED. Volunteer claims are created by `gh`-only flows; only an expired RESERVATION
     // is released on GitLab.
     ownerLogin: null,
-    inProgress: issues.rows.map(normalizeGitlabIssue),
-    mergedPrs: merged.rows.map(normalizeGitlabMr),
-    openPrs: open.rows.map(normalizeGitlabMr),
-    // One page only: a full page may hide the open MR that keeps a reservation live,
-    // so `reconcile` withholds reservation releases until the page is no longer full.
-    openPrsComplete: open.rows.length < GL_PER_PAGE,
+    inProgress,
+    mergedPrs,
+    openPrs,
   };
 }
 
@@ -546,8 +552,6 @@ export async function gatherIssueState(repoPath, { activeAgentIssueNums = new Se
     fullName: state.fullName,
     repoSpec: state.repoSpec ?? null,
     ownerLogin: state.ownerLogin ?? null,
-    // GitHub withholds the whole scan when a list saturates, so only GitLab can report false.
-    openPrsComplete: state.openPrsComplete !== false,
     issues,
   };
 }
@@ -574,11 +578,6 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
   const classified = classifyIssues(gathered.issues);
   const reserved = classified.filter((c) => c.state === 'RESERVED');
   const expired = reserved.filter((c) => isClaimStale(c.staleDays));
-  // An unseen open MR could be the live claim behind an expired-looking reservation.
-  const canRelease = gathered.openPrsComplete || expired.length === 0;
-  if (!canRelease) {
-    console.log(`⏭️ issue-reconcile: open change list for ${gathered.fullName} reached the page limit — holding ${expired.length} expired reservation(s) until it can be read in full`);
-  }
   return {
     forge: gathered.forge,
     fullName: gathered.fullName,
@@ -587,9 +586,9 @@ export async function reconcile(repoPath = PATHS.root, { activeAgentIssueNums = 
     zombies: classified.filter((c) => c.state === 'ZOMBIE'),
     abandoned: [
       ...classified.filter((c) => c.state === 'ABANDONED'),
-      ...(canRelease ? expired : []),
+      ...expired,
     ],
-    reserved: canRelease ? reserved.filter((c) => !isClaimStale(c.staleDays)) : reserved,
+    reserved: reserved.filter((c) => !isClaimStale(c.staleDays)),
     stalled: classified.filter((c) => c.state === 'STALLED'),
     live: classified.filter((c) => c.state === 'LIVE'),
   };
