@@ -1,0 +1,39 @@
+/**
+ * Music Video spend routes (#16506): the project's render spend by lane, and the manual
+ * adjustments a user makes to true it up against a provider's balance.
+ */
+import { Router } from 'express';
+import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { musicVideoSpendAdjustmentSchema } from '../lib/musicVideoValidation.js';
+import { projectSpend } from '../lib/musicVideoSpend.js';
+import { currentRun } from '../lib/musicVideoSummary.js';
+import { requireProject } from '../services/musicVideo/requireProject.js';
+import { adjustProjectSpend, readProjectRenderSpend, removeProjectSpendAdjustment } from '../services/musicVideo/renderSpend.js';
+
+const router = Router();
+
+const spendResponse = (project, renderSpend) => {
+  const withLedger = { ...project, renderSpend };
+  return { renderSpend, spend: projectSpend(withLedger, currentRun(withLedger)) };
+};
+
+router.get('/:id/spend', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  res.json(spendResponse(project, await readProjectRenderSpend(project)));
+}));
+
+router.post('/:id/spend/adjustments', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoSpendAdjustmentSchema, req.body ?? {});
+  const project = await requireProject(req.params.id);
+  const { adjustment, renderSpend } = await adjustProjectSpend(project, input);
+  res.status(201).json({ adjustment, ...spendResponse(project, renderSpend) });
+}));
+
+router.delete('/:id/spend/adjustments/:adjustmentId', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { renderSpend } = await removeProjectSpendAdjustment(project, req.params.adjustmentId);
+  res.json(spendResponse(project, renderSpend));
+}));
+
+export default router;

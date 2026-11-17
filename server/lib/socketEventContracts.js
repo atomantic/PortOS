@@ -105,6 +105,10 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Derived render cleanup changed; refresh the project render inventory.',
     payloadSchema: { type: 'object', required: ['projectId'], properties: { projectId: { type: 'string' } }, additionalProperties: false },
   },
+  'music-video:render-spend': {
+    direction: 'server-to-client', summary: "A paid render reached the project's spend ledger, or a spend adjustment changed; apply the project's new render spend summary.",
+    payloadSchema: { type: 'object', required: ['projectId', 'renderSpend'], properties: { projectId: { type: 'string' }, renderSpend: { type: 'object' } }, additionalProperties: false },
+  },
   'music-video:blender': {
     direction: 'server-to-client',
     summary: 'A Blender film job (sync, shot render, cut) was queued, advanced or ended (`kind: job`, at most four a second per job), or the film changed outside a job (`kind: state`); re-read the film state on `state` and on a job that ended.',

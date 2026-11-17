@@ -950,3 +950,13 @@ export const cancelMusicVideoLyricVerify = (jobId, options = {}) => request(`/mu
 
 export const captureMusicVideoPublishFrame = (id, atSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/frame`, { method: 'POST', body: JSON.stringify({ atSec }), ...options });
+// #16506: the project's render spend by lane, and manual adjustments that true it up.
+// An adjustment body is { lane, actualUsd } (what the lane really cost) or { lane, usd } (an amount to add), plus an optional note.
+const spendPath = (id) => `/music-video/${encodeURIComponent(id)}/spend`;
+export const getMusicVideoSpend = (id, options = {}) => request(spendPath(id), options);
+export const addMusicVideoSpendAdjustment = (id, body, options = {}) => request(`${spendPath(id)}/adjustments`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const deleteMusicVideoSpendAdjustment = (id, adjustmentId, options = {}) => request(`${spendPath(id)}/adjustments/${encodeURIComponent(adjustmentId)}`, {
+  method: 'DELETE', ...options,
+});

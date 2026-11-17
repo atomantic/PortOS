@@ -17,6 +17,7 @@ import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
+import { renderedTakeCost } from '../services/musicVideo/renderSpend.js';
 import { musicVideoTakeSelectSchema } from '../lib/musicVideoValidation.js';
 
 const router = Router();
@@ -170,6 +171,7 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   }
   const { scene, appended, edit } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
+    ...(await renderedTakeCost(req.params.id, kind, assetId)),
   }], { edit: true });
   res.status(201).json({ scene, take: appended[0], edit });
 }));

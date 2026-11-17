@@ -3,6 +3,7 @@
  */
 
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import { SPEND_ADJUSTMENT_LANES } from './musicVideoSpend.js';
 import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
 import {
   ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
@@ -2662,4 +2663,18 @@ export const musicVideoProjectListQuerySchema = z.object({
   limit: z.string().optional(),
   offset: z.string().optional(),
   cursor: z.string().max(64).optional(),
+});
+
+/**
+ * A manual spend adjustment (#16506): `actualUsd` states what the lane really cost (the
+ * adjustment is the difference from what the project shows), `usd` adds a signed amount.
+ * Exactly one of the two.
+ */
+export const musicVideoSpendAdjustmentSchema = z.object({
+  lane: z.enum(SPEND_ADJUSTMENT_LANES),
+  actualUsd: z.number().finite().min(0).max(1_000_000).optional(),
+  usd: z.number().finite().min(-1_000_000).max(1_000_000).optional(),
+  note: z.string().trim().max(500).optional(),
+}).strict().refine((input) => (input.actualUsd == null) !== (input.usd == null), {
+  message: 'Give either actualUsd (what the lane really cost) or usd (an amount to add), not both',
 });
