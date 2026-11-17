@@ -29,13 +29,20 @@ Version is managed by the `/do:release` Claude Code slash command (provided by t
 ### CI Validation
 
 The [CI workflow](../.github/workflows/ci.yml) runs on pull requests targeting
-`main` or `release`, a nightly schedule that checks `main`, manual dispatch
-(`workflow_dispatch`), and reusable-workflow calls (`workflow_call`). It plans
-the required tests and linting for each run; CI does not change the version.
+`main` or `release`, pushes to `main`, a twice-daily schedule that checks
+`main`, manual dispatch (`workflow_dispatch`), and reusable-workflow calls
+(`workflow_call`). It plans the required tests and linting for each run; CI
+does not change the version.
 
-Direct pushes to `main` do not start this workflow. Run `npm run pregate`
-before every push and again after rebasing onto a moved base, as required by
-[`AGENTS.md`](../AGENTS.md).
+A pull request into `main` runs an impact-scoped plan. A push to `main` (each
+merge) runs the primary suites complete and decides the six native job families
+(SuperCollider, Windows, macOS, Linux and Docker containment, Node minimum) from
+the tree diff since the last green `main` run; a run gated that way publishes
+no `Full CI Gate`. A pull request into `release` always runs the complete plan
+with every native job and publishes `Full CI Gate`
+([details](GITHUB_ACTIONS.md#native-jobs-on-a-push-to-main)). Run
+`npm run pregate` before every push and again after rebasing onto a moved
+base, as required by [`AGENTS.md`](../AGENTS.md).
 
 ### On candidate promotion to `release`
 
@@ -176,7 +183,7 @@ that the tree is unchanged; an unexpected content change is a reconciliation
 blocker. Do not merge the latest `main` to fix ancestry. Record any such ancestry
 merge in the candidate ledger.
 
-#### 2. Prepare and validate only this candidate
+#### 2. Prepare only this candidate; hosted CI validates it
 
 Choose the version and synthesize `.changelog/RELEASE.md` (the one notes file,
 overwritten each release; this is the stated convention the shared release recipe
@@ -196,11 +203,29 @@ candidate-gating fixes. A quality snapshot already present at the cutoff is
 included; a newly published snapshot goes to the next release and does not move
 or delay this cutoff.
 
-Run the documented release checks from the candidate worktree: provision
-`portos_test` with `npm run setup:db:test`, run `npm run test:db`, and run
-`npm run pregate -- --full` before pushing. Never use the production database.
-Report any locally unavailable stage and require its CI result. Review the full
-previous-published-commit-to-candidate diff, not just the preparation commit.
+Candidate validation is the release PR's hosted CI, not a local repeat of it.
+A pull request into `release` forces the complete plan on the exact candidate
+head: full server and client suites, lint, the client build, the boot smoke,
+the DB suite against a provisioned `portos_test`, the browser suites at their
+full profile, shipped prompt history, and every native job (Windows, macOS,
+Linux and Docker containment, SuperCollider, Node minimum). Step 4 requires
+that run green before promotion, and the Release workflow reruns the complete
+suite when it cannot find that green gate for the released tree. So before
+pushing the candidate, run only the ordinary `npm run pregate` from the
+candidate worktree. Do not run `npm run test:db` or
+`npm run pregate -- --full` as a release step; reach for them only to
+reproduce a red hosted job, and then only against `portos_test`
+(`npm run setup:db:test` first), never the production database.
+
+Review what this run adds to the candidate: the preparation commit and each
+admitted gating fix (step 3), which is the diff from `RELEASE_CUT_SHA` to the
+candidate head. Everything at or before the cutoff reached `main` through its
+own reviewed, CI-gated pull request and is not reviewed again; this replaces
+the generic slashdo instruction to review the whole
+previous-release-to-candidate diff. Pass `RELEASE_CUT_SHA` as the base of the
+local code review and of every configured local reviewer. Still read the
+commit log of the whole range: the notes, the release name and the readiness
+count are written from it.
 
 #### 3. Admit only evidenced release-gating fixes
 
@@ -218,8 +243,8 @@ owners and normal trusted-review/admission boundaries. A broad fix that cannot b
 safely isolated remains an explicit blocker; do not silently expand the release.
 
 An amendment changes the candidate head: update the notes if needed and rerun
-affected local checks, pregate, required review and full promotion CI for that
-head. Merely advancing `main` changes none of these inputs and does not invalidate
+the focused tests for the fix, pregate, a review of the amendment and full
+promotion CI for that head. Merely advancing `main` changes none of these inputs and does not invalidate
 candidate validation. Record candidate-only fixes for forward-porting to `main`.
 
 #### 4. Promote the exact validated candidate
@@ -228,7 +253,9 @@ Push the candidate after pregate. Create the PR with
 `--head "$CANDIDATE_BRANCH" --base release`, including the cutoff identities,
 previous-tag comparison, chosen version/name and amendment ledger. A PR targeting
 `release` forces full CI regardless of its head branch; require both `CI Gate`
-and `Full CI Gate` on the current candidate head.
+and `Full CI Gate` green on the current candidate head before merging. This
+run is the candidate's only broad validation, so a pending, missing, skipped
+or red gate is never promoted.
 
 When investigating integration with a structural guard, compare the candidate
 against **`origin/release`, its actual PR base**, not `origin/main`. Before

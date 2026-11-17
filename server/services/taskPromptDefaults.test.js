@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DEFAULT_TASK_PROMPTS, PROMPT_VERSIONS, REFERENCE_WATCH_AUDITED_VERSION, promptMatchesShippedDefault } from './taskPromptDefaults.js';
 import { UNPERSISTED_PROMPT_KEYS } from './taskPromptDefaults/versions.js';
@@ -1005,6 +1006,40 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(current).toContain('--log-failed');
     expect(current).not.toMatch(/copilot/i);
     expect(current).not.toContain('reviewThreads');
+  });
+
+  // do-release v29 (#16570): the release PR's hosted full run is the candidate's
+  // only broad validation, so the local repeat of it and the re-review of
+  // already-merged pull requests are gone. The green gate must not go with
+  // them. docs/VERSIONING.md is the procedure the prompt defers to, so both are
+  // pinned: dropping the CI requirement from either, or restoring the local
+  // repeat in only one, fails here.
+  it('do-release leaves broad validation to release-candidate CI and still requires it green before promotion', () => {
+    const current = DEFAULT_TASK_PROMPTS['do-release'];
+    expect(PROMPT_VERSIONS['do-release']).toBeGreaterThanOrEqual(29);
+    const requirement = current.indexOf('green release-candidate CI is a hard requirement for promotion');
+    expect(requirement).toBeGreaterThan(-1);
+    expect(requirement).toBeLessThan(current.indexOf('Once required CI is green, merge'));
+    expect(current).toContain('both `CI Gate` and `Full CI Gate`');
+    expect(current).toContain('A pending, missing, skipped, or red check is not green');
+    expect(current).toContain('run only its documented pre-push gate');
+    expect(current).toContain('do not review the whole previous-release-to-candidate diff again');
+    expect(current).toContain('Still read the commit log of the whole range');
+    expect(current).not.toContain('review, and tests use the previous published tag');
+
+    const doc = readFileSync(new URL('../../docs/VERSIONING.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+    const step = (number) => {
+      const start = doc.indexOf(`#### ${number}. `);
+      const end = doc.indexOf(`#### ${number + 1}. `);
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+      return doc.slice(start, end);
+    };
+    expect(step(2)).toContain('run only the ordinary `npm run pregate`');
+    expect(step(2)).toContain('Do not run `npm run test:db` or `npm run pregate -- --full` as a release step');
+    expect(step(2)).toContain('is not reviewed again');
+    expect(step(2)).toContain('Still read the commit log of the whole range');
+    expect(step(4)).toContain('require both `CI Gate` and `Full CI Gate` green on the current candidate head before merging');
   });
 
   // The PortOS custom catalog-refresh job still sources this versioned prompt:
