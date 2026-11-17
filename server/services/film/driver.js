@@ -12,6 +12,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathWithin } from '../../../lib/pathWithin.js';
 import { PATHS } from '../../lib/paths.js';
 import { codeAnimationWorkerFailure } from '../../lib/codeAnimationContainment.js';
 import { blenderRefusal, blenderRendersDir, blenderSongFile, blenderSrcDir, blenderWorkspaceDir } from './workspace.js';
@@ -37,11 +38,14 @@ export async function requireBlenderFilmTool() {
   return resolveBlenderTool();
 }
 
+/** A shipped driver or kit file by its `/`-separated path; a path that climbs out of py/ throws (`pathWithin`). */
+export const driverSourcePath = (path) => pathWithin(PY_DIR, ...path.split('/'));
+
 // Read from disk for each job: the driver and kit are plain source files.
 async function stagedDriverFiles() {
   const kit = (await readdir(join(PY_DIR, KIT))).filter((name) => name.endsWith('.py')).sort();
   return Promise.all([DRIVER, ...kit.map((name) => `${KIT}/${name}`)].map(async (path) => ({
-    path, content: await readFile(join(PY_DIR, ...path.split('/'))),
+    path, content: await readFile(driverSourcePath(path)),
   })));
 }
 

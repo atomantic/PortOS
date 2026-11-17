@@ -8,15 +8,17 @@
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { pathWithin } from '../../../../lib/pathWithin.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..');
 
 /**
  * Read a SHIPPED stage prompt from `data.reference/`, not the gitignored,
  * user-customizable `data/`: only the shipped seed is a contract worth enforcing.
+ * A name that climbs out of the stages directory rejects (`pathWithin`).
  */
-export const readShippedPrompt = (name) =>
-  readFile(join(REPO_ROOT, 'data.reference', 'prompts', 'stages', name), 'utf-8');
+export const readShippedPrompt = async (name) =>
+  readFile(pathWithin(join(REPO_ROOT, 'data.reference', 'prompts', 'stages'), name), 'utf-8');
 
 const IDENTIFIER = /^[a-z][A-Za-z0-9]*$/;
 

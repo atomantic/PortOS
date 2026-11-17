@@ -9,9 +9,19 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 
 const { PATHS } = await import('../../lib/paths.js');
 const projects = await import('./projects.js');
-const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument, readDocumentFiles } = await import('./compositionDocument.js');
+const { importDocumentTemplate, importDocumentDirectory, stageGeneratedDocument, readDocumentFiles, documentTemplateDirectory, readTemplateDocumentFiles } = await import('./compositionDocument.js');
 
 afterAll(() => cleanupTempDataRoots());
+
+// A template id names a directory under documentTemplates/: the callers allow only listed ids, and the
+// join itself (pathWithin) throws for one that climbs out, which is what lets the test memo key the tree.
+describe('template directory', () => {
+  it('refuses a template id that climbs out of documentTemplates, at the allowlist and at the join', async () => {
+    await expect(readTemplateDocumentFiles('../musicVideo')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(() => documentTemplateDirectory('../../musicVideo')).toThrow(RangeError);
+    expect(documentTemplateDirectory('layered')).toMatch(/documentTemplates[\\/]layered$/);
+  });
+});
 
 async function listed(document) {
   const root = join(PATHS.data, document.directory);

@@ -150,6 +150,8 @@ A variable segment is now one of three things:
   not handed to unknown code (`expect(NAMES)` only with a comparing matcher such
   as `toEqual` or `toHaveLength`), declared once). An array literal with an empty
   slot (`['a', , 'b']`) is not resolved: the slot is `undefined` to the loop.
+  An imported name can also resolve when its repository module exports a literal
+  string or a literal array wrapped in the built-in `Object.freeze()`.
   The path is evaluated once per
   value (up to 64 combinations) and each file is an ordinary input. No
   directory is keyed, and a helper nothing calls contributes nothing. A
@@ -170,7 +172,7 @@ A variable segment is now one of three things:
 - **Contained.** The variable is an unchanged entry of a `readdir`/
   `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
   `randomUUID()` from `node:crypto`, or the path is built with `pathWithin(dir, ...segments)`
-  (`scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
+  (`lib/pathWithin.js`, re-exported by `scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
   the result is outside `dir`. The directory's tree is the input, as before.
   The literal directories in front of the variable are part of it:
   `` `${HERE}/fixtures/${name}` `` keys `fixtures`, not `HERE`. Literal text
@@ -181,15 +183,15 @@ A variable segment is now one of three things:
   not a literal, a name that was rewritten (`name.replace(…)`), chosen
   (`cond ? a : name`), followed by a `..` segment, glued to the directory
   with no separator, or resolved through `new URL()` (which decodes `%2e%2e`
-  and reads `\` as a separator). The test file, and any member under
-  `scripts/`, fails closed: `reads a path through read() that the analyzer
+  and reads `\` as a separator). The test fails closed, whichever member of
+  its closure reads the path: `reads a path through read() that the analyzer
   cannot resolve (under <dir>)` when the variable is a helper's parameter,
   `reads a path with a variable segment that can leave <dir>` otherwise.
 
-A test that reads a file it cannot name in its own source (a name from a table
+Code that reads a file it cannot name in its own source (a name from a table
 in another module, a value parsed out of a file) stays memoizable by joining
 with `pathWithin()`. The analyzer accepts the call only when the name is
-imported from that module. A file that mocks `fs`, `crypto` or `pathWithin.js`
+imported from either guard module. A file that mocks `fs`, `crypto` or `pathWithin.js`
 (`vi.mock`, a `vi.spyOn` of the member, any use of the `fs` namespace but a
 call through it), or that imports a helper or runs under a workspace setup
 file that does, decides what they return, and a parameter or
@@ -198,6 +200,9 @@ nothing is inferred from them there. A mock counts against a read that relies
 on it: every `pathWithin()` call (literal segments included), a listing or a
 generated id only where a read is contained by it. It counts only from a
 member that runs: a test file another member reads as text registers nothing.
+
+A read that relies on an imported constant is refused if a file that runs
+mocks its exporting module.
 
 The analysis reads tokens, not scopes, so it resolves a name only where no
 other reading is possible: a text constant that another scope declares, binds
@@ -208,13 +213,16 @@ file. The language and the test API are taken as they are defined: a
 file that replaces `Array.prototype.forEach` or mocks `vitest` itself is past
 what its source can prove, for a variable segment as for a literal path.
 
-The rule belongs to the test file and to `scripts/`, like the git and
-oversized-tree rules. A library module builds such a path from what its caller
-passes and reads it only when a test calls it, so it keeps the directory it
-was keyed with: for an unbounded template that is the importing file's
-directory and now the literal directory too, never less than before (#16660
-tracks proving those reads). A variable `import()` whose module path is unbounded is an unresolved edge for
-the floor key, whichever member holds it.
+A search path built with Node's `path.delimiter` keys its repository
+directory entries, including the agent guard's executable shims.
+
+The unbounded-read rule applies to every member of a test's closure (#16660).
+A library module can supply a literal name, resolve that name from an imported
+constant, or prove containment with `pathWithin()`. The analyzer handles
+`readServerSource()` and `readClientSource()` at their call sites. A direct
+call with a literal argument keys the named file. A non-literal argument or
+passing the reader as a callback fails closed. A variable `import()` whose
+module path is unbounded is an unresolved edge for the floor key.
 
 ## Never memoized (fails closed)
 
@@ -226,7 +234,7 @@ file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —
 product modules that run git on their own targets are under the test's
 control); a test file or `scripts/` member that reads machine-local state
-(`data/`, the home directory); a test file or `scripts/` member that reads
+(`data/`, the home directory); any member that reads
 a path whose variable segment nothing bounds
 ([Variable path segments](#variable-path-segments)); a member that reads a path the analyzer
 cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal

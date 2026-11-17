@@ -42,12 +42,13 @@
  * limit and the listing cannot stand in for it (the repository root, a tree
  * that is spawned or may be loaded natively, a nested repository), when a
  * test or `scripts/` member reads machine-local state (`data/`,
- * the home directory) or a path with a variable segment nothing bounds
- * (`join(HERE, name)`: `createScopes` resolves the variable to its literal
- * values or proves it stays under the prefix, else the read may land
- * anywhere), when the `// test-memo: never` marker is present, when
- * the test is a tree guard (`*.guard.test.js`), in the planner's always-run
- * set or in `TEST_MEMO_NEVER`, or —
+ * the home directory), when any member reads a path with a variable segment
+ * nothing bounds (`join(HERE, name)`: `createScopes` resolves the variable to
+ * its literal values, also through another module's literal export, or
+ * proves it stays under the prefix, else the read may land anywhere), when
+ * the `// test-memo: never` marker is present, when the test is a tree
+ * guard (`*.guard.test.js`), in the planner's always-run set or in
+ * `TEST_MEMO_NEVER`, or —
  * for the floor key only — when a module edge is non-literal or unresolvable.
  * A recorded set that reaches outside the repository is not memoizable
  * either. Every unknown construct lands in one of those buckets rather than
@@ -205,6 +206,15 @@ const NON_READ_CALLEES = new Set([
   'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat', 'createRequire',
   'mkdirSync', 'mkdir', 'writeFileSync', 'writeFile', 'rmSync', 'rm', 'unlinkSync', 'renameSync', 'rename',
 ]);
+/** `readServerSource(rel)` / `readClientSource(rel)` (server/lib/testHelper.js): the workspace directory `rel` is relative to. */
+const SOURCE_READERS = Object.freeze({ readServerSource: 'server', readClientSource: 'client/src' });
+/**
+ * Helpers whose every call is keyed or refused at the call site by name
+ * (`SOURCE_READERS`): a literal names the file, anything else fails closed.
+ * Their own read of the variable path is therefore no input of the module
+ * that defines them, which every suite importing it would otherwise share.
+ */
+const CALL_SITE_CHECKED_READERS = Object.freeze({ 'server/lib/testHelper.js': Object.keys(SOURCE_READERS) });
 /** `exec`/`spawn`-style sinks whose first argument names a program. */
 const SPAWN_CALLEES = new Set(['spawn', 'spawnSync', 'execFile', 'execFileSync', 'exec', 'execSync', 'fork',
   'bufferedSpawn', 'bufferedSpawnOrThrow', 'prepareCliSpawn', 'execa']);
@@ -254,6 +264,14 @@ const EXTERNAL = Object.freeze({ k: 'ext' });
 /** A path under the user's home directory: machine-local state, never a repository input. */
 const HOME = Object.freeze({ k: 'home' });
 const NODE = Object.freeze({ k: 'node' });
+/**
+ * `delimiter` imported from node's `path`: `:` or `;`, never a path separator.
+ * `${dir}${delimiter}${rest}` puts `dir` on a search path (`PATH`) and ends it
+ * there, so what follows is another entry (`searchPath`), not more of `dir`.
+ */
+const DELIMITER = Object.freeze({ k: 'delimiter' });
+/** A search-path string: each entry a directory whose programs may be found and run (`record`). */
+const searchPath = (entries, tail = str('')) => ({ k: 'search', entries, tail });
 const str = (v) => ({ k: 'str', v });
 const normalizeRel = (value) => {
   // `new URL('../../', import.meta.url)` normalizes to './': the root is '' however it was spelled.
@@ -295,8 +313,9 @@ const partialPath = (base, v, containment) => ({ ...base, v: normalizeRel(v), pa
  * A partial path under the literal directories of unknown text: `lit/${x}`
  * joined to `base` is under `base/lit`. `outer` keeps `base`, the prefix
  * such a path was keyed with before its literal directories were read: where
- * nothing bounds the variable part neither directory is proven, so a member
- * that is not refused for it keys both rather than a narrower guess.
+ * nothing bounds the variable part neither directory is proven, so where
+ * such a path is not refused (the recorded key of a variable `import()`) both
+ * are keyed rather than a narrower guess, and related selection reaches both.
  */
 function underLiteral(base, baseDir, piece, containment = piece) {
   const dir = piece.lit.slice(0, piece.lit.lastIndexOf('/') + 1);
@@ -400,6 +419,15 @@ function appendPath(base, text) {
 }
 
 function concatValue(left, right) {
+  if (left.k === 'search') {
+    if (right.k === 'delimiter') return searchPath([...left.entries, left.tail]);
+    if (right.k === 'search') {
+      const [head, ...rest] = right.entries;
+      return searchPath([...left.entries, concatValue(left.tail, head), ...rest], right.tail);
+    }
+    return searchPath(left.entries, concatValue(left.tail, right));
+  }
+  if (right.k === 'delimiter') return left.k === 'path' ? searchPath([left]) : UNKNOWN;
   if (left.k === 'str' && right.k === 'str') return str(left.v + right.v);
   if (left.k === 'str' && left.v === '') return right;
   if (left.k === 'path') {
@@ -502,8 +530,12 @@ function foldSegments(args) {
   return acc;
 }
 
-/** The repository module whose `pathWithin(dir, ...segments)` joins like `path.join()` and throws when the result is outside `dir`. */
-const PATH_WITHIN_MODULE = 'scripts/lib/pathWithin.js';
+/**
+ * The repository modules whose `pathWithin(dir, ...segments)` joins like
+ * `path.join()` and throws when the result is outside `dir`: the shared
+ * implementation and the `scripts/` re-export of it.
+ */
+const PATH_WITHIN_MODULES = new Set(['lib/pathWithin.js', 'scripts/lib/pathWithin.js']);
 
 /** True when the file imports `name`, under that name, from a module `accepts(specifier)` vouches for. */
 function importsNamed(tokens, match, name, accepts) {
@@ -513,6 +545,81 @@ function importsNamed(tokens, match, name, accepts) {
     if (!isWord(tokens[close + 1], 'from') || tokens[close + 2]?.t !== 's' || !accepts(tokens[close + 2].v)) return false;
     return tokens.slice(i + 2, close).some((imported, at, names) => isWord(imported, name) && !isWord(names[at - 1], 'as') && !isWord(names[at + 1], 'as'));
   });
+}
+
+/**
+ * `import { A, B as C } from './x.js'`: local name -> `{ spec, name }` for
+ * every named import from a relative specifier (a repository module), whose
+ * exported literal the analyzer may read (`importedConstant`).
+ */
+function namedImports(tokens, match) {
+  const imports = new Map();
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (!isWord(tokens[i], 'import') || !isPunct(tokens[i + 1], '{') || match[i + 1] === undefined) continue;
+    const close = match[i + 1];
+    if (!isWord(tokens[close + 1], 'from') || tokens[close + 2]?.t !== 's' || !tokens[close + 2].v.startsWith('.')) continue;
+    for (const [from, to] of listRanges(tokens, match, i + 1)) {
+      const aliased = to === from + 3 && isWord(tokens[from + 1], 'as');
+      if (tokens[from]?.t !== 'id' || !(to === from + 1 || aliased) || tokens[aliased ? from + 2 : from]?.t !== 'id') continue;
+      imports.set(tokens[aliased ? from + 2 : from].v, { spec: tokens[close + 2].v, name: tokens[from].v });
+    }
+  }
+  return imports;
+}
+
+/**
+ * What a module exports as a literal the analyzer can name a file with:
+ * `export const NAME = '<literal>'` (a string) and
+ * `export const NAME = Object.freeze([<literals>])` (an array). Only the frozen
+ * form of an array: an exported array that is not frozen can gain an element
+ * from any module that imports it. Anything else (a computed value, a
+ * re-export, an object) is not read. Pure.
+ *
+ * @returns {Map<string, { k: 'str', v: string } | { k: 'array', values: string[] }>}
+ */
+export function literalExports(src, fileRel) {
+  const exported = new Map();
+  let tokens;
+  try { tokens = tokenize(src, new Set(), { jsx: !/\.[cm]?ts$/.test(fileRel) }); } catch { return exported; }
+  const match = matchBrackets(tokens);
+  let scopes;
+  const literal = (token) => (token?.t === 's' ? token.v : token?.t === 'tpl' && token.exprs.length === 0 ? token.quasis[0] : null);
+  // The initializer is the literal alone: `'a'.repeat(2)` and `'a' + b` are not it.
+  const endsStatement = (token) => token === undefined || isPunct(token, ';') || (token.t === 'id' && !['in', 'instanceof', 'as'].includes(token.v));
+  for (let i = 0; i + 4 < tokens.length; i += 1) {
+    if (!isWord(tokens[i], 'export') || !isWord(tokens[i + 1], 'const') || tokens[i + 2]?.t !== 'id' || !isPunct(tokens[i + 3], '=')) continue;
+    const at = i + 4;
+    const text = literal(tokens[at]);
+    if (text !== null) {
+      if (endsStatement(tokens[at + 1])) exported.set(tokens[i + 2].v, { k: 'str', v: text });
+      continue;
+    }
+    const open = at + 3;
+    if (!(isWord(tokens[at], 'Object') && isPunct(tokens[at + 1], '.') && isWord(tokens[at + 2], 'freeze') && isPunct(tokens[open], '(') && isPunct(tokens[open + 1], '['))) continue;
+    if (match[open] === undefined || match[open + 1] === undefined || match[open] !== match[open + 1] + 1 || !endsStatement(tokens[match[open] + 1])) continue;
+    scopes ??= createScopes({ fileRel, src, tokens, match, bindings: collectBindings(tokens, match), replaced: {} });
+    if (scopes.shadowed('Object') || scopes.writtenIn('Object', () => true) || scopes.hiddenWrite('Object')) continue;
+    // A hole (`[a, , b]`) is an empty range: no literal, so the array is not read.
+    const values = listRanges(tokens, match, open + 1).map(([from, to]) => (to === from + 1 ? literal(tokens[from]) : null));
+    if (!values.includes(null)) exported.set(tokens[i + 2].v, { k: 'array', values });
+  }
+  return exported;
+}
+
+/**
+ * The literal an imported name stands for (`literalExports` of the module it
+ * is imported from), or null: no resolver (`extractFileFacts` run alone), not
+ * a named import of a repository module, or a name the file binds again. The
+ * exporting module is an import edge, so its bytes are already in the key;
+ * the module is logged (`trustLog`) so a member that mocks it voids a read
+ * named through it (`gather`).
+ */
+function importedConstant(name, ctx, shadowed) {
+  const imported = ctx.imports.get(name);
+  if (imported === undefined || ctx.exportedConstant === null || shadowed(name)) return null;
+  const value = ctx.exportedConstant(imported.spec, imported.name);
+  if (value !== null) ctx.shared.trustLog.push(imported.spec);
+  return value;
 }
 
 /**
@@ -530,6 +637,13 @@ function mocksModule(tokens, match, accepts, members) {
     const [first] = listRanges(tokens, match, i + 1);
     return first !== undefined && tokens.slice(first[0], first[1]).flatMap(texts).some(accepts);
   });
+}
+
+/** True when `tokens[at]` is a plain name in an `import { … }` or `export { … }` list (not renamed with `as`). */
+function namedInImportList(tokens, match, at) {
+  if (isWord(tokens[at + 1], 'as') || isWord(tokens[at - 1], 'as')) return false;
+  const open = enclosingOpen(tokens, match, at);
+  return open !== null && isPunct(tokens[open], '{') && isWord(tokens[open - 1], 'import', 'export');
 }
 
 /**
@@ -550,7 +664,9 @@ export function replacedSources(src, fileRel) {
 }
 const isCryptoModule = (spec) => spec === 'crypto' || spec === 'node:crypto';
 /** `spec`, written in `fileRel`, names the guard module, with or without its extension. */
-const isGuardModule = (fileRel, spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)).replace(/\.js$/, '') === PATH_WITHIN_MODULE.replace(/\.js$/, '');
+const isGuardModule = (fileRel, spec) => spec.startsWith('.') && PATH_WITHIN_MODULES.has(
+  normalizeRel(posix.join(posix.dirname(fileRel), spec.endsWith('.js') ? spec : spec + '.js'))
+);
 
 /**
  * `pathWithin(dir, ...segments)`: the call throws unless the joined path is
@@ -970,11 +1086,11 @@ function createScopes(ctx) {
     }
   };
   /** An import is a declaration of its local names; the ones this pass trusts are trusted as that import. */
-  const TRUSTED_IMPORTS = { vitest: ['it', 'test', 'describe', 'expect'], crypto: ['randomUUID'], 'node:crypto': ['randomUUID'] };
+  const TRUSTED_IMPORTS = { path: ['delimiter'], 'node:path': ['delimiter'], vitest: ['it', 'test', 'describe', 'expect'], crypto: ['randomUUID'], 'node:crypto': ['randomUUID'] };
   const importLocal = (token, imported, spec) => {
     declare(token);
     const trusted = TRUSTED_IMPORTS[spec] ?? (isGuardModule(ctx.fileRel, spec) ? ['pathWithin'] : []);
-    if (token.v === imported && trusted.includes(imported)) ownDeclarations.set(token.v, 1);
+    if (ctx.imports?.has(token.v) || (token.v === imported && trusted.includes(imported))) ownDeclarations.set(token.v, 1);
   };
   for (let i = 0; i < main.length; i += 1) {
     if (isWord(main[i], 'import') && !isPunct(main[i + 1], '(', '.')) {
@@ -1182,8 +1298,14 @@ function createScopes(ctx) {
   const arrayBinding = (token, depth) => {
     const name = token.v;
     const start = ctx.bindings.get(name);
+    if (binderAt(name, token.i) !== null) return null;
+    // A frozen array another module exports (`literalExports`): nothing can add to it.
+    if (start === undefined) {
+      const imported = importedConstant(name, ctx, shadowed);
+      return imported?.k === 'array' ? imported.values : null;
+    }
     // One declaration of the name in the whole file: an inner `const { NAMES } = row` would be another array.
-    if (start === undefined || binders.has(name) || !isWord(ctx.tokens[start - 3], 'const') || (declared.get(name) ?? []).length !== 1) return null;
+    if (binders.has(name) || !isWord(ctx.tokens[start - 3], 'const') || (declared.get(name) ?? []).length !== 1) return null;
     const end = expressionEnd(ctx.tokens, ctx.match, start);
     // `Object.freeze([...])` as the whole initializer: `Object.freeze([...]).slice()` is an unfrozen copy.
     const frozen = isWord(ctx.tokens[start], 'Object') && isPunct(ctx.tokens[start + 1], '.') && isWord(ctx.tokens[start + 2], 'freeze') && isPunct(ctx.tokens[start + 3], '(')
@@ -1388,9 +1510,11 @@ function createScopes(ctx) {
     if (binder.domain !== undefined) return binder.domain;
     binder.domain = null; // a value that flows back into itself resolves to nothing
     if (!settled(binder)) return null;
+    const logged = ctx.shared.trustLog.length;
     if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
     else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
     else if (binder.kind === 'param' && binder.role.kind === 'callback') binder.domain = callbackDomain(binder.role, binder.index);
+    binder.trusts = ctx.shared.trustLog.slice(logged);
     return binder.domain;
   };
 
@@ -1408,9 +1532,11 @@ function identifierValue(token, ctx, depth) {
   if (ctx.unscoped) return bindingValue(token.v, ctx, depth);
   ctx.shared.scopes ??= createScopes(ctx.shared.root);
   const binder = ctx.shared.scopes.binderAt(token.v, token.i);
+  if (binder === null && token.v === 'delimiter' && ctx.delimiter && !ctx.shared.scopes.shadowed('delimiter')) return DELIMITER;
   if (binder === null) return bindingValue(token.v, ctx, depth);
   if (ctx.overrides?.has(binder)) return str(ctx.overrides.get(binder));
   const domain = ctx.shared.scopes.domainOf(binder);
+  if (domain !== null) ctx.shared.trustLog.push(...binder.trusts);
   if (domain === LISTED) return LISTED_NAME;
   if (domain !== null) return variableValue({ open: true, vars: [binder] });
   const via = binder.role?.kind === 'named' ? binder.role.nameToken.v : null;
@@ -1425,9 +1551,19 @@ function identifierValue(token, ctx, depth) {
 /** The evaluated initializer of a `const`/`let`/`var` binding, memoized per file. */
 function bindingValue(name, ctx, depth = 0) {
   const bound = ctx.bindings.get(name);
-  if (bound === undefined || ctx.resolving.has(name)) return UNKNOWN;
-  if (ctx.bindingValues.has(name)) return ctx.bindingValues.get(name);
+  if (bound === undefined) {
+    ctx.shared.scopes ??= createScopes(ctx.shared.root);
+    const imported = importedConstant(name, ctx, ctx.shared.scopes.shadowed);
+    return imported?.k === 'str' ? str(imported.v) : UNKNOWN;
+  }
+  if (ctx.resolving.has(name)) return UNKNOWN;
+  if (ctx.bindingValues.has(name)) {
+    const cached = ctx.bindingValues.get(name);
+    ctx.shared.trustLog.push(...cached.trusts);
+    return cached.value;
+  }
   ctx.resolving.add(name);
+  const logged = ctx.shared.trustLog.length;
   const initial = evaluate(ctx.tokens, ctx.match, bound, ctx, depth + 1).value;
   ctx.resolving.delete(name);
   // `let name = 'a.json'` that is assigned again is not the literal it started as. (A path keeps the
@@ -1440,7 +1576,7 @@ function bindingValue(name, ctx, depth = 0) {
   const rebound = !ctx.unscoped && (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name) || ctx.shared.scopes.hasBinder(name)
     || (!constant && (ctx.shared.scopes.writtenIn(name, () => true, declarator) || ctx.shared.scopes.hiddenWrite(name))));
   const value = rebound ? UNKNOWN : initial;
-  ctx.bindingValues.set(name, value);
+  ctx.bindingValues.set(name, { value, trusts: ctx.shared.trustLog.slice(logged) });
   return value;
 }
 
@@ -1555,9 +1691,11 @@ function widestPathExpression(tokens, match, index, guarded = false) {
 /**
  * Everything one source file contributes, before any filesystem lookup:
  * module edges, path inputs, directory inputs, cwd-relative literals, and the
- * reasons it fails closed. Pure.
+ * reasons it fails closed. Pure, but for `exportedConstant(spec, name)`: the
+ * analyzer's reading of another module's literal exports (`literalExports`),
+ * so an imported constant names its files; without it an import is unknown.
  */
-export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
+export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, exportedConstant = null }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
     paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
@@ -1572,6 +1710,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
     tools: new Set(), // external programs reached (TEST_MEMO_TOOLS)
     never: NEVER_MARKER.test(src),
     git: false,
+    trusts: new Set(), // specifiers of the modules whose constants named a read: a member that mocks one voids it (`gather`)
   };
   let tokens;
   try { tokens = tokenize(src, new Set(), { jsx: !/\.[cm]?ts$/.test(fileRel) }); } catch (error) {
@@ -1581,17 +1720,22 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   }
   const match = matchBrackets(tokens);
   const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens, match), bindingValues: new Map(), resolving: new Set() };
+  ctx.imports = namedImports(tokens, match);
+  ctx.exportedConstant = exportedConstant && ((spec, name) => (
+    mocksModule(tokens, match, (mocked) => mocked === spec, []) ? null : exportedConstant(spec, name)
+  ));
   // A source this file or the workspace setup (`replaced`) mocks is trusted for nothing.
   const own = replacedSources(src, fileRel);
   ctx.replaced = { fs: own.fs || replaced?.fs === true, crypto: own.crypto || replaced?.crypto === true, guard: own.guard || replaced?.guard === true };
   ctx.guarded = importsNamed(tokens, match, 'pathWithin', (spec) => isGuardModule(fileRel, spec));
+  ctx.delimiter = importsNamed(tokens, match, 'delimiter', (spec) => spec === 'path' || spec === 'node:path');
   facts.replaces = own;
   ctx.src = src;
   ctx.uuid = !ctx.replaced.crypto && importsNamed(tokens, match, 'randomUUID', isCryptoModule);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
   // The sources a read of this file relies on, for a mock registered by another member (`gather`).
   facts.trusted = { fs: false, crypto: false, guard: false };
-  ctx.shared = { root: ctx, scopes: undefined, trusted: facts.trusted };
+  ctx.shared = { root: ctx, scopes: undefined, trusted: facts.trusted, trustLog: [] };
   const trusts = (value) => { if (value.partial && !value.open) for (const source of value.trust ?? []) facts.trusted[source] = true; };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
   // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
@@ -1607,10 +1751,10 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   // The browser suites resolve Chrome through CHROME_PATH or playwright-core.
   if (/\bCHROME_PATH\b/.test(code) || facts.edges.some((edge) => packageNameOf(edge.spec) === 'playwright-core')) facts.tools.add('chrome');
 
-  const literalArg = (open) => {
-    const first = tokens[open + 1];
-    const second = tokens[open + 2];
-    if (!first || match[open] === undefined) return { kind: 'none' };
+  const literalArg = (open, source = tokens, brackets = match) => {
+    const first = source[open + 1];
+    const second = source[open + 2];
+    if (!first || brackets[open] === undefined) return { kind: 'none' };
     const endsArg = second?.t === 'p' && (second.v === ',' || second.v === ')');
     if (first.t === 's' && endsArg) return { kind: 'literal', value: first.v };
     if (first.t === 'tpl' && first.exprs.length === 0 && endsArg) return { kind: 'literal', value: first.quasis[0] };
@@ -1636,14 +1780,18 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
    * `read('../../client/x.js')` contributes that file and not a directory the
    * read never touches. A helper that is never called contributes nothing.
    */
+  let valueTrusts = []; // the modules the values `valuesAt` last returned came through
   const valuesAt = (index) => {
+    const logged = ctx.shared.trustLog.length;
     const { value } = evaluate(tokens, match, index, ctx);
+    valueTrusts = ctx.shared.trustLog.slice(logged);
     if (value.k === 'unknown' || value.k === 'tail') {
       // Unknown text read as a whole path is runtime data and no input. Where it is unknown only because
       // a parameter or a loop variable shares a constant's name (`unscoped`: every name is its
       // module-level binding, as before binders were modelled), what the constant names stays an input:
       // the scope rules may refuse a read, never drop one.
       const before = evaluate(tokens, match, index, { ...ctx, unscoped: true, bindingValues: new Map(), resolving: new Set() }).value;
+      valueTrusts = ctx.shared.trustLog.slice(logged);
       if (before.k !== 'unknown' && before.k !== 'tail') return [before];
     }
     const combinations = value.k === 'path' && value.partial && value.open ? variableCombinations(value.vars) : null;
@@ -1652,11 +1800,19 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
     // `resolved`: a path with a variable part is a read whoever consumes it, and stays one with the variable filled in.
     return combinations.map((chosen) => ({ ...evaluate(tokens, match, index, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value, resolved: true }));
   };
+  /** Only a value that is keyed depends on the modules it came through (`valueTrusts`): note them for `gather`. */
+  const trusted = () => { for (const spec of valueTrusts) facts.trusts.add(spec); };
 
   const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
+    // A search-path entry is where a program the string is handed to is found and run: a directory
+    // handed to a spawn (its whole tree is an input), whatever the string is then given to.
+    if (value.k === 'search') {
+      for (const entry of [...value.entries, value.tail]) if (entry.k === 'path') record(entry, { walk: true, consumer: 'spawn' });
+      return true;
+    }
     if (option !== null) {
       // The value of a rooting option is not read here; a directory is still what the tool works from.
-      if (value.k === 'path' && !value.partial && option !== 'cwd') facts.handedDirs.push(value.v);
+      if (value.k === 'path' && !value.partial && option !== 'cwd') { trusted(); facts.handedDirs.push(value.v); }
       return true;
     }
     if (value.k === 'home') {
@@ -1665,11 +1821,13 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
     }
     if (value.k === 'str') {
       if (value.v.startsWith('/') || /^[a-z]+:/i.test(value.v)) return true;
+      trusted();
       facts.cwdLiterals.push({ value: value.v, walk, dir: false });
       return true;
     }
     if (value.k !== 'path') return value.k !== 'unknown';
     if (consumer !== null && NON_READ_CALLEES.has(consumer)) return true;
+    trusted();
     // A glob pattern is no file: it reads every match under the directory in front of its first wildcard.
     if (consumer !== null && /^glob/i.test(consumer) && !value.partial && /[*?[\]{}]/.test(value.v)) {
       const literal = value.v.slice(0, value.v.search(/[*?[\]{}]/));
@@ -1699,7 +1857,35 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
 
   const anchorInside = (list) => list.some((t) => (t.t === 'id' && (t.v === '__dirname' || t.v === '__filename' || t.v === 'import' || t.v === 'process'
     || (ctx.bindings.has(t.v) && bindingValue(t.v, ctx).k === 'path'))) || (t.t === 'tpl' && t.exprs.some(anchorInside)));
+  // These reads are keyed at their call sites, including calls nested in template holes.
+  if (/\bread(?:Server|Client)Source\b/.test(src)) {
+    for (const { arr, m } of tokenArrays(tokens, match)) {
+      for (let i = 0; i < arr.length; i += 1) {
+        const { t, v: name } = arr[i];
+        const prev = arr[i - 1];
+        if (t !== 'id' || !Object.hasOwn(SOURCE_READERS, name) || isWord(prev, 'function')) continue;
+        if (isPunct(arr[i + 1], '(')) {
+          const arg = literalArg(i + 1, arr, m);
+          if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(SOURCE_READERS[name], arg.value)), walk: false, read: true });
+          else if (arg.kind === 'expr') facts.unresolvedInputs.push(`${name}() with a non-literal path`);
+        } else if (!isWord(prev, 'const', 'let', 'var') && !namedInImportList(arr, m, i) && !(isPunct(arr[i + 1], ':') && isPunct(prev, '{', ','))) {
+          facts.unresolvedInputs.push(`${name} used other than by a direct call`);
+        }
+      }
+    }
+  }
+  // The bodies of the source readers whose every call is checked by name above: what they read is
+  // what their callers name, which those callers already contribute (or fail closed on).
+  const checkedBodies = [];
+  for (const name of CALL_SITE_CHECKED_READERS[fileRel] ?? []) {
+    for (let i = 0; i + 2 < tokens.length; i += 1) {
+      if (!isWord(tokens[i], 'function') || !isWord(tokens[i + 1], name) || !isPunct(tokens[i + 2], '(') || match[i + 2] === undefined) continue;
+      const body = match[i + 2] + 1;
+      if (isPunct(tokens[body], '{') && match[body] !== undefined) checkedBodies.push([body, match[body]]);
+    }
+  }
   for (let i = 0; i < tokens.length; i += 1) {
+    if (checkedBodies.some(([from, to]) => from < i && i < to)) continue;
     const token = tokens[i];
     if (token.t === 's') continue; // a bare string is a name (a registry entry, an exclude glob), never a read
     if (token.t === 'tpl') {
@@ -1722,6 +1908,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
       if (arg.kind === 'literal') { facts.edges.push({ spec: arg.value, kind }); continue; }
       if (arg.kind === 'none') continue;
       for (const value of valuesAt(arg.index)) {
+        if (value.k === 'path' || value.k === 'str') trusted();
         if (value.k === 'path') {
           // A complete path: a file, a directory, or a name the loader completes (`./mod` is `./mod.js`).
           if (!value.partial) { facts.paths.push({ rel: value.v, walk: true }); continue; }
@@ -1796,15 +1983,6 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
       }
       continue;
     }
-    if (open !== null && (token.v === 'readServerSource' || token.v === 'readClientSource') && !(prev?.t === 'id' && prev.v === 'function')) {
-      // server/lib/testHelper.js reads a source file by workspace-relative name
-      // (its own `function readServerSource(rel)` definition is not a call).
-      const arg = literalArg(open);
-      const base = token.v === 'readServerSource' ? 'server' : 'client/src';
-      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(base, arg.value)), walk: false, read: true });
-      else if (arg.kind === 'expr') facts.unresolvedInputs.push(`${token.v}() with a non-literal path`);
-      continue;
-    }
     if (open !== null && token.v === 'toMatchFileSnapshot') {
       const arg = literalArg(open);
       if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(posix.dirname(fileRel), arg.value)), walk: false });
@@ -1858,7 +2036,7 @@ const isBuiltin = (spec) => spec.startsWith('node:') || BUILTINS.has(packageName
 /**
  * The git rule and the oversized-tree rule apply to the test itself and to
  * repository tooling under `scripts/`; a product or library module's git use
- * and unbounded reads happen only when a test calls them.
+ * is controlled by the test that calls it.
  */
 const gitRuleApplies = (rel, testRel) => rel === testRel || rel.startsWith('scripts/');
 
@@ -1887,6 +2065,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const listedTrees = new Map();
   const dataTrees = new Map();
   const packages = new Map();
+  const exportedLiterals = new Map(); // module -> its literal exports (`literalExports`)
   let byName = null;
   let listing; // undefined until first asked; null when git cannot list the tree
 
@@ -2055,13 +2234,14 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const replacedBySetup = () => {
     if (setupReplaced !== null) return setupReplaced;
     // Set before the walk: the setup files' own facts ask for it, and what they trust does not matter.
-    setupReplaced = { fs: false, crypto: false, guard: false };
+    setupReplaced = { fs: false, crypto: false, guard: false, modules: new Set() };
     for (const entry of WORKSPACE_SETUP_ENTRIES[workspaceRel] ?? []) {
       if (fs.kind(entry) !== 'file') continue;
       // The entry and everything it imports: `import './testMocks.js'` registers its mocks all the same.
-      for (const rel of closureOf(entry, null).members) {
-        const replaces = factsFor(rel).replaces;
-        for (const source of Object.keys(setupReplaced)) setupReplaced[source] ||= replaces?.[source] === true;
+      for (const rel of closureOf(entry, null, null, { followMockOnly: false }).members) {
+        const f = factsFor(rel);
+        for (const source of ['fs', 'crypto', 'guard']) setupReplaced[source] ||= f.replaces?.[source] === true;
+        for (const target of f.mocked) setupReplaced.modules.add(target);
       }
     }
     return setupReplaced;
@@ -2084,12 +2264,24 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
       openReads: new Set(), // reads whose variable segment is not proven to stay under the prefix that was keyed
       replaces: null, trusted: null, // sources this file mocks, and sources its contained paths rely on (`replacedSources`)
+      trusts: new Set(), // modules whose constants named a read: void when a member mocks one (`gather`)
+      mocked: new Set(), // modules this file replaces with vi.mock / vi.doMock
     };
     facts.set(rel, resolved);
     const bytes = fs.read(rel);
     if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
     if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
-    const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel, replaced: replacedBySetup() });
+    const exportedConstant = (spec, name) => {
+      const target = resolveRelativeSpecifier(rel, spec, fs.kind);
+      if (target === null || !JS_EXT.test(target)) return null;
+      if (!exportedLiterals.has(target)) exportedLiterals.set(target, literalExports(fs.read(target)?.toString('utf8') ?? '', target));
+      return exportedLiterals.get(target).get(name) ?? null;
+    };
+    const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel, replaced: replacedBySetup(), exportedConstant });
+    for (const spec of raw.trusts) {
+      const target = resolveRelativeSpecifier(rel, spec, fs.kind);
+      if (target !== null) resolved.trusts.add(target);
+    }
     resolved.replaces = raw.replaces ?? null;
     resolved.trusted = raw.trusted ?? null;
     resolved.never = raw.never;
@@ -2143,8 +2335,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
     const addDir = (dirRel, walk, guessed = false, open = false, via = null) => {
-      // Wherever the prefix is, the read may land outside it. The prefix tree is still added
-      // below, so a member that does not own the rule (`gather`) keys what it keyed before.
+      // Wherever the prefix is, the read may land outside it, which refuses every test that
+      // reaches this file (`gather`). The prefix tree is still added below for related selection.
       if (open) resolved.openReads.add(via === null ? `reads a path with a variable segment that can leave ${dirRel || '<repo root>'}` : `reads a path through ${via}() that the analyzer cannot resolve (under ${dirRel || '<repo root>'})`);
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
@@ -2196,6 +2388,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       addPackage(spec, { mock: kind === 'mock' || kind === 'mock-import' });
     }
     for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
+    resolved.mocked = registered;
     for (const target of eager) resolved.lazyModules.delete(target);
     for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
     for (const { rel: dirRel, walk, guessed, open, via } of raw.dirs) addDir(dirRel, walk, guessed === true, open === true, via ?? null);
@@ -2290,6 +2483,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const unresolvedInputs = [];
     const replacedBy = { fs: null, crypto: null, guard: null }; // the first member that mocks each trusted source
     const trusting = []; // members whose contained paths rely on one
+    const namedTrusts = [];
+    const mocked = new Set(replacedBySetup().modules);
     let never = false;
     let git = false;
     while (stack.length) {
@@ -2319,11 +2514,18 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);
       for (const dir of f.oversized) if (ownsTrees) unresolvedInputs.push(`${rel}: directory input too large: ${dir}`);
-      // A variable path segment nothing bounds can name any file, so the prefix that was keyed
-      // is a guess. Same ownership as the two rules above: a library member builds such a path
-      // from what its caller passes, and reads it only when a test calls it.
-      for (const reason of ownsTrees ? f.openReads : []) unresolvedInputs.push(`${rel}: ${reason}`);
-      if (ownsTrees && f.trusted && (f.trusted.fs || f.trusted.crypto || f.trusted.guard)) trusting.push({ rel, trusted: f.trusted });
+      // A variable path segment nothing bounds can name any file, so the prefix that was keyed is a
+      // guess, whichever member reads it: a library module's read lands wherever its caller or its
+      // own data says, which no key line follows (#16660). Unlike the two rules above, no caller
+      // proves it: such a module resolves the name, or joins it with `pathWithin()`.
+      for (const reason of f.openReads) unresolvedInputs.push(`${rel}: ${reason}`);
+      // A library's explicit guard is part of the read proof. Keep the existing scope for
+      // directory-listing and UUID inference, including recorded dynamic imports.
+      if (f.trusted) {
+        const { fs, crypto, guard } = f.trusted;
+        if (guard || (ownsTrees && (fs || crypto))) trusting.push({ rel, trusted: { fs: ownsTrees && fs, crypto: ownsTrees && crypto, guard } });
+      }
+      if (f.trusts.size) namedTrusts.push(rel);
       for (const dir of ownsTrees ? f.dataTrees : []) {
         const data = dataTree(dir);
         if (data === null) { unresolvedInputs.push(`${rel}: directory input too large: ${dir}`); continue; }
@@ -2341,11 +2543,12 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     // Only a member that runs registers one: a test file another member lists or reads as text does not.
     const running = [...roots].map((rel) => ({ rel, walkEdges: walk }));
     const ran = new Set();
-    while (trusting.length && running.length) {
+    while ((trusting.length || namedTrusts.length) && running.length) {
       const { rel, walkEdges } = running.pop();
       if (ran.has(rel) || stop?.has(rel)) continue;
       ran.add(rel);
       const f = factsFor(rel);
+      for (const target of f.mocked) mocked.add(target);
       if (f.replaces) for (const source of Object.keys(replacedBy)) if (f.replaces[source]) replacedBy[source] ??= rel;
       if (walkEdges) for (const dep of f.modules) running.push({ rel: dep, walkEdges: true });
       for (const side of f.sideModules) if (!f.dataModules.has(side)) running.push({ rel: side, walkEdges: true });
@@ -2355,6 +2558,10 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       for (const source of Object.keys(replacedBy)) {
         if (trusted[source] && replacedBy[source] !== null && replacedBy[source] !== rel) unresolvedInputs.push(`${rel}: relies on ${SOURCE_NAMES[source]}, which ${replacedBy[source]} mocks`);
       }
+    }
+    // A mock can change the imported constant that named a read.
+    for (const rel of namedTrusts) {
+      for (const target of factsFor(rel).trusts) if (mocked.has(target)) unresolvedInputs.push(`${rel}: names a path through ${target}, which the test mocks`);
     }
     // A real-browser test renders what a dev server, bundler or static server
     // reads for it, none of which the module runner records. Every directory

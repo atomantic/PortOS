@@ -33,6 +33,7 @@ import { existsSync } from 'fs';
 import { dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+import { pathWithin } from '../../../lib/pathWithin.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
@@ -387,10 +388,18 @@ export async function importDocumentDirectory(projectId, directory) {
   return storeVersion(projectId, files, { kind: 'directory', name: rel.split(sep).join('/').slice(0, 200) });
 }
 
+/**
+ * A shipped template's directory (documentTemplates/<id>). The callers allow
+ * only `MUSIC_VIDEO_DOCUMENT_TEMPLATES` first; an id that climbs out throws
+ * here all the same (`pathWithin`), which is what lets the test memo key the
+ * templates directory for a read whose id it cannot see.
+ */
+export const documentTemplateDirectory = (templateId) => pathWithin(TEMPLATE_ROOT, templateId);
+
 /** Copy a shipped template (documentTemplates/<id>) into the project. */
 export async function importDocumentTemplate(projectId, templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
+  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
@@ -401,7 +410,7 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
  */
 export async function readTemplateDocumentFiles(templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
+  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
   return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 

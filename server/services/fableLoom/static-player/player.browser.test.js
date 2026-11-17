@@ -10,7 +10,6 @@ import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveTestChrome } from '../../../lib/browserSuiteGate.js';
 import { startOwnedBrowserFixture } from '../../../test/browserFixture.js';
 import { FABLELOOM_STATIC_PLAYER_FILES } from '../staticPlayerFiles.js';
-import { pathWithin } from '../../../../scripts/lib/pathWithin.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const chrome = resolveTestChrome();
@@ -107,8 +106,7 @@ function startPackageServer(root) {
 
 async function stage(dir, manifest) {
   await mkdir(join(dir, 'player'), { recursive: true });
-  // pathWithin: the names live in another module, so the test memo keys this directory for them.
-  for (const name of FABLELOOM_STATIC_PLAYER_FILES) await cp(pathWithin(here, name), join(dir, 'player', name));
+  for (const name of FABLELOOM_STATIC_PLAYER_FILES) await cp(join(here, name), join(dir, 'player', name));
   await writeFile(join(dir, 'manifest.json'), JSON.stringify(manifest));
 }
 

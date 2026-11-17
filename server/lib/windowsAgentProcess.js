@@ -48,7 +48,10 @@ const receiptSchema = startedSchema.extend({ version: z.literal(1), settledAt: z
 const failureSchema = z.object({ version: z.literal(1), code: z.number().int(), stage: z.enum(['job', 'attributes', 'launch',
   'process-times', 'started-receipt', 'accounting', 'cancel', 'root-exit', 'exit-code', 'settled-receipt', 'subreaper', 'reap']) }).strict();
 const supervised = () => ['win32', 'linux', 'darwin'].includes(process.platform);
-const POSIX_SUPERVISOR = fileURLToPath(new URL(process.platform === 'darwin' ? './darwinAgentSupervisor.py' : './linuxAgentSupervisor.py', import.meta.url));
+// Each helper spelled out whole: a URL built from a chosen name hides which file it is from the test memo.
+const POSIX_SUPERVISOR = process.platform === 'darwin'
+  ? fileURLToPath(new URL('./darwinAgentSupervisor.py', import.meta.url))
+  : fileURLToPath(new URL('./linuxAgentSupervisor.py', import.meta.url));
 const directory = agentId => join(PATHS.cos, 'process-settlement', idSchema.parse(agentId));
 const unavailable = (reason, failure) => {
   // Allowlisted record/stage names and a numeric code only, so a hold can be
