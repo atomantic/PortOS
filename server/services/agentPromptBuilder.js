@@ -34,6 +34,7 @@ import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSe
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
 import { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from './promptSections/taskContext.js';
 import { applySlashdoInvocation } from './promptSections/slashdo.js';
+import { deferClaimEpicSection } from './promptSections/claimEpic.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
 import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildIssueFilingSection } from './promptSections/plannerAttribution.js';
@@ -480,11 +481,16 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // is the light/`api` split itself: `cli`/`tui` hosts are agentic CLIs with
   // native file tools (so an over-budget procedure can live on disk), while an
   // HTTP `api` provider has none and must have it pasted (#3110).
+  const hasFileTools = LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType);
   task = await applySlashdoInvocation(task, {
-    providerId, providerCommand, leanMode,
-    hasFileTools: LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType),
+    providerId, providerCommand, leanMode, hasFileTools,
     defaultReviewers, codeReviewDefaults,
   });
+  // Same split for a claim prompt's epic phase, which most claim runs never
+  // reach: a file-tools host reads it from the staged copy only when it lands on
+  // an epic (#16573). The staging store is the slashdo one: an install-root path
+  // every local CLI host can read, managed-app workspaces included.
+  if (hasFileTools) task = await deferClaimEpicSection(task, writeResolvedSlashdoBody);
 
   const {
     isFollowUpNeedingRecipes, localAgentLoopBody,
