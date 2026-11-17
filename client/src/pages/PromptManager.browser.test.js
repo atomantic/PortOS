@@ -1,22 +1,15 @@
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
+import { chromium } from 'playwright-core';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../test/browserFixture.js';
 import { resolveTestChrome } from '../../../scripts/lib/testChrome.js';
 
 vi.setConfig({ testTimeout: 30000 });
 
-const require = createRequire(import.meta.url);
-// Prefer the client dev dependency; linked worktrees can also use the same
-// pinned driver from the server without installing into shared node_modules.
-const { chromium } = require(require.resolve('playwright-core', { paths: [
-  fileURLToPath(new URL('../..', import.meta.url)),
-  fileURLToPath(new URL('../../../server', import.meta.url)),
-] }));
 const chrome = resolveTestChrome();
 
 // Where the Layout would put the page: the viewport minus the sidebar. The
