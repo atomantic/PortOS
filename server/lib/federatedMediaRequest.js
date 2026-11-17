@@ -21,11 +21,8 @@ import { isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
  * was never requested.
  */
 
-import {
-  federatedMediaImageJobSubmissionBaseSchema,
-  federatedMediaVideoJobSubmissionBaseSchema,
-  validateRequest,
-} from './validation.js';
+import { federatedMediaImageJobSubmissionBaseSchema, federatedMediaVideoJobSubmissionBaseSchema } from './federatedMediaValidation.js';
+import { validateRequest } from './validateRequest.js';
 
 // Local param name -> wire field name, per kind. The two generate routes speak
 // slightly different local dialects (video's route carries `guidanceScale`
