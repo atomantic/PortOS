@@ -115,7 +115,9 @@ A directory a test reads as a whole is an input as a whole.
   changed. A Node test that passes a directory along keeps the older reading.
 
 The key still fails closed for the repository root; for a tree the test
-spawns, imports or requires through a variable path; for a test with a
+spawns, imports or requires through a variable path; for a directory that is
+only the known prefix of a path with a variable segment (`join(HERE, p)`:
+the read may land outside it); for a test with a
 non-literal `require()`, which could load the tree natively where no
 recording shows it; for a tree holding a submodule or nested repository (one
 listed entry, whatever it contains); and outside a git checkout. A product

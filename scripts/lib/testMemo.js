@@ -582,7 +582,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
     paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
-    dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
+    dirs: [], // { rel, walk, guessed } — repo-relative directory prefixes whose tree is an input; guessed: the prefix of a path with a variable segment
     scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
     unresolvedEdges: [], // the module graph is not fully known from source
@@ -667,7 +667,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
         else if (consumer !== null || member) facts.handedDirs.push(value.v);
         return true;
       }
-      facts.dirs.push({ rel: value.v, walk });
+      facts.dirs.push({ rel: value.v, walk, guessed: value.partial });
       return true;
     }
     facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v), read: consumer !== null && READ_CALLEES.has(consumer) });
@@ -1083,14 +1083,16 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     };
     const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
-    const addDir = (dirRel, walk) => {
+    const addDir = (dirRel, walk, guessed = false) => {
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
       if (underGit(dirRel)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
       if (fs.kind(dirRel) !== 'dir') return;
       const files = tree(dirRel);
-      // Past the limit: a tree only read as data may still be keyed, decided once this file's edges are all known.
-      if (files === null) { if (walk) resolved.oversized.push(dirRel || '<repo root>'); else oversizedData.push(dirRel); return; }
+      // Past the limit: a tree only read as data may still be keyed, decided once this file's edges are
+      // all known. Not a guessed one: the variable segment may leave the prefix (`join(HERE, p)` called
+      // with '../../client/x.js'), and under the limit that guess was only ever an approximation.
+      if (files === null) { if (walk || guessed) resolved.oversized.push(dirRel || '<repo root>'); else oversizedData.push(dirRel); return; }
       for (const file of files) addFile(file, { data: !walk });
     };
     const addPath = (target, walk, read = false) => {
@@ -1131,7 +1133,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
     for (const target of eager) resolved.lazyModules.delete(target);
     for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
-    for (const { rel: dirRel, walk } of raw.dirs) addDir(dirRel, walk);
+    for (const { rel: dirRel, walk, guessed } of raw.dirs) addDir(dirRel, walk, guessed === true);
     for (const { value, walk, dir } of raw.cwdLiterals) {
       const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
       for (const base of bases) {

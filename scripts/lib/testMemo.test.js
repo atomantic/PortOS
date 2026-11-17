@@ -208,6 +208,20 @@ describe('floor key', () => {
       expect(floorOf(files, two).key).not.toBe(baseline.key);
     });
 
+    it('keeps failing closed when the directory is only the prefix of a path with a variable segment', () => {
+      // The read may land anywhere: `read('../../server/lib/nav.js')` leaves the prefix, and a
+      // template URL keeps only the importing file's directory. Past the limit that was always refused.
+      for (const read of [
+        "const HERE = dirname(fileURLToPath(import.meta.url));\nconst read = (p) => readFileSync(join(HERE, p), 'utf8');",
+        'const shipped = (name) => readFileSync(new URL(`../../../server/lib/${name}`, import.meta.url));',
+      ]) {
+        const guessed = { ...files };
+        for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) guessed[`client/src/pages/p${i}.json`] = '{}';
+        guessed[one] = `import { it } from 'vitest';\n${read}\nit('one', () => {});\n`;
+        expect(floorOf(guessed), read).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client/src/pages` });
+      }
+    });
+
     it('keeps failing closed on the repository root, a nested repository, a spawned tree and a reader that can load it natively', () => {
       const rootReader = { ...files, [one]: suite('one').replace("'../..'", "'../../..'") };
       expect(floorOf(rootReader)).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: <repo root>` });
