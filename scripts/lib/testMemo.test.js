@@ -137,6 +137,225 @@ describe('floor key', () => {
     expect(keyOf({ ...small, 'server/lib/fixtures/f0.json': '{"v":2}' }).floor.key).not.toBe(before.key);
   });
 
+  // #16545: a suite that hands `client/` to Vite as its root reads the whole
+  // tree. "Too large" kept it out of the memo forever; the repository listing
+  // names the tree's files instead, and the key still moves with every one.
+  describe('a directory past the limit that the repository listing can enumerate', () => {
+    const CLIENT = {
+      ...BASE,
+      'client/vitest.config.js': 'export default {};\n',
+      'client/src/test/setup.js': 'export const setup = true;\n',
+      'client/package.json': '{"name":"client"}',
+      'client/package-lock.json': '{}',
+      'client/node_modules/vitest/package.json': '{"name":"vitest","version":"5.0.4"}',
+      'client/src/App.jsx': "import { NAV } from '../../server/lib/nav.js';\nexport const App = () => NAV;\n",
+      'client/src/index.css': 'body { margin: 0; }\n',
+      'client/src/notes.md': 'notes\n',
+      'client/src/guard.test.js': "// test-memo: never\nimport { execFileSync } from 'node:child_process';\nexecFileSync('git', ['status']);\n",
+      'server/lib/nav.js': "export { NAV } from './navData.js';\n",
+      'server/lib/navData.js': 'export const NAV = 1;\n',
+      'server/lib/unrelated.js': 'export const unrelated = 1;\n',
+    };
+    for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) CLIENT[`client/src/components/C${i}.jsx`] = `export const C${i} = ${i};\n`;
+    const suite = (name) => [
+      "import { it } from 'vitest';",
+      "const root = fileURLToPath(new URL('../..', import.meta.url));",
+      `it('${name}', async () => { await createServer({ configFile: false, root, readdir: readdirSync(root) }); });`,
+    ].join('\n');
+    const one = 'client/src/pages/One.browser.test.js';
+    const two = 'client/src/pages/Two.browser.test.js';
+    const files = { ...CLIENT, [one]: suite('one'), [two]: suite('two') };
+    const tracked = (tree) => Object.keys(tree).filter((rel) => !rel.includes('node_modules/'));
+    const floorOf = (tree, test = one, extra = {}) => computeTestMemoKeys([test], options(tree, { workspace: 'client', listFiles: () => tracked(tree), ...extra })).get(test).floor;
+    const baseline = floorOf(files);
+
+    it('keys the suite instead of failing closed, and still fails closed without a listing', () => {
+      expect(baseline.memoizable).toBe(true);
+      expect(floorOf(files).key).toBe(baseline.key);
+      for (const listFiles of [undefined, null, () => null]) {
+        expect(floorOf(files, one, { listFiles })).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client` });
+      }
+    });
+
+    it('moves the key when any file under client/src changes, appears or disappears', () => {
+      // Every file, not a sample: a served tree has no file the suite provably cannot reach.
+      const sources = tracked(files).filter((rel) => rel.startsWith('client/src/'));
+      expect(sources.length).toBeGreaterThan(DIRECTORY_INPUT_LIMIT);
+      const unmoved = sources.filter((rel) => floorOf({ ...files, [rel]: `${files[rel]}\n/* edited */\n` }).key === baseline.key);
+      expect(unmoved).toEqual([]);
+      expect(floorOf({ ...files, 'client/src/components/New.jsx': 'export const New = 1;\n' }).key).not.toBe(baseline.key);
+      const { 'client/src/notes.md': removed, ...without } = files;
+      expect(floorOf(without).key).not.toBe(baseline.key);
+      // Still listed but gone from the working tree (an unstaged deletion): the set changed all the same.
+      expect(floorOf(without, one, { listFiles: () => tracked(files) }).key).toBe(floorOf(without).key);
+    });
+
+    it('follows what the tree imports from outside it, and nothing else outside it', () => {
+      expect(floorOf({ ...files, 'server/lib/nav.js': "export { NAV } from './navData.js'; // edited\n" }).key).not.toBe(baseline.key);
+      expect(floorOf({ ...files, 'server/lib/navData.js': 'export const NAV = 2;\n' }).key).not.toBe(baseline.key);
+      expect(floorOf({ ...files, 'server/lib/unrelated.js': 'export const unrelated = 2;\n' }).key).toBe(baseline.key);
+    });
+
+    it('leaves a file git ignores out of the key', () => {
+      const listed = () => tracked(files);
+      expect(floorOf({ ...files, 'client/src/scratch.log': 'one\n' }, one, { listFiles: listed }).key).toBe(baseline.key);
+      expect(floorOf({ ...files, 'client/src/scratch.log': 'two\n' }, one, { listFiles: listed }).key).toBe(baseline.key);
+    });
+
+    it('gives two suites inside the same tree different keys', () => {
+      // Their file sets are identical; an entry names one test, so a shared key would let only one of them ever hit.
+      expect(floorOf(files, two).memoizable).toBe(true);
+      expect(floorOf(files, two).key).not.toBe(baseline.key);
+    });
+
+    it('keeps failing closed on the repository root, a nested repository, a spawned tree and a reader that can load it natively', () => {
+      const rootReader = { ...files, [one]: suite('one').replace("'../..'", "'../../..'") };
+      expect(floorOf(rootReader)).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: <repo root>` });
+      // A submodule is one listed entry whatever it holds, so the listing cannot vouch for the tree.
+      const nested = { ...files, 'client/vendor/lib/index.js': 'export const vendored = 1;\n' };
+      expect(floorOf(nested, one, { listFiles: () => [...tracked(files), 'client/vendor'] })).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client` });
+      const spawned = { ...files, [one]: "import { it } from 'vitest';\nconst root = fileURLToPath(new URL('../../', import.meta.url));\nit('one', () => { spawnSync(root); });\n" };
+      expect(floorOf(spawned)).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client` });
+      const native = { ...files, [one]: `${suite('one')}\nconst load = createRequire(import.meta.url);\nconst plugin = load(pluginPath());\n` };
+      const recordedNative = computeTestMemoKeys([one], options(native, { workspace: 'client', listFiles: () => tracked(native), records: new Map([[one, [one]]]) })).get(one).recorded;
+      expect(recordedNative).toMatchObject({ memoizable: false, reason: `${one}: directory input too large: client` });
+    });
+
+    it('keys the tree for the test and for repository tooling, never for a product module the test imports', () => {
+      // A library walker reads such a tree only when a tree-scanning guard calls it, and those are always-run.
+      const reader = (up) => `export const list = () => readdirSync(fileURLToPath(new URL('${up}/client', import.meta.url)));\n`;
+      const importer = (spec) => `import { it } from 'vitest';\nimport { list } from '${spec}';\nit('x', () => {});\n`;
+      const test = 'server/lib/reader.test.js';
+      const floor = (tree) => computeTestMemoKeys([test], options(tree, { listFiles: () => tracked(tree) })).get(test).floor;
+      const product = { ...files, 'server/lib/reader.js': reader('../..'), [test]: importer('./reader.js') };
+      const tooling = { ...files, 'scripts/reader.js': reader('..'), [test]: importer('../../scripts/reader.js') };
+      const edited = { 'client/src/index.css': 'body { margin: 1px; }\n' };
+      expect(floor(product).memoizable).toBe(true);
+      expect(floor({ ...product, ...edited }).key).toBe(floor(product).key);
+      expect(floor(tooling).memoizable).toBe(true);
+      expect(floor({ ...tooling, ...edited }).key).not.toBe(floor(tooling).key);
+    });
+
+    it('selects the suite for a change anywhere in the tree, recorded or not', () => {
+      const keys = (extra = {}) => computeTestMemoKeys([one], options(files, { workspace: 'client', listFiles: () => tracked(files), ...extra }));
+      const digestOf = (rel) => createHash('sha256').update(files[rel]).digest('hex').slice(0, 16);
+      const recorded = keys({ records: new Map([[one, [one]]]), digests: new Map([[one, [digestOf(one)]]]) });
+      expect(recorded.get(one).narrowed).not.toBeNull();
+      for (const info of [keys(), recorded]) {
+        expect(relatedTests(info, ['client/src/components/C7.jsx'])).toEqual([one]);
+        expect(relatedTests(info, ['server/lib/navData.js'])).toEqual([one]);
+        expect(relatedTests(info, ['server/lib/unrelated.js'])).toEqual([]);
+      }
+    });
+  });
+
+  // A real-browser suite renders what a dev server, bundler or static server
+  // reads on its behalf, none of which the module runner records. Before
+  // #16545 a directory handed to such a tool was "a value", so a suite that
+  // wrote `root: clientDir` was skipped after the component it renders changed.
+  describe('a directory a real-browser test hands to a tool', () => {
+    const SERVED = {
+      ...TREE,
+      'client/package.json': '{"name":"client"}',
+      'client/package-lock.json': '{"lockfileVersion":3}',
+      'client/src/Panel.jsx': 'export const Panel = 1;\n',
+      'client/public/font.woff2': 'font v1\n',
+      'server/lib/static/player.js': 'export const play = 1;\n',
+      'server/node_modules/playwright-core/package.json': '{"name":"playwright-core","version":"1.0.0"}',
+    };
+    const preamble = ["import { it } from 'vitest';", "const repo = resolve(import.meta.dirname, '../..');", "const client = join(repo, 'client');"];
+    const browserTest = (body) => [...preamble, "import { chromium } from 'playwright-core';", body, "it('renders', () => {});"].join('\n');
+    const nodeTest = (body) => [...preamble, body, "it('renders', () => {});"].join('\n');
+    const test = 'server/lib/a.test.js';
+    const floorOf = (body, tree = SERVED, extra = {}) => keyOf({ ...tree, [test]: browserTest(body) }, test, extra).floor;
+    const handing = "const server = await createServer({ configFile: false, root: client, css: { postcss: { plugins: [tailwind({ base: client })] } } });\napp.use(express.static(join(__dirname, 'static')));";
+
+    it('keys the tree behind a root: option, a static server and an object-literal value', () => {
+      const baseline = floorOf(handing);
+      expect(baseline.memoizable).toBe(true);
+      for (const rel of ['client/src/Panel.jsx', 'client/public/font.woff2', 'client/package-lock.json', 'server/lib/static/player.js']) {
+        expect(floorOf(handing, { ...SERVED, [rel]: `${SERVED[rel]} ` }).key, rel).not.toBe(baseline.key);
+      }
+      expect(floorOf(handing, { ...SERVED, 'client/src/New.jsx': 'export const New = 1;\n' }).key).not.toBe(baseline.key);
+      const publicDir = "await build({ configFile: false, publicDir: join(client, 'public') });";
+      expect(floorOf(publicDir, { ...SERVED, 'client/public/font.woff2': 'font v2\n' }).key).not.toBe(floorOf(publicDir).key);
+      expect(floorOf(publicDir, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).toBe(floorOf(publicDir).key);
+      const shorthand = 'await serve({ port: 0, client });';
+      expect(floorOf(shorthand, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).not.toBe(floorOf(shorthand).key);
+    });
+
+    it('keys an install directory by its manifest and lockfile', () => {
+      for (const body of ["await symlink(join(client, 'node_modules'), link, 'dir');", 'const bundler = resolveClientBundler(repo);']) {
+        const tree = { ...SERVED, 'client/node_modules/vite/package.json': '{"name":"vite","version":"8.0.0"}' };
+        const baseline = floorOf(body, tree);
+        expect(baseline.memoizable, body).toBe(true);
+        expect(floorOf(body, { ...tree, 'client/package-lock.json': '{"lockfileVersion":4}' }).key, body).not.toBe(baseline.key);
+        expect(floorOf(body, { ...tree, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key, body).toBe(baseline.key);
+      }
+    });
+
+    it('fails closed on the repository root, the install data tree, build output, a tree past the limit and a native non-literal require', () => {
+      expect(floorOf("app.use(express.static(join(client, 'dist')));", { ...SERVED, 'client/dist/index.html': '<html></html>' }))
+        .toMatchObject({ memoizable: false, reason: `${test}: hands build output or a cache to a tool: client/dist` });
+      expect(floorOf('const server = await createServer({ root: repo });')).toMatchObject({ memoizable: false, reason: `${test}: hands the repository root to a tool` });
+      // The same root spelled with a trailing slash.
+      expect(floorOf("app.use(express.static(fileURLToPath(new URL('../../', import.meta.url))));")).toMatchObject({ memoizable: false, reason: `${test}: hands the repository root to a tool` });
+      expect(floorOf("app.use(express.static(join(repo, 'data')));", { ...SERVED, 'data/x.json': '{}' })).toMatchObject({ memoizable: false, reason: `${test}: reads machine-local state (data)` });
+      const big = { ...SERVED };
+      for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) big[`client/src/big/f${i}.js`] = 'export {};\n';
+      expect(floorOf(handing, big)).toMatchObject({ memoizable: false, reason: `${test}: directory input too large: client` });
+      expect(floorOf(handing, big, { listFiles: () => Object.keys(big) }).memoizable).toBe(true);
+      const native = `${handing}\nconst load = createRequire(import.meta.url);\nconst plugin = load(pluginPath());`;
+      const recorded = computeTestMemoKeys([test], options({ ...SERVED, [test]: browserTest(native) }, { records: new Map([[test, [test]]]) })).get(test).recorded;
+      expect(recorded).toMatchObject({ memoizable: false, reason: `${test}: hands client to a tool and has a non-literal require()` });
+    });
+
+    it('does not mistake a property key for the binding of the same name, or a block for an object literal', () => {
+      // `root: client` beside `const root = <repo root>`: the key is not a use of the binding.
+      const body = "const root = resolve(import.meta.dirname, '../..');\nconst server = await createServer({ configFile: false, root: client });";
+      expect(floorOf(body).memoizable).toBe(true);
+      // A directory returned from a block or chosen by a ternary there is handed to nothing.
+      const blocks = 'const where = () => { return repo; };\nif (flag) { const picked = flag ? client : repo; }';
+      expect(floorOf(blocks).memoizable).toBe(true);
+      expect(floorOf(blocks, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).toBe(floorOf(blocks).key);
+    });
+
+    it('leaves a Node test that passes the same directories along exactly as it was', () => {
+      const key = (body, tree = SERVED) => keyOf({ ...tree, [test]: nodeTest(body) }).floor;
+      expect(key(`${handing}\nhelper({ root: repo });`).memoizable).toBe(true);
+      expect(key(handing, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).toBe(key(handing).key);
+    });
+
+    it('selects the suite for a change in a handed tree, recorded or not', () => {
+      const files = { ...SERVED, [test]: browserTest(handing) };
+      const digestOf = (rel) => createHash('sha256').update(files[rel]).digest('hex').slice(0, 16);
+      const recorded = computeTestMemoKeys([test], options(files, { records: new Map([[test, [test]]]), digests: new Map([[test, [digestOf(test)]]]) }));
+      expect(recorded.get(test).narrowed).not.toBeNull();
+      for (const info of [computeTestMemoKeys([test], options(files)), recorded]) {
+        expect(relatedTests(info, ['client/src/Panel.jsx'])).toEqual([test]);
+        expect(relatedTests(info, ['server/lib/static/player.js'])).toEqual([test]);
+        expect(relatedTests(info, ['server/lib/unrelated.js'])).toEqual([]);
+      }
+    });
+  });
+
+  it('keys the arguments that select which cases run', () => {
+    const plain = keyOf(TREE).floor.key;
+    const full = keyOf(TREE, 'server/lib/a.test.js', { caseFilter: ['--testNamePattern=^(?!.*\\[local-performance\\]).*$'] }).floor.key;
+    expect(keyOf(TREE, 'server/lib/a.test.js', { caseFilter: [] }).floor.key).toBe(plain);
+    expect(full).not.toBe(plain);
+    expect(keyOf(TREE, 'server/lib/a.test.js', { caseFilter: ['--testNamePattern=\\[fidelity\\]'] }).floor.key).not.toBe(full);
+  });
+
+  it('marks a verdict that was declared rather than discovered', () => {
+    const marked = { ...TREE, 'server/lib/a.js': `// test-memo: never\n${TREE['server/lib/a.js']}` };
+    expect(keyOf(marked).floor).toMatchObject({ memoizable: false, declared: true });
+    const [guard] = getAlwaysRunTests();
+    expect(computeTestMemoKeys([guard], options({ ...TREE, [guard]: "import { it } from 'vitest';\nit('g', () => {});\n" })).get(guard).floor).toMatchObject({ memoizable: false, declared: true });
+    const dynamic = { ...TREE, 'server/lib/a.js': 'export const a = (name) => import(name);\n' };
+    expect(keyOf(dynamic).floor).toMatchObject({ memoizable: false, declared: false });
+  });
+
   it('keeps the git rule off product modules the test merely imports', () => {
     const files = { ...TREE, 'server/lib/a.js': "import { execFileSync } from 'node:child_process';\nexport const a = () => execFileSync('git', ['status']);\n" };
     expect(keyOf(files).floor.memoizable).toBe(true);

@@ -23,7 +23,7 @@ import { killProcessTree } from '../server/lib/bufferedSpawn.js';
 import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { computeTestMemoKeys, createDiskFs, relatedTests } from './lib/testMemo.js';
-import { vitestShardSlice } from './lib/testMemoRunner.js';
+import { VITEST_PROJECT_NAMES, listRepositoryFiles, vitestDependenciesPath, vitestShardSlice } from './lib/testMemoRunner.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
 import { toWorkspacePath } from './lib/workspaceTests.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -33,7 +33,7 @@ import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
-import { buildCiTestPlan, collectPlanInputs } from './ci-test-plan.js';
+import { buildCiTestPlan, collectPlanInputs, getAlwaysRunTests } from './ci-test-plan.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
 // Actions annotation. Duration/summary tests retain real I/O.
@@ -250,6 +250,22 @@ describe('test memo through the real runner', () => {
       expect(trustedPr.stdout).toContain('skipped 1 of 1 selected files');
       expect(trustedPr.stdout).not.toContain('RAN ');
 
+      // A passed file that stores nothing says why on a trusted run (#16545). The
+      // stuck file spawns git, so neither key exists (any other undeclared reason
+      // serves equally). A declared guard is only counted.
+      const stuck = 'scripts/check-import-case.test.js';
+      const [guard] = getAlwaysRunTests();
+      const unrecorded = { CI_TEST_FILES: JSON.stringify([stuck, guard]), PORTOS_TEST_MEMO_DIR: join(fixture, 'unrecorded-memo') };
+      const trusted = run(unrecorded);
+      expect(trusted.status, trusted.stderr).toBe(0);
+      expect(trusted.stdout).toContain('recorded 0 green entries for 2 passed files');
+      expect(trusted.stdout).toMatch(new RegExp(`🧠   not recorded: ${stuck.replace(/[./]/g, '\\$&')} \\(floor key: [^;]+; recorded key: [^)]+\\)\n`));
+      expect(trusted.stdout).toContain('🧠   not recorded: 1 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).');
+      expect(trusted.stdout.match(/not recorded:/g)).toHaveLength(2);
+      const untrusted = run({ ...unrecorded, GITHUB_EVENT_NAME: 'pull_request' });
+      expect(untrusted.status, untrusted.stderr).toBe(0);
+      expect(untrusted.stdout).not.toContain('not recorded');
+
       // A gating environment variable is part of the key.
       const other = run({ PORTOS_TEST_QUIET: process.env.PORTOS_TEST_QUIET === '1' ? '' : '1' });
       expect(other.stdout).toContain('skipped 0 of 1 selected files');
@@ -446,20 +462,36 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
       'fs.writeFileSync(report, JSON.stringify({ numPassedTests: selection.include.length, numFailedTests: 0,',
       'testResults: selection.include.map(file => ({ name: path.resolve("server", file), status: "passed", assertionResults: [{ status: "passed" }] })) }));',
       'fs.writeFileSync(process.env.PORTOS_CI_DIAGNOSTICS_PATH, JSON.stringify({ reason: "passed", errorCount: 0 }));',
-      'process.stdout.write(JSON.stringify({ args, selection }) + "\\n");',
+      // The depfile Vitest would merge into: which files the runner seeded, per project.
+      `const depfile = ${JSON.stringify(vitestDependenciesPath(root, 'server'))};`,
+      'const seeded = fs.existsSync(depfile) ? Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(depfile, "utf8")).projects).map(([name, project]) => [name, Object.keys(project.files).sort()])) : null;',
+      // Then what Vitest does with a seeded file: merge the modules the run loaded into its record.
+      'if (seeded) fs.writeFileSync(depfile, JSON.stringify({ version: 2, projects: { "": { modules: selection.include,',
+      '  files: Object.fromEntries(selection.include.map((file, index) => [file, { at: 1, deps: [index] }])) } } }));',
+      'process.stdout.write(JSON.stringify({ args, selection, seeded }) + "\\n");',
     ].join('\n'));
-    const run = (index, { profile = 'full', files = BROWSER_SUITES, memo = null } = {}) => {
+    const run = (index, { profile = 'full', files = BROWSER_SUITES, memo = null, event = 'push' } = {}) => {
       const result = spawnSync(process.execPath, [join(root, 'scripts/run-ci-tests.js'), 'server'], {
         cwd: root, encoding: 'utf8', timeout: 120000,
         env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
           CI_TEST_MODE: 'files', CI_TEST_FILES: JSON.stringify(files), CI_SHARD: `${index}/2`,
           PORTOS_CI_BROWSER_OWNER: 'browser', PORTOS_BROWSER_TEST_PROFILE: profile,
           PORTOS_TEST_MEMO: memo ? '' : 'off', PORTOS_TEST_MEMO_DIR: memo || '',
-          GITHUB_EVENT_NAME: 'push', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
+          GITHUB_EVENT_NAME: event, GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
       });
       const line = result.stdout.split('\n').find(line => line.startsWith('{"args"'));
       return { ...result, reported: line ? JSON.parse(line) : null };
     };
+    // The listing a directory past the limit is keyed from: tracked files and
+    // untracked ones a commit would pick up, never what git ignores; no answer outside a checkout.
+    writeFileSync(join(root, '.gitignore'), 'ignored.log\n');
+    writeFileSync(join(root, 'ignored.log'), 'local\n');
+    writeFileSync(join(root, 'untracked.js'), 'export {};\n');
+    const listed = listRepositoryFiles(root);
+    expect(listed).toEqual(expect.arrayContaining(['.gitignore', 'untracked.js', 'scripts/run-ci-tests.js', ...BROWSER_SUITES]));
+    expect(listed).not.toContain('ignored.log');
+    expect(listed.some(file => file.startsWith('server/.cache/') || file.includes('node_modules/'))).toBe(false);
+    expect(listRepositoryFiles(fixture)).toBeNull();
     const selections = {};
     for (const profile of ['full', 'smoke']) {
       const runs = [1, 2].map(index => run(index, { profile }));
@@ -487,10 +519,22 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
       expect(scoped.status, scoped.stderr).toBe(0);
       expect(scoped.reported.selection.include).toEqual(selections.full[index - 1].filter(file => subset.includes(`server/${file}`)));
     }
+    // Vitest records nothing for a name-filtered run unless each file has a record to merge
+    // into (#16545): a recording run seeds one per file and project, and no other run does.
+    for (const result of Object.values(selections).flat()) expect(result).not.toBeNull();
+    const readOnly = run(1, { memo: join(fixture, 'pull-request-memo'), event: 'pull_request' });
+    expect(readOnly.status, readOnly.stderr).toBe(0);
+    expect(readOnly.reported.seeded).toBeNull();
     const memo = join(fixture, 'first-shard-memo');
     const seed = run(1, { memo });
     expect(seed.status, seed.stderr).toBe(0);
     expect(seed.stdout).toMatch(/recorded \d+ green entries/);
+    expect(seed.reported.args).toEqual(expect.arrayContaining(['--experimental.recordDependencies', '--testNamePattern=^(?!.*\\[local-performance\\]).*$']));
+    expect(seed.reported.seeded).toEqual(Object.fromEntries(VITEST_PROJECT_NAMES.map(name => [name, [...selections.full[0]].sort()])));
+    // The filtered run's records feed its own recorded key and carry no digests, so they never narrow another profile's selection.
+    const records = readdirSync(join(memo, 'records', 'server')).map(name => JSON.parse(readFileSync(join(memo, 'records', 'server', name), 'utf8')));
+    expect(records.map(record => record.test).sort()).toEqual(selections.full[0].map(file => `server/${file}`).sort());
+    for (const record of records) expect(record).toEqual({ test: record.test, modules: [record.test], recordedAt: expect.any(String) });
     const reused = run(1, { memo });
     expect(reused.status, reused.stderr).toBe(0);
     expect(reused.stdout).toContain(`skipped ${firstCount} of ${firstCount} selected files`);

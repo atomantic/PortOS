@@ -18,7 +18,7 @@ import { browserShardSlice } from './lib/browserSuites.js';
 import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
@@ -433,14 +433,17 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   });
 }
 
+/** The case-selecting Vitest arguments of the active browser profile; they are also a test-memo key input. */
+const browserProfileArgs = () => (process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+  ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : []);
+
 // `scope` here is the workspace npm runs in; `name` is only the runner scope shown on the duration line.
 export async function spawnNpm(scope, script, extraArgs, label, {
   run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {}, name = scope,
 } = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
-  const profileArgs = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const profileArgs = browserProfileArgs();
   const result = await run(scope, script, [...extraArgs, ...profileArgs]);
   recordVitestDuration(name, label, startedAt);
   onResult(result);
@@ -566,7 +569,8 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   if (memoDir) clearVitestDependencies(repoRoot, scope);
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard,
+  const caseFilter = browserProfileArgs();
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter,
     ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
@@ -592,6 +596,8 @@ async function main() {
   const selection = writeSelectionFile({ scope, include: plan.run, exclude: [] });
   process.env.PORTOS_CI_TEST_SELECTION = selection.path;
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
+  // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
+  if (extraArgs.length && caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
   const passed = [];
   const durations = {};
   try {
@@ -618,12 +624,14 @@ async function main() {
     console.log('🧠 Test memo: read-only for pull requests; no cache publication.');
     return;
   }
-  const written = recordTestMemo({
+  const { written, unrecorded } = recordTestMemo({
     scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
     dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
     source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
   });
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
+  // A passed file that stores nothing re-runs on every trusted run; say which and why.
+  for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
 }
 
 if (isDirectlyInvoked(import.meta.url)) await main();

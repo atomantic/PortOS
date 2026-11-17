@@ -11,9 +11,11 @@ import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies,
-  recordTestMemo, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
+  MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
+  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies,
+  recordTestMemo, seedVitestDependencies, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
+import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 
@@ -143,7 +145,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(readVitestDependencies(v2, 'server')).toBeNull();
     expect(dependencies.get('server/lib/a.test.js')).toEqual(['server/lib/a.js', 'server/lib/a.test.js']);
 
-    const written = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed, dependencies, source: 'local', commit: 'abc' });
+    const { written } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed, dependencies, source: 'local', commit: 'abc' });
     expect(written).toBe(2);
     // A v2 record: each loaded module's digest, so related selection can narrow it.
     expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual({ modules: ['server/lib/a.js', 'server/lib/a.test.js'],
@@ -161,7 +163,7 @@ describe('planTestMemo and recordTestMemo', () => {
     writeFileSync(join(root, 'server/lib/b.js'), "export const load = () => import('./lazy.js'); // edited mid-run\n");
     const bPassed = { testResults: [{ name: join(root, 'server/lib/b.test.js'), status: 'passed', assertionResults: [{ status: 'passed' }] }] };
     writeFileSync(reportPath, JSON.stringify(bPassed));
-    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: midRun, passed: passedTestFiles(fileResultsFromReport(reportPath), clean), dependencies, source: 'local', commit: 'abc' })).toBe(0);
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: midRun, passed: passedTestFiles(fileResultsFromReport(reportPath), clean), dependencies, source: 'local', commit: 'abc' }).written).toBe(0);
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     clearVitestDependencies(root, 'server');
     expect(findVitestDependenciesFile(root, 'server')).toBeNull();
@@ -257,6 +259,127 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(red.status).toBe(1);
     expect(fileResultsFromReport(report)).toEqual([expect.objectContaining({ file: join(root, user), status: 'failed' })]);
   }, 120000);
+
+  // #16545: a passed file that stores nothing re-runs on every trusted run,
+  // and the only trace used to be a lower count in one summary line.
+  it('names every passed file it could not record, with the reason each key was refused', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-store-'));
+    const guard = 'server/lib/layering.test.js'; // always-run guard: never analyzed in a files plan
+    const dynamic = 'server/lib/dynamic.test.js';
+    const marked = 'server/lib/markedMember.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [guard]: "import { it } from 'vitest';\nit('g', () => {});\n",
+      [dynamic]: "import { it } from 'vitest';\nconst load = (name) => import(name);\nit('d', () => {});\n",
+      'server/lib/markedMember.js': '// test-memo: never\nexport const m = 1;\n',
+      [marked]: "import { it } from 'vitest';\nimport { m } from './markedMember.js';\nit('m', () => {});\n",
+    });
+    const a = 'server/lib/a.test.js';
+    const c = 'server/lib/c.test.js';
+    const files = [a, c, dynamic, guard, marked];
+    const cold = plan({ repoFiles: files });
+    // Vitest recorded a.test.js only; c.test.js is edited while the run is in flight.
+    const dependencies = new Map([[a, ['server/lib/a.js', a]]]);
+    writeFileSync(join(root, c), `${FILES[c]}// edited mid-run\n`);
+    const { written, unrecorded } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed: files, dependencies, source: 'ci', commit: 'abc' });
+    expect(written).toBe(2);
+    expect(unrecorded).toEqual([
+      { test: c, declared: false, reason: 'floor key: an input changed while the run was in flight; recorded key: Vitest recorded no modules for this file' },
+      { test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: Vitest recorded no modules for this file` },
+      { test: guard, declared: true, reason: 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)' },
+      { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: Vitest recorded no modules for this file' },
+    ]);
+    // No depfile at all (a Vitest that stopped writing one) is a different cause from a file missing in it.
+    const none = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: plan({ repoFiles: [dynamic] }), passed: [dynamic], dependencies: null, source: 'ci' });
+    expect(none).toEqual({ written: 0, unrecorded: [{ test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: no readable Vitest dependency file` }] });
+    // A file stored under one key is recorded; the other key's refusal is not reported.
+    const recordedOnly = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: plan({ repoFiles: [dynamic] }), passed: [dynamic], dependencies: new Map([[dynamic, [dynamic]]]), source: 'ci' });
+    expect(recordedOnly).toEqual({ written: 1, unrecorded: [] });
+
+    // One line per file the memo should have taken, then one count for the declared ones.
+    expect(memoUnrecordedLines(unrecorded)).toEqual([
+      `🧠   not recorded: ${c} (${unrecorded[0].reason})`,
+      `🧠   not recorded: ${dynamic} (${unrecorded[1].reason})`,
+      '🧠   not recorded: 2 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).',
+    ]);
+    expect(memoUnrecordedLines([])).toEqual([]);
+    const many = Array.from({ length: MEMO_UNRECORDED_LINE_LIMIT + 3 }, (_, index) => ({ test: `server/lib/t${index}.test.js`, reason: 'floor key: x; recorded key: y', declared: false }));
+    const lines = memoUnrecordedLines(many);
+    expect(MEMO_UNRECORDED_LINE_LIMIT).toBe(40);
+    expect(lines).toHaveLength(MEMO_UNRECORDED_LINE_LIMIT + 1);
+    expect(lines.at(-1)).toBe('🧠   not recorded: 3 more files not listed.');
+    expect(lines.at(-2)).toContain(`server/lib/t${MEMO_UNRECORDED_LINE_LIMIT - 1}.test.js`);
+  });
+
+  // The cause #16545 found: a browser profile runs under `--testNamePattern`,
+  // Vitest calls that run partial and writes no dependency record for a file
+  // without a previous one, and the runner clears the depfile before each run.
+  // Pinned against the installed Vitest so a release that changes either side
+  // fails here instead of silently stopping the records again.
+  it('records a case-filtered run from a real Vitest depfile only when the files were seeded', () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-memo-filtered-')));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-filtered-store-'));
+    const filtered = 'server/lib/filtered.test.js';
+    const idle = 'server/lib/idle.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'server/lib/onlyFast.js': 'export const fast = 1;\n',
+      'server/lib/onlySlow.js': 'export const slow = 1;\n',
+      // Globals, not `import … from 'vitest'`: the fixture's vitest package is a stub.
+      [filtered]: [
+        "it('fast case', async () => { expect((await import('./onlyFast.js')).fast).toBe(1); });",
+        "it('[local-performance] slow case', async () => { expect((await import('./onlySlow.js')).slow).toBe(1); });",
+      ].join('\n'),
+      [idle]: "it('never selected', () => {});\n",
+      'server/vitest.probe.config.mjs': "export default { cacheDir: '.cache/vitest', test: { globals: true, include: ['lib/**/*.test.js'], maxWorkers: 1 } };\n",
+    });
+    const caseFilter = ['--testNamePattern=^(?!.*\\[local-performance\\]).*$'];
+    const report = join(root, 'report.json');
+    const vitest = (files) => spawnSync(process.execPath, [join(import.meta.dirname, '../../server/node_modules/vitest/vitest.mjs'),
+      'run', ...files.map((rel) => rel.replace(/^server\//, '')), '--config', 'vitest.probe.config.mjs', '--reporter=json', `--outputFile=${report}`,
+      '--experimental.recordDependencies', ...caseFilter], {
+      cwd: join(root, 'server'), encoding: 'utf8', timeout: 60000,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_MEMO: 'off' },
+    });
+    const filteredPlan = () => plan({ listTests: () => ['lib/filtered.test.js', 'lib/idle.test.js'], repoFiles: [filtered], caseFilter });
+    const record = (planned) => recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: planned, source: 'ci', commit: 'abc',
+      passed: passedTestFiles(fileResultsFromReport(report), { repoRoot: root, namePattern: true, status: 0, runReport: { reason: 'passed', errorCount: 0 } }),
+      dependencies: readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server') });
+
+    // Unseeded: Vitest writes the depfile but no record for the file.
+    const unseeded = filteredPlan();
+    expect(vitest(unseeded.run).status).toBe(0);
+    expect(findVitestDependenciesFile(root, 'server')).toBe(vitestDependenciesPath(root, 'server'));
+    expect(readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server').get(filtered)).toBeUndefined();
+
+    // Seeded: the record is what the cases that ran loaded. The seed for a file that never ran stays empty and is dropped.
+    clearVitestDependencies(root, 'server');
+    const seeded = filteredPlan();
+    seedVitestDependencies(root, 'server', [...seeded.run, idle]);
+    expect(vitest(seeded.run).status).toBe(0);
+    const dependencies = readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server');
+    expect(dependencies.get(filtered)).toEqual(['server/lib/filtered.test.js', 'server/lib/onlyFast.js']);
+    expect(dependencies.has(idle)).toBe(false);
+    expect(record(seeded)).toEqual({ written: 2, unrecorded: [] });
+    // Stored without digests: a filtered record must never narrow related selection for a run that skips nothing.
+    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null });
+    expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
+
+    // The entry vouches for this filter only: no filter, or another one, runs the file.
+    expect(plan({ listTests: () => ['lib/filtered.test.js'], repoFiles: [filtered] }).skipped).toEqual([]);
+    expect(plan({ listTests: () => ['lib/filtered.test.js'], repoFiles: [filtered], caseFilter: ['--testNamePattern=\\[fidelity\\]'] }).skipped).toEqual([]);
+    // A module only the skipped case loads is outside this filter's verdict; one a case that ran loads is inside it.
+    writeFileSync(join(root, 'server/lib/onlySlow.js'), 'export const slow = 2;\n');
+    expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
+    writeFileSync(join(root, 'server/lib/onlyFast.js'), 'export const fast = 2;\n');
+    expect(filteredPlan().skipped).toEqual([]);
+  }, 120000);
+
+  it('seeds every project name the workspace configs run files under', () => {
+    const projects = vitestCaptureProjects({ include: [], exclude: [] }, { cacheDir: 'x' }).map((project) => project.test.name);
+    expect(VITEST_PROJECT_NAMES).toEqual(['', ...projects]);
+  });
 
   it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));

@@ -19,7 +19,10 @@
  * key when the static closure is fully resolvable — so the next run can hit
  * either. Entries come only from a run whose process exited 0 and whose
  * run-level report shows no unhandled error, and only when the inputs hash
- * the same after the run as before it.
+ * the same after the run as before it. A passed file that gets no entry is
+ * reported with the reason each key was refused (`recordTestMemo`), and a
+ * run under a browser profile's name pattern is seeded so Vitest records it
+ * at all (`seedVitestDependencies`).
  *
  * Sharding: a matrix shard takes its slice of the FULL selected list with
  * the runner's selected algorithm (Vitest by default) before the memo subtracts
@@ -66,15 +69,15 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
  * @param {string[]} options.repoSources changed sources for related mode (repo-relative)
  * @param {string|null} options.memoDir null when the memo is off
  * @returns {{ selected: string[], run: string[], skipped: Array<{test: string, via: 'recorded'|'floor'}>,
- *   reasons: Map<string, string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
+ *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
-export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
+export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
   const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
   const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
   // Files mode only: the other modes need every closure to resolve their selection.
   const alwaysRun = new Set(getAlwaysRunTests());
   const unmemoizable = new Set(mode === 'files' ? candidates.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
-  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion };
+  const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
   const analyze = (test, recorded, digests = null) => {
@@ -128,7 +131,6 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   }
 
   const skipped = [];
-  const reasons = new Map();
   const run = [];
   let unanalyzed = 0;
   for (const test of slice) {
@@ -140,10 +142,9 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
           : null;
     if (via) { skipped.push({ test, via }); continue; }
     run.push(test);
-    if (info && !info.floor.memoizable) reasons.set(test, info.recorded?.memoizable ? 'no green entry yet (recorded key)' : info.recorded?.reason ?? info.floor.reason);
   }
   const narrowed = mode === 'related' ? [...verdicts.values()].filter((info) => info.narrowed).length : 0;
-  return { selected, slice, run, skipped, reasons, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts };
+  return { selected, slice, run, skipped, unmemoizable, unanalyzed, narrowed, analyze, freshAnalyze, moduleDigest, verdicts, caseFiltered: caseFilter.length > 0 };
 }
 
 export function memoSummaryLine(plan) {
@@ -274,6 +275,10 @@ export function readVitestDependencies(path, scope) {
         out.set(key, uniqueSorted([...(out.get(key) ?? []), ...modules]));
       }
     }
+    // A file Vitest loaded always names itself and the setup files. An empty
+    // list is a seed (`seedVitestDependencies`) the run never filled in, and
+    // keying on it would hash nothing but the test file.
+    for (const [test, modules] of out) if (modules.length === 0) out.delete(test);
     return out;
   } catch {
     return null;
@@ -291,6 +296,46 @@ export function clearVitestDependencies(repoRoot, scope) {
     if (!path) return;
     rmSync(path, { force: true });
   }
+}
+
+/** Every project name a workspace config runs files under: the root, and `vitestCaptureProjects`' two. */
+export const VITEST_PROJECT_NAMES = Object.freeze(['', 'parallel', 'capture']);
+
+/**
+ * Where Vitest keeps a workspace's depfile: `<cacheDir>/vitest/<sha1 of the
+ * root project name>/dependencies.json` (`resolveTestCacheDir` in Vitest;
+ * no workspace config names its root project).
+ */
+export function vitestDependenciesPath(repoRoot, scope) {
+  return join(repoRoot, workspaceOf(scope), TEST_SCOPES[scope]?.cacheDir ?? '.cache/vitest', 'vitest', createHash('sha1').update('').digest('hex'), 'dependencies.json');
+}
+
+/**
+ * Give every file about to run an empty previous record, for a run with a
+ * case filter (a browser profile's `--testNamePattern`).
+ *
+ * Vitest calls such a run partial and writes a file's dependency record only
+ * by merging into one it already has (`DependenciesCache.update`): cases the
+ * filter skipped may import modules the record would then lack, which matters
+ * to Vitest because it reuses the record for unfiltered runs. This runner
+ * clears the depfile before every run, so without a seed a filtered run
+ * recorded nothing and the real-Chrome suites, whose closures have
+ * non-literal imports and therefore no floor key, never got an entry
+ * (#16545). The memo does not share Vitest's concern: the filter is in the
+ * key (`caseFilter`), so an entry only ever vouches for a run that skips the
+ * same cases, and `recordTestMemo` stores a filtered record without digests,
+ * so it never narrows related selection for another profile.
+ *
+ * A seed the run does not fill in stays empty, and `readVitestDependencies`
+ * drops it. If Vitest moves or reshapes the file the seed is ignored and the
+ * runner reports each suite as unrecorded; the runner tests pin both against
+ * the installed Vitest.
+ */
+export function seedVitestDependencies(repoRoot, scope, tests) {
+  const files = Object.fromEntries(tests.map((test) => [toWorkspacePath(scope, test), { at: 0, deps: [] }]));
+  const path = vitestDependenciesPath(repoRoot, scope);
+  nodeFs.mkdirSync(nodePath.dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify({ version: 2, projects: Object.fromEntries(VITEST_PROJECT_NAMES.map((name) => [name, { modules: [], files }])) }));
 }
 
 /**
@@ -319,6 +364,19 @@ export function createToolVersionResolver({ env = process.env } = {}) {
   };
 }
 
+/**
+ * Every working-tree file git does not ignore, repo-relative: tracked files
+ * plus untracked ones a commit would pick up. One `git ls-files`; null when
+ * git cannot answer (not a checkout), which leaves an oversized directory
+ * input failing closed. The analyzer hashes working-tree bytes of what this
+ * names, so no repository state enters a key through it.
+ */
+export function listRepositoryFiles(repoRoot) {
+  const result = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: repoRoot, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout.split('\0').filter(Boolean);
+}
+
 /** Best-effort commit identity for the entry; never a reason to fail the run. */
 export function currentCommit(repoRoot, env = process.env) {
   if (env.GITHUB_SHA) return env.GITHUB_SHA;
@@ -326,30 +384,72 @@ export function currentCommit(repoRoot, env = process.env) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
+const DECLARED_NEVER = 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)';
+const CHANGED_DURING_RUN = 'an input changed while the run was in flight';
+
 /**
  * Record green results: a memo record and entries for every passed file the
  * plan knows. Each key is recomputed from the tree as it is after the run
  * and written only when it still equals the key computed before (floor) or
  * from the pre-run hashes (recorded): a file edited while Vitest ran is not
- * attributed to the verdict. Returns how many entries were written.
+ * attributed to the verdict.
+ *
+ * `unrecorded` names every passed file that got no entry under either key,
+ * with why each key was refused, so a suite that re-runs forever says so in
+ * the log instead of only lowering a count. `declared` marks the files that
+ * are never memoized on purpose; the runner counts those and lists the rest.
+ *
+ * @returns {{ written: number, unrecorded: Array<{ test: string, reason: string, declared: boolean }> }}
  */
 export function recordTestMemo({ scope, repoRoot, memoDir, plan, passed, dependencies, source, commit, writeEntry = writeMemoEntry, writeRecord = writeMemoRecord }) {
   let written = 0;
+  const unrecorded = [];
   for (const test of passed) {
     const info = plan.verdicts.get(test);
-    if (!info) continue;
+    if (!info) {
+      const declared = plan.unmemoizable?.has(test) === true;
+      unrecorded.push({ test, reason: declared ? DECLARED_NEVER : 'not analyzed by this plan', declared });
+      continue;
+    }
     const meta = { test, workspace: scope, source, commit };
     const modules = dependencies?.get(test) ?? null;
     const after = plan.freshAnalyze(test, modules);
-    if (info.floor.memoizable && after.floor.key === info.floor.key) { writeEntry(memoDir, info.floor.key, meta); written += 1; }
-    if (!modules) continue;
-    const recorded = plan.analyze(test, modules).recorded;
-    if (!recorded?.memoizable || after.recorded?.key !== recorded.key) continue;
-    writeRecord(memoDir, scope, test, modules, plan.moduleDigest);
-    writeEntry(memoDir, recorded.key, meta);
-    written += 1;
+    const refused = [];
+    if (!info.floor.memoizable) refused.push(`floor key: ${info.floor.reason}`);
+    else if (after.floor.key !== info.floor.key) refused.push(`floor key: ${CHANGED_DURING_RUN}`);
+    else { writeEntry(memoDir, info.floor.key, meta); written += 1; }
+    const recorded = modules ? plan.analyze(test, modules).recorded : null;
+    if (!modules) refused.push(`recorded key: ${dependencies ? 'Vitest recorded no modules for this file' : 'no readable Vitest dependency file'}`);
+    else if (!recorded?.memoizable) refused.push(`recorded key: ${recorded?.reason ?? 'not computed'}`);
+    else if (after.recorded?.key !== recorded.key) refused.push(`recorded key: ${CHANGED_DURING_RUN}`);
+    else {
+      // A case-filtered run loaded only what its cases reached: the list keys this
+      // filter's entry, but digests would let it narrow selection for any other run.
+      writeRecord(memoDir, scope, test, modules, plan.caseFiltered ? () => null : plan.moduleDigest);
+      writeEntry(memoDir, recorded.key, meta);
+      written += 1;
+    }
+    if (refused.length === 2) unrecorded.push({ test, reason: refused.join('; '), declared: info.floor.declared === true });
   }
-  return written;
+  return { written, unrecorded };
+}
+
+/** How many unrecorded files `memoUnrecordedLines` names before it counts the rest. */
+export const MEMO_UNRECORDED_LINE_LIMIT = 40;
+
+/**
+ * The log lines for `recordTestMemo`'s `unrecorded` list: one per file,
+ * capped, then one count for the overflow and one for the files that are
+ * never memoized on purpose (a full run passes dozens of those every time;
+ * listing them would bury the suites that should have been recorded).
+ */
+export function memoUnrecordedLines(unrecorded, limit = MEMO_UNRECORDED_LINE_LIMIT) {
+  const listed = unrecorded.filter((entry) => !entry.declared);
+  const declared = unrecorded.length - listed.length;
+  const lines = listed.slice(0, limit).map(({ test, reason }) => `🧠   not recorded: ${test} (${reason})`);
+  if (listed.length > limit) lines.push(`🧠   not recorded: ${listed.length - limit} more files not listed.`);
+  if (declared > 0) lines.push(`🧠   not recorded: ${declared} files ${DECLARED_NEVER}.`);
+  return lines;
 }
 
 /**

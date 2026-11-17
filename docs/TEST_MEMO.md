@@ -28,7 +28,8 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
 Both keys also cover: every non-JS file a member names through a literal path
 anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
 bound to one of those (a literal directory contributes its whole tree, up to
-400 files; snapshot files and each `FIXTURE_OWNERS` directory — or only
+400 files, and past that through the repository listing when it is only read
+as data: [Directory trees](#directory-trees); snapshot files and each `FIXTURE_OWNERS` directory — or only
 its direct children when the owner sets `fileRe` — are added for the test
 itself); the installed version of every package the
 members reach (so a lockfile bump invalidates exactly the suites that reach
@@ -45,7 +46,10 @@ version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
 `NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
 `PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
 `PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
-`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
+`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …); and the arguments that select
+which cases of a file run (a browser profile's `--testNamePattern`), because
+a green verdict covers only the cases that ran. An unfiltered run adds
+nothing, so its keys are unchanged.
 
 The workspace base leaves out two things that cannot change what a
 collected file proves. The test-selection modules the configs import only
@@ -77,6 +81,45 @@ base, and a setup-phase problem the static walk finds still fails both keys
 closed. The floor key always walks the setup closure (less bare mock
 registrations).
 
+## Directory trees
+
+A directory a test reads as a whole is an input as a whole.
+
+- **Up to 400 files** the tree is walked on disk. JS found there is a side
+  module: it stays in the key with its own closure and its own reads.
+- **Past 400 files**, a tree that is only read as data (listed, read as text,
+  served) is taken from one `git ls-files` instead: every tracked file plus
+  every untracked file a commit would pick up, so a new source file moves
+  the key before it is staged. Each file counts by its bytes, and the walk
+  follows the literal imports of the tree's JS out of the tree, since
+  whatever serves or bundles it follows the same specifiers
+  (`client/src/App.jsx` imports `server/lib/navManifest.js`). A served file's
+  own filesystem reads, git use and `// test-memo: never` marker say nothing
+  about the test process and are left out. Git-ignored files are outside the
+  key, as `.env` files and installs are outside every key. Suites that key
+  the same tree from inside it would hash the same file set, so such a key
+  also names its test.
+- **A real-browser test** (one that reaches Chrome) renders what a dev
+  server, bundler or static server reads on its behalf, and the module runner
+  records none of it. Every directory the test file hands to such a tool is
+  therefore a tree input under the two rules above: the value of a `root:`,
+  `dir:` or `base:` option, any other object-literal value
+  (`publicDir: join(client, 'public')`), and a function argument
+  (`express.static(dir)`). An install directory stands for the
+  `package.json` and lockfile beside it; `resolveClientBundler(repoRoot)` is
+  read as the client workspace's install directory. Before #16545 such a
+  directory was "a value", so a suite that wrote `root: clientDir` and loaded
+  its component from a fixture string was skipped after the component
+  changed. A Node test that passes a directory along keeps the older reading.
+
+The key still fails closed for the repository root; for a tree the test
+spawns, imports or requires through a variable path; for a test with a
+non-literal `require()`, which could load the tree natively where no
+recording shows it; for a tree holding a submodule or nested repository (one
+listed entry, whatever it contains); and outside a git checkout. A product
+module's own oversized read is still ignored, as before: only a tree-scanning
+guard calls those walkers, and the planner keeps those always-run.
+
 ## Never memoized (fails closed)
 
 A file in the planner's always-run set
@@ -87,8 +130,9 @@ product modules that run git on their own targets are under the test's
 control); a test file or `scripts/` member that reads machine-local state
 (`data/`, the home directory); a member that reads a path the analyzer
 cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
-`readServerSource`/`readClientSource`, a literal directory with more than
-400 files); a bare specifier that resolves to no installed package; and, for
+`readServerSource`/`readClientSource`, a directory with more than 400
+files that the listing cannot stand in for, see
+[Directory trees](#directory-trees)); a bare specifier that resolves to no installed package; and, for
 the floor key only, a non-literal `import()`/`require()` or an unparseable
 member. Two non-literal `require()` shapes are keyed instead: `require(CONST)`
 with a module-level string is that bare specifier (package version), and
@@ -125,6 +169,39 @@ verdict. The runner prints one line —
 any closure walk; and `Related selection used R digest records.` in a related
 plan) — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`.
 When every selected file is memoized nothing is launched and the job exits 0.
+
+After a run that may record (every run but a pull request's), the runner
+also names each passed file it stored under neither key, with why each key
+was refused:
+
+```
+🧠 Test memo: recorded 12 green entries for 14 passed files.
+🧠   not recorded: client/src/components/CmdKSearch.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
+🧠   not recorded: 3 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).
+```
+
+At most 40 files are listed, then the rest are counted. Files that are never
+memoized on purpose are only counted: a full run passes dozens of them every
+time. A suite that appears here on every run is re-executing identical
+inputs forever, which is how #16545 was found.
+
+### Runs under a name pattern
+
+A browser profile selects cases with `--testNamePattern`. Vitest calls such a
+run partial and writes a file's dependency record only by merging into one it
+already has: cases the pattern skipped may import modules the record would
+lack, and Vitest reuses the record for unfiltered runs. The runner clears the
+depfile before every run, so a profile run recorded nothing, and the 15
+registered browser suites whose closures have non-literal imports (no floor
+key) never got an entry. The runner now writes an empty record for each file
+about to run (`seedVitestDependencies`), under every project name, into the
+path Vitest reads (`<cacheDir>/vitest/<sha1 of the root project name>/dependencies.json`).
+Vitest's concern does not apply to the memo: the pattern is in the key, so an
+entry only vouches for a run that skips the same cases, and a record from a
+filtered run is stored without digests, so it never narrows related
+selection for another profile. A seed the run does not fill in stays empty
+and is ignored. `scripts/lib/testMemoRunner.test.js` pins the whole exchange
+against the installed Vitest.
 
 ## Shards
 
