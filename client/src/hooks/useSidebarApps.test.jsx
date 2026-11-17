@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import * as api from '../services/api';
+import * as api from '../services/apiApps.js';
 import socket from '../services/socket';
 import { useSidebarApps } from './useSidebarApps.js';
 
-vi.mock('../services/api', () => ({
+vi.mock('../services/apiApps.js', () => ({
   getApps: vi.fn(),
 }));
 

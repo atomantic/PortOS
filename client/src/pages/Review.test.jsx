@@ -115,6 +115,13 @@ vi.mock('../services/api', () => ({
   getHarnessUpdateReference: vi.fn(() => Promise.resolve({ state: 'unknown' })),
 }));
 
+// useActionQueue reads getReviewQueue from apiReview.js directly (#16562); wire
+// the barrel mock's fn so the api.getReviewQueue setups below still drive it.
+vi.mock('../services/apiReview.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getReviewQueue: (await import('../services/api')).getReviewQueue,
+}));
+
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() }
 }));

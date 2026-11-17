@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const mock = vi.hoisted(() => ({ getInstanceFeatures: vi.fn() }));
-vi.mock('../services/api', () => mock);
+vi.mock('../services/apiSystem.js', () => mock);
 
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
 import {

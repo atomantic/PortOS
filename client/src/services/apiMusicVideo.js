@@ -28,7 +28,7 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   return request(`/music-video?${query}`, options);
 };
 // Live `{ id, name }` rows for the sidebar's Music Video sub-nav.
-export const listMusicVideoProjectNames = (options = {}) => request('/music-video/names', options);
+export { listMusicVideoProjectNames } from './apiNavNames.js';
 // Built-in character styles a project loads through `concept.characterStyleId`,
 // each with this install's character sheet (`referenceImageId`, or null).
 export const listMusicVideoCharacterStyles = (options = {}) => request('/music-video/character-styles', options);

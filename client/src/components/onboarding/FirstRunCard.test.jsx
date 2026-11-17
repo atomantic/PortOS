@@ -10,6 +10,11 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('../../services/api', () => mock);
+// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: mock.getInstanceFeatures,
+}));
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }),
 }));

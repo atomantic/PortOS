@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useSyncExternalStore } from 'react';
-import * as api from '../services/api';
+import { getSystemActivity } from '../services/apiSystem.js';
 import socket from '../services/socket';
 import { sameJsonShape } from '../lib/sameJsonShape';
 import { subscribeVisibility } from './useVisibilityEvent.js';
@@ -55,7 +55,7 @@ function read() {
     return inFlight;
   }
   const started = generation;
-  inFlight = api.getSystemActivity({ silent: true }).then((snapshot) => {
+  inFlight = getSystemActivity({ silent: true }).then((snapshot) => {
     if (started !== generation) return;
     if (!snapshot || typeof snapshot !== 'object' || !snapshot.activity || typeof snapshot.activity.idle !== 'boolean') {
       publish({ snapshot: state.snapshot, status: 'error', error: new Error('Invalid system activity') });

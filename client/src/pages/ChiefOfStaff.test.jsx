@@ -59,6 +59,11 @@ const localLlm = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/api', () => api);
+// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: api.getInstanceFeatures,
+}));
 vi.mock('../services/apiLocalLlm', () => localLlm);
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
 vi.mock('../services/socket', () => ({ default: socketStub }));

@@ -7,6 +7,13 @@ domain already has a service file.
 `api.js` is a barrel that re-exports everything from the `apiX.js` files; callers can
 either `import * as api from '.../services/api'` or `import { specificFn } from '.../services/apiX'`.
 
+**App-shell code never imports the barrel.** Anything statically reachable from `main.jsx`
+(`App.jsx`, `Layout`, the sidebar and ⌘K, their hooks) imports the specific `apiX.js` module,
+because one barrel import puts every API wrapper on every cold load. The same holds for the
+large page modules `apiMusicVideo.js` and `apiPipeline.js`; the sidebar reads their name lists
+from `apiNavNames.js`. `client/src/entryClosure.test.js` fails on a regression and prints the
+import chain. Lazy pages may keep using the barrel.
+
 When you add a new `apiX.js`, re-export it from `api.js`; `index.test.js` fails if it is missing.
 
 ## Discovery rule

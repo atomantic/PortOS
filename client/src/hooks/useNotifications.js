@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';
 import useMounted from './useMounted';
-import * as api from '../services/api';
+import { getNotificationCount, getNotifications, markNotificationRead, markAllNotificationsRead, deleteNotification, clearNotifications } from '../services/apiSystem.js';
 
 export function useNotifications() {
   const [notifications, setNotifications] = useState([]);
@@ -23,7 +23,7 @@ export function useNotifications() {
   // or newer request supersedes any count request already in flight.
   const refreshCount = useCallback(async () => {
     const generation = ++countGeneration.current;
-    await api.getNotificationCount().then(({ count }) => {
+    await getNotificationCount().then(({ count }) => {
       if (generation === countGeneration.current) setUnreadCount(count);
     }).catch(err => {
       console.error(`❌ Failed to load notification count: ${err.message}`);
@@ -39,7 +39,7 @@ export function useNotifications() {
     if (initial) setLoading(true);
     try {
       const [notifs] = await Promise.all([
-        api.getNotifications({ limit: 50 }),
+        getNotifications({ limit: 50 }),
         refreshCount()
       ]);
       if (fresh()) setNotifications(notifs);
@@ -106,7 +106,7 @@ export function useNotifications() {
   }, []);
 
   const markAsRead = useCallback(async (id) => {
-    await api.markNotificationRead(id);
+    await markNotificationRead(id);
     setNotifications(prev =>
       prev.map(n => n.id === id ? { ...n, read: true } : n)
     );
@@ -114,19 +114,19 @@ export function useNotifications() {
   }, [refreshCount]);
 
   const markAllAsRead = useCallback(async () => {
-    await api.markAllNotificationsRead();
+    await markAllNotificationsRead();
     setNotifications(prev => prev.map(n => ({ ...n, read: true })));
     await refreshCount();
   }, [refreshCount]);
 
   const removeNotification = useCallback(async (id) => {
-    await api.deleteNotification(id);
+    await deleteNotification(id);
     setNotifications(prev => prev.filter(n => n.id !== id));
     await refreshCount();
   }, [refreshCount]);
 
   const clearAll = useCallback(async () => {
-    await api.clearNotifications();
+    await clearNotifications();
     setNotifications([]);
     await refreshCount();
   }, [refreshCount]);

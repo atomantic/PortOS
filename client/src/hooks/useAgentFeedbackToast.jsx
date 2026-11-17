@@ -9,7 +9,7 @@ import toast from '../components/ui/Toast';
 import { ThumbsUp, ThumbsDown, Loader2, AlertTriangle } from 'lucide-react';
 import socket from '../services/socket';
 import { useSocketSubscription } from './useSocketSubscription';
-import * as api from '../services/api';
+import { getCosAgent, submitCosAgentFeedback } from '../services/apiAgents.js';
 import OutputBlocks from '../components/cos/OutputBlocks';
 import { isAgentFeedbackEligible } from '../lib/cosAgentFeedback';
 import { agentIssueLinkifier } from '../lib/issueRefs';
@@ -58,7 +58,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
     const req = ++outputRequestRef.current;
     const current = () => req === outputRequestRef.current;
     setLoadingOutput(true);
-    api.getCosAgent(agentId)
+    getCosAgent(agentId)
       .then(data => { if (current()) setOutput(data?.output || []); })
       .catch(err => console.warn('fetch agent output:', err?.message ?? String(err)))
       .finally(() => { if (current()) setLoadingOutput(false); });
@@ -158,7 +158,7 @@ export function useAgentFeedbackToast() {
 
   // Submit feedback for an agent
   const submitFeedback = useCallback(async (agentId, rating, toastId) => {
-    const result = await api.submitCosAgentFeedback(agentId, { rating }).catch(() => null);
+    const result = await submitCosAgentFeedback(agentId, { rating }).catch(() => null);
 
     // Dismiss the feedback toast
     toast.dismiss(toastId);

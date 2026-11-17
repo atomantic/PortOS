@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { CircleAlert } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router';
-import * as api from '../services/api';
+import { getCapabilities } from '../services/apiSystem.js';
 import { safeReadJsonSession, safeWriteJsonSession } from '../lib/safeStorage.js';
 import Banner from './ui/Banner';
 
@@ -15,7 +15,7 @@ export default function SetupBanner() {
 
   useEffect(() => {
     let cancelled = false;
-    api.getCapabilities({ silent: true })
+    getCapabilities({ silent: true })
       .then((data) => {
         if (!cancelled) setSetupState(data);
       })

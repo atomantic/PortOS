@@ -41,6 +41,13 @@ vi.mock('../../../services/api', () => ({
   getAppClaimReviewers: vi.fn(),
 }));
 
+// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above never
+// provided it, so keep the hook on its fail-open path instead of a real fetch.
+vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
+}));
+
 import * as api from '../../../services/api';
 import { chipColors, parseColor } from '../../../lib/chipContrast';
 import IssuesTab from './IssuesTab';
