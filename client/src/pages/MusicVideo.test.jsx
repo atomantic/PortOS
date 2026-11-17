@@ -94,6 +94,21 @@ describe('MusicVideo project load recovery (#9761)', () => {
 });
 
 describe('MusicVideo project status filter', () => {
+  it('keeps index options available while the unfiltered picker loads', async () => {
+    let resolvePicker;
+    listMusicVideoProjectSummaries.mockImplementation(({ statusFilter }) => statusFilter
+      ? Promise.resolve({ items: [PROJECT_WITH_CLIP], total: 1, nextCursor: null })
+      : new Promise(resolve => { resolvePicker = resolve; }));
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: PROJECT_WITH_CLIP.name });
+    const picker = screen.getByLabelText('Project');
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    fireEvent.focus(picker);
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    await act(async () => resolvePicker({ items: [PROJECT_WITH_CLIP, { ...PROJECT_NO_CLIP, status: 'complete' }], total: 2, nextCursor: null }));
+    expect(within(picker).getByRole('option', { name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+  });
+
   it('filters before paging, switches accessible controls, and opens the selected project', async () => {
     const projects = [
       { ...PROJECT_WITH_CLIP, name: 'Working', status: 'ready' },

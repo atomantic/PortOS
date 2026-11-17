@@ -229,11 +229,11 @@ export default function MusicVideo() {
   };
   // The open project leads; summaries fill in the rest of the picker.
   const sortedProjects = useMemo(() => {
-    const pickerItems = !summariesWanted && !stageOnlyParam ? indexSummaries.items : summaries.items;
+    const pickerItems = !summaries.loaded && !stageOnlyParam ? indexSummaries.items : summaries.items;
     const byId = new Map(pickerItems.map((p) => [p.id, p]));
     if (selected) byId.set(selected.id, selected);
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
-  }, [selected, summaries.items, indexSummaries.items, summariesWanted, stageOnlyParam]);
+  }, [selected, summaries.items, summaries.loaded, indexSummaries.items, stageOnlyParam]);
   useEffect(() => {
     if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
     const newest = sortedProjects[0];
@@ -316,7 +316,7 @@ export default function MusicVideo() {
       events.forEach((e) => socket.off(e, onRunEvent));
       socket.off('music-video:render-spend', onRenderSpend);
     };
-  }, [selectedId, stageOnlyParam, statusFilter, indexSummaries.reload]);
+  }, [selectedId, stageOnlyParam, statusFilter]);
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
   const unsavedSceneFields = useRef(new Map());
