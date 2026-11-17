@@ -16,6 +16,7 @@ import { timeAgo } from '../utils/formatters';
 const InboxTab = lazy(() => import('../components/brain/tabs/InboxTab'));
 const LinksTab = lazy(() => import('../components/brain/tabs/LinksTab'));
 const MemoryTab = lazy(() => import('../components/brain/tabs/MemoryTab'));
+const MeditationTab = lazy(() => import('../components/brain/tabs/MeditationTab'));
 const IdeasTab = lazy(() => import('../components/brain/tabs/IdeasTab'));
 const DigestTab = lazy(() => import('../components/brain/tabs/DigestTab'));
 const FeedsTab = lazy(() => import('../components/brain/tabs/FeedsTab'));
@@ -68,6 +69,8 @@ export default function Brain() {
         return <ThreadsTab />;
       case 'links':
         return <LinksTab onRefresh={refetch} />;
+      case 'meditation':
+        return <MeditationTab />;
       case 'memory':
         return <MemoryTab onRefresh={refetch} />;
       case 'ideas':
