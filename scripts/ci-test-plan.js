@@ -381,7 +381,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
   'server/services/agentImportCycles.test.js',
   'server/services/meatspacePostImportCycles.test.js',
-  'server/services/serviceImportCycles.test.js',
   'server/services/twinImportCycles.test.js',
   // Prompt-upgrade contract: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',

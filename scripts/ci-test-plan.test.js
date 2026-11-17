@@ -652,7 +652,7 @@ it('runs the whole-tree import-cycle guards on a PR that touches one server/serv
   expect(plan.server.files).toEqual(expect.arrayContaining([
     'server/services/agentImportCycles.test.js',
     'server/services/meatspacePostImportCycles.test.js',
-    'server/services/serviceImportCycles.test.js',
+    'server/services/serviceImportCycles.guard.test.js',
     'server/services/twinImportCycles.test.js',
   ]));
 });
