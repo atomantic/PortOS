@@ -301,11 +301,16 @@ describe('bounded completion endpoint budget', () => {
     const fetch = respondWith(completion('ok'));
     const pending = call({ ...local, timeout: 20 });
     await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
-    await new Promise(resolve => setTimeout(resolve, 40));
-    expect(fetch).not.toHaveBeenCalled();
-    await release();
-    expect(await pending).toMatchObject({ text: 'ok' });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await vi.advanceTimersByTimeAsync(40);
+      expect(fetch).not.toHaveBeenCalled();
+      await release();
+      expect(await pending).toMatchObject({ text: 'ok' });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
