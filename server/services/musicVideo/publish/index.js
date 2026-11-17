@@ -33,7 +33,7 @@ import { sunoHookAdapter } from './sunoHook.js';
 import { distrokidAdapter } from './distrokid.js';
 import { musicVideoEvents } from '../events.js';
 import { CROSS_LINK_ADAPTERS } from './crossLinkEdits.js';
-import { carriedLinks, crossLinkBackfill, dropCarriedLink, mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
+import { carriedLinks, crossLinkBackfill, dropCarriedLink, mergeCarriedLinks } from '../../../lib/musicVideo/musicVideoCrossLinks.js';
 
 export const PUBLISH_ADAPTERS = Object.freeze({
   youtube: youtubeAdapter, shorts: shortsAdapter, tiktok: tiktokAdapter, instagram: instagramAdapter,

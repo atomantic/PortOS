@@ -15,7 +15,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { SUNO_LIMITS } from '../../lib/musicVideoAutonomous.js';
+import { SUNO_LIMITS } from '../../lib/musicVideo/musicVideoAutonomous.js';
 import { parseLLMJSON } from '../aiProvider.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
 

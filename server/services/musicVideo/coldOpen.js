@@ -1,5 +1,5 @@
 /**
- * Music Video — the cold open's sound (lib/musicVideoColdOpen.js). Each
+ * Music Video — the cold open's sound (lib/musicVideo/musicVideoColdOpen.js). Each
  * cold-open shot gets a mix of exactly its length: silence, the clip's own
  * audio at the director's level, and any sound layers placed in it (an effect
  * ffmpeg synthesizes, or a music-library track). The shots' mixes play back to
@@ -14,7 +14,7 @@ import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, hasAudioStream, runFfmpegProcess, safeUnder, probeVideoGeometry } from '../../lib/ffmpeg.js';
-import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideoColdOpen.js';
+import { coldOpenPlan, coldOpenScenes, normalizePreMusic, preMusicEffect } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { nameShots } from './productionReview.js';
 import { shotSegmentDir } from './shotSegmentPaths.js';
 

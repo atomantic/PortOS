@@ -4,7 +4,7 @@
  * artist set by code from the song's own cover design: where the title sits,
  * its typeface, weight, case, spacing and colors, and what sits behind it.
  * Each song gets its own design (coverArt.js drafts it from the song); this
- * module only renders one: the layout itself is lib/musicVideoCoverOverlay.js
+ * module only renders one: the layout itself is lib/musicVideo/musicVideoCoverOverlay.js
  * (shared with the client's live Lettering preview), and this adds the
  * measuring and the sharp composite. Lettering is set here rather than drawn
  * by an image model, so it stays crisp.
@@ -15,9 +15,9 @@
 
 import {
   COVER_ART_SIZE, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, fontAttrs, normalizeCoverDesign, tagTextFor, titleLinesFor,
-} from '../../lib/musicVideoCoverOverlay.js';
+} from '../../lib/musicVideo/musicVideoCoverOverlay.js';
 
-export { normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
+export { normalizeCoverDesign } from '../../lib/musicVideo/musicVideoCoverOverlay.js';
 
 const escapeXml = (s) => String(s).replace(/[<>&"']/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' })[c]);
 
@@ -42,7 +42,7 @@ const unitRange = (v, fallback = 0.5) => Math.min(1, Math.max(0, Number.isFinite
  * Write `out` (a JPEG): `source` cropped to the largest `width`×`height` frame
  * it holds, at `focusX` / `focusY` along whichever side has room to spare
  * (0 = left/top, 1 = right/bottom), scaled to that size, with the song's
- * design on top laid out for `frame` (lib/musicVideoCoverOverlay.js).
+ * design on top laid out for `frame` (lib/musicVideo/musicVideoCoverOverlay.js).
  * `lettering: false` leaves the image bare. `fonts` are the uploaded typefaces
  * the design may name (already registered with the renderer, see coverFonts.js).
  */

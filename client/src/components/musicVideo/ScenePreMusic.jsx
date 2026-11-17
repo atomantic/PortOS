@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   PRE_MUSIC_DEFAULT_DURATION_SEC, PRE_MUSIC_DURATION_RANGE, PRE_MUSIC_EFFECTS, PRE_MUSIC_LAYER_LIMIT, normalizePreMusic,
-} from '../../../../server/lib/musicVideoColdOpen.js';
+} from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { listTracks } from '../../services/api';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
@@ -73,7 +73,7 @@ function LayerRow({ fieldId, index, layer, spanSec, tracks, onCommit, onRemove, 
 }
 
 /**
- * A shot before the song (the cold open, lib/musicVideoColdOpen.js) has a length
+ * A shot before the song (the cold open, lib/musicVideo/musicVideoColdOpen.js) has a length
  * and sound of its own; the song's timing is untouched either way. The shot editor
  * shows PreMusicTiming in its Timing group and PreMusicSound in its Sound group.
  *

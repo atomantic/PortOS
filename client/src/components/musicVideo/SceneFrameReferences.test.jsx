@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
-import { musicVideoLinkedReferenceId } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoLinkedReferenceId } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 
 const project = { visualSpec: { references: [
   { id: 'r1', imageId: 'lead.png', role: 'character', label: 'Lead — character sheet, black sweater', condition: true },

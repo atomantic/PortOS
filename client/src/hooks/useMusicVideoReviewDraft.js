@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { musicVideoReviewDrafts } from '../../../server/lib/musicVideoReviewDraft.js';
+import { musicVideoReviewDrafts } from '../../../server/lib/musicVideo/musicVideoReviewDraft.js';
 
 /** Resolve only the implicit review choice. Explicit drawer versions never fall back. */
 export function useMusicVideoReviewDraft(project, { enabled = true } = {}) {

@@ -9,7 +9,7 @@
 
 import {
   MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS, musicVideoLlmRouteLabel,
-} from '../../../server/lib/musicVideoAutomation.js';
+} from '../../../server/lib/musicVideo/musicVideoAutomation.js';
 
 export { MUSIC_VIDEO_AUTOMATION_TOOLS, MUSIC_VIDEO_AUTOMATION_TOOL_IDS, MUSIC_VIDEO_LLM_STAGES, MUSIC_VIDEO_LLM_STAGE_LABELS };
 // `claude-tui · opus · high (TUI)` — one line naming the route a stage ran on.

@@ -1,9 +1,9 @@
 /**
  * The audio a project's song currently plays, and what to do when that file
  * was replaced in place under a track the project is still linked to (#14793).
- * Pure comparison lives in `lib/musicVideoSongAudio.js`.
+ * Pure comparison lives in `lib/musicVideo/musicVideoSongAudio.js`.
  */
-import { songAudioChange, keepSongTimingPatch } from '../../lib/musicVideoSongAudio.js';
+import { songAudioChange, keepSongTimingPatch } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { getTrack } from '../tracks/index.js';
 import { mutateProjectRecord } from './projects.js';
 

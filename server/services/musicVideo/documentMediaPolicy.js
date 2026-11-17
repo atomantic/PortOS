@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { parse } from '@babel/parser';
-import { assertMusicVideoMedia, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { assertMusicVideoMedia, musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 const IMAGES = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif', '.bmp', '.svg', '.ico']);
 const VIDEO = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi']);
 const SOURCE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.txt', '.md']);

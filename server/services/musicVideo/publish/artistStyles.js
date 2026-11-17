@@ -14,7 +14,7 @@
  * machine-local; settings are not synced between machines. No migration: a design
  * saved before `titleStyle`/`tagLayout` existed normalizes to the previous look.
  */
-import { normalizeCoverDesign } from '../../../lib/musicVideoCoverOverlay.js';
+import { normalizeCoverDesign } from '../../../lib/musicVideo/musicVideoCoverOverlay.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { getSettings, updateSettingsWith } from '../../settings.js';
 import { listCoverFonts } from '../coverFonts.js';

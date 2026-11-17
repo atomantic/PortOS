@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import migration, { migrateMusicVideoPreviz } from './459-music-video-previz-timeline.js';
-import { musicVideoPrevizSchema } from '../../server/lib/musicVideoValidation.js';
+import { musicVideoPrevizSchema } from '../../server/lib/musicVideo/musicVideoValidation.js';
 
 const legacy = (extra = {}) => ({
   id: 'p1',

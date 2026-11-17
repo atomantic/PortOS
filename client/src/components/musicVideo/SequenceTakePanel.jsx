@@ -2,7 +2,7 @@ import { useId, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Film } from 'lucide-react';
 import {
   defaultSequenceTakeModelId, SEQUENCE_TAKE_MAX_SHOTS, SEQUENCE_TAKE_MIN_SHOTS, SEQUENCE_TAKE_MODELS,
-} from '../../../../server/lib/musicVideoSequenceTake.js';
+} from '../../../../server/lib/musicVideo/musicVideoSequenceTake.js';
 import { musicVideoSequenceTake } from '../../services/apiMusicVideo.js';
 import { formatUsd } from '../../utils/formatters.js';
 import SentPromptPanel from '../media/SentPromptPanel';

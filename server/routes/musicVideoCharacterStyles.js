@@ -5,12 +5,12 @@ import { validateRequest } from '../lib/validateRequest.js';
 import { PATHS, pathExists } from '../lib/fileUtils.js';
 import {
   musicVideoCharacterStyleParamsSchema, musicVideoCharacterStyleReferenceSchema,
-} from '../lib/musicVideoValidation.js';
+} from '../lib/musicVideo/musicVideoValidation.js';
 import {
   getCharacterStyleDetail, listCharacterStyles, setCharacterStyleReferenceImage,
 } from '../services/musicVideo/characterStyles.js';
 
-// Built-in Music Video character styles (server/lib/musicVideoCharacterStyles.js).
+// Built-in Music Video character styles (server/lib/musicVideo/musicVideoCharacterStyles.js).
 // A project loads one through `concept.characterStyleId`; `PUT /:id/reference`
 // picks the gallery image this install uses as the style's character sheet.
 const router = Router();

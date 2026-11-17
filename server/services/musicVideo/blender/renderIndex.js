@@ -1,7 +1,7 @@
 export * from '../../film/renderIndex.js';
 import * as film from '../../film/renderIndex.js';
 import { blenderFinalsSignature } from '../../film/renderIndex.js';
-import { normalizeBlenderRecord, summarizeBlenderShots } from '../../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord, summarizeBlenderShots } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { readBlenderManifest } from './manifest.js';
 import { musicVideoFilmOwner } from './owner.js';
 export const blenderRenderFile = (id, ...args) => film.blenderRenderFile(musicVideoFilmOwner(id), ...args);

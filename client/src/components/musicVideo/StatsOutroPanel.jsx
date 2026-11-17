@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Scissors } from 'lucide-react';
-import { STATS_OUTRO_DEFAULTS, STATS_OUTRO_LIMITS, STATS_OUTRO_LINES, normalizeStatsOutro } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { STATS_OUTRO_DEFAULTS, STATS_OUTRO_LIMITS, STATS_OUTRO_LINES, normalizeStatsOutro } from '../../../../server/lib/musicVideo/musicVideoStatsOutro.js';
 
 // Lengths offered for the scene, in seconds (inside STATS_OUTRO_LIMITS).
 const LENGTHS = [4, 6, 8, 10, 12, 15, 20];
@@ -24,7 +24,7 @@ function HeadingField({ id, label, value, onCommit }) {
 }
 
 /**
- * The cutting room floor ending (lib/musicVideoStatsOutro.js): an optional
+ * The cutting room floor ending (lib/musicVideo/musicVideoStatsOutro.js): an optional
  * scene after the song with a heading, an orange subheading and a tally of
  * what was made, used and left on the floor. Off by default; on, it plays in
  * the storyboard animatic when the song ends (or from its Ending button) and

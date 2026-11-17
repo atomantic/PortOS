@@ -9,7 +9,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { STORYBOARD_LIMITS, newStoryboardEntityId } from '../../lib/storyboardVocabulary.js';
-import { isPreMusicShot } from '../../lib/musicVideoColdOpen.js';
+import { isPreMusicShot } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { storyboardFitSong } from '../../lib/storyboardFit.js';
 import { STORYBOARD_SYNC_END_SLACK_SEC } from '../../lib/storyboardShotSync.js';
 import { getStoryboard, mutateStoryboard } from './index.js';

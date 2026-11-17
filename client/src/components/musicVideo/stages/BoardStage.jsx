@@ -8,15 +8,15 @@ import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from
 import CatalogShotReferenceProblems from '../CatalogShotReferenceProblems.jsx';
 import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
 import useShotSheetMapFilter from '../../../hooks/useShotSheetMapFilter.js';
-import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../../../server/lib/musicVideoShotSheet.js';
+import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../../../server/lib/musicVideo/musicVideoShotSheet.js';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
 import SharedTakeOffers from '../SharedTakeOffers.jsx';
 import SequenceTakePanel from '../SequenceTakePanel.jsx';
 import FinalUpgradePanel from '../FinalUpgradePanel.jsx';
-import { sceneClipIsFinal, sceneFinalApproved } from '../../../../../server/lib/musicVideoFinalApproval.js';
-import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
+import { sceneClipIsFinal, sceneFinalApproved } from '../../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
+import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';

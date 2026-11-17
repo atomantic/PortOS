@@ -20,7 +20,7 @@ import {
   proposeShotRevisions,
 } from './planner.js';
 import { planShots } from './shotPlan.js';
-import { FRAME_PROMPT_WRITING, CLIP_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
+import { FRAME_PROMPT_WRITING, CLIP_PROMPT_WRITING } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 
 const SECTIONS = [
   { label: 'Intro', startSec: 0, endSec: 10, energy: 0.2 },

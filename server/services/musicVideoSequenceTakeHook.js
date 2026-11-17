@@ -19,7 +19,7 @@ import { getHistoryItem } from './videoGen/history.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { probeVideoDuration, safeUnder } from '../lib/ffmpeg.js';
 import { detectVideoSceneCuts } from '../lib/videoSceneCuts.js';
-import { proposeSequenceTakeOffsets } from '../lib/musicVideoSequenceTake.js';
+import { proposeSequenceTakeOffsets } from '../lib/musicVideo/musicVideoSequenceTake.js';
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 

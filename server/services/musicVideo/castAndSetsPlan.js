@@ -41,14 +41,14 @@
  * its prompt. A code-only project plans no images at all.
  */
 
-import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoLimits.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideo/musicVideoLimits.js';
 import { FACE_SHEET_ANGLE_TEMPLATE, FACE_SHEET_TEMPLATE_INSTRUCTION } from '../../lib/faceSheetAngleTemplate.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { heightScaleLine, resolveHeight } from '../../lib/characterHeight.js';
-import { isOutsideMusicVideoReference, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideo/musicVideoConditioning.js';
 // A sentence naming a person or the protagonist puts someone in an empty plate.
-import { withoutPeople } from '../../lib/musicVideoCreativeContext.js';
-import { peopleLightLine } from '../../lib/musicVideoSnapshotLight.js';
+import { withoutPeople } from '../../lib/musicVideo/musicVideoCreativeContext.js';
+import { peopleLightLine } from '../../lib/musicVideo/musicVideoSnapshotLight.js';
 import { CAST_SETS_SUBJECT_PREFIX, fixedCasting, fixedSupportingCast, formSubjects, leadingAge, musicVideoLipSyncs, songSections, subjectNameParts } from './castAndSetsDirection.js';
 
 export const CAST_SETS_IMAGE_SIZE = Object.freeze({ width: 1536, height: 1024 });

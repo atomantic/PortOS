@@ -33,7 +33,7 @@
  * it verbatim and has no route that acts on it, so no schema bump is needed.
  */
 
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';

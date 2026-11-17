@@ -19,7 +19,7 @@
  * the director can fix the cause and resume the revision.
  */
 
-import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
+import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
 import { QUEUEABLE_IMAGE_MODES, IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { RENDER_TARGET, recordRenderPin } from '../../lib/renderTargets.js';
 import { getProject } from './projects.js';

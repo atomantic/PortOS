@@ -1,6 +1,6 @@
 import { createCatalogReads, isCatalogCheckin, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, remapCatalogShotReferences } from './catalogCheckin.js';
 import { previewCastSetsImageEdit, requestCastSetsImageEdit, settleCastSetsImageEdit, acceptCastSetsImageEdit, discardCastSetsImageEdit } from './castAndSetsImageEdit.js';
-import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoAllowsMedia, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { castAndSetsApprovalInputs, castAndSetsApprovalValues, castAndSetsStoryInputs, directorArtGuides, productionFeedbackContext, seedArtDraft, selectArtGuideIfNone } from './productionReview.js';
 import { withMusicVideoStyle } from './styleReferences.js';
 /**
@@ -31,7 +31,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
  */
 
 import { randomUUID } from 'crypto';
-import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionInputs, currentCastSetsInspection, castSetsInspectionBlockers, sameCastSetsInspectionInputs } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'node:fs';
 import { FACE_SHEET_ANGLE_TEMPLATE } from '../../lib/faceSheetAngleTemplate.js';
@@ -40,11 +40,11 @@ import { basename, extname } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../lib/generationModes.js';
 import { resolveGalleryImage, resolveImageRef, resolveTemplateAsset } from '../../lib/pathSafety.js';
-import { musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { mediaRecoveryPending } from '../../lib/mediaRecoveryActivity.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
+import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideo/musicVideoGreybox.js';
 import { getProject, mutateProjectRecord } from './projects.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { requireProject } from './requireProject.js';

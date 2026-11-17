@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { sunoHookAdapter } from './sunoHook.js';
 import { pickSongRow } from '../../../lib/sunoSongPicker.js';
 import { buildPublishPayload } from './payloads.js';
-import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence } from '../../../lib/musicVideo/musicVideoDependencies.js';
 
 const ID = '12345678-abcd-4abc-8abc-123456789abc';
 const project = (extra = {}) => {

@@ -9,7 +9,7 @@ import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';
 import { readJSONFileStrict } from '../../lib/jsonIo.js';
-import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideo/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRendersDir, blenderWorkspaceDir } from './workspace.js';
 
 async function pendingFile(owner) {

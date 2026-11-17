@@ -4,7 +4,7 @@ import toast from '../../ui/Toast';
 import SentPromptPanel from '../../media/SentPromptPanel.jsx';
 import useProviderModels from '../../../hooks/useProviderModels.js';
 import { draftCatalogGreybox, saveCatalogGreybox } from '../../../services/apiCatalog.js';
-import { applyPrevizGreybox, previzSetGreyboxDraftInstruction } from '../../../../../server/lib/musicVideoPreviz.js';
+import { applyPrevizGreybox, previzSetGreyboxDraftInstruction } from '../../../../../server/lib/musicVideo/musicVideoPreviz.js';
 import { formatCount } from '../../../utils/formatters.js';
 
 const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';

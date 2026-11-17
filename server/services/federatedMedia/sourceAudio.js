@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { PATHS, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isPathInsideDir } from '../../lib/pathSafety.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { localModelTakesSongAudio } from '../../lib/musicVideoLocalModels.js';
+import { localModelTakesSongAudio } from '../../lib/musicVideo/musicVideoLocalModels.js';
 
 // This slice uses the LTX PCM input and --no-audio contract. Other A2V
 // runtimes have different output/window controls and are not negotiated yet.
@@ -99,7 +99,7 @@ async function prepareWindow({ project, scene, numFrames, fps }) {
   const [{ resolveMasterAudioPath }, { findFfmpeg, runFfmpegProcess }] = await Promise.all([
     import('../musicVideo/render.js'), import('../../lib/ffmpeg.js'),
   ]);
-  const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+  const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
   const audioDependencies = captureMusicVideoEvidence(project, { sceneIds: [], composition: false });
   const source = await resolveMasterAudioPath(project);
   const sourceSha256 = await sha256File(source);

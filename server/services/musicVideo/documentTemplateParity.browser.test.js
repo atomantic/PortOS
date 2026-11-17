@@ -11,7 +11,7 @@ import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { installTemplateParityDiagnostics } from '../../test/templateParityDiagnostics.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
+import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { buildDocumentData, documentRenderClock, documentRenderInitScripts, documentAspect, DOCUMENT_FRAME_SIZES } from './documentRender.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 

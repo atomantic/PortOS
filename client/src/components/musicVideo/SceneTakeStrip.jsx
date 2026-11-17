@@ -1,5 +1,5 @@
-import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
-import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideoRenderTier.js';
+import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
+import { musicVideoRenderTierLabel } from '../../../../server/lib/musicVideo/musicVideoRenderTier.js';
 import { useRef, useState } from 'react';
 import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, takeControl, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
@@ -7,7 +7,7 @@ import { plateVerdict } from './PlateComparison.jsx';
 import TakeExtend from './TakeExtend.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
 import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
-import { sequenceTakeLabel, sequenceTakeSummary } from '../../../../server/lib/musicVideoSequenceTake.js';
+import { sequenceTakeLabel, sequenceTakeSummary } from '../../../../server/lib/musicVideo/musicVideoSequenceTake.js';
 
 const VERDICT_TONE = { pass: 'bg-port-success/20 text-port-success', fail: 'bg-port-error/20 text-port-error', unverified: 'bg-port-warning/20 text-port-warning' };
 // The project's asset marks are keyed by media kind: an end frame is a still like any other.

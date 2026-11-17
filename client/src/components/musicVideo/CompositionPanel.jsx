@@ -7,7 +7,7 @@ import CodeVideoPanel from './CodeVideoPanel.jsx';
 import DocumentCompositionPanel from './DocumentCompositionPanel.jsx';
 import BlenderFilmPanel, { FILM_LOOK_ANCHOR } from './BlenderFilmPanel.jsx';
 import { renderStyleLabel } from './compositionDraft.js';
-import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 
 /**
  * The composition half of Make: how the final render is put together — grade,

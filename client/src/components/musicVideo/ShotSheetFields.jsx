@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
-import { SHOT_CAMERA_SET_DOWN, normalizeShotSheet, shotSheetCast, shotSheetOptions } from '../../../../server/lib/musicVideoShotSheet.js';
+import { SHOT_CAMERA_SET_DOWN, normalizeShotSheet, shotSheetCast, shotSheetOptions } from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const labelCls = 'block text-[11px] text-port-text-muted';

@@ -13,7 +13,7 @@ import { constants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { atomicWrite } from '../../lib/fileCore.js';
-import { MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES, blenderSourceFileKind } from '../../lib/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES, blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderSrcDir, blenderWorkspaceDir, resolveBlenderSourceFile } from './workspace.js';
 
 const STARTER_DIR = fileURLToPath(new URL('./py/starter/', import.meta.url));

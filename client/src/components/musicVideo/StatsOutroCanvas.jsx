@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { STATS_OUTRO_FONTS, drawStatsOutro } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { STATS_OUTRO_FONTS, drawStatsOutro } from '../../../../server/lib/musicVideo/musicVideoStatsOutro.js';
 
 // The canvas the animatic paints at; CSS scales it to the figure. The final render paints at the cut's own size.
 const WIDTH = 1280;
@@ -21,7 +21,7 @@ const floorSrc = (imageId) => (imageId.startsWith('/api/music-video/') ? imageId
   : `/data/images/${encodeURIComponent(imageId)}`);
 
 /**
- * The cutting room floor outro (lib/musicVideoStatsOutro.js) at scene time
+ * The cutting room floor outro (lib/musicVideo/musicVideoStatsOutro.js) at scene time
  * `t`, painted by the same function the final render captures. `outro` is the
  * normalized record (its heading lines and hidden tally lines). `stats` is the
  * server's tally (null while it loads: the floor and plate draw, the numbers

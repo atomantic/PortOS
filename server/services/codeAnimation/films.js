@@ -10,7 +10,7 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { PATHS } from '../../lib/paths.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { makePathResolver } from '../../lib/pathSafety.js';
 import { UPLOAD_AUDIO_EXTENSIONS } from '../../lib/mimeTypes.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';

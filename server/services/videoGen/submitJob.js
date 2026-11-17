@@ -19,7 +19,7 @@ import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel, buildHiggsfieldVideoRequest } from '../../lib/higgsfieldVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
-import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoClipReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
 import { prepareRemoteMediaJob, negotiateVideoConstraints } from '../federatedMedia/remoteSubmission.js';
 import { getLoom } from '../fableLoom/records.js';
@@ -37,10 +37,10 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES } from './requestFields.js';
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { getProject } from '../musicVideo/projects.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { resolveVideoModelSelection } from './modelSelection.js';
-import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
-import { localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { localModelRendersPerformance } from '../../lib/musicVideo/musicVideoLocalModels.js';
 
 const musicVideoProjectAspect = async (projectId) => {
   return musicVideoAspect(await getProject(projectId));

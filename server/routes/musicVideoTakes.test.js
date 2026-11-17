@@ -18,7 +18,7 @@ import { mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 const race = vi.hoisted(() => ({ beforeDelete: null, beforeSave: null, onRequest: null, ownerAnswer: null }));
@@ -52,7 +52,7 @@ vi.mock('../lib/fileUtils.js', async (original) => {
 // The vision reviewer itself is covered in plateReview.test.js; here it answers with real evidence for the scene it was handed.
 const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null, asked: null }));
 vi.mock('../services/musicVideo/plateReview.js', async () => {
-  const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
+  const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideo/musicVideoPlateEvidence.js');
   return {
     resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
     reviewPlate: async ({ scene, assetId, runId, prompt, frameRole = 'start', project }) => {
@@ -143,7 +143,7 @@ describe('scene takes routes', () => {
   it('records server-derived acknowledgement only for the current image and visible rendering defect', async () => {
     seedImage('defect.png');
     const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'defect.png' });
-    const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
+    const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideo/musicVideoPlateEvidence.js');
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, scenes: current.scenes.map((scene) => scene.sceneId === sceneA.sceneId
       ? { ...scene, takes: scene.takes.map((take) => ({ ...take, plateEvidence: plateReviewEvidence(scene, take.assetId, 'synthetic-run', JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
         id, status: id === 'render-quality' ? 'fail' : 'pass', note: id === 'render-quality' ? 'The clock is fused into the wall.' : 'Matches',
@@ -843,7 +843,7 @@ describe('the shot asset manager', () => {
     expect(scene.selectedTakeMarkedBad).toBe(true);
     expect(markRes.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
 
-    const { sceneRenderReady } = await import('../lib/musicVideoLayers.js');
+    const { sceneRenderReady } = await import('../lib/musicVideo/musicVideoLayers.js');
     expect(sceneRenderReady(scene)).toBe(false);
 
     const { productionReadiness } = await import('../services/musicVideo/productionReview.js');
@@ -853,7 +853,7 @@ describe('the shot asset manager', () => {
     // Advice only: a bad mark on a kept take never blocks approving the storyboard.
     expect(readiness.storyboard.problems.some((p) => p.includes('marked bad'))).toBe(false);
 
-    const { summarizeMusicVideoProject } = await import('../lib/musicVideoSummary.js');
+    const { summarizeMusicVideoProject } = await import('../lib/musicVideo/musicVideoSummary.js');
     expect(summarizeMusicVideoProject(stored).selectedTakeMarkedBad).toBe(true);
   });
 
@@ -963,7 +963,7 @@ describe('deleting a peer-owned pool asset', () => {
 describe('a shot\'s frame references', () => {
   // Uniquely catches the shot card's References pick failing to save, or a frame render ignoring it.
   it('saves the director\'s pick on the shot, and frame renders send it instead of the automatic set', async () => {
-    const { musicVideoConditioningReferences } = await import('../lib/musicVideoConditioning.js');
+    const { musicVideoConditioningReferences } = await import('../lib/musicVideo/musicVideoConditioning.js');
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, visualSpec: { ...(current.visualSpec || {}), references: [
       { id: 'lead', imageId: 'lead.png', role: 'character', label: 'Lead', condition: true },
       { id: 'tattooist', imageId: 'tattooist.png', role: 'character', label: 'Tattoo artist', condition: false },
@@ -984,7 +984,7 @@ describe('a shot\'s frame references', () => {
 
   // Uniquely catches a shot's Casting variant failing to save, or the server-side load not feeding conditioning.
   it('saves a shot\'s cast variant and conditions its frames only on age-compatible Casting guides', async () => {
-    const { musicVideoConditioningReferences } = await import('../lib/musicVideoConditioning.js');
+    const { musicVideoConditioningReferences } = await import('../lib/musicVideo/musicVideoConditioning.js');
     const { loadSceneCastMedia } = await import('../services/musicVideo/castGuideMedia.js');
     await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, visualSpec: { ...(current.visualSpec || {}), references: [
       { id: 'lead', imageId: 'lead.png', role: 'character', label: 'Lead', condition: true },

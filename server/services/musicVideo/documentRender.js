@@ -1,17 +1,17 @@
-import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
-import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
-import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
-import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
-import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
-import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
+import { musicVideoGlitchRuntime } from '../../lib/musicVideo/musicVideoGlitchCanvas.js';
+import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
+import { musicVideoWipeRuntime } from '../../lib/musicVideo/musicVideoWipes.js';
+import { plannedTransitions } from '../../lib/musicVideo/musicVideoCutEffects.js';
+import { musicVideoGradeFilter } from '../../lib/musicVideo/musicVideoGrade.js';
+import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicVideo/musicVideoFilmLook.js';
 import { activeShotColorMatch, colorMatchSvgParts, documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../../lib/shotColorMatch.js';
-import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+import { titleCardVisible, titleCardWindows } from '../../lib/musicVideo/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
-import { normalizeTemplateEffects, templateEffects } from '../../lib/musicVideoTemplateEffects.js';
+import { normalizeTemplateEffects, templateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
 import { documentHandheld } from '../../lib/handheldCamera.js';
-import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
+import { documentSceneCameo, documentCameos } from '../../lib/musicVideo/musicVideoCameos.js';
 /**
  * Music Video — render a project's composition document over the song.
  *
@@ -45,15 +45,15 @@ import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
-import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideoSourceTake.js';
-import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
-import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
-import { lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
+import { selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideo/musicVideoSourceTake.js';
+import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideo/musicVideoLayers.js';
+import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideo/musicVideoAspect.js';
+import { lyricAnchorOnset } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 import { documentDirectoryForRender, unsupportedDocumentEffects } from './compositionDocument.js';
 import { musicVideoSongDocument } from './compositionRender.js';
 import { buildSongDocument } from './codeTimeline.js';
-import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
+import { resolveNarrativeEvents, narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { DOCUMENT_RENDER_FPS, documentRenderClock, documentSongDuration } from './documentTiming.js';
 
 import { safeUnder, findFfmpeg, runFfmpegProcess, H264_ENCODE_ARGS, probeVideoGeometry, edgeFadeFilter } from '../../lib/ffmpeg.js';
@@ -80,13 +80,13 @@ const hasSelectedGlitches = (project) => (project?.scenes || []).some((scene) =>
 });
 const hasSelectedWipes = (project) => (project?.scenes || []).some(scene => scene?.wipeIn || scene?.wipeOut);
 
-/** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
+/** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideo/musicVideoAspect.js). */
 export const documentAspect = musicVideoAspect;
 
 /**
  * The browser init scripts a document render opens its page with: the film
  * look runtime when the project, a camera or a shot has a non-neutral look, and
- * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
+ * the opening title card (lib/musicVideo/musicVideoTitleCard.js) when it has one to show,
  * so every captured frame, probe sample and worker browser draws what the live
  * preview shows. Pure.
  */

@@ -1,5 +1,5 @@
 /** Settings and shot notes live in the owner record; writes merge atomically there. */
-import { blenderOptionValueProblem, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderOptionValueProblem, normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { assertBlenderShotId, blenderRefusal } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 

@@ -31,7 +31,7 @@
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { MUSIC_VIDEO_DEV_ARTIFACT_KINDS, MUSIC_VIDEO_DEV_ARTIFACT_STATUSES } from '../../lib/musicVideoValidation.js';
+import { MUSIC_VIDEO_DEV_ARTIFACT_KINDS, MUSIC_VIDEO_DEV_ARTIFACT_STATUSES } from '../../lib/musicVideo/musicVideoValidation.js';
 
 const DEV_ARTIFACT_KINDS = MUSIC_VIDEO_DEV_ARTIFACT_KINDS;
 const DEV_ARTIFACT_STATUSES = MUSIC_VIDEO_DEV_ARTIFACT_STATUSES;

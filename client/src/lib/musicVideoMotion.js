@@ -1,5 +1,5 @@
 /**
- * Re-export of `server/lib/musicVideoMotion.js` (`MOTION_CONTINUITY_CLAUSE`,
+ * Re-export of `server/lib/musicVideo/musicVideoMotion.js` (`MOTION_CONTINUITY_CLAUSE`,
  * `AUDIO_REACTIVE_PERFORMANCE_GUARD`, `silentMotionPrompt`) for board motion prompts.
  */
 

@@ -38,7 +38,7 @@ import { recordSceneLastFailure } from './musicVideo/sceneFailure.js';
 import { alignPerformanceInstruction } from './musicVideo/takeAudioAlignment.js';
 import { getHistoryItem } from './videoGen/history.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { extendTakeInPointFrames } from '../lib/musicVideoSequenceTake.js';
+import { extendTakeInPointFrames } from '../lib/musicVideo/musicVideoSequenceTake.js';
 import { storyboardFirstFrameFile } from '../lib/storyboardGuidance.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 

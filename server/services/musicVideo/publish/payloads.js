@@ -1,4 +1,4 @@
-import { publishExportLabel } from '../../../lib/musicVideoPublishExports.js';
+import { publishExportLabel } from '../../../lib/musicVideo/musicVideoPublishExports.js';
 /**
  * Music Video publishing (#9282) — what each platform posts, built from the
  * project's publishing kit (#9281). Pure: project + kit + the director's
@@ -7,10 +7,10 @@ import { publishExportLabel } from '../../../lib/musicVideoPublishExports.js';
  */
 import { ServerError } from '../../../lib/errorHandler.js';
 import { chaptersText } from '../publishKitText.js';
-import { musicVideoDependencyChanges } from '../../../lib/musicVideoDependencies.js';
+import { musicVideoDependencyChanges } from '../../../lib/musicVideo/musicVideoDependencies.js';
 import { suggestDistrokidGenres } from '../../../lib/distrokidGenres.js';
 import { kitCutWindows, latestSunoHookStartSec, suggestSocialCuts } from '../socialCuts.js';
-import { crossLinkLines, crossLinksEnabled, releaseLinkUrl, releaseLinks } from '../../../lib/musicVideoCrossLinks.js';
+import { crossLinkLines, crossLinksEnabled, releaseLinkUrl, releaseLinks } from '../../../lib/musicVideo/musicVideoCrossLinks.js';
 
 const TITLE_LIMITS = { youtube: 100, shorts: 100, reddit: 300, stackerNews: 80, substack: 100 };
 const DEFAULT_SUBREDDIT = 'aivideo';

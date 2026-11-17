@@ -14,7 +14,7 @@ import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../lib/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
-import { normalizeAutopilotParams } from '../lib/musicVideoAutonomous.js';
+import { normalizeAutopilotParams } from '../lib/musicVideo/musicVideoAutonomous.js';
 
 // Programmatic handler types + target-scope vocabulary live in
 // `lib/taskTargetScope.js` (see that file for why); re-exported here because

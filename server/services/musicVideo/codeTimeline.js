@@ -11,7 +11,7 @@
  */
 
 import { CODE_FPS } from './codeFrame.js';
-import { musicVideoSongFeaturesSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoSongFeaturesSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 
 const round3 = (n) => Math.round(n * 1000) / 1000;
 

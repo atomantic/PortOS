@@ -1,4 +1,4 @@
-import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
+import { assertShotActionContract } from '../../lib/musicVideo/musicVideoActionContract.js';
 /**
  * Music Video performance shots (#8977) — the submission-boundary half.
  *
@@ -7,7 +7,7 @@ import { assertShotActionContract } from '../../lib/musicVideoActionContract.js'
  * submitted this module:
  *
  *   1. refuses the render unless the resolved backend has a verified
- *      source-audio lip-sync capability (lib/musicVideoShotTiming.js) — Grok and
+ *      source-audio lip-sync capability (lib/musicVideo/musicVideoShotTiming.js) — Grok and
  *      local lanes are cutaway-only, and nothing silently falls back to a lane
  *      that would invent an unrelated voice or ignore the song;
  *   2. plans the provider-bounded audio window (a short shot is padded to a
@@ -50,8 +50,8 @@ import {
   sceneRenderShot,
   selectedPerformanceInstruction,
   SOURCE_AUDIO_MUSIC,
-} from '../../lib/musicVideoShotTiming.js';
-import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+} from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { getProject } from './projects.js';
 import { clipLocks, nameShots } from './productionReview.js';
 import { assertVocalStemMatchesSong, resolveVocalStemPath } from './vocalStem.js';

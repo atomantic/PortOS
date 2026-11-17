@@ -8,10 +8,10 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { toolFreeOneShotRefusal } from '../../lib/providerVendors.js';
-import { shotSheetBackfillSchema, shotSheetPromptProposalSchema, shotSheetSplitSchema } from '../../lib/musicVideoStoryValidation.js';
-import { shotSheetCast, shotSheetDrivesPrompt, shotSheetOptions, shotSheetRows } from '../../lib/musicVideoShotSheet.js';
+import { shotSheetBackfillSchema, shotSheetPromptProposalSchema, shotSheetSplitSchema } from '../../lib/musicVideo/musicVideoStoryValidation.js';
+import { shotSheetCast, shotSheetDrivesPrompt, shotSheetOptions, shotSheetRows } from '../../lib/musicVideo/musicVideoShotSheet.js';
 import { requireProject } from './requireProject.js';
-import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
+import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 
 const deps = {
   resolve: async (args) => (await import('../promptRunner.js')).resolveProviderAndModel(args),

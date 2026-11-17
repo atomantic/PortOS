@@ -3,7 +3,7 @@
  * planned on the old song must not mark the project complete, so every terminal
  * write runs `settleMusicVideoRender` inside the project mutation.
  */
-import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
+import { audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { applyProjectPatch } from './projectsLogic.js';
 
 // #9010: an in-flight render mark names its instance in `renderingOn`. A booting

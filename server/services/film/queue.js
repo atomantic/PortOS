@@ -10,7 +10,7 @@ import { filmOwnerKey } from './owner.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { readPendingBlenderRenders, writePendingBlenderRenders, removePendingBlenderShots } from './pending.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { blenderRenderWanted, normalizeBlenderRecord, normalizeBlenderSheetOptions } from '../../lib/musicVideoBlender.js';
+import { blenderRenderWanted, normalizeBlenderRecord, normalizeBlenderSheetOptions } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderRefusal } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { readBlenderRenders } from './renderIndex.js';

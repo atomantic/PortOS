@@ -4,7 +4,7 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoDcpRequestSchema, musicVideoExcerptRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoDcpRequestSchema, musicVideoExcerptRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 import { Router } from 'express';

@@ -19,7 +19,7 @@
  */
 
 import { lyricSectionSpans } from './lyricSectionSpans.js';
-import { PRE_MUSIC_DURATION_RANGE } from './musicVideoColdOpen.js';
+import { PRE_MUSIC_DURATION_RANGE } from './musicVideo/musicVideoColdOpen.js';
 import { STORYBOARD_DEFAULT_HOLD_SEC, storyboardPreludeCount } from './storyboardSongBrief.js';
 import { newStoryboardEntityId, STORYBOARD_MUSICAL_ROLE_LABELS } from './storyboardVocabulary.js';
 

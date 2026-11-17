@@ -12,9 +12,9 @@ import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
 import { SHOT_SHEET_ANCHOR } from '../../lib/musicVideoStages.js';
 import {
   SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
-} from '../../../../server/lib/musicVideoShotSheet.js';
-import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVideoFilmLook.js';
-import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideoFinalApproval.js';
+} from '../../../../server/lib/musicVideo/musicVideoShotSheet.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVideo/musicVideoFilmLook.js';
+import { sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { FILM_LOOK_PRESETS, filmLookPreset } from '../../lib/filmLook.js';
 import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
 

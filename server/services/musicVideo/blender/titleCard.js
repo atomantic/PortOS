@@ -1,11 +1,11 @@
 /**
- * The project's title card (lib/musicVideoTitleCard.js) on a Blender film: no page
+ * The project's title card (lib/musicVideo/musicVideoTitleCard.js) on a Blender film: no page
  * carries the card's runtime, so it is captured as in compositionRender.js (alpha
  * clip per window) and laid over the joined picture after the grade and timed
  * effects. A film look pass would weave and grain a baked card, wrong for a steady
  * one, so `blenderTitleCardPlan` settles per assembly whether the join bakes it.
  */
-import { normalizeTitleCard, titleCardSteady, titleCardWindows } from '../../../lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardSteady, titleCardWindows } from '../../../lib/musicVideo/musicVideoTitleCard.js';
 
 /** The card's windows that reach into `[startSec, endSec)` of the film (song seconds). Pure. */
 function blenderTitleCardWindows(project, { startSec = 0, endSec }) {

@@ -10,12 +10,12 @@
  * rating and notes; `publishHistory` rolls those up across every project so
  * the director, and the copy prompt, can see what landed.
  */
-import { MUSIC_VIDEO_PUBLISH_TARGETS } from '../../../lib/musicVideoValidation.js';
+import { MUSIC_VIDEO_PUBLISH_TARGETS } from '../../../lib/musicVideo/musicVideoValidation.js';
 import { ServerError } from '../../../lib/errorHandler.js';
 import { getSettings, updateSettingsWith } from '../../settings.js';
 import { listProjects } from '../projects.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from '../../../lib/distrokidGenres.js';
-import { mergeCarriedLinks } from '../../../lib/musicVideoCrossLinks.js';
+import { mergeCarriedLinks } from '../../../lib/musicVideo/musicVideoCrossLinks.js';
 
 const SETTINGS_KEY = 'musicVideoPublishing';
 const RECEPTIONS = ['good', 'mixed', 'poor'];

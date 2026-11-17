@@ -29,14 +29,14 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
-import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
-import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { castInputsFromReferences } from '../../lib/musicVideo/musicVideoCastLook.js';
+import { musicVideoCameoReferences } from '../../lib/musicVideo/musicVideoCameos.js';
 import { FRAME_REFERENCE_UNAVAILABLE } from '../musicVideo/sceneFrameReferences.js';
-import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
-import { musicVideoGreyboxReferences } from '../../lib/musicVideoGreybox.js';
-import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
+import { musicVideoFrameModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { captureImageFrameDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { musicVideoGreyboxReferences } from '../../lib/musicVideo/musicVideoGreybox.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
 import { join } from 'node:path';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
 import { ServerError } from '../../lib/errorHandler.js';

@@ -10,9 +10,9 @@
  * through the Board's own transforms, so ids, order and approval staleness
  * behave as they do for a director's edit. Pure.
  */
-import { sungLyricTextWithin } from '../../../lib/musicVideoLyricAnchors.js';
-import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
-import { normalizePreMusic } from '../../../lib/musicVideoColdOpen.js';
+import { sungLyricTextWithin } from '../../../lib/musicVideo/musicVideoLyricAnchors.js';
+import { normalizeBlenderRecord } from '../../../lib/musicVideo/musicVideoBlender.js';
+import { normalizePreMusic } from '../../../lib/musicVideo/musicVideoColdOpen.js';
 import { addScenes, applySceneUpdate, removeScene } from '../projectsLogic.js';
 import { carryShotLocks } from '../productionReview.js';
 // The music-video manifest barrel imports owner, which imports this module.

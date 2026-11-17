@@ -15,7 +15,7 @@
  */
 import { lstat, readdir, rm, rmdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideo/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { BLENDER_RENDER_QUALITIES, blenderCompositedHandlesDir, blenderFramesDir, blenderLayersRoot, blenderRenderFile, blenderShotVideo } from './renderIndex.js';

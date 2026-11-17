@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
-import { TEMPLATE_EFFECT_CONTROLS, templateEffects } from '../../../../server/lib/musicVideoTemplateEffects.js';
-import { shotFilmLook } from '../../../../server/lib/musicVideoFilmLook.js';
+import { TEMPLATE_EFFECT_CONTROLS, templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
+import { shotFilmLook } from '../../../../server/lib/musicVideo/musicVideoFilmLook.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
 import { formatCount } from '../../utils/formatters.js';
 

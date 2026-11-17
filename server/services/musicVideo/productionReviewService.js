@@ -1,4 +1,4 @@
-import { currentPlateEvidence, selectedPlateTake, renderQualityAcknowledged } from '../../lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence, selectedPlateTake, renderQualityAcknowledged } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { mutateProjectRecord } from './projects.js';
@@ -6,10 +6,10 @@ import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { shotCameraLabel } from '../../lib/cameraMovements.js';
 import { productionReadiness, boardStoryboard, seedArtDraft, productionReviewBasis, productionAlignmentBasis, alignmentBasisMatches, documentStoryboardBasis, approveProductionStage, assertProductionApproval, recordProductionFeedback, resolveProductionFeedback, revertApprovedInput, anchorShotsToSungLyrics, dropStaleStoryboardRows, carryStoryboardApproval } from './productionReview.js';
-import { sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
+import { sungLyricTextWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
 
-import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 const reviewProcessId = randomUUID();
 
 const present = project => ({ project, readiness: productionReadiness(project) });
@@ -66,7 +66,7 @@ export async function importProductionPlanning(id, source) {
   let input;
   try { input = JSON.parse(source); } catch { throw new ServerError('Choose a valid planning JSON document.', { status: 422, code: 'VALIDATION_ERROR' }); }
   if (!input || Array.isArray(input) || typeof input !== 'object') throw new ServerError('The planning document must be an object.', { status: 422, code: 'VALIDATION_ERROR' });
-  const { musicVideoProductionDraftSchema } = await import('../../lib/musicVideoValidation.js');
+  const { musicVideoProductionDraftSchema } = await import('../../lib/musicVideo/musicVideoValidation.js');
   const prose = value => value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   const draft = musicVideoProductionDraftSchema.parse({
     cast: prose(input.cast), environments: prose(input.environments), visualLanguage: prose(input.visualLanguage),

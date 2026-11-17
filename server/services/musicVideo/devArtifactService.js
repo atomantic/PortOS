@@ -1,5 +1,5 @@
 import { assertDocumentMediaPolicy } from './documentMediaPolicy.js';
-import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video — development artifact workflow: import/upload, generated saves,
  * notes, review and soft delete over the pure transforms in devArtifacts.js

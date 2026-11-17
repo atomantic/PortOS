@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import socket from '../../services/socket.js';
 import { VideoCastLinksDisclosure } from './VideoCastLinks.jsx';
 import { isUsableReference, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
-import { musicVideoAllowsMedia } from '../../../../server/lib/musicVideoMediaPolicy.js';
+import { musicVideoAllowsMedia } from '../../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { detachCatalogIngredientMedia, listCatalogIngredientMedia } from '../../services/apiCatalog.js';
 import useMounted from '../../hooks/useMounted.js';
 import { useVisibilityEvent } from '../../hooks/useVisibilityEvent.js';

@@ -108,7 +108,7 @@ vi.mock('../services/federatedMedia/sourceAudio.js', async (importOriginal) => {
   return {
     ...actual,
     prepareSourceAudioWindow: vi.fn(async ({ project, scene, numFrames, fps }) => {
-      const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
+      const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
       const startSample = Math.round(scene.startSec * 48000);
       const sampleCount = Math.round(((numFrames - 1) / fps) * 48000);
       return {

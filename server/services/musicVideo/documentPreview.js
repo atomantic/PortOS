@@ -1,10 +1,10 @@
 import { PREVIEW_DOCUMENT_BASE, inlineDocumentModule, previewDocumentPath } from './documentModules.js';
-import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { documentFilmLookRuntime } from '../../lib/musicVideoFilmLook.js';
+import { musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { documentFilmLookRuntime } from '../../lib/musicVideo/musicVideoFilmLook.js';
 import { documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../../lib/shotColorMatch.js';
 import { titleCardRuntime } from './titleCardFonts.js';
-import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
-import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
+import { musicVideoGlitchRuntime } from '../../lib/musicVideo/musicVideoGlitchCanvas.js';
+import { musicVideoWipeRuntime } from '../../lib/musicVideo/musicVideoWipes.js';
 /**
  * Music Video — HTML for a composition preview document.
  *
@@ -34,7 +34,7 @@ import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
  */
 
 import { readFile } from 'fs/promises';
-import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
+import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { extname } from 'path';
 import { loadHistory } from '../videoGen/history.js';
 import { readDocumentFiles, documentMimeType } from './compositionDocument.js';

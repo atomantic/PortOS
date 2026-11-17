@@ -7,7 +7,7 @@
  * `sceneIds` (board shot order, a missing shot is gone); `scenes` (presented shots
  * that changed or are new, incl. neighbours whose time or take staleness moved);
  * `project` (other changed top-level presented fields); `removed` (fields no
- * longer present). Client side: server/lib/musicVideoEditResult.js.
+ * longer present). Client side: server/lib/musicVideo/musicVideoEditResult.js.
  */
 
 import { presentProjectRecord, readPresentationInputs } from './projectPresentation.js';

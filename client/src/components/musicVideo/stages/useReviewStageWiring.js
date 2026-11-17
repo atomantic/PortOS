@@ -2,7 +2,7 @@ import useMusicVideoExcerpts from '../../../hooks/useMusicVideoExcerpts.js';
 import useMusicVideoAutoReview from '../../../hooks/useMusicVideoAutoReview.js';
 import { useMusicVideoReviewDraft } from '../../../hooks/useMusicVideoReviewDraft.js';
 import { useVideoFileSrc } from '../../../hooks/useVideoFileSrc.js';
-import { latestMusicVideoReviewDraft } from '../../../../../server/lib/musicVideoReviewDraft.js';
+import { latestMusicVideoReviewDraft } from '../../../../../server/lib/musicVideo/musicVideoReviewDraft.js';
 
 /**
  * Final render step (Review): draft excerpts, the automatic review run, the

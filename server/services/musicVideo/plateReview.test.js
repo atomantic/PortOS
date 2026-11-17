@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reviewPlate, reviewPlateStrip, resolvePlateReviewer } from './plateReview.js';
-import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn(), resolveProviderAndModel: vi.fn(),
   resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
 const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));

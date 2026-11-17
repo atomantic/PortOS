@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 import { bindAuthoredPreviewPlayback } from './authoredPreviewPlayback.js';
-import { titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
+import { titleCardRuntimeSource } from '../../lib/musicVideo/musicVideoTitleCard.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy, ownTestBodies } from '../../lib/mockPathsDataRoot.js';
 import { withCreativeLatitude } from '../../lib/creativeLatitude.js';
 

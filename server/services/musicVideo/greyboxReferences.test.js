@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { loadMusicVideoGreybox, withMusicVideoGreyboxInput } from './greyboxReferences.js';
-import { musicVideoFrameModelInput, musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoFrameModelInput, musicVideoShotModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { musicVideoSceneCreateSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { buildProjectRecord, addScene, replaceScenes, splitScene } from './projectsLogic.js';
 import { buildCastAndSetsImagePlan } from './castAndSetsPlan.js';
-import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
+import { musicVideoConditioningReferences } from '../../lib/musicVideo/musicVideoConditioning.js';
 
 const setReference = { subjectId: 'set-rink', greyboxShotId: 'wide' };
 const scene = { sceneId: 's1', prompt: 'The singer waves', framePrompt: 'A wide shot', startSec: 0, endSec: 8, setReference };

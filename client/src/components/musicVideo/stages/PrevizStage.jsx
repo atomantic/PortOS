@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { AlertTriangle, Box, Loader2, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
-import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideo/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
@@ -12,7 +12,7 @@ import PrevizAi from './PrevizAi.jsx';
 import PrevizDraftMissingGreyboxes from './PrevizDraftMissingGreyboxes.jsx';
 import PrevizTimeline from './PrevizTimeline.jsx';
 import WorldMap, { useWorldMapView } from '../../catalog/WorldMapView';
-import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideoPrevizTimeline.js';
+import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideo/musicVideoPrevizTimeline.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, finishCatalogPrevizBuildJob, saveCatalogWorld, startCatalogPrevizBuildJob } from '../../../services/apiCatalog.js';
 import { draftWorldFromRouteMaps, worldClockText, worldSetFootprint } from '../../../../../server/lib/worldMap.js';
@@ -21,8 +21,8 @@ import { formatCount, formatDateTime, formatTimecode } from '../../../utils/form
 import { shotNumbers } from '../ShotStepper.jsx';
 import {
   backfillPrevizFromShots, previzCutProblems, previzPawnColors, updatePrevizCut, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, previzSetsWithoutGreybox, projectPreviz,
-} from '../../../../../server/lib/musicVideoPreviz.js';
-import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS, PREVIZ_VEHICLES_MAX, VEHICLE_DEFAULT_METERS_PER_MIN, VEHICLE_SPEED_MAX_METERS_PER_MIN } from '../../../../../server/lib/musicVideoPrevizLimits.js';
+} from '../../../../../server/lib/musicVideo/musicVideoPreviz.js';
+import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS, PREVIZ_VEHICLES_MAX, VEHICLE_DEFAULT_METERS_PER_MIN, VEHICLE_SPEED_MAX_METERS_PER_MIN } from '../../../../../server/lib/musicVideo/musicVideoPrevizLimits.js';
 
 export const PREVIZ_ANCHOR = 'mv-previz';
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-0';

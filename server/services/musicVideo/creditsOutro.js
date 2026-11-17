@@ -1,12 +1,12 @@
 /**
- * Music Video — the credits ending's prefill (lib/musicVideoCreditsOutro.js):
+ * Music Video — the credits ending's prefill (lib/musicVideo/musicVideoCreditsOutro.js):
  * what PortOS already knows about the song, read from the project's track,
  * the track's artist (Create › Music › Artists) and its album. Read-only;
  * the client applies it only when the director turns the credits on or asks
  * to refill them.
  */
 
-import { creditsOutroPrefill } from '../../lib/musicVideoCreditsOutro.js';
+import { creditsOutroPrefill } from '../../lib/musicVideo/musicVideoCreditsOutro.js';
 
 /**
  * The suggested credits for `project`. Only a song known to have no artist

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyProjectRenderPool } from './renderPool.js';
-import { musicVideoVideoSettingsSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoVideoSettingsSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { mergeProjectRecord } from './projectsLogic.js';
 
