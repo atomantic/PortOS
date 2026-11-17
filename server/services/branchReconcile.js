@@ -28,7 +28,7 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches, readBranchLineage, readBranchPublished } from './git.js';
-import { readClaimIssueReservation } from './claimIssueReservation.js';
+import { readClaimIssueReservation, readRepoClaimIssueReservation } from './claimIssueReservation.js';
 import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
@@ -1290,8 +1290,12 @@ async function retireBranch(repoPath, b, opts) {
     }
     const issue = claimIssueOfBranch(b.branch);
     if (issue && lineage === 'ancestry') {
-      const origin = opts.origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : opts.origin;
-      opts = { ...opts, claimReserved: await readClaimIssueReservation(origin, issue, opts.forgeExec ?? null) };
+      // A standalone caller (the Git page) passes no credential overlay: resolve
+      // it here. Reconcile's explicit null (no GitHub origin) stays unreadable.
+      const claimReserved = opts.forgeExec === undefined
+        ? await readRepoClaimIssueReservation(repoPath, issue, { forgeAccount: opts.forgeAccount ?? null })
+        : await readClaimIssueReservation(opts.origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : opts.origin, issue, opts.forgeExec);
+      opts = { ...opts, claimReserved };
     }
   }
   // One ownership critical section re-reads owners, gates and removes, so a bind

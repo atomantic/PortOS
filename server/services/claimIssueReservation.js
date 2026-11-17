@@ -32,15 +32,16 @@ export async function readClaimIssueReservation(target, issue, forgeExec) {
 /**
  * `readClaimIssueReservation` for a repository path, resolving its origin and
  * gh credential overlay first (a caller without branch-reconcile's per-cycle
- * resolution, such as the early merged-worktree reaper).
+ * resolution: the early merged-worktree reaper, or the Git page's cleanup).
  *
  * @param {string} repoPath
  * @param {string|number} issue
+ * @param {{ forgeAccount?: string|null }} [options] - the app record's pinned gh account
  * @returns {Promise<boolean|null>}
  */
-export async function readRepoClaimIssueReservation(repoPath, issue) {
+export async function readRepoClaimIssueReservation(repoPath, issue, { forgeAccount = null } = {}) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
   if (!githubRepoSpec(origin)) return null;
-  const forgeExec = await resolveForgeExecOptions(repoPath).catch(() => null);
+  const forgeExec = await resolveForgeExecOptions(repoPath, { forgeAccount }).catch(() => null);
   return readClaimIssueReservation(origin, issue, forgeExec);
 }

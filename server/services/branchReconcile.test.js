@@ -583,6 +583,22 @@ describe('cleanupMerged', () => {
     expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' && args[1] === 'edit')).toBe(false);
   });
 
+  // #16625: a merge by ancestry of a /do:next branch also needs its issue released.
+  // The Git page passes no credential overlay; retirement resolves one itself.
+  it.each([
+    ['a closed issue retires the branch', { state: 'CLOSED', labels: [], assignees: [] }, 'cleaned'],
+    ['an assigned open issue holds it', { state: 'OPEN', labels: [], assignees: [{ login: 'someone' }] }, 'claim-issue-reserved'],
+  ])('reads a merged-by-ancestry claim\'s issue reservation without a caller-supplied credential: %s', async (_name, issue, expected) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    git.readBranchLineage.mockResolvedValue('ancestry');
+    execGh.mockImplementation(async args => (args[0] === 'issue' && args[1] === 'view' ? JSON.stringify(issue) : '[]'));
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-77' }]);
+    if (expected === 'cleaned') expect(result.cleaned).toEqual(['next/issue-77']);
+    else expect(result.skipped).toEqual([expect.objectContaining({ branch: 'next/issue-77', reason: expected })]);
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: null });
+    expect(execGh).toHaveBeenCalledWith(['issue', 'view', '77', '--repo', expect.any(String), '--json', 'state,labels,assignees'], undefined, expect.objectContaining({ env: PINNED_ENV }));
+  });
+
   it('leaves markers intact for a live owner or a failed branch deletion', async () => {
     git.hasBranchMergeEvidence.mockResolvedValue(true);
     const branch = { branch: 'claim/issue-42', worktreePath: '/repo/data/cos/worktrees/claim-issue-42', worktreeAgeMs: 10 * 24 * 60 * 60 * 1000 };
