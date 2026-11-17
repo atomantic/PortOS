@@ -362,41 +362,6 @@ export const expandUniverseCharacter = (universeId, entryId, { providerId, model
     ...options,
   }));
 
-// Catalog of every registered reference-sheet variant. The panel iterates
-// this on mount to render one row per variant. New variants light up
-// automatically once they're registered in the server-side SHEET_VARIANTS.
-export const fetchReferenceSheetVariants = (options = {}) =>
-  request('/universe-builder/reference-sheet-variants', options);
-
-// Kick off a character reference sheet render. `variant` selects which
-// registered style to render (defaults server-side to 'standard'); the server
-// stamps the resulting filename into the matching pointer slot
-// (`referenceSheetImageRef` for legacy 'standard', `referenceSheets[<id>]`
-// for everything else). Returns `{ jobId, generationId, variant, ... }`.
-export const renderCharacterReferenceSheet = (universeId, entryId, {
-  variant, overridePrompt, overrideNegativePrompt, modelId,
-} = {}, options = {}) =>
-  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
-    method: 'POST',
-    body: JSON.stringify({ variant, overridePrompt, overrideNegativePrompt, modelId }),
-    ...options,
-  });
-
-export const previewCharacterReferenceSheet = (universeId, entryId, body = {}, options = {}) =>
-  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet/preview`, {
-    method: 'POST', body: JSON.stringify(body), ...options,
-  });
-
-// Delete the character's reference sheet of the given variant. Variant
-// defaults server-side to 'standard'. Returns `{ filename, fileDeleted, cleared }`.
-export const deleteCharacterReferenceSheet = (universeId, entryId, { variant, ...requestOpts } = {}) => {
-  const qs = variant ? `?variant=${encodeURIComponent(variant)}` : '';
-  return trackUniverseWrite(universeId, request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet${qs}`, {
-    method: 'DELETE',
-    ...requestOpts,
-  }));
-};
-
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
 export const differentiateUniverseCast = (universeId, { providerId, model } = {}, options = {}) =>
@@ -524,9 +489,6 @@ export const autoSortBuckets = (universeId, { providerId, model } = {}, options 
     body: JSON.stringify({ providerId, model }),
     ...options,
   }));
-
-export const getCharacterReferenceSheet = (universeId, entryId, variant, options = {}) =>
-  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet?variant=${encodeURIComponent(variant)}`, options);
 
 // Explicit text-only restore; record revision protects concurrent edits.
 export const restoreUniverseStarter = (id, expectedUpdatedAt, options = {}) => trackUniverseWrite(id, request(`/universe-builder/${encodeURIComponent(id)}/restore-starter`, {

@@ -28,7 +28,7 @@ vi.mock('../lib/mediaModels.js', async (importOriginal) => ({
   getImageModels: (...args) => mocks.getImageModels(...args),
 }));
 
-import { renderCharacterReferenceSheet, getCharacterReferenceSheet } from './universeCharacterSheet.js';
+import { renderCharacterReferenceSheet } from './universeCharacterSheet.js';
 
 
 import { mediaJobEvents } from './mediaJobQueue/index.js';
@@ -72,7 +72,7 @@ it('announces readiness only after the destination copy and pointer persistence,
   expect(listener).not.toHaveBeenCalled();
   finishWrite();
   expect(await result).toEqual({ universeId: 'universe-1', entryId: 'character-1', jobId: 'job-1', variant: 'standard', status: 'ready' });
-  expect(await getCharacterReferenceSheet('universe-1', 'character-1')).toEqual({ filename: queued.destFilename, pendingJobId: null });
+  expect(universe.characters[0].referenceSheetImageRef).toBe(queued.destFilename);
   mediaJobEvents.off('reference-sheet:changed', listener);
 });
 
@@ -83,7 +83,6 @@ it('reports copy failure and releases pending state for reconnect recovery', asy
   completed();
   expect(await result).toMatchObject({ jobId: 'job-1', status: 'failed' });
   expect(mocks.update).toHaveBeenCalledTimes(1); // Only the durable request claim.
-  expect(await getCharacterReferenceSheet('universe-1', 'character-1')).toMatchObject({ pendingJobId: null });
 });
 
 it('publishes from persisted job metadata after restart without a subscriber or pending slot', async () => {
@@ -102,7 +101,6 @@ it('releases an expired listener slot and still publishes its later completion',
   vi.useFakeTimers();
   await renderCharacterReferenceSheet('universe-1', 'character-1');
   await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
-  expect(await getCharacterReferenceSheet('universe-1', 'character-1')).toMatchObject({ pendingJobId: null });
   const result = publication();
   completed();
   expect(await result).toMatchObject({ status: 'ready' });
@@ -179,5 +177,5 @@ it('does not reclaim pending state when a fast job publishes before enqueue retu
     return { jobId: job.id, position: 1, status: 'queued' };
   });
   const queued = await renderCharacterReferenceSheet('universe-1', 'character-1');
-  expect(await getCharacterReferenceSheet('universe-1', 'character-1')).toEqual({ filename: queued.destFilename, pendingJobId: null });
+  expect(universe.characters[0].referenceSheetImageRef).toBe(queued.destFilename);
 });

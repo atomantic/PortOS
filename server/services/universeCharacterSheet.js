@@ -14,12 +14,11 @@
 
 import { join, basename } from 'path';
 import { randomUUID } from 'node:crypto';
-import { PATHS, ensureDir, shortId, assertSafeFilename, copyFileGuarded, unlinkGuarded } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, copyFileGuarded } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
-import { purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { universeAestheticLine } from '../lib/universeVisualStyle.js';
 import { applyImageVisualProfile } from './imageGen/visualProfile.js';
 import { resolveUniverseVisualProfile } from '../lib/universeVisualProfile.js';
@@ -42,7 +41,7 @@ import {
   LEGACY_SHEET_VARIANT_ID, readSheetPointer, applySheetPointerToCharacter,
 } from '../lib/storyBible.js';
 import {
-  claimPendingSheetSlot, getPendingSheetSlot, releasePendingSheetSlot,
+  claimPendingSheetSlot, releasePendingSheetSlot,
 } from './universeCharacterSheetSlot.js';
 
 // Local FLUX backend: 2048×1536 keeps panel labels legible while still
@@ -937,80 +936,6 @@ async function publishCompletedSheet({ universeId, entryId, jobId, sourceFilenam
   if (!stamped) return { filename: destFilename, path: destPath, superseded: true };
   console.log(`📌 Character ${shortId(entryId)} [${variant}] = ${destFilename}`);
   return { filename: destFilename, path: destPath, variant };
-}
-
-export async function getCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
-  getVariantConfig(variant);
-  // Capture before the record read so an older snapshot cannot be paired
-  // with a just-released slot and mistaken for a failed publication.
-  const pendingJobId = getPendingSheetSlot(universeId, entryId, variant) ?? null;
-  const universe = await getUniverse(universeId);
-  const character = universe.characters?.find(entry => entry.id === entryId);
-  if (!character) throw new ServerError('Character not found in universe', { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' });
-  return {
-    filename: readSheetPointer(character, variant),
-    pendingJobId,
-  };
-}
-
-/**
- * Delete a character's reference sheet of the given variant — unlinks the
- * file from `PATHS.imageRefs` and clears the variant's pointer (legacy field
- * OR `referenceSheets` map slot) on every matching character. Returns
- * `{ filename, fileDeleted, cleared }`; a missing file is not an error
- * (the lazy `pruneStaleReferenceSheets` may have already nulled the pointer
- * out-of-band) — `fileDeleted: false` distinguishes that case.
- *
- * Mirrors the renderer's lock check so a locked character's sheet stays
- * delete-protected alongside its other AI-managed fields.
- *
- * `variant` defaults to 'standard' so the existing route + client callers
- * stay unchanged.
- *
- * Admitted before the pointer read and held through the purge, so a backup
- * never captures the unlinked file alongside a pointer that still names it.
- */
-export function deleteCharacterReferenceSheet(universeId, entryId, options) {
-  return withBackupAssetPublication(() => removeCharacterReferenceSheet(universeId, entryId, options));
-}
-
-async function removeCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
-  const variantConfig = getVariantConfig(variant);
-  const universe = await getUniverse(universeId);
-  const list = Array.isArray(universe.characters) ? universe.characters : [];
-  const character = list.find((c) => c.id === entryId);
-  if (!character) {
-    throw new ServerError(`Character ${entryId} not found in universe`, {
-      status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
-    });
-  }
-  if (character.locked === true) {
-    throw new ServerError(
-      `Character "${character.name}" is locked — unlock it before deleting the reference sheet`,
-      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
-    );
-  }
-  const filename = readSheetPointer(character, variant);
-  if (!filename) {
-    return { filename: null, fileDeleted: false, cleared: 0 };
-  }
-  // Defense-in-depth: the filename was server-stamped via `sheetFilename()`,
-  // but re-validate before passing to `unlink` so a hand-edited universes
-  // JSON can't smuggle a traversal segment into the filesystem call.
-  assertSafeFilename(filename, { extensions: ['.png'], subject: 'reference sheet filename' });
-
-  const target = join(PATHS.imageRefs, filename);
-  // ENOENT is benign — the on-disk file may already be gone (out-of-band
-  // cleanup, sample-data reset). The pointer-purge below is the canonical
-  // clean and runs regardless.
-  let fileDeleted = true;
-  await unlinkGuarded(target).catch((err) => {
-    if (err?.code === 'ENOENT') { fileDeleted = false; return; }
-    throw err;
-  });
-  const { cleared } = await purgeReferenceSheetFromAllUniverses(filename);
-  console.log(`🗑️ Deleted ${variantConfig.label.toLowerCase()} ${filename} (file=${fileDeleted}, pointers cleared=${cleared})`);
-  return { filename, fileDeleted, cleared };
 }
 
 export const REFERENCE_SHEET_CONSTANTS = Object.freeze({

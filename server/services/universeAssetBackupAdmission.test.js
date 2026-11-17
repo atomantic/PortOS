@@ -76,7 +76,7 @@ const {
   acquireBackupSnapshotCut, runOutsideBackupAssetPublication, withBackupAssetPublication,
 } = await import('../lib/backupSnapshotBoundary.js');
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
-const { deleteCharacterReferenceSheet, renderCharacterReferenceSheet } = await import('./universeCharacterSheet.js');
+const { renderCharacterReferenceSheet } = await import('./universeCharacterSheet.js');
 const { initUniverseBuilderCollectionHook } = await import('./universeBuilderCollectionHook.js');
 const { deleteGalleryImage } = await import('./galleryImageDeletion.js');
 
@@ -200,12 +200,6 @@ describe('render completion listeners', () => {
 describe('durable asset deletions', () => {
   it.each([
     {
-      name: 'character reference sheet deletion',
-      mutate: () => deleteCharacterReferenceSheet('universe-1', 'character-1'),
-      removedPath: oldSheetPath,
-      captured: () => expect(character().referenceSheetImageRef ?? null).toBeNull(),
-    },
-    {
       name: 'gallery image deletion with its universe canon refs',
       mutate: () => deleteGalleryImage(RENDER),
       removedPath: renderPath,
@@ -230,22 +224,17 @@ describe('durable asset deletions', () => {
     captured();
   });
 
-  it('holds both deletions behind an active cut, preserving the captured bytes and refs', async () => {
+  it('holds the gallery deletion behind an active cut, preserving the captured bytes and refs', async () => {
     const release = await acquireBackupSnapshotCut();
-    const deletions = [deleteGalleryImage(RENDER), deleteCharacterReferenceSheet('universe-1', 'character-1')];
+    const deletion = deleteGalleryImage(RENDER);
     try {
       await settle();
       expect(await exists(renderPath())).toBe(true);
-      expect(await exists(oldSheetPath())).toBe(true);
-      expect(character()).toMatchObject({ imageRefs: [RENDER], referenceSheetImageRef: OLD_SHEET });
+      expect(character()).toMatchObject({ imageRefs: [RENDER] });
     } finally {
       release();
     }
-    await expect(Promise.all(deletions)).resolves.toEqual([
-      expect.objectContaining({ ok: true, canonRefsRemoved: 1 }),
-      { filename: OLD_SHEET, fileDeleted: true, cleared: 1 },
-    ]);
+    await expect(deletion).resolves.toEqual(expect.objectContaining({ ok: true, canonRefsRemoved: 1 }));
     expect(await exists(renderPath())).toBe(false);
-    expect(await exists(oldSheetPath())).toBe(false);
   });
 });
