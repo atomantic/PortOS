@@ -176,7 +176,7 @@ describe('mergedOwnershipHold', () => {
   const IDLE = 2 * HOUR;
   const BASE_READS = { reap: ['dirty', 'mergeEvidence'], branch: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'] };
   const own = ({ branch = 'feat/x', checkoutPath = CHECKOUT, facts = {} } = {}) => {
-    const answers = { lineage: 'ancestry', published: false, claimReserved: false, checkoutProcess: false, idleMs: IDLE, mergedPrAtHead: false, ...facts };
+    const answers = { lineage: 'ancestry', published: false, claimReserved: false, checkoutPresent: true, checkoutProcess: false, idleMs: IDLE, mergedPrAtHead: false, ...facts };
     const step = checkoutPath === null
       ? decide(mergedCase(branch, null, { scan: { worktreePath: null }, facts: answers }))
       : drive(decideMergedWorktreeReap, {
@@ -199,6 +199,8 @@ describe('mergedOwnershipHold', () => {
     ['a published branch whose PR merged at this head retires', { facts: { published: true, mergedPrAtHead: true } }, 'retire'],
     ['rebase- or squash-merged own commits retire, however recent', { facts: { lineage: 'patch', checkoutProcess: true, idleMs: 0 } }, 'retire'],
     ['an idle, unoccupied no-ff merge retires', {}, 'retire'],
+    ['a checkout directory proven absent needs no activity read', { facts: { checkoutPresent: false, checkoutProcess: null, idleMs: null } }, 'retire'],
+    ['an unreadable checkout directory holds', { facts: { checkoutPresent: null } }, 'checkout-presence-unreadable'],
     ['a process in the checkout holds an ancestry merge', { facts: { checkoutProcess: true } }, 'checkout-process-active'],
     ['an unreadable process probe holds', { facts: { checkoutProcess: null } }, 'checkout-process-active'],
     ['recent activity holds an ancestry merge', { facts: { idleMs: 10 * 60 * 1000 } }, 'checkout-recently-touched'],
@@ -220,7 +222,8 @@ describe('mergedOwnershipHold', () => {
   });
 
   it('reads the forge only once a hold would apply, and checkout activity only for an ancestry merge', () => {
-    expect(own().asked).toEqual(['lineage', 'published', 'checkoutProcess', 'idleMs']);
+    expect(own().asked).toEqual(['lineage', 'published', 'checkoutPresent', 'checkoutProcess', 'idleMs']);
+    expect(own({ facts: { checkoutPresent: false } }).asked).toEqual(['lineage', 'published', 'checkoutPresent']);
     expect(own({ facts: { lineage: 'patch' } }).asked).toEqual(['lineage', 'published']);
     expect(own({ facts: { lineage: 'new' } }).asked).toEqual(['lineage', 'mergedPrAtHead']);
     expect(own({ branch: 'next/issue-7', facts: { claimReserved: true } }).asked).toEqual(['lineage', 'published', 'claimReserved', 'mergedPrAtHead']);

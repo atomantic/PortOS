@@ -414,6 +414,19 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).not.toContain('feat/merged');
   });
 
+  // A registration whose directory is already gone has no process and no
+  // activity to wait on; holding it would strand the merged branch behind it.
+  it('retires a no-ff merged branch whose checkout directory is already gone', async () => {
+    const path = await addMergedTree(join(external, 'vanished'), 'feat/vanished', 'no-ff');
+    await rm(path, { recursive: true, force: true });
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'feat/vanished' }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: ['feat/vanished'], skipped: [] });
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).not.toContain('feat/vanished');
+    expect(await branches()).not.toContain('feat/vanished');
+  });
+
   // Each of these reads as merged by ancestry, and each would retire without
   // its one hold: the published branch is rebase-merged work, the others are
   // idle no-ff merges unless the case says otherwise.
