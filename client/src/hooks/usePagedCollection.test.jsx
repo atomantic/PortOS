@@ -164,3 +164,38 @@ it('disposes mutation replay and queued refreshes when filters change or the col
   expect(firstQuery).toHaveBeenCalledTimes(3);
   expect(secondQuery).toHaveBeenCalledTimes(1);
 });
+
+it('restarts an offset cursor after membership changes during an in-flight page', async () => {
+  const stale = deferred();
+  const replay = deferred();
+  const fresh = deferred();
+  const fetchPage = vi.fn()
+    .mockResolvedValueOnce({ items: [row('removed'), row('kept')], nextCursor: '2' })
+    .mockReturnValueOnce(stale.promise).mockReturnValueOnce(replay.promise).mockReturnValueOnce(fresh.promise)
+    .mockResolvedValueOnce({ items: [row('last')], nextCursor: null });
+  const { result } = renderHook(() => usePagedCollection(fetchPage));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  act(() => { void result.current.loadMore(); });
+  act(() => { void result.current.setItems(items => items.filter(item => item.id !== 'removed')); void result.current.reconcileFirst(); });
+  await act(async () => replay.resolve({ items: [row('later')], nextCursor: '3' }));
+  await act(async () => fresh.resolve({ items: [row('kept'), row('later')], nextCursor: '2' }));
+  await act(async () => stale.resolve({ items: [row('removed')], nextCursor: null }));
+  expect(result.current.nextCursor).toBe('2');
+  await act(async () => result.current.loadMore());
+  expect(fetchPage).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: '2' }));
+  expect(result.current.items.map(item => item.id)).toContain('last');
+});
+
+
+it('retains the offset reset when a membership reconciliation is retried', async () => {
+  const fetchPage = vi.fn()
+    .mockResolvedValueOnce({ items: [row('kept')], nextCursor: 'old-offset' })
+    .mockRejectedValueOnce(new Error('Unavailable'))
+    .mockResolvedValueOnce({ items: [row('kept')], nextCursor: 'new-offset' });
+  const { result } = renderHook(() => usePagedCollection(fetchPage));
+  await waitFor(() => expect(result.current.loaded).toBe(true));
+  await act(async () => result.current.reconcileFirst());
+  expect(result.current.error.message).toBe('Unavailable');
+  await act(async () => result.current.loadMore());
+  expect(result.current.nextCursor).toBe('new-offset');
+});

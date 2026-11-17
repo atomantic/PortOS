@@ -133,8 +133,8 @@ describe('musicVideo routes', () => {
     app.use(express.json());
     app.use('/api/music-video', musicVideoRoutes);
     vi.clearAllMocks();
-    svc.listProjectPage.mockImplementation(async ({ limit, offset, compare }) => {
-      const projects = [...await svc.listProjects()];
+    svc.listProjectPage.mockImplementation(async ({ limit, offset, compare, filter }) => {
+      const projects = [...await svc.listProjects()].filter(filter || (() => true));
       if (compare) projects.sort(compare);
       return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
     });
@@ -278,6 +278,21 @@ describe('musicVideo routes', () => {
     expect(r2.body.nextCursor).toBeNull();
     expect(r2.body.items).toHaveLength(1);
     expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
+  it('filters project status before paging and keeps missing and failed statuses in progress', async () => {
+    svc.listProjects.mockResolvedValue([
+      { id: 'done', status: 'complete', createdAt: '2026-03-01' },
+      { id: 'failed', status: 'failed', createdAt: '2026-02-01' },
+      { id: 'draft', createdAt: '2026-01-01' },
+    ]);
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1');
+    expect(progress.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'failed' }] });
+    const next = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1&cursor=1');
+    expect(next.body).toMatchObject({ total: 2, nextCursor: null, items: [{ id: 'draft' }] });
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'done' }] });
+    expect((await request(app).get('/api/music-video?summary=1&statusFilter=unknown')).status).toBe(400);
   });
 
   it('presents only the requested summary page, including cursor precedence and an empty page', async () => {
