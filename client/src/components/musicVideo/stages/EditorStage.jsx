@@ -6,10 +6,11 @@ import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from
 import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+import { MUSIC_VIDEO_SCROLL_ID } from '../MusicVideoLayout.jsx';
 
 /**
  * The height that takes `el` from where it sits to the bottom of the page's
- * scroll area (the nearest `main`), so the docked timeline is on screen
+ * scroll area, so the docked timeline is on screen
  * without scrolling whatever the headers above it wrap to. Null until measured.
  * Whatever the page still adds below it (a wrapper's padding or gap) is read
  * back from the scroll area's overflow and taken off, so the page never scrolls.
@@ -17,7 +18,8 @@ import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
 function useScreenFill(el) {
   const [height, setHeight] = useState(null);
   useEffect(() => {
-    const scroller = el?.closest('main');
+    // The Music Video page scrolls in its own padded area under its title bar, not in `main`.
+    const scroller = el?.closest(`#${MUSIC_VIDEO_SCROLL_ID}`) || el?.closest('main');
     if (!el || !scroller || typeof ResizeObserver === 'undefined') return undefined;
     let handle = 0;
     const apply = () => {
@@ -141,11 +143,12 @@ export default function EditorStage({ board }) {
         // One screen: the top row takes what the docked timeline leaves.
         <div ref={setScreenEl} style={screenHeight ? { height: screenHeight } : undefined}
           className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-3rem)] min-h-[32rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
-          <div className="grid min-h-0 grid-cols-[20rem_minmax(0,1fr)] gap-3">
-            <section ref={setLibraryEl} aria-label="Effects" className={panelCls} />
+          {/* The preview takes the width its height allows; the side panel takes the rest, so no column sits empty. */}
+          <div className="flex min-h-0 gap-3">
+            <section ref={setLibraryEl} aria-label="Effects" className={`${panelCls} min-w-[20rem] flex-1`} />
             {/* The player's controls sit under its picture; its width is held to what the row's height allows. */}
-            <div ref={setPreviewCell} className="flex min-h-0 min-w-0 items-start justify-center overflow-hidden">
-              <div className="w-full min-w-[20rem]" style={previewWidth ? { maxWidth: previewWidth } : undefined}>{board.previewDock}</div>
+            <div ref={setPreviewCell} className="min-h-0 w-[45%] min-w-[20rem] shrink overflow-hidden" style={previewWidth ? { width: previewWidth } : undefined}>
+              <div className="w-full">{board.previewDock}</div>
             </div>
           </div>
           <div className="max-h-[45dvh] min-h-0 overflow-y-auto">{timeline}</div>

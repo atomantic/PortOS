@@ -199,7 +199,7 @@ export function TimelineInShotEffects({ lanes, pxPerSec, shotName, selectedId = 
 function EffectStyleGrid({ onPick, picture, selected = null, labelFor, dense = false }) {
   const [playing, setPlaying] = useState(null);
   return (
-    <ul className={`grid gap-1.5 ${dense ? 'grid-cols-3' : 'grid-cols-2'}`}>
+    <ul className={`grid gap-1.5 ${dense ? 'grid-cols-3' : 'grid-cols-[repeat(auto-fill,minmax(9rem,1fr))]'}`}>
       {MUSIC_VIDEO_TRANSITIONS.map((style) => {
         const label = MUSIC_VIDEO_TRANSITION_LABELS[style];
         const on = () => setPlaying(style);

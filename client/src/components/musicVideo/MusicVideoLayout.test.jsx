@@ -179,17 +179,20 @@ describe('player-first steps', () => {
   });
 
   // Uniquely catches the Shots step stacking its checklist over a full-width player again.
-  it('keeps the checklist beside the player when the step has no approval panel', () => {
+  it('docks the player in the side column when the step has no approval panel, so the work flows beside it', () => {
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
       onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} playerFirst
       lead={<section aria-label="Checklist">checklist</section>} dock={<aside aria-label="Preview">preview</aside>}>
       <section aria-label="Work">work</section>
     </MusicVideoLayout>);
-    const checklist = screen.getByRole('region', { name: 'Checklist' });
-    const preview = screen.getByRole('complementary', { name: 'Preview' });
-    const row = checklist.parentElement.parentElement;
-    expect(row).toBe(preview.parentElement.parentElement);
-    expect(row.className).toMatch(/xl:grid-cols-\[minmax\(0,1fr\)_minmax\(20rem,24rem\)\]/);
+    const panel = screen.getByRole('tabpanel');
+    // Checklist and work share the step column; the player sits outside it, in the sticky side column.
+    expect(within(panel).getByRole('region', { name: 'Checklist' })).toBeTruthy();
+    expect(within(panel).getByRole('region', { name: 'Work' })).toBeTruthy();
+    expect(within(panel).queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    const dockCell = screen.getByRole('complementary', { name: 'Preview' }).parentElement;
+    expect(dockCell.className).toMatch(/xl:sticky/);
+    expect(dockCell.parentElement.className).toMatch(/xl:grid-cols-\[13rem_minmax\(0,1fr\)_minmax\(20rem,24rem\)\]/);
   });
 
   it('docks the player at the side and closes the step with the approval otherwise', () => {

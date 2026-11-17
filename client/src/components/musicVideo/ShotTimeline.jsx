@@ -14,6 +14,8 @@ import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.j
 import { NEW_GLITCH_STYLE } from './SceneGlitches.jsx';
 import { TimelineEffectLibrary, TimelineEffectSpans, TimelineEffectsPanel, TimelineInShotEffects, timelineEffectLanes } from './ShotTimelineEffects.jsx';
 
+// About the width of a ruler label ("12:30") at its 10px size.
+const TICK_LABEL_PX = 30;
 const zoomButtonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text hover:border-port-accent disabled:opacity-40 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 // How far inside the right edge the playhead may run before the view follows it.
 const FOLLOW_MARGIN_PX = 24;
@@ -481,7 +483,8 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
         ))}
       </div>
       <div ref={scrollerRef} data-testid="shot-timeline-scroller" className="relative min-w-0 flex-1 overflow-x-auto overscroll-x-contain">
-        <div className="relative" style={{ width: `${widthPx}px` }}>
+        {/* Clipped across: a label or handle hanging past the song's end would otherwise scroll a fitted timeline. */}
+        <div className="relative overflow-x-clip" style={{ width: `${widthPx}px` }}>
           {/* The ruler scrubs (touch-none); the tracks under it pan the view. */}
           <div ref={rulerRef} role="slider" tabIndex={0} aria-label="Seek" aria-valuemin={0} aria-valuemax={Math.round(durationSec)} aria-valuenow={0}
             className={`${ROW_CLS} h-7 cursor-pointer touch-none select-none`}
@@ -494,7 +497,8 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
               timeRef.current = t;
               onSeek?.(Math.round(t * 1000) / 1000);
             }}>
-            {ticks.map((t) => (
+            {/* A label with no room before the end is left off rather than cut in half. */}
+            {ticks.filter((t) => t * pxPerSec + TICK_LABEL_PX <= widthPx).map((t) => (
               <span key={t} className="pointer-events-none absolute inset-y-0 border-l border-port-border pl-1 text-[10px] leading-7 tabular-nums text-port-text-muted" style={{ left: t * pxPerSec }}>
                 {tickLabel(t, stepSec)}
               </span>
