@@ -54,6 +54,7 @@ import {
   deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, proofReviewInUse,
 } from '../../lib/musicVideoStages.js';
 import { blenderStillPreviewItems, summarizeBlenderShots } from '../../lib/musicVideoBlender.js';
+import { shotStartFrameSec } from './ShotStepper.jsx';
 
 // The step each production approval closes (#10151); it sits at the bottom of that step.
 // Once the storyboard is approved, a production run parked on its pilot shows
@@ -154,7 +155,7 @@ export default function ProjectWorkspace({
   // `play` starts playback from there (a storyboard row), `pause` stops it there; a scene card only cues the shot.
   const seekToScene = (scene, { play = false, pause = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play, pause: !play && pause }));
+    setSeekRequest((prev) => ({ t: shotStartFrameSec(scene.startSec), n: (prev?.n || 0) + 1, play, pause: !play && pause }));
   };
 
   // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)
