@@ -166,6 +166,8 @@ export const UNCALLED_ROUTE_ALLOWLIST = Object.freeze({
     '/api/managed-visitor-admin',
     '/api/managed-visitor-admin/:appId/credential',
     '/api/meatspace/post/memory-drill',
+    // docs/features/product-surfaces.md: a music video's spend by lane, for API callers; the page reads it off the project.
+    '/api/music-video/:id/spend',
     '/api/ports/allocate',
     '/api/ports/scan',
     '/api/universe-builder/:id/canon/backfill-descriptions',
