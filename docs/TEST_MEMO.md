@@ -99,9 +99,11 @@ A directory a test reads as a whole is an input as a whole.
   key, as `.env` files and installs are outside every key. Suites that key
   the same tree from inside it would hash the same file set, so such a key
   also names its test.
-- **A real-browser test** (one that reaches Chrome) renders what a dev
-  server, bundler or static server reads on its behalf, and the module runner
-  records none of it. Every directory the test file hands to such a tool is
+- **A real-browser test** renders what a dev server, bundler or static
+  server reads on its behalf, and the module runner records none of it. A
+  test is one when it, a module it imports or a script it runs names the
+  browser (`CHROME_PATH`, `playwright-core`); browser tests that a member
+  merely lists in a directory do not make their lister's importers one. Every directory the test file hands to such a tool is
   therefore a tree input under the two rules above: the value of a `root:`,
   `dir:` or `base:` option, any other object-literal value
   (`publicDir: join(client, 'public')`), and a function argument
