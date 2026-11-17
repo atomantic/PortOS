@@ -149,11 +149,13 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
 /**
  * Run one completion, with at most one recovery retry.
  *
- * `recover(failure)` is the caller's repair step for a failed first attempt (a
- * local backend with no model loaded, a model id that is not installed). It
- * resolves to the model id to retry with, or a falsy value to leave the failure
- * as the answer. The retry is part of the same call, so a tracked run stays one
- * run however the first attempt went.
+ * `recover(failure, { signal })` is the caller's repair step for a failed first
+ * attempt (a local backend with no model loaded, a model id that is not
+ * installed). It resolves to the model id to retry with, or a falsy value to
+ * leave the failure as the answer. The retry is part of the same call, so a
+ * tracked run stays one run however the first attempt went. An aborted
+ * `signal` ends the call at the first failure: no repair is started, a repair
+ * in progress is handed the signal, and no retry is sent.
  *
  * @returns {Promise<object>} the reply `requestChatCompletion` gave, plus
  *   `model` (the id the answering request used) and `retried`.
@@ -161,9 +163,9 @@ async function requestChatCompletion(provider, model, prompt, { temperature, max
 export async function runChatCompletion({ provider, model, prompt, temperature, maxTokens, timeout, signal, recover }) {
   const opts = { temperature, max_tokens: maxTokens, timeout, signal };
   const first = await requestChatCompletion(provider, model, prompt, opts);
-  if (!first.error || typeof recover !== 'function') return { ...first, model, retried: false };
-  const retryModel = await recover(first);
-  if (!retryModel) return { ...first, model, retried: false };
+  if (!first.error || typeof recover !== 'function' || signal?.aborted) return { ...first, model, retried: false };
+  const retryModel = await recover(first, { signal });
+  if (!retryModel || signal?.aborted) return { ...first, model, retried: false };
   const retry = await requestChatCompletion(provider, retryModel, prompt, opts);
   return { ...retry, model: retryModel, retried: true };
 }
