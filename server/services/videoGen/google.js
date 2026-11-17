@@ -108,7 +108,7 @@ async function generateVideoPrepared({
     resolution: planned.resolution,
     generateAudio: planned.generateAudio,
     ...(planned.seed != null ? { seed: planned.seed } : {}),
-    estimatedCostUsd: null,
+    estimatedCostUsd: planned.estimatedCostUsd,
     ...sentRecord,
     filename,
     createdAt: new Date().toISOString(),

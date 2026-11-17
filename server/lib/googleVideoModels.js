@@ -18,9 +18,16 @@
  * `negativePrompt`, so nothing is folded into the prompt. `enhancePrompt` is not
  * sent because the Veo 3 models refuse it being turned off.
  *
- * `priceNote` is a hint from Google's list prices; the per-clip estimate
- * stays unknown (never zero) — the Cloud billing console has the real charge.
+ * `rates` are the per-second list prices (USD) by resolution, with and without generated audio, from
+ * Google's Vertex AI Veo pricing, as of GOOGLE_VIDEO_PRICING_VERIFIED_AT. `googleVideoClipQuote` prices one
+ * clip from them so Music Video spend counts Veo renders (#16509). They are estimates: the Cloud billing
+ * console has the real charge, and a combination with no listed rate stays unknown (never zero).
  */
+
+export const GOOGLE_VIDEO_PRICING_VERIFIED_AT = '2026-11-17';
+const flat = (audio, silent) => Object.freeze({
+  '720p': Object.freeze({ audio, silent }), '1080p': Object.freeze({ audio, silent }),
+});
 
 const VEO_RATIOS = Object.freeze(['16:9', '9:16']);
 const VEO_LENGTHS = Object.freeze([4, 6, 8]);
@@ -37,22 +44,22 @@ const REFERENCE_LENGTH = 8;
  */
 export const GOOGLE_VIDEO_MODELS = Object.freeze([
   Object.freeze({
-    id: 'veo-3.1-generate-001', label: 'Veo 3.1', priceNote: '~$0.40/s with audio',
+    id: 'veo-3.1-generate-001', label: 'Veo 3.1', priceNote: '~$0.40/s with audio', rates: flat(0.4, 0.2),
     lengths: VEO_LENGTHS, defaultSec: 8, resolutions: VEO_TIERS, defaultResolution: '720p',
     aspectRatios: VEO_RATIOS, endFrame: true, maxReferenceImages: 3,
   }),
   Object.freeze({
-    id: 'veo-3.1-fast-generate-001', label: 'Veo 3.1 Fast', priceNote: '~$0.15/s with audio',
+    id: 'veo-3.1-fast-generate-001', label: 'Veo 3.1 Fast', priceNote: '~$0.15/s with audio', rates: flat(0.15, 0.1),
     lengths: VEO_LENGTHS, defaultSec: 8, resolutions: VEO_TIERS, defaultResolution: '720p',
     aspectRatios: VEO_RATIOS, endFrame: true, maxReferenceImages: 0,
   }),
   Object.freeze({
-    id: 'veo-3.0-generate-001', label: 'Veo 3', priceNote: '~$0.40/s with audio',
+    id: 'veo-3.0-generate-001', label: 'Veo 3', priceNote: '~$0.40/s with audio', rates: flat(0.4, 0.2),
     lengths: VEO_LENGTHS, defaultSec: 8, resolutions: VEO_TIERS, defaultResolution: '720p',
     aspectRatios: VEO_RATIOS, endFrame: false, maxReferenceImages: 0,
   }),
   Object.freeze({
-    id: 'veo-3.0-fast-generate-001', label: 'Veo 3 Fast', priceNote: '~$0.15/s with audio',
+    id: 'veo-3.0-fast-generate-001', label: 'Veo 3 Fast', priceNote: '~$0.15/s with audio', rates: flat(0.15, 0.1),
     lengths: VEO_LENGTHS, defaultSec: 8, resolutions: VEO_TIERS, defaultResolution: '720p',
     aspectRatios: VEO_RATIOS, endFrame: false, maxReferenceImages: 0,
   }),
@@ -88,6 +95,15 @@ export function googleShotRequestFields(settings, spanSec = null) {
   };
 }
 
+/** The list price of one clip: `{ costUsd, ratePerSec }`, or null when the model or tier has no listed rate. */
+export function googleVideoClipQuote({ modelId, seconds, resolution, generateAudio = false } = {}) {
+  const model = getGoogleVideoModel(modelId);
+  const base = model?.rates?.[resolution]?.[generateAudio === true ? 'audio' : 'silent'];
+  const sec = Number(seconds);
+  if (!Number.isFinite(base) || !(sec > 0)) return null;
+  return { costUsd: Math.round(base * sec * 1e4) / 1e4, ratePerSec: base };
+}
+
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_VIDEO_INPUT_INVALID' });
 
 function nearestRatio(width, height, ratios) {
@@ -114,7 +130,7 @@ const inlineImage = (img) => ({ bytesBase64Encoded: img.data, mimeType: img.mime
  * is chosen from which are present. Throws a 400-shaped error rather than
  * dropping an input.
  *
- * @returns {{ model, route, body, seconds, resolution, aspectRatio, generateAudio, seed, estimatedCostUsd: null }}
+ * @returns {{ model, route, body, seconds, resolution, aspectRatio, generateAudio, seed, estimatedCostUsd }} — the list price (`googleVideoClipQuote`), or null when unlisted
  */
 export function buildGoogleVideoRequest({
   modelId = GOOGLE_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
@@ -162,6 +178,7 @@ export function buildGoogleVideoRequest({
   };
   return {
     model, route, body: { instances: [instance], parameters },
-    seconds: sec, resolution: tier, aspectRatio: ratio, generateAudio: audio, seed: validSeed, estimatedCostUsd: null,
+    seconds: sec, resolution: tier, aspectRatio: ratio, generateAudio: audio, seed: validSeed,
+    estimatedCostUsd: googleVideoClipQuote({ modelId: model.id, seconds: sec, resolution: tier, generateAudio: audio })?.costUsd ?? null,
   };
 }
