@@ -395,6 +395,28 @@ describe('floor key', () => {
   });
 });
 
+// #16602: a path with a variable segment was keyed as the directory the source
+// still names, as if the read had to land inside it. A helper called with
+// '../../client/src/limits.js' leaves that directory, so the key held a tree the
+// test never read and missed the file it did.
+describe('a read whose variable segment can leave the directory the source names', () => {
+  const test = 'server/lib/a.test.js';
+  const OUTSIDE = { 'client/src/limits.js': 'export const LIMIT = 1;\n', 'data.reference/templates/a.png': 'png v1\n' };
+  const tree = (body, extra = {}) => ({ ...TREE, ...OUTSIDE, ...extra, [test]: `import { it } from 'vitest';\n${body}\nit('x', () => {});\n` });
+  const floorOf = (files) => keyOf(files, test).floor;
+  const HERE = 'const HERE = dirname(fileURLToPath(import.meta.url));';
+
+  it.fails.each([
+    ['a helper that joins its parameter', `${HERE}\nconst read = (p) => readFileSync(join(HERE, p), 'utf8');\nconst limits = read('../../client/src/limits.js');`, 'client/src/limits.js'],
+    ['a template URL', 'const template = (name) => readFileSync(new URL(`../../data.reference/templates/${name}`, import.meta.url));\nconst png = template(process.env.TEMPLATE);', 'data.reference/templates/a.png'],
+  ])('%s never keeps its key after the file it reads changes', (_label, body, read) => {
+    const before = floorOf(tree(body));
+    const after = floorOf(tree(body, { [read]: 'changed\n' }));
+    // Sound either way: refused, or keyed with the file actually read.
+    expect(before.memoizable && before.key === after.key).toBe(false);
+  });
+});
+
 describe('fixture owners', () => {
   // No package import: a scripts/ owner does not walk up into server/node_modules.
   const stub = "it('pin', () => {});\n";
