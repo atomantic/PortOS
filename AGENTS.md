@@ -36,7 +36,7 @@ node scripts/pregate.js [--full] # same gate on Windows
 
 No `NODE_ENV` prefix is needed: `server/vitest.config.js` forces `NODE_ENV=test` (#4554). A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/TEST_MEMO.md`).
 
-**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It does not cover transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/CONTRIBUTING.md)).
+**Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows). It does not cover transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement; `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only; hosted CI and provider-enforced checks and reviews stay mandatory ([what it runs](docs/PREGATE.md)).
 
 ## Test Strategy: Value Over Assertion Count
 
@@ -65,7 +65,7 @@ Test at the highest practical public boundary (route, service workflow, store ad
 
 **Creative review and public publication are separate.** Only public Suno publication and social-media posting need the human; review decisions bind to exact revisions and genuine inspection evidence. Provider permissions, quotas, budgets and purchase authorization still apply (the `portos-music-video-*` skills carry the delegated-review detail).
 
-**Federation between the user's own machines** is supported ([ADR](docs/decisions/2026-09-19-user-controlled-federation.md)), but reachability or an inbound announcement is never permission to publish to other people. Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [docs/CONTRIBUTING.md](docs/INSTRUCTION_RULE_DETAIL.md#federation-between-the-users-own-machines).
+**Federation between the user's own machines** is supported ([ADR](docs/decisions/2026-09-19-user-controlled-federation.md)), but reachability or an inbound announcement is never permission to publish to other people. Credentials, tokens, encryption keys and machine-local execution/sync settings stay local; guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification; non-self peers, guests, public worlds and external services follow that surface's audience controls (ADRs in `docs/decisions/`). Wire contract and permitted Brain sync: [detail](docs/INSTRUCTION_RULE_DETAIL.md#federation-between-the-users-own-machines).
 
 **Distribution model (across installs).** Installs upgrade on their own schedules and often federate, so cross-install and cross-version compatibility is first-class:
 
@@ -100,9 +100,9 @@ The server is user-facing on `:5555` (HTTP or HTTPS); `npm run dev` serves the c
 
 ### Per-directory conventions
 
-Read the nested `AGENTS.md` (each with a bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (the last is an override-consistency contract: no imports out to other PortOS modules); scope list: [docs/CONTRIBUTING.md](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
+Read the nested `AGENTS.md` (each with a bridge `CLAUDE.md`) before editing `client/src`, `client/src/components/dashboard`, `server` or `server/lib/aiToolkit` (the last is an override-consistency contract: no imports out to other PortOS modules); scope list: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
-**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.test.js` caps every instruction file's size. Splice details and where procedure moves: [docs/CONTRIBUTING.md](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
+**API-provider agents get these files too, within a budget**: the root file is the only guaranteed-first slot, so rules guarding data loss, destructive actions, privacy or spend belong here, and `scripts/agent-instructions-files.test.js` caps every instruction file's size. Splice details and where procedure moves: [detail](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).
 
 ### Command Palette & Voice Nav
 

@@ -1,6 +1,6 @@
 # Instruction-file rule detail
 
-Root and nested `AGENTS.md` files carry a byte budget (`scripts/agent-instructions-files.test.js`), so passages that are procedure or detail live here and the instruction file keeps the one-sentence rule. The wording below is the original, unabridged text; the rule left in place stays authoritative where it is shorter.
+Root and nested `AGENTS.md` files carry a byte budget (`scripts/agent-instructions-files.test.js`), so passages that are procedure or detail live here and the instruction file keeps the one-sentence rule. Each passage adds detail its instruction file leaves out, and the rule left there stays authoritative; a sentence already in the instruction file is not repeated here.
 
 ## Agent instruction files
 
@@ -17,7 +17,7 @@ Read the nested instructions before editing these trees (each an `AGENTS.md` wit
 
 ## Federation between the user's own machines
 
-**Federation between the user's own machines** is supported ([ADR](decisions/2026-09-19-user-controlled-federation.md)); personal content alone is no reason to block it, and Brain records (including tracked-topic threads) may travel the Brain sync channel. Keep the configured peer/category controls and each domain's wire contract; reachability or an inbound announcement is not permission to publish to other people. Credentials, tokens, encryption keys and machine-local execution/sync settings stay local. Guarded local-only stores (Privacy Center, message mirrors, provider configuration) gain sync only through a scoped change, never a doc clarification. Status/capability endpoints keep bounded projections, never an export path. Sharing with a non-self peer, guest, public world or external service follows that surface's audience controls (ADRs in `docs/decisions/`).
+Personal content alone is no reason to block federation ([ADR](decisions/2026-09-19-user-controlled-federation.md)), and Brain records (including tracked-topic threads) may travel the Brain sync channel. Keep the configured peer/category controls and each domain's wire contract. Status/capability endpoints keep bounded projections, never an export path.
 
 ## Logging levels
 
@@ -25,13 +25,13 @@ Read the nested instructions before editing these trees (each an `AGENTS.md` wit
 
 ## LLM response merging and sentinels
 
-**LLM response merging**: key absent preserves the original; key present and empty applies the clear; never `.length` truthiness. Strings: `null`/`undefined` absent, `""` a clear (`universeBuilderExpand.trimField` returns `null` for non-strings). Arrays/objects: gate on `Array.isArray(parsed?.field)` / a non-null, non-array object. Keep server merges and the client's `pick` helpers mirrored.
+**LLM response merging** string gate: `null`/`undefined` is absent, `""` a clear (`universeBuilderExpand.trimField` returns `null` for non-strings). Array/object gate: `Array.isArray(parsed?.field)` / a non-null, non-array object.
 
-**Sentinels**: never let absent, failed-to-fetch or invalid collapse into fetched-and-empty or valid; use an explicit sentinel and validate, not `x.length` or `x || fallback`. Examples: `null` not fetched vs `[]` cached-empty (`ollamaManager.js` `installedModels`); a reachable backend whose list failed surfaces `modelsError`, not `0 models` (`getLastListError`).
+**Sentinel** examples: `null` not fetched vs `[]` cached-empty (`ollamaManager.js` `installedModels`); a reachable backend whose list failed surfaces `modelsError`, not `0 models` (`getLastListError`).
 
 ## Error handling outside the request lifecycle
 
-**Error handling**: Express handlers let errors reach the central middleware; no per-handler try/catch. Client code uses the shared boundaries in `client/src/AGENTS.md`. Outside the request lifecycle (PTY/child-process/timer callbacks) an uncaught throw crashes Node: wrap hook invocations in try/catch and log with the emoji `console.error` style. Async event handlers mutating shared module state (the TUI spawner's `handleData`) serialize on a per-session `Promise.resolve()` queue.
+Outside the request lifecycle, a caught hook failure logs in the emoji `console.error` style. Async event handlers mutating shared module state (the TUI spawner's `handleData`) serialize on a per-session `Promise.resolve()` queue.
 
 ## Server conventions moved from server/AGENTS.md
 
@@ -47,30 +47,41 @@ Record writes reach peer sync only through the subscription adapter in `server/s
 
 ## Slashdo read resolution
 
-[slashdo](https://github.com/atomantic/slashdo) is a submodule at `lib/slashdo`, exposed as `.claude/commands/do/` symlinks (`/do:next`, `/do:pr`, …). `!read lib/<name>.md` is a required read of `lib/slashdo/lib/<name>.md` when that phase applies (nested and `~/.claude/lib/` references resolve against the bundled package root; staged CoS bundles, against the containing file), not a shell command. Don't preload every phase or rely on a global install.
+A `!read lib/<name>.md` in a nested file or a `~/.claude/lib/` reference resolves against the bundled package root; in a staged CoS bundle it resolves against the containing file. Read each phase's file only when that phase applies, and don't rely on a global install.
 
-## Other root rules, original wording
+## Testing
 
-- No `NODE_ENV` prefix is needed: `server/vitest.config.js` forces `NODE_ENV=test` (#4554) so a suite never inherits PM2's `development` and aims at the real Postgres. A focused file run is not a full-suite result. `PORTOS_TEST_MEMO=off` disables the passed-input test memo (`docs/GITHUB_ACTIONS.md`).
-- **Run pregate before every push and again after rebasing onto a moved base** (`node scripts/pregate.js` on Windows, where cmd may miss the `exec.cmd` shim). It runs lint/format, structural guards, and changed, sibling and one-hop importing/mocking tests (cap 25 per source) over committed, uncommitted and untracked changes, but not transitive imports or browser/DB/build/boot-smoke suites, so run a focused public-boundary regression as you implement. `--full` runs CI's broad plan, still pinned to `portos_test`. Its receipt is local evidence only ([docs/CONTRIBUTING.md](CONTRIBUTING.md)); hosted CI and provider-enforced checks and reviews stay mandatory.
-- Test at the highest practical public boundary (route, service workflow, store adapter, socket exchange, rendered interaction); add focused unit tests only where that can't pin behavior precisely or cheaply (parsers, security/privacy/destructive-action guards, migrations, schema boundaries, retry/timeout/lifecycle state machines). Name the regression a new test uniquely catches; coverage is a diagnostic. Full policy: [docs/CONTRIBUTING.md](CONTRIBUTING.md#test-strategy-value-over-assertion-count).
-- macOS is the primary interactive app/browser target; Windows is secondary; Linux interactive browser compatibility is not a support target (Linux server support is unchanged). Linux-browser-only work needs a supported-target reproduction or concrete shared-code, server, security or data impact; headless Linux CI failures still get investigated. Triage procedure: [portos-file-issue](../.claude/skills/portos-file-issue/SKILL.md) and [docs/CONTRIBUTING.md](CONTRIBUTING.md#platform-support-and-issue-triage).
-- Every reusable-code directory (`server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/src/utils/`, `client/src/services/`) is cataloged from module headers. **Search the catalog (`node scripts/lib-catalog.js <term>`) before writing a helper** and reuse a close match. Before adding a file there, read [portos-add-module](../.claude/skills/portos-add-module/SKILL.md) (placement and the one-sentence summary header). Decide Postgres vs a `data/` file with `docs/STORAGE.md` *before* adding a `data/*.json`. One concern per file; tests sit beside their source.
-- Write comments for agents maintaining the code: the why, invariants, non-obvious constraints, safety rationale, external contracts and justified workarounds that names and control flow don't show. Remove redundant narration, stale explanations, commented-out code and walkthroughs; keep licenses, tool directives, meaningful type/JSDoc, public API docs and needed rationale. No quotas. This governs code comments, not user-facing guides.
-- [ETHOS.md](../ETHOS.md) states why unsupervised agent operation is the design target and the commitments a change must not break; read it before proposing supervision gates, per-action confirmations, external edits to a mind's own memories, or new data crossing federation. `docs/README.md` indexes `docs/` (ADRs in `docs/decisions/`, plans in `docs/plans/`); key: `docs/STORAGE.md`, `docs/ARCHITECTURE.md`, `docs/API.md`.
-- **Archive approved design plans**: when a plan is approved out of plan mode, copy it from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` before implementing (`docs/plans/README.md`).
-- **Search before filing.** Reuse an existing issue and add evidence. A new issue carries redacted evidence or repro steps, expected vs actual behavior, affected files, a chosen next step and acceptance criteria, and says whether a flake is suspected or reproduced. For PortOS, read [portos-file-issue](../.claude/skills/portos-file-issue/SKILL.md) and the label guidance in `server/lib/dispatchLabels.js`.
-- **Route to the owner.** Shared slashdo command, renderer or workflow defects go to [atomantic/slashdo](https://github.com/atomantic/slashdo/issues); PortOS behavior, integration, configuration and instructions go here; forks and managed apps use their configured remote. Cross-link only when both need changes. Use your own authorized GitHub identity, never the owner's (Pico-delegated work: `picodot`; the owner's local agents: `atomantic` when authorized).
-- **No cold-bootstrap LLM calls.** PortOS never queues provider calls the user hasn't knowingly triggered: none from server boot or `server/index.js` init (warm-ups, pre-generation, backfills), and no background job that grows "what the user asked for" into "a batch for later." User-configured scheduled automations (`taskSchedule.js`, `backupScheduler.js`, autopilot gates, CoS agents) are the one exception; anything else needs a direct user action in the same request or an explicit consent/config step. For cache pre-generation, boot loads only what is on disk; the cold fill runs only from a user-triggered endpoint behind a prompt naming the provider/model that lets the user change or decline it; replenishing an item the user consumed may run silently. Reference: `server/services/meatspacePostDrillCache.js` (`initDrillCache` / `requestCacheFill`).
-- Static additions (universe/project style, production bible, mood-board style, shot actions, preset negatives, agent wrapper, policy clause) appear beside it as labeled, openable chips (original parenthetical list, moved from the 'Never modify a model's input' rule).
-- **Distribution model (across installs).** Many people run their own installs on their own upgrade schedule, often federating several machines, so cross-install and cross-version compatibility is first-class:
-- Self-update stays fork-aware. **Never add `--force` to the server-side `gh repo sync`** (it discards fork commits; the 409 `FORK_DIVERGED` message tells the user to run it themselves). The upstream slug lives only in `server/lib/gitRemote.js`; UI claiming "you are running PortOS" reads `remoteInfo.isUpstream` ([docs/SELF_UPDATE.md](SELF_UPDATE.md)).
-- **API keys for free, non-monetary services are not security findings.** Host-allowlisting or redirect-stripping one (CivitAI, #2200, `applyDownloadToken` in `server/services/loras.js`) is won't-fix; the key is still never committed or logged. Paid/quota-billed keys and keys gating money-bearing or destructive actions are not exempt.
-- **Preserve delegated agent authority.** In the host-control gate an operator session includes a verified `PORTOS_API_TOKEN` agent session; operator does not mean human-only. Genuine local callers keep host access when auth is disabled; network reachability and scoped peer credentials do not grant it. A Basic password holder can already exchange it for a session, so refusing Basic is credential-use policy, not isolation. Security findings distinguish these principals, trace the real execution path (fallback and deferred work included), and test both unauthorized refusal and the preserved authorized workflow. Authorized agent execution is an intended capability, not a vulnerability; a configured tool-capable provider still never lets an anonymous remote caller launch it.
-- A rule may be retired after reassessing its value and feasibility, with concise rationale; difficulty alone is not an exemption, and retiring never hides a known important defect. Never suppress findings, weaken tests, demote rules or disable useful checks to get green; invest in high-quality fixes. A hardware, permission or genuinely user-owned blocker stays explicitly unresolved with evidence, an owner and a tracked next step, never relabeled clean. Bounded audits may track remaining accepted work; severity alone never justifies deferral. Review scope stays tied to the requested change and affected contracts; subjective preferences are not defects.
-- Reject hypothetical durability, crash-recovery, multi-writer or state-preservation findings on ephemeral or regenerable state (worktrees/branches, caches, agent completion state, in-memory locks); never add a receipt ledger, quarantine archive or two-step review endpoint for a speculative finding.
-- **Push, don't poll**: the server emits a Socket.IO event when data changes; own mutations apply their response locally. Never refetch on a timer; add the missing server event ([exceptions](UX_DESIGN_GUIDE.md#realtime-updates-not-polling); client rules in `client/src/AGENTS.md`).
-- Original test and package script lines: `npm test --prefix server         # Vitest (node), also globs ../scripts, ../lib, ../autofixer` and `npm test --prefix client         # Vitest (happy-dom)`.
+`server/vitest.config.js` forces `NODE_ENV=test` so a suite never inherits PM2's `development` environment and aims at the real Postgres. What pregate runs, and its Windows and interrupt behavior: [PREGATE.md](PREGATE.md). The full test policy, including retry, timeout and process-lifecycle state machines as unit-test territory: [CONTRIBUTING.md](CONTRIBUTING.md#test-strategy-value-over-assertion-count).
+
+## Findings and review scope
+
+Review scope stays tied to the requested change and affected contracts; subjective preferences are not defects. The ephemeral-state rule also covers branches, agent completion state and state-preservation findings, and never justifies a two-step review endpoint.
+
+## Filing and routing issues
+
+Cross-link an issue in slashdo and PortOS only when both need changes.
+
+## Provider calls and model input
+
+The cold-bootstrap reference implementation is `initDrillCache` (boot, disk only) and `requestCacheFill` (user-triggered fill) in `server/services/meatspacePostDrillCache.js`.
+
+Static additions shown as chips beside the user's own words include universe/project style, production bible, mood-board style, shot actions, preset negatives, the agent wrapper and policy clauses.
+
+## Security exemptions
+
+The free-API-key exemption's CivitAI case lives in `applyDownloadToken` (`server/services/loras.js`).
+
+## Realtime updates
+
+When a view would need a timer to stay fresh, add the missing server event rather than polling.
+
+## Code comments
+
+Also remove walkthroughs; keep meaningful type/JSDoc and public API docs. There is no comment quota in either direction.
+
+## Documentation
+
+[ETHOS.md](../ETHOS.md) also lists the commitments a change must not break. `docs/README.md` indexes ADRs (`docs/decisions/`) and plans (`docs/plans/`, conventions in `docs/plans/README.md`); start with `docs/STORAGE.md`, `docs/ARCHITECTURE.md` and `docs/API.md`.
 
 ## Keyboard ownership and web storage
 
