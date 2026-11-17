@@ -4862,10 +4862,11 @@ describe('PR model attribution', () => {
     expect(prompt).toContain(`--label ${label}`);
     expect(prompt).toContain(forgeCli === 'glab' ? `glab label create --name ${label}` : `gh label create ${label}`);
     expect(prompt).toContain(forgeCli === 'glab' ? 'glab mr create' : 'gh pr create');
-    expect(prompt).toContain(forgeCli === 'glab' ? `glab mr update <mr> --label ${label}` : `gh pr edit <pr> --add-label ${label}`);
-    expect(prompt).toContain('read the PR/MR labels back');
-    expect(prompt).toContain('opening agent must use its own trusted runtime model');
-    expect(prompt).toContain('preserve its original opener attribution');
+    // One best-effort call: the repair and read-back procedure is gone because no code reads the label (#16571).
+    expect(prompt).toContain('Best-effort: no read-back or repair');
+    const section = prompt.slice(prompt.indexOf('## PR Model Attribution')).split('\n\n')[0];
+    expect(section).not.toMatch(/labels back|pr edit <pr>|mr update <mr>|completion summary/);
+    expect(section.split('\n').length).toBeLessThanOrEqual(3);
     expect(prompt).not.toContain('implementer:example-runner');
   });
 
@@ -4874,8 +4875,8 @@ describe('PR model attribution', () => {
       makeTask({ metadata: { claimFlow: true, openPR: false } }), '/repo', null,
       { providerId: 'example-runner' },
     );
-    expect(prompt).toContain('PortOS did not resolve a model for this run');
-    expect(prompt).toContain('report the missing attribution');
+    expect(prompt).toContain('No opener model was resolved for this run');
+    expect(prompt).toContain('never a guess');
     expect(prompt).not.toContain('implementer:example-runner');
   });
 });
