@@ -180,9 +180,14 @@ export default function Loras() {
   // Image/Video media-type filter for both panels. 'all' | 'image' | 'video'.
   const [mediaFilter, setMediaFilter] = useState('all');
 
-  const refresh = useCallback(() => {
+  // The install endpoints return the raw sidecar, not the library row: the row
+  // adds server-derived fields (filename, sizeBytes, loraCompatKey, normalized
+  // preview URL), so splicing the sidecar in would render a malformed card.
+  // After an install the list is therefore re-read, but in the background — the
+  // spinner only replaces the list for the first load and explicit retries.
+  const refresh = useCallback(({ background = false } = {}) => {
     setError(null);
-    setLoading(true);
+    if (!background) setLoading(true);
     // silent:true — the failure renders as a persistent inline error Banner;
     // the default toast would say the same thing a second time.
     listLorasFull({ silent: true })
@@ -265,7 +270,7 @@ export default function Loras() {
         toast.success(`Installed ${sidecar.name}`);
         setLastInstalled(sidecar.name);
         setInstallUrl('');
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => {
         // Early-access content is gated by Civitai membership, not by API
@@ -314,7 +319,7 @@ export default function Loras() {
         setLastInstalled(sidecar.name);
         setHfUrl('');
         setHfFamilyPrompt(null);
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => {
         // Autodetection failed but the install is otherwise valid — offer an
@@ -361,7 +366,7 @@ export default function Loras() {
       .then((sidecar) => {
         toast.success(`Installed ${sidecar.name}`);
         setLastInstalled(sidecar.name);
-        refresh();
+        refresh({ background: true });
       })
       .catch((err) => toast.error(err?.message || 'HuggingFace install failed'))
       .finally(() => { setInstallingVideoKey(null); setHfProgress(null); });

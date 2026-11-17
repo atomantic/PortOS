@@ -1,7 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { GitBranch, Plus, RefreshCw, Trash2, CheckCircle, AlertCircle, Edit3, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import FormField from '../ui/FormField';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
 import * as api from '../../services/api';
 import { formatDateTime, formatDurationMs } from '../../utils/formatters';
 
@@ -93,29 +95,29 @@ export default function ReferenceReposPanel({ appId, appName }) {
     if (!created) return;
     toast.success(`Added "${created.name}"`);
     setShowAdd(false);
-    loadRefs();
+    setRefs((prev) => [...prev.filter((r) => r.id !== created.id), created]);
   };
 
-  // Two-click delete per AGENTS.md "no window.confirm". First click arms the
-  // row, second click within 4s actually deletes.
-  const pendingDeleteRef = useRef({ id: null, expiresAt: 0 });
+  // Replace one row with the record a mutation returned; no list refetch.
+  const applyRef = (updated) => setRefs((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
+  const [removingIds, setRemovingIds] = useState(() => new Set());
   const handleDelete = async (ref) => {
-    const pending = pendingDeleteRef.current;
-    if (pending.id !== ref.id || Date.now() > pending.expiresAt) {
-      pendingDeleteRef.current = { id: ref.id, expiresAt: Date.now() + 4000 };
-      toast(`Click delete again to remove "${ref.name}"`, { icon: '⚠️' });
-      return;
-    }
-    pendingDeleteRef.current = { id: null, expiresAt: 0 };
+    setConfirmingDeleteId(null);
     // Only mutate local state on success — otherwise the row vanishes from
-    // the UI while the server still has the ref, leaving the user confused
-    // about why "delete failed" appeared next to a now-empty list.
+    // the UI while the server still has the ref.
     const ok = await api.deleteReferenceRepo(appId, ref.id, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(e.message || 'Delete failed'); return false; });
     if (!ok) return;
-    setRefs((prev) => prev.filter((r) => r.id !== ref.id));
-    setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
+    setRemovingIds((prev) => new Set(prev).add(ref.id));
+  };
+
+  const handleRowExited = (id) => {
+    setRemovingIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setRefs((prev) => prev.filter((r) => r.id !== id));
+    setSnapshots((prev) => { const n = { ...prev }; delete n[id]; return n; });
   };
 
   const handleCheck = async (ref) => {
@@ -169,25 +171,23 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // PATCH. Otherwise the UI claims the ref was reviewed while the server
     // still has the old lastReviewedSha — which gets confusing fast since
     // the next "Check" rediscovers the same commits.
-    const ok = await api.markReferenceRepoReviewed(appId, ref.id, sha, { silent: true })
-      .then(() => true)
-      .catch((e) => { toast.error(e.message || 'Mark reviewed failed'); return false; });
-    if (!ok) return;
+    const updated = await api.markReferenceRepoReviewed(appId, ref.id, sha, { silent: true })
+      .catch((e) => { toast.error(e.message || 'Mark reviewed failed'); return null; });
+    if (!updated) return;
+    applyRef(updated);
     toast.success(`Marked ${ref.name} reviewed up to ${sha.slice(0, 8)}`);
     setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
-    loadRefs();
   };
 
   const handleSaveNotes = async (ref, nextNotes) => {
     // Keep the editor open on a failed PATCH — losing the user's draft on
     // a transient network blip is the worst possible outcome here. They
     // can re-click Save, or click Cancel to discard.
-    const ok = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes }, { silent: true })
-      .then(() => true)
-      .catch((e) => { toast.error(e.message || 'Update failed'); return false; });
-    if (!ok) return;
+    const updated = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes }, { silent: true })
+      .catch((e) => { toast.error(e.message || 'Update failed'); return null; });
+    if (!updated) return;
+    applyRef(updated);
     setEditingNotesId(null);
-    loadRefs();
   };
 
   if (initialLoading) {
@@ -229,21 +229,25 @@ export default function ReferenceReposPanel({ appId, appName }) {
           No reference repos configured.
         </div>
       ) : (
-        <div className="space-y-2">
+        <div>
           {refs.map((ref) => (
+            <CollapsibleListItem key={ref.id} removing={removingIds.has(ref.id)} onExited={() => handleRowExited(ref.id)}>
             <RefRow
-              key={ref.id}
               reference={ref}
               snapshot={snapshots[ref.id]}
               checking={checkingIds.has(ref.id)}
               editingNotes={editingNotesId === ref.id}
               onCheck={() => handleCheck(ref)}
               onMarkReviewed={() => handleMarkReviewed(ref)}
-              onDelete={() => handleDelete(ref)}
+              confirmingDelete={confirmingDeleteId === ref.id}
+              onDelete={() => setConfirmingDeleteId(ref.id)}
+              onConfirmDelete={() => handleDelete(ref)}
+              onCancelDelete={() => setConfirmingDeleteId(null)}
               onEditNotes={() => setEditingNotesId(ref.id)}
               onCancelNotes={() => setEditingNotesId(null)}
               onSaveNotes={(notes) => handleSaveNotes(ref, notes)}
             />
+            </CollapsibleListItem>
           ))}
         </div>
       )}
@@ -276,7 +280,7 @@ function StatusBadge({ status, lastError }) {
   );
 }
 
-function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkReviewed, onDelete, onEditNotes, onCancelNotes, onSaveNotes }) {
+function RefRow({ reference, snapshot, checking, editingNotes, confirmingDelete, onCheck, onMarkReviewed, onDelete, onConfirmDelete, onCancelDelete, onEditNotes, onCancelNotes, onSaveNotes }) {
   // Seed the draft when the user enters edit mode. Don't depend on
   // `reference.notes` — a parent re-fetch produces a new ref object every
   // poll and would clobber whatever the user is mid-typing.
@@ -336,13 +340,23 @@ function RefRow({ reference, snapshot, checking, editingNotes, onCheck, onMarkRe
           >
             <Edit3 size={12} />
           </button>
-          <button
-            onClick={onDelete}
-            className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 text-gray-400 hover:text-port-error rounded"
-            title="Remove this reference" aria-label="Remove this reference"
-          >
-            <Trash2 size={12} />
-          </button>
+          {confirmingDelete ? (
+            <ConfirmButtonPair
+              prompt="Remove?"
+              confirmText="Remove"
+              onConfirm={onConfirmDelete}
+              onCancel={onCancelDelete}
+              ariaLabel={`Confirm remove ${reference.name}`}
+            />
+          ) : (
+            <button
+              onClick={onDelete}
+              className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 px-2 py-1 text-gray-400 hover:text-port-error rounded"
+              title="Remove this reference" aria-label="Remove this reference"
+            >
+              <Trash2 size={12} />
+            </button>
+          )}
         </div>
       </div>
 

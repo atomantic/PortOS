@@ -125,17 +125,18 @@ export default function OrchestrationTab() {
         profile: editingProfile.profile,
       };
 
-      if (isNew) {
-        await api.saveOrchestrationProfile(payload);
-        toast.success(`Profile "${payload.name}" created`);
-      } else {
-        await api.updateOrchestrationProfile(id, payload);
-        toast.success(`Profile "${payload.name}" updated`);
-      }
+      const saved = isNew
+        ? await api.saveOrchestrationProfile(payload)
+        : await api.updateOrchestrationProfile(id, payload);
+      toast.success(`Profile "${payload.name}" ${isNew ? 'created' : 'updated'}`);
 
+      // Apply the server's saved record in place: a full reload flips `loading`
+      // and would unmount the list under the user.
+      setProfiles((prev) => (prev.some((p) => p.id === saved.id)
+        ? prev.map((p) => (p.id === saved.id ? saved : p))
+        : [...prev, saved]));
       setEditingProfile(null);
       setIsNew(false);
-      await loadData();
     } catch (err) {
       toast.error(`Failed to save profile: ${err.message}`);
     } finally {
@@ -148,7 +149,7 @@ export default function OrchestrationTab() {
     try {
       await api.deleteOrchestrationProfile(id);
       toast.success(`Profile "${name}" deleted`);
-      await loadData();
+      setProfiles((prev) => prev.filter((p) => p.id !== id));
     } catch (err) {
       toast.error(`Failed to delete profile: ${err.message}`);
     } finally {

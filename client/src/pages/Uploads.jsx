@@ -3,7 +3,8 @@ import PageHeader from '../components/PageHeader';
 import { Upload, Trash2, Download, FileText, Image, File, FolderOpen, RefreshCw } from 'lucide-react';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
-import { formatDateTime } from '../utils/formatters';
+import CollapsibleListItem from '../components/ui/CollapsibleListItem';
+import { formatBytes, formatDateTime } from '../utils/formatters';
 import { pluralize } from '../lib/textUtils';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -26,13 +27,14 @@ function isPreviewableImage(mimeType) {
 
 export default function Uploads() {
   const [uploads, setUploads] = useState([]);
-  // null until a read succeeds — a failed read must never read as "0 files".
-  const [stats, setStats] = useState(null);
+  // false until a read succeeds — a failed read must never read as "0 files".
+  const [inventoryLoaded, setInventoryLoaded] = useState(false);
   const [inventoryError, setInventoryError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [confirmingDeleteAll, setConfirmingDeleteAll] = useState(false);
+  const [removingNames, setRemovingNames] = useState(() => new Set());
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const fetchUploads = useCallback(async () => {
@@ -42,7 +44,7 @@ export default function Uploads() {
     });
     if (data) {
       setUploads(data.uploads || []);
-      setStats({ count: data.count || 0, totalSizeFormatted: data.totalSizeFormatted || '0 B' });
+      setInventoryLoaded(true);
     }
     setInventoryError(!data);
     setLoading(false);
@@ -52,11 +54,18 @@ export default function Uploads() {
     fetchUploads();
   }, [fetchUploads]);
 
+  // Own mutations patch the list in place (no refetch, no scroll reset); the
+  // header totals are derived from the rows. `inventoryLoaded` stays false until
+  // a read succeeds, so a mutation against an unloaded inventory refetches
+  // instead of presenting a partial list as the whole.
+  const totalSize = uploads.reduce((sum, file) => sum + (file.size || 0), 0);
+
   const handleFileUpload = async (files) => {
     if (!files || files.length === 0) return;
 
     setUploading(true);
     const fileArray = Array.from(files);
+    const added = [];
 
     for (const file of fileArray) {
       const result = await api.uploadFile(file, file.name, { silent: true }).catch(err => {
@@ -65,12 +74,17 @@ export default function Uploads() {
       });
 
       if (result) {
+        added.push(result);
         toast.success(`Uploaded "${file.name}"`);
       }
     }
 
     setUploading(false);
-    fetchUploads();
+    if (!inventoryLoaded) return fetchUploads();
+    if (added.length > 0) {
+      const names = new Set(added.map(file => file.filename));
+      setUploads(prev => [...added.reverse(), ...prev.filter(file => !names.has(file.filename))]);
+    }
   };
 
   const handleDelete = async (filename) => {
@@ -81,7 +95,7 @@ export default function Uploads() {
 
     if (result?.success) {
       toast.success('File deleted');
-      fetchUploads();
+      setRemovingNames(prev => new Set(prev).add(filename));
     }
   };
 
@@ -98,7 +112,7 @@ export default function Uploads() {
 
     if (result?.success) {
       toast.success(`Deleted ${pluralize(result.deleted, 'file')} (${result.freedSpaceFormatted})`);
-      fetchUploads();
+      setUploads([]);
     }
     setConfirmingDeleteAll(false);
   };
@@ -131,8 +145,8 @@ export default function Uploads() {
       <PageHeader
         icon={Upload}
         title="File Uploads"
-        subtitle={stats
-          ? `${stats.count} file${stats.count !== 1 ? 's' : ''} (${stats.totalSizeFormatted})`
+        subtitle={inventoryLoaded
+          ? `${uploads.length} file${uploads.length !== 1 ? 's' : ''} (${formatBytes(totalSize)})`
           : 'Upload totals unavailable'}
         actions={<>
           <button
@@ -201,7 +215,7 @@ export default function Uploads() {
       {inventoryError && (
         <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-port-warning/40 bg-port-card p-4 text-sm text-port-warning">
           <div className="flex-1 min-w-0">
-            {stats ? (
+            {inventoryLoaded ? (
               <p>Upload inventory could not be refreshed. Showing the last loaded files; retry to check for changes.</p>
             ) : (
               <>
@@ -219,7 +233,7 @@ export default function Uploads() {
           </button>
         </div>
       )}
-      {!stats ? null : uploads.length === 0 ? (
+      {!inventoryLoaded ? null : uploads.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
           <FolderOpen size={48} className="mx-auto mb-4 text-gray-500" />
           <p className="text-gray-500">No files uploaded yet</p>
@@ -229,10 +243,16 @@ export default function Uploads() {
         <div className="bg-port-card border border-port-border rounded-lg overflow-hidden">
           <div className="grid grid-cols-1 divide-y divide-port-border">
             {uploads.map((file) => (
-              <div
+              <CollapsibleListItem
                 key={file.filename}
-                className="flex items-center gap-4 p-4 hover:bg-port-bg/50 transition-colors group"
+                removing={removingNames.has(file.filename)}
+                spacing="0"
+                onExited={() => {
+                  setRemovingNames(prev => { const next = new Set(prev); next.delete(file.filename); return next; });
+                  setUploads(prev => prev.filter(row => row.filename !== file.filename));
+                }}
               >
+              <div className="flex items-center gap-4 p-4 hover:bg-port-bg/50 transition-colors group">
                 {/* Icon or Preview */}
                 <div className="w-12 h-12 flex items-center justify-center bg-port-bg rounded-lg shrink-0">
                   {isPreviewableImage(file.mimeType) ? (
@@ -289,6 +309,7 @@ export default function Uploads() {
                   )}
                 </div>
               </div>
+              </CollapsibleListItem>
             ))}
           </div>
         </div>

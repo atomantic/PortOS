@@ -7,6 +7,8 @@ vi.mock('../../../services/api', () => ({
   getPlatformAccounts: vi.fn(),
   getScheduleStats: vi.fn(),
   runAutomationScheduleNow: vi.fn(),
+  toggleAutomationSchedule: vi.fn(),
+  deleteAutomationSchedule: vi.fn(),
 }));
 
 import * as api from '../../../services/api';
@@ -55,5 +57,28 @@ describe('SchedulesTab', () => {
 
     expect(runButton).toBeEnabled();
     expect(runButton).toHaveTextContent('Run Now');
+  });
+
+  it('applies toggle and delete in place without refetching or flashing the spinner', async () => {
+    const schedule = {
+      id: 'schedule-1', agentId: 'agent-1', accountId: 'account-1', enabled: true,
+      action: { type: 'heartbeat', params: {} }, schedule: { type: 'interval', intervalMs: 60000 },
+      rateLimit: { maxPerDay: 5 },
+    };
+    api.getAutomationSchedules.mockResolvedValue([schedule]);
+    api.getPlatformAccounts.mockResolvedValue([{ id: 'account-1', status: 'active', credentials: { username: 'example-user' } }]);
+    api.getScheduleStats.mockResolvedValue({});
+    api.toggleAutomationSchedule.mockResolvedValue({ ...schedule, enabled: false });
+    api.deleteAutomationSchedule.mockResolvedValue({ success: true });
+
+    render(<SchedulesTab agentId="agent-1" />);
+    await screen.findByText('1 enabled / 1 total');
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Enabled' })); });
+    expect(screen.getByText('0 enabled / 1 total')).toBeInTheDocument();
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /delete/i })); });
+    expect(await screen.findByText('No schedules')).toBeInTheDocument();
+    expect(api.getAutomationSchedules).toHaveBeenCalledTimes(1);
   });
 });

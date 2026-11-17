@@ -141,7 +141,11 @@ export default function JobsTab() {
     });
     if (result) {
       toast.success(result.job.enabled ? 'Job enabled' : 'Job disabled');
-      fetchJobs();
+      // Merge over the listed row so the server-derived `hasGate`/`nextRunAt`
+      // survive; only the enabled tally in the header stats needs adjusting.
+      const delta = (result.job.enabled ? 1 : 0) - (jobs.find(job => job.id === result.job.id)?.enabled ? 1 : 0);
+      setJobs(prev => prev.map(job => (job.id === result.job.id ? { ...job, ...result.job } : job)));
+      setStats(prev => prev && { ...prev, enabled: Math.max(0, (prev.enabled || 0) + delta) });
     }
   };
 
@@ -184,7 +188,13 @@ export default function JobsTab() {
     });
     if (!result) return;
     toast.success('Job deleted');
-    fetchJobs();
+    const removed = jobs.find(job => job.id === jobId);
+    setJobs(prev => prev.filter(job => job.id !== jobId));
+    setStats(prev => prev && {
+      ...prev,
+      total: Math.max(0, (prev.total || 0) - 1),
+      enabled: Math.max(0, (prev.enabled || 0) - (removed?.enabled ? 1 : 0)),
+    });
   };
 
   if (loading) {

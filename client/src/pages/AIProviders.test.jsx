@@ -2120,36 +2120,20 @@ describe('AIProviders model refresh', () => {
   // on this page share: `loadData` flipped `loading` on unconditionally, so ANY
   // reload after a click swapped the whole list for the page skeleton and
   // returned the user to the top. The skeleton belongs to the first load only.
-  it('reloads after enabling a provider without swapping the list for the skeleton', async () => {
-    api.updateProvider.mockResolvedValue({});
-    // The reload is held OPEN so the assertions run while it is in flight — that
-    // window is the whole bug, and after it resolves the skeleton is gone again
-    // whether or not it ever appeared.
-    let releaseReload;
-    api.getProviders
-      .mockResolvedValueOnce(mtplxProviders())
-      .mockImplementationOnce(() => new Promise((resolve) => { releaseReload = resolve; }));
+  it('applies a disable in place: no re-read and no skeleton', async () => {
+    api.updateProvider.mockResolvedValue({ id: 'opencode-mtplx', enabled: false });
+    api.getProviders.mockResolvedValue(mtplxProviders());
 
     mountPage();
-    // The first load DOES show the skeleton — there is nothing else to show, and
-    // this is what keeps the assertion below from passing vacuously.
+    // The first load DOES show the skeleton — this keeps the assertion below
+    // from passing vacuously.
     expect(screen.getByLabelText('Loading providers')).toBeInTheDocument();
-    // This find settles the initial mount after the pending-state assertion,
-    // including the retired-model-pin child that triggered #7801.
     fireEvent.click(await screen.findByRole('button', { name: 'Disable' }));
 
-    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
-    expect(screen.queryByLabelText('Loading providers')).toBeNull();
-    // ...and the card the user just clicked is still the thing on screen.
-    expect(screen.getByRole('heading', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
-
-    await act(async () => {
-      releaseReload({
-        ...mtplxProviders(),
-        providers: mtplxProviders().providers.map(p => ({ ...p, enabled: false })),
-      });
-    });
     expect(await screen.findByRole('button', { name: 'Enable' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loading providers')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'OpenCode MTPLX' })).toBeInTheDocument();
+    expect(api.getProviders).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2543,6 +2527,13 @@ describe('provider list ordering', () => {
     providers: providers.map(provider => ({ ...provider, enabled: !disabled.includes(provider.id) })),
   });
   const card = id => within(document.getElementById(`provider-card-${id}`));
+  // Disable and Delete patch the list in place, so a reload in flight is started
+  // by adding a sample preset (which re-reads the list).
+  const samples = ['s1', 's2'].map(id => ({ id, name: `Sample ${id}`, type: 'api', enabled: true, endpoint: 'https://example.test', models: ['m'] }));
+  const reloadViaSample = async () => {
+    const addButton = (await screen.findAllByRole('button', { name: 'Add' }))[0];
+    await act(async () => { fireEvent.click(addButton); });
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -2554,6 +2545,8 @@ describe('provider list ordering', () => {
     api.updateProvider.mockResolvedValue({});
     api.setActiveProvider.mockResolvedValue({});
     api.getProviders.mockResolvedValue(snapshot());
+    api.createProvider.mockResolvedValue({});
+    api.getSampleProviders.mockResolvedValue({ providers: samples });
   });
 
   it.each(['success', 'failure'])('keeps Set Default after an older Disable read ends in %s and reconciles', async outcome => {
@@ -2562,7 +2555,8 @@ describe('provider list ordering', () => {
       .mockImplementationOnce(() => new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveFresh = resolve; }));
     await renderPage();
-    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    await clickLoadSamples();
+    await reloadViaSample();
     await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
     fireEvent.click(card('b').getByRole('button', { name: 'Set Default' }));
     await waitFor(() => expect(card('b').getByText('DEFAULT')).toBeInTheDocument());
@@ -2584,9 +2578,10 @@ describe('provider list ordering', () => {
       .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }))
       .mockImplementationOnce(() => new Promise(resolve => { resolveNew = resolve; }));
     await renderPage();
-    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    await clickLoadSamples();
+    await reloadViaSample();
     await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2));
-    fireEvent.click(card('b').getByRole('button', { name: 'Disable' }));
+    await reloadViaSample();
     await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(3));
     await act(async () => resolveNew(snapshot('a', ['a', 'b'])));
     await act(async () => resolveOld(snapshot('a', ['a'])));
@@ -2596,7 +2591,8 @@ describe('provider list ordering', () => {
   it('shows a failed reconciliation read and recovers with Retry', async () => {
     api.getProviders.mockResolvedValueOnce(snapshot()).mockRejectedValueOnce(new Error('offline'));
     await renderPage();
-    fireEvent.click(card('a').getByRole('button', { name: 'Disable' }));
+    await clickLoadSamples();
+    await reloadViaSample();
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
     expect(await screen.findByRole('heading', { name: 'Provider b' })).toBeInTheDocument();
     expect(screen.queryByText('Failed to load AI providers')).not.toBeInTheDocument();
