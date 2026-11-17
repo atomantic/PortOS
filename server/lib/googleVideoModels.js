@@ -96,7 +96,7 @@ export function googleShotRequestFields(settings, spanSec = null) {
 }
 
 /** The list price of one clip: `{ costUsd, ratePerSec }`, or null when the model or tier has no listed rate. */
-export function googleVideoClipQuote({ modelId, seconds, resolution, generateAudio = false } = {}) {
+function googleVideoClipQuote({ modelId, seconds, resolution, generateAudio = false } = {}) {
   const model = getGoogleVideoModel(modelId);
   const base = model?.rates?.[resolution]?.[generateAudio === true ? 'audio' : 'silent'];
   const sec = Number(seconds);

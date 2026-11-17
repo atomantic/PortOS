@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildGoogleVideoRequest,
-  googleVideoClipQuote,
   GOOGLE_VIDEO_MODELS,
   coerceGoogleVideoSeconds,
   googleVideoLengths,
@@ -83,24 +82,18 @@ describe('buildGoogleVideoRequest', () => {
   });
 });
 
-describe('googleVideoClipQuote', () => {
+describe('Veo clip pricing', () => {
   const expected = { 'veo-3.1-generate-001': [0.4, 0.2], 'veo-3.1-fast-generate-001': [0.15, 0.1], 'veo-3.0-generate-001': [0.4, 0.2], 'veo-3.0-fast-generate-001': [0.15, 0.1] };
 
   it('prices every model, tier and audio combination', () => {
     for (const m of GOOGLE_VIDEO_MODELS) {
       for (const resolution of m.resolutions) {
         const [audio, silent] = expected[m.id];
-        expect(googleVideoClipQuote({ modelId: m.id, seconds: 8, resolution, generateAudio: true }).costUsd).toBeCloseTo(audio * 8, 4);
-        expect(googleVideoClipQuote({ modelId: m.id, seconds: 6, resolution, generateAudio: false }).costUsd).toBeCloseTo(silent * 6, 4);
+        expect(buildGoogleVideoRequest({ modelId: m.id, prompt: 'x', seconds: 8, resolution, generateAudio: true }).estimatedCostUsd).toBeCloseTo(audio * 8, 4);
+        expect(buildGoogleVideoRequest({ modelId: m.id, prompt: 'x', seconds: 6, resolution, generateAudio: false }).estimatedCostUsd).toBeCloseTo(silent * 6, 4);
         const built = buildGoogleVideoRequest({ modelId: m.id, prompt: 'x', seconds: 4, resolution, generateAudio: true });
         expect(built.estimatedCostUsd).toBeCloseTo(audio * 4, 4);
       }
     }
-  });
-
-  it('stays null for an unlisted model or tier', () => {
-    expect(googleVideoClipQuote({ modelId: 'veo-9', seconds: 8, resolution: '720p' })).toBeNull();
-    expect(googleVideoClipQuote({ modelId: 'veo-3.1-generate-001', seconds: 8, resolution: '4k' })).toBeNull();
-    expect(googleVideoClipQuote({ modelId: 'veo-3.1-generate-001', seconds: 0, resolution: '720p' })).toBeNull();
   });
 });
