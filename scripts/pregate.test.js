@@ -463,16 +463,19 @@ describe('pregate hidden-content invocation', () => {
   describe('cross-run guard reuse', () => {
     const events = () => readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n').filter(Boolean);
     const receipt = () => JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
-    const runNode = (nodeArgs, ...args) => spawnSync(process.execPath, [...nodeArgs, 'scripts/pregate.js', '--base', base, ...args], {
-      cwd: root, encoding: 'utf8',
-      env: { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` },
-    });
+    // Children start without the runner's PORTOS_TEST_MEMO, which would otherwise disable reuse in every case.
+    const runWith = ({ nodeArgs = [], env = {} }, ...args) => {
+      const childEnv = { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` };
+      delete childEnv.PORTOS_TEST_MEMO;
+      return spawnSync(process.execPath, [...nodeArgs, 'scripts/pregate.js', '--base', base, ...args], { cwd: root, encoding: 'utf8', env: { ...childEnv, ...env } });
+    };
+    const runReuse = (...args) => runWith({}, ...args);
     const prepare = () => {
       prepareGuardFixture();
       write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
     };
     const firstRun = () => {
-      const result = run();
+      const result = runReuse();
       expect(result.status, result.stderr).toBe(0);
       expect(events().filter(event => event === 'catalog')).toHaveLength(1);
       write('.cache/events', '');
@@ -491,7 +494,7 @@ describe('pregate hidden-content invocation', () => {
 
       git('add', '--all');
       git('commit', '-qm', 'commit the validated tree');
-      const second = run();
+      const second = runReuse();
       expect(second.status, second.stderr).toBe(0);
       expect(second.stdout).toContain('⏭️ server structural guards reused from');
       expect(events()).toEqual([]);
@@ -501,7 +504,7 @@ describe('pregate hidden-content invocation', () => {
         .toEqual(first.map(stage => [stage.name, stage.passedAt]));
 
       // The original pass time carries forward through a reuse of a reuse.
-      expect(run().status).toBe(0);
+      expect(runReuse().status).toBe(0);
       expect(receipt().stages.filter(stage => stage.reusedFrom).map(stage => stage.reusedFrom))
         .toEqual(first.map(stage => stage.passedAt));
     });
@@ -517,7 +520,7 @@ describe('pregate hidden-content invocation', () => {
       write('local.secret', 'one\n');
       firstRun();
       mutate();
-      const result = run();
+      const result = runReuse();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).not.toContain('⏭️');
       expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
@@ -531,7 +534,7 @@ describe('pregate hidden-content invocation', () => {
       git('commit', '-qm', 'docs-only commit');
       firstRun();
       base = git('rev-parse', 'HEAD');
-      const result = run();
+      const result = runReuse();
       expect(result.status, result.stderr).toBe(0);
       expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
     });
@@ -540,7 +543,7 @@ describe('pregate hidden-content invocation', () => {
       prepare();
       firstRun();
       const preload = "Object.defineProperty(process, 'version', { value: 'v99.0.0' });";
-      const result = runNode(['--import', `data:text/javascript,${encodeURIComponent(preload)}`]);
+      const result = runWith({ nodeArgs: ['--import', `data:text/javascript,${encodeURIComponent(preload)}`] });
       expect(result.status, result.stderr).toBe(0);
       expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
     });
@@ -548,11 +551,22 @@ describe('pregate hidden-content invocation', () => {
     it('never reuses under --full, while recording its passes for a later focused run', () => {
       prepare();
       firstRun();
-      const full = run('--full');
+      const full = runReuse('--full');
       expect(full.status, full.stderr).toBe(0);
       expect(full.stdout).not.toContain('⏭️');
       expect(events().filter(event => event === 'catalog')).toHaveLength(1);
       expect(receipt().stages.find(stage => stage.guard).reuseKey).toEqual(expect.any(String));
+    });
+
+    it('never reuses under PORTOS_TEST_MEMO=off, even from a pass recorded with the same setting', () => {
+      prepare();
+      const off = () => runWith({ env: { PORTOS_TEST_MEMO: 'off' } });
+      expect(off().status).toBe(0);
+      write('.cache/events', '');
+      const result = off();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('⏭️');
+      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
     });
   });
 
