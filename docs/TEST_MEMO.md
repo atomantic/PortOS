@@ -158,7 +158,10 @@ A variable segment is now one of three things:
   (`scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
   the result is outside `dir`. The directory's tree is the input, as before.
   The literal directories in front of the variable are part of it:
-  `` `${HERE}/fixtures/${name}` `` keys `fixtures`, not `HERE`.
+  `` `${HERE}/fixtures/${name}` `` keys `fixtures`, not `HERE`. Literal text
+  after the variable is judged as it accumulates (`name + '/.' + './x'`
+  climbs), and `dirname()` of such a path, or a URL resolved against it, is
+  no longer contained.
 - **Unbounded.** Anything else: a property, a call result, an argument that is
   not a literal, a name that was rewritten (`name.replace(…)`), chosen
   (`cond ? a : name`), followed by a `..` segment, glued to the directory
@@ -172,9 +175,16 @@ A test that reads a file it cannot name in its own source (a name from a table
 in another module, a value parsed out of a file) stays memoizable by joining
 with `pathWithin()`. The analyzer accepts the call only when the name is
 imported from that module. A file that mocks `fs`, `crypto` or `pathWithin.js`
-(`vi.mock`, or a `vi.spyOn` of the member) decides what they return, and a
-parameter or local named `readdirSync`, `randomUUID` or `pathWithin` is not
-the import, so nothing is inferred from them there.
+(`vi.mock`, a `vi.spyOn` of the member, a write to the `fs` namespace), or a
+workspace setup file that does, decides what they return, and a parameter or
+local named `readdirSync`, `randomUUID` or `pathWithin` is not the import, so
+nothing is inferred from them there.
+
+The analysis reads tokens, not scopes, so it resolves a name only where no
+other reading is possible: a text constant that another scope declares, binds
+as a parameter or assigns again is unknown, and so is a helper or an array
+whose name turns up inside a string (`eval`, or code the tokenizer took for
+text).
 
 The rule belongs to the test file and to `scripts/`, like the git and
 oversized-tree rules. A library module builds such a path from what its caller

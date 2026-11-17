@@ -334,16 +334,24 @@ function extendTail(tail, next) {
   return tailValue(head.lit, bothContainments(head, piece), piece.post);
 }
 
-/** One more segment on a path that already has a variable part. */
-function joinPartial(base, segment) {
+/**
+ * One more segment on a path that already has a variable part, or text
+ * `glued` onto its last segment. `post` is the literal text since the last
+ * variable piece, judged as it accumulates: `'/.' + './x'` climbs though
+ * neither piece does.
+ */
+function joinPartial(base, segment, glued = false) {
+  const before = `${base.post ?? ''}${glued ? '' : '/'}`;
   if (segment.k === 'str') {
+    const post = before + segment.v;
     // A resolvable path is evaluated again in full, so only a contained one can be lost here.
-    return base.open || !(CLIMBS.test(segment.v) || segment.v.startsWith('/')) ? base : partialPath(base, base.v, UNBOUNDED);
+    const climbs = !base.open && (CLIMBS.test(post) || (!glued && segment.v.startsWith('/')));
+    return { ...partialPath(base, base.v, climbs ? UNBOUNDED : base), post };
   }
   // `resolve(partial, ROOT)` restarts at ROOT; an external or home segment is unknown text.
   const piece = segment.k === 'path' ? tailValue('') : asTail(segment);
-  const climbs = CLIMBS.test(piece.lit) || piece.lit.startsWith('/');
-  return partialPath(base, base.v, bothContainments(base, climbs && !piece.open ? UNBOUNDED : piece));
+  const climbs = CLIMBS.test(before + piece.lit) || (!glued && piece.lit.startsWith('/'));
+  return { ...partialPath(base, base.v, bothContainments(base, climbs && !piece.open ? UNBOUNDED : piece)), post: piece.post };
 }
 
 function joinPath(base, segment) {
@@ -360,15 +368,28 @@ function joinPath(base, segment) {
   // A leading slash restarts `resolve()` at the filesystem root and is a plain segment to `join()`;
   // a Windows separator in the literal part can spell a climb this reading does not see.
   if (piece.lit.startsWith('/') || (!piece.open && piece.lit.includes('\\'))) return partialPath(base, base.v, UNBOUNDED);
-  return underLiteral(base, base.v, piece);
+  return { ...underLiteral(base, base.v, piece), post: piece.post };
 }
 
-/** `${dir}/x` and `dir + '/x'`: the separator belongs to the join, not to an absolute path. */
+/**
+ * Text appended to a path, as string concatenation has it. `${dir}/x` and
+ * `dir + '/x'` join (the separator belongs to the join, not to an absolute
+ * path), and so does text after a path that ends in a separator. Anything
+ * else continues the last segment: `${file}.bak`, `${dir}/${stem}.json`.
+ */
 function appendPath(base, text) {
   if (text === '') return base;
-  const joined = joinPath(base, str(text.replace(/^\/+/, '')));
-  // `${dir}/` ends in a separator, so what follows is a new segment (`concatValue`).
-  return text.endsWith('/') && joined.k === 'path' ? { ...joined, sep: true } : joined;
+  let appended;
+  if (base.partial) appended = joinPartial(base, str(text.replace(/^\/+/, '')), !(text.startsWith('/') || base.sep));
+  else if (text.startsWith('/') || base.sep) appended = joinPath(base, str(text.replace(/^\/+/, '')));
+  // Glued onto the repository root's own name, the text names a sibling of the repository.
+  else if (base.v === '') return EXTERNAL;
+  else {
+    const glued = base.v + text;
+    appended = pathValue(glued, { isDir: text.endsWith('/') || (base.isDir && !/\.[A-Za-z0-9]+$/.test(posix.basename(glued))) });
+  }
+  // `${dir}/` ends in a separator, so what follows is a new segment.
+  return text.endsWith('/') && appended.k === 'path' ? { ...appended, sep: true } : appended;
 }
 
 function concatValue(left, right) {
@@ -378,7 +399,8 @@ function concatValue(left, right) {
     if (right.k === 'str') return appendPath(left, right.v);
     // `${DIR}/${name}` is a join. `${DIR}${name}` glues unknown text onto the last segment and may name a
     // sibling of DIR. (An external segment keeps its older reading, in `joinPath`: outside the repository.)
-    return left.sep || left.partial || right.k === 'ext' ? joinPath(left, right) : partialPath(left, left.v, UNBOUNDED);
+    if (left.partial) return joinPartial(left, right, !left.sep);
+    return left.sep || right.k === 'ext' ? joinPath(left, right) : partialPath(left, left.v, UNBOUNDED);
   }
   if (left.k === 'ext' || left.k === 'home') return left;
   if (right.k === 'path') return UNKNOWN;
@@ -409,7 +431,12 @@ function urlValue(args) {
   if (args.length === 0) return UNKNOWN;
   if (args.length === 1) {
     const only = args[0];
-    return only.k === 'path' ? only : only.k === 'str' && /^[a-z]+:/i.test(only.v) ? EXTERNAL : only.k === 'ext' ? EXTERNAL : UNKNOWN;
+    if (only.k !== 'path') return only.k === 'str' && /^[a-z]+:/i.test(only.v) ? EXTERNAL : only.k === 'ext' ? EXTERNAL : UNKNOWN;
+    if (only.partial) return only.open ? only : partialPath(only, only.v, UNBOUNDED);
+    // `new URL(href + '/' + name)`: the text is parsed, so `?raw` and `%20` are not part of the file name.
+    if (!/[?#%\\\s]/.test(only.v)) return only;
+    const parsed = fileUrlPath('', only.v);
+    return parsed.k === 'path' ? { ...parsed, isDir: only.isDir, sep: only.sep } : parsed;
   }
   const [spec, base] = args;
   if (base.k === 'ext' || base.k === 'home') return base;
@@ -421,11 +448,13 @@ function urlValue(args) {
   const piece = spec.k === 'str' ? null : asTail(spec);
   const unlisted = piece === null || piece.open ? piece : UNBOUNDED;
   if (base.partial) {
-    // A resolvable base is evaluated again in full; a contained one stays so under a literal that does not climb.
-    if (spec.k === 'str') return base.open || !CLIMBS.test(spec.v) ? base : partialPath(base, base.v, UNBOUNDED);
-    return partialPath(base, base.v, bothContainments(base, unlisted));
+    // A resolvable base is evaluated again in full. A contained one is not contained any more: the spec
+    // resolves beside its last segment, and the parser has its own ways to spell a climb.
+    if (!base.open) return partialPath(base, base.v, UNBOUNDED);
+    return partialPath(base, base.v, bothContainments(base, spec.k === 'str' ? CONTAINED : unlisted));
   }
-  const baseDir = base.isDir ? base.v : posix.dirname(base.v);
+  // Against a base that ends in a separator a spec resolves inside it, against any other beside it.
+  const baseDir = base.sep ? base.v : posix.dirname(base.v);
   if (spec.k === 'str') return fileUrlPath(baseDir, spec.v);
   if (elsewhere(piece.lit)) return EXTERNAL;
   // The literal directories of the spec are kept: `new URL(\`../fixtures/${name}\`, here)` is under ../fixtures.
@@ -434,12 +463,23 @@ function urlValue(args) {
 
 function dirnameValue(value) {
   if (value.k !== 'path') return value.k === 'ext' ? EXTERNAL : UNKNOWN;
-  // The parent of a path under a prefix is the prefix or below it: the containment is unchanged.
-  if (value.partial) return value;
+  // The parent of a contained path may be the prefix's own parent (`dirname` twice, or once on a guard
+  // that returned its directory). A resolvable one is evaluated again in full.
+  if (value.partial) return value.open ? value : partialPath(value, value.v, UNBOUNDED);
   return dirValue(posix.dirname(value.v));
 }
 
-function foldJoin(args) {
+/** `join(...args)`, or `resolve(...args)` when `joins` is false: only `join` keeps a trailing separator. */
+function foldJoin(args, joins = true) {
+  // `join()` reads a leading separator as a plain segment; `resolve()` restarts at the filesystem root.
+  const folded = foldSegments(joins ? args.map((arg, i) => (i > 0 && arg.k === 'str' ? str(arg.v.replace(/^\/+/, '')) : arg)) : args);
+  if (folded.k !== 'path' || folded.partial) return folded;
+  const last = args.at(-1);
+  const sep = joins && (args.length === 1 ? folded.sep === true : last.k === 'str' && last.v.endsWith('/'));
+  return { ...folded, sep };
+}
+
+function foldSegments(args) {
   if (args.length === 0) return UNKNOWN;
   let acc = args[0];
   if (acc.k === 'str' && acc.v.startsWith('/')) acc = EXTERNAL;
@@ -475,10 +515,36 @@ function importsNamed(tokens, match, name, accepts) {
  * 'readdirSync')`). What such a module then returns is the test's to decide,
  * so nothing is inferred from a call to it.
  */
-function mocksModule(tokens, accepts, members) {
-  return tokens.some((token, i) => (token.t === 's' && members.includes(token.v))
-    || (isWord(token, 'mock', 'doMock') && isPunct(tokens[i - 1], '.') && isPunct(tokens[i + 1], '(') && tokens[i + 2]?.t === 's' && accepts(tokens[i + 2].v)));
+function mocksModule(tokens, match, accepts, members) {
+  // A string, a template without holes, or either inside `import('…')`.
+  const texts = (token) => (token.t === 's' ? [token.v] : token.t === 'tpl' ? [token.quasis.join('')] : []);
+  return tokens.some((token, i) => {
+    if (texts(token).some((text) => members.includes(text))) return true;
+    if (!isWord(token, 'mock', 'doMock') || !isPunct(tokens[i - 1], '.') || !isPunct(tokens[i + 1], '(') || match[i + 1] === undefined) return false;
+    const [first] = listRanges(tokens, match, i + 1);
+    return first !== undefined && tokens.slice(first[0], first[1]).flatMap(texts).some(accepts);
+  });
 }
+
+/**
+ * Which of the three trusted sources a file replaces: node's `fs` (a
+ * directory listing), `crypto` (`randomUUID`) and the `pathWithin` guard.
+ * Pure; `createTestMemoAnalyzer` asks it of the workspace setup files too,
+ * whose mocks apply to every test.
+ */
+export function replacedSources(src, fileRel) {
+  let tokens;
+  try { tokens = tokenize(src, new Set(), { jsx: !/\.[cm]?ts$/.test(fileRel) }); } catch { return { fs: true, crypto: true, guard: true }; }
+  const match = matchBrackets(tokens);
+  return {
+    fs: mocksModule(tokens, match, (spec) => FS_MODULES.has(spec), [...READDIR_CALLEES]),
+    crypto: mocksModule(tokens, match, isCryptoModule, ['randomUUID']),
+    guard: mocksModule(tokens, match, (spec) => isGuardModule(fileRel, spec), ['pathWithin']),
+  };
+}
+const isCryptoModule = (spec) => spec === 'crypto' || spec === 'node:crypto';
+/** `spec`, written in `fileRel`, names the guard module, with or without its extension. */
+const isGuardModule = (fileRel, spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)).replace(/\.js$/, '') === PATH_WITHIN_MODULE.replace(/\.js$/, '');
 
 /**
  * `pathWithin(dir, ...segments)`: the call throws unless the joined path is
@@ -491,7 +557,7 @@ function guardedJoin(args) {
   if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
   if (!segments.every((segment) => segment.k === 'str')) return partialPath({ ...dir, isDir: true }, dir.v, CONTAINED);
   // `join()` semantics: a leading separator is a plain segment.
-  return segments.reduce((path, segment) => appendPath(path, segment.v), dir);
+  return segments.reduce((path, segment) => joinPath(path, str(segment.v.replace(/^\/+/, ''))), dir);
 }
 
 function evaluateArgs(tokens, match, open, ctx, depth) {
@@ -521,20 +587,20 @@ function evaluate(tokens, match, start, ctx, depth = 0) {
     end = rhs.end;
   }
   // `name && other`, `name ? a : b`, `name[0]`, `name.replace(…)`: what follows decides the value, so a
-  // listed name or a variable with known values is no longer either. (A path keeps the older reading:
-  // an input either way.)
+  // literal, a listed name or a variable with known values is no longer what it was. (A path keeps the
+  // older reading: an input either way.)
   const next = tokens[end];
   const continues = next !== undefined && (next.t === 'p' ? ![',', ';', ')', ']', '}'].includes(next.v) : next.t === 'id' && (next.v === 'in' || next.v === 'instanceof'));
-  return { value: continues && isVariableText(value) ? UNKNOWN : value, end };
+  return { value: continues && (isVariableText(value) || value.k === 'str') ? UNKNOWN : value, end };
 }
 
 const closeOf = (match, open) => (match[open] ?? open) + 1;
 /**
  * The value of a parenthesized expression or a template hole that was
- * evaluated up to `end`. `(name, other)` is `other`, so a listed name or a
- * resolvable variable that is not the whole of it is neither.
+ * evaluated up to `end`. `(name, other)` is `other`, so a literal, a listed
+ * name or a resolvable variable that is not the whole of it is none of them.
  */
-const wholeValue = ({ value, end }, close) => (end !== close && isVariableText(value) ? UNKNOWN : value);
+const wholeValue = ({ value, end }, close) => (end !== close && (isVariableText(value) || value.k === 'str') ? UNKNOWN : value);
 
 function evaluatePostfix(tokens, match, start, ctx, depth) {
   let { value, end } = evaluatePrimary(tokens, match, start, ctx, depth);
@@ -549,7 +615,7 @@ function evaluatePostfix(tokens, match, start, ctx, depth) {
     if (call && value.k === 'unknown' && (PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name))) {
       // `path.join(...)`, `posix.resolve(...)`, `url.fileURLToPath(...)`: a module namespace receiver.
       const args = evaluateArgs(tokens, match, open, ctx, depth) ?? [];
-      value = PATH_JOIN.has(name) ? foldJoin(args) : PATH_DIRNAME.has(name) ? dirnameValue(args[0] ?? UNKNOWN) : (args[0] ?? UNKNOWN);
+      value = PATH_JOIN.has(name) ? foldJoin(args, name === 'join') : PATH_DIRNAME.has(name) ? dirnameValue(args[0] ?? UNKNOWN) : (args[0] ?? UNKNOWN);
       end = closeOf(match, open);
       continue;
     }
@@ -609,7 +675,7 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
     if (['tmpdir', 'mkdtempSync', 'mkdtemp'].includes(token.v)) return { value: EXTERNAL, end };
     const args = evaluateArgs(tokens, match, start + 1, ctx, depth);
     if (args === null) return { value: UNKNOWN, end };
-    if (PATH_JOIN.has(token.v)) return { value: foldJoin(args), end };
+    if (PATH_JOIN.has(token.v)) return { value: foldJoin(args, token.v === 'join'), end };
     if (PATH_DIRNAME.has(token.v)) return { value: dirnameValue(args[0] ?? UNKNOWN), end };
     if (PATH_IDENTITY.has(token.v)) return { value: args[0] ?? UNKNOWN, end };
     if (token.v === 'URL') return { value: urlValue(args), end };
@@ -643,8 +709,8 @@ const ARRAY_ITERATORS = new Set([...ELEMENT_CALLBACKS, 'reduce', 'reduceRight'])
  */
 const ARRAY_READS = new Set([...ARRAY_ITERATORS, 'length', 'includes', 'indexOf', 'lastIndexOf', 'join', 'slice', 'at', 'concat',
   'entries', 'keys', 'values', 'toString', 'flat', 'toSorted', 'toReversed', 'toSpliced', 'with']);
-/** Callees that only read an array handed to them. */
-const ARRAY_READERS = new Set(['each', 'expect', 'Set', 'from', 'freeze', 'isArray', 'stringify', 'toEqual', 'toStrictEqual', 'toContain', 'arrayContaining']);
+/** Matchers that compare against an array handed to them. */
+const ARRAY_MATCHERS = new Set(['toEqual', 'toStrictEqual', 'toContain', 'arrayContaining']);
 const READDIR_CALLEES = new Set(['readdirSync', 'readdir']);
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises']);
 const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
@@ -775,7 +841,7 @@ function createScopes(ctx) {
       return expression ? { kind: 'other' } : { kind: 'named', nameToken };
     }
     if (isPunct(prev, '=') && arr[before - 1]?.t === 'id' && isWord(arr[before - 2], 'const', 'let', 'var')) {
-      return isWord(arr[before - 3], 'export') ? { kind: 'other' } : { kind: 'named', nameToken: arr[before - 1] };
+      return isWord(arr[before - 3], 'export') ? { kind: 'other' } : { kind: 'named', nameToken: arr[before - 1], constant: isWord(arr[before - 2], 'const') };
     }
     return isPunct(prev, '(', ',') ? { kind: 'callback', arr, m, at: before } : { kind: 'other' };
   };
@@ -803,8 +869,15 @@ function createScopes(ctx) {
     for (let i = 0; i < arr.length; i += 1) {
       const token = arr[i];
       if (isWord(token, 'const', 'let', 'var')) {
-        if (arr[i + 1]?.t === 'id') declare(arr[i + 1]);
-        else if (isPunct(arr[i + 1], '{', '[') && m[i + 1] !== undefined) boundNames(arr, m, i + 2, m[i + 1]).forEach(declare);
+        // Every declarator: `const a = 1, readdirSync = fake` declares the second name too.
+        for (let at = i + 1; ;) {
+          if (arr[at]?.t === 'id') declare(arr[at]);
+          else if (isPunct(arr[at], '{', '[') && m[at] !== undefined) boundNames(arr, m, at + 1, m[at]).forEach(declare);
+          else break;
+          const end = expressionEnd(arr, m, at);
+          if (!isPunct(arr[end], ',')) break;
+          at = end + 1;
+        }
       } else if (isWord(token, 'class') && arr[i + 1]?.t === 'id') declare(arr[i + 1]);
       else if (isWord(token, 'function') && !isPunct(arr[i - 1], '.', '?.')) {
         let open = isPunct(arr[i + 1], '*') ? i + 2 : i + 1;
@@ -819,7 +892,8 @@ function createScopes(ctx) {
         const head = open ?? i - 1;
         const extent = bodyExtent(arr, m, arr[head].i, i + 1);
         const role = roleOf(arr, m, head);
-        if (role.kind === 'named') {
+        // A `let` can be given another function later, so only a `const` arrow has a known parameter list.
+        if (role.kind === 'named' && role.constant) {
           arrowArity.set(role.nameToken.v, arrowArity.has(role.nameToken.v) ? Infinity : parameterCount(arr, m, open));
           ownDeclarations.set(role.nameToken.v, 1);
         }
@@ -864,14 +938,29 @@ function createScopes(ctx) {
       if (own) ownDeclarations.set(local.v, 1);
     }
   };
+  /** An import is a declaration of its local names; the ones this pass trusts are trusted as that import. */
+  const TRUSTED_IMPORTS = { vitest: ['it', 'test', 'describe', 'expect'], crypto: ['randomUUID'], 'node:crypto': ['randomUUID'] };
+  const importLocal = (token, imported, spec) => {
+    declare(token);
+    const trusted = TRUSTED_IMPORTS[spec] ?? (isGuardModule(ctx.fileRel, spec) ? ['pathWithin'] : []);
+    if (token.v === imported && trusted.includes(imported)) ownDeclarations.set(token.v, 1);
+  };
   for (let i = 0; i < main.length; i += 1) {
     if (isWord(main[i], 'import') && !isPunct(main[i + 1], '(', '.')) {
       let from = i + 1;
       while (from < main.length && !isWord(main[from], 'from') && !isPunct(main[from], ';')) from = isPunct(main[from], '{') && ctx.match[from] !== undefined ? ctx.match[from] + 1 : from + 1;
-      if (!isWord(main[from], 'from') || !fromFs(main[from + 1])) continue;
+      if (!isWord(main[from], 'from') || main[from + 1]?.t !== 's') continue;
+      const spec = main[from + 1].v;
       for (let at = i + 1; at < from; at += 1) {
-        if (isPunct(main[at], '{') && ctx.match[at] !== undefined) { addFsNames(at, 'as', false); at = ctx.match[at]; }
-        else if (main[at].t === 'id' && main[at].v !== 'as') fsNamespaces.add(main[at].v); // a default import, or the name after `* as`
+        if (isPunct(main[at], '{') && ctx.match[at] !== undefined) {
+          for (const [a, b] of listRanges(main, ctx.match, at)) if (main[b - 1]?.t === 'id' && main[a]?.t === 'id') importLocal(main[b - 1], main[a].v, spec);
+          if (fromFs(main[from + 1])) addFsNames(at, 'as', true);
+          at = ctx.match[at];
+        } else if (main[at].t === 'id' && main[at].v !== 'as') {
+          // A default import, or the name after `* as`.
+          importLocal(main[at], 'default', spec);
+          if (fromFs(main[from + 1])) { fsNamespaces.add(main[at].v); ownDeclarations.set(main[at].v, 1); }
+        }
       }
     } else if (isWord(main[i], 'const', 'let', 'var')) {
       const pattern = isPunct(main[i + 1], '{') && ctx.match[i + 1] !== undefined;
@@ -882,8 +971,14 @@ function createScopes(ctx) {
       else if (main[i + 1]?.t === 'id') { fsNamespaces.add(main[i + 1].v); ownDeclarations.set(main[i + 1].v, 1); }
     }
   }
-  // A file that mocks fs, or spies on its readdir, decides what a listing returns.
-  if (mocksModule(main, (spec) => FS_MODULES.has(spec), [...READDIR_CALLEES])) { listers.clear(); fsNamespaces.clear(); }
+  // A file that mocks fs, or spies on its readdir, decides what a listing returns; so does one that
+  // writes to the namespace object or hands it on (`fs.readdirSync = fake`, `Object.assign(fs, …)`).
+  if (ctx.replaced.fs) { listers.clear(); fsNamespaces.clear(); }
+  for (const name of [...fsNamespaces]) {
+    const intact = arrays.every(({ arr }) => arr.every((use, at) => use.t !== 'id' || use.v !== name || isPunct(arr[at - 1], '.', '?.') || isWord(arr[at - 1], 'import', 'as', 'const', 'let', 'var')
+      || (isPunct(arr[at + 1], '.') && arr[at + 2]?.t === 'id' && !assignsAt(arr, at + 3))));
+    if (!intact) fsNamespaces.delete(name);
+  }
   /** True when `name` is bound anywhere in the file beyond the declaration its trusted meaning comes from: a use may then mean something else. */
   const shadowed = (name) => binders.has(name) || (declared.get(name) ?? []).length > (ownDeclarations.get(name) ?? 0);
   /** True when the call whose callee ends at `callee` (a dotted path from `head`) is node's readdir. */
@@ -896,12 +991,13 @@ function createScopes(ctx) {
   /** True when `arr[at]` is written: assigned, updated, or a target of a destructuring assignment. */
   const writesTo = (arr, m, at) => {
     if (isPunct(arr[at - 1], '.', '?.')) return false; // a property of that name
-    if (assignsAt(arr, at + 1) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--')) return true;
+    let after = at + 1;
+    while (isPunct(arr[after], ')')) after += 1; // `(p) = other`
+    if (assignsAt(arr, after) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--')) return true;
+    // `for (p of rows)`: the head assigns on every turn.
+    if (isWord(arr[at + 1], 'of', 'in') && !isWord(arr[at - 1], 'const', 'let', 'var') && inForHead(arr, m, at)) return true;
     // `({ p } = other)`, `[p] = other`: the pattern closes before the `=`.
-    for (let open = enclosingOpen(arr, m, at); open !== null && isPunct(arr[open], '{', '['); open = enclosingOpen(arr, m, open)) {
-      if (assignsAt(arr, m[open] + 1)) return true;
-    }
-    return false;
+    return inAssignedPattern(arr, m, at);
   };
   /** True when `name` is written at a source offset `inside` accepts, other than at the token `declaration`. */
   const writtenIn = (name, inside, declaration = null) => arrays.some(({ arr, m }) => arr.some((use, at) => use.t === 'id' && use.v === name && use !== declaration && inside(use.i) && writesTo(arr, m, at)));
@@ -959,9 +1055,52 @@ function createScopes(ctx) {
     } else return null;
     while (domain !== null && i < to) {
       if (!isPunct(arr[i], '.', '?.') || arr[i + 1]?.t !== 'id' || !ELEMENT_PRESERVING.has(arr[i + 1].v) || !isPunct(arr[i + 2], '(') || m[i + 2] === undefined) return null;
+      // A filter callback is handed the array and can replace an element it has not reached yet.
+      if (arr[i + 1].v === 'filter' && !callbackIsBlind(arr, m, i + 3)) return null;
       i = m[i + 2] + 1;
     }
     return domain;
+  };
+
+  /**
+   * True when the callback at `start` (an iteration method's first argument) cannot reach the array
+   * it is handed after the index: an arrow with at most `limit` parameters, written inline or
+   * declared once as a `const` in this file. A `function` has `arguments`.
+   */
+  const callbackIsBlind = (arr, m, start, limit = 2) => {
+    let at = start;
+    if (isWord(arr[at], 'async')) at += 1;
+    const count = isPunct(arr[at], '(') && m[at] !== undefined && isPunct(arr[m[at] + 1], '=>') ? parameterCount(arr, m, at)
+      : arr[at]?.t === 'id' && isPunct(arr[at + 1], '=>') ? 1
+        : arr[at]?.t === 'id' && isPunct(arr[at + 1], ')') && !shadowed(arr[at].v) ? (arr[at].v === 'Boolean' ? 1 : arrowArity.get(arr[at].v) ?? Infinity)
+          : Infinity;
+    return count <= limit;
+  };
+  /** True when `arr[at]` is directly inside the parentheses of a `for` head. */
+  const inForHead = (arr, m, at) => {
+    const open = enclosingOpen(arr, m, at);
+    return open !== null && isPunct(arr[open], '(') && (isWord(arr[open - 1], 'for') || (isWord(arr[open - 1], 'await') && isWord(arr[open - 2], 'for')));
+  };
+  /** True when `arr[at]` sits in a pattern that is assigned to: `[a, names[0]] = pair`, `for ({ p } of rows)`. */
+  const inAssignedPattern = (arr, m, at) => {
+    for (let open = enclosingOpen(arr, m, at); open !== null && isPunct(arr[open], '{', '['); open = enclosingOpen(arr, m, open)) {
+      if (assignsAt(arr, m[open] + 1)) return true;
+      if (isWord(arr[m[open] + 1], 'of', 'in') && !isWord(arr[open - 1], 'const', 'let', 'var') && inForHead(arr, m, open)) return true;
+    }
+    return false;
+  };
+  /**
+   * The text of every string and template in the file. The tokenizer can take code for one (a regex
+   * literal it reads as division swallows what follows up to the next quote), and `eval` runs one: a
+   * use of a name that would change what is proven about it may be hiding there.
+   */
+  const stringText = arrays.flatMap(({ arr }) => arr.flatMap((token) => (token.t === 's' ? [token.v] : token.t === 'tpl' ? token.quasis : []))).join('\n');
+  const hiddenUse = (name, after) => new RegExp(`(?:^|[^\\w$.])${name.replace(/[$]/g, '\\$&')}\\s*(?:${after})`).test(stringText);
+  /** True when the dotted callee ending at `arr[at]` hangs off the test API: `it.each`, `describe.skip.each`. */
+  const onTestApi = (arr, at) => {
+    let root = at;
+    while (isPunct(arr[root - 1], '.') && arr[root - 2]?.t === 'id') root -= 2;
+    return isWord(arr[root], 'it', 'test', 'describe') && !shadowed(arr[root].v);
   };
 
   /** The elements of a module-level `const` array, when nothing in the file can add one to it. */
@@ -969,11 +1108,15 @@ function createScopes(ctx) {
     const name = token.v;
     const start = ctx.bindings.get(name);
     // One declaration of the name in the whole file: an inner `const { NAMES } = row` would be another array.
-    if (start === undefined || binderAt(name, token.i) !== null || !isWord(ctx.tokens[start - 3], 'const') || (declared.get(name) ?? []).length !== 1) return null;
-    const frozen = isWord(ctx.tokens[start], 'Object') && isWord(ctx.tokens[start + 2], 'freeze');
+    if (start === undefined || binders.has(name) || !isWord(ctx.tokens[start - 3], 'const') || (declared.get(name) ?? []).length !== 1) return null;
+    const end = expressionEnd(ctx.tokens, ctx.match, start);
+    // `Object.freeze([...])` as the whole initializer: `Object.freeze([...]).slice()` is an unfrozen copy.
+    const frozen = isWord(ctx.tokens[start], 'Object') && isPunct(ctx.tokens[start + 1], '.') && isWord(ctx.tokens[start + 2], 'freeze') && isPunct(ctx.tokens[start + 3], '(')
+      && ctx.match[start + 3] === end - 1 && !shadowed('Object');
     // A frozen array cannot change. Any other must only be read: an export or an alias can reach `push()`.
-    if (!frozen && (isWord(ctx.tokens[start - 4], 'export') || !arrays.every(({ arr, m }) => arr.every((use, at) => use.t !== 'id' || use.v !== name || use === ctx.tokens[start - 2] || readsArray(arr, m, at))))) return null;
-    return elementsOf(ctx.tokens, ctx.match, start, expressionEnd(ctx.tokens, ctx.match, start), depth + 1);
+    if (!frozen && (isWord(ctx.tokens[start - 4], 'export') || hiddenUse(name, '\\??\\.|\\[|\\)')
+      || !arrays.every(({ arr, m }) => arr.every((use, at) => use.t !== 'id' || use.v !== name || use === ctx.tokens[start - 2] || readsArray(arr, m, at))))) return null;
+    return elementsOf(ctx.tokens, ctx.match, start, end, depth + 1);
   };
   const readsArray = (arr, m, at) => {
     const prev = arr[at - 1];
@@ -982,26 +1125,33 @@ function createScopes(ctx) {
     if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
     if (isPunct(next, '.', '?.')) {
       const method = arr[at + 2];
-      if (method?.t !== 'id' || !ARRAY_READS.has(method.v)) return false;
-      const open = at + 3;
+      // A method that only reads, and is not replaced (`NAMES.map = other`).
+      if (method?.t !== 'id' || !ARRAY_READS.has(method.v) || assignsAt(arr, at + 3)) return false;
+      const open = isPunct(arr[at + 3], '?.') ? at + 4 : at + 3; // `NAMES.forEach?.(cb)`
       if (!ARRAY_ITERATORS.has(method.v) || !isPunct(arr[open], '(') || m[open] === undefined) return true;
-      // `names.forEach((name, i, all) => all.push(x))`: the callback is handed the array. Only an arrow that
-      // declares no such parameter is known not to write to it (an arrow has no `arguments` either).
-      let start = open + 1;
-      if (isWord(arr[start], 'async')) start += 1;
-      const inline = isPunct(arr[start], '(') && m[start] !== undefined && isPunct(arr[m[start] + 1], '=>') ? parameterCount(arr, m, start)
-        : arr[start]?.t === 'id' && isPunct(arr[start + 1], '=>') ? 1
-          : arr[start]?.t === 'id' && isPunct(arr[start + 1], ')') && !shadowed(arr[start].v) ? arrowArity.get(arr[start].v) ?? Infinity
-            : Infinity;
-      return inline <= (method.v.startsWith('reduce') ? 3 : 2);
+      // `names.forEach((name, i, all) => all.push(x))`: the callback is handed the array.
+      return callbackIsBlind(arr, m, open + 1, method.v.startsWith('reduce') ? 3 : 2);
     }
     if (isPunct(next, '[') && m[at + 1] !== undefined) {
-      // `NAMES[0] = x` and `NAMES[0] += x` write an element; `NAMES[0] === x` does not.
-      return !assignsAt(arr, m[at + 1] + 1);
+      // One element, read: not called (`NAMES['push'](x)`), not written (`NAMES[0] = x`, `NAMES[0] += x`,
+      // `[NAMES[0]] = pair`, `for (NAMES[0] of xs)`). `NAMES[0] === x` is a read.
+      const after = m[at + 1] + 1;
+      return !isPunct(arr[after], '(', '?.', '++', '--') && !isPunct(prev, '++', '--') && !isWord(arr[after], 'of', 'in')
+        && !assignsAt(arr, after) && !inAssignedPattern(arr, m, at);
     }
     if (isPunct(prev, '(', ',') && isPunct(next, ')', ',')) {
+      // Handed to something that only reads it: `expect(NAMES)`, `new Set(NAMES)`, `Array.from(NAMES)`,
+      // `Object.freeze(NAMES)`, `JSON.stringify(NAMES)`, `it.each(NAMES)`, a matcher.
       const open = enclosingOpen(arr, m, at);
-      return open !== null && isPunct(arr[open], '(') && ARRAY_READERS.has(calleeName(arr, open) ?? '');
+      const callee = open !== null && isPunct(arr[open], '(') ? arr[open - 1] : null;
+      // Alone: a second argument can be a callback that is handed the array, or bound to it as `this`.
+      if (callee?.t !== 'id' || listRanges(arr, m, open).length !== 1) return false;
+      if (!isPunct(arr[open - 2], '.')) return !shadowed(callee.v) && (callee.v === 'expect' || (callee.v === 'Set' && isWord(arr[open - 2], 'new')));
+      const owner = arr[open - 3];
+      const global = (name) => isWord(owner, name) && !isPunct(arr[open - 4], '.', '?.') && !shadowed(name);
+      return (callee.v === 'each' && onTestApi(arr, open - 1)) || ARRAY_MATCHERS.has(callee.v)
+        || (global('Array') && (callee.v === 'from' || callee.v === 'isArray'))
+        || (global('Object') && callee.v === 'freeze') || (global('JSON') && callee.v === 'stringify');
     }
     return false;
   };
@@ -1018,6 +1168,8 @@ function createScopes(ctx) {
         const before = arr[i - 1];
         // A call or an index continues leftwards to its callee; a parenthesized head or an array literal starts here.
         if (isPunct(before, ')', ']') || (before?.t === 'id' && !OPERAND_KEYWORDS.has(before.v))) { i -= 1; continue; }
+        // After `}` or a literal, with no semicolon between, this is an index into what came before.
+        if (isPunct(before, '}') || ['s', 'n', 'tpl', 're'].includes(before?.t)) return null;
         return i;
       }
       if (token.t !== 'id') return null;
@@ -1050,7 +1202,7 @@ function createScopes(ctx) {
   /** Every value parameter `index` of the function named by `nameToken` is called with, or null when a use is not a plain call. */
   const callSiteDomain = (nameToken, index) => {
     const name = nameToken.v;
-    if ((declared.get(name) ?? []).length !== 1 || binders.has(name)) return null;
+    if ((declared.get(name) ?? []).length !== 1 || binders.has(name) || hiddenUse(name, '[(`.]|\\?\\.')) return null;
     const parts = [];
     for (const { arr, m } of arrays) {
       for (let at = 0; at < arr.length; at += 1) {
@@ -1061,7 +1213,8 @@ function createScopes(ctx) {
         if (isPunct(prev, '.', '?.') || (isPunct(next, ':') && isPunct(prev, '{', ','))) continue; // another object's property
         if (isPunct(next, '(') && m[at + 1] !== undefined) parts.push(argumentDomain(arr, m, at + 1, index));
         else if (index === 0 && isPunct(prev, '(') && isPunct(next, ')') && arr[at - 2]?.t === 'id' && ELEMENT_CALLBACKS.has(arr[at - 2].v) && isPunct(arr[at - 3], '.', '?.')) {
-          // `NAMES.map(read)`: called with each element.
+          // `NAMES.map(read)`: called with each element, and with the array, which it must not be able to take.
+          if (!callbackIsBlind(arr, m, at)) return null;
           const start = operandStart(arr, m, at - 3);
           parts.push(start === null ? null : elementsOf(arr, m, start, at - 3));
         } else return null; // exported, aliased, stored or handed on: its callers are not all in view
@@ -1079,14 +1232,13 @@ function createScopes(ctx) {
     const position = listRanges(arr, m, open).findIndex(([from, to]) => from <= at + 1 && at + 1 < to);
     const callee = arr[open - 1];
     if (position === 0 && callee?.t === 'id' && ELEMENT_CALLBACKS.has(callee.v) && isPunct(arr[open - 2], '.', '?.')) {
-      const start = operandStart(arr, m, open - 2);
+      // The callback is handed the array too, and could replace an element it has not been called with yet.
+      const start = callbackIsBlind(arr, m, at + 1) ? operandStart(arr, m, open - 2) : null;
       return start === null ? null : elementsOf(arr, m, start, open - 2);
     }
     // `it.each(TABLE)('title', (row) => …)`: one call per row; a row that is itself an array is spread, and is no string.
-    if (position >= 1 && isPunct(callee, ')') && m[open - 1] !== undefined && isWord(arr[m[open - 1] - 1], 'each')) {
-      let root = m[open - 1] - 1;
-      while (isPunct(arr[root - 1], '.') && arr[root - 2]?.t === 'id') root -= 2; // `it.skip.each`, `describe.each`
-      if (isWord(arr[root], 'it', 'test', 'describe') && !shadowed(arr[root].v)) return elementsOf(arr, m, m[open - 1] + 1, open - 1);
+    if (position >= 1 && isPunct(callee, ')') && m[open - 1] !== undefined && isWord(arr[m[open - 1] - 1], 'each') && onTestApi(arr, m[open - 1] - 1)) {
+      return elementsOf(arr, m, m[open - 1] + 1, open - 1);
     }
     return null;
   };
@@ -1100,14 +1252,17 @@ function createScopes(ctx) {
     const ambiguous = binders.get(binder.name).some((other) => other !== binder && (inside(other.from) || (other.from <= binder.from && binder.from < other.to)))
       || (declared.get(binder.name) ?? []).some(inside);
     // `p = other()`, `p++` or `({ p } = other)` in the body: the variable no longer holds what it was given.
-    if (ambiguous || writtenIn(binder.name, inside)) return null;
+    // `arguments[0] = x` rebinds a parameter in a sloppy-mode script, and `eval` can do anything.
+    const rewritten = writtenIn(binder.name, inside) || arrays.some(({ arr }) => arr.some((token) => isWord(token, 'arguments', 'eval') && inside(token.i)))
+      || hiddenUse(binder.name, '=(?!=)|\\+\\+|--|[-+*/%|&^?]{1,3}=|\\)\\s*=(?!=)');
+    if (ambiguous || rewritten) return null;
     if (binder.kind === 'loop') binder.domain = elementsOf(binder.iter.arr, binder.iter.m, binder.iter.from, binder.iter.to);
     else if (binder.kind === 'param' && binder.role.kind === 'named') binder.domain = callSiteDomain(binder.role.nameToken, binder.index);
     else if (binder.kind === 'param' && binder.role.kind === 'callback') binder.domain = callbackDomain(binder.role, binder.index);
     return binder.domain;
   };
 
-  return { binderAt, domainOf, writtenIn, shadowed, declaredTwice: (name) => (declared.get(name) ?? []).length > 1 };
+  return { binderAt, domainOf, writtenIn, shadowed, declaredTwice: (name) => (declared.get(name) ?? []).length > 1, hasBinder: (name) => binders.has(name) };
 }
 
 /**
@@ -1139,26 +1294,33 @@ function bindingValue(name, ctx, depth = 0) {
   // `let name = 'a.json'` that is assigned again is not the literal it started as. (A path keeps the
   // older reading: its first value is an input either way.)
   ctx.shared.scopes ??= createScopes(ctx.shared.root);
-  // Nor is it when an inner scope declares the name again (`const { name } = row`): which one a use means is not modelled.
-  const rebound = (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name)
-    || (!isWord(ctx.tokens[bound - 3], 'const') && ctx.shared.scopes.writtenIn(name, () => true, ctx.tokens[bound - 2])));
+  // Nor is it when another scope declares the name again (`const { name } = row`, an import) or binds it
+  // as a parameter or loop variable: which one a use means is scoping this pass models only roughly.
+  const declarator = ctx.tokens[bound - 2];
+  const constant = isWord(ctx.tokens[bound - 3], 'const');
+  const rebound = (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name) || ctx.shared.scopes.hasBinder(name)
+    || (!constant && ctx.shared.scopes.writtenIn(name, () => true, declarator)));
   const value = rebound ? UNKNOWN : initial;
   ctx.bindingValues.set(name, value);
   return value;
 }
 
 /** `const|let|var NAME =` initializers by name; a name bound twice is ambiguous and dropped. */
-function collectBindings(tokens) {
+function collectBindings(tokens, match) {
   const bindings = new Map();
   const seen = new Set();
   for (let i = 0; i + 3 < tokens.length; i += 1) {
     const token = tokens[i];
     if (token.t !== 'id' || !(token.v === 'const' || token.v === 'let' || token.v === 'var')) continue;
-    const name = tokens[i + 1];
-    if (name.t !== 'id' || tokens[i + 2].t !== 'p' || tokens[i + 2].v !== '=') continue;
-    if (seen.has(name.v)) { bindings.delete(name.v); continue; }
-    seen.add(name.v);
-    bindings.set(name.v, i + 3);
+    // Every declarator: `const a = 1, file = join(HERE, name)` binds `file` too.
+    for (let at = i + 1; tokens[at]?.t === 'id' && isPunct(tokens[at + 1], '=');) {
+      const name = tokens[at];
+      if (seen.has(name.v)) bindings.delete(name.v);
+      else { seen.add(name.v); bindings.set(name.v, at + 2); }
+      const end = expressionEnd(tokens, match, at + 2);
+      if (!isPunct(tokens[end], ',')) break;
+      at = end + 1;
+    }
   }
   return bindings;
 }
@@ -1256,7 +1418,7 @@ function widestPathExpression(tokens, match, index, guarded = false) {
  * module edges, path inputs, directory inputs, cwd-relative literals, and the
  * reasons it fails closed. Pure.
  */
-export function extractFileFacts(src, { fileRel, cwdRel }) {
+export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
     paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
@@ -1279,12 +1441,12 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     return facts;
   }
   const match = matchBrackets(tokens);
-  const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens), bindingValues: new Map(), resolving: new Set(),
-  };
-  const isGuardModule = (spec) => spec.startsWith('.') && normalizeRel(posix.join(posix.dirname(fileRel), spec)) === PATH_WITHIN_MODULE;
-  const isCrypto = (spec) => spec === 'crypto' || spec === 'node:crypto';
-  ctx.guarded = importsNamed(tokens, match, 'pathWithin', isGuardModule) && !mocksModule(tokens, isGuardModule, ['pathWithin']);
-  ctx.uuid = importsNamed(tokens, match, 'randomUUID', isCrypto) && !mocksModule(tokens, isCrypto, ['randomUUID']);
+  const ctx = { fileRel, cwdRel, tokens, match, bindings: collectBindings(tokens, match), bindingValues: new Map(), resolving: new Set() };
+  // A source this file or the workspace setup (`replaced`) mocks is trusted for nothing.
+  const own = replacedSources(src, fileRel);
+  ctx.replaced = { fs: own.fs || replaced?.fs === true, crypto: own.crypto || replaced?.crypto === true, guard: own.guard || replaced?.guard === true };
+  ctx.guarded = !ctx.replaced.guard && importsNamed(tokens, match, 'pathWithin', (spec) => isGuardModule(fileRel, spec) && spec.endsWith('.js'));
+  ctx.uuid = !ctx.replaced.crypto && importsNamed(tokens, match, 'randomUUID', isCryptoModule);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
   ctx.shared = { root: ctx, scopes: undefined };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
@@ -1335,7 +1497,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     const combinations = value.k === 'path' && value.partial && value.open ? variableCombinations(value.vars) : null;
     // `a\\b` is one name on POSIX and two segments on Windows, and `C:` is a drive there: no single file to key.
     if (combinations === null || combinations.some((chosen) => [...chosen.values()].some((text) => /\\|^[A-Za-z]:/.test(text)))) return [value];
-    return combinations.map((chosen) => evaluate(tokens, match, index, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value);
+    // `resolved`: a path with a variable part is a read whoever consumes it, and stays one with the variable filled in.
+    return combinations.map((chosen) => ({ ...evaluate(tokens, match, index, { ...ctx, overrides: chosen, bindingValues: new Map(), resolving: new Set() }).value, resolved: true }));
   };
 
   const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
@@ -1359,7 +1522,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // A complete directory handed to an unknown function (`resolveInstallRoot(join(__dirname, '..'))`)
       // or passed nowhere (`cwd || process.cwd()`) is a value. A partial path (variable
       // segments) or a directory handed to a read/spawn sink is a read of that tree.
-      const read = value.partial || (consumer !== null && (READ_CALLEES.has(consumer) || SPAWN_CALLEES.has(consumer)));
+      const read = value.partial || value.resolved === true || (consumer !== null && (READ_CALLEES.has(consumer) || SPAWN_CALLEES.has(consumer)));
       if (!read) {
         // `resolveClientBundler(repoRoot)` resolves the client workspace's bundler packages.
         if (consumer === 'resolveClientBundler') facts.handedDirs.push(normalizeRel(posix.join(value.v, 'client/node_modules')));
@@ -1725,6 +1888,19 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return found;
   };
 
+  /** The sources the workspace's setup files mock for every test (`replacedSources`); asked once. */
+  let setupReplaced = null;
+  const replacedBySetup = () => {
+    if (setupReplaced !== null) return setupReplaced;
+    setupReplaced = { fs: false, crypto: false, guard: false };
+    for (const rel of WORKSPACE_SETUP_ENTRIES[workspaceRel] ?? []) {
+      const bytes = fs.read(rel);
+      const replaced = bytes === null ? null : replacedSources(bytes.toString('utf8'), rel);
+      for (const source of Object.keys(setupReplaced)) setupReplaced[source] ||= replaced?.[source] === true;
+    }
+    return setupReplaced;
+  };
+
   /** Extracted and resolved facts for one file (cached). */
   const factsFor = (rel) => {
     if (facts.has(rel)) return facts.get(rel);
@@ -1746,7 +1922,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const bytes = fs.read(rel);
     if (bytes === null) { resolved.unresolvedEdges.push('missing file'); resolved.unresolvedInputs.push('missing file'); return resolved; }
     if (!JS_EXT.test(rel)) { resolved.inputs.add(rel); return resolved; }
-    const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel });
+    const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel, replaced: replacedBySetup() });
     resolved.never = raw.never;
     resolved.git = raw.git;
     resolved.nativeUnresolved = raw.nativeUnresolved;
