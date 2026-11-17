@@ -371,6 +371,10 @@ export const runDatabasePhase = async ({ gate, migrate, warmStores, reconcilePro
  *      a cosmetic thumbnail pass must never delay the server accepting
  *      requests, while a script that won't even load is a real breakage and
  *      takes the fatal path.
+ *   7. Just before `startListening`, one log line reports each awaited phase's
+ *      milliseconds plus the time since process start, so a slow boot names its
+ *      slow phase. `now` is injected for the tests; it defaults to
+ *      `performance.now()`, whose origin is process start.
  *
  * Returns the chain's promise; a rejection anywhere in it is fatal.
  */
@@ -390,23 +394,31 @@ export const runPostRouteSequence = ({
   loadSeriesCoverBackfill,
   startListening,
   isStopping = () => false,
-  onFatal = () => process.exit(1)
+  onFatal = () => process.exit(1),
+  now = () => performance.now()
 }) => {
   if (isStopping()) return Promise.resolve();
   // An awaited boot step can settle after SIGTERM has closed the listeners
   // and quiesced workers. Never re-arm recovery or open a listener afterwards.
   const whileRunning = (step) => () => { if (!isStopping()) return step(); };
+  const phaseMs = [];
+  const timed = (name, step) => async () => {
+    const startedAt = now();
+    const result = await step();
+    phaseMs.push(`${name}=${Math.round(now() - startedAt)}`);
+    return result;
+  };
   startBackgroundServices();
 
   return Promise.resolve()
-    .then(whileRunning(ensureSelf))
-    .then(whileRunning(initSyncLog))
-    .then(whileRunning(() => {
+    .then(whileRunning(timed('self', ensureSelf)))
+    .then(whileRunning(timed('syncLog', initSyncLog)))
+    .then(whileRunning(timed('cloneRecovery', () => {
       bestEffort(recoverStuckClassifications(), logFailure('Brain recovery failed'));
       return bestEffort(recoverInterruptedRepoClones(), logFailure('Brain clone recovery failed'));
-    }))
-    .then(whileRunning(() => initMediaJobQueue({ deferCompletionRecovery: true })))
-    .then(whileRunning(() => bestEffort(initLoraTraining(), logFailure('loraTraining init failed'))))
+    })))
+    .then(whileRunning(timed('mediaQueue', () => initMediaJobQueue({ deferCompletionRecovery: true }))))
+    .then(whileRunning(timed('lora', () => bestEffort(initLoraTraining(), logFailure('loraTraining init failed')))))
     .then(whileRunning(initMediaJobDependentHooks))
     .then(whileRunning(() => {
       // Recovery may wait behind a backup cut; arm it without blocking boot.
@@ -423,13 +435,16 @@ export const runPostRouteSequence = ({
       // failure path (it must resolve the CD recovery gate either way).
       recoverCreativeDirectorProjects();
     }))
-    .then(whileRunning(databasePhase))
-    .then(whileRunning(async () => {
+    .then(whileRunning(timed('database', databasePhase)))
+    .then(whileRunning(timed('coverBackfillLoad', async () => {
       // Load awaited, run not — see point 6 above.
       const backfillSeriesCoverImages = await loadSeriesCoverBackfill();
       if (!isStopping()) bestEffort(backfillSeriesCoverImages(), logFailure('series cover backfill failed at boot'));
+    })))
+    .then(whileRunning(() => {
+      console.log(`⏱️  Boot phases (ms): ${phaseMs.join(' ')} — ${Math.round(now())}ms since process start`);
+      return startListening();
     }))
-    .then(whileRunning(startListening))
     .catch((err) => {
       if (isStopping()) return;
       console.error(`❌ Instance init failed: ${err.message}`);
@@ -444,10 +459,17 @@ export const runPostRouteSequence = ({
  * it completes would ship untagged records. The brain relay sweep (#8351) also
  * waits for the backfill, so the entries it appends carry the stamped origin;
  * it runs in the background because nothing after it reads its result.
+ *
+ * The media asset index sweep (#16556) starts right after the safety net and is
+ * never awaited: it re-reads every image and video on disk, which on a large
+ * library is the slowest part of boot. Until it finishes the gallery serves the
+ * previous boot's rows. Its completed-hooks were subscribed before `listen()`
+ * (the database phase), so nothing generated meanwhile is missed.
  */
 export const runPostListenSequence = ({
   announceListening,
   setupProcessErrorHandlers,
+  reconcileMediaAssetIndex,
   backfillOriginInstanceId,
   relayUnloggedBrainRecords,
   startPolling,
@@ -458,6 +480,7 @@ export const runPostListenSequence = ({
   if (isStopping()) return Promise.resolve();
   announceListening();
   setupProcessErrorHandlers();
+  bestEffort(reconcileMediaAssetIndex(), logFailure('Media asset index boot reconcile failed'));
   return bestEffort(
     Promise.resolve(backfillOriginInstanceId()).then(() => {
       if (isStopping()) return;
