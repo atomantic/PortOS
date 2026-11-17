@@ -901,9 +901,9 @@ export function resolveFamilyProvider(providers, family, measured = null) {
 }
 
 /**
- * True for a run whose usage is entirely its own request: a bounded API
- * completion (`services/apiCompletionRun.js` stamps `selfContainedUsage`). One
- * HTTP request writes no session file and cannot launch a CLI, so no transcript
+ * True for a bounded API completion or an ephemeral subscription text turn
+ * (`selfContainedUsage`). Neither writes a native session or launches nested
+ * agents, so no transcript
  * is read or claimed for it: not its own provider family's (an API record may
  * be called `grok-api`) and no nested one. The stamp does not depend on the
  * provider having reported counts; a run that got none keeps its estimate and
@@ -918,7 +918,7 @@ export const isSelfContainedRun = (run) => run?.selfContainedUsage === true;
  * counted once, as measured. Read from the record rather than passed alongside
  * it, so a later backfill of the same run sees the same numbers.
  */
-function reportedRunUsage(run) {
+export function reportedRunUsage(run) {
   const reported = run?.reportedUsage;
   if (!reported || typeof reported !== 'object' || Array.isArray(reported)) return null;
   const fields = {};
@@ -996,7 +996,8 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
       source: estimateSource ?? 'estimate',
-      ...(reported || {})
+      ...(reported || {}),
+      ...(run?.nativeUsageUnpersisted === true ? { nativeUsageUnpersisted: true } : {}),
     };
 
   const siblings = [];

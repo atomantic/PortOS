@@ -248,7 +248,7 @@ async function resolveExplicitFallback(provider) {
  * the same options mean.
  */
 async function callCodexSubscription(provider, model, prompt, {
-  statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal,
+  statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal, source, workspacePath,
 }) {
   if (Object.keys(provider.executionOptions || {}).length && ['CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'].some((key) => provider.envVars?.[key])) {
     throw executionOptionsError('This provider has a separate authentication environment; use its native Codex route for speed options.');
@@ -270,7 +270,7 @@ async function callCodexSubscription(provider, model, prompt, {
 
   if (!benched) {
     statusOp.update('provider:starting', 'Running through the ChatGPT subscription…', { providerId: provider.id });
-    const turn = await runCodexTextTurn({
+    const turnOptions = {
       prompt,
       model: model || provider.defaultModel || null,
       effort: provider.effort || null,
@@ -278,7 +278,11 @@ async function callCodexSubscription(provider, model, prompt, {
       timeoutMs: timeout,
       responseSchema,
       signal,
-    }).catch((err) => ({ error: err }));
+    };
+    const turn = await (getAIToolkitInstance()
+      ? runTrackedCodexTurn({ provider, source, workspacePath, turnOptions, runCodexTextTurn })
+      : asDirectProviderCall(() => runCodexTextTurn(turnOptions)))
+      .catch((err) => ({ error: err }));
 
     if (!turn.error) {
       if (turn.effortClamped) statusOp.update('model:corrected', turn.clampReason, { model: turn.model });
@@ -374,9 +378,9 @@ const reportedResetsAt = (readiness) => {
  * An API provider's call is a tracked run: it goes through
  * `promptRunner.runPromptThroughProvider` as a bounded completion, so it has a
  * run record, one usage session, and its reported token counts in the usage
- * ledger. Two legs are not runs: the ChatGPT subscription (its transcript
- * reconciler owns that bill) and a process with no AI toolkit (the local-review
- * bridge script has no run store), which sends the same request untracked.
+ * ledger. Subscription turns have the same lifecycle, with their ephemeral
+ * counts kept alongside native Codex history. Processes with no toolkit send
+ * requests untracked and never write the server-owned usage ledger.
  *
  * Pass `appId` and/or `workspacePath` when the call originates on behalf of a
  * managed app or CoS-agent workspace — the OpenWorld AI Core aims its activity
@@ -391,7 +395,7 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
 
 /**
  * Count `work` as a live direct provider call for as long as it runs. Only the
- * stretches no run record covers are counted this way (the subscription turn,
+ * stretches no run record covers are counted this way (a toolkit-less turn,
  * the readiness warm-up, an untracked request); a tracked run is counted by the
  * run registry, and counting it here too would show one request as two.
  */
@@ -421,20 +425,58 @@ async function runTrackedCompletion({ provider, model, prompt, source, temperatu
   });
 }
 
-/** The same request with no run store to record into (no AI toolkit in this process). */
+/** Record a bounded subscription turn without changing its transport/fallback contract. */
+async function runTrackedCodexTurn({ provider, source, workspacePath, turnOptions, runCodexTextTurn }) {
+  const { createRun, patchRunMetadata, registerActiveRun, unregisterActiveRun, emitRunStarted, finalizeRunRecord } = await import('./runner.js');
+  const { runOwnership } = await import('../lib/aiToolkit/internal/runOwnership.js');
+  const startTime = Date.now();
+  const { runId } = await createRun({
+    providerId: provider.id, provider, model: turnOptions.model, effort: turnOptions.effort,
+    prompt: turnOptions.prompt, source, allowFallback: false,
+    ...(workspacePath ? { workspacePath } : {}),
+  });
+  const controller = new AbortController();
+  const signal = anyAbortSignal([controller.signal, turnOptions.signal]);
+  let turn;
+  let failure;
+  try {
+    registerActiveRun(runId, controller);
+    await patchRunMetadata(runId, {
+      ...runOwnership('api'), selfContainedUsage: true,
+      // The transport's ephemeral thread writes no native rollout. Preserve
+      // these counts alongside the native history rather than replacing them.
+      nativeUsageUnpersisted: true,
+    });
+    emitRunStarted({ runId, provider, model: turnOptions.model });
+    turn = await runCodexTextTurn({ ...turnOptions, signal });
+  } catch (err) {
+    failure = err;
+  } finally {
+    unregisterActiveRun(runId);
+  }
+  const canceled = !!failure && (signal.aborted || classifyCodexTransportError(failure) === ERROR_CATEGORIES.CANCELED);
+  await finalizeRunRecord({
+    runId, output: turn?.text || '', startTime,
+    exitCode: failure ? 1 : 0, success: !failure, error: failure?.message,
+    reportFailure: false, onlyIfRecorded: true,
+    extras: {
+      ...(turn ? { model: turn.model ?? turnOptions.model, effort: turn.effort, effortClamped: turn.effortClamped, clampReason: turn.clampReason,
+        ...(turn.usage ? { reportedUsage: {
+          tokensIn: Math.max(0, turn.usage.inputTokens - (turn.usage.cachedInputTokens || 0)),
+          tokensOut: turn.usage.outputTokens, cacheReadTokens: turn.usage.cachedInputTokens || 0,
+        } } : {}),
+        ...(turn.executionOptions ? { executionOptions: turn.executionOptions } : {}) } : {}),
+      ...(canceled ? { canceled: true, completionReason: 'canceled' } : {}),
+    },
+  }).catch((err) => console.error(`❌ Run ${runId} could not be finalized: ${err.message}`));
+  if (failure) throw failure;
+  return turn;
+}
+
+/** No toolkit means no run store or ledger ownership in this process. */
 async function runUntrackedCompletion(request) {
   const { runChatCompletion } = await import('./chatCompletionExchange.js');
-  const result = await runChatCompletion(request);
-  if (result.reportedUsage) {
-    // Ledger failure must not fail the completion.
-    void import('./usage.js').then(({ recordRunUsage }) => recordRunUsage({
-      providerId: request.provider.id,
-      model: result.model,
-      messages: 1,
-      ...result.reportedUsage,
-    })).catch((err) => console.error(`❌ Failed to record chat usage: ${err.message}`));
-  }
-  return result;
+  return runChatCompletion(request);
 }
 
 // The run-record tag for a caller that named none. Operational, so an unnamed
@@ -513,9 +555,9 @@ async function callProviderAISimpleImpl(provider, model, prompt, options) {
   // so it takes over here — before the local-backend warm-ups, which are all
   // `/chat/completions` concerns.
   if (isSubscriptionText(provider)) {
-    const attempt = await asDirectProviderCall(() => callCodexSubscription(provider, model, stamped(), {
-      statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal,
-    }));
+    const attempt = await callCodexSubscription(provider, model, stamped(), {
+      statusOp, doneLabel, elapsedSec, throughput, timeout, responseSchema, signal, source, workspacePath,
+    });
     if (attempt.result) return attempt.result;
     // The subscription could not serve this call and the user named an explicit
     // fallback. Re-enter with the ORIGINAL prompt and options so the fallback

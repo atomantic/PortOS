@@ -11,12 +11,29 @@ import { recordLocalReviewAttribution } from '../lib/localReviewAttribution.js';
 import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
+import { createRunnerService } from '../lib/aiToolkit/runner.js';
+import { createProviderService } from '../lib/aiToolkit/providers.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { setAIToolkit, patchRunMetadata } from '../services/runner.js';
 import { stopCodexAppServer } from '../services/codexAppServer.js';
 import { screenLinkedContribution } from '../services/untrustedContent.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
 globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+
+// This process owns run directories only. The server imports deferred sessions
+// and counts; importing usage hooks here would race its in-memory ledger.
+const providers = createProviderService({ dataDir: PATHS.data });
+const runStore = createRunnerService({ dataDir: PATHS.data, providerService: providers });
+setAIToolkit({ services: { providers, runner: {
+  ...runStore,
+  async createRun(options) {
+    const run = await runStore.createRun(options);
+    await patchRunMetadata(run.runId, { usageSessionDeferred: true });
+    return run;
+  },
+} } }, { dataDir: PATHS.data });
 
 // CLI flag dispatch for explicit agent reporting or active tier queries
 const args = process.argv.slice(2);
