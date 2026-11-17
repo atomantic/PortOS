@@ -1,6 +1,6 @@
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
-import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
+import { STALE_CLAIM_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, buildActiveOwnerIds, claimIssueOfBranch, decideBranchRetirement, resolveLiveOwnerReason, decideDetachedRetirement, gatheredHoldReason, recoveryWorktreeReason, supersededPolicyHold, teardownGate } from './branchRetirementDecision.js';
 /**
  * Branch & PR Reconciler — deterministic core (Tier 1).
  *
@@ -27,7 +27,9 @@ import { buildAutoMergeHandoffInstructions } from '../lib/mergeGateContract.js';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
-import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches } from './git.js';
+import { getBranches, getDefaultBranch, hasBranchMergeEvidence, deleteMergedRemoteBranches, readBranchLineage, readBranchPublished } from './git.js';
+import { readClaimIssueReservation } from './claimIssueReservation.js';
+import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
 import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, reapMergedWorktrees, readWorktreeStatus, deleteCompletedLocalBranch } from './worktreeManager.js';
 import { isHumanClaimWorktree, knownAgentIds, worktreeAgentId, worktreeOwnershipReason, worktreeHoldExpiresAt } from '../lib/worktreeOwnership.js';
@@ -909,6 +911,11 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
       // remote (`null`) yields false — "we could not ask" must not read as
       // "the remote branch is gone". See the SHIPPED_CLAIM note on cleanupMerged.
       upstreamGone: Boolean(remoteHeads) && upstreamName !== null && !remoteHeads.has(upstreamName),
+      // Origin lists this branch (or the one it tracks): merged retirement holds
+      // a published branch with no PR merged at its head as a claim (#16625).
+      // False here only means this read did not see it; retirement still reads
+      // the local remote-tracking refs.
+      published: Boolean(remoteHeads) && (remoteHeads.has(b.name) || (upstreamName !== null && remoteHeads.has(upstreamName))),
       isMerged: hasMergeEvidence,
       hasWorktree: Boolean(worktreePath),
       worktreePath,
@@ -1055,14 +1062,7 @@ async function retainedClaimMarkers(repoPath, branch, { origin, forgeExec = null
 
 /** True only on a parsed forge answer; an unreadable issue keeps the hold. */
 async function claimIssueUnreserved(target, issue, forgeExec) {
-  const repoSpec = githubRepoSpec(target);
-  if (!repoSpec || !forgeExec) return false;
-  const raw = await execGh(['issue', 'view', issue, '--repo', repoSpec, '--json', 'state,labels,assignees'],
-    undefined, { cwd: forgeExec.cwd, env: forgeExec.env }).catch(() => null);
-  const view = safeJSONParse(raw, null);
-  if (!view || !Array.isArray(view.labels) || !Array.isArray(view.assignees)) return false;
-  if (view.state === 'CLOSED') return true;
-  return view.state === 'OPEN' && view.assignees.length === 0 && !view.labels.some(label => label?.name === IN_PROGRESS_LABEL);
+  return await readClaimIssueReservation(target, issue, forgeExec) === false;
 }
 
 /**
@@ -1107,6 +1107,8 @@ export async function cleanupMerged(repoPath, defaultBranch, merged, { activeAge
       appId,
       mergeTarget: defaultBranch,
       forgeAccount,
+      origin,
+      forgeExec,
       label: `🔀 branch-reconcile: remove worktree for ${b.branch}`,
     });
     if (!retired.ok) {
@@ -1264,14 +1266,29 @@ async function retireBranch(repoPath, b, opts) {
   // under the lock binding takes: a bind lands before this check or after the
   // removal, never between them.
   if (b.claimOwnerReason) return { ok: false, reason: b.claimOwnerReason };
-  // A merged PR at the branch's exact head makes uncommitted and untracked files
-  // disposable. Asked here, outside the ownership lock (a forge call); admission
-  // and removal re-bind the answer to the head they observe.
-  if (opts.mergedRetirement && opts.requireCleanWorktree !== false && b.worktreePath) {
-    const head = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
-    if (head && await isWorktreeDirty(b.worktreePath) !== false) {
-      const { isMergedPrHead } = await import('./prProbe.js');
-      if (await isMergedPrHead(repoPath, b.branch, head)) opts = { ...opts, disposableHead: head };
+  // Forge reads for merged retirement, asked here outside the ownership lock;
+  // admission and removal re-bind each answer to the head they observe. A PR
+  // merged at the branch's exact head proves it shipped (a new or published
+  // branch is otherwise held, #16625) and makes uncommitted and untracked files
+  // disposable.
+  const head = opts.mergedRetirement
+    ? (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim()
+    : null;
+  if (head) {
+    // Each forge read only where its answer can change the outcome: dirt, or a
+    // hold that only a PR merged at this head lifts. Admission re-reads the
+    // local facts under the lock; an answer not asked for here holds there.
+    const dirty = opts.requireCleanWorktree !== false && Boolean(b.worktreePath) && await isWorktreeDirty(b.worktreePath) !== false;
+    const lineage = await readBranchLineage(repoPath, b.branch, head, opts.mergeTarget);
+    const ownershipHold = lineage !== 'patch' || b.published === true || await readBranchPublished(repoPath, b.branch) !== false;
+    const { isMergedPrHead } = await import('./prProbe.js');
+    if ((dirty || ownershipHold) && await isMergedPrHead(repoPath, b.branch, head)) {
+      opts = { ...opts, shippedHead: head, ...(dirty && { disposableHead: head }) };
+    }
+    const issue = claimIssueOfBranch(b.branch);
+    if (issue && lineage === 'ancestry') {
+      const origin = opts.origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : opts.origin;
+      opts = { ...opts, claimReserved: await readClaimIssueReservation(origin, issue, opts.forgeExec ?? null) };
     }
   }
   // One ownership critical section re-reads owners, gates and removes, so a bind
@@ -1292,7 +1309,7 @@ async function retireBranch(repoPath, b, opts) {
  * removal needs. The gates and their order are `decideBranchRetirement`'s; this
  * only reads each fact when the decision asks for it.
  */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, superseded = false }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, shippedHead = null, claimReserved, superseded = false }) {
   const completionPolicy = await import('./branchCompletionPolicy.js');
   const completionEvidence = () => import('./completedCheckoutEvidence.js');
   const readPolicyHold = async (tip) => {
@@ -1320,6 +1337,12 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
     forgeMerge: async facts => (await completionEvidence()).readMergedClaimEvidence({ repoPath, branch: b.branch, head: facts.head, forgeAccount }).catch(() => null),
     githubOrigin: async () => Boolean(githubRepoSpec(await getOriginInfo(repoPath).catch(() => null))),
     idleMs: (facts, path) => checkoutIdleMs(path),
+    lineage: facts => readBranchLineage(repoPath, b.branch, facts.head, mergeTarget),
+    // The gather's ls-remote answer, else the local remote-tracking refs.
+    published: () => b.published === true || readBranchPublished(repoPath, b.branch),
+    claimReserved: () => claimReserved,
+    checkoutProcess: (facts, path) => hasProcessCwdInside(path),
+    mergedPrAtHead: facts => Boolean(shippedHead) && shippedHead === facts.head,
   };
   const facts = {};
   for (;;) {

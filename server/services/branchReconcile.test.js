@@ -27,6 +27,10 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn(async () => 'main'),
   resolveForgeForRepo: vi.fn(async () => null),
   hasBranchMergeEvidence: vi.fn(),
+  // Merged work with commits of its own, replayed onto main and unpublished:
+  // what merged retirement retires (#16625). Cases that need another answer set it.
+  readBranchLineage: vi.fn(async () => 'patch'),
+  readBranchPublished: vi.fn(async () => false),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
 vi.mock('../lib/execGit.js', () => ({

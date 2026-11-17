@@ -1642,6 +1642,62 @@ async function mergeBranchAdmitted(dir, branchName) {
   return { success: true, output: (result.stdout + result.stderr).trim() };
 }
 
+const COMMIT_SHA_RE = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i;
+
+/**
+ * How a branch's `head` came to be inside `target`, for merged retirement
+ * (#16625). Ancestry alone cannot tell a merged branch from one created at the
+ * default branch a minute ago, so this separates them:
+ *
+ * - `'patch'`: the head is not an ancestor of target, so the branch holds
+ *   commits of its own that reached target only as patch-equivalents (a rebase
+ *   or squash merge). No reflog is needed for this answer.
+ * - `'new'`: the head is an ancestor and is still the commit the branch was
+ *   created at (the oldest entry of its reflog), so it has no commits of its own.
+ * - `'ancestry'`: the head is an ancestor and moved since creation.
+ * - `null`: a read failed, or the reflog is empty (`git gc` expires every entry
+ *   of a branch idle past `gc.reflogExpire`). Unknown, never "merged".
+ *
+ * @returns {Promise<'patch'|'new'|'ancestry'|null>}
+ */
+export async function readBranchLineage(dir, branch, head, target) {
+  if (!dir || !branch || !COMMIT_SHA_RE.test(head || '') || !target) return null;
+  const options = { ignoreExitCode: true };
+  const ancestor = await execGit(['merge-base', '--is-ancestor', head, target], dir, options)
+    .then(r => (r.exitCode === 0 ? true : r.exitCode === 1 ? false : null)).catch(() => null);
+  if (ancestor === null) return null;
+  if (!ancestor) return 'patch';
+  const log = await execGit(['reflog', 'show', '--format=%H', `refs/heads/${branch}`, '--'], dir, options).catch(() => null);
+  if (log?.exitCode !== 0) return null;
+  const created = log.stdout.trim().split('\n').filter(Boolean).at(-1);
+  if (!COMMIT_SHA_RE.test(created || '')) return null;
+  return created.toLowerCase() === head.toLowerCase() ? 'new' : 'ancestry';
+}
+
+/**
+ * Whether `branch` is published: some configured remote has a remote-tracking
+ * ref of the same name, or the branch's upstream resolves to an existing
+ * remote-tracking ref (a branch may track one named differently). Local refs
+ * only, so it is safe inside an ownership section. null when unreadable.
+ *
+ * @returns {Promise<boolean|null>}
+ */
+export async function readBranchPublished(dir, branch) {
+  if (!dir || !branch) return null;
+  const lines = r => r.stdout.split('\n').map(line => line.trim()).filter(Boolean);
+  const read = await Promise.all([
+    execGit(['remote'], dir).then(lines),
+    execGit(['for-each-ref', '--format=%(refname)', 'refs/remotes/'], dir).then(lines),
+    // A pattern also matches refs nested under it, so the exact ref is picked below.
+    execGit(['for-each-ref', '--format=%(refname)%00%(upstream)', `refs/heads/${branch}`], dir).then(lines),
+  ]).catch(() => null);
+  if (!read) return null;
+  const [remotes, remoteRefs, heads] = read;
+  const tracking = new Set(remoteRefs);
+  const upstream = heads.map(line => line.split('\0')).find(([ref]) => ref === `refs/heads/${branch}`)?.[1] || null;
+  return remotes.some(remote => tracking.has(`refs/remotes/${remote}/${branch}`)) || Boolean(upstream && tracking.has(upstream));
+}
+
 /**
  * True means the merge probes found evidence; false means they did not establish
  * it, including missing inputs, self-comparison, unresolved refs, and probe failures.
