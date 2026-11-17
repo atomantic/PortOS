@@ -66,21 +66,20 @@ it('hides quick-add buttons and Manage when the button read fails, so a position
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
-it('drops the edit draft with a failed button reload, so the Add form never reopens prefilled with the edited drink', async () => {
+it('keeps the edit draft on the same drink when an earlier button is removed in place', async () => {
   api.getDailyAlcohol.mockResolvedValue([]);
   api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }, { name: 'Example Lager', oz: 12, abv: 4 }]);
+  api.removeCustomDrink.mockResolvedValue({ name: 'Example Stout', oz: 12, abv: 5 });
   render(<AlcoholTab />);
   fireEvent.click(await screen.findByRole('button', { name: /Manage/ }));
-  fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
-  expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Stout');
+  fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[1]);
+  expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Lager');
 
-  api.getCustomDrinks.mockRejectedValueOnce(new Error('boom'));
-  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-  const confirm = screen.getByRole('group', { name: 'Confirm remove quick-add button Example Lager' });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Remove' })[0]);
+  const confirm = screen.getByRole('group', { name: 'Confirm remove quick-add button Example Stout' });
   fireEvent.click(within(confirm).getByRole('button', { name: /Remove/ }));
-  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your quick-add drink buttons');
-
-  api.getCustomDrinks.mockResolvedValueOnce([{ name: 'Example Stout', oz: 12, abv: 5 }]);
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-  expect(await screen.findByLabelText('New drink button name')).toHaveValue('');
+  await waitFor(() => expect(api.removeCustomDrink).toHaveBeenCalledWith(0));
+  await waitFor(() => expect(screen.queryByText('Example Stout')).toBeNull());
+  expect(screen.getByLabelText('Drink button name')).toHaveValue('Example Lager');
+  expect(api.getCustomDrinks).toHaveBeenCalledTimes(1);
 });

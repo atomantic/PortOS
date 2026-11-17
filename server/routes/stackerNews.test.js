@@ -14,7 +14,6 @@ vi.mock('../services/stackerNews.js', () => ({
   executeApprovedAction: vi.fn(),
   listAccounts: vi.fn(async () => []),
   verifyConnection: vi.fn(async () => ({ configured: true, connected: true, transport: 'browser', username: 'example_steward' })),
-  stackerNewsCapabilities: { browserReads: ['me'], api: { reads: ['me'] } },
 }));
 
 import * as stackerNews from '../services/stackerNews.js';

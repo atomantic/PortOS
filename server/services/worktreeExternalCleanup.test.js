@@ -136,14 +136,36 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('external orphan cleanup recovery policy
     await execGit(['worktree', 'lock', locked], external);
     const merged = await addTree('agent-merged', { committed: true });
     await execGit(['merge', '--no-ff', 'agent-merged', '--no-edit'], external);
+    const log = vi.spyOn(console, 'log');
 
     expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(1);
+    // The removal names the checkout and the evidence that admitted it (#16618).
+    const removals = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('Removed external worktree'));
+    log.mockRestore();
+    expect(removals).toEqual([expect.stringMatching(/^🌳 Removed external worktree .*agent-merged \(branch agent-merged @ [0-9a-f]{12}, repo .*\): branch head contained in /)]);
     for (const path of [dirty, unmerged, locked]) expect(existsSync(path)).toBe(true);
     expect(await readFile(join(dirty, 'private-recovery.txt'), 'utf8')).toBe('dirty recovery\n');
     expect(await readFile(join(locked, 'private-recovery.txt'), 'utf8')).toBe('locked recovery\n');
     expect(await branchExists('agent-unmerged')).toBe(true);
     expect(existsSync(merged)).toBe(false);
     expect(await branchExists('agent-merged')).toBe(false);
+  });
+
+  // #16618: the sweep reads only the shared worktrees root, so a fresh `/do:next` sibling
+  // claim (zero own commits, clean, contained in main by ancestry) of either repository
+  // is never a candidate, whatever its merge evidence.
+  it('never considers a fresh sibling claim checkout outside the worktrees root', async () => {
+    const siblings = [[primary, 'next-issue-1'], [external, 'next-issue-2']].map(([repo, name]) => ({ repo, name, path: join(root(), name) }));
+    for (const { repo, name, path } of siblings) await execGit(['worktree', 'add', '-b', `next/${name}`, path, 'main'], repo);
+    try {
+      expect(await cleanupOrphanedWorktrees(primary, new Set(), NO_OWNERS)).toBe(0);
+      for (const { repo, name, path } of siblings) {
+        expect(existsSync(join(path, '.git'))).toBe(true);
+        expect((await execGit(['show-ref', '--verify', `refs/heads/next/${name}`], repo, { ignoreExitCode: true })).exitCode).toBe(0);
+      }
+    } finally {
+      for (const { repo, path } of siblings) await execGit(['worktree', 'remove', '--force', path], repo, { ignoreExitCode: true });
+    }
   });
 
   it('matches Git registration spelling when Node retains another alias for the same checkout', async () => {

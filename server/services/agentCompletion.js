@@ -11,7 +11,7 @@ import { updateAgent } from './cosAgentLifecycle.js';
 // declaring module, and a stub on any other specifier intercepts nothing (the
 // suite would silently read the running install's config).
 import { getConfig } from './cosState.js';
-import { startAppCooldown, markAppReviewCompleted } from './appActivity.js';
+import { startAppCooldown, updateAppActivity } from './appActivity.js';
 import { emitLog } from './cosEvents.js';
 import { extractAndStoreMemories } from './memoryExtractor.js';
 import { isRecoveryTask } from './recoveryTasks.js';
@@ -65,21 +65,17 @@ export async function processAgentCompletion(agentId, task, success, outputBuffe
     const config = await getConfig();
     const cooldownMs = config.appReviewCooldownMs ?? 3600000;
 
-    const issuesFound = success ? 1 : 0;
-    const issuesFixed = success ? 1 : 0;
-    await markAppReviewCompleted(appId, issuesFound, issuesFixed).catch(err => {
-      emitLog('warn', `Failed to mark app review completed: ${err.message}`, { appId });
-    });
-
     // Perpetual (drain-until-done) tasks intentionally re-queue back-to-back
     // until their work-detector idles and the task PARKS itself
     // (taskSchedule.parkPerpetual). Bumping the per-app review cooldown here
     // would throttle that drain to one item per cooldown window (default 30
     // min), defeating the "keep going until done" contract — the drain's own
-    // park IS the throttle. Skip the cooldown bump for them (stats above still
-    // recorded). Same spirit as the recovery-task skip above.
+    // park IS the throttle. Skip the cooldown bump for them. Same spirit as the recovery-task skip above.
     if (task.metadata?.perpetual) {
       emitLog('info', `Skipping cooldown bump for perpetual task on app ${appId}`, { appId, taskId: task.id });
+      await updateAppActivity(appId, { activeAgentId: null }).catch(err => {
+        emitLog('warn', `Failed to clear active agent: ${err.message}`, { appId });
+      });
       return;
     }
 

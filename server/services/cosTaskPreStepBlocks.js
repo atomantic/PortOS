@@ -27,7 +27,7 @@ import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
  * them to static imports.
  */
 
-import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/validation.js';
+import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
 import { emitLog } from './cosEvents.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { getActiveApps, getAppById } from './apps.js';
@@ -46,6 +46,7 @@ import {
 } from './cosTaskPrompts.js';
 import { resolveAppWorkTracker, githubApiHost } from '../lib/workTracker.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
+import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { listProviders } from './providers.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
@@ -760,6 +761,7 @@ export async function resolveBranchReconcileBlock(app, taskType, metadata, taskS
       branchesPerAgent: metadata.branchesPerAgent,
       repoPath: app.repoPath,
       appId: app.id,
+      mergeHandoff: isMergeHandoffEnabled(app.mergeHandoffMinQueuedRuns),
       detachedWorktrees: result.detachedWorktrees
     }),
     supersededBlock
@@ -886,7 +888,7 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
   // the issue-watcher stamp always has a releaser (issue #6112). Failures are
   // logged inside and simply retried next pass.
   const releasedCount = await releaseAbandonedClaims(result.abandoned, {
-    forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName,
+    forge: result.forge, repoSpec: result.repoSpec, fullName: result.fullName, repoPath: app.repoPath,
   }).catch((err) => {
     emitLog('warn', `issue-reconcile could not release abandoned claims for ${app.name}: ${err.message}`, { appId: app.id });
     return 0;
@@ -920,6 +922,9 @@ export async function resolveIssueReconcileBlock(app, taskType, metadata, taskSc
     // In-progress issues with NO merged PR and NO live claim — a different stuck
     // state issue-reconcile deliberately does NOT auto-heal. Surface them.
     emitLog('info', `🧟 issue-reconcile ${app.name}: ${result.stalled.length} stalled in-progress issue(s) with no merged PR (left for human/branch-reconcile)`, { appId: app.id, analysisType: taskType });
+  }
+  if (result.reserved.length) {
+    emitLog('info', `⏭️ issue-reconcile ${app.name}: ${result.reserved.length} reserved in-progress issue(s) with no assignee (a batch run's reservation — left alone until stale)`, { appId: app.id, analysisType: taskType });
   }
   if (result.zombies.length === 0) {
     await taskSchedule.parkPerpetual(taskType, app.id, { reason: 'no-zombie-issues', actionableCount: 0, signature: null });

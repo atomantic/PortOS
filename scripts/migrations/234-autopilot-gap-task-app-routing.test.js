@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration, { unrouteTasks } from './234-autopilot-gap-task-app-routing.js';
-import { parseTasksMarkdown } from '../../server/lib/taskParser.js';
+import { parseTasksMarkdown } from '../../server/lib/legacyTaskMarkdown.js';
 
 const STAMP = '2026-08-09T12:00:00.000Z';
 const GAP = { headline: /^Autopilot \S+ gap — series \S+/, app: 'pipeline', stamp: STAMP };

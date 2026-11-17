@@ -54,8 +54,6 @@ vi.mock('./providerStatus.js', () => ({
   markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),
 }));
-vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 
 const resolveFailedTaskUpdateMock = vi.fn(async (_task, analysis) => ({
   status: 'pending',

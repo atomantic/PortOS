@@ -18,7 +18,7 @@ import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
-import { GITHUB_NOTIFICATION_CADENCES } from '../lib/validation.js';
+import { GITHUB_NOTIFICATION_CADENCES } from '../lib/githubValidation.js';
 import {
   linkHeaderHasNext,
   parseGhIncludeOutput,

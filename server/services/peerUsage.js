@@ -51,7 +51,7 @@ import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE
 import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
 import { getAllProviders } from './providers.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
-import { readRenderReceipts, summarizeRenderReceipts } from './imageRenderUsage.js';
+import { readRenderProjectionRows, summarizeRenderReceipts } from './imageRenderUsage.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
 const PROVIDERS_FILE = join(PATHS.data, 'providers.json');
@@ -261,9 +261,9 @@ let imageProjectionMemo = null;
 async function readImageProjection(directoryStat) {
   const stamp = directoryStat ? `${directoryStat.ino}:${directoryStat.mtimeMs}:${directoryStat.size}` : 'missing';
   if (imageProjectionMemo?.stamp === stamp) return imageProjectionMemo.projection;
-  const receipts = await readRenderReceipts({ directory: IMAGE_RECEIPTS_DIR });
-  receipts.sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || a.id.localeCompare(b.id));
-  const projection = { complete: receipts.length <= MAX_IMAGE_RECEIPTS, receipts: receipts.slice(0, MAX_IMAGE_RECEIPTS).map((receipt) => ({
+  // Rows come from the derived per-day aggregates; a damaged receipt makes the projection partial.
+  const { receipts, complete } = await readRenderProjectionRows({ directory: IMAGE_RECEIPTS_DIR, limit: MAX_IMAGE_RECEIPTS });
+  const projection = { complete, receipts: receipts.map((receipt) => ({
     id: receipt.id, renderKey: receipt.renderKey, occurredAt: receipt.occurredAt, identitySource: receipt.identitySource,
     driverTotal: receipt.driverTokens?.reportedTotal ?? null,
   })) };

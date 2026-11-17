@@ -1,26 +1,15 @@
 /**
  * Bare-URL detection for capture surfaces.
  *
- * `parseBareUrl(text)` — returns the normalized URL when a captured string is nothing *but* a URL
- * (bare host gets `https://`), else null. Drives the brain-capture short-circuit that files a pasted
- * URL straight to Links instead of running the classifier. Stricter than the client's
- * `urlNormalize.js` `isUrl` (needs a plausible TLD; http/https/`git@` only) because it picks a storage
- * destination rather than a hint.
+ * `parseBareUrl(text)` returns the normalized URL when a captured string is nothing *but* a URL
+ * (bare host gets `https://`), else null. A capture that is entirely a URL is a bookmark, filed
+ * straight to Links without a classifier LLM call, identically across every capture surface.
  *
- * A brain capture whose ENTIRE text is a URL is a bookmark, not a thought — the
- * capture path files it straight to the links collection instead of spending a
- * classifier LLM call on it. This module owns that decision so every capture
- * surface (Inbox tab, voice capture, the API) behaves identically.
+ * Stricter than the client's `urlNormalize.js` `isUrl` because it picks a storage destination:
+ * a bare host needs a plausible TLD and only http/https/git@ are accepted.
  *
- * Deliberately stricter than `client/src/utils/urlNormalize.js`'s `isUrl` (which
- * answers a looser question for the Links quick-add): here the answer picks a
- * storage destination, so a token like `v1.2` or `notes.md` must NOT read as a
- * URL. A bare host therefore needs a plausible TLD, and only http/https/git@ are
- * accepted (no `javascript:`/`data:`/`file:`).
- *
- * A pure leaf: `client/src/lib/bareUrl.js` re-exports it so the capture boxes
- * preview this exact decision. Import no Node built-in here, and nothing outside
- * `server/lib`.
+ * A pure leaf: `client/src/lib/bareUrl.js` re-exports it. Import no Node built-in here, and
+ * nothing outside `server/lib`.
  */
 
 // Explicit http(s) scheme — the URL constructor does the real validation below.
@@ -33,13 +22,8 @@ const SSH_GIT_PATTERN = /^git@[a-z0-9.-]+:[\w.-]+\/[\w.-]+$/i;
 // "example.com", "sub.example.co.uk/path?q=1", "example.com:8080/x".
 const DOMAIN_LIKE_PATTERN = /^(?:[a-z0-9-]+\.)+[a-z]{2,24}(?::\d{2,5})?(?:[/?#]\S*)?$/i;
 
-// Several ccTLDs double as common file extensions (`.md` Moldova, `.sh` St
-// Helena, `.py` Paraguay…), so a scheme-less bare token like `notes.md` or
-// `deploy.sh` is far more likely a filename in a note than a host. Only the
-// scheme-less, path-less form is filtered — `https://foo.md` and `foo.md/page`
-// still read as URLs. Digit-bearing extensions (`mp4`, `h264`) need no entry:
-// DOMAIN_LIKE_PATTERN's all-alphabetic TLD already rejects them. Not exhaustive
-// by construction — an extension that isn't also a plausible TLD can't reach here.
+// ccTLDs that double as file extensions (`.md`, `.sh`): scheme-less, path-less `notes.md` is
+// a filename, while `https://foo.md` and `foo.md/page` still read as URLs.
 const FILE_EXTENSION_TAIL = new Set([
   'md', 'txt', 'log', 'csv', 'json', 'xml', 'yml', 'yaml', 'toml', 'ini', 'env', 'lock',
   'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'htm', 'py', 'rb', 'sh', 'zsh', 'go', 'rs',
@@ -47,10 +31,7 @@ const FILE_EXTENSION_TAIL = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'mov', 'wav'
 ]);
 
-/**
- * True for a scheme-less, path-less `name.ext` whose tail is a known file
- * extension (`notes.md`) rather than a host.
- */
+/** True for a scheme-less, path-less `name.ext` whose tail is a known file extension. */
 function looksLikeFilename(token) {
   if (/[/?#:]/.test(token)) return false;
   const tail = token.slice(token.lastIndexOf('.') + 1).toLowerCase();
@@ -58,17 +39,14 @@ function looksLikeFilename(token) {
 }
 
 /**
- * If `text` is nothing but a single URL, return it normalized (an `https://`
- * scheme is prepended to a bare host). Returns null for free text, multi-token
- * input, a URL with surrounding prose, or a non-http(s)/git scheme.
- *
+ * If `text` is nothing but a single URL, return it normalized; null for free text,
+ * multi-token input, surrounding prose, or a non-http(s)/git scheme.
  * @param {string} text
  * @returns {string|null}
  */
 export function parseBareUrl(text) {
   const trimmed = (text ?? '').trim();
-  // "Just a URL" means the whole capture is one token — any whitespace (a label,
-  // a trailing note, a second URL) makes it a thought that mentions a link.
+  // Any whitespace makes it a thought that mentions a link, not a bare URL.
   if (!trimmed || /\s/.test(trimmed)) return null;
 
   if (SSH_GIT_PATTERN.test(trimmed)) return trimmed;
@@ -81,8 +59,6 @@ export function parseBareUrl(text) {
   }
   if (!candidate) return null;
 
-  // Final gate: the parser rejects shapes the regexes let through (bad port,
-  // malformed IPv6 host). The scheme needs no re-check — a candidate only exists
-  // here because it matched `http(s)://` or had `https://` prepended.
+  // Final gate: the parser rejects shapes the regexes let through (bad port, malformed IPv6).
   return URL.canParse(candidate) ? candidate : null;
 }

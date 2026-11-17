@@ -1,124 +1,74 @@
-import { describe, it, expect } from 'vitest';
-import { calculateBackoff, generateTaskFromFeatureAgent } from './featureAgents.js';
+import { afterAll, describe, it, expect, vi } from 'vitest';
+import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 
 /**
- * Tests for feature agents pure logic.
+ * Tests for feature agents scheduling and task generation.
  */
 
-const _MIN_BACKOFF_MS = 60 * 60 * 1000;
-const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
+const tempRoot = createTempDataRoot('portos-feature-agent-due-');
 
-describe('Feature Agent Backoff Calculation', () => {
-  it('should start at 1 hour for first idle', () => {
-    expect(calculateBackoff(1)).toBe(60 * 60 * 1000);
-  });
-
-  it('should double for each consecutive idle', () => {
-    expect(calculateBackoff(2)).toBe(2 * 60 * 60 * 1000);
-    expect(calculateBackoff(3)).toBe(4 * 60 * 60 * 1000);
-  });
-
-  it('should cap at 24 hours', () => {
-    expect(calculateBackoff(10)).toBe(MAX_BACKOFF_MS);
-    expect(calculateBackoff(100)).toBe(MAX_BACKOFF_MS);
-  });
+vi.mock('../lib/fileUtils.js', async () => {
+  const actual = await vi.importActual('../lib/fileUtils.js');
+  return makePathsProxy(actual, { dataRoot: tempRoot });
 });
+vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn() }));
+vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
+vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 
-describe('Feature Agent Scheduling Logic', () => {
-  function isDue(agent, now) {
-    if (agent.status !== 'active') return false;
-    if (agent.currentAgentId) return false;
+const { generateTaskFromFeatureAgent, getDueFeatureAgents } = await import('./featureAgents.js');
 
-    if (agent.backoff?.currentDelayMs) {
-      const nextAllowed = new Date(agent.backoff.lastIdleAt).getTime() + agent.backoff.currentDelayMs;
-      if (now < nextAllowed) return false;
-    }
+afterAll(() => rmSync(tempRoot, { recursive: true, force: true }));
 
-    const lastRun = agent.lastRunAt ? new Date(agent.lastRunAt).getTime() : 0;
-    const mode = agent.schedule?.mode || 'continuous';
-
-    if (mode === 'continuous') {
-      const pause = agent.schedule?.pauseBetweenRunsMs || 60000;
-      return now - lastRun >= pause;
-    } else if (mode === 'interval') {
-      const interval = agent.schedule?.intervalMs || 3600000;
-      return now - lastRun >= interval;
-    }
-    return false;
-  }
-
+describe('Feature Agent Scheduling (getDueFeatureAgents)', () => {
   const baseAgent = {
+    id: 'fa-sched',
     status: 'active',
     currentAgentId: null,
-    backoff: null,
     lastRunAt: null,
     schedule: { mode: 'continuous', pauseBetweenRunsMs: 60000 }
   };
 
-  it('should be due when never run before', () => {
-    expect(isDue(baseAgent, Date.now())).toBe(true);
+  const isDue = async (agent) => {
+    mkdirSync(join(tempRoot, 'cos'), { recursive: true });
+    writeFileSync(join(tempRoot, 'cos', 'feature-agents.json'), JSON.stringify({ version: 1, agents: [agent] }));
+    return (await getDueFeatureAgents()).some(a => a.id === agent.id);
+  };
+
+  it('should be due when never run before', async () => {
+    expect(await isDue(baseAgent)).toBe(true);
   });
 
-  it('should not be due when recently run (continuous)', () => {
-    const agent = { ...baseAgent, lastRunAt: new Date().toISOString() };
-    expect(isDue(agent, Date.now())).toBe(false);
+  it('should not be due when recently run (continuous)', async () => {
+    expect(await isDue({ ...baseAgent, lastRunAt: new Date().toISOString() })).toBe(false);
   });
 
-  it('should be due when pause elapsed (continuous)', () => {
-    const agent = {
-      ...baseAgent,
-      lastRunAt: new Date(Date.now() - 120000).toISOString()
-    };
-    expect(isDue(agent, Date.now())).toBe(true);
+  it('should be due when pause elapsed (continuous)', async () => {
+    expect(await isDue({ ...baseAgent, lastRunAt: new Date(Date.now() - 120000).toISOString() })).toBe(true);
   });
 
-  it('should respect interval mode', () => {
+  it('should respect interval mode', async () => {
     const agent = {
       ...baseAgent,
       schedule: { mode: 'interval', intervalMs: 3600000 },
       lastRunAt: new Date(Date.now() - 1800000).toISOString() // 30min ago
     };
-    expect(isDue(agent, Date.now())).toBe(false);
-
-    const oldAgent = {
-      ...agent,
-      lastRunAt: new Date(Date.now() - 7200000).toISOString() // 2h ago
-    };
-    expect(isDue(oldAgent, Date.now())).toBe(true);
+    expect(await isDue(agent)).toBe(false);
+    expect(await isDue({ ...agent, lastRunAt: new Date(Date.now() - 7200000).toISOString() })).toBe(true);
   });
 
-  it('should skip non-active agents', () => {
-    expect(isDue({ ...baseAgent, status: 'draft' }, Date.now())).toBe(false);
-    expect(isDue({ ...baseAgent, status: 'paused' }, Date.now())).toBe(false);
+  it('should skip non-active agents', async () => {
+    expect(await isDue({ ...baseAgent, status: 'draft' })).toBe(false);
+    expect(await isDue({ ...baseAgent, status: 'paused' })).toBe(false);
   });
 
-  it('should skip agents already running', () => {
-    const agent = { ...baseAgent, currentAgentId: 'agent-123' };
-    expect(isDue(agent, Date.now())).toBe(false);
+  it('should skip standby agents', async () => {
+    expect(await isDue({ ...baseAgent, autonomyLevel: 'standby' })).toBe(false);
   });
 
-  it('should skip agents in backoff', () => {
-    const agent = {
-      ...baseAgent,
-      backoff: {
-        currentDelayMs: 3600000,
-        lastIdleAt: new Date().toISOString(),
-        consecutiveIdles: 1
-      }
-    };
-    expect(isDue(agent, Date.now())).toBe(false);
-  });
-
-  it('should allow agents past backoff window', () => {
-    const agent = {
-      ...baseAgent,
-      backoff: {
-        currentDelayMs: 3600000,
-        lastIdleAt: new Date(Date.now() - 7200000).toISOString(),
-        consecutiveIdles: 1
-      }
-    };
-    expect(isDue(agent, Date.now())).toBe(true);
+  it('should skip agents already running', async () => {
+    expect(await isDue({ ...baseAgent, currentAgentId: 'agent-123' })).toBe(false);
   });
 });
 

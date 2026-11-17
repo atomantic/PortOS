@@ -39,7 +39,8 @@ import { isPerpetualRefillCandidate, perpetualRefillPlan, resetOrphanedTasks } f
 import { firstLine } from './cosTaskStore.js';
 import { canQueueImprovementTasks, DEFAULT_STATE } from './cosState.js';
 import { createDequeueCapacity, countRunningAgentsByLocalEndpoint, isIdleTierEligible, isUserTaskRunnableUnattended } from './cosDequeue.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { parseTasksMarkdown } from '../lib/legacyTaskMarkdown.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 import {
   createLocalEndpointSlotContext,
   cloudSwarmThreadCapacity,
@@ -1343,12 +1344,12 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
   });
 
-  // Parse a legacy row, write it back the way the USER queue writes it, and read
-  // the result — the approval flags a real row carries after one heal cycle.
+  // Read a legacy row the way migration 018 does, store it in the USER queue, and
+  // return the approval flags the stored row carries.
   const healedUserRow = (line) => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const parsed = parseTasksMarkdown(`# Tasks\n\n## Pending\n${line}\n`);
-    const [healed] = parseTasksMarkdown(generateTasksMarkdown(parsed, false));
+    const [parsed] = parseTasksMarkdown(`# Tasks\n\n## Pending\n${line}\n`);
+    const healed = storedForm(parsed, 'user');
     warn.mockRestore();
     return { approvalRequired: healed.approvalRequired, autoApproved: healed.autoApproved };
   };
@@ -2250,7 +2251,7 @@ describe('addTask — first-line dedup', () => {
 
   it('multi-line and single-line descriptions with the same first line collide', () => {
     // Repro: handleOrphanedTask builds a multi-line description, but
-    // generateTasksMarkdown flattens it to one line. Without first-line
+    // the stored form flattens it to one line. Without first-line
     // normalization, addTask's dedup compares the full multi-line input to
     // the stored single line and never matches — producing N duplicate
     // [Auto-Fix] tasks, each spawning its own agent.
@@ -2715,37 +2716,13 @@ describe('CoS startup — single-flight recovery', () => {
   });
 });
 
-describe('cos-rehabilitation-check timer — failure observability (#7552)', () => {
-  // A rejecting checkAndRehabilitateSkippedTasks used to collapse to the same
-  // { count: 0 } a healthy no-op call produces, so a persistence failure in the
-  // ONLY path back from an auto-skipped task type went silent forever. This
-  // extracts and REALLY EXECUTES the shipped `.catch(err => {...})` handler
-  // (not a reimplementation) against a mocked emitLog, rather than mocking the
-  // full `runStart()` import graph — the file's own header explains why that
-  // full-mock approach is rejected here as "a brittle test of mocks".
-  const anchor = 'checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {';
-  const anchorStart = COS_SRC.indexOf(anchor);
-
-  it('is still the exact call site this test extracts its handler from', () => {
-    expect(anchorStart, 'the rehabilitation catch handler moved/changed shape — update this test\'s anchor').toBeGreaterThan(-1);
+describe('CoS maintenance timers — advisory learning removal (#16406)', () => {
+  // The learning store is only ever reset by an explicit user action; none of the
+  // removed timers (performance summary, insights, rehabilitation) may come back.
+  it.each(['cos-performance-summary', 'cos-learning-insights', 'cos-rehabilitation-check'])('does not register or cancel %s', (id) => {
+    expect(COS_SRC).not.toContain(id);
   });
-
-  it('logs via emitLog(\'warn\', ...) with the stack, and still resolves the neutral fallback, when the rehabilitation call rejects', () => {
-    const bodyStart = anchorStart + anchor.length;
-    const bodyEnd = COS_SRC.indexOf('\n      });', bodyStart);
-    const fnBody = COS_SRC.slice(bodyStart, bodyEnd);
-    const emitLog = vi.fn();
-    // executes the real extracted source, not a rewritten copy
-    const catchHandler = new Function('emitLog', `return function(err) {${fnBody}}`)(emitLog);
-
-    const err = new Error('learning store unavailable');
-    const result = catchHandler(err);
-
-    expect(emitLog).toHaveBeenCalledWith(
-      'warn',
-      expect.stringContaining('checkAndRehabilitateSkippedTasks failed: learning store unavailable'),
-      expect.objectContaining({ stack: expect.any(String) })
-    );
-    expect(result).toEqual({ count: 0 });
+  it('no longer reads or auto-resets learning data', () => {
+    expect(COS_SRC).not.toMatch(/checkAndRehabilitateSkippedTasks|resetTaskTypeLearning|getLearningInsights/);
   });
 });

@@ -1,27 +1,11 @@
 /**
  * Settle where a container project lives on a Windows host, once, for every
- * stack that has one.
+ * stack that has one (vLLM and SGLang share this settle → detect → record → emit loop).
  *
- * On Windows the answer is never the default `%USERPROFILE%\<leaf>`: Docker
- * Desktop's engine IS a WSL2 VM, so a project on the Windows filesystem is
- * reached from inside that VM over a 9p share, and tens of gigabytes of weights
- * would be written across it once and paged back across it forever. PortOS used
- * to refuse and hand the operator a UNC template with `<distro>` and `<user>`
- * left as literal angle brackets for them to look up; it now asks WSL for those
- * two values (`lib/wslDistro.js`) and records the answer
- * (`lib/recordedProjectDir.js`), so the readiness poll, the Start button, and
- * the next server boot all resolve the directory this run actually used.
- *
- * This module is the loop — settle → detect → record → emit — and it is
- * deliberately the ONLY copy of it. Two stacks use it today (vLLM, which then
- * clones into the directory, and SGLang, which only ever finds a hand-prepared
- * one), and the difference between them is prose, not mechanism.
- *
- * It lives in `services/` rather than `lib/` because it spawns a subprocess and
- * writes a file, neither of which a `lib/` module promises.
- *
- * Nothing here throws: every caller runs from an SSE route whose headers are
- * already flushed, so a failure comes back as the refusal string.
+ * On Windows the answer is never `%USERPROFILE%\<leaf>`: Docker Desktop's engine
+ * IS a WSL2 VM, so the Windows filesystem is a slow 9p share. This asks WSL for
+ * the distro and user and records the answer so every later resolver agrees.
+ * Nothing here throws (SSE headers are already flushed): failure is the refusal string.
  */
 
 import { detectWslProjectDir, WSL_UNC_PREFIX } from '../lib/wslDistro.js';
@@ -31,18 +15,8 @@ const nameDistros = (distros) => (distros?.length
   ? ` PortOS can see ${distros.join(', ')} — \`wsl --set-default <name>\` picks one; otherwise`
   : ' Install one with');
 
-/**
- * The lead sentence for each way the WSL question can go unanswered.
- *
- * A table rather than four returns so the shared tail below is appended exactly
- * once. That tail is the part that must never go missing — a fifth reason added
- * to `detectWslProjectDir` would otherwise ship a refusal that neither rules out
- * `C:\` nor names the override.
- *
- * Only `no-wsl` needs a per-stack word, and only in its last clause: what the
- * operator does once a distro exists differs between a stack PortOS provisions
- * for them and one they prepare by hand.
- */
+// Lead sentence per unanswered-WSL case; a table so the shared tail (which rules
+// out `C:\` and names the override) is appended exactly once.
 const PLACEMENT_REFUSALS = Object.freeze({
   'internal-distro': (f, _detail, { sizeHint }) => `the default WSL distro is \`${f.distro}\`, which is a container engine's own plumbing — it is recreated from scratch on a reset, so ${sizeHint} of weights must not live there.${nameDistros(f.distros)} \`wsl --install -d Ubuntu\`.`,
   'unreadable-share': (f, detail) => `the \`${f.distro}\` distro answered, but Windows cannot read ${f.home} — the ${WSL_UNC_PREFIX} share is not responding${detail}. \`wsl --shutdown\` restarts it (that takes the whole VM down, so stop your containers first).`,
@@ -51,19 +25,10 @@ const PLACEMENT_REFUSALS = Object.freeze({
 });
 
 /**
- * Why PortOS could not find a Linux-side home for this project on a Windows
- * host — prose the checklist renders verbatim, one fix per case.
- *
- * There is no case for "the operator did not configure a directory" any more.
- * That was the old refusal, and it asked a person to look up two values
- * (`<distro>`, `<user>`) that WSL will state on request. What survives is the
- * set of answers PortOS genuinely cannot supply for itself: a machine with no
- * WSL, a default distro that belongs to a container engine, and a share Windows
- * cannot read.
- *
+ * Why PortOS could not find a Linux-side home for this project on Windows:
+ * prose the checklist renders verbatim, one fix per case.
  * @param {{reason?: string, distro?: string, home?: string, error?: string, distros?: string[]}} found
  * @param {{envVar: string, sizeHint: string, afterInstall: string}} stack
- * @returns {string}
  */
 function wslPlacementRefusal(found, stack) {
   const lead = PLACEMENT_REFUSALS[found?.reason] || PLACEMENT_REFUSALS['no-wsl'];
@@ -73,11 +38,8 @@ function wslPlacementRefusal(found, stack) {
 
 /**
  * Settle where one stack's project goes before anything is written to it.
- *
- * Detection runs ONLY when nothing already answers the question — an exported
- * env var or an earlier recording both win, and neither costs a subprocess. Off
- * Windows there is nothing to detect: the default home is already on a Linux
- * filesystem.
+ * Detection runs ONLY when nothing already answers (an env var or earlier
+ * recording wins); off Windows there is nothing to detect.
  *
  * @param {object} stack
  * @param {string} stack.envVar - the operator override / record key, e.g. `VLLM_QWEN_PROJECT_DIR`
@@ -108,15 +70,11 @@ export async function ensureWslProjectDir({
   if (!found.dir) return wslPlacementRefusal(found, { envVar, sizeHint, afterInstall });
 
   emit(`Using the \`${found.distro}\` distro, at ${found.dir}.`);
-  // This process FIRST, the file second. Every stack's resolver reads the env
-  // ahead of the record, so every later read in this run — the re-inspection
-  // that follows, the readiness poll, the Start button — resolves the detected
-  // directory even when the write fails. Without it, a failed write silently
-  // sends the very next inspection back to `%USERPROFILE%\<leaf>`: the C:\
-  // placement this whole path exists to refuse.
+  // This process FIRST, the file second: every resolver reads the env ahead of the
+  // record, so even a failed write can't send the next inspection back to
+  // `%USERPROFILE%\<leaf>`, the C:\ placement this path exists to refuse.
   process.env[envVar] = found.dir;
-  // Recording is only what makes the choice outlive this run, so a failed write
-  // costs exactly that — not a multi-tens-of-gigabytes provision.
+  // Recording only makes the choice outlive this run; a failed write costs just that.
   const recordedOk = await record(found.dir).then(() => true, (err) => {
     emit(`Could not record ${envVar} in PortOS's .env (${err.message}) — this run still uses that directory, but set it there yourself or the next restart will look on the Windows filesystem again.`);
     return false;

@@ -11,6 +11,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
@@ -157,11 +158,12 @@ const referenceUpload = optionalUploadFields(['referenceImage'], {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const records = await listRecords();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(page)) {
     return res.json(records);
   }
-  res.json(paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(records, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Characters with a locked main reference — the pool that can seed a new main

@@ -52,9 +52,6 @@ vi.mock('./cosState.js', async () => {
 vi.mock('./autonomousJobs.js', () => ({ getAllJobs: vi.fn(async () => []) }));
 vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./userActions.js', () => ({ recordUserAction: vi.fn() }));
-vi.mock('./taskLearning.js', () => ({
-  getAdaptiveCooldownMultiplier: vi.fn(async () => ({ multiplier: 1, reason: 'insufficient-data', skip: false })),
-}));
 
 const { ON_DEMAND_ORIGINS, triggerOnDemandTask } = await import('./taskSchedule.js');
 const { getQuotaBurnTaskCatalog } = await import('./quotaBurnInvoke.js');

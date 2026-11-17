@@ -1,29 +1,9 @@
 /**
- * Constrain the idea / beat-sheet stage to THIS issue's synopsis scope so
- * adjacent issues stop dramatizing the same arc beat (issue #1513).
+ * Constrain the idea / beat-sheet stage to THIS issue's synopsis scope so adjacent issues stop dramatizing the same arc beat (issue #1513).
  *
- * Two kinds of change ship in `pipeline-idea-expansion.md`:
- *
- *   1. Scope-boundary language. The prior/next-issue neighbor blocks and the
- *      beat-sheet instructions now frame neighboring issues as hard boundaries
- *      ("OUT OF SCOPE", "do NOT cross into them", "stop AT this issue's
- *      cliffhanger, not past it") rather than as material to continue into —
- *      directly targeting the observed failure where issue N's beats ran
- *      through issue N+1's climax.
- *
- *   2. A new `{{#paddingRisk}}` section (NEW template variable, which per
- *      CLAUDE.md requires this migration). It renders only when the issue's
- *      synopsis is terse relative to its length profile — the padding pressure
- *      that makes a long-profile issue absorb the next issue's events to hit
- *      the page target. `assessSynopsisScope` in `server/lib/issueLength.js`
- *      computes the flag; `buildIdeaContextAugment` feeds it into the prompt.
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old template until this migration rewrites it. Customization-safe:
- * only installs whose copy still hashes to the known pre-change shipped version
- * are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * Two changes ship in `pipeline-idea-expansion.md`: (1) scope-boundary language: the prior/next-issue neighbor blocks and beat-sheet instructions frame neighboring issues as hard boundaries ("OUT OF SCOPE", "do NOT cross into them", "stop AT this issue's cliffhanger") rather than material to continue into, targeting the failure where issue N's beats ran through N+1's climax;
+ * (2) a `{{#paddingRisk}}` section (a NEW template variable, which per CLAUDE.md requires this migration), rendered only when the synopsis is terse relative to its length profile (the padding pressure that makes a long-profile issue absorb the next issue's events); `assessSynopsisScope` in `server/lib/issueLength.js` computes the flag and `buildIdeaContextAugment` feeds it in.
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Customization-safe: only copies hashing to the known pre-change shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

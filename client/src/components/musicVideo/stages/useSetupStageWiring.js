@@ -15,7 +15,7 @@ import useMusicVideoManualTempo from '../../../hooks/useMusicVideoManualTempo.js
  * project switch); this binds them to the open project by id.
  */
 export default function useSetupStageWiring({
-  selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, patchProject, openProject, prepareSong, navigate, onClone,
+  selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, openProject, prepareSong, navigate, onClone, saveOwnEdit,
 }) {
   const [importingLyrics, setImportingLyrics] = useState(false);
   const tempo = useMusicVideoManualTempo({ project: selected, onUpdated: replaceProject });
@@ -61,9 +61,8 @@ export default function useSetupStageWiring({
   const handleImportLyrics = (body, onDone) => {
     const projectId = selected.id;
     setImportingLyrics(true);
-    importMusicVideoLyrics(projectId, body, { silent: true })
-      .then(({ project, imported, format }) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
+    saveOwnEdit(projectId, (options) => importMusicVideoLyrics(projectId, body, options))
+      .then(({ imported, format }) => {
         onDone?.();
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'} (${format})`);
         prepareSong(projectId);
@@ -75,9 +74,8 @@ export default function useSetupStageWiring({
   const handleImportTrackLyrics = () => {
     const projectId = selected.id;
     setImportingLyrics(true);
-    importMusicVideoTrackLyrics(projectId, { mode: 'replace' }, { silent: true })
-      .then(({ project, imported, markers }) => {
-        patchProject(projectId, { lyricCues: project.lyricCues, lyricMarkers: project.lyricMarkers, updatedAt: project.updatedAt });
+    saveOwnEdit(projectId, (options) => importMusicVideoTrackLyrics(projectId, { mode: 'replace' }, options))
+      .then(({ imported, markers }) => {
         toast.success(`Imported ${imported} lyric line${imported === 1 ? '' : 's'}${markers ? ` and ${markers} section/direction marker${markers === 1 ? '' : 's'}` : ''} from the track`);
         prepareSong(projectId);
       })

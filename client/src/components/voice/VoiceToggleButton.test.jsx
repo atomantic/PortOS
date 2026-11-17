@@ -2,14 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
-  getVoiceConfig: vi.fn(),
-  onVoiceEvent: vi.fn(() => () => {}),
   readVoiceHidden: vi.fn(() => true),
   writeVoiceHidden: vi.fn(),
 }));
 
-vi.mock('../../services/apiVoice', () => ({ getVoiceConfig: mocks.getVoiceConfig }));
-vi.mock('../../services/voiceClient', () => ({ onVoiceEvent: mocks.onVoiceEvent }));
+vi.mock('./VoiceWidgetGate', () => ({ useVoiceEnabled: () => true }));
 vi.mock('../../services/voiceVisibility', () => ({
   VISIBILITY_EVENT: 'portos:voice-visibility',
   ENGAGE_EVENT: 'portos:voice-engage',
@@ -23,7 +20,6 @@ import VoiceToggleButton from './VoiceToggleButton';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getVoiceConfig.mockResolvedValue({ enabled: true });
   mocks.readVoiceHidden.mockReturnValue(true);
 });
 

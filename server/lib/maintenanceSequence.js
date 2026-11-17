@@ -1,40 +1,20 @@
 /**
- * Maintenance task ladder shared by both runners: `MAINTENANCE_TASK_ORDER`, interleaved
- * `MAINTENANCE_SEQUENCE_TYPES` with claim-issue drains, and `maintenanceStepParams`.
+ * Maintenance task ladder shared by both runners.
  *
- * The maintenance ladder shared by both runners: `MAINTENANCE_TASK_ORDER` /
- * `MAINTENANCE_ORDER_GUIDANCE`, the interleaved `MAINTENANCE_SEQUENCE_TYPES` (a perpetual
- * `claim-issue` drain between every pair of audits), `maintenanceStepParams` (audits file issues,
- * documentation does the work), and `buildMaintenanceSteps` (fix mode runs audits directly with one
- * final drain; issue filing can omit claim jobs) which emits quota-burn-shaped run-once steps so
- * `quotaBurnInvoke.js` can run a step from the Schedule tab's manual run or a Quota Burn family plan
- * alike. Pure.
+ * `MAINTENANCE_TASK_ORDER` / `MAINTENANCE_ORDER_GUIDANCE`, interleaved `MAINTENANCE_SEQUENCE_TYPES` with claim-issue drains,
+ * `maintenanceStepParams`, and `buildMaintenanceSteps`, which emits quota-burn-shaped run-once steps so `quotaBurnInvoke.js` can run them from the Schedule tab or a Quota Burn plan. Pure.
  */
 
 import { EXTENDED_AUDIT_WORKFLOW } from './auditWorkflow.js';
-/**
- * The maintenance ladder: the ordered audits PortOS recommends running against a
- * managed app, with a perpetual `claim-issue` drain between every pair so each
- * audit's findings are resolved before the next audit reads the code. Fix mode
- * instead resolves findings in each audit and runs one final drain. Issue-only
- * runs can skip all drains to leave findings open for human review.
- *
- * ONE definition, shared by both runners. `services/maintenanceRun.js` walks
- * these steps directly for the Schedule tab's "Run now" — no quota gates, no
- * burn plan — and the Quota Burn page's "Populate maintenance sequence" saves the
- * same steps into a family plan to be walked later under that family's window
- * gates. The client (`client/src/lib/quotaBurnTasks.js`) imports the order from
- * here so the guidance banner, the prerequisite check and the server's own
- * builder cannot disagree about what the ladder is.
- *
- * Pure: no I/O, no imports out of `lib/`. The step shape is the quota-burn job
- * shape (`quotaBurnTaskRef.js`) so `quotaBurnInvoke.js` can run a step from
- * either runner without knowing which one asked.
+/*
+ * One definition shared by `services/maintenanceRun.js` ("Run now") and the Quota Burn "Populate maintenance sequence" plan; the client (`client/src/lib/quotaBurnTasks.js`)
+ * imports the order so banner, prerequisite check and builder cannot disagree. Between every pair of audits sits a perpetual `claim-issue` drain so findings are resolved
+ * before the next audit; fix mode resolves in each audit with one final drain; issue-only runs can skip drains. The step shape is the quota-burn job shape (`quotaBurnTaskRef.js`).
  */
 
 import { AUDIT_DEFINITIONS } from './auditCatalog.js';
 
-/** The audits, in the order they should run. */
+/** The audits, in run order. */
 export const MAINTENANCE_TASK_ORDER = Object.freeze([
   'better-structural-drift', 'simplify', 'module-hygiene', 'better-complexity',
   'performance', 'better-cognitive-load', 'documentation',
@@ -49,27 +29,16 @@ export const MAINTENANCE_DRAIN_TASK = 'claim-issue';
 export const MAINTENANCE_SEQUENCE_TYPES = Object.freeze(MAINTENANCE_TASK_ORDER.flatMap((type, index) =>
   (index ? [MAINTENANCE_DRAIN_TASK, type] : [type])));
 
-/**
- * The run params an audit step pins. The first six audits explicitly FILE
- * issues (which the drain then claims); documentation explicitly does the work.
- * Fix mode runs audits directly and drains once at the end. Code-producing
- * steps explicitly request PR delivery so issue-only schedule defaults cannot
- * turn their completion into a local-only merge. Review policy still inherits.
- * A drain pins nothing — it inherits the app's saved claim filters.
- */
+// The first six audits FILE issues (the drain claims them); documentation does the work. Fix mode runs audits directly (drain once at the end). Code-producing steps request PR
+// delivery explicitly so issue-only schedule defaults can't make them local-only merges. A drain pins nothing and inherits the app's saved claim filters.
 export const maintenanceStepParams = (taskType, mode = 'file-issues') => (taskType === MAINTENANCE_DRAIN_TASK
   ? {}
   : mode !== 'fix' && taskType !== 'documentation'
     ? { fileIssues: true }
     : { fileIssues: false, useWorktree: true, openPR: true });
 
-/**
- * Build the ladder as run-once steps targeting `appId`, every one pinned to the
- * provider/model/effort the user chose. `effort: null` inherits each scheduled
- * task's saved effort. Ids are `${idPrefix}-${index}`, so a fresh prefix per
- * invocation yields fresh step identities. An optional claimHandler replaces
- * the provider/model/effort bundle for drains only; omitted keeps legacy pins.
- */
+// Build the ladder as run-once steps for `appId`, pinned to the chosen provider/model/effort (`effort: null` inherits each task's saved effort). Ids are `${idPrefix}-${index}`.
+// An optional claimHandler replaces the provider/model/effort bundle for drains only.
 export function buildMaintenanceSteps({ appId, idPrefix, providerId = null, model = null, effort = null, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
   if (taskTypes !== null && (!Array.isArray(taskTypes) || !taskTypes.length || taskTypes.some(type => !Object.hasOwn(AUDIT_DEFINITIONS, type)))) {
     throw new Error('Quality checks must name known audit categories');

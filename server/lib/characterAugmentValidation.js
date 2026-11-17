@@ -6,15 +6,9 @@
  * routes and the Writers Room work-bible routes so the two surfaces cannot drift on which field paths
  * a proposal may name.
  *
- * The Universe cast editor and the Writers Room work bible expose the same two
- * endpoints over the same field contract, so they validate against the same two
- * schemas — a second hand-written copy is how one surface ends up accepting a
- * path the other rejects.
- *
- * Both are pinned to `AUGMENTABLE_FIELD_PATHS`, which is the string-valued
- * subset of the integrity contract. That is deliberately narrower than "any
- * character field": it keeps a request from reaching the service (and the
- * provider) with a path the before/after preview cannot render.
+ * `AUGMENTABLE_FIELD_PATHS` is deliberately the string-valued subset of the integrity
+ * contract, so no request reaches the service or provider with a path the
+ * before/after preview cannot render.
  */
 
 import { z } from 'zod';
@@ -27,11 +21,7 @@ export const characterAugmentProposeSchema = z.object({
   model: z.string().trim().max(128).optional(),
 });
 
-/**
- * Apply only the proposals the author accepted. `fingerprint` is the character
- * state the preview was reviewed against — the service turns a mismatch into a
- * 409 rather than overwriting whatever was edited in the meantime.
- */
+/** Apply only accepted proposals; a `fingerprint` mismatch (character edited since preview) becomes a 409. */
 export const characterAugmentApplySchema = z.object({
   fields: z.array(z.object({
     field: z.enum(AUGMENTABLE_FIELD_PATHS),

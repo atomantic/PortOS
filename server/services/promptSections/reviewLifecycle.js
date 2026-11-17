@@ -11,7 +11,7 @@ import { forkLocalBranch, forkRemoteName, normalizeForkHead } from '../../lib/fo
 import { shellQuote } from '../../lib/shellQuote.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiAuthNote, agentApiCurl } from '../../lib/agentApiToken.js';
-import { LOCAL_REVIEW_BRIDGE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE, localReviewAttributionErrorGate } from '../../lib/localReviewBridge.js';
+import { LOCAL_REVIEW_BRIDGE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
 import { INLINE_REVIEW_LOOP_STEP } from './constants.js';
 import { normalizeForgeCli } from './forge.js';
 import { buildCliReviewerOutcomeInstructions } from './reviewerOutcome.js';
@@ -419,7 +419,7 @@ function buildLocalLlmInvocation({ localLlmBackends, reviewerModelMap, reviewerE
 REVIEW_RESPONSE=$(mktemp)
 trap 'rm -f "$REVIEW_RESPONSE" "\${REVIEW_RESPONSE}.findings"' EXIT
 ${diffCommand} | jq -Rs ${shellQuote(reviewInput)} | node ${shellQuote(LOCAL_REVIEW_BRIDGE_SCRIPT)} > "$REVIEW_RESPONSE"
-${recordAttribution ? `${localReviewAttributionErrorGate()}\n` : ''}if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
+if ! jq -er 'select(.ok == true and (.verdict == "clean" or .verdict == "findings")) | .findings | select(type == "string" and length > 0)' "$REVIEW_RESPONSE" > "\${REVIEW_RESPONSE}.findings"; then
   echo "Local reviewer failed: $(jq -r '.error // "missing .findings in reviewer response"' "$REVIEW_RESPONSE")" >&2
   exit 1 # Never treat an absent or malformed response as clean.
 else
@@ -479,7 +479,7 @@ function buildCrossPhaseStopModeNote({ localPhaseReviewers, prSideReviewerNames,
  * inline and standalone follow-up phases apart from the exit step and the
  * inline-only local-review merge guard, which is why both read this one builder.
  */
-function buildPrSideClosingSteps({ leaveOpen, exitStep, mergeGuard = '', forge, reviewRecheckReviewers = [], localReviewers = [], localReviewRequired = false }) {
+function buildPrSideClosingSteps({ leaveOpen, exitStep, mergeGuard = '', forge, reviewRecheckReviewers = [], localReviewers = [], localReviewRequired = false, mergeHandoff = false }) {
   if (leaveOpen) {
     return [
       '4. When the reviewer list is exhausted (or the stop mode triggers), **leave the PR open** — do NOT merge it, and do NOT delete the branch. Its JIRA ticket is sitting in review and a human lands both together; merging here would leave the work merged and the ticket stuck in review.',
@@ -494,6 +494,7 @@ function buildPrSideClosingSteps({ leaveOpen, exitStep, mergeGuard = '', forge, 
     forge: forge.mergeGateForge,
     alreadyMergedHint: '',
     reviewRecheckReviewers,
+    mergeHandoff,
     mergeEquivalentLine: forge.mergeEquivalentLine,
     // `mergeGuard` is the inline phase's existing local-review state check. It
     // has the same fail-closed predicate but the handoff text must return to
@@ -611,7 +612,7 @@ function buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired }
  * telling it to "exit" here leaves a finished merge without the `.agent-done`
  * sentinel that records it.
  */
-function buildInlinePhaseTexts({ inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired }) {
+function buildInlinePhaseTexts({ inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, mergeHandoff }) {
   const objective = leaveOpen
     ? '**Your job is to drive the review-and-fix loop to completion. Do NOT merge — this PR is tracked in JIRA and a human lands it.**'
     : '**Your job is to drive the review-and-fix loop to completion and merge the PR.**';
@@ -635,6 +636,7 @@ function buildInlinePhaseTexts({ inlineExitStep, inlineWorkflowStep, leaveOpen, 
       reviewRecheckReviewers: prSideReviewerNames,
       localReviewers: localPhaseReviewers,
       localReviewRequired: localPhaseReviewRequired,
+      mergeHandoff,
     }),
     crossPhaseNote: ({ prSideReviewerNames, configuredReviewerPositions, reviewerPositionLabel }) => (
       (localPhaseCanShortCircuit && localPhaseReviewers.length)
@@ -649,7 +651,7 @@ function buildInlinePhaseTexts({ inlineExitStep, inlineWorkflowStep, leaveOpen, 
  * phase where the system may already have pre-requested the initial Copilot
  * review, which it does only when copilot LEADS the configured order.
  */
-function buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId }) {
+function buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId, mergeHandoff }) {
   const objective = leaveOpen
     ? '**Your job is to drive the review-and-fix loop to completion. Do NOT merge — this PR is tracked in JIRA and a human lands it.**'
     : '**Your job is to drive the review-and-fix loop to completion and merge the PR.**';
@@ -667,7 +669,7 @@ function buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNum
     opening: ctx => `A previous agent finished implementing the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on branch \`${prBranch}\`. ${initialReviewState(ctx)} ${objective}`,
     compactOpening: ctx => `A previous agent finished task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. ${initialReviewState(ctx)} ${leaveOpen ? 'Drive the review-and-fix loop to completion — do NOT merge (JIRA-tracked; a human lands it).' : 'Drive the review-and-fix loop to completion and merge.'}`,
     closingSteps: ({ forge, prSideReviewerNames }) => buildPrSideClosingSteps({
-      leaveOpen, exitStep, forge, reviewRecheckReviewers: prSideReviewerNames,
+      leaveOpen, exitStep, forge, reviewRecheckReviewers: prSideReviewerNames, mergeHandoff,
     }),
   };
 }
@@ -680,15 +682,15 @@ function buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNum
  * section is a field here, so a wrong-phase sentence is a mismatched field
  * rather than a `localOnly ? … : …` pair 400 lines from its sibling (#6846).
  */
-function resolveReviewPhase({ localOnly, inline, inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired }) {
+function resolveReviewPhase({ localOnly, inline, inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId, localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, mergeHandoff }) {
   if (localOnly) return buildLocalPhaseTexts({ baseBranch, prBranch, localPhaseReviewRequired });
   if (inline) {
     return buildInlinePhaseTexts({
       inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber,
-      localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired,
+      localPhaseReviewers, localPhaseCanShortCircuit, localPhaseReviewRequired, mergeHandoff,
     });
   }
-  return buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId });
+  return buildFollowUpPhaseTexts({ leaveOpen, baseBranch, prBranch, prUrl, prNumber, sourceTaskId, mergeHandoff });
 }
 /**
  * Build the **review-loop follow-up** section — the instructions for the
@@ -750,7 +752,7 @@ function resolveReviewPhase({ localOnly, inline, inlineExitStep, inlineWorkflowS
  *   but still permits publication.
  * @returns {string}
  */
-export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false, rprBody = null, localAgentLoopBody = null, localAgentLoopBodyPath = null, inlineExitStep = null, forgeCli = null, localOnly = false, baseBranch = '<base-branch>', reviewerPositions = [], inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false } = {}) {
+export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false, rprBody = null, localAgentLoopBody = null, localAgentLoopBodyPath = null, inlineExitStep = null, forgeCli = null, localOnly = false, baseBranch = '<base-branch>', reviewerPositions = [], inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localPhaseReviewers = [], localPhaseCanShortCircuit = false, localPhaseReviewRequired = false, mergeHandoff = false } = {}) {
   // One parameter, not two: an `inline` boolean alongside it could disagree with
   // it, and the disagreement renders silently — `inline` with a blank exit step
   // emits a bare "6." and a truncated merge-gate hand-back.
@@ -795,12 +797,12 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     return forkNote + buildMergeFollowUpSection({
       prUrl, prBranch, prNumber, prOwner, prRepo, sourceTaskId, verbose, inlineExitStep,
       mergeGateForge: forge.mergeGateForge, inlineWorkflowStep, localReviewers: localPhaseReviewerList, localReviewRequired: localPhaseReviewRequired,
-      selfReview: isSelfReviewFollowUp(metadata),
+      selfReview: isSelfReviewFollowUp(metadata), mergeHandoff,
     });
   }
   const phase = resolveReviewPhase({
     localOnly, inline, inlineExitStep, inlineWorkflowStep, leaveOpen, baseBranch, prBranch, prUrl, prNumber,
-    sourceTaskId, localPhaseReviewers: localPhaseReviewerList, localPhaseCanShortCircuit, localPhaseReviewRequired,
+    sourceTaskId, localPhaseReviewers: localPhaseReviewerList, localPhaseCanShortCircuit, localPhaseReviewRequired, mergeHandoff,
   });
   const {
     usernames, reviewers, reviewerMaxRounds, stopMode,
@@ -1102,7 +1104,7 @@ export const LEAVE_PR_OPEN_STEP = (step, jiraTracked = false) => `${step}. **Lea
  *   forge command to show beside the primary merge command.
  * @returns {{lines: string[], nextStep: number}}
  */
-export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>', forge = 'github', alreadyMergedHint = ' (a saved `/do:pr` default can merge it for you)', localReviewers = [], localReviewRequired = false, reviewRecheckReviewers = [], mergeEquivalentLine = null, deleteBranch = true }) {
+export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>', forge = 'github', alreadyMergedHint = ' (a saved `/do:pr` default can merge it for you)', localReviewers = [], localReviewRequired = false, reviewRecheckReviewers = [], mergeEquivalentLine = null, deleteBranch = true, mergeHandoff = false }) {
   const gh = forge !== 'gitlab';
   const glab = forge !== 'github';
   const both = gh && glab;
@@ -1143,7 +1145,7 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
   const lines = [
     localReviewMergeGuard || null,
     localReviewAfterCodeFix ? `**Code-changing CI fix gate:**${localReviewAfterCodeFix}` : null,
-    gh ? buildAutoMergeHandoffInstructions(prRef) : null,
+    gh ? buildAutoMergeHandoffInstructions(prRef, { mergeHandoff }) : null,
     `${startStep}. **Wait for CI to finish**: ${checksCmd}. "No checks reported" is AMBIGUOUS — a just-opened PR reports it while checks are still attaching, and merging on it races the CI this gate exists to wait for. Treat it as green ONLY when the repo genuinely has no CI (${gh ? '`gh workflow list` is empty / nothing in `.github/workflows` triggers on pull_request, and no external status check is configured' : 'no `.gitlab-ci.yml` and no pipeline is configured'}). If CI IS expected, wait 30s and re-check for up to 5 minutes — and if it still hasn't attached, **leave the PR open and say so**; never merge on checks that were expected but never appeared.`,
     `${startStep + 1}. **Clear whatever blocks the merge, then re-check.** A conflict-free branch may merge behind the base when required checks pass for its current head and configured reviews are satisfied. Base movement alone does not require rebasing or restarting CI. Rebase only for actual conflicts, an enforced up-to-date branch policy, or evidenced integration risk; after any resulting head change, rerun affected validation and required reviews/checks. If a check failed, read the failing job's log (${gh ? `\`gh run view --log-failed\`${glab ? ' on GitHub, `glab ci trace` on GitLab' : ''}` : '`glab ci trace`'}), identify the failure and affected head, and make a feasible evidence-driven diagnosis or recovery attempt before a hold: focused reproduction, a validated fix, or one justified diagnostic rerun. Filing an issue alone is not an attempt, and a passing rerun alone does not diagnose a flake. Never blindly retry until green or weaken tests. If the cause is fixable, run the project's tests, commit (\`fix:\` prefix, no Co-Authored-By), and push.${reviewRecheckAfterCodeFix} Then return to CI on the exact current head. Respect configured retry budgets and cap fix rounds at 5. If logs or a necessary prerequisite are unavailable, recovery is unsafe, or evidenced attempts are exhausted, preserve the PR and checkout and report the blocker and attempts as incomplete or blocked; never bypass red CI. If ${mergeableCmd}, \`git fetch origin\`, rebase onto the base branch, resolve the conflicts keeping BOTH sides' intent,${rebaseReviewSuffix} re-run the tests, \`git push --force-with-lease\`, and re-check.`,
     `${startStep + 2}. **Merge** ${gh ? 'with these flags, replacing <verified-head> with the exact head whose required CI and configured reviews passed' : 'with exactly these flags, nothing else'} — a true merge commit keeps the branch tip in the base branch's history so automated worktree cleanup can prove the branch is merged, ${gh ? 'unless the exact-head durable PortOS successor above accepted responsibility for the remaining work' : 'and any merge-deferral flag leaves the PR open after you exit'}. If it is already merged${alreadyMergedHint}, skip to the next step:`,
@@ -1180,7 +1182,7 @@ export function buildCiMergeGateSteps(startStep, { prRef, mrRef = '<MR_NUMBER>',
  * @param {Object} opts - PR coordinates + `verbose` (full/api path) vs compact.
  * @returns {string}
  */
-function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '', prRepo = '', sourceTaskId = 'unknown', verbose = false, inlineExitStep = null, mergeGateForge = 'github', inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localReviewers = [], localReviewRequired = false, selfReview = false }) {
+function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '', prRepo = '', sourceTaskId = 'unknown', verbose = false, inlineExitStep = null, mergeGateForge = 'github', inlineWorkflowStep = INLINE_REVIEW_LOOP_STEP, localReviewers = [], localReviewRequired = false, selfReview = false, mergeHandoff = false }) {
   const inline = inlineExitStep !== null;
   const hasLocalReview = Array.isArray(localReviewers) && localReviewers.length > 0;
   // How the self-review step tells the agent to read the change. Forge-derived
@@ -1249,6 +1251,7 @@ function buildMergeFollowUpSection({ prUrl, prBranch, prNumber = '', prOwner = '
     forge: mergeGateForge,
     localReviewers,
     localReviewRequired,
+    mergeHandoff,
     // An inline run reached this gate through plain `git`/`gh` — it never ran
     // `/do:pr`, so a saved slashdo merge default can't have landed the PR for it.
     alreadyMergedHint: inline ? '' : undefined,

@@ -9,7 +9,7 @@ export const LEGACY_FORGE_MAINTENANCE_REASON = 'This legacy forge maintenance ta
 
 export const isForgeMaintenanceTask = task => ['pr-watcher', 'issue-reconcile'].includes(task?.metadata?.analysisType);
 
-// TASKS.md stores scalar metadata as text; freshly generated tasks use numbers.
+// Generated tasks store a number; rows stored before #16407 and peers on older versions hold its text.
 // Accept only the exact current value, without coercing arbitrary input.
 export const hasCurrentForgeMaintenanceEvidence = task =>
   task?.metadata?.forgeMaintenanceVersion === FORGE_MAINTENANCE_VERSION

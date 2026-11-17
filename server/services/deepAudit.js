@@ -18,11 +18,12 @@ import { deepAuditProgress, mergeDeepAuditReport, DEEP_AUDIT_CONTRACT_VERSION } 
 import { PROMPT_VERSIONS } from './taskPromptDefaults/versions.js';
 import { resolveTaskHookType } from './taskTypeHooks.js';
 import { toPgJson } from '../lib/pgJson.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 function deepAuditId(task) {
   const meta = task.metadata || {};
   return meta.deepAuditId || meta.quotaBurnStepId || (meta.app
-    ? `deep-${canonicalSnapshotChecksum({ app: meta.app, category: resolveTaskHookType(task) || 'code-quality', job: meta.jobId || null, fileIssues: meta.fileIssues === true || meta.fileIssues === 'true' }).slice(0, 32)}`
+    ? `deep-${canonicalSnapshotChecksum({ app: meta.app, category: resolveTaskHookType(task) || 'code-quality', job: meta.jobId || null, fileIssues: isTruthyMeta(meta.fileIssues) }).slice(0, 32)}`
     : task.id);
 }
 
@@ -88,7 +89,7 @@ export async function getDeepAuditSourceRevision(task, deps = {}) {
   const ledger = await (deps.readLedger || getDeepAuditLedger)(deepAuditId(task));
   if (!ledger) return null;
   const category = isAuditTaskType(resolveTaskHookType(task)) ? normalizeAuditTaskType(resolveTaskHookType(task)) : 'code-quality';
-  const delivery = task.metadata.fileIssues === true || task.metadata.fileIssues === 'true' ? 'file-issues' : 'fix';
+  const delivery = isTruthyMeta(task.metadata.fileIssues) ? 'file-issues' : 'fix';
   if (ledger.appId !== task.metadata.app || ledger.category !== category || ledger.delivery !== delivery) {
     throw new Error('Deep audit resume must keep the same app, category and delivery mode');
   }

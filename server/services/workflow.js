@@ -170,7 +170,7 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
         perpetual: info.perpetual === true,
         autoStart: info.autoStart ?? (info.perpetual === true),
         intervalMs: info.intervalMs ?? null,
-        effectiveIntervalMs: info.adjustedIntervalMs ?? info.intervalMs ?? null,
+        effectiveIntervalMs: info.intervalMs ?? null,
         cronExpression: info.cronExpression ?? null,
         recheckCron: info.recheckCron ?? null,
         recheckIntervalMs: info.recheckIntervalMs ?? null,

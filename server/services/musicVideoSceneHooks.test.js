@@ -269,6 +269,16 @@ describe('music-video scene completion hooks → takes', () => {
     expect(takes.find((t) => t.assetId === 'clip-plain')).not.toHaveProperty('tier');
   });
 
+  // Uniquely catches a completed clip dropping the character references its submit recorded (#16473).
+  it('keeps the character references a clip was sent on its take', async () => {
+    const job = videoJob(project.id, scene.sceneId, 'clip-refs');
+    const castInputs = { ingredientId: null, guides: [], sheets: [], characters: [{ id: 'mvr-cs-character', imageId: 'ada.png' }] };
+    job.params.musicVideoCastInputs = castInputs;
+    mediaJobEvents.emit('completed', job);
+    await waitFor(async () => (await sceneOf(project.id, scene.sceneId))?.takes?.some((t) => t.assetId === 'clip-refs'));
+    expect((await sceneOf(project.id, scene.sceneId)).takes.find((t) => t.assetId === 'clip-refs').castInputs).toEqual(castInputs);
+  });
+
   it('keeps a clip using an untracked cast guide unselected after completion', async () => {
     await projects.updateScene(project.id, scene.sceneId, { referenceImageId: 'frame-a.png' });
     const current = await projects.getProject(project.id);

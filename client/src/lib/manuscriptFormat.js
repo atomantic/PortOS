@@ -1,107 +1,47 @@
 /**
  * Pure manuscript text normalizer for the Manuscript editor's "Format" button.
  *
- * `formatManuscript(text, stageId)` / `REFLOW_STAGES` — normalize a manuscript section's text for the
- * editor's "Format" button: undo PDF-paste artifacts (stylized drop-cap split onto its own line,
- * hyphen-split words, trailing whitespace, runaway blank lines) for every stage, and additionally
- * reflow soft-wrapped lines back into paragraphs for `prose` only (scripts keep their structural line
- * breaks). Pure/DOM-free.
+ * `formatManuscript(text, stageId)` / `REFLOW_STAGES` undo PDF-paste artifacts (stylized drop-cap split onto its own line, hyphen-split words,
+ * orphaned closing quotes, trailing whitespace, runaway blank lines) for every stage, and additionally reflow soft-wrapped lines back into
+ * paragraphs for `prose` only: scripts (comic / teleplay / anything else) carry meaning in their line breaks, so they get the conservative cleanup only.
  *
- * The motivating mess: text pasted out of a PDF export arrives hard-wrapped at
- * the page margin (every visual line is a real `\n`), with stylized drop-caps
- * split onto their own line ("T\nhe dawn …"), words hyphenated across the wrap
- * ("approxi-\nmating"), and closing quotes orphaned from the text they
- * terminate (alone on a line, wrapped to the next line, or with a stray space
- * before them). `formatManuscript(text, stageId)` undoes those paste artifacts
- * so a paragraph reads as one logical line again.
+ * Reflow heuristic: a document is often a MIX of joined and wrapped paragraphs with no blank lines between them, so a global line-width threshold is
+ * unsound. Join a line onto the previous one ONLY when it begins with a lowercase letter; a real sentence, heading or attribution never does, so this is the
+ * one near-zero-false-positive signal. A wrong join (merging paragraphs, swallowing a heading) is far worse than one extra break. Blank lines always separate paragraphs.
  *
- * Two altitudes, chosen by stage:
- *   - prose  → full reflow: join soft-wrapped lines back into paragraphs, plus
- *     quote re-attachment.
- *   - comic / teleplay / anything else → conservative cleanup ONLY. Scripts
- *     carry meaning in their line breaks (scene headings, panel descriptions,
- *     character cues), so we never reflow or touch their quotes — we only fix
- *     the unambiguous artifacts (drop-caps, hyphen splits, trailing whitespace,
- *     blank-line runs).
- *
- * Reflow heuristic (the hard part — PDF paste usually has NO blank lines between
- * paragraphs, and a document is often a MIX of already-joined single-line
- * paragraphs and genuinely-wrapped ones, so a global line-width threshold is
- * unsound — it both pulls the next paragraph into a long complete one and fails
- * to recognize a wrapped line once a longer paragraph raises the bar):
- *   Join a line onto the previous one ONLY when it begins with a lowercase
- *   letter. A real sentence, paragraph, heading, or attribution never starts
- *   lowercase, so this is the one near-zero-false-positive signal. A
- *   capital/quote/dash start keeps its break — it might be a new paragraph, and
- *   a wrong join (merging two paragraphs or swallowing a heading) is far more
- *   destructive than leaving one extra break. Blank lines always separate
- *   paragraphs and are never crossed.
- *
- * Pure + dependency-free (no DOM) so it runs in node test env too.
+ * Pure + dependency-free (no DOM) so it runs in the node test env too.
  */
 
-// Stages whose line breaks are prose-structural and safe to reflow. Everything
-// else (comicScript, teleplay, …) gets the conservative pass only.
+// Stages whose line breaks are prose-structural and safe to reflow; everything else gets the conservative pass only.
 export const REFLOW_STAGES = new Set(['prose']);
 
 const stripTrailingWs = (text) => text.split('\n').map((l) => l.replace(/[ \t]+$/, '')).join('\n');
 
-// Join a syllable hyphenated across a wrap: "approxi-\nmating" → "approximating".
-// Only letter-hyphen-newline-lowercase, so real line-final hyphens before a
-// capitalized word or number are left alone. Accepted miss: a genuinely
-// hyphenated compound that happens to wrap at its hyphen ("over-\nride") is
-// merged without the hyphen ("override") — unavoidable without a dictionary, and
-// rare enough that reflowing the common case is the better trade.
+// Join a syllable hyphenated across a wrap ("approxi-\nmating"); only letter-hyphen-newline-lowercase.
+// Accepted miss: a real compound wrapped at its hyphen ("over-\nride") loses it.
 const dehyphenate = (text) => text.replace(/([A-Za-z])-\n([a-z])/g, '$1$2');
 
-// Re-attach a stylized drop-cap that landed on its own line: a line that is a
-// single uppercase letter immediately followed by a line starting lowercase.
-// "T\nhe dawn" → "The dawn" (joined with NO space — it's one word). `I` and `A`
-// are excluded: they're the only single-letter English words, so a lone `I`/`A`
-// is almost always the WORD wrapped to its own line ("I\nam …"), which must
-// join WITH a space — left to reflowProse — not glue into "Iam". The rare
-// drop-cap "In"/"And" is the accepted miss.
+// Re-attach a stylized drop-cap on its own line ("T\nhe dawn" → "The dawn", no space). `I` and `A` are excluded: a lone one is almost always the WORD
+// ("I\nam"), which must join WITH a space via reflowProse. Accepted miss: drop-cap "In"/"And".
 const rejoinDropCaps = (text) => text.replace(/^([B-HJ-Z])\n(?=[a-z])/gm, '$1');
 
-// Re-attach closing double-quotes the PDF export orphaned. Three artifacts, all
-// keyed on a `"` separated from the text it should hug. (Straight quotes only —
-// a closing quote is one preceded by text / whitespace, never one immediately
-// followed by a word, which is how an opening quote reads.)
+// Re-attach closing double-quotes the PDF export orphaned (straight quotes only; a closing quote follows text/whitespace, an opening one precedes a word).
 const reattachQuotes = (text) => text
-  // A `"` alone on its own line collapses up onto the previous NON-BLANK line.
-  // The `(\S)` anchor both keeps the quote off a blank line and makes the pass
-  // idempotent — without it a quote sitting after a blank line would hop one
-  // line closer per run instead of stabilizing.
+  // A `"` alone on its own line collapses onto the previous NON-BLANK line; the `(\S)` anchor keeps it off blank lines and makes the pass idempotent.
   //   …diagnostics.\n"\n— Maggie  →  …diagnostics."\n— Maggie
   .replace(/(\S)\n[ \t]*"[ \t]*(?=\n|$)/g, '$1"')
-  // A `"` that wrapped to the START of the next line, followed by more text,
-  // hugs the previous line instead (no inserted space — it's a closing quote):
-  //   Panel Seven,\n" I say  →  Panel Seven," I say
-  // Accepted miss: a non-standard opening quote written with a space after it
-  // at line start (`\n" Wait`) is pulled up too; standard opening quotes hug
-  // their word (`"Wait`) and are untouched. Not worth tightening — the obvious
-  // guard (skip when the previous line ends in terminal punctuation) would
-  // regress the common closing-quote-after-a-sentence case (`gone.\n" she`).
+  // A `"` that wrapped to the START of the next line, followed by text, hugs the previous line:  Panel Seven,\n" I say  →  Panel Seven," I say
+  // Accepted miss: an opening quote written with a space after it at line start is pulled up too; guarding on terminal punctuation would regress the common closing-quote case.
   .replace(/\n[ \t]*"(?=[ \t]+\S)/g, '"')
-  // A stray space before a closing `"` at end of line — but only after
-  // sentence-terminating punctuation, the real "stray space" shape. Gating on
-  // [.!?] leaves an OPENING quote whose dialogue wrapped (`said, "\nGood`)
-  // alone, since it sits after a comma, not a sentence-ender.
+  // A stray space before a closing `"` at end of line, only after [.!?] so an OPENING quote whose dialogue wrapped (`said, "\nGood`) is left alone.
   //   relationships. "  →  relationships."
   .replace(/([.!?])[ \t]+"(?=[ \t]*$)/gm, '$1"');
 
-// Drop a stray opening-quote fragment the source duplicated onto its own line
-// just before the real quoted line — a PDF/LLM export artifact:
+// Drop a stray opening-quote fragment duplicated onto its own line before the real quoted line (PDF/LLM export artifact):
 //   "I
 //   "I need a calibration partner …   →   "I need a calibration partner …
-// Only fires when the fragment is an INCOMPLETE opening (a `"` plus a few
-// non-terminal chars, no closing quote) AND the next line is either the exact
-// same fragment or begins with it followed by WHITESPACE — the same way a true
-// duplicate continues (`"I` → `"I need …`, a space after the prefix). Requiring
-// whitespace (not any non-word char) is what keeps two genuinely distinct
-// dialogue lines apart: `"Wait` before `"Wait, no — …` continues into a comma,
-// not a space, so it is left alone; so are "Yes. / "No. (terminal punctuation —
-// not a fragment) and "I / "Information (the prefix runs into a letter).
+// Only fires on an INCOMPLETE opening (`"` plus a few non-terminal chars, no closing quote) when the next line is the same fragment or begins with it
+// followed by WHITESPACE; that keeps distinct dialogue apart (`"Wait` / `"Wait, no`, `"Yes. / "No.`, `"I / "Information`).
 const dropDuplicatedQuoteFragments = (text) => {
   const lines = text.split('\n');
   const out = [];

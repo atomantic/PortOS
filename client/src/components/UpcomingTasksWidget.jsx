@@ -4,10 +4,7 @@ import {
   Clock,
   ChevronRight,
   CheckCircle,
-  Timer,
-  TrendingUp,
-  TrendingDown,
-  Sparkles
+  Timer
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useSocketResource } from '../hooks/useSocketResource';
@@ -141,20 +138,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                 <span className="text-sm font-medium text-white truncate">
                   {task.description}
                 </span>
-                {task.learningAdjusted && (
-                  <span
-                    className={`flex items-center gap-0.5 text-xs ${
-                      task.adjustmentMultiplier < 1 ? 'text-port-success' : 'text-port-warning'
-                    }`}
-                    title={`Learning adjusted: ${task.successRate}% success rate`}
-                  >
-                    {task.adjustmentMultiplier < 1 ? (
-                      <TrendingUp size={10} />
-                    ) : (
-                      <TrendingDown size={10} />
-                    )}
-                  </span>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
@@ -188,20 +171,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
                 <span className="text-sm font-medium text-gray-300 truncate">
                   {task.description}
                 </span>
-                {task.learningAdjusted && (
-                  <span
-                    className={`flex items-center gap-0.5 text-xs ${
-                      task.adjustmentMultiplier < 1 ? 'text-port-success' : 'text-port-warning'
-                    }`}
-                    title={`Learning adjusted: ${task.successRate}% success rate`}
-                  >
-                    {task.adjustmentMultiplier < 1 ? (
-                      <TrendingUp size={10} />
-                    ) : (
-                      <TrendingDown size={10} />
-                    )}
-                  </span>
-                )}
               </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="flex items-center gap-1">
@@ -230,14 +199,6 @@ const UpcomingTasksWidget = memo(function UpcomingTasksWidget() {
           <Link to="/cos/schedule" className="hover:text-port-accent transition-colors">
             +{upcoming.length - 5} more scheduled tasks
           </Link>
-        </div>
-      )}
-
-      {/* Learning indicator */}
-      {upcoming.some(t => t.learningAdjusted) && (
-        <div className="mt-3 pt-3 border-t border-port-border flex items-center gap-2 text-xs text-purple-400">
-          <Sparkles size={12} />
-          <span>Schedule adjusted based on task performance</span>
         </div>
       )}
 

@@ -302,9 +302,9 @@ export async function cloneProject(id, options = {}) {
 }
 
 /**
- * Merge a project patch. With `{ edit: true }` a patch that touches neither the cast, the references
- * nor a style snapshot answers `{ edit }` (editResult.js) instead of the project, so the editing tab
- * patches its board; any other patch still answers the project, which the caller reloads from.
+ * Merge a project patch. With `{ edit: true }` it answers `{ edit }` (editResult.js) instead of the
+ * project, taken after the write's own follow-ups (reference naming, style snapshots), so the editing
+ * tab patches its board and never reads the project again.
  */
 export async function updateProject(id, patch, { edit: answerEdit = false } = {}) {
   const backend = await selectBackend();
@@ -317,11 +317,15 @@ export async function updateProject(id, patch, { edit: answerEdit = false } = {}
   // A reference added from the gallery or a mood board takes its catalog record's name.
   // Linking the cast alone leaves approvals current, so naming then must not stale them.
   const referencesChanged = resolved?.visualSpec?.references !== undefined;
-  if (answerEdit && !needsSnapshot && !castChanged && !referencesChanged) {
+  if (answerEdit) {
     const { applyProjectPatch } = await import('./projectsLogic.js');
     const { edit } = await editWrite(id, (current) => ({ project: applyProjectPatch(current, resolved) }),
       { catalogDescriptionBases, includeNewLinks: true });
-    return withEditResult({}, edit);
+    if (castChanged) queueProjectCatalogLinkSync(id);
+    // Naming the references is a second write: when it changed any, the edit result is taken against the record as it is now.
+    const named = referencesChanged || castChanged ? await labelProjectReferences(id, { backfill: !referencesChanged }) : null;
+    if (!named) return withEditResult({}, edit);
+    return withEditResult({}, edit, await getProject(id, edit.reads ? { catalogReads: edit.reads } : {}));
   }
   const nameReferences = async (saved) => (referencesChanged || castChanged
     ? (await labelProjectReferences(id, { backfill: !referencesChanged }))?.project || saved : saved);
@@ -815,9 +819,13 @@ export async function swapProjectSceneFrames(id, sceneId, { edit: answerEdit = f
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review, { edit: answerEdit = false } = {}) {
-  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit);
+  // A catalog project's character references come from its check-in, which only the full write resolves,
+  // so accepting them is checked there whether or not the caller wants an edit result (#16473).
+  const accepting = Boolean(review.acceptCharacterReferences);
+  const { project, scene, edit } = await takeDecisionWrite(id, (current) => reviewTake(current, sceneId, takeId, review), answerEdit || accepting);
   // The edit result's copy of the shot is presented as GET presents it (catalog check-in included).
   if (answerEdit) return { scene: edit.scenes.find((entry) => entry.sceneId === sceneId) || scene, edit };
+  if (accepting) return edit.scenes.find((entry) => entry.sceneId === sceneId) || scene;
   // A scene-only write presents takes against the stored record. A confirmation's reply is what the
   // board shows as cleared, so present it as GET does, with the catalog check-in (#16274).
   if (!review.confirmFrame || project?.castAndSets?.source !== 'catalog') return scene;

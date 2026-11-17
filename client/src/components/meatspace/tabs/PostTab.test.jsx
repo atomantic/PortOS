@@ -3,10 +3,20 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router';
 import PostTab from './PostTab';
 
-// Settle the mount-effect fetches (config/sessions/stats/morse progress) inside
-// act so their state updates can't land outside it mid-test — the mocks are all
-// pre-resolved promises, so one microtask flush drains every pending .then.
-const settle = () => act(async () => {});
+// The trainers under test are lazy chunks in PostTab. Load them once up front so
+// the first test to open one does not race its module transform; after that a
+// lazy import resolves within one macrotask.
+await Promise.all([
+  import('../post/MorseTrainer'),
+  import('../post/MemoryPractice'),
+  import('../post/ElementsSong'),
+]);
+
+// Settle the mount-effect fetches (config/sessions/stats/morse progress) and the
+// lazy trainer imports inside act so their state updates can't land outside it
+// mid-test. The api mocks are pre-resolved promises; the macrotask gives the
+// cached dynamic import room to resolve and React room to mount the trainer.
+const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 
 // PostTab pulls config/sessions/stats on mount and drives a session hook; stub
 // both so the component renders in isolation. The Morse tab doesn't depend on
@@ -69,7 +79,7 @@ const { MEMORY_ITEM, ELEMENTS_ITEM, getPostRecommendations, POST_SESSION_OVERRID
   POST_SESSION_OVERRIDE: { current: null },
 }));
 
-vi.mock('../../../hooks/usePostSession', () => ({
+vi.mock('../post/usePostSession', () => ({
   usePostSession: () => POST_SESSION_OVERRIDE.current || ({
     state: 'idle',
     drills: [],

@@ -317,3 +317,51 @@ describe('Blender film legacy clip locks', () => {
     }
   });
 });
+
+describe('lyric timing verification basis', () => {
+  const verified = (edit) => {
+    const p = project();
+    const base = { ...p, audioAnalysis: { durationSec: 8, sections: [{ label: 'verse', startSec: 0, endSec: 8 }], beats: [0, 1, 2] }, lyricMarkers: [] };
+    return productionReadiness(edit({ ...base, productionReview: { ...base.productionReview, alignmentBasis: productionAlignmentBasis(base) } })).alignment.status;
+  };
+
+  it('survives a section rename, a lyric marker and a nudged beat grid, which move no word', () => {
+    expect(verified((p) => p)).toBe('verified');
+    expect(verified((p) => ({ ...p, audioAnalysis: { ...p.audioAnalysis, sections: [{ label: 'chorus', startSec: 0, endSec: 8 }] } }))).toBe('verified');
+    expect(verified((p) => ({ ...p, lyricMarkers: [{ type: 'section', label: 'Chorus', atSec: 3 }] }))).toBe('verified');
+    expect(verified((p) => ({ ...p, audioAnalysis: { ...p.audioAnalysis, beats: [0.1, 1.1, 2.1] } }))).toBe('verified');
+  });
+
+  it('goes stale when a word time moves, a word changes or the audio is replaced', () => {
+    const cue = (p, patch) => ({ ...p, lyricCues: [{ ...p.lyricCues[0], ...patch }] });
+    expect(verified((p) => cue(p, { words: [{ w: 'walking', startSec: 0.6, endSec: 1 }, p.lyricCues[0].words[1]] }))).toBe('stale');
+    expect(verified((p) => cue(p, { text: 'walking away' }))).toBe('stale');
+    expect(verified((p) => ({ ...p, uploadedAudioFilename: 'other.wav' }))).toBe('stale');
+    expect(verified((p) => ({ ...p, audioAnalysis: { ...p.audioAnalysis, durationSec: 9 } }))).toBe('stale');
+  });
+
+  it('keeps a project verified under the pre-split basis (whole storyboard source) verified', () => {
+    // Literal produced by the previous formula for this exact fixture.
+    const legacyBasis = 'a9e8c47ecf5265a35459eaefe63a76dd';
+    const p = project();
+    const legacy = { ...p, audioAnalysis: { durationSec: 8, sections: [{ label: 'verse', startSec: 0, endSec: 8 }], beats: [0, 1, 2] }, lyricMarkers: [],
+      productionReview: { ...p.productionReview, alignmentBasis: legacyBasis } };
+    expect(productionReadiness(legacy).alignment.status).toBe('verified');
+    expect(productionReadiness({ ...legacy, uploadedAudioFilename: 'other.wav' }).alignment.status).toBe('stale');
+  });
+});
+
+describe('readiness problem codes', () => {
+  it('tags each problem with a stable code and shot while problems keeps the same sentences', () => {
+    const p = project();
+    const bare = { ...p, scenes: [{ sceneId: 's1', label: 'Verse', startSec: 0, endSec: 4 }], productionReview: { ...p.productionReview, alignmentBasis: null } };
+    const { storyboard } = productionReadiness(bare);
+    expect(storyboard.problems).toEqual([...new Set(storyboard.problemItems.map((i) => i.message))]);
+    const byCode = Object.fromEntries(storyboard.problemItems.map((i) => [i.code, i]));
+    expect(byCode['art-unapproved']).toBeTruthy();
+    expect(byCode['alignment-unverified'].message).toBe('Lyric alignment is provisional or changed. Listen and verify the current word timings.');
+    expect(byCode.coverage).toBeTruthy();
+    expect(byCode['shot-incomplete'].sceneId).toBe('s1');
+    expect(productionReadiness(bare).proof.problemItems.map((i) => i.code)).toContain('proof-needs-storyboard');
+  });
+});

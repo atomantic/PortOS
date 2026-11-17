@@ -11,7 +11,7 @@ import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/validation.js';
+import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/cosValidation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { describeReaimedValues } from '../lib/jobFormFields.js';
@@ -93,12 +93,6 @@ router.get('/jobs/gates', asyncHandler(async (req, res) => {
       : { jobId: gateIds[i], shouldRun: true, reason: `Gate error (fail-open): ${s.reason?.message || s.reason}`, error: true }
   );
   res.json({ gates: results });
-}));
-
-// POST /api/cos/jobs/:id/gate-check - Check a job's LLM gate without running
-router.post('/jobs/:id/gate-check', asyncHandler(async (req, res) => {
-  const result = await checkJobGate(req.params.id);
-  res.json({ jobId: req.params.id, hasGate: hasGate(req.params.id), ...result });
 }));
 
 // GET /api/cos/jobs/:id - Get a single job

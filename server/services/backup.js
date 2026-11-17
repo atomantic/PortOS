@@ -265,6 +265,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/python/laya-mlx/', reason: 'Rebuildable Laya-MLX experiment runtime and pinned model weights', overridable: false },
   { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
+  { path: '/cos/initialized-checkout-fixtures/', reason: 'Retired CoS checkout test fixtures — regenerable, removed by migration 461', overridable: false },
   { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
   { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
@@ -790,7 +791,7 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
     const releaseSnapshotCut = await acquireBackupSnapshotCut();
     // The snapshot records how far that guarantee reaches: `global` only once
     // no durable asset owner remains outside admission.
-    const assetConsistency = backupAssetConsistency();
+    const assetConsistency = { ...backupAssetConsistency(), reclaimedLeases: releaseSnapshotCut.reclaimedLeases ?? 0 };
     let pgResult;
     let restoreWarning = null;
     try {
@@ -2467,7 +2468,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     return {
       status: 'failed',
       reason: 'backup_snapshot_busy',
-      error: 'A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes.',
+      error: `A backup is capturing the database or an asset publication did not finish draining. Restore was refused without changing data; retry when it finishes. ${err.message}`,
     };
   }
   try {

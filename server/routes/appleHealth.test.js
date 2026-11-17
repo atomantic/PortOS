@@ -28,7 +28,7 @@ vi.mock('../services/appleHealthXml.js', () => ({
   }),
 }));
 vi.mock('../services/appleHealthQuery.js', () => ({
-  getMetricSummary: vi.fn(), getDailyAggregates: vi.fn(), getAvailableDateRange: vi.fn(),
+  getMetricSummary: vi.fn(), getDailyAggregates: vi.fn(),
   getCorrelationData: vi.fn(), getAvailableMetrics: vi.fn(),
   getLatestMetricValues: vi.fn(async () => ({ step_count: 1 })),
 }));

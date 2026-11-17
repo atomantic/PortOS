@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../lib/fileCore.js';
-import { codexRenderReceipt, readRenderReceipts, recordRenderReceipt, publishAccountingFile } from './imageRenderUsage.js';
+import { codexRenderReceipt, ensureRenderAggregate, readRenderReceipts, recordRenderReceipt, publishAccountingFile } from './imageRenderUsage.js';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fingerprint = plan => {
@@ -102,9 +102,12 @@ export async function applyImageRenderBackfill(dataDir, reviewedPlan, journalPat
   // precisely our additions, even if the final journal update did not land.
   const journal = { version: 1, batch, inventoryHash: current.inventoryHash, status: 'applying', plannedIds: current.receipts.map(row => row.id), inserted: 0 };
   if (!await publishAccountingFile(journalPath, journal)) throw new Error('Journal already exists; choose a new journal path');
+  const directory = join(dataDir, 'image-render-usage');
+  // One rebuild after the batch instead of rewriting the aggregate index per inserted receipt.
   for (const receipt of current.receipts) {
-    if (await recordRenderReceipt({ ...receipt, backfillBatch: batch }, { directory: join(dataDir, 'image-render-usage') })) journal.inserted++;
+    if (await recordRenderReceipt({ ...receipt, backfillBatch: batch }, { directory, aggregate: false })) journal.inserted++;
   }
+  await ensureRenderAggregate({ directory });
   journal.status = 'complete';
   await atomicWrite(journalPath, journal);
   return { ...current.coverage, inserted: journal.inserted, batch };

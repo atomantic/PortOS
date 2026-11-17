@@ -23,25 +23,36 @@
  * through a literal path anchored at `import.meta.url`, `__dirname`,
  * `process.cwd()` or an identifier bound to one of those (a literal that
  * names a directory contributes its whole tree, bounded by
- * `DIRECTORY_INPUT_LIMIT`); the installed version of every package the
+ * `DIRECTORY_INPUT_LIMIT`; past it, a tree that is only read as data is taken
+ * from the repository listing instead, `dataTree`); for a real-browser test,
+ * every directory the test file hands to a dev server, bundler or static
+ * server (`handedDirs`); the installed version of every package the
  * members reach; the sibling imports of a Python sidecar; the version of an
  * external program a member reaches (`TEST_MEMO_TOOLS`); the workspace's
  * Vitest configuration closure and manifest, less the test-selection modules
  * and bare mock registrations (`workspaceBase`; for a recorded key, the setup
  * files and custom environment come from the record instead of the static
  * walk: `WORKSPACE_SETUP_ENTRIES`); the full Node version, platform and
- * arch; and `TEST_MEMO_ENV`.
+ * arch; `TEST_MEMO_ENV`; and the arguments that select which cases run
+ * (`caseFilter`).
  *
  * Fail closed. A test is not memoizable when a member reads a path the
  * analyzer cannot resolve, when a test or `scripts/` member spawns `git`
  * (repository state is not in the key), when a directory input exceeds the
- * limit, when a test or `scripts/` member reads machine-local state (`data/`,
+ * limit and the listing cannot stand in for it (the repository root, a tree
+ * that is spawned or may be loaded natively, a nested repository), when a
+ * test or `scripts/` member reads machine-local state (`data/`,
  * the home directory), when the `// test-memo: never` marker is present, when
  * the test is in the planner's `ALWAYS_RUN_TESTS` or `TEST_MEMO_NEVER`, or —
  * for the floor key only — when a module edge is non-literal or unresolvable.
  * A recorded set that reaches outside the repository is not memoizable
  * either. Every unknown construct lands in one of those buckets rather than
  * silently narrowing the key.
+ *
+ * Related selection (`relatedTests`) reuses the records: a test with a
+ * version 2 record (per-module digests) is selected through
+ * `recordedReach`, which follows a lazy `import()` only where the record
+ * cannot vouch for it; any other test through its full closure.
  *
  * The store is `testMemoStore.js`; selection and the summary line live in
  * `scripts/run-ci-tests.js`.
@@ -57,6 +68,13 @@ export { tokenize } from './sourceTokens.js';
 
 /** Opt-out marker; anywhere in a test or a closure member. */
 export const NEVER_MARKER = /\/\/\s*test-memo:\s*never\b/;
+
+/**
+ * Hex characters of sha256 a v2 memo record keeps per loaded module. It only
+ * detects that a module changed since the record (never authenticates), so
+ * 64 bits is ample and keeps records small.
+ */
+export const RECORD_DIGEST_LENGTH = 16;
 
 /** A literal directory input larger than this is "the tree", not an input. */
 export const DIRECTORY_INPUT_LIMIT = 400;
@@ -196,7 +214,7 @@ const NON_READ_CALLEES = new Set([
   'toBe', 'toEqual', 'toStrictEqual', 'toContain', 'toMatch', 'toHaveBeenCalledWith', 'toMatchObject', 'log',
   'error', 'warn', 'info', 'debug', 'stringify', 'encodeURIComponent', 'escapeRegExp', 'RegExp', 'toModuleKey',
   'push', 'add', 'set', 'has', 'get', 'map', 'filter', 'some', 'every', 'test', 'match', 'exec', 'isDirectlyInvoked',
-  'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat',
+  'describe', 'it', 'Error', 'TypeError', 'diagnosticTestFile', 'concat', 'from', 'padEnd', 'padStart', 'repeat', 'createRequire',
   'mkdirSync', 'mkdir', 'writeFileSync', 'writeFile', 'rmSync', 'rm', 'unlinkSync', 'renameSync', 'rename',
 ]);
 /** `exec`/`spawn`-style sinks whose first argument names a program. */
@@ -250,8 +268,9 @@ const HOME = Object.freeze({ k: 'home' });
 const NODE = Object.freeze({ k: 'node' });
 const str = (v) => ({ k: 'str', v });
 const normalizeRel = (value) => {
-  const normalized = posix.normalize(value);
-  return normalized === '.' ? '' : normalized.replace(/\/$/, '');
+  // `new URL('../../', import.meta.url)` normalizes to './': the root is '' however it was spelled.
+  const normalized = posix.normalize(value).replace(/\/$/, '');
+  return normalized === '.' ? '' : normalized;
 };
 const pathValue = (v, extra = {}) => ({ k: 'path', v: normalizeRel(v), partial: false, isDir: false, ...extra });
 const dirValue = (v) => pathValue(v, { isDir: true });
@@ -502,7 +521,11 @@ function enclosingOpen(tokens, match, index) {
  * From an anchor token, walk outward through enclosing path-building calls
  * and `+` chains to the widest expression that still evaluates as a path,
  * and report what consumes it. `null` means the occurrence is a binding
- * initializer, a reassignment, or a `cwd:`/`root:` option — never a read.
+ * initializer or a reassignment. `option` names a `cwd:`/`root:`/`dir:`/
+ * `base:` property the expression is the value of: where a tool is rooted,
+ * never a read by this file, though a directory there is still handed to the
+ * tool (`handedDirs`). `member` marks any other object-literal value
+ * (`key: <expr>` or the shorthand `{ name }`), which a block's `{` is not.
  */
 function widestPathExpression(tokens, match, index) {
   let start = index;
@@ -526,8 +549,10 @@ function widestPathExpression(tokens, match, index) {
   }
   const before = tokens[start - 1];
   if (before?.t === 'p' && before.v === '=') return null;
-  if (before?.t === 'p' && before.v === ':' && tokens[start - 2]?.t === 'id' && ['cwd', 'root', 'dir', 'base'].includes(tokens[start - 2].v)) return null;
   const parent = enclosingOpen(tokens, match, start);
+  if (before?.t === 'p' && before.v === ':' && tokens[start - 2]?.t === 'id' && ['cwd', 'root', 'dir', 'base'].includes(tokens[start - 2].v)) {
+    return { index: start, consumer: null, walk: false, bare: start === index, option: tokens[start - 2].v, member: true };
+  }
   let consumer = null;
   let walk = false;
   if (parent !== null && tokens[parent].v === '(') {
@@ -538,7 +563,10 @@ function widestPathExpression(tokens, match, index) {
     walk = outer !== null && tokens[outer].v === '(' && SPAWN_CALLEES.has(calleeName(tokens, outer) ?? '');
     consumer = walk ? calleeName(tokens, outer) : null;
   }
-  return { index: start, consumer, walk, bare: start === index };
+  const punct = (token, ...values) => token?.t === 'p' && values.includes(token.v);
+  const keyed = punct(before, ':') && (tokens[start - 2]?.t === 'id' || tokens[start - 2]?.t === 's') && punct(tokens[start - 3], '{', ',');
+  const shorthand = start === index && punct(before, '{', ',');
+  return { index: start, consumer, walk, bare: start === index, option: null, member: parent !== null && tokens[parent].v === '{' && (keyed || shorthand) };
 }
 
 // ---------------------------------------------------------------------------
@@ -553,12 +581,14 @@ function widestPathExpression(tokens, match, index) {
 export function extractFileFacts(src, { fileRel, cwdRel }) {
   const facts = {
     edges: [], // { spec, kind: 'static'|'dynamic'|'require'|'mock' (registration)|'mock-import' }
-    paths: [], // { rel, walk } — repo-relative literal paths
-    dirs: [], // { rel, walk } — repo-relative directory prefixes whose tree is an input
+    paths: [], // { rel, walk, read } — repo-relative literal paths; `read`: only handed to a filesystem read
+    dirs: [], // { rel, walk, guessed } — repo-relative directory prefixes whose tree is an input; guessed: the prefix of a path with a variable segment
     scopedNames: [], // basenames a require() reads under an unknown directory: every tracked file of that name is an input
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
     unresolvedEdges: [], // the module graph is not fully known from source
     unresolvedInputs: [], // a filesystem input is not fully known from source
+    handedDirs: [], // complete directories given to code the analyzer does not model (a Vite root, a static server)
+    nativeUnresolved: false, // a non-literal require(): a native load no recording shows
     localReads: [], // machine-local state a member reads (home directory); the test or tooling fails closed on it
     tools: new Set(), // external programs reached (TEST_MEMO_TOOLS)
     never: NEVER_MARKER.test(src),
@@ -609,7 +639,12 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     return last?.k === 'str' && /\.(?:c?js|mjs|json|node)$/.test(last.v) ? posix.basename(last.v) : null;
   };
 
-  const record = (value, { walk = false, consumer = null, bare = false } = {}) => {
+  const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
+    if (option !== null) {
+      // The value of a rooting option is not read here; a directory is still what the tool works from.
+      if (value.k === 'path' && !value.partial && option !== 'cwd') facts.handedDirs.push(value.v);
+      return true;
+    }
     if (value.k === 'home') {
       if (!(consumer !== null && NON_READ_CALLEES.has(consumer))) facts.localReads.push('~');
       return true;
@@ -626,11 +661,16 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // or passed nowhere (`cwd || process.cwd()`) is a value. A partial path (variable
       // segments) or a directory handed to a read/spawn sink is a read of that tree.
       const read = value.partial || (consumer !== null && (READ_CALLEES.has(consumer) || SPAWN_CALLEES.has(consumer)));
-      if (!read) return true;
-      facts.dirs.push({ rel: value.v, walk });
+      if (!read) {
+        // `resolveClientBundler(repoRoot)` resolves the client workspace's bundler packages.
+        if (consumer === 'resolveClientBundler') facts.handedDirs.push(normalizeRel(posix.join(value.v, 'client/node_modules')));
+        else if (consumer !== null || member) facts.handedDirs.push(value.v);
+        return true;
+      }
+      facts.dirs.push({ rel: value.v, walk, guessed: value.partial });
       return true;
     }
-    facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v) });
+    facts.paths.push({ rel: value.v, walk: walk || JS_EXT.test(value.v), read: consumer !== null && READ_CALLEES.has(consumer) });
     return true;
   };
 
@@ -668,6 +708,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // (tests only load in-repo files, so keying by tracked basename covers the real target).
       const scoped = kind === 'require' ? joinedBasename(arg.index) : null;
       if (scoped !== null) { facts.scopedNames.push(scoped); continue; }
+      if (kind === 'require') facts.nativeUnresolved = true;
       facts.unresolvedEdges.push(`${token.v}() with a non-literal specifier`);
       continue;
     }
@@ -729,7 +770,7 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
       // (its own `function readServerSource(rel)` definition is not a call).
       const arg = literalArg(open);
       const base = token.v === 'readServerSource' ? 'server' : 'client/src';
-      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(base, arg.value)), walk: false });
+      if (arg.kind === 'literal') facts.paths.push({ rel: normalizeRel(posix.join(base, arg.value)), walk: false, read: true });
       else if (arg.kind === 'expr') facts.unresolvedInputs.push(`${token.v}() with a non-literal path`);
       continue;
     }
@@ -748,6 +789,8 @@ export function extractFileFacts(src, { fileRel, cwdRel }) {
     if (!isAnchor) continue;
     // The declared name itself (`const ROOT = …`) is not a use.
     if (prev?.t === 'id' && (prev.v === 'const' || prev.v === 'let' || prev.v === 'var')) continue;
+    // Nor is a property key that happens to share a binding's name (`{ root: client }` beside `const root`).
+    if (tokens[i + 1]?.t === 'p' && tokens[i + 1].v === ':' && prev?.t === 'p' && (prev.v === '{' || prev.v === ',')) continue;
     const widest = widestPathExpression(tokens, match, i);
     if (widest === null) continue;
     const { value } = evaluate(tokens, match, widest.index, ctx);
@@ -793,13 +836,29 @@ const gitRuleApplies = (rel, testRel) => rel === testRel || rel.startsWith('scri
  * The analyzer over an abstract filesystem (`read(rel) -> Buffer|null`,
  * `kind(rel) -> 'file'|'dir'|null`, `list(rel) -> string[]`), so the whole
  * thing is unit-testable from an in-memory tree.
+ *
+ * `listFiles` returns every working-tree file git does not ignore
+ * (repo-relative posix paths), or null when it cannot say. It is asked at
+ * most once per analyzer and only lets a directory input past
+ * `DIRECTORY_INPUT_LIMIT` be keyed instead of failing closed (`listedTree`).
+ *
+ * `acceptVerdictsFrom` lists other run settings (`{ label, env, caseFilter }`,
+ * `env` overriding this run's values) whose green verdict also proves this
+ * run's cases. Each memoizable verdict then carries `acceptedKeys`: the key
+ * those settings would compute for the same inputs, differing only in the
+ * environment lines. They are lookup keys only; entries are written under
+ * `key` alone. The caller owns the claim that the other run's cases include
+ * this run's (`browserProfileAcceptedVerdicts`).
  */
-export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null }) {
+export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = process.platform, arch = process.arch, nodeVersion = process.versions.node, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = null }) {
   const hashes = new Map();
   const facts = new Map();
   const trees = new Map();
+  const listedTrees = new Map();
+  const dataTrees = new Map();
   const packages = new Map();
   let byName = null;
+  let listing; // undefined until first asked; null when git cannot list the tree
 
   const fileHash = (rel) => {
     if (hashes.has(rel)) return hashes.get(rel);
@@ -810,6 +869,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   };
 
   const ignoredInput = (rel) => IGNORED_INPUT_PREFIXES.some((prefix) => rel === prefix.slice(0, -1) || rel.startsWith(prefix));
+  const localState = (target) => target === 'data' || target.startsWith('data/');
   const underGit = (rel) => rel === '.git' || rel.startsWith('.git/');
 
   /**
@@ -836,6 +896,87 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     let result = files;
     try { walk(dirRel); } catch (error) { if (!(error instanceof RangeError)) throw error; result = null; }
     trees.set(cacheKey, result);
+    return result;
+  };
+
+  /**
+   * The files of a directory past the limit, from the repository listing
+   * instead of a walk. Null (the caller fails closed) when there is no
+   * listing; for a directory the listing has no file in (an ignored tree:
+   * installs, build output, machine-local state); and for one holding an
+   * entry the listing does not enumerate (a submodule or nested repository
+   * is a single entry whatever it contains).
+   *
+   * The listing includes untracked files a commit would pick up, so a new
+   * source file moves the key before it is ever staged. A listed path that
+   * is gone from the working tree is left out, which changes the set.
+   * Git-ignored files are outside the key here, as `.env` files and installs
+   * are outside every key.
+   */
+  const listedTree = (dirRel) => {
+    if (!listFiles) return null;
+    if (listedTrees.has(dirRel)) return listedTrees.get(dirRel);
+    if (listing === undefined) {
+      const all = listFiles();
+      listing = Array.isArray(all) ? [...new Set(all.map((rel) => rel.replace(/\/+$/, '')))].sort() : null;
+    }
+    let files = null;
+    if (listing !== null) {
+      const prefix = `${dirRel}/`;
+      files = [];
+      for (const rel of listing) {
+        if (!rel.startsWith(prefix)) continue;
+        const kind = fs.kind(rel);
+        if (kind === 'dir') { files = null; break; }
+        if (kind === 'file') files.push(rel);
+      }
+      if (files !== null && files.length === 0) files = null;
+    }
+    listedTrees.set(dirRel, files);
+    return files;
+  };
+
+  /**
+   * The files a data tree starts from: a walk under the limit, the listing
+   * past it. Never the repository root, which stays "the tree" and belongs
+   * to the always-run scanners.
+   */
+  const dataTreeFiles = (dirRel) => (dirRel === '' ? null : tree(dirRel) ?? listedTree(dirRel));
+
+  /**
+   * What a directory contributes when it is served or bundled rather than
+   * executed by the test process (a suite that hands `client/` to Vite as its
+   * root): every file by its bytes, plus what those files import from outside
+   * the tree, transitively, since whatever serves or bundles the tree follows
+   * the same specifiers (`client/src/App.jsx` imports
+   * `server/lib/navManifest.js`). Only literal import edges are followed, the
+   * trust the recorded key gives a side module. A served file's own
+   * filesystem reads, git use and `test-memo: never` marker are not facts
+   * about the test process and are left out, which is why a reader that could
+   * load the tree natively is refused (`nativeUnresolved`). Null when the
+   * tree cannot be enumerated (`dataTreeFiles`). Cached per directory: every
+   * client-root suite shares one walk.
+   */
+  const dataTree = (dirRel) => {
+    if (dataTrees.has(dirRel)) return dataTrees.get(dirRel);
+    const start = dataTreeFiles(dirRel);
+    if (start === null) { dataTrees.set(dirRel, null); return null; }
+    const files = new Set();
+    const absent = new Set();
+    const packageVersions = new Map();
+    const pending = [...start];
+    while (pending.length) {
+      const rel = pending.pop();
+      if (files.has(rel)) continue;
+      files.add(rel);
+      if (!JS_EXT.test(rel)) continue;
+      const f = factsFor(rel);
+      for (const target of f.edgeTargets) if (!files.has(target)) pending.push(target);
+      for (const missing of f.absent) absent.add(missing);
+      for (const [name, version] of f.packages) packageVersions.set(name, version);
+    }
+    const result = { files, absent, packages: packageVersions };
+    dataTrees.set(dirRel, result);
     return result;
   };
 
@@ -886,6 +1027,12 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       modules: new Set(), // import edges: narrowed to what a green run loaded by the recorded key
       sideModules: new Set(), // JS read as text, spawned, loaded natively or as a worker: in every key with its closure
       mockOnly: new Set(), // modules only named by a vi.mock-style registration, which loads nothing by itself
+      lazyModules: new Set(), // modules only reached through a literal import(): followed for selection only where no current record vouches (`recordedReach`)
+      dataModules: new Set(), // side modules only read as data (as text, or listed by a directory read); never spawned, required or run as a worker
+      edgeTargets: new Set(), // every file a literal relative import, require or mock-import names, JS or not
+      dataTrees: [], // directories past the limit that are keyed from the repository listing (`dataTree`)
+      handedDirs: [], // existing directories this file gives to a tool; inputs of a real-browser test (`gather`)
+      nativeUnresolved: false,
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
       unresolvedEdges: [], unresolvedInputs: [], oversized: [], localReads: [], never: false, git: false,
     };
@@ -896,6 +1043,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const raw = extractFileFacts(bytes.toString('utf8'), { fileRel: rel, cwdRel: workspaceRel });
     resolved.never = raw.never;
     resolved.git = raw.git;
+    resolved.nativeUnresolved = raw.nativeUnresolved;
+    resolved.handedDirs = [...new Set(raw.handedDirs)].filter((dirRel) => !dirRel.startsWith('..') && fs.kind(dirRel) === 'dir');
     resolved.unresolvedEdges.push(...raw.unresolvedEdges);
     resolved.unresolvedInputs.push(...raw.unresolvedInputs);
     resolved.localReads.push(...raw.localReads);
@@ -933,42 +1082,50 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         }
       }
     };
-    const addFile = (target, { edge = false } = {}) => {
+    const executedSide = new Set();
+    const addFile = (target, { edge = false, data = false } = {}) => {
+      if (JS_EXT.test(target) && !edge) (data ? resolved.dataModules : executedSide).add(target);
       if (JS_EXT.test(target)) (edge ? resolved.modules : resolved.sideModules).add(target);
       else if (target.endsWith('.py')) addPython(target);
       else resolved.inputs.add(target);
     };
-    const localState = (target) => target === 'data' || target.startsWith('data/');
+    const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
-    const addDir = (dirRel, walk) => {
+    const addDir = (dirRel, walk, guessed = false) => {
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
       if (underGit(dirRel)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
       if (fs.kind(dirRel) !== 'dir') return;
       const files = tree(dirRel);
-      if (files === null) { resolved.oversized.push(dirRel || '<repo root>'); return; }
-      for (const file of files) addFile(file);
+      // Past the limit: a tree only read as data may still be keyed, decided once this file's edges are
+      // all known. Not a guessed one: the variable segment may leave the prefix (`join(HERE, p)` called
+      // with '../../client/x.js'), and under the limit that guess was only ever an approximation.
+      if (files === null) { if (walk || guessed) resolved.oversized.push(dirRel || '<repo root>'); else oversizedData.push(dirRel); return; }
+      for (const file of files) addFile(file, { data: !walk });
     };
-    const addPath = (target, walk) => {
+    const addPath = (target, walk, read = false) => {
       if (underGit(target)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
       if (localState(target)) { resolved.localReads.push(target); return; }
       if (ignoredInput(target)) return;
       const inModules = target.match(/(?:^|\/)node_modules\/((?:@[^/]+\/)?[^/]+)/);
       if (inModules) { addPackage(inModules[1]); return; }
       const kind = fs.kind(target);
-      if (kind === 'file') { addFile(target); return; }
+      if (kind === 'file') { addFile(target, { data: read }); return; }
       if (kind === 'dir') { addDir(target, walk); return; }
       const viaExt = resolveRelativeSpecifier('x', `./${target}`, fs.kind);
-      if (viaExt) addFile(viaExt);
+      if (viaExt) addFile(viaExt, { data: read });
     };
 
     const registered = new Set();
     const loaded = new Set();
+    const eager = new Set();
     for (const { spec, kind } of raw.edges) {
       if (spec.startsWith('/')) { resolved.unresolvedEdges.push(`absolute specifier ${spec}`); continue; }
       if (spec.startsWith('.')) {
         const target = resolveRelativeSpecifier(rel, spec, fs.kind);
         if (target !== null) (kind === 'mock' ? registered : loaded).add(target);
+        if (target !== null) (kind === 'dynamic' ? resolved.lazyModules : eager).add(target);
+        if (target !== null && kind !== 'mock') resolved.edgeTargets.add(target);
         // require() is a native load the Vite module runner never records.
         if (target !== null) { addFile(target, { edge: kind !== 'require' }); continue; }
         // Node cannot load a module whose import is missing, so a file with one
@@ -982,19 +1139,81 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       addPackage(spec, { mock: kind === 'mock' || kind === 'mock-import' });
     }
     for (const target of registered) if (!loaded.has(target) && resolved.modules.has(target)) resolved.mockOnly.add(target);
-    for (const { rel: target, walk } of raw.paths) addPath(target, walk);
-    for (const { rel: dirRel, walk } of raw.dirs) addDir(dirRel, walk);
+    for (const target of eager) resolved.lazyModules.delete(target);
+    for (const { rel: target, walk, read } of raw.paths) addPath(target, walk, read);
+    for (const { rel: dirRel, walk, guessed } of raw.dirs) addDir(dirRel, walk, guessed === true);
     for (const { value, walk, dir } of raw.cwdLiterals) {
       const bases = value.startsWith('.') ? [posix.dirname(rel), workspaceRel] : [workspaceRel, '', posix.dirname(rel)];
       for (const base of bases) {
         const target = normalizeRel(posix.join(base, value));
         if (target.startsWith('..')) continue;
         const kind = fs.kind(target);
-        if (kind === 'file') { addPath(target, walk); break; }
+        if (kind === 'file') { addPath(target, walk, !walk); break; }
         if (kind === 'dir' && dir) { addDir(target, walk); break; }
       }
     }
+    // One executing reference outweighs any number of data reads.
+    for (const target of executedSide) resolved.dataModules.delete(target);
+    // A reader with a non-literal require() may load what it read natively, where no
+    // recording shows it and the file's own reads count: that stays failed closed.
+    // (A non-literal import() is recorded when it runs, and fails the floor key anyway.)
+    for (const dirRel of oversizedData) {
+      if (!resolved.nativeUnresolved && dataTreeFiles(dirRel) !== null) resolved.dataTrees.push(dirRel);
+      else resolved.oversized.push(dirRel || '<repo root>');
+    }
     return resolved;
+  };
+
+  /**
+   * Fold one directory a real-browser test hands to a tool into `into`
+   * (`inputs`, `absent`, `dataPackages`), or return why it cannot be keyed.
+   * An install directory stands for its manifest and lockfile. Build output
+   * and caches are never inputs, so a suite that serves one fails closed:
+   * what it renders was made from sources this key would not see.
+   */
+  const addHandedDir = (dir, own, into) => {
+    if (dir === '') return 'hands the repository root to a tool';
+    if (underGit(dir)) return 'reads repository state under .git';
+    if (localState(dir)) return `reads machine-local state (${dir})`;
+    const installs = /^(.*?)\/?node_modules(?:\/|$)/.exec(dir);
+    if (installs) {
+      for (const name of ['package.json', 'package-lock.json']) {
+        const manifest = normalizeRel(posix.join(installs[1], name));
+        if (fs.kind(manifest) === 'file') into.inputs.add(manifest);
+      }
+      return null;
+    }
+    if (ignoredInput(dir)) return `hands build output or a cache to a tool: ${dir}`;
+    if (own.nativeUnresolved) return `hands ${dir} to a tool and has a non-literal require()`;
+    const data = dataTree(dir);
+    if (data === null) return `directory input too large: ${dir}`;
+    into.trees?.add(dir);
+    for (const file of data.files) into.inputs.add(file);
+    for (const missing of data.absent) into.absent.add(missing);
+    for (const [name, version] of data.packages) if (!into.dataPackages.has(name)) into.dataPackages.set(name, version);
+    return null;
+  };
+
+  /**
+   * True when the code `roots` run reaches Chrome: a root, or (when walking)
+   * a module it imports or a script it executes, names the browser. JS that
+   * is only read as data does not count: a product module that lists a
+   * template directory also lists that directory's browser tests, and that
+   * must not turn every importer into a real-browser test.
+   */
+  const reachesChrome = (roots, walk) => {
+    const seen = new Set();
+    const pending = [...roots];
+    while (pending.length) {
+      const rel = pending.pop();
+      if (seen.has(rel)) continue;
+      seen.add(rel);
+      const f = factsFor(rel);
+      if (f.tools.has('chrome')) return true;
+      if (walk) for (const dep of f.modules) pending.push(dep);
+      for (const side of f.sideModules) if (!f.dataModules.has(side)) pending.push(side);
+    }
+    return false;
   };
 
   /** Fold the facts of `members` (and, when walking, of everything they reach) into one verdict. */
@@ -1007,6 +1226,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const inputs = new Set();
     const absent = new Set();
     const packageVersions = new Map();
+    const dataPackages = new Map();
+    const trees = new Set(); // directories keyed whole (`dataTree`)
     const tools = new Set();
     const unresolvedEdges = [];
     const unresolvedInputs = [];
@@ -1035,11 +1256,35 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // source walkers) reads such a tree only when a test calls it, and every
       // test that does is a tree scanner the planner already keeps always-run
       // (`scripts/repo-scan-guards.test.js` enforces the registration).
-      for (const dir of f.oversized) if (testRel === null || gitRuleApplies(rel, testRel)) unresolvedInputs.push(`${rel}: directory input too large: ${dir}`);
+      // A data-read tree the repository listing can enumerate is keyed instead
+      // (`dataTree`), under the same membership rule.
+      const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);
+      for (const dir of f.oversized) if (ownsTrees) unresolvedInputs.push(`${rel}: directory input too large: ${dir}`);
+      for (const dir of ownsTrees ? f.dataTrees : []) {
+        const data = dataTree(dir);
+        if (data === null) { unresolvedInputs.push(`${rel}: directory input too large: ${dir}`); continue; }
+        trees.add(dir);
+        for (const file of data.files) inputs.add(file);
+        for (const missing of data.absent) absent.add(missing);
+        // The members' own resolution wins where both name a package.
+        for (const [name, version] of data.packages) if (!dataPackages.has(name)) dataPackages.set(name, version);
+      }
       if (f.never) never = true;
       if (f.git && (testRel === null || gitRuleApplies(rel, testRel))) git = true;
     }
-    return { members, inputs, absent, packages: packageVersions, tools, unresolvedEdges, unresolvedInputs, never, git };
+    // A real-browser test renders what a dev server, bundler or static server
+    // reads for it, none of which the module runner records. Every directory
+    // the test file hands to such a tool is therefore an input, whole. Every
+    // other test keeps the older reading (a directory passed along is a value).
+    if (testRel !== null && members.has(testRel) && reachesChrome(roots, walk)) {
+      const own = factsFor(testRel);
+      for (const dir of own.handedDirs) {
+        const problem = addHandedDir(dir, own, { inputs, absent, dataPackages, trees });
+        if (problem) unresolvedInputs.push(`${testRel}: ${problem}`);
+      }
+    }
+    for (const [name, version] of dataPackages) if (!packageVersions.has(name)) packageVersions.set(name, version);
+    return { members, inputs, absent, packages: packageVersions, tools, trees, unresolvedEdges, unresolvedInputs, never, git };
   };
 
   const closureOf = (entry, testRel = entry, stop = null, { followMockOnly = true } = {}) => gather([entry], { walk: true, testRel, stop, followMockOnly });
@@ -1063,10 +1308,18 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     return { inputs, problems };
   };
 
-  const environmentLines = [
+  const environmentLinesFor = (runEnv, runCaseFilter) => [
     `node ${nodeVersion} ${platform} ${arch}`,
-    ...TEST_MEMO_ENV.map((name) => `env ${name} ${env[name] === undefined ? '<unset>' : env[name]}`),
+    ...TEST_MEMO_ENV.map((name) => `env ${name} ${runEnv[name] === undefined ? '<unset>' : runEnv[name]}`),
+    // Arguments that decide which cases of a file run (a browser profile's name
+    // pattern). A green verdict covers only the cases that ran, so the filter is
+    // an input; an unfiltered run adds no line and keeps its keys.
+    ...runCaseFilter.map((arg) => `case-filter ${arg}`),
   ];
+  const environmentLines = environmentLinesFor(env, caseFilter);
+  // Node, platform and arch stay this run's: only the env and case filter may differ.
+  const acceptedEnvironments = acceptVerdictsFrom.map(({ label, env: overrides, caseFilter: otherFilter }) => (
+    { label, lines: environmentLinesFor({ ...env, ...overrides }, otherFilter) }));
 
   /**
    * The workspace-level inputs every key shares: the Vitest config closure and
@@ -1109,12 +1362,17 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     if (getAlwaysRunTests().includes(testRel)) reasons.push('always-run guard');
     if (TEST_MEMO_NEVER[testRel]) reasons.push(TEST_MEMO_NEVER[testRel]);
     if (gathered.never) reasons.push('test-memo: never marker');
+    // Set before the analyzer's own findings are appended: these three are a decision someone wrote down.
+    const declared = reasons.length > 0;
     if (gathered.git) reasons.push('spawns git');
     if (baseClosure.unresolved.length) reasons.push(`workspace config: ${baseClosure.unresolved[0]}`);
     if (requireEdges) reasons.push(...gathered.unresolvedEdges);
     reasons.push(...gathered.unresolvedInputs, ...extra.problems);
-    if (reasons.length) return { key: null, memoizable: false, reason: reasons[0], reasons };
-    const lines = [...environmentLines];
+    if (reasons.length) return { key: null, memoizable: false, reason: reasons[0], reasons, declared };
+    const lines = [];
+    // Suites that key the same tree from inside it hash the same file set, and an
+    // entry names one test: without this line they would overwrite each other's entry.
+    if (gathered.trees.size) lines.push(`test ${testRel}`);
     const files = new Set([...gathered.members, ...gathered.inputs, ...extra.inputs, ...snapshotInputs(testRel), ...baseClosure.files]);
     for (const rel of [...files].sort()) {
       const digest = fileHash(rel);
@@ -1125,16 +1383,93 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const versions = new Map([...baseClosure.packages, ...gathered.packages]);
     for (const name of [...versions.keys()].sort()) lines.push(`pkg ${name} ${versions.get(name)}`);
     for (const tool of [...gathered.tools].sort()) lines.push(`tool ${tool} ${toolVersion(tool) ?? 'absent'}`);
-    return { key: sha256(lines.join('\n')), memoizable: true, reasons: [] };
+    const keyWith = (head) => sha256([...head, ...lines].join('\n'));
+    return {
+      key: keyWith(environmentLines),
+      acceptedKeys: acceptedEnvironments.map(({ label, lines: head }) => ({ label, key: keyWith(head) })),
+      memoizable: true,
+      reasons: [],
+    };
+  };
+
+  /** The truncated content digest a v2 memo record stores per loaded module; null for a missing file. */
+  const moduleDigest = (rel) => fileHash(rel)?.slice(0, RECORD_DIGEST_LENGTH) ?? null;
+
+  /**
+   * What can change a recorded test's outcome, for related selection: the
+   * test, every module its green run loaded, the names those modules import,
+   * and their non-JS inputs. A module the run did not load is reached by
+   * name only: under unchanged recorded code it was mocked away or on an
+   * untaken path. A literal `import()` edge is followed only from the test
+   * itself and below a member whose bytes no longer match the record's
+   * digest: a lazy edge gained since the run is in such a member, so its
+   * whole closure counts, as it does for an unrecorded test. Side modules
+   * keep their whole closure because the module runner never records them.
+   * An unresolved edge fails closed in a stale member or below a side module
+   * that executes (spawned, `require()`d, run as a worker); JS only read as
+   * data (`dataModules`: read as text, or listed by a directory read) counts
+   * by its own bytes, and with its closure (which cannot fail closed, the
+   * trust the recorded key gives it) only when the reader has a non-literal
+   * import that could evaluate it. Only a record whose members all still exist gets here (the
+   * recorded key fails closed on a missing one).
+   *
+   * @param {{ modules: string[], digests: string[] }} record
+   * @returns {{ reach: Set<string>, failClosed: string|null }}
+   */
+  const recordedReach = (testRel, record) => {
+    const recordedDigest = new Map(record.modules.map((rel, index) => [rel, record.digests[index]]));
+    const NARROW = 0;
+    const DATA = 1;
+    const FULL = 2;
+    const reach = new Set();
+    // The directories a real-browser test hands to a tool (`gather`); a problem there already failed the recorded key.
+    const own = factsFor(testRel);
+    if (reachesChrome([testRel, ...record.modules], false)) {
+      for (const dir of own.handedDirs) addHandedDir(dir, own, { inputs: reach, absent: new Set(), dataPackages: new Map() });
+    }
+    const walked = new Map(); // rel -> highest mode walked; a wider later visit re-walks it
+    const stack = [testRel, ...record.modules].map((rel) => ({ rel, mode: NARROW }));
+    let failClosed = null;
+    while (stack.length) {
+      const next = stack.pop();
+      const { rel } = next;
+      reach.add(rel);
+      if (fileHash(rel) === null) continue;
+      const stale = recordedDigest.has(rel) && moduleDigest(rel) !== recordedDigest.get(rel);
+      const mode = stale ? FULL : next.mode;
+      // Reached only through unchanged recorded code yet absent from the record:
+      // the green run never loaded it (mocked away or on an untaken path), so
+      // nothing below it can change the outcome. Its own name stays in reach.
+      if (mode === NARROW && !recordedDigest.has(rel) && rel !== testRel) continue;
+      if ((walked.get(rel) ?? -1) >= mode) continue;
+      walked.set(rel, mode);
+      const f = factsFor(rel);
+      for (const input of f.inputs) reach.add(input);
+      if (gitRuleApplies(rel, testRel)) for (const dir of f.dataTrees) for (const file of dataTree(dir)?.files ?? []) reach.add(file);
+      if (mode === FULL && f.unresolvedEdges.length && failClosed === null) failClosed = `${rel}: ${f.unresolvedEdges[0]}`;
+      const lazy = mode !== NARROW || rel === testRel;
+      for (const dep of f.modules) if (lazy || !f.lazyModules.has(dep)) stack.push({ rel: dep, mode });
+      for (const side of f.sideModules) {
+        // Read as data by a module with only literal edges: just those bytes count.
+        // A reader with a non-literal import may evaluate what it read (a data: URL), so the closure counts.
+        if (f.dataModules.has(side) && f.unresolvedEdges.length === 0) reach.add(side);
+        else stack.push({ rel: side, mode: mode === DATA || f.dataModules.has(side) ? DATA : FULL });
+      }
+    }
+    return { reach, failClosed };
   };
 
   /**
    * Both keys for one test. `recorded` is the module list a previous green
-   * run loaded (repo-relative), or null when none is on record.
+   * run loaded (repo-relative), or null when none is on record. `digests`
+   * (aligned with `recorded`, from a v2 record) also narrows related
+   * selection to `recordedReach` when the recorded key is memoizable — the
+   * gate the record was written under, so selection never trusts a record
+   * the memo itself would not.
    *
-   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean }}
+   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean, narrowed: object|null }}
    */
-  const analyzeTest = (testRel, { baseClosure, recorded = null }) => {
+  const analyzeTest = (testRel, { baseClosure, recorded = null, digests = null }) => {
     const closure = closureOf(testRel);
     const fixtures = fixtureInputs(testRel);
     const floor = verdict(testRel, closure, fixtures, baseClosure, { requireEdges: true });
@@ -1151,37 +1486,46 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
         recordedVerdict = verdict(testRel, gathered, fixtures, base, { requireEdges: false });
       }
     }
-    return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0 };
+    const narrowed = recordedVerdict?.memoizable && Array.isArray(digests) && digests.length === recorded.length
+      ? recordedReach(testRel, { modules: recorded, digests })
+      : null;
+    return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0, narrowed };
   };
 
-  return { analyzeTest, closureOf, fileHash, workspaceBase, factsFor };
+  return { analyzeTest, closureOf, fileHash, moduleDigest, workspaceBase, factsFor };
 }
 
 /**
  * Keys for `testFiles` (repo-relative posix paths) in one workspace.
  * `records` maps a test to the module list its last green run loaded.
+ * `digests` maps a test to that record's per-module digests (a v2 record),
+ * which lets related selection narrow it.
  *
  * @returns {Map<string, { floor, recorded, closure: Set<string>, edgesResolved: boolean }>}
  */
-export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, records = new Map() }) {
-  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion });
+export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map() }) {
+  const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles });
   const baseClosure = analyzer.workspaceBase(WORKSPACE_BASE_INPUTS[workspace] ?? [], WORKSPACE_SETUP_ENTRIES[workspace] ?? []);
   const out = new Map();
-  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null }));
+  for (const test of testFiles) out.set(test, analyzer.analyzeTest(test, { baseClosure, recorded: records.get(test) ?? null, digests: digests.get(test) ?? null }));
   return out;
 }
 
 /**
- * Tests related to `sources` under closure-based selection: a test is related
- * when a source is in its module closure or among the non-JS inputs it
- * reaches (a JSON or CSS import, a fixture), or when its edges could not all
- * be resolved (fail closed: it may reach anything).
+ * Tests related to `sources` under closure-based selection. A test with a
+ * narrowing record (`analyzeTest`'s `narrowed`) is related when a source is
+ * in its `recordedReach`, or when that walk failed closed. Any other test is
+ * related when a source is in its static+dynamic module closure or among the
+ * non-JS inputs it reaches (a JSON or CSS import, a fixture), or when its
+ * edges could not all be resolved (fail closed: it may reach anything).
  */
 export function relatedTests(keys, sources) {
   const changed = new Set(sources);
   const reaches = (set) => [...set].some((rel) => changed.has(rel));
   return [...keys.entries()]
-    .filter(([, info]) => !info.edgesResolved || reaches(info.closure) || reaches(info.inputs))
+    .filter(([, info]) => (info.narrowed
+      ? info.narrowed.failClosed !== null || reaches(info.narrowed.reach)
+      : !info.edgesResolved || reaches(info.closure) || reaches(info.inputs)))
     .map(([test]) => test);
 }
 

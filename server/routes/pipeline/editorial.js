@@ -7,14 +7,14 @@ import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
-  validateRequest,
   editorialCheckConfigSchema,
   editorialChecksRunSchema,
   editorialCustomCheckCreateSchema,
   editorialCustomCheckUpdateSchema,
   editorialCustomCheckPreviewSchema,
-} from '../../lib/validation.js';
+} from '../../lib/pipelineValidation.js';
 import {
   resolveCheckState,
   readChecksSlice,
@@ -315,10 +315,6 @@ router.get('/series/:id/review/fix/progress', (req, res) => {
 router.get('/series/:id/review/fix/status', (req, res) => {
   res.json({ active: seriesReview.isSeriesFixActive(req.params.id) });
 });
-
-router.post('/series/:id/review/fix/cancel', asyncHandler(async (req, res) => {
-  res.json({ canceled: seriesReview.cancelSeriesFix(req.params.id) });
-}));
 
 // ---------------------------------------------------------------------------
 // Editorial checks (#1284) — registry-driven editorial review.

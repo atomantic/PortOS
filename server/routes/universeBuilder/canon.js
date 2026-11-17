@@ -78,9 +78,12 @@ const castScopeSchema = z.object({
 // DETERMINISTIC integrity report — no provider call, safe on page load. Also
 // returns `reviewScope` (provider / model / batch size) so the UI can name what
 // a semantic review would spend BEFORE the user opts into it.
+const castIntegrityQuerySchema = z.object({ characterIds: z.string().optional() });
+
 router.get('/:id/characters/integrity', asyncHandler(async (req, res) => {
-  const characterIds = typeof req.query.characterIds === 'string' && req.query.characterIds.trim()
-    ? req.query.characterIds.split(',').map((s) => s.trim()).filter(Boolean)
+  const { characterIds: characterIdsRaw } = validateRequest(castIntegrityQuerySchema, req.query);
+  const characterIds = characterIdsRaw?.trim()
+    ? characterIdsRaw.split(',').map((s) => s.trim()).filter(Boolean)
     : undefined;
   const result = await getUniverseCastIntegrity(req.params.id, { characterIds })
     .catch((err) => { throw mapServiceError(err); });

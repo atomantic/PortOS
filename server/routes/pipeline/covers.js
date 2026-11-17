@@ -15,6 +15,7 @@ import {
   refineImagePixelCap,
   PIXEL_CAP_MESSAGE,
 } from '../../lib/validation.js';
+import { pipelinePdfQuerySchema } from '../../lib/pipelineValidation.js';
 import * as arcPlanner from '../../services/pipeline/arcPlanner.js';
 import {
   renderComicCover,
@@ -24,7 +25,7 @@ import {
 } from '../../services/pipeline/visualStages.js';
 import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
 import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
-import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE } from '../../services/pipeline/comicPdf.js';
+import { buildComicPdf } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
 import { mapServiceError } from './shared.js';
 
@@ -127,9 +128,9 @@ router.post('/series/:id/seasons/:seasonId/back-cover/render', makeCoverRenderHa
 // 409 with ERR_NO_VOLUME_COVER when the season has no rendered front cover;
 // 409 with ERR_NO_RENDERED_ISSUES when no issue has any rendered page yet.
 router.get('/series/:id/seasons/:seasonId/volume.pdf', asyncHandler(async (req, res) => {
-  const sizeRaw = typeof req.query.size === 'string' ? req.query.size : '';
-  const size = PAGE_SIZES[sizeRaw] ? sizeRaw : DEFAULT_PAGE_SIZE;
-  const includeColophon = req.query.colophon !== 'skip';
+  const query = validateRequest(pipelinePdfQuerySchema, req.query);
+  const size = query.size;
+  const includeColophon = query.colophon !== 'skip';
   const { bytes, filename } = await buildVolumePdf(req.params.id, req.params.seasonId, {
     size, includeColophon,
   }).catch((err) => { throw mapServiceError(err); });
@@ -182,11 +183,11 @@ router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHa
 // render is always a fresh assembly. ?size= picks paper format
 // (us-letter|a4|tabloid). 409 when the issue has no rendered cover/pages.
 router.get('/issues/:id/comic.pdf', asyncHandler(async (req, res) => {
-  const sizeRaw = typeof req.query.size === 'string' ? req.query.size : '';
-  const size = PAGE_SIZES[sizeRaw] ? sizeRaw : DEFAULT_PAGE_SIZE;
-  const includeCover = req.query.cover !== 'skip';
-  const includeBackCover = req.query.backCover !== 'skip';
-  const includeColophon = req.query.colophon !== 'skip';
+  const query = validateRequest(pipelinePdfQuerySchema, req.query);
+  const size = query.size;
+  const includeCover = query.cover !== 'skip';
+  const includeBackCover = query.backCover !== 'skip';
+  const includeColophon = query.colophon !== 'skip';
   const { bytes, filename } = await buildComicPdf(req.params.id, {
     size, includeCover, includeBackCover, includeColophon,
   }).catch((err) => { throw mapServiceError(err); });

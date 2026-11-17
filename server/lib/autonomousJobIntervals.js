@@ -1,40 +1,24 @@
 /**
- * Autonomous-job cadence vocabulary (pure).
+ * Autonomous-job cadence vocabulary (pure): picker rows, cadence → milliseconds resolver,
+ * and the "this job has no clock" predicate.
  *
- * The interval-mode vocabulary for CoS autonomous jobs — the picker rows, the
- * cadence → milliseconds resolver, and the "this job has no clock" predicate.
- * Lives in lib rather than `services/autonomousJobs/constants.js` so the Zod
- * boundary (`lib/cosValidation.js`) can validate against the same list without
- * a lib → services import; the services constants module re-exports it, so
- * existing deep imports keep working.
- *
- * NOTE: this is a SEPARATE vocabulary from the scheduled-CoS-task
- * `INTERVAL_TYPES = { ON_DEMAND, CRON }` in `services/taskScheduleConstants.js`.
- * Nothing converts between the two.
+ * Lives in lib so the Zod boundary (`lib/cosValidation.js`) can validate against it without
+ * a lib → services import; `services/autonomousJobs/constants.js` re-exports it. SEPARATE
+ * from the scheduled-task `INTERVAL_TYPES` in `services/taskScheduleConstants.js`; nothing
+ * converts between the two.
  */
 
-// Time units are declared locally rather than imported from `fileUtils.js`.
-// This module is pulled in by `cosValidation.js` — i.e. by every route suite —
-// and dozens of those suites mock fileUtils with an exhaustive factory, so an
-// import here would make a missing `DAY`/`HOUR` on their mock a hard failure.
-// `autonomousJobIntervals.test.js` asserts these still equal fileUtils'.
+// Local, not imported from `fileUtils.js`: many route suites mock fileUtils exhaustively.
+// The test asserts these equal fileUtils'.
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
 export const WEEK = 7 * DAY;
 
-/**
- * Cadence for a job that never fires on a clock — it runs only when a human (or
- * another feature) triggers it via `POST /api/cos/jobs/:id/trigger`. Distinct
- * from `enabled: false`, which also makes a job un-runnable.
- */
+/** Cadence for a job that fires only via `POST /api/cos/jobs/:id/trigger`; distinct from `enabled: false`. */
 export const ON_DEMAND_INTERVAL = 'on-demand';
 
-/**
- * Available interval options for UI pickers. `ms: null` marks a cadence with no
- * recurrence. `JOB_INTERVAL_OPTIONS` in `client/src/utils/cronHelpers.js`
- * imports this registry and projects its value/label fields for both pickers.
- */
+/** Interval options for UI pickers. `ms: null` marks a cadence with no recurrence. */
 export const INTERVAL_OPTIONS = [
   { value: 'hourly', label: 'Every Hour', ms: HOUR },
   { value: 'every-2-hours', label: 'Every 2 Hours', ms: 2 * HOUR },
@@ -47,22 +31,15 @@ export const INTERVAL_OPTIONS = [
   { value: ON_DEMAND_INTERVAL, label: 'On Demand', ms: null }
 ];
 
-/**
- * Every cadence string a persisted job may carry. `custom` is deliberately not
- * an INTERVAL_OPTIONS row (it has no fixed duration to label — the caller
- * supplies `intervalMs`), but it is a legal stored value.
- */
+/** Every stored cadence; `custom` is not a picker row (the caller supplies `intervalMs`) but is legal. */
 export const JOB_INTERVAL_VALUES = [...INTERVAL_OPTIONS.map(o => o.value), 'custom'];
 
 const INTERVAL_MS_BY_VALUE = new Map(INTERVAL_OPTIONS.map(o => [o.value, o.ms]));
 
 /**
- * Resolve a cadence string to milliseconds.
- *
- * Returns `null` — an explicit no-interval sentinel, never `DAY` and never
- * `NaN` — for the on-demand cadence and for any value outside the vocabulary.
- * The old `default: return DAY` fall-through silently rescheduled a typo'd
- * cadence as a daily job; every caller now handles the sentinel instead.
+ * Resolve a cadence string to milliseconds. Returns `null` (an explicit no-interval
+ * sentinel, never `DAY` or `NaN`) for on-demand and for any unknown value, so a typo'd
+ * cadence is never silently rescheduled.
  *
  * @param {string} interval
  * @param {number} [customMs] duration for the `custom` cadence
@@ -78,10 +55,8 @@ export function resolveIntervalMs(interval, customMs) {
 }
 
 /**
- * True when a job has nothing to fire on — the on-demand cadence, or a stored
- * job whose cadence resolved to the no-interval sentinel. Cron-mode jobs are
- * never on-demand: their schedule lives in `cronExpression`/`cronSchedule`, and
- * a job switched to cron mode keeps whatever `interval` it last had.
+ * True when a job has nothing to fire on. Cron-mode jobs are never on-demand: their
+ * schedule lives in `cronExpression`/`cronSchedule`, and they keep whatever `interval` they had.
  *
  * @param {Object} job
  * @returns {boolean}

@@ -561,6 +561,11 @@ describe('peer-sync routes', () => {
   });
 
   describe('GET /api/peer-sync/manifest', () => {
+  it('rejects a repeated query key with 400 (manifest, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/peer-sync/manifest?kind=universe&kind=series');
+    expect(res.status).toBe(400);
+  });
+
     it('200 with records for a valid kind', async () => {
       const records = [
         { id: 'col-1', name: 'My Collection', updatedAt: '2026-05-23T00:00:00.000Z', deleted: false, assetHashes: [] },
@@ -686,6 +691,11 @@ describe('peer-sync routes', () => {
   });
 
   describe('GET /api/peer-sync/cos-agent-archive (#1650)', () => {
+  it('rejects a repeated query key with 400 (cos-agent-archive, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/peer-sync/cos-agent-archive?date=a&date=b');
+    expect(res.status).toBe(400);
+  });
+
     let tmp;
     let originalCos;
     beforeEach(async () => {
@@ -750,6 +760,11 @@ describe('peer-sync routes', () => {
   });
 
   describe('GET /api/peer-sync/integrity', () => {
+  it('rejects a repeated query key with 400 (integrity, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/peer-sync/integrity?peerId=a&peerId=b&kind=universe');
+    expect(res.status).toBe(400);
+  });
+
     it('200 with available:false when peer is not found', async () => {
       integritySvc.getPeerIntegrity.mockResolvedValue({
         available: false,
@@ -861,6 +876,11 @@ describe('peer-sync routes', () => {
   });
 
   describe('GET /api/peer-sync/record', () => {
+  it('rejects a repeated query key with 400 (record, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=a&id=b');
+    expect(res.status).toBe(400);
+  });
+
     it('200 with the record payload for a valid kind + id', async () => {
       svc.getRecordPayloadForPeer.mockResolvedValue({ kind: 'universe', record: { id: 'u1' }, assetManifest: [], sourceInstanceId: 'me' });
       const res = await request(buildApp()).get('/api/peer-sync/record?kind=universe&id=u1');

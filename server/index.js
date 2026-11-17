@@ -35,7 +35,6 @@ import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
 import networkExposureRoutes from './routes/networkExposure.js';
 import logsRoutes from './routes/logs.js';
-import detectRoutes from './routes/detect.js';
 import scaffoldRoutes from './routes/scaffold.js';
 import historyRoutes from './routes/history.js';
 import commandsRoutes from './routes/commands.js';
@@ -73,7 +72,6 @@ import beeperRoutes from './routes/beeper.js';
 import spotifyRoutes from './routes/spotify.js';
 import youtubeRoutes from './routes/youtube.js';
 import notificationsRoutes from './routes/notifications.js';
-import standardizeRoutes from './routes/standardize.js';
 import brainRoutes from './routes/brain.js';
 import brainImportRoutes from './routes/brainImport.js';
 import notesRoutes from './routes/notes.js';
@@ -184,7 +182,6 @@ import importerRoutes from './routes/importer.js';
 import storyBuilderRoutes from './routes/storyBuilder.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
-import loraDatasetsRoutes from './routes/loraDatasets.js';
 import loraTrainingRoutes from './routes/loraTraining.js';
 import dataMaintenanceRoutes from './routes/dataMaintenance.js';
 import sdapiRoutes from './routes/sdapi.js';
@@ -352,7 +349,6 @@ app.use('/api/apps/:appId/reference-repos', referenceReposRoutes);
 app.use('/api/ports', portsRoutes);
 app.use('/api/network-exposure', networkExposureRoutes);
 app.use('/api/logs', logsRoutes);
-app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);
 
 // AI Toolkit routes with PortOS extensions
@@ -421,7 +417,6 @@ app.use('/api/beeper', beeperRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/youtube', youtubeRoutes);
 app.use('/api/notifications', notificationsRoutes);
-app.use('/api/standardize', standardizeRoutes);
 app.use('/api/brain/import', brainImportRoutes);
 app.use('/api/brain', brainRoutes);
 app.use('/api/notes', notesRoutes);
@@ -513,7 +508,6 @@ app.use('/api/story-builder', storyBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 app.use('/api/data-maintenance', dataMaintenanceRoutes);
-app.use('/api/lora-datasets', loraDatasetsRoutes);
 app.use('/api/lora-training', loraTrainingRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.

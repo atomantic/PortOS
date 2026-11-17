@@ -109,15 +109,6 @@ describe('GET /api/user-actions', () => {
   });
 });
 
-describe('GET /api/user-actions/types', () => {
-  it('serves the closed vocabulary so a filter UI need not mirror it', async () => {
-    const res = await request(buildApp()).get('/api/user-actions/types');
-    expect(res.status).toBe(200);
-    expect(res.body.types).toEqual([...USER_ACTION_TYPES]);
-    expect(res.body.actors).toEqual(['user', 'mind', 'schedule', 'system']);
-    expect(res.body.maxLimit).toBe(MAX_LIST_LIMIT);
-  });
-});
 
 describe('auth posture', () => {
   it('sits behind the normal /api/* gate', () => {
@@ -125,7 +116,6 @@ describe('auth posture', () => {
     // reachable without a session when the instance password is on, so it may
     // not appear in ALWAYS_PUBLIC_API_PATHS or an API_REGISTRY public prefix.
     expect(apiAccessForPath('/api/user-actions')).toBe('authenticated-ui');
-    expect(apiAccessForPath('/api/user-actions/types')).toBe('authenticated-ui');
     // Bypass probe: the classifier does return something else for a genuinely
     // public path, so the two assertions above are not vacuously true.
     expect(apiAccessForPath('/api/system/health')).toBe('always-public');

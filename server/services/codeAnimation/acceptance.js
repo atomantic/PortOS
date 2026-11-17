@@ -123,22 +123,3 @@ export async function getProductionAcceptance(projectId) {
     return { accepted, acceptanceProjection: project.acceptanceProjection ?? null, runs: runs.map(run => summarizeRunForComparison(run, frozen?.runId ?? null)) };
   });
 }
-
-/** Accepted shorts as downstream tools consume them: a Media History id and a source package, nothing else required. */
-export async function listAcceptedAssets(page) {
-  const { items, nextCursor } = await store.pageAcceptedOutputs(page);
-  return {
-    items: await Promise.all(items.map(({ id }) => queueAcceptance(id, async () => {
-      // Re-read inside the queue: a newer promotion may have superseded the page.
-      const project = await reconcileProjection(await getProductionProject(id));
-      const accepted = project.acceptedOutput;
-      return {
-        projectId: id, title: project.title, videoId: accepted.videoId, filename: accepted.filename, path: accepted.path, format: accepted.format,
-        sourceHash: accepted.sourceHash, audioHash: accepted.audioHash, renderHash: accepted.renderHash, acceptedAt: accepted.acceptedAt,
-        acceptanceProjection: project.acceptanceProjection ?? null,
-        packageUrl: project.kind === 'film' ? null : `/api/code-animation/projects/${id}/revisions/${accepted.revisionId}/package`,
-      };
-    }))),
-    nextCursor,
-  };
-}

@@ -15,6 +15,7 @@
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
+import { PAGE_SIZE_NAMES, DEFAULT_PAGE_SIZE } from './pdfPageSizes.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import {
@@ -35,6 +36,16 @@ import { EFFORT_LEVELS } from './providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 import { characterEvolutionSchema } from './characterEvolutionValidation.js';
+
+// Print-PDF export options. `size` must name a catalog page size (an unknown one, including an
+// Object.prototype key, is a 400); omitted means the default. The `skip` toggles only act on the
+// literal value.
+export const pipelinePdfQuerySchema = z.object({
+  size: z.enum(PAGE_SIZE_NAMES).default(DEFAULT_PAGE_SIZE),
+  cover: z.string().optional(),
+  backCover: z.string().optional(),
+  colophon: z.string().optional(),
+});
 
 export const pipelineStageRecoverySchema = z.object({ revision: z.string().regex(/^[a-f0-9]{64}$/) });
 

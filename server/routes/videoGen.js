@@ -1,4 +1,5 @@
 import { sanitizeContinuation } from '../lib/videoContinuationProvenance.js';
+import { runtimeQuerySchema } from '../lib/queryValidation.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/videoLoraStageValidation.js';
 /**
  * Video Generation Routes — local LTX backend.
@@ -10,7 +11,6 @@ import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from '../lib/vide
 
 import { withMediaFileSizes } from '../lib/mediaFileInfo.js';
 import { checkHiggsfieldNewModels } from '../services/higgsfieldCatalogCheck.js';
-import { clearMetalBufferProfiles } from '../services/videoGen/metalBufferProfiles.js';
 import { historyListQuerySchema, isHistoryListQuery, listVideoHistoryQuery } from '../services/videoGen/historyList.js';
 import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
@@ -719,10 +719,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
   });
 }));
 
-router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
-  res.json(await clearMetalBufferProfiles());
-}));
-
 // Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`
 // (#6214) — the raw REACTOR_API_KEY never reaches the client. Load-bearing
 // security pattern: never cached, and the scope/session bound is set by
@@ -741,7 +737,7 @@ router.get('/reactor/token', asyncHandler(async (_req, res) => {
 // aborted) leaves a venv directory present but no torch, which would
 // hide the banner and make every render fail with a deep ImportError.
 const sendRuntimeStatus = async (req, res) => {
-  const runtime = String(req.query?.runtime || '');
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   res.json(await getVideoRuntimeStatus(runtime));
 };
 
@@ -752,9 +748,10 @@ router.get('/setup/runtime-status', asyncHandler(sendRuntimeStatus));
 router.get('/setup/runtime-install', asyncHandler(sendRuntimeStatus));
 
 router.post('/setup/runtime-install', asyncHandler(async (req, res) => {
+  const runtime = String(validateRequest(runtimeQuerySchema, req.query).runtime || '');
   const { send, safeEnd } = openSseStream(res);
   await streamVideoRuntimeInstall({
-    runtime: String(req.query?.runtime || ''),
+    runtime,
     send,
     safeEnd,
     onDisconnect: (handler) => res.on('close', handler),

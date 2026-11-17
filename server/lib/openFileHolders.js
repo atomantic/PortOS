@@ -1,17 +1,7 @@
 /**
- * Which OTHER processes still hold a set of files open?
+ * Which OTHER processes still hold a set of files open? `findOpenFileHolders(files, { canary })` → `{ known: true, pids }` (via `lsof -F pn`) or `{ known: false, reason }`.
  *
- * `findOpenFileHolders(files, { canary })` → `{ known: true, pids }` (other processes holding any of
- * `files` open, via `lsof -F pn`) or `{ known: false, reason }`. Fails CLOSED: the probe holds
- * `canary` open itself and rejects any listing that does not report its own PID, so a missing `lsof`,
- * an unsupported platform or a truncated listing never reads as "nobody holds it". Gates the
- * staged-checkpoint cleanup in `services/ollamaSafetensorsImport.js`.
- *
- * Used before deleting staged input another process (an `ollama create` CLI,
- * the Ollama daemon) may still be reading. The answer is tri-state and fails
- * CLOSED: `known: false` whenever the probe cannot prove its own listing is
- * complete — no `lsof`, an unsupported platform, or a listing that omits the
- * canary file this process holds open for the duration of the probe.
+ * Gates the staged-checkpoint cleanup in `services/ollamaSafetensorsImport.js`: deleting staged input another process (an `ollama create` CLI, the Ollama daemon) may still be reading. Fails CLOSED: the probe holds `canary` open itself and rejects any listing that doesn't report its own PID, so a missing `lsof`, an unsupported platform or a truncated listing never reads as "nobody holds it".
  */
 
 import { open } from 'node:fs/promises';
@@ -32,9 +22,7 @@ function parseLsofPids(stdout) {
 /**
  * @param {string[]} files - paths to check
  * @param {{ canary: string, platform?: string, selfPid?: number,
- *   run?: (file: string, args: string[], opts: object) => Promise<{ stdout: string }> }} options
- *   `canary` must be an existing file; it is opened by this process so a
- *   listing that does not report this PID on it is rejected as incomplete.
+ *   run?: (file: string, args: string[], opts: object) => Promise<{ stdout: string }> }} options `canary` must be an existing file, opened by this process so a listing not reporting this PID on it is rejected as incomplete.
  * @returns {Promise<{ known: true, pids: number[] } | { known: false, reason: string }>}
  */
 export async function findOpenFileHolders(files, { canary, platform = process.platform, selfPid = process.pid, run = promisify(execFile) } = {}) {
@@ -42,10 +30,7 @@ export async function findOpenFileHolders(files, { canary, platform = process.pl
   if (!canary) return { known: false, reason: 'no canary file' };
   const handle = await open(canary, 'r').catch(() => null);
   if (!handle) return { known: false, reason: 'canary file unreadable' };
-  // lsof exits 1 when any named file is not open (the expected case for most
-  // of them) while still printing what it found. Any other failure — a
-  // timeout, a signal, a maxBuffer overflow — can leave a listing truncated
-  // after this PID but before a holder's, so it is never trusted.
+  // lsof exits 1 when any named file isn't open (expected for most) while still printing what it found; any other failure (timeout, signal, maxBuffer overflow) can truncate the listing after this PID but before a holder's, so it is never trusted.
   const out = await run('lsof', ['-F', 'pn', '--', canary, ...files], { timeout: LSOF_TIMEOUT_MS, maxBuffer: LSOF_MAX_BUFFER })
     .then((r) => r.stdout, (err) => (err?.code === 1 && !err.killed && !err.signal ? err.stdout ?? null : null))
     .finally(() => handle.close().catch(() => {}));

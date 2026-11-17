@@ -15,7 +15,6 @@ import * as messageSender from '../services/messageSender.js';
 import { getSelectors, updateSelectors, testSelectors, launchProvider } from '../services/messagePlaywrightSync.js';
 import { evaluateMessages, generateReplyBody } from '../services/messageEvaluator.js';
 import { executeAction } from '../services/messageActions.js';
-import { listRules, deleteRule } from '../services/messageTriageRules.js';
 import { getToken, getTokenStatus, testApi, clearTokenCache } from '../services/messageTokenExtractor.js';
 
 const router = express.Router();
@@ -155,31 +154,8 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid account ID format', { status: 400 });
-  }
-  const status = await messageSync.getSyncStatus(req.params.accountId);
-  if (!status) throw new ServerError('Account not found', { status: 404 });
-  res.json(status);
-}));
-
 // === Inbox Routes ===
 router.get('/inbox', messageInboxRead);
-
-// === Triage Rules Routes ===
-router.get('/triage-rules', asyncHandler(async (req, res) => {
-  const rules = await listRules();
-  res.json({ rules });
-}));
-
-router.delete('/triage-rules/:index', asyncHandler(async (req, res) => {
-  const index = parseInt(req.params.index, 10);
-  if (Number.isNaN(index) || index < 0) throw new ServerError('Invalid rule index', { status: 400 });
-  const deleted = await deleteRule(index);
-  if (!deleted) throw new ServerError('Rule not found', { status: 404 });
-  res.status(204).send();
-}));
 
 // === Evaluate Route ===
 router.post('/evaluate', asyncHandler(async (req, res) => {
@@ -205,8 +181,11 @@ router.post('/evaluate', asyncHandler(async (req, res) => {
 }));
 
 // === Draft Routes ===
+const draftListQuerySchema = z.object({ accountId: z.string().optional(), status: z.string().optional() });
+const testTokenQuerySchema = z.object({ top: z.string().optional() });
+
 router.get('/drafts', asyncHandler(async (req, res) => {
-  const { accountId, status } = req.query;
+  const { accountId, status } = validateRequest(draftListQuerySchema, req.query);
   if (accountId && !UUID_RE.test(accountId)) {
     throw new ServerError('Invalid accountId format', { status: 400 });
   }
@@ -473,6 +452,7 @@ router.get('/debug/token-status', asyncHandler(async (req, res) => {
 
 router.post('/debug/test-token', asyncHandler(async (req, res) => {
   const { provider = 'outlook' } = validateRequest(messageTokenProviderBodySchema, req.body ?? {});
+  const { top } = validateRequest(testTokenQuerySchema, req.query);
   const tokenResult = await getToken(provider);
   if (tokenResult.error) {
     throw new ServerError(tokenResult.message || tokenResult.error, {
@@ -491,7 +471,7 @@ router.post('/debug/test-token', asyncHandler(async (req, res) => {
     scopes: decoded.scp || decoded.roles || 'unknown'
   };
 
-  const apiResult = await testApi(provider, tokenResult.token, parseInt(req.query?.top, 10) || 5);
+  const apiResult = await testApi(provider, tokenResult.token, parseInt(top, 10) || 5);
 
   // Trim the raw Graph/Outlook response to a status summary — message bodies and
   // recipient lists have no business in a token-connectivity check response.

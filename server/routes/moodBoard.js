@@ -8,23 +8,10 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  moodBoardCreateSchema,
-  moodBoardUpdateSchema,
-  moodBoardItemCreateSchema,
-  moodBoardItemUpdateSchema,
-  moodBoardPinterestLinkSchema,
-  moodBoardXPostImportSchema,
-  moodBoardCollageSchema,
-  moodBoardExtractFramesSchema,
-  moodBoardItemRenderSchema,
-  moodBoardGenerateSchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest, moodBoardCreateSchema, moodBoardUpdateSchema, moodBoardItemCreateSchema, moodBoardItemUpdateSchema, moodBoardPinterestLinkSchema, moodBoardXPostImportSchema, moodBoardCollageSchema, moodBoardExtractFramesSchema, moodBoardItemRenderSchema, moodBoardGenerateSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { moodBoardCombineSchema } from '../lib/moodBoardValidation.js';
 import { influencesSchema, lockedSchema } from './universeBuilder/shared.js';
 import { synthesizeBoardStyle } from '../services/moodBoardStyleSynthesis.js';
@@ -40,7 +27,6 @@ import {
   updateBoard,
   deleteBoard,
   addBoardItem,
-  backfillGalleryPrompts,
   updateBoardItem,
   removeBoardItem,
   linkPinterestBoard,
@@ -71,11 +57,12 @@ router.get('/:id/generate', asyncHandler(async (req, res) => {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const boards = await listBoards();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(boards);
   }
-  res.json(paginateArray(boards, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(boards, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Registered ahead of `/:id` so the literal path is not read as a board id.
@@ -163,14 +150,6 @@ const composePromptSchema = z.object({
   model: z.string().trim().max(256).optional(),
   effort: z.string().trim().max(64).optional(),
 }).strict();
-// Copy gallery generation prompts onto pins that lack any prompt, so the board
-// analyze step doesn't re-run vision on them. Resolves to the updated board.
-router.post('/:id/backfill-prompts', asyncHandler(async (req, res) => {
-  const board = await backfillGalleryPrompts(req.params.id);
-  if (!board) throw new ServerError('Mood board not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(board);
-}));
-
 // Background analyze job: prompt-from-media over un-analyzed pins, then compose
 // the board style. Survives the page unmounting; progress follows the
 // `mood-board:analyze` socket event and GET restores it on return.

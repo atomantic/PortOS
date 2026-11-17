@@ -165,7 +165,7 @@ describe('production scene dispatch (#9066)', () => {
       castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
       visualSpec: { references: [
         { id: 'authored', imageId: 'authored.png', condition: true },
-        { id: 'mvr-cs-character', imageId: 'character.png', condition: true },
+        { id: 'mvr-cs-character', imageId: 'character.png', role: 'character', condition: true },
         { id: 'mvr-cs-set-harbor', imageId: 'harbor.png', condition: true },
         { id: 'mvr-cs-set-roof', imageId: 'roof.png', condition: false },
       ] },
@@ -180,6 +180,8 @@ describe('production scene dispatch (#9066)', () => {
         ingredientId: null,
         guides: [],
         sheets: [{ id: 'mvr-cs-character', imageId: 'character.png' }, { id: `mvr-cs-set-${plate}`, imageId: `${plate}.png` }],
+        // The character sheet it was sent, so the take can tell when that sheet changes (#16473); a set plate is not one.
+        characters: [{ id: 'mvr-cs-character', imageId: 'character.png' }],
       });
     }
   });

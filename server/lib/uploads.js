@@ -1,9 +1,7 @@
 /**
- *  Upload staging, validation, persistence, and local-file serving helpers.
- *
  * Upload staging/import, base64/image persistence, and safe local-file serving.
- * `assertFileNotMediaManifest(path)` refuses a media upload whose bytes are a playlist or manifest
- * before ffmpeg can probe it (the base64 and multipart import helpers apply the same check).
+ *
+ * `assertFileNotMediaManifest(path)` refuses a media upload whose bytes are a playlist or manifest before ffmpeg can probe it (the base64 and multipart import helpers apply the same check).
  */
 import { open, readFile, stat, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
@@ -55,17 +53,9 @@ export async function assertFileNotMediaManifest(path) {
 }
 
 /**
- * Move a temp file into `destDir` and return the persisted filename, using the
- * `/api/uploads` route's naming (`<uuid8>-<sanitized-name>`) so a
- * server-produced file is served and referenced exactly like a user upload.
- *
- * copyFile + unlink instead of rename — the source usually lives in
- * `os.tmpdir()`, which may sit on a different filesystem (rename across devices
- * throws EXDEV on Linux); copy works regardless. The temp unlink is best-effort
- * cleanup. When `extensions` is supplied, the persisted name must use one of
- * those extensions. A persisted extension determines the Content-Type for
- * files that may live under a static mount, so it must never come from a
- * client-supplied filename. Returns `{ filename, sizeBytes }`.
+ * Move a temp file into `destDir` and return `{ filename, sizeBytes }`, using the `/api/uploads` naming (`<uuid8>-<sanitized-name>`) so a server-produced file is served like a user upload.
+ * copyFile + unlink, not rename: `os.tmpdir()` may be on another filesystem (EXDEV); the temp unlink is best-effort. With `extensions`, the persisted name must use one of them
+ * (the extension determines Content-Type under a static mount, so it never comes from a client filename).
  */
 export async function importFileToDir(tempPath, originalName, destDir, { extensions } = {}) {
   const extension = getFileExtension(originalName);
@@ -100,27 +90,14 @@ const MIN_IMAGE_BYTES = 12;
 const MAX_FILENAME_BYTES = 255;
 
 /**
- * Persist a base64-encoded IMAGE into `dir`, deriving the format from the bytes
- * rather than trusting the client: decode → size cap → magic-byte sniff → force
- * the extension to the detected format → sanitize + containment guard → write.
- *
- * This is the sibling of `saveBase64Upload` for the paths that must be certain
- * they wrote an image (they hand the file to an image-gen backend or to an agent
- * that will read it), so an extension allowlist isn't enough. Naming is the
- * CALLER's call — pass a name that is already unique if later uploads must not
- * overwrite this one, since `dir` is a shared bucket. The bytes are staged in a
- * short-named sibling file and renamed into place, so a write that fails midway
- * (ENOSPC, …) never truncates an image already stored under the final name.
- * `stagePrefix` lets an owner keep its recovery prefix on the stage name (the
- * Persistent Mind sweeps `mind-<attachmentId>-*` images when a cleanup fails).
- *
- * Throws ServerError with the status/code/message contract `routes/screenshots.js`
- * established (`FILE_TOO_LARGE`, `INVALID_FILE_TYPE`, `INVALID_FILENAME` — all
- * 400) so callers keep their pinned responses.
+ * Persist a base64-encoded IMAGE into `dir`, deriving the format from the bytes, not the client: decode → size cap → magic-byte sniff → force the detected extension → sanitize + containment guard → write.
+ * Sibling of `saveBase64Upload` for paths that must be certain they wrote an image (they hand it to an image-gen backend or agent). Naming is the CALLER's call: pass a unique name if later uploads must not
+ * overwrite (`dir` is a shared bucket). Bytes are staged in a short-named sibling and renamed into place so a failed write (ENOSPC, …) never truncates an existing image; `stagePrefix` keeps an owner's
+ * recovery prefix on the stage name (the Persistent Mind sweeps `mind-<attachmentId>-*`).
+ * Throws ServerError with the `routes/screenshots.js` contract (`FILE_TOO_LARGE`, `INVALID_FILE_TYPE`, `INVALID_FILENAME`, all 400).
  *
  * @param {string} dir - Destination directory (created if missing).
- * @param {{ filename: string, data: string }} upload - Desired base name (the
- *   extension is replaced with the detected one) + base64 payload.
+ * @param {{ filename: string, data: string }} upload - Desired base name (extension replaced with the detected one) + base64 payload.
  * @param {{ maxBytes: number, stagePrefix?: string }} opts
  * @returns {Promise<{ filename: string, filePath: string, size: number,
  *   format: string, mime: string }>}
@@ -131,11 +108,7 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes, stage
     throw new ServerError(`File exceeds maximum size of ${maxBytes / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
   }
 
-  // Floor before the sniff, because the per-format signatures are short (a JPEG is
-  // 3 bytes, a GIF header 6) and would happily "detect" a truncated payload — which
-  // then saves as a success and hands a consumer a path to an unreadable file. 12
-  // bytes is the widest signature (WebP's RIFF….WEBP), so anything under it cannot
-  // be a complete header for ANY supported format, let alone a complete image.
+  // Floor before the sniff: per-format signatures are short (JPEG 3 bytes, GIF 6) and would "detect" a truncated payload and save it as a success. 12 bytes is the widest (WebP's RIFF….WEBP).
   if (buffer.length < MIN_IMAGE_BYTES) {
     throw new ServerError('Invalid image file - only PNG, JPEG, GIF, and WebP are supported', { status: 400, code: 'INVALID_FILE_TYPE' });
   }
@@ -145,12 +118,8 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes, stage
     throw new ServerError('Invalid image file - only PNG, JPEG, GIF, and WebP are supported', { status: 400, code: 'INVALID_FILE_TYPE' });
   }
 
-  // The DETECTED extension always wins over whatever the client claimed, so the
-  // file on disk can't advertise a type its bytes contradict. Strip a matching
-  // extension off the base rather than appending a second one, then clamp the base
-  // so `base + ext` fits NAME_MAX — a caller that prefixes the name (see
-  // services/shellImageDrop.js) can otherwise push a legitimately-long client
-  // filename past the limit and turn the write into an ENAMETOOLONG 500.
+  // The DETECTED extension always wins so the file can't advertise a type its bytes contradict. Strip a matching extension off the base, then clamp it so `base + ext` fits NAME_MAX
+  // (a caller prefixing the name, see services/shellImageDrop.js, could otherwise push a long client filename into ENAMETOOLONG).
   const safeName = sanitizeFilename(filename);
   const base = safeName.toLowerCase().endsWith(detected.ext)
     ? safeName.slice(0, -detected.ext.length)
@@ -163,10 +132,7 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes, stage
   }
 
   await ensureDir(dir);
-  // Stage + rename rather than atomicWrite: the stored name is clamped to
-  // NAME_MAX just above, and atomicWrite's `.<pid>.<ts>.<uuid>.tmp` suffix would
-  // push the temp file past it (#6176). The stage name is short and fixed-size
-  // whatever the final name is. Both paths are in `dir`, so rename is atomic.
+  // Stage + rename rather than atomicWrite: its `.<pid>.<ts>.<uuid>.tmp` suffix would push the temp file past NAME_MAX (#6176); the stage name is short and fixed-size, and both paths are in `dir` so rename is atomic.
   const stagePath = join(dir, `${stagePrefix}.stage-${randomUUID().slice(0, 8)}${detected.ext}`);
   if (!isPathInsideDir(dir, stagePath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
@@ -184,24 +150,14 @@ export async function saveImageUpload(dir, { filename, data }, { maxBytes, stage
 }
 
 /**
- * Persist a base64-encoded upload into `dir` with the shared attachment
- * pipeline: extension allowlist → base64 decode → size cap → ensureDir →
- * `<uuid8>-<sanitized-name>` naming → containment guard → write.
- *
- * Throws ServerError with the exact status/code/message contract the
- * attachment routes established (`INVALID_FILE_TYPE`, `FILE_TOO_LARGE`,
- * `INVALID_FILENAME` — all 400), so refactored routes keep their pinned
- * responses. Consolidates `routes/attachments.js`, `routes/brainSongbook.js`,
- * and `routes/uploads.js` — the last keeps its own richer response shape
- * (`originalName` / `sizeFormatted` / `createdAt`) around these fields.
+ * Persist a base64-encoded upload into `dir` via the shared attachment pipeline: extension allowlist → decode → size cap → ensureDir → `<uuid8>-<sanitized-name>` naming → containment guard → write.
+ * Throws ServerError with the attachment routes' contract (`INVALID_FILE_TYPE`, `FILE_TOO_LARGE`, `INVALID_FILENAME`, all 400); `routes/uploads.js` keeps its own richer response shape around these fields.
  *
  * @param {string} dir - Destination directory (created if missing).
- * @param {{ filename: string, data: string }} upload - Original filename +
- *   base64 payload (validated as present by the calling route).
+ * @param {{ filename: string, data: string }} upload - Original filename + base64 payload.
  * @param {{ allowedExtensions: Set<string>, maxBytes: number }} opts
  * @returns {Promise<{ id: string, filename: string, filePath: string,
- *   buffer: Buffer, size: number, mime: string }>} `id` is the full UUID whose
- *   first 8 chars prefix `filename`.
+ *   buffer: Buffer, size: number, mime: string }>} `id` is the full UUID whose first 8 chars prefix `filename`.
  */
 export async function saveBase64Upload(dir, { filename, data }, { allowedExtensions, maxBytes }) {
   const ext = getFileExtension(filename);
@@ -232,47 +188,18 @@ export async function saveBase64Upload(dir, { filename, data }, { allowedExtensi
   return { id, filename: fname, filePath, buffer, size: buffer.length, mime: getMimeType(getFileExtension(fname)) };
 }
 
-/**
- * A declared media type reduced to a bare, comparable `type/subtype`:
- * parameters dropped, whitespace trimmed on BOTH sides of the split (a value
- * like ` text/html ;charset=utf-8` leaves a trailing space otherwise), case
- * folded. Returns `''` for anything that is not a non-empty string.
- */
+/** A declared media type reduced to a bare `type/subtype`: parameters dropped, whitespace trimmed on BOTH sides of the split, case folded; `''` for anything not a non-empty string. */
 function normalizeDeclaredMimeType(value) {
   return typeof value === 'string' ? value.split(';')[0].trim().toLowerCase() : '';
 }
 
 /**
- * Serve a machine-local file from `dir` by user-supplied filename with the
- * shared safety pipeline: sanitize → containment guard (400
- * `INVALID_FILENAME`) → existence check (404, message/code parametrized via
- * `missingError` so routes keep their contracts) → `X-Content-Type-Options:
- * nosniff` → attachment disposition for RISKY_MIME_TYPES → `res.sendFile`.
+ * Serve a machine-local file from `dir` by user-supplied filename (mirrors `routes/attachments.js`): sanitize → containment guard (400 `INVALID_FILENAME`) → existence check (404, message/code via `missingError`)
+ * → `X-Content-Type-Options: nosniff` → attachment disposition for RISKY_MIME_TYPES → `res.sendFile`.
  *
- * Mirrors the exact serving behavior of `routes/attachments.js`.
- *
- * `contentType` overrides the extension-derived type for a store whose
- * filenames carry no meaning. The Beeper attachment mirror (#37) is the
- * caller: it is content-addressed (`<sha256>.<ext>`), and the source it
- * downloads from (`GET /v1/assets/serve`) sends no `Content-Type` header at
- * all, so the type Beeper declared in the message payload is the only real
- * answer and the extension is decoration.
- *
- * That declared type is written by a REMOTE SENDER and this route is on the
- * authenticated dashboard origin, so the override is normalized and bounded
- * rather than trusted:
- *
- *   - Normalized first — parameters dropped, trimmed, lowercased. A media type
- *     is case-insensitive (RFC 2045) while `RISKY_MIME_TYPES` is a lowercase
- *     set, so `text/HTML` walked straight past the guard until this step
- *     existed and executed inline on the dashboard's own origin.
- *   - Bounded second — only a type the mirror itself can produce
- *     (`MIRRORED_MIME_TYPES`) is echoed; anything else is served as
- *     `application/octet-stream` instead of whatever was declared.
- *
- * The disposition decision is then taken on the declared type as well as the
- * served one, so downgrading a `text/html` to octet-stream never costs it the
- * attachment header it earned.
+ * `contentType` overrides the extension-derived type for a store whose filenames carry no meaning (the Beeper attachment mirror, #37: content-addressed `<sha256>.<ext>`, source sends no `Content-Type`).
+ * That type is written by a REMOTE SENDER on the authenticated dashboard origin, so it is normalized (parameters dropped, trimmed, lowercased: `RISKY_MIME_TYPES` is lowercase and `text/HTML`
+ * once executed inline) then bounded (only `MIRRORED_MIME_TYPES` is echoed; else `application/octet-stream`). The disposition decision uses the declared type too, so downgrading `text/html` keeps its attachment header.
  *
  * @param {import('express').Response} res
  * @param {string} dir - The containing directory.

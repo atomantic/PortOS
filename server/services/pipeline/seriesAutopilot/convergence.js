@@ -20,32 +20,20 @@ export function convergencePauseReason(gate, maxRounds, blockingCount) {
     + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
 }
 
-// Divergence/oscillation guard for the bounded convergence loops (#1571). A
-// verify→resolve round is "profitable" only when the next verify shows STRICTLY
-// FEWER blocking findings. When the count fails to drop (stays equal, or rises —
-// a resolve pass that introduced a new break while fixing another) for
-// DIVERGENCE_PATIENCE consecutive rounds, the loop is no longer converging:
-// stop early and pause with a `divergence` kind instead of burning the rest of
-// the daily cos budget down to maxRounds. The terminal maxRounds pause keeps its
-// own `maxRounds` kind — the two are distinguished in the pause SSE frame so the
-// UI can tell "needs a human" (diverging) from "just ran out of rounds".
-//
-// With the default caps (arc 3 / beat 2 / editorial 2) the loop hits maxRounds
-// before the streak can reach patience, so default runs are unaffected; the
-// guard only bites when a user RAISES a cap and the loop then stalls.
+// Divergence guard for the bounded loops (#1571): a round is profitable only if the
+// next verify shows STRICTLY FEWER blocking findings. After DIVERGENCE_PATIENCE
+// consecutive rounds without a drop, stop early with a `divergence` kind instead of
+// burning the budget; the terminal maxRounds pause keeps its own kind so the UI can
+// tell "needs a human" from "ran out of rounds". Default caps hit maxRounds first;
+// the guard bites when a user raises a cap and the loop stalls.
 export const DIVERGENCE_PATIENCE = 2;
 
-// Convergence tracker for one verify→resolve round. `state` is
-// { best, sinceBest }: `best` is the FEWEST blocking findings seen so far this
-// loop (null before the first measured round), `sinceBest` the count of
-// consecutive rounds since that minimum last STRICTLY improved. A round that
-// reaches a new low is progress (sinceBest → 0); a stall, a regression (a fix
-// that introduced a new break), OR an oscillation that merely revisits an old
-// count all accrue sinceBest. The loop diverges once sinceBest reaches
-// DIVERGENCE_PATIENCE. Tracking the running minimum (not just the previous
-// round) is what lets this catch a 2-cycle oscillation — e.g. 5→4→5→4 never
-// sets a new low after round 2, so it's caught — which a naive
-// "compare to the previous round" check would miss. Pure + unit-tested.
+// Convergence tracker for one verify->resolve round. `state` is { best, sinceBest }:
+// `best` the fewest blocking findings seen this loop (null before the first round),
+// `sinceBest` rounds since that minimum last STRICTLY improved. A stall, a
+// regression, or an oscillation revisiting an old count all accrue sinceBest.
+// Tracking the running minimum (not the previous round) catches 5->4->5->4.
+// Pure + unit-tested.
 export function trackConvergence(state, curr) {
   if (state.best === null || curr < state.best) {
     return { best: curr, sinceBest: 0 };
@@ -63,13 +51,8 @@ export function divergencePauseReason(gate, blockingCount, rounds) {
 }
 
 // ---------------------------------------------------------------------------
-// Auto-resolve REGRESSION guard — one altitude tighter than the divergence
-// guard above. Divergence asks "is the loop still making progress?" over several
-// rounds and pauses on the state it finds; this asks "did THIS round's edits
-// make the draft worse?" so the caller can put the pre-resolve state back before
-// pausing. Without it, a resolve pass that rewrites the arc into MORE blocking
-// findings than it was handed is committed permanently, and the run pauses on
-// damage it caused itself.
+// Auto-resolve REGRESSION guard: asks "did THIS round's edits make the draft
+// worse?" so the caller can restore the pre-resolve state before pausing.
 // ---------------------------------------------------------------------------
 
 // Normalizer behind the finding matcher, hoisted so the regexes aren't rebuilt
@@ -80,19 +63,12 @@ const normFindingText = (v) => String(v ?? '')
   .replace(/\s+/g, ' ')
   .trim();
 
-// Singularize one token so "volumes"/"volume" and "stages"/"stage" don't read
-// as two different words — the single most common way the verifier re-words
-// itself between calls.
+// Singularize a token so "volumes"/"volume" read as one word.
 const stemToken = (tok) => (tok.endsWith('s') ? tok.slice(0, -1) : tok);
 
-// Words that carry no identity for a verify finding: ordinary connective tissue
-// plus the structural nouns ("volume", "episode", "arc", …) that appear in
-// nearly every finding this gate sees. Dropped before scoring so the overlap
-// below reflects what a finding is ABOUT, not the vocabulary the whole corpus
-// shares — two unrelated findings that both say "volume" must not read as one.
-// Stemmed through `stemToken` on the way in (so entries stay naturally spelled
-// here and still match the stemmed tokens they have to filter), which also
-// covers each one's plural.
+// Words with no identity for a finding: connectives plus structural nouns
+// ("volume", "arc", ...) common to nearly every finding, so overlap reflects what a
+// finding is ABOUT. Stemmed on the way in via `stemToken`.
 const FINDING_STOPWORDS = new Set((
   'a an and are as at be been both but by can could did do does each ever every for from had has have in'
   + ' into is it more most never no not of on one only or other same should some still than that the'
@@ -112,9 +88,8 @@ function contentTokens(value) {
   return out;
 }
 
-// Shared content tokens of two findings' prose, plus the containment score:
-// shared over the SMALLER token set, so a terse restatement of a long finding
-// still scores high (Jaccard would punish it for the length difference).
+// Shared content tokens plus containment score (shared over the SMALLER set, so a
+// terse restatement of a long finding still scores high).
 function overlapStats(a, b) {
   const left = contentTokens(a);
   const right = contentTokens(b);
@@ -127,11 +102,9 @@ function overlapStats(a, b) {
 /** Containment overlap of two findings' prose, 0..1. Pure. */
 export const findingTextOverlap = (a, b) => overlapStats(a, b).score;
 
-// How much of the smaller finding's prose must be shared before two findings
-// from different verify calls are treated as the same one, and how many content
-// tokens that has to amount to. The token floor is what keeps a one-word
-// coincidence from scoring 1.0: "fix volume 3" and "fix arc one" both reduce to
-// {fix} once the structural nouns are dropped.
+// Share of the smaller finding's prose, and number of content tokens, that must be
+// shared for two findings to match. The token floor stops a one-word coincidence
+// scoring 1.0.
 export const FINDING_MATCH_MIN_OVERLAP = 0.4;
 const FINDING_MATCH_MIN_SHARED = 2;
 // Both relax when the two findings name the same place — a location that already
@@ -155,25 +128,15 @@ export function sameFindingLocation(a, b) {
 }
 
 /**
- * True when two findings — filed by two SEPARATE verifier calls — are the same
- * underlying problem. Pure.
+ * True when two findings from two SEPARATE verifier calls are the same underlying
+ * problem. Pure.
  *
- * Identity is deliberately loose about WORDING, because the verifier re-words
- * itself freely between calls: it re-punctuates, re-cases, paraphrases the
- * problem, and re-labels the location when a resolve round renumbers volumes.
- * An exact fingerprint of that prose reads every round's findings as brand new,
- * which is how the regression guard below silently missed the 1 → 3 → 5
- * divergence it was written for.
- *
- * It is NOT loose about SUBJECT. A shared location is corroboration, never proof
- * — two genuinely different defects routinely sit in the same volume, and
- * treating them as one would revert a round that closed what it targeted and
- * merely exposed something else next door. So the problem text always has to
- * agree; naming the same place only lowers how much of it must.
- *
- * Severity is NOT part of the identity — every finding here is already in the
- * gate's blocking set, and the verifier moves a finding between `high` and
- * `medium` freely, which would otherwise hide it from the guard.
+ * Loose about WORDING (the verifier re-punctuates, paraphrases and re-labels the
+ * location after a renumber; an exact fingerprint read every round as new and
+ * missed the 1 -> 3 -> 5 divergence the regression guard exists for). NOT loose
+ * about SUBJECT: a shared location only lowers how much problem text must agree,
+ * since distinct defects often share a volume. Severity is not part of identity:
+ * the verifier moves findings between `high` and `medium` freely.
  */
 export function sameFinding(a, b) {
   const corroborated = sameFindingLocation(a?.location, b?.location);
@@ -182,29 +145,19 @@ export function sameFinding(a, b) {
     && score >= (corroborated ? FINDING_MATCH_MIN_OVERLAP_SAME_LOCATION : FINDING_MATCH_MIN_OVERLAP);
 }
 
-// "Is this problem somewhere in that list?" — the membership question every
-// caller of `sameFinding` above is actually asking, spelled once. Argument order
-// is fixed here (list, then finding) because the sites that open-coded it each
-// picked their own, which is harmless only while the matcher stays symmetric.
+// "Is this problem somewhere in that list?" Argument order is fixed (list, then
+// finding) so call sites agree even if the matcher stops being symmetric.
 export const containsFinding = (list, finding) => (
   Array.isArray(list) && list.some((candidate) => sameFinding(candidate, finding))
 );
 
 /**
  * True when the round that produced `after` REGRESSED: it left more blocking
- * findings than the `before` set it was asked to close, AND at least one of
- * those targeted findings is still standing. Pure.
+ * findings than `before` AND at least one targeted finding still stands. Pure.
  *
- * That second half is what keeps this from rejecting good work: a round that
- * closed everything it targeted and merely exposed findings that were latent
- * underneath is progress, even when the raw count went up, so it is allowed to
- * stand (the divergence guard still catches it if the loop stalls from there).
- * A round that closed nothing and added more is damage.
- *
- * A round that held the count is NOT this guard's business either — it bought
- * nothing, but it also broke nothing, and the divergence guard's patience is
- * what absorbs a verifier that re-files the same set with slightly different
- * prose. Only a GROWING blocking set gets reverted here.
+ * A round that closed everything it targeted and merely exposed latent findings is
+ * progress even if the count rose. A round that held the count is left to the
+ * divergence guard's patience. Only a GROWING blocking set is reverted here.
  */
 export function isResolveRegression(before, after) {
   const targeted = Array.isArray(before) ? before : [];
@@ -216,11 +169,9 @@ export function isResolveRegression(before, after) {
 const FINDING_SEVERITY_RANK = Object.freeze({ low: 1, medium: 2, high: 3 });
 
 /**
- * Regression test for a bounded, finding-keyed exact-text patch. Unlike a
- * legacy whole-field rewrite, a sparse patch that closes its target may safely
- * expose unrelated latent findings elsewhere in the already-authored plan.
- * Revert only when a targeted finding survives while the set grows, or when
- * that same finding returns at a higher severity.
+ * Regression test for a bounded, finding-keyed exact-text patch: a sparse patch
+ * that closes its target may expose unrelated latent findings. Revert only when a
+ * targeted finding survives while the set grows, or returns at a higher severity.
  */
 export function isTargetedPatchRegression(before, after) {
   const targeted = Array.isArray(before) ? before : [];
@@ -232,12 +183,9 @@ export function isTargetedPatchRegression(before, after) {
   )));
 }
 
-// The arc rollback guard's operational ordering. Total blockers remain the
-// primary signal: accepting a larger set is what caused the original runaway
-// repair loop. When the totals tie, severity is the tiebreaker so a resolver
-// cannot trade a medium finding for a high one and call the unchanged count
-// safe. Unknown severities do not need a bucket here — with equal totals, any
-// movement into high/medium/low is already reflected by the known buckets.
+// The arc rollback guard's ordering. Total blockers are primary (accepting a larger
+// set caused the original runaway repair loop); on ties severity breaks it, so a
+// resolver can't trade a medium finding for a high one.
 export function isBlockingSetRegression(before, after) {
   const prior = Array.isArray(before) ? before : [];
   const current = Array.isArray(after) ? after : [];
@@ -250,29 +198,18 @@ export function isBlockingSetRegression(before, after) {
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// Per-finding ISOLATION acceptance (#3780) — one altitude tighter again. The
-// guards above judge a WHOLE resolve round; this judges one single-finding patch
-// (see `isolateArcFindings` in childRuns.js for what the pass is FOR).
-// ---------------------------------------------------------------------------
+// Per-finding ISOLATION acceptance (#3780): judges one single-finding patch (see
+// `isolateArcFindings` in childRuns.js), where the guards above judge a whole round.
 
 /**
- * May an isolated single-finding patch be KEPT? True only when it did the job it
- * was billed for and cost nothing elsewhere: `target` is gone from the re-verify,
- * and what it left behind is not a regression on the set it started from. Pure.
+ * May an isolated single-finding patch be KEPT? True only when `target` is gone
+ * from the re-verify and the remainder is not a regression on the starting set.
+ * Pure.
  *
- * "Not a regression" is `isBlockingSetRegression` — deliberately the SAME
- * operational definition of worse the whole-round rollback guard uses, so which
- * trades survive doesn't depend on which tier happened to judge them. Ties are
- * therefore allowed at an unchanged severity mix: a patch that closed its target
- * and exposed one equally-severe finding next door is the same "different,
- * narrower findings" trade the round loop's checkpoint already accepts, and the
- * divergence guard still catches a gate that only ever trades.
- *
- * Closure is decided by `sameFinding`, not by prose equality, for the same
- * reason the regression guard is: the verifier restates a standing defect in
- * fresh words at a re-labelled location every call, and reading that as "closed"
- * would accept a patch that changed nothing but the wording.
+ * "Not a regression" is `isBlockingSetRegression`, the same definition the
+ * whole-round guard uses, so ties at an unchanged severity mix are allowed (the
+ * divergence guard still catches a gate that only trades). Closure uses
+ * `sameFinding`, not prose equality: the verifier re-words standing defects.
  */
 export function isIsolatedFixSafe(target, before, after) {
   const current = Array.isArray(after) ? after : [];
@@ -280,10 +217,8 @@ export function isIsolatedFixSafe(target, before, after) {
   return !isBlockingSetRegression(before, current);
 }
 
-// Pause reason for a gate whose auto-resolve round was reverted — distinct from
-// both "ran out of rounds" and "stopped converging": the state the user is being
-// handed is the one from BEFORE the round, and saying so is the difference
-// between a trustworthy pause and an unexplained rewind.
+// Pause reason for a gate whose auto-resolve round was reverted: the user is
+// handed the state from BEFORE the round, and saying so keeps the rewind explained.
 export function regressionPauseReason(gate, beforeCount, afterCount, bestCount = beforeCount, severityEscalated = false) {
   const { label, fix } = PAUSE_GATES[gate];
   const outcome = severityEscalated
@@ -294,21 +229,17 @@ export function regressionPauseReason(gate, beforeCount, afterCount, bestCount =
     + `Paused for review with the best verified ${bestCount}-finding state from this gate. ${fix}, then resume.`;
 }
 
-// Foundation gate pause reasons (#2176) — the gate converges on a WEIGHTED
-// SCORE, not a finding count, so it needs its own wording (score vs. threshold)
-// rather than the finding-count phrasing of convergencePauseReason. Shares
-// PAUSE_GATES.foundation so the copy stays aligned with the other gates.
+// Foundation gate pause reasons (#2176): the gate converges on a WEIGHTED SCORE,
+// not a finding count, so it has its own wording; shares PAUSE_GATES.foundation.
 export function foundationPauseReason(maxRounds, score, threshold) {
   const { label, fix, limit } = PAUSE_GATES.foundation;
   const plural = maxRounds === 1 ? 'round' : 'rounds';
   return `${label} couldn't reach the threshold (weighted ${score} < ${threshold}) in ${maxRounds} ${plural} — `
     + `paused for review. ${fix}, or raise the ${limit} limit in Options and resume.`;
 }
-// A foundation repair whose independent re-judge showed no gain for the target
-// it was asked to fix. `missed` is the shared head of every sentence about that
-// attempt — the rewind notice, the unverified-restore pause, and the note the
-// NEXT attempt at that dimension is handed — so the three can't disagree about
-// what the numbers were.
+// A foundation repair whose re-judge showed no gain for its target. `missed` is
+// the shared head of the rewind notice, the unverified-restore pause and the
+// next attempt's note, so the three can't disagree about the numbers.
 export function foundationRepairMissed({ dimension, targetBefore, targetAfter, weightedBefore, weightedAfter }) {
   const missed = `Foundation ${dimension} repair did not improve its target `
     + `(${targetBefore} → ${targetAfter}; weighted ${weightedBefore} → ${weightedAfter})`;
@@ -316,9 +247,7 @@ export function foundationRepairMissed({ dimension, targetBefore, targetAfter, w
     missed,
     rewind: `${missed}, so its edits were reverted to the pre-repair checkpoint.`,
     unverified: (reason) => `${missed}, and checkpoint verification failed after rollback: ${reason || 'unknown restore mismatch'}.`,
-    // Handed to the retry so it changes strategy instead of re-proposing edits
-    // the gate has already thrown away. Names the rejected re-judge's own gap:
-    // that is the evidence the last attempt failed to move anything.
+    // Handed to the retry so it changes strategy instead of re-proposing reverted edits.
     retryNote: (gap) => `A previous ${dimension} repair this run was REVERTED: it left the target score at ${targetAfter} `
       + `(weighted ${weightedBefore} → ${weightedAfter}), so none of its edits were kept. The re-judge of that attempt still `
       + `reported: ${gap || 'the same gap'}. Take a different approach — repeating those edits will be reverted again.`,
@@ -334,30 +263,18 @@ export function foundationDivergenceReason(score, threshold, rounds) {
 // Dry-run plan note for a bounded gate: "skipped (0 rounds)" or "up to N rounds".
 export const roundsNote = (rounds) => (rounds === 0 ? 'skipped (0 rounds)' : `up to ${rounds} rounds`);
 
-// Dry-run cost model (#1576) — each planned step carries an estimated
-// `estActions`: the number of cos actions it bills via recordDomainUsage('cos',
-// { actions }), i.e. the unit the daily budget cap gates on. Surfacing it lets a
-// user see, before starting, whether a large series will exhaust the cap on
-// text/verify and never reach editorial. Estimates are approximate and lean
-// toward the high end — convergence loops counted at their max rounds (they
-// usually converge sooner), per-item steps at one action per item (retries
-// excluded). A few steps cost nothing against the cap (editorialHealthGate,
-// canonVerify) and carry estActions: 0. One known UNDER-count: the editorial
-// review's per-comment auto-fixes each bill an extra action and scale with the
-// number of blocking findings, which isn't knowable at plan time — so a heavy
-// editorial pass can exceed its estimate.
+// Dry-run cost model (#1576): each step's `estActions` is the cos actions it bills
+// (the unit the daily cap gates on). Estimates lean high: loops counted at max
+// rounds, per-item steps at one action per item. editorialHealthGate/canonVerify
+// are 0. Known UNDER-count: editorial per-comment auto-fixes scale with findings
+// unknowable at plan time.
 //
-// A bounded verify→resolve convergence loop (arc, beat-continuity, editorial)
-// bills one action per verify plus (roughly) one per resolve; the final round
-// never resolves (it converges or pauses). Estimate: rounds verifies +
-// (rounds-1) resolves.
+// A verify->resolve loop bills one action per verify plus one per resolve; the
+// final round never resolves: rounds verifies + (rounds-1) resolves.
 export const convergenceLoopActions = (rounds) => (rounds <= 0 ? 0 : 2 * rounds - 1);
 
-// Sum a dry-run plan's per-step estimates into run totals. `estActions` is the
-// budget-relevant total (cos daily-cap units); `estLlmCalls` aggregates the
-// check-pass fan-out (editorialChecks bills a single cos action but issues many
-// LLM calls — see the rough proxy at its plan.push). Pure — safe to call at
-// broadcast time and in tests.
+// Sum a dry-run plan's per-step estimates: `estActions` is the cos daily-cap total;
+// `estLlmCalls` aggregates the check-pass fan-out. Pure.
 export function summarizePlanCost(plan) {
   return (Array.isArray(plan) ? plan : []).reduce(
     (acc, step) => ({
@@ -368,16 +285,12 @@ export function summarizePlanCost(plan) {
   );
 }
 
-// When true, a comic-target run with `includeVisual` proceeds past the text +
-// editorial terminal into draft cover/page rendering (see runVisualDraft).
+// When true, a comic-target run with `includeVisual` proceeds into draft rendering.
 export const VISUAL_DRAFT_ENABLED = true;
 
-// Which severities block each verify/review gate (low is informational) is now
-// PER-SERIES configurable (#1616): the defaults (arc/beatContinuity → high+medium,
-// editorial → high) live in `lib/editorial/severityConfig.js` and a series may
-// override any gate. `startSeriesAutopilot` resolves each gate's blocking Set
-// once via `resolveBlockingSet(series.blockingSeverities, gate)` and stamps it on
-// `record.options.blockingSets` so every read site uses the same resolved set.
+// Blocking severities per gate are per-series configurable (#1616): defaults live
+// in `lib/editorial/severityConfig.js`; `startSeriesAutopilot` resolves each gate's
+// blocking Set once and stamps it on `record.options.blockingSets`.
 
 // Poll cadence while awaiting a delegated child runner (volume beats / auto-run).
 export const CHILD_POLL_MS = 750;

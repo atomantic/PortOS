@@ -18,7 +18,7 @@ import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/
  * already on the record, so federation was purely additive (no record migration).
  */
 
-import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'node:crypto';
 import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideoSections.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
@@ -30,7 +30,7 @@ import {
   musicVideoMidiTranscriptionSchema,
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
-} from '../../lib/validation.js';
+} from '../../lib/musicVideoValidation.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
@@ -702,10 +702,11 @@ export function afterLoad(stored) {
  * review record from before slim snapshots shrinks at its next write. Reads
  * never call it, so a pure read neither rewrites the record nor moves
  * `updatedAt`; readers tolerate both shapes. Idempotent, and it leaves every
- * approval as it was.
+ * approval as it was. It also re-stamps an accepted legacy frame cast fingerprint to the canonical
+ * value (#16375).
  */
 export function beforeSave(project) {
-  return slimProjectReview(project);
+  return restampLegacyFrameCasts(slimProjectReview(project));
 }
 
 /**
@@ -1548,17 +1549,21 @@ function joinScenes(project, idx, { keep, backend }) {
  * `updatedAt`, so a tombstone beats an older live copy and can't be resurrected.
  */
 /**
- * An older peer rebuilds takes from an explicit field list and drops
- * `castInputs`. Copy it back onto a take that peer still sends, before newest
- * `updatedAt` wins, so the loss is not written back. A take the peer omitted
- * entirely stays omitted. A body that includes the field keeps its own value.
+ * An older peer rebuilds takes from an explicit field list and drops the take
+ * fields it predates: `castInputs` and a "Still matches" for an older character
+ * reference (`characterReferenceAcceptance`, #16473). Copy each back onto a take
+ * that peer still sends, before newest `updatedAt` wins, so the loss is not
+ * written back. A take the peer omitted entirely stays omitted. A body that
+ * includes a field keeps its own value.
  */
-function preserveOmittedTakeCastInputs(local, remote) {
+const PEER_PRESERVED_TAKE_FIELDS = ['castInputs', 'characterReferenceAcceptance'];
+function preserveOmittedTakeFields(local, remote) {
   const kept = new Map();
   for (const scene of local?.scenes || []) {
     if (!scene?.sceneId || !Array.isArray(scene.takes)) continue;
     for (const take of scene.takes) {
-      if (take?.takeId && Object.hasOwn(take, 'castInputs')) kept.set(`${scene.sceneId}\0${take.takeId}`, take.castInputs);
+      const fields = take?.takeId ? PEER_PRESERVED_TAKE_FIELDS.filter((field) => Object.hasOwn(take, field)) : [];
+      if (fields.length) kept.set(`${scene.sceneId}\0${take.takeId}`, Object.fromEntries(fields.map((field) => [field, take[field]])));
     }
   }
   if (!kept.size || !Array.isArray(remote.scenes)) return remote;
@@ -1567,9 +1572,11 @@ function preserveOmittedTakeCastInputs(local, remote) {
     if (!scene?.sceneId || !Array.isArray(scene.takes)) return scene;
     let takesChanged = false;
     const takes = scene.takes.map((take) => {
-      if (!take?.takeId || Object.hasOwn(take, 'castInputs') || !kept.has(`${scene.sceneId}\0${take.takeId}`)) return take;
+      const local = take?.takeId ? kept.get(`${scene.sceneId}\0${take.takeId}`) : null;
+      const missing = local ? Object.keys(local).filter((field) => !Object.hasOwn(take, field)) : [];
+      if (!missing.length) return take;
       takesChanged = true;
-      return { ...take, castInputs: structuredClone(kept.get(`${scene.sceneId}\0${take.takeId}`)) };
+      return { ...take, ...Object.fromEntries(missing.map((field) => [field, structuredClone(local[field])])) };
     });
     if (!takesChanged) return scene;
     scenesChanged = true;
@@ -1626,7 +1633,7 @@ export function mergeProjectRecord(local, remoteRaw) {
       ...(local.composition.documentDraft ? { documentDraft: local.composition.documentDraft } : {}),
     };
   }
-  remote = preserveOmittedTakeCastInputs(local, remote);
+  remote = preserveOmittedTakeFields(local, remote);
   if (local.videoSettings && typeof local.videoSettings === 'object'
     && !Array.isArray(local.videoSettings) && ['backend', 'renderPool'].some((key) => Object.hasOwn(local.videoSettings, key))) {
     const remoteVideoSettings = remote.videoSettings && typeof remote.videoSettings === 'object'

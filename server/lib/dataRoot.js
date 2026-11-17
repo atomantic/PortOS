@@ -1,19 +1,9 @@
 /**
- * Data-root resolution + worktree-checkout detection.
+ * Data-root resolution + worktree-checkout detection: `resolveInstallRoot()` pins the install root via
+ * `PORTOS_DATA_ROOT`.
  *
- * PortOS derives its "install root" (the directory that contains `data/`,
- * `data.reference/`, `scripts/`) from where the executing file lives
- * (`import.meta.url`). That silently breaks when a process boots from inside a
- * CoS agent's git worktree (`data/cos/worktrees/agent-<id>`): the checkout only
- * contains git-tracked files, so the gitignored `data/` runtime tree is empty,
- * and boot migrations resolve against a nonexistent path and crash (#1947).
- *
- * `resolveInstallRoot()` lets a real launch pin the root explicitly via the
- * `PORTOS_DATA_ROOT` env var, independent of the executing file's location, so
- * even a process booted from inside a worktree still resolves to the real
- * install. `isWorktreeRoot()` is the defensive backstop: detect a
- * worktree-rooted process so callers (boot migrations) can skip work that
- * assumes the real install tree instead of crashing.
+ * `isWorktreeRoot()` lets boot migrations skip a CoS worktree, whose checkout lacks the gitignored `data/` tree,
+ * instead of crashing (#1947).
  */
 import { existsSync } from 'fs';
 import { dirname, isAbsolute, join, resolve as resolvePath, sep } from 'path';
@@ -22,27 +12,14 @@ import { fileURLToPath } from 'url';
 /** Env var a real launch sets to pin the install root (see ecosystem.config.cjs). */
 export const DATA_ROOT_ENV = 'PORTOS_DATA_ROOT';
 
-/**
- * Marker file that declares an install root DISPOSABLE — a throwaway tree a
- * harness created for one process (the server boot smoke, #8343) and deletes
- * afterwards. Such a root holds no live data, so it is the one pin a
- * worktree-executing process may honor: the leak-safety rule below exists to
- * keep worktree code off the LIVE install, and a live install never carries
- * this marker.
- */
+/** Marks an install root DISPOSABLE (throwaway harness tree, no live data); the one pin a worktree may honor. */
 export const DISPOSABLE_ROOT_MARKER = '.portos-disposable-root';
 
 /** True when `rootDir` carries the disposable-root marker. */
 export const isDisposableRoot = (rootDir) => existsSync(join(rootDir, DISPOSABLE_ROOT_MARKER));
 
 /**
- * The executing checkout's root, derived from a caller's `import.meta.url`
- * (two directories up from wherever that module physically lives). Single
- * source of truth for this depth assumption — `lib/paths.js`'s `CODE_ROOT`
- * and any code that must independently re-derive the real (non-test-mocked)
- * install root, such as `userActions.js`'s data-root guard, both resolve it
- * through here so the two can never silently drift apart if this formula
- * ever changes.
+ * The checkout root: two directories above the caller's `import.meta.url` (the one place that depth is assumed).
  *
  * @param {string} moduleUrl the caller's `import.meta.url`
  * @returns {string} absolute path two directories above the caller's file
@@ -52,67 +29,32 @@ export function resolveCodeRootForModule(moduleUrl) {
 }
 
 /**
- * Resolve the PortOS install root (the parent of `data/` and `data.reference/`).
- *
- * Prefers an explicit `PORTOS_DATA_ROOT` env var (set at a real launch in
- * `ecosystem.config.cjs`) over the caller's `import.meta.url`-derived fallback,
- * pinning the primary install's root independent of the executing-file location.
- * Returns `fallbackRoot` unchanged when the env var is unset or blank —
- * preserving the existing behavior for installs that never set it (backward
- * compatible).
- *
- * The var is set ONLY on the `portos-server` app (not the shared `BASE_ENV`), so
- * the `portos-cos` runner — which spreads its `process.env` into agent CLI
- * children — never carries it into worktree agents. As belt-and-suspenders, this
- * resolver ALSO refuses the pin whenever the executing location (`fallbackRoot`)
- * is itself a worktree checkout: even a leaked `PORTOS_DATA_ROOT` can't make
- * worktree-version code resolve `PATHS.data` to the LIVE install and read/write
- * real data. In that case resolution stays on the worktree path, where the
- * migration backstop safely skips and `PATHS.data` points at the worktree's own
- * (empty) tree — no crash, no live-data corruption.
+ * The `PORTOS_DATA_ROOT` pin when set and non-blank, else `fallbackRoot` (from the caller's location).
  *
  * @param {string} fallbackRoot absolute path derived from the caller's location
  * @returns {string} the install root to use
  */
 export function resolveInstallRoot(fallbackRoot) {
-  // Leak-safety (#1947): a process whose CODE physically lives inside a worktree
-  // checkout must NEVER honor a PORTOS_DATA_ROOT pin. The var is inherited by
-  // long-lived PM2 processes and can leak into agent child envs (spread of
-  // process.env), so a worktree-launched command could otherwise resolve
-  // PATHS.data to the LIVE install and let worktree-version code read/write real
-  // data. When the fallback (the executing location) is itself a worktree, ignore
-  // the override and stay on the worktree path — where the migration backstop
-  // safely skips and PATHS.data points at the worktree's own (empty) tree.
-  //
-  // The single exception is a pin to a DISPOSABLE root (marker file above): it
-  // holds no live data by construction, so honoring it from a worktree is what
-  // lets `npm run smoke` stay hermetic there too instead of writing into the
-  // worktree's own `data/`.
+  // Leak-safety (#1947): the var can leak into agent child envs, so code living in a worktree
+  // must NEVER honor a pin to the LIVE install; it stays on the worktree's own (empty) tree.
+  // The exception is a DISPOSABLE root, which keeps `npm run smoke` hermetic from a worktree.
   const override = process.env[DATA_ROOT_ENV];
   if (typeof override !== 'string' || override.trim() === '') return fallbackRoot;
   const trimmed = override.trim();
   const resolved = isAbsolute(trimmed) ? trimmed : resolvePath(trimmed);
-  // Symmetric leak-safety: never let the data root resolve INTO a worktree,
-  // whether the worktree path came from the executing location (below) or a
-  // misconfigured override. A worktree has no runtime data/ tree, so honoring
-  // such an override would strand the real process on an empty tree.
+  // Never resolve INTO a worktree: it has no runtime data/ tree.
   if (isWorktreeRoot(resolved)) return fallbackRoot;
   if (isWorktreeRoot(fallbackRoot) && !isDisposableRoot(resolved)) return fallbackRoot;
   return resolved;
 }
 
 /**
- * True when `rootDir` is a CoS agent worktree checkout rather than the real
- * install — its path lives under `data/cos/worktrees/`. Such a checkout has no
- * gitignored `data/` runtime tree, so boot migrations (and any pass that
- * assumes the real install's `data/`/`data.reference/`) must skip it instead of
- * crashing on ENOENT.
+ * True when `rootDir` is a CoS agent worktree checkout (path under `data/cos/worktrees/`), whose
+ * missing `data/` tree must make boot migrations skip rather than crash on ENOENT.
  *
- * We key ONLY on the `data/cos/worktrees/` path segment, not on "does `data/`
- * exist" — a worktree checkout still ships `data/.gitkeep`, and a genuinely
- * fresh real install legitimately has an empty `data/` on first boot (the
- * migration runner creates it), so a presence check would false-positive on
- * fresh installs and skip their migrations.
+ * Keys ONLY on the path segment, never on `data/` existing: a worktree ships `data/.gitkeep` and
+ * a fresh real install legitimately has an empty `data/`, so a presence check would skip its
+ * migrations.
  *
  * @param {string} rootDir candidate install root
  * @returns {boolean}

@@ -1,11 +1,7 @@
 /**
  * The facade is a re-export surface (#3450), so argument forwarding cannot fail —
  * `export { x } from './y.js'` is a binding alias, not a wrapper. What CAN fail
- * is the wiring: an alias pointed at the wrong leaf. `agentManagement.js` and
- * `cosAgentLifecycle.js` both export a function called `terminateAgent` and they
- * do completely different things — one emits `agent:terminate` and returns, the
- * other runs the real SIGTERM/SIGKILL sequence — so a copy-paste swap between
- * them is silent and severe. These assertions pin binding identity, which is the
+ * is the wiring: an alias pointed at the wrong leaf. These assertions pin binding identity, which is the
  * property that actually holds, and pin the surface so the facade cannot quietly
  * regrow into a second barrel.
  */
@@ -17,13 +13,11 @@ vi.mock('./agentManagement.js', () => ({
   resumeAgent: () => {},
   relaunchAgent: () => {},
   killAgent: () => {},
-  terminateAgent: () => {},
   getAgentProcessStats: () => {}
 }));
 
 vi.mock('./cosAgentLifecycle.js', () => ({
-  completeAgent: () => {},
-  terminateAgent: () => {}
+  completeAgent: () => {}
 }));
 
 vi.mock('./agentLifecycle.js', () => ({
@@ -41,23 +35,14 @@ const WIRING = [
   ['resumeAgent', agentManagement, 'resumeAgent'],
   ['relaunchAgent', agentManagement, 'relaunchAgent'],
   ['killAgent', agentManagement, 'killAgent'],
-  ['terminateAgent', agentManagement, 'terminateAgent'],
   ['getAgentProcessStats', agentManagement, 'getAgentProcessStats'],
   ['completeAgent', cosAgentLifecycle, 'completeAgent'],
-  ['requestAgentTermination', cosAgentLifecycle, 'terminateAgent'],
   ['spawnAgentForTask', agentLifecycle, 'spawnAgentForTask']
 ];
 
 describe('agentOrchestrator facade (#3450)', () => {
   it.each(WIRING)('%s resolves to the intended leaf', (exported, mod, leaf) => {
     expect(orchestrator[exported]).toBe(mod[leaf]);
-  });
-
-  it('keeps the two same-named terminates distinct', () => {
-    // The whole point of the rename. If these ever converge, one of the two
-    // aliases is pointed at the wrong module and the identity checks above
-    // would both still pass against a single shared binding.
-    expect(orchestrator.terminateAgent).not.toBe(orchestrator.requestAgentTermination);
   });
 
   it('exposes exactly the transition surface — new exports are a deliberate decision', () => {

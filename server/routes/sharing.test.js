@@ -335,6 +335,11 @@ describe('sharing routes', () => {
   });
 
   describe('GET /api/sharing/subscriptions', () => {
+  it('rejects a repeated query key with 400 (subscriptions, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/sharing/subscriptions?bucketId=a&bucketId=b');
+    expect(res.status).toBe(400);
+  });
+
     it('returns all subscriptions when no filter is given', async () => {
       subs.listSubscriptions.mockResolvedValue([{ id: 'sub-1' }]);
       const res = await request(buildApp()).get('/api/sharing/subscriptions');

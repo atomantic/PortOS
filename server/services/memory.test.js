@@ -101,7 +101,6 @@ import {
   getTimeline,
   getCategories,
   getTags,
-  getRelatedMemories,
   getGraphData,
   linkMemories,
   consolidateMemories,
@@ -1350,116 +1349,6 @@ describe('memory service', () => {
       const tags = await getTags();
 
       expect(tags).toEqual([{ name: 'react', count: 1 }]);
-    });
-  });
-
-  // ===========================================================================
-  // getRelatedMemories
-  // ===========================================================================
-
-  describe('getRelatedMemories', () => {
-    it('should return explicitly linked memories', async () => {
-      const mockMemory = { id: 'mem-1', relatedMemories: ['mem-2'], embedding: null };
-      const mockIndex = {
-        version: 1, lastUpdated: '', count: 2,
-        memories: [
-          { id: 'mem-1', status: 'active' },
-          { id: 'mem-2', status: 'active', summary: 'linked' }
-        ]
-      };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (path.includes('embeddings.json')) return Promise.resolve({ model: null, dimension: 0, vectors: {} });
-        return Promise.resolve(def);
-      });
-
-      const related = await getRelatedMemories('mem-1');
-
-      expect(related).toHaveLength(1);
-      expect(related[0].relationship).toBe('linked');
-      expect(related[0].similarity).toBe(1.0);
-    });
-
-    it('should include similar memories by embedding', async () => {
-      const mockMemory = { id: 'mem-1', relatedMemories: [], embedding: [0.1, 0.2] };
-      const mockIndex = {
-        version: 1, lastUpdated: '', count: 2,
-        memories: [
-          { id: 'mem-1', status: 'active' },
-          { id: 'mem-3', status: 'active', summary: 'similar' }
-        ]
-      };
-      const mockEmbeddings = { model: 'test', dimension: 2, vectors: { 'mem-1': [0.1, 0.2], 'mem-3': [0.15, 0.25] } };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (path.includes('embeddings.json')) return Promise.resolve(mockEmbeddings);
-        return Promise.resolve(def);
-      });
-      findTopK.mockReturnValue([{ id: 'mem-3', similarity: 0.85 }]);
-
-      const related = await getRelatedMemories('mem-1');
-
-      expect(related).toHaveLength(1);
-      expect(related[0].relationship).toBe('similar');
-      expect(related[0].similarity).toBe(0.85);
-    });
-
-    it('should return empty for non-existent memory', async () => {
-      readJSONFile.mockImplementation((path, def) => Promise.resolve(def));
-
-      const related = await getRelatedMemories('non-existent');
-
-      expect(related).toEqual([]);
-    });
-
-    it('should not duplicate linked and similar results', async () => {
-      const mockMemory = { id: 'mem-1', relatedMemories: ['mem-2'], embedding: [0.1] };
-      const mockIndex = {
-        version: 1, lastUpdated: '', count: 2,
-        memories: [
-          { id: 'mem-1', status: 'active' },
-          { id: 'mem-2', status: 'active' }
-        ]
-      };
-      const mockEmbeddings = { model: 'test', dimension: 1, vectors: { 'mem-1': [0.1], 'mem-2': [0.15] } };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (path.includes('embeddings.json')) return Promise.resolve(mockEmbeddings);
-        return Promise.resolve(def);
-      });
-      // findTopK returns mem-2 as similar too
-      findTopK.mockReturnValue([{ id: 'mem-2', similarity: 0.9 }]);
-
-      const related = await getRelatedMemories('mem-1');
-
-      expect(related).toHaveLength(1);
-      expect(related[0].relationship).toBe('linked');
-    });
-
-    it('should respect limit parameter', async () => {
-      const mockMemory = { id: 'mem-1', relatedMemories: ['mem-2', 'mem-3', 'mem-4'], embedding: null };
-      const mockIndex = {
-        version: 1, lastUpdated: '', count: 4,
-        memories: [
-          { id: 'mem-1', status: 'active' },
-          { id: 'mem-2', status: 'active' },
-          { id: 'mem-3', status: 'active' },
-          { id: 'mem-4', status: 'active' }
-        ]
-      };
-      readJSONFile.mockImplementation((path, def) => {
-        if (path.includes('memory.json')) return Promise.resolve({ ...mockMemory });
-        if (path.includes('index.json')) return Promise.resolve(mockIndex);
-        if (path.includes('embeddings.json')) return Promise.resolve({ model: null, dimension: 0, vectors: {} });
-        return Promise.resolve(def);
-      });
-
-      const related = await getRelatedMemories('mem-1', 2);
-
-      expect(related).toHaveLength(2);
     });
   });
 

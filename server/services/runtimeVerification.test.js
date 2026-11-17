@@ -67,7 +67,7 @@ beforeEach(() => {
 describe('persisted runtime continuation', () => {
   it('parks stale code without budget changes, expiry, generic revival or affected-task completion', async () => {
     const task = await park();
-    expect(task).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'runtime-verification', failureCount: '2', totalSpawnCount: '4' } });
+    expect(task).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'runtime-verification', failureCount: 2, totalSpawnCount: 4 } });
     expect(task).not.toHaveProperty('runtimeRecoveryContext');
     expect(task.metadata).not.toHaveProperty('runtimeRecoveryContext');
     expect(JSON.stringify(cosEvents.emit.mock.calls)).not.toContain('runtimeRecoveryContext');
@@ -75,7 +75,7 @@ describe('persisted runtime continuation', () => {
     expect(await reviveBlockedTask(task.id)).toMatchObject({ error: expect.stringContaining('Runtime verification') });
     await sweepResolvedFailureTasks({ now: Date.now() + 60 * 86400000 });
     expect(await sweepRuntimeVerifications()).toEqual({ resumed: [] });
-    expect(await getTaskById(task.id)).toMatchObject({ status: 'blocked', metadata: { existingBranch: 'claim/issue-123', failureCount: '2' } });
+    expect(await getTaskById(task.id)).toMatchObject({ status: 'blocked', metadata: { existingBranch: 'claim/issue-123', failureCount: 2 } });
   });
 
   it('resumes the same task exactly once through concurrent sweeps and cache reload, retaining its budget and checkout', async () => {
@@ -86,7 +86,7 @@ describe('persisted runtime continuation', () => {
     const results = await Promise.all([sweepRuntimeVerifications(), sweepRuntimeVerifications()]);
     expect(results.flatMap(r => r.resumed)).toEqual(['sys-example']);
     const task = await getTaskById('sys-example');
-    expect(task).toMatchObject({ status: 'pending', metadata: { failureCount: '2', totalSpawnCount: '4', orphanRetryCount: '1',
+    expect(task).toMatchObject({ status: 'pending', metadata: { failureCount: 2, totalSpawnCount: 4, orphanRetryCount: 1,
       existingBranch: 'claim/issue-123', resumeWorktreePath: '/example/worktree',
       runtimeVerification: { status: 'resumed', integratedCommit: 'c'.repeat(40), bootCommit: facts.boot } } });
     expect(cosEvents.emit.mock.calls.filter(([name, e]) => name === 'tasks:changed' && e.action === 'unblocked')).toHaveLength(1);
@@ -101,7 +101,7 @@ describe('persisted runtime continuation', () => {
     await updateTask(task.id, update, 'internal', update.runtimeRecoveryContext);
     const retained = await getTaskById(task.id);
     expect(retained).toMatchObject({ status: 'blocked', metadata: { blockedCategory: 'task-recovery-exhausted',
-      failureCount: '3', totalSpawnCount: '4', existingBranch: 'claim/issue-123' } });
+      failureCount: 3, totalSpawnCount: 4, existingBranch: 'claim/issue-123' } });
     expect(retained.metadata.taskOutcome.reason).toContain('already running');
     expect(retained.metadata.runtimeVerification.status).toBe('satisfied');
     expect(retained.metadata.taskOutcome).not.toHaveProperty('recovery');
@@ -110,9 +110,9 @@ describe('persisted runtime continuation', () => {
     __resetTaskCache();
     const replay = await resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example');
     expect(replay).toMatchObject({ status: 'blocked', metadata: {
-      failureCount: '3', totalSpawnCount: '4', taskOutcome: retained.metadata.taskOutcome } });
+      failureCount: 3, totalSpawnCount: 4, taskOutcome: retained.metadata.taskOutcome } });
     await updateTask(task.id, replay, 'internal', replay.runtimeRecoveryContext);
-    expect((await getTaskById(task.id)).metadata.failureCount).toBe('3');
+    expect((await getTaskById(task.id)).metadata.failureCount).toBe(3);
     await updateTask(task.id, { metadata: { totalSpawnCount: 5 } }, 'internal');
     await expect(resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example')).rejects.toThrow('dispatch ownership');
   });
@@ -124,7 +124,7 @@ describe('persisted runtime continuation', () => {
     const update = await resolveRuntimeVerificationUpdate(task, outcome(), 'agent-example');
     await updateTask(task.id, update, 'internal', update.runtimeRecoveryContext);
     expect(await getTaskById(task.id)).toMatchObject({ status: 'blocked', metadata: {
-      blockedCategory: 'runtime-verification', failureCount: '2', totalSpawnCount: '4' } });
+      blockedCategory: 'runtime-verification', failureCount: 2, totalSpawnCount: 4 } });
     expect(await sweepRuntimeVerifications()).toEqual({ resumed: ['sys-example'] });
   });
 

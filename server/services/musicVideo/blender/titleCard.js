@@ -1,16 +1,9 @@
 /**
- * The project's title card (lib/musicVideoTitleCard.js) on a Blender film.
- *
- * A Blender film has no page for the card's runtime to ride on: its picture is
- * shot videos joined by ffmpeg. So the card is captured the way a composed
- * render captures it (compositionRender.js: the same runtime, drawn on a
- * transparent page, one alpha clip per window it shows in) and laid over the
- * joined picture, after the grade and the shots' timed effects.
- *
- * A film look pass over that picture would weave, flicker and grain a card
- * baked into it, which is right for a card that sits in the film and wrong for
- * a steady one. `blenderTitleCardPlan` settles, once per assembly, whether the
- * join bakes the card or leaves it for the pass to draw over the look.
+ * The project's title card (lib/musicVideoTitleCard.js) on a Blender film: no page
+ * carries the card's runtime, so it is captured as in compositionRender.js (alpha
+ * clip per window) and laid over the joined picture after the grade and timed
+ * effects. A film look pass would weave and grain a baked card, wrong for a steady
+ * one, so `blenderTitleCardPlan` settles per assembly whether the join bakes it.
  */
 import { normalizeTitleCard, titleCardSteady, titleCardWindows } from '../../../lib/musicVideoTitleCard.js';
 
@@ -20,13 +13,10 @@ function blenderTitleCardWindows(project, { startSec = 0, endSec }) {
 }
 
 /**
- * Where an assembly's card is drawn. `lookPass` says a film look pass will
- * follow the join; `filmEndSec` is the film's length. Resolves
- * `{ bake, pass }`: `bake` is whether the join lays the card over the shots
- * (withBlenderTitleCard), and `pass` is what applyFilmLookFinish takes to draw
- * it instead (empty when the join bakes it). A steady card rides the pass
- * whenever there is one; any other card, and every card without a pass, is
- * baked. Pure.
+ * Where an assembly's card is drawn: `{ bake, pass }`. `bake` is whether the join
+ * lays the card over the shots (withBlenderTitleCard); `pass` is what
+ * applyFilmLookFinish takes to draw it instead. A steady card rides the film look
+ * pass when there is one; every other card is baked. Pure.
  */
 export function blenderTitleCardPlan(project, { lookPass, filmEndSec }) {
   const card = normalizeTitleCard(project?.titleCard);
@@ -36,12 +26,10 @@ export function blenderTitleCardPlan(project, { lookPass, filmEndSec }) {
 }
 
 /**
- * Run `work(overlays)` with the card captured for the window `[startSec, endSec)`
- * of a film `filmEndSec` long: `[{ path, startSec, durationSec }]`, each
- * `startSec` counted from the window's first frame. A project without a card
- * there, or one whose card the film look pass draws (`bake: false`), costs
- * nothing: `work([])` runs at once and no browser opens. The captures are
- * removed when `work` settles.
+ * Run `work(overlays)` with the card captured for `[startSec, endSec)` of a film
+ * `filmEndSec` long: `[{ path, startSec, durationSec }]`, `startSec` counted from
+ * the window's first frame. With no card there, or `bake: false`, `work([])` runs
+ * at once and no browser opens. Captures are removed when `work` settles.
  */
 export async function withBlenderTitleCard({ project, jobId, width, height, fps, startSec = 0, endSec, filmEndSec = endSec, bake = true, signal, onProgress }, work) {
   if (!bake || !blenderTitleCardWindows(project, { startSec, endSec }).length) return work([]);
@@ -53,8 +41,8 @@ export async function withBlenderTitleCard({ project, jobId, width, height, fps,
   try {
     const captured = await renderTypographyOverlays({
       jobId: captureId, cues: titleCardOverlayCues(project, filmEndSec), style: {}, width, height, fps, durationSec: filmEndSec,
-      // A lead-in window starts below song frame 0. The card is captured on the song;
-      // placement below still subtracts the original start so the card lands after the lead-in.
+      // A lead-in window starts below song frame 0; placement still subtracts the
+      // original start so the card lands after the lead-in.
       window: { startFrame: Math.max(0, Math.round(startSec * fps)), endFrame: Math.round(endSec * fps) }, signal, onProgress,
     });
     return await work(captured.map((overlay) => ({ path: overlay.path, startSec: overlay.startSec - startSec, durationSec: overlay.durationSec })));

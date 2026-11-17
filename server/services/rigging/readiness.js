@@ -1,19 +1,11 @@
 /**
- * Character rigging — the honest readiness answer.
+ * Character rigging: the honest readiness answer, shipped BEFORE any rigging behavior so a
+ * host with no Blender runtime says so by name instead of a mysterious spawn error.
  *
- * Shipped BEFORE any rigging behavior so the capability is reportable and fail-closed
- * from day one: a host with no Blender runtime says so by name, instead of surfacing a
- * mysterious spawn error the first time a user clicks a rigging action.
- *
- * Shape and vocabulary mirror the image-to-3D lane (`imageTo3d/targets.js`'s reason
- * codes and `imageTo3d/degradedInstall.js`'s "remedy plus culprit" split): stable
- * kebab-case codes here, user-facing labels mirrored verbatim to
- * `client/src/lib/riggingReasons.js`, with the drift AND the code-coverage gap both
- * pinned by `unavailableReasons.parity.test.js` next to this file.
- *
- * `riggingUnavailableReason` is a PURE reducer over an already-collected host picture,
- * so every branch — including the two that matter most, a half-provisioned env and an
- * unsupported host — is unit-testable with no real install.
+ * Mirrors the image-to-3D lane's vocabulary (`imageTo3d/targets.js`, `degradedInstall.js`):
+ * stable kebab-case codes here, labels mirrored to `client/src/lib/riggingReasons.js`, drift
+ * pinned by `unavailableReasons.parity.test.js`. `riggingUnavailableReason` is a PURE reducer
+ * over a collected host picture, so every branch is unit-testable with no real install.
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
@@ -27,14 +19,10 @@ import {
 } from './runtime.js';
 
 /**
- * Every reason code `riggingUnavailableReason` can return, mapped to its user-facing
- * label. MIRRORED verbatim to `client/src/lib/riggingReasons.js` — the client cannot
- * import this module (it reaches `node:fs`/`child_process` through the probe), so the
- * parity test asserts the two never drift and that the key set still EQUALS the codes
- * the reducer actually returns.
- *
- * Labels are per-CODE prose, never interpolated: the machine-specific half (which
- * platform, which interpreter, which import error) travels in `detail`.
+ * Every reason code `riggingUnavailableReason` can return, mapped to its user-facing label.
+ * MIRRORED verbatim to `client/src/lib/riggingReasons.js` (the client cannot import this
+ * module); the parity test pins drift and that the key set EQUALS the returned codes.
+ * Labels are never interpolated: machine-specific values travel in `detail`.
  */
 export const RIGGING_UNAVAILABLE_REASONS = Object.freeze({
   'unsupported-platform': 'Rigging needs macOS on Apple Silicon, or Linux',
@@ -62,13 +50,9 @@ export function riggingReasonLabel(reason, fallback = RIGGING_REASON_FALLBACK) {
 }
 
 /**
- * Why rigging can't run — or `null` when it can. Pure: the host picture is passed in,
- * never probed here.
- *
- * Order is the point. The platform gate comes first because it is final (no install
- * fixes it); the interpreter gate before the module gate because "no env" and "env
- * present, module broken" are different remedies; and anything the probe could not
- * answer falls to `runtime-probe-failed` rather than to a confident "not installed".
+ * Why rigging can't run, or `null` when it can. Pure: the host picture is passed in.
+ * Order matters: platform gate first (final), interpreter before module (different
+ * remedies), and an unanswered probe falls to `runtime-probe-failed`, not "not installed".
  *
  * @param {{supportedPlatform?: boolean, python?: string|null,
  *          probe?: {status?: string}|null}} [host]
@@ -82,9 +66,7 @@ export function riggingUnavailableReason({ supportedPlatform, python, probe } = 
   return 'runtime-probe-failed';
 }
 
-// The machine-specific half of the answer. Split from the labels above for the same
-// reason `degradedInstall.js` splits remedy from culprits: the label is mirrored to the
-// client and must stay free of values only the server knows.
+// The machine-specific half of the answer, split from the labels (as `degradedInstall.js` does) because the labels are mirrored to the client.
 const detailFor = (reason, { platform, python, probe }) => {
   switch (reason) {
     case null:
@@ -105,13 +87,9 @@ const detailFor = (reason, { platform, python, probe }) => {
 
 /**
  * Assemble the readiness payload from an already-collected host picture. Pure.
- *
- * `installCommand` is omitted for `unsupported-platform` on purpose — offering a remedy
- * that cannot work is worse than offering none.
- *
- * The payload carries the reason CODE, never its label: the client renders labels from
- * its own pinned mirror (`client/src/lib/riggingReasons.js`), the way the image-to-3D
- * lane's `/targets` response does. `riggingReasonLabel` above is for server-side prose.
+ * `installCommand` is omitted for `unsupported-platform` (a remedy that cannot work is worse
+ * than none). The payload carries the reason CODE, never its label: the client renders
+ * labels from its mirror (`client/src/lib/riggingReasons.js`).
  *
  * @param {{supportedPlatform: boolean, platform: string, python: string|null,
  *          probe: {status?: string, version?: string|null, error?: string|null}|null}} host
@@ -134,11 +112,8 @@ export function describeRiggingReadiness({ supportedPlatform, platform, python, 
 }
 
 /**
- * Collect the host picture and describe it. The one impure export here — it resolves a
- * path and (only when there is an interpreter to run) spawns the import probe.
- *
- * Runs ON REQUEST, never from boot: a fresh install must not pay a Blender import at
- * startup for a feature the user has not asked for.
+ * Collect the host picture and describe it. The one impure export: it resolves a path and
+ * may spawn the import probe. Runs ON REQUEST, never from boot.
  *
  * @param {{exists?: Function, env?: NodeJS.ProcessEnv, execFileImpl?: Function,
  *          platform?: string, arch?: string}} [opts]
@@ -154,11 +129,8 @@ export async function probeRiggingReadiness({ exists, env, execFileImpl, platfor
   return describeRiggingReadiness({ supportedPlatform, platform, python, probe });
 }
 
-// A real `import bpy` costs seconds, and the readiness answer is read by BOTH the
-// Settings card and the instance-feature detector (which runs on every
-// `GET /api/settings/features`, i.e. every page load). Memoize it for a short window so
-// navigation never waits on a repeated Blender import; the Settings card's explicit
-// recheck passes `refresh` to bypass it.
+// A real `import bpy` costs seconds and this answer is read on every `GET /api/settings/features`;
+// memoize briefly. The Settings card's explicit recheck passes `refresh` to bypass it.
 const CACHE_TTL_MS = 60_000;
 let cached = null;
 
@@ -166,8 +138,7 @@ let cached = null;
 export const __resetRiggingReadinessCache = () => { cached = null; };
 
 /**
- * The cached readiness answer. `probe`/`now` are injectable for the same reason the
- * rest of this lane is: the cache contract is testable without a real Blender import.
+ * The cached readiness answer; `probe`/`now` are injectable so the cache is testable without Blender.
  * @param {{refresh?: boolean, now?: () => number, probe?: () => Promise<object>}} [opts]
  * @returns {Promise<object>}
  */
@@ -182,11 +153,8 @@ export async function getRiggingReadiness({ refresh = false, now = Date.now, pro
 
 /**
  * The interpreter a rigging run may spawn, or a named 409 explaining why it may not.
- *
- * Both worker lanes (`autoSkin.js`, `retarget.js`) open with exactly this check, and it
- * fails CLOSED twice: once on the readiness verdict, and once on an answer that claims
- * ready without naming an interpreter. `readiness` is injectable so a run can reuse an
- * answer it already has (and so tests need no Blender install).
+ * Fails CLOSED on the readiness verdict and on a ready answer naming no interpreter.
+ * `readiness` is injectable so a run can reuse an answer it already has.
  *
  * @param {{readiness?: object, python?: string|null}} [opts]
  * @returns {Promise<string>} The interpreter path.

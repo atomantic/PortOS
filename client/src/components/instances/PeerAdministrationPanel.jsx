@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { getPeerAdminSetup, savePeerAdminGrant, previewPeerAdministration, savePeerExecutionGrant, previewPeerExecution, dispatchPeerExecution, getPeerExecutionStatus } from '../../services/api';
 import { safeReadJsonStorage, safeWriteJsonStorage, safeReadStorage } from '../../lib/safeStorage';
-import socket from '../../services/socket';
+import { useSocketResource } from '../../hooks/useSocketResource';
 import PeerCatalogControls from './PeerCatalogControls';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useMounted from '../../hooks/useMounted';
 import { timeUntil } from '../../utils/formatters';
+
+const PEER_ADMIN_EVENTS = ['peer-execution:changed'];
 
 const LABELS = {
   'portos.update': 'PortOS update',
@@ -15,37 +17,19 @@ const LABELS = {
 
 function Controls({ peer }) {
   const [expanded, setExpanded] = useState(false);
-  const [setup, setSetup] = useState(null);
   const [busy, setBusy] = useState(false);
   const [confirmation, setConfirmation] = useState(null);
   const [error, setError] = useState('');
   const [preview, setPreview] = useState(null);
   const mounted = useMounted();
-  const setupGeneration = useRef(0);
-  const updateSetup = value => {
-    setupGeneration.current += 1;
-    setSetup(value);
-  };
-
-  useEffect(() => {
-    if (!expanded) return;
-    let active = true;
-    const refresh = () => {
-      const generation = ++setupGeneration.current;
-      getPeerAdminSetup(peer.id, { silent: true }).then(value => {
-        if (active && generation === setupGeneration.current) setSetup(value);
-      }).catch(err => { if (active && generation === setupGeneration.current) setError(err.message); });
-    };
-    setError('');
-    refresh();
-    socket.on('peer-execution:changed', refresh);
-    socket.on('connect', refresh);
-    return () => {
-      active = false;
-      socket.off('peer-execution:changed', refresh);
-      socket.off('connect', refresh);
-    };
-  }, [expanded, peer.id]);
+  // Reads reload on peer-execution changes and reconnect; open only while expanded.
+  const { data, error: readError, updateData: updateSetup } = useSocketResource(
+    () => getPeerAdminSetup(peer.id, { silent: true }),
+    { events: PEER_ADMIN_EVENTS, resourceKey: peer.id, enabled: expanded },
+  );
+  const setup = expanded ? data : null;
+  useEffect(() => { if (readError) setError(readError.message); }, [readError]);
+  useEffect(() => { if (expanded) setError(''); }, [expanded, peer.id]);
 
   const save = async () => {
     if (busy || !confirmation || !setup) return;
@@ -78,7 +62,7 @@ function Controls({ peer }) {
 
   return <section className="border-t border-port-border pt-3 mt-3 text-sm">
     <button type="button" aria-expanded={expanded} disabled={busy}
-      className="min-h-[44px] text-port-accent" onClick={() => { setExpanded(value => !value); setSetup(null); setConfirmation(null); }}>
+      className="min-h-[44px] text-port-accent" onClick={() => { setExpanded(value => !value); setConfirmation(null); }}>
       Peer administration
     </button>
     {expanded && <div className="space-y-3">

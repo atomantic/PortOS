@@ -1,38 +1,14 @@
 // Buffered chunk→line splitter for child-process stdout/stderr streams.
 //
-// Node delivers a stream's 'data' chunks on arbitrary byte boundaries, so a
-// single output line can arrive split across two chunks (or several lines can
-// arrive in one chunk). `createLineReader` carries the partial trailing line
-// between chunks and emits each COMPLETE line to `onLine`; call `flush()` on
-// the process 'close'/'exit' event to emit any final line the child wrote
-// without a trailing newline (a SIGKILL mid-write, or a progress bar that
-// never terminated its last redraw). Flushing the tail is the drift this
-// helper ends — hand-copied splitters (ytdlpAudioImport, videoDownload) were
-// dropping that unterminated last line while hfDownload's copy alone flushed.
-//
-// Chunks are decoded through a per-reader `StringDecoder`, so a multibyte
-// UTF-8 codepoint split across a chunk boundary (a non-ASCII yt-dlp title,
-// say) is stitched back together instead of decoded as two replacement
-// characters. Callers may also `push()` plain strings (tests, already-decoded
-// input) — those pass straight through.
-//
-// Each stream needs its OWN reader: a shared carry buffer would splice a
-// partial line from stdout onto a chunk from stderr and corrupt marker lines.
-//
-// `splitRe` defaults to `/\r?\n/` (newline-terminated lines; blank lines are
-// preserved as empty strings). Pass `splitRe: /[\r\n]+/` for torch/tqdm-style
-// progress bars that redraw the same line with a bare `\r` and no `\n`, so each
-// redraw surfaces as its own line. A collapsing regex like `/[\r\n]+/` collapses
-// separator runs WITHIN a chunk, but a run split across a chunk boundary can
-// still yield one empty-string segment — every caller of that option filters
-// empty lines, which is the intended usage.
+// Node delivers 'data' chunks on arbitrary byte boundaries, so a line can arrive split across chunks (or several in one). `createLineReader` carries the partial trailing line and emits each COMPLETE line to `onLine`; call `flush()` on process 'close'/'exit' to emit a final line written
+// without a trailing newline (SIGKILL mid-write, a progress bar that never terminated its last redraw): hand-copied splitters (ytdlpAudioImport, videoDownload) dropped that line while hfDownload's alone flushed. Chunks decode through a per-reader `StringDecoder` so a multibyte UTF-8 codepoint split
+// across a boundary stitches back instead of becoming two replacement characters; plain strings pushed by tests pass straight through. Each stream needs its OWN reader (a shared carry would splice a stdout partial onto a stderr chunk and corrupt marker lines).
+// `splitRe` defaults to `/\r?\n/` (blank lines preserved as empty strings); pass `/[\r\n]+/` for torch/tqdm progress bars redrawing with a bare `\r`. A collapsing regex collapses runs WITHIN a chunk, but a run split across a boundary can yield one empty segment: every caller of that option filters empty lines.
 
 import { StringDecoder } from 'string_decoder';
 
 const DEFAULT_SPLIT_RE = /\r?\n/;
-// Clamp so a stream that never emits a separator can't grow the carry buffer
-// without bound (a runaway child writing megabytes with no newline). At the
-// threshold the oversized carry is flushed as a line and the buffer reset.
+// Clamp so a stream that never emits a separator (a child writing megabytes with no newline) can't grow the carry buffer without bound: at the threshold the oversized carry is flushed as a line and reset.
 const DEFAULT_MAX_CARRY = 1 << 20; // 1 MiB
 
 export function createLineReader(onLine, { splitRe = DEFAULT_SPLIT_RE, maxCarry = DEFAULT_MAX_CARRY } = {}) {
@@ -45,8 +21,7 @@ export function createLineReader(onLine, { splitRe = DEFAULT_SPLIT_RE, maxCarry 
     carry = lines.pop() ?? '';
     for (const line of lines) onLine(line);
     if (carry.length > maxCarry) {
-      // Safety valve: no separator seen within maxCarry chars. Emit what we
-      // have as a line rather than buffer unbounded, then reset.
+      // Safety valve: no separator within maxCarry chars; emit what we have as a line, then reset.
       const oversized = carry;
       carry = '';
       onLine(oversized);
@@ -54,8 +29,7 @@ export function createLineReader(onLine, { splitRe = DEFAULT_SPLIT_RE, maxCarry 
   };
 
   const flush = () => {
-    // Drain any bytes the decoder is still holding for an incomplete multibyte
-    // sequence (a no-op when only strings were pushed).
+    // Drain bytes the decoder holds for an incomplete multibyte sequence (a no-op when only strings were pushed).
     carry += decoder.end();
     if (carry.length === 0) return;
     const line = carry;
@@ -67,16 +41,8 @@ export function createLineReader(onLine, { splitRe = DEFAULT_SPLIT_RE, maxCarry 
 }
 
 /**
- * A rolling buffer of the most recent output lines, capped by a char budget.
- *
- * The tail is what turns "exited with code 1" into the reason the tool printed
- * — `runStreamingCommand` attaches it to every non-zero exit, and the daemon
- * starter in `services/localRuntimeSetup.js` needs the same thing for a server
- * that dies before it binds. Shared so those two cannot drift.
- *
- * `remember` ignores decoration-only lines (box drawing, rules, ASCII-art
- * banners): a CLI that prints a 6-line logo before failing would otherwise
- * spend the whole budget on it and push the actual error out of the tail.
+ * A rolling buffer of the most recent output lines, capped by a char budget: the tail turns "exited with code 1" into the reason the tool printed (`runStreamingCommand` attaches it to every non-zero exit; `services/localRuntimeSetup.js`'s daemon starter needs it for a server dying before it binds), shared so the two can't drift.
+ * `remember` ignores decoration-only lines (box drawing, rules, ASCII-art banners): a 6-line logo before failing would spend the whole budget and push the real error out.
  */
 export function createOutputTail({ budget = 1024 } = {}) {
   const lines = [];

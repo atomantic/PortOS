@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import {
   ClipboardList,
@@ -44,8 +44,7 @@ import GitHubNotificationCard from '../components/github/GitHubNotificationCard'
 import TabPills from '../components/ui/TabPills';
 import useUrlParams from '../hooks/useUrlParams';
 import useAsyncAction from '../hooks/useAsyncAction';
-import useEscapeKey from '../hooks/useEscapeKey';
-import useFocusTrap from '../hooks/useFocusTrap';
+import Modal from '../components/ui/Modal';
 import { timeAgo, formatDateTime, formatCount, formatDateShort, localDateKey } from '../utils/formatters';
 import { markdownToPlainText, dropsMarkupWhenFlattened } from '../utils/markdownText';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -169,10 +168,6 @@ export default function Review() {
   const [editingId, setEditingId] = useState(null);
   const [filter, setFilter] = useState('pending');
   const [briefingFullscreen, setBriefingFullscreen] = useState(false);
-  const briefingRef = useRef(null);
-  // Fullscreen acts as a modal: trap Tab, dismiss on Escape, and hand focus back to the toggle.
-  useFocusTrap(briefingFullscreen, briefingRef);
-  useEscapeKey(briefingFullscreen, () => setBriefingFullscreen(false));
 
   // Cross-domain live queue (M42 P5). Source payloads remain live projections;
   // presentation decisions are durable server-side markers keyed by the row's
@@ -208,10 +203,12 @@ export default function Review() {
   const handleCreateTodo = async (e) => {
     e.preventDefault();
     if (!newTodo.trim()) return;
-    const thread = await api.createThread({ title: newTodo.trim() }, { silent: true }).catch(() => null);
+    // Failure toasts via the shared request wrapper; keep the typed text so it can be retried.
+    const thread = await api.createThread({ title: newTodo.trim() }).catch(() => null);
+    if (!thread) return;
     setNewTodo('');
     await fetchQueue();
-    if (thread?.id) {
+    if (thread.id) {
       const threadView = actionView === 'all' || actionView === 'today' ? actionView : 'today';
       navigate(`/review/${encodeURIComponent(`threads:${thread.id}`)}?view=${threadView}`);
     }
@@ -388,25 +385,9 @@ export default function Review() {
   const pendingCount = pendingItems.length;
   const remainingActionCount = Math.max(0, actionableItems.length - topActionItems.length);
 
-  // One named disclosure for history: stored counts plus the daily briefing. A
-  // briefing older than a day is context, not news, so it starts closed. Rendered
-  // below stored items on the all-clear surface so pending work leads.
-  const historyDisclosure = (
-    <details open={briefingIsFresh}>
-      <summary className="text-xs text-port-text-muted">{historySummary}</summary>
-      <section className="flex flex-wrap gap-2 mt-2">
-        <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
-        <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
-        <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
-        <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
-      </section>
-      {showBriefing && (
+  const renderBriefing = (fullscreen) => (
         <section
-          ref={briefingRef}
-          role={briefingFullscreen ? 'dialog' : undefined}
-          aria-modal={briefingFullscreen ? 'true' : undefined}
-          aria-label={briefingFullscreen ? 'Daily Briefing' : undefined}
-          className={`bg-port-card border border-port-border rounded-xl p-4 ${briefingFullscreen ? 'fixed inset-0 z-50 overflow-y-auto m-0 rounded-none' : 'mt-2'}`}>
+          className={`bg-port-card border border-port-border rounded-xl p-4 ${fullscreen ? 'h-full overflow-y-auto m-0 rounded-none' : 'mt-2'}`}>
           <div className="flex items-center justify-between gap-2 mb-2">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
               <FileText size={16} className="text-gray-400" />
@@ -419,17 +400,37 @@ export default function Review() {
               <button
                 onClick={() => setBriefingFullscreen(prev => !prev)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-white transition-colors rounded-md hover:bg-white/5"
-                title={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={briefingFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                title={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} aria-label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
               >
-                {briefingFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               </button>
             </div>
           </div>
-          <div className={`text-gray-400 text-sm overflow-y-auto ${briefingFullscreen ? '' : 'max-h-[32rem]'}`}>
+          <div className={`text-gray-400 text-sm overflow-y-auto ${fullscreen ? '' : 'max-h-[32rem]'}`}>
             <MarkdownOutput content={briefing.content} />
           </div>
         </section>
-      )}
+  );
+
+  // One named disclosure for history: stored counts plus the daily briefing. A
+  // briefing older than a day is context, not news, so it starts closed. Rendered
+  // below stored items on the all-clear surface so pending work leads.
+  const historyDisclosure = (
+    <details open={briefingIsFresh}>
+      <summary className="text-xs text-port-text-muted">{historySummary}</summary>
+      <section className="flex flex-wrap gap-2 mt-2">
+        <SummaryPill icon={BellRing} label="Pending" value={counts?.total ?? 0} tone="text-white" />
+        <SummaryPill icon={AlertTriangle} label="Alerts" value={counts?.alert ?? 0} tone="text-port-warning" urgent={(counts?.alert ?? 0) > 0} />
+        <SummaryPill icon={Crown} label="CoS" value={counts?.cos ?? 0} tone="text-port-accent" />
+        <SummaryPill icon={ClipboardList} label="Todos" value={counts?.todo ?? 0} tone="text-port-success" />
+      </section>
+      {/* Stays mounted (hidden) in fullscreen so the Modal can return focus to this toggle. */}
+      {showBriefing && <div hidden={briefingFullscreen}>{renderBriefing(false)}</div>}
+      {/* Fullscreen is a <Modal>: portaled to <body>, focus-trapped, Esc-layered. */}
+      <Modal open={showBriefing && briefingFullscreen} onClose={() => setBriefingFullscreen(false)} usePortal size="none" align="none"
+        backdropClassName="bg-port-bg" panelClassName="w-full h-dvh" ariaLabel="Daily Briefing">
+        {showBriefing && renderBriefing(true)}
+      </Modal>
     </details>
   );
 

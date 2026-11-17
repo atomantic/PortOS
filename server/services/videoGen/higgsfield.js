@@ -109,7 +109,8 @@ async function generateVideoPrepared({
     ...(planned.resolution ? { resolution: planned.resolution } : {}),
     ...(planned.model.audio ? { generateAudio: planned.generateAudio } : {}),
     ...(planned.body.seed != null ? { seed: planned.body.seed } : {}),
-    estimatedCostUsd: null,
+    // The list price of this take (higgsfieldVideoClipQuote), or null for an unlisted tier.
+    estimatedCostUsd: planned.estimatedCostUsd,
     ...sentRecord,
     // Which endpoint family carried the take (text / image / reference), so a take can be explained after the fact.
     higgsfieldRoute: planned.route,
@@ -121,7 +122,7 @@ async function generateVideoPrepared({
     ...(referenceImagePaths.length ? { clipReferenceFiles: referenceImagePaths.map((path) => basename(path)) } : {}),
   };
   return runner.start({
-    meta, renderStartedAtMs, logDetail: `${planned.endpointId}${meta.resolution ? ` ${meta.resolution}` : ''} ${planned.seconds}s`,
+    meta, renderStartedAtMs, logDetail: `${planned.endpointId}${meta.resolution ? ` ${meta.resolution}` : ''} ${planned.seconds}s${meta.estimatedCostUsd != null ? ` ~$${meta.estimatedCostUsd.toFixed(2)}` : ' cost unknown'}`,
     run: (job) => runHiggsfieldVideo(job, jobId, {
       apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, meta,
       uploadedTempPath, uploadedTempPaths, frameAspect,

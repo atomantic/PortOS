@@ -1,38 +1,23 @@
 /**
- * Editorial severity configuration (#1616) — the frozen DEFAULT severity
- * weights + per-gate blocking-severity sets, plus pure merge/resolve/sanitize
- * helpers that let a SERIES override either one without ever clobbering the
- * defaults when no override is set.
+ * Editorial severity configuration — the frozen DEFAULT severity weights and per-gate
+ * blocking-severity sets, plus pure merge/resolve/sanitize helpers that let a SERIES
+ * override either without clobbering defaults when no override is set. Pure; the severity
+ * enum is `CHECK_SEVERITIES` so gate, weights and blocking sets cannot drift.
  *
- * This module is PURE (no side-effecting imports). The canonical severity enum
- * is `CHECK_SEVERITIES` (`['high','medium','low']`) re-used from
- * `./checkRegistry.js` so the wire gate, the score weights, and the blocking
- * sets can never drift apart.
- *
- * ABSENT vs INTENTIONALLY-EMPTY is the load-bearing distinction here (mirrors
- * the PortOS LLM-merge rule):
- *
- *  - severity weights: an ABSENT key (override omits high/medium/low, or the
- *    value isn't a finite non-negative number) keeps the frozen default. An
- *    empty `{}` override is "nothing overridden" → all defaults. There is no
- *    "intentionally cleared weight" — a weight is always a number.
- *  - blocking sets: an ABSENT gate (override omits the gate, or its value isn't
- *    an array) falls back to the gate's DEFAULT blocking set. An explicit EMPTY
- *    array (`[]`) is a legitimate, distinct choice — "nothing blocks this gate"
- *    — and is honored as-is (NOT treated as absent). So `Array.isArray` MUST be
- *    checked first, before any emptiness check.
+ * ABSENT vs INTENTIONALLY-EMPTY is load-bearing: an absent weight key (or a non-finite /
+ * negative value) keeps the default. For blocking sets, an absent gate (or non-array)
+ * falls back to the default set, while an explicit `[]` means "nothing blocks this gate"
+ * and is honored, so `Array.isArray` MUST be checked before any emptiness check.
  */
 
 import { CHECK_SEVERITIES } from './checkInfra/taxonomy.js';
 
-// Transparent severity penalty weights (mirrors editorialScore.SEVERITY_WEIGHTS,
-// which now re-exports this). A draft starts at 100 and loses points per OPEN
-// finding: a `high` costs as much as a dozen `low` nits.
+// Severity penalty weights (editorialScore.SEVERITY_WEIGHTS re-exports this): a draft
+// starts at 100 and loses points per OPEN finding.
 export const DEFAULT_SEVERITY_WEIGHTS = Object.freeze({ high: 12, medium: 5, low: 1 });
 
-// The autopilot gates that consume a blocking-severity set, and their defaults.
-// arc + beatContinuity are structural-continuity gates (block on high + medium);
-// editorial is the manuscript-review gate (blocks on high only).
+// Autopilot gates that consume a blocking-severity set: arc + beatContinuity block on
+// high + medium; editorial blocks on high only.
 export const BLOCKING_GATES = Object.freeze(['arc', 'beatContinuity', 'editorial']);
 export const DEFAULT_BLOCKING_SEVERITIES = Object.freeze({
   arc: Object.freeze(['high', 'medium']),
@@ -43,13 +28,8 @@ export const DEFAULT_BLOCKING_SEVERITIES = Object.freeze({
 const isFiniteNonNegative = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 
 /**
- * Merge a per-series severity-weight override over the frozen defaults. Each of
- * high/medium/low is replaced ONLY when `override[key]` is a finite,
- * non-negative number; an absent or invalid key keeps its default. A non-object
- * override (or `{}`) returns the defaults unchanged — absent must NOT clobber.
- *
- * Returns a fresh PLAIN object (never the frozen default) so callers may read it
- * without mutating the shared constant.
+ * Merge a per-series weight override over the defaults; a key is replaced ONLY when it
+ * is a finite non-negative number. Returns a fresh plain object (never the frozen default).
  *
  * @param {object} [override] — partial `{ high?, medium?, low? }`
  * @returns {{ high: number, medium: number, low: number }}
@@ -64,12 +44,9 @@ export function mergeSeverityWeights(override) {
 }
 
 /**
- * Resolve the blocking-severity Set for one autopilot gate from a per-series
- * override. `Array.isArray(override[gate])` is checked FIRST so an explicit
- * empty array (`[]` → "nothing blocks", a legitimate choice) is distinguished
- * from an absent gate (falls back to the gate's default set). When present, the
- * array is filtered to the CHECK_SEVERITIES subset (junk dropped) and deduped —
- * even if that resolves to an empty Set.
+ * Resolve the blocking-severity Set for one gate. An explicit `[]` is distinguished from
+ * an absent gate (default set); a present array is filtered to CHECK_SEVERITIES and
+ * deduped, even if that leaves it empty.
  *
  * @param {object} [override] — per-series `{ arc?, beatContinuity?, editorial? }`
  * @param {string} gate — one of BLOCKING_GATES
@@ -80,20 +57,15 @@ export function resolveBlockingSet(override, gate) {
     ? override[gate]
     : undefined;
   if (Array.isArray(raw)) {
-    // Explicit (possibly empty) override — filter to known severities + dedupe.
     return new Set(raw.filter((s) => CHECK_SEVERITIES.includes(s)));
   }
-  // Absent / not-an-array → the gate's frozen default set.
   return new Set(DEFAULT_BLOCKING_SEVERITIES[gate] || []);
 }
 
 /**
- * Wire-shape bounder for a per-series severity-weight override (persisted on the
- * series record). Returns a plain object containing ONLY the high/medium/low
- * keys whose value is a finite non-negative number (everything else dropped);
- * returns `{}` when nothing is valid. An empty override therefore persists as
- * `{}` and `mergeSeverityWeights` falls back to the defaults — so "tunes
- * nothing" round-trips as the frozen defaults rather than a frozen snapshot.
+ * Bound a per-series weight override for persistence: only high/medium/low keys with a
+ * finite non-negative value survive; `{}` when nothing is valid (so it falls back to the
+ * defaults rather than freezing a snapshot).
  *
  * @param {*} raw
  * @returns {object} bounded `{ high?, medium?, low? }`
@@ -108,12 +80,8 @@ export function sanitizeSeverityWeights(raw) {
 }
 
 /**
- * Wire-shape bounder for a per-series blocking-severity override (persisted on
- * the series record). Returns a plain object containing ONLY the keys in
- * BLOCKING_GATES whose value is an Array, each filtered to the CHECK_SEVERITIES
- * subset and deduped. An explicit empty array is PRESERVED as `[]` (the distinct
- * "nothing blocks" choice); a non-array gate value is dropped. Returns `{}` when
- * nothing is valid.
+ * Bound a per-series blocking-severity override: only BLOCKING_GATES keys holding an
+ * Array survive, filtered to CHECK_SEVERITIES and deduped. An explicit `[]` is PRESERVED.
  *
  * @param {*} raw
  * @returns {object} bounded `{ arc?, beatContinuity?, editorial? }`
@@ -123,7 +91,7 @@ export function sanitizeBlockingSeverities(raw) {
   const out = {};
   for (const gate of BLOCKING_GATES) {
     if (Array.isArray(raw[gate])) {
-      // Dedupe + drop junk, preserving an explicit empty array as [].
+      // Dedupe + drop junk; keep an explicit empty array.
       out[gate] = [...new Set(raw[gate].filter((s) => CHECK_SEVERITIES.includes(s)))];
     }
   }

@@ -4,9 +4,10 @@ import { MemoryRouter } from 'react-router';
 
 // Mock the API surface EditAppDrawer touches on mount, plus the work-tracker
 // resolver and the update path used on save.
+const { getInstanceFeatures } = vi.hoisted(() => ({ getInstanceFeatures: vi.fn() }));
 vi.mock('../../services/api', () => ({
   getDatadogInstances: vi.fn(),
-  getInstanceFeatures: vi.fn(),
+  getInstanceFeatures,
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
   getAppLayeredIntelligenceOutcomes: vi.fn(),
@@ -15,6 +16,12 @@ vi.mock('../../services/api', () => ({
   getProviders: vi.fn(),
   updateApp: vi.fn(),
   upgradeAppTls: vi.fn(),
+}));
+
+// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
 }));
 
 import * as api from '../../services/api';

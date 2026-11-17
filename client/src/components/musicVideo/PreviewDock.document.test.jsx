@@ -53,7 +53,7 @@ describe('PreviewDock composition document', () => {
     const view = render(draw(active));
     expect(await screen.findByTestId('document-template-canvas')).toBeTruthy();
     expect(screen.queryByTestId('document-template-finish')).toBeNull();
-    expect(screen.getByText(/camera moves, beat reactions, cards, HUD and words/)).toBeTruthy();
+    expect(screen.queryByText(/only in the paused frame/)).toBeNull();
     const audio = screen.getByLabelText('Song for the composition preview');
     const changed = { ...active, composition: { ...active.composition, overlay: { enabled: true, titleLines: ['Changed'] } } };
     view.rerender(draw(changed));

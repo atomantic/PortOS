@@ -16,6 +16,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest, mediaCollectionBulkItemsSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
@@ -67,9 +68,10 @@ const itemSchema = z.object({
 // client passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const list = await svc.listCollections();
-  if (!isPaginationRequested(req.query)) return res.json(list);
-  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  if (!isPaginationRequested(query)) return res.json(list);
+  res.json(paginateArray(list, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

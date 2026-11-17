@@ -4,12 +4,11 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
-import { musicVideoShotReferenceRepairSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoShotReferenceRepairSchema, musicVideoCastAndSetsStartSchema, musicVideoCastAndSetsDirectionEditSchema, musicVideoCastAndSetsDirectionTextEditSchema, musicVideoCastAndSetsFeedbackSchema, musicVideoCastAndSetsFeedbackPlanSchema, musicVideoCastAndSetsFeedbackRenderSchema, musicVideoCastAndSetsImageNoteRemovalSchema, musicVideoCastAndSetsRegenerateSchema } from '../lib/musicVideoValidation.js';
 import { Router } from 'express';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, musicVideoCastAndSetsStartSchema, musicVideoCastAndSetsDirectionEditSchema, musicVideoCastAndSetsDirectionTextEditSchema, musicVideoCastAndSetsFeedbackSchema, musicVideoCastAndSetsFeedbackPlanSchema, musicVideoCastAndSetsFeedbackRenderSchema, musicVideoCastAndSetsImageNoteRemovalSchema, musicVideoCastAndSetsRegenerateSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { startCastAndSets, editCastAndSetsDirection, editCastAndSetsDirectionText, applyCastAndSetsFeedback, renderCastAndSetsFeedback, refreshCastAndSetsFeedbackRenderer, removeCastAndSetsFeedbackEntry, removeCastAndSetsImageFeedback, editCastAndSetsImage, previewCastAndSetsImageEdit, acceptCastAndSetsImageEdit, discardCastAndSetsImageEdit, regenerateCastAndSets, resumeCastAndSets, approveCastAndSets, useCastAndSetsImage, acknowledgeCastAndSetsImage, reinspectCastAndSetsImages, reconfirmCastAndSets, skipCastAndSets, discardCastAndSets, getCastAndSets, getCastAndSetsCastingChanges, useCatalogCheckin, rebuildCatalogGuide, repairShotReference } from '../services/musicVideo/castAndSetsService.js';
 
 const router = Router();

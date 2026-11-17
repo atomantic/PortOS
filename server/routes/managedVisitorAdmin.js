@@ -3,7 +3,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { visitorCredentialSchema, visitorIdSchema } from '../lib/managedVisitorValidation.js';
 import { getManagedVisitorBroker } from '../services/managedVisitors.js';
 import { isCrossOrigin } from '../../lib/portosAuthCore.js';
-import { validateRequest } from './managedVisitors.js';
+import { validateRequest } from '../lib/validateRequest.js';
 
 // Owner provisioning lives in its own module so the route-graph scan, which
 // keys a module by its router, credits these routes to this mount alone.

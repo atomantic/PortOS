@@ -9,6 +9,16 @@ export const mediaDdl = [
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_media_prompt_examinations_created ON media_prompt_examinations (created_at DESC, id DESC)`,
+    // Music Video render spend ledger (#16506): one row per paid render a project's
+    // media jobs completed, keyed `render:<jobId>`, plus manual adjustments. Machine-
+    // local (spend is billed to this install's provider accounts), never federated.
+    `CREATE TABLE IF NOT EXISTS music_video_render_spend (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_music_video_render_spend_project ON music_video_render_spend (project_id, created_at)`,
     // Creative Director projects (Phase 3, issue #997). One row per project;
     // the full record lives in `data` JSONB, with status/created_at/updated_at
     // mirrored into columns (kept in lockstep on every write) for future

@@ -7,14 +7,13 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
   moltworldWsConnectSchema,
   moltworldWsMoveSchema,
   moltworldWsThinkSchema,
-  moltworldWsNearbySchema,
-  moltworldWsInteractSchema
-} from '../lib/validation.js';
+  moltworldWsInteractSchema,
+} from '../lib/agentValidation.js';
 import * as moltworldWs from '../services/moltworldWs.js';
 
 const router = Router();
@@ -55,15 +54,6 @@ router.post('/think', asyncHandler(async (req, res) => {
 
   console.log(`🌐 POST /api/agents/tools/moltworld/ws/think`);
   moltworldWs.sendThink(data.thought);
-  res.json({ sent: true });
-}));
-
-// POST /nearby — Request nearby agents via WebSocket
-router.post('/nearby', asyncHandler(async (req, res) => {
-  const data = validateRequest(moltworldWsNearbySchema, req.body);
-
-  console.log(`🌐 POST /api/agents/tools/moltworld/ws/nearby`);
-  moltworldWs.sendNearby(data.radius);
   res.json({ sent: true });
 }));
 

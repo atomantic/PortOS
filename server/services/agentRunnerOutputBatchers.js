@@ -1,16 +1,13 @@
 /**
  * Per-agent debounced output batchers for the CoS Runner stream path.
  *
- * The runner emits `agent:output` per parsed line (see cos-runner/index.js), so
- * a chatty agent would otherwise trigger a full state load+save per line. Each
- * batcher coalesces a ~250ms window; we drain + drop it when the agent
- * completes/errors so the final lines persist before the completion event.
+ * The runner emits `agent:output` per parsed line, so each batcher coalesces a
+ * ~250ms window instead of a state load+save per line; it is drained and dropped
+ * on completion/error so the final lines persist before the completion event.
  *
- * Extracted from `subAgentSpawner.js` (issue #2837) so `agentManagement.js` can
- * import `flushRunnerOutputBatcher` statically. It previously reached for it via
- * `await import('./subAgentSpawner.js')` purely to dodge a cycle — the spawner
- * barrel re-exports agentManagement. Leaf module: only depends on the state
- * layer (`cosAgentLifecycle.js`).
+ * Leaf module (depends only on `cosAgentLifecycle.js`) so `agentManagement.js`
+ * can import `flushRunnerOutputBatcher` statically without a cycle through the
+ * spawner barrel.
  */
 
 import { createAgentOutputBatcher } from './cosAgentLifecycle.js';
@@ -29,11 +26,8 @@ export function getRunnerOutputBatcher(agentId) {
 export async function flushRunnerOutputBatcher(agentId) {
   const batcher = runnerOutputBatchers.get(agentId);
   if (!batcher) return;
-  // Flush BEFORE deleting: the agent is still in `runnerAgents` at this point
-  // (handleAgentCompletion removes it afterwards), so a line racing in during
-  // the awaited flush lands in this same batcher instead of orphaning a new
-  // one. The `agent:output` guard in the spawner drops any truly
-  // post-completion stray.
+  // Flush BEFORE deleting: the agent is still in `runnerAgents`, so a line racing
+  // in during the awaited flush lands in this batcher instead of orphaning a new one.
   await batcher.flush();
   runnerOutputBatchers.delete(agentId);
 }

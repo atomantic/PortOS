@@ -5,7 +5,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 vi.mock('../services/moltworldWs.js', () => ({
   connect: vi.fn(), disconnect: vi.fn(), getStatus: vi.fn(),
-  sendMove: vi.fn(), sendThink: vi.fn(), sendNearby: vi.fn(), sendInteract: vi.fn(),
+  sendMove: vi.fn(), sendThink: vi.fn(), sendInteract: vi.fn(),
 }));
 
 import * as moltworldWs from '../services/moltworldWs.js';

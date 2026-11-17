@@ -8,13 +8,14 @@ import { isDeepStrictEqual } from 'node:util';
 import * as catalogDB from '../services/catalogDB.js';
 import { catalogEvents } from '../services/catalogEvents.js';
 import * as catalogSync from '../services/catalogSync.js';
-import { resolveRefs, listDanglingRefs } from '../services/catalogRefResolver.js';
+import { resolveRefs } from '../services/catalogRefResolver.js';
 import { projectToCanon } from '../services/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
 import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
-import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema } from '../lib/catalogValidation.js';
+import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalogValidation.js';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
 import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
@@ -29,12 +30,11 @@ import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } fro
 import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
 import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
-import { MAX_CAST_GUIDES, filterLibraryMedia, pickGuideMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, filterLibraryMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
 import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
 import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../services/musicVideo/catalogCast.js';
-import { fileCatalogImagesIntoUniverses } from '../services/catalogUniverseFiling.js';
 import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
@@ -52,7 +52,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
 }));
 
 router.get('/scraps', asyncHandler(async (req, res) => {
-  const { limit, offset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { limit, offset } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 50, maxLimit: 200 });
   res.json(await catalogDB.listScraps({ limit, offset }));
 }));
 
@@ -298,6 +298,7 @@ router.get('/ingredients/media', asyncHandler(async (req, res) => {
 }));
 
 router.get('/ingredients/:id', asyncHandler(async (req, res) => {
+  const { includeEmbedding: includeEmbeddingRaw } = validateRequest(catalogIncludeEmbeddingQuerySchema, req.query);
   const ing = await catalogDB.getIngredient(req.params.id);
   if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
   const [refs, sources] = await Promise.all([
@@ -306,7 +307,7 @@ router.get('/ingredients/:id', asyncHandler(async (req, res) => {
   ]);
   // Detail UI doesn't render the 768-float embedding (~6KB stringified).
   // Strip unless `?includeEmbedding=true` — sync/export consumers can opt in.
-  const includeEmbedding = req.query.includeEmbedding === 'true';
+  const includeEmbedding = includeEmbeddingRaw === 'true';
   const { embedding, ...rest } = ing;
   res.json({
     ...(includeEmbedding ? { ...rest, embedding } : rest),
@@ -531,30 +532,8 @@ router.delete('/ingredients/:id/link', asyncHandler(async (req, res) => {
   res.status(204).end();
 }));
 
-router.get('/ingredients/:id/refs', asyncHandler(async (req, res) => {
-  res.json(await catalogDB.listRefsForIngredient(req.params.id));
-}));
-
 router.get('/refs/:refKind/:refId/ingredients', asyncHandler(async (req, res) => {
   res.json(await catalogDB.listIngredientsForRef(req.params.refKind, req.params.refId));
-}));
-
-// Resolver (#1018): does this (refKind, refId) target a LIVE app-native record?
-// Pairs with the ingredients list above so a caller rendering "everything
-// related to this universe/series/issue/work" can also tell whether the target
-// itself still exists. Read-only, local — no FK, by design (D3 of #999).
-router.get('/refs/:refKind/:refId/resolve', asyncHandler(async (req, res) => {
-  const [resolved] = await resolveRefs([{ refKind: req.params.refKind, refId: req.params.refId }]);
-  res.json(resolved);
-}));
-
-// Integrity surface (#1018): every LIVE ref whose target record no longer
-// resolves (deleted, or never arrived after a federated ref). Mirrors the media
-// `metadata-missing` check — a dangling ref isn't an error (the target may sync
-// in later), just a report. `count` is handy for a badge.
-router.get('/refs/dangling', asyncHandler(async (req, res) => {
-  const dangling = await listDanglingRefs();
-  res.json({ count: dangling.length, dangling });
 }));
 
 // --- Ingredient↔ingredient relations -----------------------------------
@@ -623,15 +602,6 @@ router.get('/ingredients/:id/media', asyncHandler(async (req, res) => {
   res.json(Object.keys(filters).length ? filterLibraryMedia(media, { ...filters, guide: filters.guide === 'true' ? true : undefined }) : media);
 }));
 
-// Casting reference library: the up-to-4 images a render of this cast member
-// should condition on for the requested variant (?age=&era=&wardrobeId=).
-router.get('/ingredients/:id/media/guides', asyncHandler(async (req, res) => {
-  const ing = await catalogDB.getIngredient(req.params.id);
-  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  const want = validateRequest(catalogMediaLibraryQuerySchema, req.query);
-  res.json({ guides: pickGuideMedia(await catalogDB.listMediaForIngredient(req.params.id), want) });
-}));
-
 // Edit a media row's Casting library fields (variant/tags/guide). 409 past 4 guides.
 router.patch('/ingredients/:id/media/library', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaLibraryPatchSchema, req.body);
@@ -673,14 +643,6 @@ router.post('/ingredients/:id/media/from-mood-board', asyncHandler(async (req, r
     attached.push(Object.keys(patch).length ? await catalogDB.updateMediaLibrary(req.params.id, parsed.mediaKey, parsed.kind, patch) : { mediaKey: parsed.mediaKey, kind: parsed.kind });
   }
   res.status(201).json({ attached, skipped });
-}));
-
-// Integrity surface: media keys on this ingredient that don't resolve against
-// the local library (typically arrived via federation before their asset did).
-router.get('/ingredients/:id/media/missing', asyncHandler(async (req, res) => {
-  const ing = await catalogDB.getIngredient(req.params.id);
-  if (!ing) throw new ServerError('Ingredient not found', { status: 404 });
-  res.json({ missing: await catalogDB.getMissingMediaForIngredient(req.params.id) });
 }));
 
 router.post('/ingredients/:id/media', asyncHandler(async (req, res) => {
@@ -1135,7 +1097,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
   // instead of nesting it. We reconstruct the per-kind object ourselves so
   // the documented bracket protocol survives regardless of parser config —
   // otherwise peers would silently keep pulling page 1 and loop on hasMore.
-  const sinceRaw = req.query.since;
+  const { since: sinceRaw, limit: limitRaw } = validateRequest(catalogSyncQuerySchema, req.query);
   let since;
   if (sinceRaw && typeof sinceRaw === 'object' && !Array.isArray(sinceRaw)) {
     since = sinceRaw;
@@ -1158,7 +1120,7 @@ router.get('/sync', asyncHandler(async (req, res) => {
       since = (typeof sinceRaw === 'string' && /^\d+$/.test(sinceRaw)) ? sinceRaw : '0';
     }
   }
-  const { limit } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 1000 });
+  const { limit } = parsePagination({ limit: limitRaw }, { defaultLimit: 100, maxLimit: 1000 });
   const changes = await catalogSync.getChangesSince(since, limit);
   res.json({
     ...changes,
@@ -1233,18 +1195,6 @@ router.post('/import/music-videos', asyncHandler(async (req, res) => {
   res.json(await commitCatalogCastImport(selections));
 }));
 
-// Universe collection integrity: every image on a record that belongs to a
-// universe (directly or through a story in it) sits in that universe's
-// collection. GET reports what is missing; POST files it. Never removes, and
-// skips images the user took out of the collection.
-router.get('/universe-filing', asyncHandler(async (req, res) => {
-  res.json(await fileCatalogImagesIntoUniverses({ dryRun: true }));
-}));
-
-router.post('/universe-filing', asyncHandler(async (req, res) => {
-  res.json(await fileCatalogImagesIntoUniverses());
-}));
-
 // --- User-defined ingredient types --------------------------------------
 // User types live in PostgreSQL (`catalog_user_types`, #1001 — formerly the
 // settings.json `catalogUserTypes` slice) and merge into the active type
@@ -1313,7 +1263,7 @@ router.patch('/types/:id', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/types/:id', asyncHandler(async (req, res) => {
-  const force = req.query.force === 'true';
+  const force = validateRequest(catalogTypeDeleteQuerySchema, req.query).force === 'true';
   await updateUserTypes(async (slice) => {
     const current = Array.isArray(slice) ? slice : [];
     const idx = current.findIndex((t) => t.id === req.params.id && !t.deletedAt);

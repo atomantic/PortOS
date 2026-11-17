@@ -34,14 +34,10 @@ const store = {
   applyReconciliation: vi.fn().mockResolvedValue(undefined),
   commitPendingProjection: vi.fn().mockResolvedValue(undefined),
   acknowledgeProjection: vi.fn().mockResolvedValue(undefined),
-  relinkBinding: vi.fn().mockResolvedValue(undefined),
   deleteConnection: vi.fn(),
-  detachBindingToConnection: vi.fn().mockResolvedValue(undefined),
   mergeServiceInstances: vi.fn().mockResolvedValue(undefined),
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
-  saveRouteModelMap: vi.fn().mockResolvedValue(undefined),
-  saveRouteModelAliases: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock('../services/providerGraphStore.js', () => store);
 

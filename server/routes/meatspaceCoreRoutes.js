@@ -14,9 +14,6 @@ import { getLoggingStats } from '../services/meatspaceLoggingStats.js';
 
 const router = Router();
 
-// =============================================================================
-// OVERVIEW
-// =============================================================================
 
 /**
  * GET /api/meatspace
@@ -36,9 +33,6 @@ router.get('/logging-stats', asyncHandler(async (req, res) => {
   res.json(stats);
 }));
 
-// =============================================================================
-// CONFIG
-// =============================================================================
 
 /**
  * GET /api/meatspace/config
@@ -69,9 +63,6 @@ router.put('/lifestyle', asyncHandler(async (req, res) => {
   res.json(config);
 }));
 
-// =============================================================================
-// BIRTH DATE
-// =============================================================================
 
 /**
  * GET /api/meatspace/birth-date
@@ -92,9 +83,6 @@ router.put('/birth-date', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// =============================================================================
-// DEATH CLOCK & LEV
-// =============================================================================
 
 /**
  * GET /api/meatspace/death-clock
@@ -103,15 +91,6 @@ router.put('/birth-date', asyncHandler(async (req, res) => {
 router.get('/death-clock', asyncHandler(async (req, res) => {
   const deathClock = await meatspaceService.getDeathClock();
   res.json(deathClock);
-}));
-
-/**
- * GET /api/meatspace/lev
- * LEV 2045 tracker data
- */
-router.get('/lev', asyncHandler(async (req, res) => {
-  const lev = await meatspaceService.getLEV();
-  res.json(lev);
 }));
 
 export default router;

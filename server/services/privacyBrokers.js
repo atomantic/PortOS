@@ -371,30 +371,52 @@ export function parseBadboolList(payload) {
 const BADBOOL_URL = 'https://raw.githubusercontent.com/bugbounty-zz/data-broker-list/main/brokers.json';
 const CA_REGISTRY_URL = 'https://cppa.ca.gov/data_broker_registry.csv';
 
+// A transport or HTTP failure THROWS: an empty list means the source answered
+// with no brokers, never that it was unreachable (refreshBrokers reports each
+// source's outcome so a failed download cannot read as fetched-and-empty).
+async function fetchSource(url) {
+  const res = await fetchWithTimeout(url, {}, BROKER_FETCH_TIMEOUT_MS);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res;
+}
+
 async function defaultFetchBadbool() {
-  const res = await fetchWithTimeout(BADBOOL_URL, {}, BROKER_FETCH_TIMEOUT_MS).catch(() => null);
-  if (!res || !res.ok) return [];
-  return parseBadboolList(await res.json().catch(() => null));
+  const res = await fetchSource(BADBOOL_URL);
+  return parseBadboolList(await res.json());
 }
 
 async function defaultFetchCaRegistry() {
-  const res = await fetchWithTimeout(CA_REGISTRY_URL, {}, BROKER_FETCH_TIMEOUT_MS).catch(() => null);
-  if (!res || !res.ok) return [];
-  return parseCaRegistryCsv(await res.text().catch(() => ''));
+  const res = await fetchSource(CA_REGISTRY_URL);
+  return parseCaRegistryCsv(await res.text());
+}
+
+// Test hook: the real downloaders, exercised against a stubbed fetchWithTimeout.
+export const _sourceFetchers = { badbool: defaultFetchBadbool, caRegistry: defaultFetchCaRegistry };
+
+// Run one source fetcher to a { ok, count, error } outcome; rows are [] on failure.
+async function runSource(fetcher) {
+  try {
+    const rows = await fetcher();
+    if (!Array.isArray(rows)) throw new Error('Unexpected response shape');
+    return { rows, outcome: { ok: true, count: rows.length, error: null } };
+  } catch (err) {
+    return { rows: [], outcome: { ok: false, count: 0, error: err?.message || 'Fetch failed' } };
+  }
 }
 
 /**
  * USER-TRIGGERED refresh: pull the BADBOOL people-search list + the CA Data
  * Broker Registry and upsert them with `source`/`confidence: auto`. NEVER
  * overwrites a curated row (the ON CONFLICT guard skips `source=curated`).
- * Fetchers are injectable for tests. NOT called at boot.
+ * Fetchers are injectable for tests and throw on failure; each source's
+ * outcome is returned as `{ ok, count, error }` so one failed download still
+ * upserts the other. NOT called at boot.
  */
 export async function refreshBrokers({ fetchBadbool = defaultFetchBadbool, fetchCaRegistry = defaultFetchCaRegistry } = {}) {
   await ensureSeeded();
-  const [badbool, caRegistry] = await Promise.all([
-    fetchBadbool().catch(() => []),
-    fetchCaRegistry().catch(() => []),
-  ]);
+  const [badboolRun, caRegistryRun] = await Promise.all([runSource(fetchBadbool), runSource(fetchCaRegistry)]);
+  const badbool = badboolRun.rows;
+  const caRegistry = caRegistryRun.rows;
   // Normalize + tag every fetched entry per lane (defensive — an injected/raw
   // fetcher may return a sparse shape, and a refreshed broker is ALWAYS an auto
   // source, never curated). `clusterParent: null` because auto brokers never
@@ -416,8 +438,13 @@ export async function refreshBrokers({ fetchBadbool = defaultFetchBadbool, fetch
       if (before.rowCount === 0) added += 1;
     }
   });
-  console.log(`🔄 Broker refresh: ${badbool.length} badbool + ${caRegistry.length} ca_registry → ${added} new, curated preserved`);
-  return { fetched: byId.size, added, sources: { badbool: badbool.length, caRegistry: caRegistry.length } };
+  const failed = [badboolRun, caRegistryRun].filter((r) => !r.outcome.ok).length;
+  console.log(`🔄 Broker refresh: ${badbool.length} badbool + ${caRegistry.length} ca_registry → ${added} new, curated preserved${failed ? `, ${failed} source(s) failed` : ''}`);
+  return {
+    fetched: byId.size,
+    added,
+    sources: { badbool: badboolRun.outcome, caRegistry: caRegistryRun.outcome },
+  };
 }
 
 // ─── Case ledger ────────────────────────────────────────────────────────────

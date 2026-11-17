@@ -21,6 +21,7 @@ import { inPlaceClipName } from '../../utils/animationClips';
 import { getNavPageForPath, getPageNavTabs } from '../../../../server/lib/navManifest.js';
 import { PR_REVIEW_MODES, DEFAULT_PR_REVIEW_MODE, DEFAULT_PR_COMPLETION, resolveUseAutoMerge } from '../../../../server/lib/prDisposition.js';
 import { buildPageNavTabs } from '../../lib/pageNavTabs.js';
+import { isFalsyMeta, isTruthyMeta } from '../../../../server/lib/metadataFlags.js';
 
 // Icon per tab id. The manifest (`tabGroup: 'cos'`) owns id/label/order — this
 // file owns only how each tab looks. Throws at import time on drift.
@@ -302,8 +303,8 @@ export const IMPLICIT_PR_COMPLETION = DEFAULT_PR_COMPLETION;
 // IMPLICIT_PR_COMPLETION floor — that floor is what "inherit" resolves to.
 export function pinnedPrCompletion(metadata) {
   if (prCompletionOption(metadata?.prCompletion)) return metadata.prCompletion;
-  if (metadata?.reviewLoop === true || metadata?.reviewLoop === 'true') return 'review-then-merge';
-  return metadata?.reviewLoop === false || metadata?.reviewLoop === 'false' ? 'merge-on-green' : '';
+  if (isTruthyMeta(metadata?.reviewLoop)) return 'review-then-merge';
+  return isFalsyMeta(metadata?.reviewLoop) ? 'merge-on-green' : '';
 }
 
 // UI copy for each reviewer in the Review Loop picker. `copilot` requests a

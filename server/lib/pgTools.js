@@ -1,25 +1,7 @@
 /**
- * pg_dump binary resolution.
+ * pg_dump binary resolution and libpq env helpers: `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup and isolates libpq settings from inherited PG variables.
  *
- * `withPgToolEnv(config, run)` stages Node trust roots with guaranteed cleanup; isolates libpq
- * connection/TLS settings from inherited PG variables; `pg_dump` binary resolution shared by the
- * backup snapshot path and the native↔Docker export path: `resolvePgDumpBinary(serverMajor)`
- * (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`), plus the lower-level
- * `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. Picks the closest installed `pg_dump`
- * whose major is ≥ the running server's.
- *
- * `pg_dump` REFUSES to dump a server newer than itself ("server version
- * mismatch"), but a newer `pg_dump` dumps an older server fine. On machines
- * with multiple Postgres installs (the common Homebrew case: an old
- * `postgresql@NN` keg shadowing a newer running server in PATH) the bare
- * `pg_dump` is often the wrong one, so these helpers discover the installed
- * binaries and select the closest whose major is >= the running server's.
- *
- * Shared by both pg_dump consumers — the backup snapshot path
- * (`server/services/backup.js`) and the native↔Docker backend-copy / export
- * path (`server/services/dbAdmin.js`) — so the version-aware selection and the
- * `PORTOS_PGDUMP` override behave identically in both. Self-contained: no
- * imports out to other PortOS services.
+ * `resolvePgDumpBinary(serverMajor)` (PORTOS_PGDUMP override → version-aware auto-select → bare `pg_dump`) plus `pickPgDump` / `discoverPgDumpCandidates` / `resolvePgDump`. `pg_dump` REFUSES to dump a newer server ("server version mismatch") but a newer one dumps an older server, and on machines with several Postgres installs (an old Homebrew `postgresql@NN` keg shadowing a newer server in PATH) the bare binary is often wrong, so the closest installed major >= the server's is picked. Shared by the backup snapshot path (`server/services/backup.js`) and the native↔Docker export path (`server/services/dbAdmin.js`). Self-contained: no imports out to other PortOS services.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -30,13 +12,7 @@ import { join } from 'path';
 import { execFileAsync } from './fileUtils.js';
 
 /**
- * Choose which discovered pg_dump binary to run, given the server's major
- * version. pg_dump REFUSES to dump a server newer than itself ("server version
- * mismatch"), but a newer pg_dump dumps an older server fine — so the rule is:
- * pick the closest binary whose major is >= the server's.
- *
- * Pure + exported for unit testing (the IO-bound discovery lives in
- * resolvePgDump, which feeds this the runnable candidates it found).
+ * Choose which discovered pg_dump to run given the server's major: the closest binary whose major is >= the server's. Pure and exported for tests (discovery I/O lives in resolvePgDump).
  *
  * @param {number|null} serverMajor - server's PG major version (null = unknown)
  * @param {Array<{binary: string, major: number}>} candidates - runnable pg_dumps
@@ -44,37 +20,25 @@ import { execFileAsync } from './fileUtils.js';
  */
 export function pickPgDump(serverMajor, candidates) {
   if (!candidates?.length) return null;
-  // Unknown server version: keep prior behavior — trust the first (PATH) entry.
+  // Unknown server version: trust the first (PATH) entry.
   if (!Number.isFinite(serverMajor)) return candidates[0].binary;
-  // Prefer the smallest major that still satisfies >= server (closest match,
-  // avoids reaching for a wildly newer keg when an exact one is installed).
+  // Smallest major that satisfies >= server (avoids a wildly newer keg when an exact one exists).
   const viable = candidates.filter(c => c.major >= serverMajor).sort((a, b) => a.major - b.major);
   if (viable.length) return viable[0].binary;
-  // Nothing is new enough. Return the newest we have so the resulting error is a
-  // clear "still too old" instead of an arbitrary pick — and so the version
-  // detection in dumpPostgres can flag it as version_mismatch.
+  // Nothing is new enough: return the newest so the error is a clear "still too old" and dumpPostgres can flag version_mismatch.
   return [...candidates].sort((a, b) => b.major - a.major)[0].binary;
 }
 
-/**
- * Read a pg_dump binary's major version, or null if it isn't runnable.
- * `pg_dump --version` prints e.g. "pg_dump (PostgreSQL) 17.10 (Homebrew)".
- */
+/** Read a pg_dump binary's major version (`pg_dump --version` → "pg_dump (PostgreSQL) 17.10 (Homebrew)"), or null if not runnable. */
 async function pgDumpMajor(binary) {
   const { stdout } = await execFileAsync(binary, ['--version']).catch(() => ({ stdout: '' }));
   const m = stdout.match(/PostgreSQL\)\s+(\d+)/i);
   return m ? parseInt(m[1], 10) : null;
 }
 
-/**
- * Enumerate candidate pg_dump locations: the bare PATH binary, then versioned
- * Homebrew kegs and Postgres.app bundles (where multiple majors coexist and
- * PATH order silently picks the wrong one).
- */
+/** Enumerate candidate pg_dump locations: the bare PATH binary, then versioned Homebrew kegs and Postgres.app bundles (where PATH order silently picks the wrong major). */
 export async function discoverPgDumpCandidates() {
-  // Note: the PORTOS_PGDUMP override is NOT a candidate here — resolvePgDumpBinary
-  // honors it outright before discovery runs, so it's never subject to the
-  // closest-major auto-selection below.
+  // The PORTOS_PGDUMP override is NOT a candidate: resolvePgDumpBinary honors it before discovery.
   const paths = ['pg_dump']; // whatever PATH resolves — preserves the old default
   const kegDirs = ['/opt/homebrew/opt', '/usr/local/opt', '/Applications/Postgres.app/Contents/Versions'];
   for (const dir of kegDirs) {
@@ -85,9 +49,7 @@ export async function discoverPgDumpCandidates() {
       }
     }
   }
-  // Probe versions concurrently (each `pg_dump --version` is an independent
-  // spawn); [...new Set(paths)] de-dups while preserving priority order, which
-  // Promise.all keeps — so pickPgDump still sees PATH > kegs.
+  // Probe versions concurrently; `[...new Set(paths)]` de-dups keeping priority order, which Promise.all preserves (PATH > kegs).
   const probed = await Promise.all(
     [...new Set(paths)].map(async (binary) => ({ binary, major: await pgDumpMajor(binary) }))
   );
@@ -95,16 +57,8 @@ export async function discoverPgDumpCandidates() {
 }
 
 /**
- * Auto-select a pg_dump binary for a server at `serverMajor` by discovering
- * installed binaries and picking the closest whose major is >= the server's.
- * Returns the chosen path and whether it satisfies the server's version
- * (false ⇒ the dump will fail with a version mismatch and there's nothing
- * newer installed).
- *
- * The explicit `PORTOS_PGDUMP` override is NOT handled here — the caller
- * (`resolvePgDumpBinary`) honors it before reaching this resolver, so the
- * override works even when the server version is unknown and this resolver
- * is skipped.
+ * Auto-select a pg_dump for a server at `serverMajor` by discovering installed binaries; returns the path and whether it satisfies the server's version (false ⇒ the dump will fail with a mismatch).
+ * The `PORTOS_PGDUMP` override is handled by the caller (`resolvePgDumpBinary`) so it works even when the server version is unknown.
  *
  * @param {number} serverMajor - known server major (caller guards on isFinite)
  * @returns {Promise<{binary: string, satisfies: boolean}>}
@@ -118,17 +72,8 @@ export async function resolvePgDump(serverMajor) {
 }
 
 /**
- * The full pg_dump-binary decision shared by every consumer:
- *  - an explicit PORTOS_PGDUMP override always wins — the escape hatch must
- *    work even when version detection failed (its main use case);
- *  - else, when we know the server version, auto-select a binary whose major
- *    is >= it (resolvePgDump scans Homebrew kegs / Postgres.app);
- *  - else keep the prior behavior (bare `pg_dump` off PATH) without paying for
- *    discovery I/O we couldn't act on.
- *
- * `satisfies` is false only when a known server version has no new-enough
- * installed binary — the caller can warn before the dump fails with a clear
- * "server version mismatch".
+ * The full pg_dump-binary decision shared by every consumer: an explicit PORTOS_PGDUMP always wins (the escape hatch must work when version detection failed); else with a known server version, auto-select
+ * a major >= it; else bare `pg_dump` without discovery I/O. `satisfies` is false only when a known server version has no new-enough binary, so the caller can warn before the dump fails.
  *
  * @param {number|null} serverMajor - server's PG major (null/NaN = unknown)
  * @returns {Promise<{binary: string, satisfies: boolean}>}

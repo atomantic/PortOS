@@ -3,18 +3,14 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { requireHostControl } from '../services/authGate.js';
-import { executeMaintenance, getMaintenanceInventory, previewMaintenance } from '../services/dataMaintenance.js';
+import { deleteMaintenance, getMaintenanceInventory } from '../services/dataMaintenance.js';
 
 const router = Router();
-const previewSchema = z.object({ operationId: z.string().min(1).max(100) }).strict();
-const executeSchema = z.object({ token: z.string().uuid(), confirmation: z.string().max(150) }).strict();
+const paramsSchema = z.object({ operationId: z.string().min(1).max(100) });
 router.get('/', requireHostControl, asyncHandler(async (_req, res) => res.json(await getMaintenanceInventory())));
-router.post('/preview', asyncHandler(async (req, res) => {
-  const { operationId } = validateRequest(previewSchema, req.body);
-  res.json(await previewMaintenance(operationId));
-}));
-router.post('/execute', asyncHandler(async (req, res) => {
-  const body = validateRequest(executeSchema, req.body);
-  res.json(await executeMaintenance(body));
+// Non-GET host-control gating comes from hostControlRouteGate at the app mount.
+router.delete('/:operationId', asyncHandler(async (req, res) => {
+  const { operationId } = validateRequest(paramsSchema, req.params);
+  res.json(await deleteMaintenance(operationId));
 }));
 export default router;

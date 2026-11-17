@@ -1,16 +1,6 @@
 /**
- * Creative Director — catalog ingredient seeding (#1808).
- *
- * Turns a list of resolved catalog ingredient records (characters / places /
- * objects / scenes / ideas) into the structured `cast` array stored on a CD
- * project and surfaced to the treatment agent. The agent uses the cast to ground
- * the treatment prompt and bind specific members to individual scenes (per-scene
- * casting). The same ingredients are linked to the project via
- * catalog_ingredient_refs (ref_kind='creative-director') — see
- * linkIngredientsToCreativeDirector in catalogDB.js — so the Catalog "Appears
- * in" panel and the convergence contract stay on one data model.
- *
- * Pure transform (no I/O), so it's unit-tested without a DB.
+ * Creative Director catalog ingredient seeding: pure transform of resolved ingredient records into the project `cast` array the treatment agent uses for per-scene casting.
+ * Ingredients are also linked via catalog_ingredient_refs (ref_kind='creative-director'); see linkIngredientsToCreativeDirector in catalogDB.js.
  */
 
 import { cdRefRoleForType } from '../catalogDB.js';

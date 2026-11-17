@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import ShotStepper, { shotNumbers, shotSteps } from './ShotStepper.jsx';
+import ShotStepper, { shotNumbers, shotStartFrameSec, shotSteps } from './ShotStepper.jsx';
 
 const scenes = [{ startSec: 4 }, { startSec: 0 }, { startSec: 8.5 }, { startSec: null }];
 
@@ -11,6 +11,16 @@ describe('shotSteps', () => {
     expect(shotSteps(scenes, 3.98)).toMatchObject({ back: 0, next: 8.5, index: 2 });
     expect(shotSteps(scenes, 0.2)).toMatchObject({ back: 0, next: 4, index: 1 });
     expect(shotSteps(scenes, 9)).toMatchObject({ back: 4, next: null, index: 3 });
+  });
+
+  it('lands on a between-frames start\'s first whole frame, so the jump shows that shot', () => {
+    // 5.37 s falls inside 24 fps frame 128 (5.333 s), which still belongs to the shot before.
+    const between = [{ startSec: 0 }, { startSec: 5.37 }, { startSec: 9.45 }];
+    const next = shotSteps(between, 0.5).next;
+    expect(next).toBe(129 / 24);
+    expect(Math.floor(next * 24 + 1e-9)).toBe(129);
+    expect(shotSteps(between, next)).toMatchObject({ index: 2, back: 0, next: shotStartFrameSec(9.45) });
+    expect(shotStartFrameSec(4)).toBe(4);
   });
 
   it('keeps a rendered excerpt to the shots inside it', () => {

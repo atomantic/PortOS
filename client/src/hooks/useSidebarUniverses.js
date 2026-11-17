@@ -5,7 +5,7 @@
  * Use when: The sidebar universes section.
  */
 
-import * as api from '../services/api';
+import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
 const UNIVERSE_EVENTS = ['universe:changed'];
@@ -14,5 +14,5 @@ const UNIVERSE_EVENTS = ['universe:changed'];
 // reloads when a universe is created, renamed or deleted, and refreshes on
 // window focus (debounced 30s).
 export function useSidebarUniverses() {
-  return useFocusRefreshedList(api.listUniverseNames, 'universes', UNIVERSE_EVENTS);
+  return useFocusRefreshedList(listUniverseNames, 'universes', UNIVERSE_EVENTS);
 }

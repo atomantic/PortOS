@@ -18,7 +18,7 @@
  * generator back; `taskSchedule.js` is imported lazily, as the generator does.
  */
 
-import { sanitizeTaskMetadata, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/validation.js';
+import { sanitizeTaskMetadata, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/cosValidation.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { ServerError } from '../lib/errorHandler.js';

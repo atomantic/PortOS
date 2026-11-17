@@ -1,3 +1,6 @@
+// @vitest-environment node
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: An `absolute` element with a base fixed width >= 256px (`w-64`+ or equivalent `w-[…]`) must also carry an unprefixed viewport-relative clamp (`max-w-[calc(100vw-1rem)]`, `max-w-[90vw]`, `max-w-full`, or `max-w-screen`).
  * Fix: Add `max-w-[calc(100vw-1rem)]` (or `max-w-full`) at the base viewport alongside the fixed width.

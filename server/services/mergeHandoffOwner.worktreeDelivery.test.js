@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { storedForm } from '../lib/cosTaskRows.js';
 
 // Generic, operator-configured CoS PR delivery (#11435): a live worktree run
 // whose prompt told it to open and merge its own PR may hand a pending merge to
@@ -24,11 +24,11 @@ import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 const BRANCH = 'cos/task-1/agent-1';
 const persist = () => { f.disk = structuredClone(f.state); };
 
-// The task round-trips through TASKS.md like a real queue entry, so metadata
+// The task is stored like a real queue entry, so metadata
 // arrives with the string scalars the owner proof must still interpret correctly.
 async function launch({ metadata = {}, mergesOwnPr = true, prOpenedBy = 'agent-slashdo' } = {}) {
-  const [task] = parseTasksMarkdown(generateTasksMarkdown([{ id: 'task-1', status: 'in_progress', priority: 'MEDIUM',
-    description: 'Fix the example', metadata: { openPR: true, prCompletion: 'merge-on-green', ...metadata } }]));
+  const task = storedForm({ id: 'task-1', status: 'in_progress', priority: 'MEDIUM',
+    description: 'Fix the example', metadata: { openPR: true, prCompletion: 'merge-on-green', ...metadata } }, 'user');
   f.tasks[task.id] = { ...task, taskType: 'user' };
   await registerAgent('agent-1', task.id, buildAgentRegistration({ task: f.tasks[task.id], provider: { id: 'test' }, modelSelection: {},
     sourceWorkspace: '/repos/source', workspacePath: '/repos/worktree', worktreeInfo: { branchName: BRANCH },

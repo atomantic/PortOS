@@ -1,43 +1,14 @@
 /**
  * Seed the shipped `Reality` universe (#7616, epic #7609).
  *
- * Factual/autobiographical capture had no home: every universe was fiction, so
- * a voice memo or a journal entry got extracted through a story lens. Phase 2
- * put a `factual` flag on the universe record; this migration gives every
- * install one factual world from first boot, so the flag has something to be
- * true of.
+ * Factual/autobiographical capture had no home (every universe was fiction, so a voice memo got extracted through a story lens); Phase 2 added a `factual` flag on the universe record and this gives every install one factual world from first boot.
  *
- * Why a MIGRATION and not a `data.reference/` seed: universes are Postgres
- * rows (`server/lib/db/schema/universes.js`), and `scripts/setup-data.js` only
- * copies files into `data/`. There is no `data/universes/` file to seed on a
- * PG install, so the seeding mechanism has to be code that writes a row. Note
- * this is NOT the "derived from the install's own records" case that
- * `scripts/lib/migrationOwnedPaths.js` governs — that list is about `data/`
- * FILE paths, and this migration writes no file at all.
+ * A MIGRATION, not a `data.reference/` seed: universes are Postgres rows (`server/lib/db/schema/universes.js`) and `scripts/setup-data.js` only copies files into `data/`. This is NOT the "derived from the install's own records" case of `scripts/lib/migrationOwnedPaths.js` (that list governs `data/` FILE paths).
  *
- * Shape decisions:
- *   - **Deterministic id `universe-reality`** (matches `UNIVERSE_ID_RE`), not
- *     a `randomUUID()`. A user commonly federates several machines; each one
- *     runs this migration itself, and a random id would give them one Reality
- *     per install that then all sync to each other. One fixed id makes the
- *     copies converge on a single record under the normal LWW merge.
- *   - **Empty logline / premise / styleNotes.** Reality is the user's own
- *     life; inventing copy for it would be wrong, and generating copy is
- *     barred outright — AGENTS.md "No cold-bootstrap LLM calls" rules out an
- *     LLM call on a boot path.
- *   - **Not `ephemeral`**, so it federates like any other universe.
+ * Shape: deterministic id `universe-reality` (matches `UNIVERSE_ID_RE`), not a `randomUUID()`: federated machines each run this, and a random id would give one Reality per install that all sync to each other, while a fixed id converges under LWW. Empty logline / premise / styleNotes
+ * (Reality is the user's own life, and AGENTS.md "No cold-bootstrap LLM calls" bars generating copy on a boot path). Not `ephemeral`, so it federates. Re-run safety: the applied-list stops a second run but the record check is the real guard (the row may already have synced in from a peer).
  *
- * Re-run safety: the applied-list already stops a second run, but the record
- * check is the real guard — an install can also reach this code with the row
- * already synced in from a peer.
- *
- * TOMBSTONE CONTRACT (the subtle part): the check is "does ANY row exist with
- * this id", `deleted` true or false — not "is there a live row". A user who
- * deleted Reality must not have it resurrected by the next upgrade, and a
- * tombstone is exactly the record of that decision. `insertUniverseWithId`
- * deliberately OVERWRITES a tombstone (its `wasResurrection` branch), which is
- * right for a share-bucket re-import and wrong here, so the emptiness check
- * lives here rather than as a `resurrect: false` option on the shared importer.
+ * TOMBSTONE CONTRACT: the check is "does ANY row exist with this id", `deleted` true or false, so a deleted Reality is not resurrected by the next upgrade. `insertUniverseWithId` deliberately OVERWRITES a tombstone (`wasResurrection`), right for a share-bucket re-import and wrong here, so the check lives here rather than as a `resurrect: false` option on the shared importer.
  */
 
 import { store, insertUniverseWithId } from '../../server/services/universeBuilder.js';

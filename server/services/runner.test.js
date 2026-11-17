@@ -304,7 +304,8 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
   // queued a CoS investigation task per failed benchmark run.
   it('finalizes a probe run without firing the provider-failure hook', async () => {
     const onRunFailed = vi.fn();
-    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks: { onRunFailed } });
+    const onRunUnreported = vi.fn();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks: { onRunFailed, onRunUnreported } });
 
     const metadata = await finalizeRunRecord({
       runId: 'run-probe',
@@ -318,6 +319,9 @@ describe('finalizeRunRecord — authoritative timeout classification', () => {
 
     expect(metadata).toMatchObject({ success: false, exitCode: 1, error: 'TUI exited with code 1' });
     expect(onRunFailed).not.toHaveBeenCalled();
+    // The run still ended: the activity snapshot is told so, with no failure detail.
+    expect(onRunUnreported).toHaveBeenCalledTimes(1);
+    expect(onRunUnreported).toHaveBeenCalledWith({ runId: 'run-probe' });
   });
 });
 

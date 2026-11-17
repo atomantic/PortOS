@@ -69,7 +69,7 @@ import { loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
 import { setAIToolkit as setProvidersToolkit } from './providers.js';
 import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
-import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed } from './runner.js';
+import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed, serializeRunDeletion } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
 import { startAutomaticUpdateReservationRecovery, stopAutomaticUpdateReservationRecovery } from './automaticUpdateReservationRecovery.js';
@@ -165,6 +165,7 @@ import { initMusicVideoSceneVideoHook } from './musicVideoSceneVideoHook.js';
 import { initMusicVideoSequenceVideoHook } from './musicVideoSequenceVideoHook.js';
 import { initMusicVideoSequenceTakeHook } from './musicVideoSequenceTakeHook.js';
 import { initMusicVideoCollectionHook } from './musicVideoCollectionHook.js';
+import { initMusicVideoRenderSpendHook } from './musicVideoRenderSpendHook.js';
 import { initMusicVideoCastSetsImageHook } from './musicVideoCastSetsImageHook.js';
 import { initMusicVideoCoverArtImageHook } from './musicVideoCoverArtImageHook.js';
 import { initCreativeDirectorMusicBedHook } from './creativeDirectorMusicBedHook.js';
@@ -419,11 +420,12 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
           onSettled: () => permit.finish(),
         })).catch(err => { permit.markUnsettled(); throw err; });
       };
+      // Interrupted-run recovery finalizes records while DELETE /api/runs/:id is
+      // served; a delete shares finalizeRunRecord's per-run turn.
+      aiToolkit.services.runner.deleteRun = serializeRunDeletion(aiToolkit.services.runner.deleteRun.bind(aiToolkit.services.runner));
       aiToolkit.services.runner.setCliRunner(executeCliRunFixed);
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },
-
-    recoverInterruptedRuns: () => import('./interruptedRunRecovery.js').then(({ recoverInterruptedRuns }) => recoverInterruptedRuns()),
 
     // Auto-fixer for error recovery.
     initAutoFixer,
@@ -444,6 +446,15 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Stamp uncertain publications before later boot steps read the journal.
   // Sync and non-throwing; CoS may be off. Smoke boot skips this whole function.
   reconcileDeadOwnerReservations();
+  // Detached-launch writer records a restart stranded would otherwise block the
+  // database cutover preflight; sweep the proven-quiescent ones. File I/O and
+  // `ps` only, no provider calls.
+  import('../lib/detachedSpawn.js')
+    .then(({ sweepQuiescentWriters }) => sweepQuiescentWriters())
+    .then(({ retired, skipped }) => console.log(skipped
+      ? `⏭️ Detached writer sweep skipped (${skipped})`
+      : `🧹 Detached writer sweep retired ${retired} quiescent record(s)`))
+    .catch((err) => logBootstrapFailure('❌ Detached writer sweep failed', err));
   startHarnessActionRecovery();
 
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
@@ -763,6 +774,8 @@ const initMediaJobDependentHooks = () => {
   // Music Video collection hook — files every render that names a music video
   // (a shot's, Cast & Sets, or a tagged Image/Video Gen request) into its collection.
   initMusicVideoCollectionHook();
+  // Music Video render spend hook (#16506) — records every paid render a project's jobs complete.
+  initMusicVideoRenderSpendHook();
   // Music Video Cast & Sets hook — files a queued check-in reference image
   // (character sheet, looks, set plates, in-set tests) onto its stage key.
   // It only listens: nothing is generated at boot.
@@ -868,10 +881,9 @@ const runDatabaseBootPhase = () => runDatabasePhase({
     // landed). LWW on updatedAt; writes the winner to both sides. Marker-gated
     // in data/catalog-canon-reconcile.applied.json.
     reconcileCanonCatalog: async () => (await import('../scripts/reconcileCanonCatalog.js')).reconcileCanonCatalog(),
-    // Media asset index (#1000): subscribe the generation-completed hooks +
-    // reconcile the derived media_assets table against on-disk images/videos.
-    // Bytes + sidecars + video-history.json stay authoritative; this builds a
-    // queryable index over them. Idempotent, safe to run every boot.
+    // Media asset index (#1000): ensure its schema + subscribe the
+    // generation-completed hooks. The full reconcile of the derived media_assets
+    // table against on-disk images/videos runs after listen() (#16556).
     initMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).initMediaAssetIndex()
   }).finally(markCosAgentMigrationsSettled),
 
@@ -1080,6 +1092,15 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // Process-level safety net, wired with the io instance so unhandled
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
+      reconcileMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).reconcileMediaAssetIndexAtBoot(),
+      // The dead-owner sweep in startBackgroundServices ran before this, so a
+      // cli-run reservation whose record recovery just closed is released by a
+      // second sweep; it releases only what the closed record now proves.
+      recoverInterruptedRuns: async () => {
+        const { recoverInterruptedRuns } = await import('./interruptedRunRecovery.js');
+        const { recovered } = await recoverInterruptedRuns();
+        if (recovered > 0) reconcileDeadOwnerReservations();
+      },
       backfillOriginInstanceId,
       // Relay any brain record whose current state never reached the sync log
       // (a crash or failed append on a previous run) — #8351.

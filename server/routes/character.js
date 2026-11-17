@@ -122,10 +122,4 @@ router.post('/sync/tasks', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/character/reset - Reset character (fresh start)
-router.post('/reset', asyncHandler(async (req, res) => {
-  const character = await characterService.resetCharacter();
-  res.json(character);
-}));
-
 export default router;

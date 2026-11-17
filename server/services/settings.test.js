@@ -124,7 +124,7 @@ describe('settings.js', () => {
 
     it('a settings:updated landing during a cold read does not clobber the fresher value', async () => {
       // Hold the cold read's disk load open until we release it, so we can slip a
-      // save() in while getSettings() is awaiting loadRaw().
+      // save() in while getSettings() is awaiting the disk read.
       let releaseRead;
       let readStarted;
       const started = new Promise(resolve => { readStarted = resolve; });
@@ -720,7 +720,7 @@ describe('settings.js', () => {
   });
 
   // Strict read for the auth gate (#2684): distinguishes absent (auth off) from
-  // present-but-corrupt (fail closed), which loadRaw()/getSettings() collapse to {}.
+  // present-but-corrupt (fail closed), which getSettings() collapses to {}.
   // Content comes through the mocked tryReadFile; the absent-vs-unreadable split
   // rides `tryReadFileStrict`'s `ok` flag (#4115), so those cases stub it directly.
   describe('readSettingsStrict', () => {

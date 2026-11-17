@@ -1,31 +1,7 @@
 /**
- * "Is this bible entry actually described?" — the one field vocabulary the
- * describe automation, the character/canon expand services, and the image jobs
- * all measure completeness against.
+ * Is a universe bible entry actually described?
  *
- * Is a universe bible entry actually described? The shared per-kind expand-field vocabulary
- * (`BIBLE_EXPAND_FIELDS`, `BIBLE_CORE_FIELDS`) and the `core`/`full` completeness predicates the
- * quota-burn describe job scans with. Pure.
- *
- * A universe bible entry can be *present* without being *usable*: a character
- * row with a name and nothing else renders a generic figure, and a place with a
- * blank description renders whatever the model felt like. The quota-burn
- * describe job exists to close that gap before any image quota is spent on it,
- * which needs a definition of "described" that does not live in the job.
- *
- * Two depths, because the two questions are different:
- *   - `core`   — the minimum for the entry to render or be written at all.
- *   - `full`   — the whole sheet: everything the expand prompts can fill, which
- *                for a character is the character-sheet field set a novelist +
- *                graphic novelist both need.
- *
- * Pure module: shape and predicates only, no storage and no provider I/O, so the
- * burn job (which must not import the universe store to answer "how many are
- * missing"), the expand services, and the tests all agree on one list. The
- * character lists are the SOURCE for `universeCharacterExpand.js`'s
- * `STRING_FIELDS` / `LIST_FIELDS` — a field the expand prompt fills but this
- * module doesn't know about would be permanently invisible to the completeness
- * scan, so the two are deliberately one list rather than two that agree today.
+ * The shared per-kind expand-field vocabulary (`BIBLE_EXPAND_FIELDS`, `BIBLE_CORE_FIELDS`) and the `core`/`full` completeness predicates that the describe automation, the character/canon expand services, the image jobs and the quota-burn describe job all measure against. A row with a name and nothing else renders a generic figure; the describe job closes that gap before image quota is spent. Two depths: `core` (minimum to render or be written at all) and `full` (everything the expand prompts can fill; for a character, the sheet a novelist and graphic novelist both need). Pure: shape and predicates only, so the burn job (which must not import the universe store) and the expand services agree on one list. The character lists are the SOURCE for `universeCharacterExpand.js`'s `STRING_FIELDS` / `LIST_FIELDS`: a field the expand prompt fills but this module doesn't know would be invisible to the scan, so they are one list, not two that agree today.
  */
 
 import { BIBLE_KEYS, PSYCHOLOGY_DRIVE_AXES } from './storyBible.js';
@@ -34,28 +10,13 @@ import { isEmptyScalar } from './objects.js';
 /** Depth vocabulary. `core` = renderable at all; `full` = the whole sheet. */
 export const BIBLE_DESCRIBE_DEPTHS = Object.freeze(['core', 'full']);
 
-/**
- * Which entries a describe pass covers: everything, or one canon bucket. Derived
- * from `BIBLE_KEYS` so the job catalog's option list and the job's own scope→kind
- * table move together — a renamed or added canon kind that reached only one of
- * them would leave stored jobs carrying a `scope` that matches nothing.
- */
+/** Which entries a describe pass covers: everything, or one canon bucket. Derived from `BIBLE_KEYS` so the job catalog's options and the job's scope→kind table move together (else stored jobs carry a `scope` matching nothing). */
 export const BIBLE_DESCRIBE_SCOPES = Object.freeze(['all', ...BIBLE_KEYS]);
 
-/**
- * The three slider axes, all of which must be rated for `sliders` to count as
- * filled. Exported so the character expand's merge rates the same three.
- */
+/** The three slider axes, all of which must be rated for `sliders` to count as filled; exported so the character expand's merge rates the same three. */
 export const SLIDER_AXES = Object.freeze(['proactivity', 'likability', 'competence']);
 
-/**
- * Every field the per-kind expand prompt may fill, grouped by how it is stored.
- * The grouping is what lets one merge helper handle all three kinds:
- *   - `strings` — plain prose, blank when empty/whitespace
- *   - `lists`   — arrays of sanitized rows, blank when empty
- *   - `enums`   — a single constrained token, blank when unset (null)
- *   - `objects` — structured records with their own "is it filled" rule
- */
+/** Every field the per-kind expand prompt may fill, grouped by storage so one merge helper handles all kinds: `strings` (blank when empty/whitespace), `lists` (sanitized rows, blank when empty), `enums` (blank when null), `objects` (structured records with their own filled rule). */
 export const BIBLE_EXPAND_FIELDS = Object.freeze({
   character: Object.freeze({
     strings: Object.freeze([
@@ -63,8 +24,7 @@ export const BIBLE_EXPAND_FIELDS = Object.freeze({
       'physicalDescription', 'personality', 'background', 'visualNotes',
       'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
       'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
-      // Character framework (CWQE Phase 10, #2175) — the Ghost → Wound → Lie →
-      // Want → Need chain. `arcType` and `sliders` are the structured half.
+      // Character framework (CWQE Phase 10, #2175): Ghost → Wound → Lie → Want → Need; `arcType` and `sliders` are the structured half.
       'ghost', 'wound', 'lie', 'want', 'need',
     ]),
     lists: Object.freeze([
@@ -72,9 +32,7 @@ export const BIBLE_EXPAND_FIELDS = Object.freeze({
       'wardrobes', 'secrets',
     ]),
     enums: Object.freeze(['arcType']),
-    // `psychology` (#6414) — the optional theory-of-control + drives profile.
-    // Structured, so it merges leaf-by-leaf like `sliders` rather than as one
-    // opaque string; `characterPsychologyIsBlank` below is its filled rule.
+    // `psychology` (#6414): optional theory-of-control + drives profile, merged leaf-by-leaf like `sliders`; `characterPsychologyIsBlank` is its filled rule.
     objects: Object.freeze(['sliders', 'psychology']),
   }),
   place: Object.freeze({
@@ -91,31 +49,16 @@ export const BIBLE_EXPAND_FIELDS = Object.freeze({
   }),
 });
 
-/**
- * The `core` set per kind — what an entry needs before it is worth rendering.
- *
- * Deliberately short. `core` gates the image job's opt-in "skip entries nobody
- * has described yet" filter, and a long core list there would park most of a
- * young universe's backlog behind an LLM pass the user may not want.
- */
+/** The `core` set per kind: what an entry needs before it is worth rendering. Deliberately short: it gates the image job's opt-in "skip undescribed entries" filter, and a long list would park a young universe's backlog behind an LLM pass the user may not want. */
 export const BIBLE_CORE_FIELDS = Object.freeze({
   character: Object.freeze(['physicalDescription', 'personality', 'background', 'motivations', 'visualNotes']),
   place: Object.freeze(['description']),
   object: Object.freeze(['description']),
 });
 
-/**
- * `relationshipLinks` (characters) and `attachments` (objects) are INTENTIONALLY
- * absent from every list above: each row points at a sibling entry by id, which
- * an expand call has no way to mint. They are authored in the UI, so counting
- * them as "missing" would make every entry permanently incomplete.
- */
+/** `relationshipLinks` (characters) and `attachments` (objects) are INTENTIONALLY absent from every list: each points at a sibling entry by id, which an expand call can't mint (authored in the UI), so counting them would leave every entry permanently incomplete. */
 
-/**
- * Every field a kind's expand prompt can fill, flattened across the groups.
- * Reads the groups generically so adding a fifth storage shape is one edit here
- * rather than one at every flatten site.
- */
+/** Every field a kind's expand prompt can fill, flattened across the groups generically so a fifth storage shape is one edit. */
 export const expandableBibleFields = (kind) => Object.values(BIBLE_EXPAND_FIELDS[kind] || {}).flat();
 
 const requiredFields = (kind, depth) => {
@@ -123,39 +66,18 @@ const requiredFields = (kind, depth) => {
   return depth === 'core' ? (BIBLE_CORE_FIELDS[kind] || []) : expandableBibleFields(kind);
 };
 
-/**
- * Whether ONE field on an entry is still unfilled — the single blank predicate
- * the completeness scan AND the expand merges both call, so the code that
- * decides an entry needs work can't disagree with the code that does it.
- * `isEmptyScalar` (objects.js) carries the base string/array rule; the two exceptions
- * below are what this wrapper adds.
- */
+/** Whether ONE field is still unfilled: the single blank predicate the completeness scan AND the expand merges share, so deciding an entry needs work can't disagree with doing it. `isEmptyScalar` (objects.js) carries the base rule; the exceptions below are added here. */
 export function bibleFieldIsBlank(entry, field) {
-  // A character's canonical description lives in `physicalDescription`; migration
-  // 019 rewrites the legacy `description` alias forward but the read-side fallback
-  // stays, so a pre-migration entry must not read as blank here — it would be
-  // re-described on top of text it already has.
+  // A character's canonical description lives in `physicalDescription`; migration 019 rewrote the legacy `description` alias but the read fallback stays, so a pre-migration entry must not read blank (it would be re-described over existing text).
   if (field === 'physicalDescription') return isEmptyScalar(entry?.physicalDescription) && isEmptyScalar(entry?.description);
-  // `sliders` is an always-present object whose axes are individually null until
-  // rated, so plain presence would report it filled the moment the sanitizer
-  // materialized it.
+  // `sliders` is always present with axes null until rated, so plain presence would count it filled once the sanitizer materializes it.
   if (field === 'sliders') return SLIDER_AXES.some((axis) => entry?.sliders?.[axis] == null);
-  // `psychology` is absent entirely until authored, and materializes all three
-  // drive slots the moment any leaf is filled — so it needs its own rule too.
+  // `psychology` is absent until authored and materializes all three drive slots once any leaf is filled, so it needs its own rule.
   if (field === 'psychology') return characterPsychologyIsBlank(entry?.psychology);
   return isEmptyScalar(entry?.[field]);
 }
 
-/**
- * Whether a character's psychology profile (#6414) still counts as unassessed.
- *
- * Presence alone is not enough (same reason `sliders` needs a rule): the
- * sanitizer materializes all three drive slots as soon as ANY leaf is authored.
- * An explicit `unknown` / `not-applicable` ruling WITH the author's
- * explanation is a real assessment, not a gap — that is what lets a
- * deliberately opaque or nonhuman character be complete without inventing a
- * human interior for it.
- */
+/** Whether a character's psychology profile (#6414) counts as unassessed. Presence isn't enough (the sanitizer materializes all three drive slots on ANY leaf); an explicit `unknown` / `not-applicable` ruling WITH the author's explanation is a real assessment, letting an opaque or nonhuman character be complete. */
 export function characterPsychologyIsBlank(psychology) {
   if (!psychology || typeof psychology !== 'object' || Array.isArray(psychology)) return true;
   if (psychology.assessment === 'unknown' || psychology.assessment === 'not-applicable') {
@@ -170,10 +92,7 @@ export function characterPsychologyIsBlank(psychology) {
 export const normalizeDescribeDepth = (depth) =>
   (BIBLE_DESCRIBE_DEPTHS.includes(depth) ? depth : 'full');
 
-/**
- * The fields still blank on `entry`, in the canonical order the expand prompt
- * lists them. Empty array means the entry is described to that depth.
- */
+/** The fields still blank on `entry`, in the expand prompt's canonical order; empty means described to that depth. */
 export function missingBibleFields(kind, entry, { depth = 'full' } = {}) {
   if (!entry || typeof entry !== 'object') return [];
   return requiredFields(kind, normalizeDescribeDepth(depth)).filter((field) => bibleFieldIsBlank(entry, field));
@@ -183,11 +102,7 @@ export function missingBibleFields(kind, entry, { depth = 'full' } = {}) {
 export const bibleEntryIsDescribed = (kind, entry, options) =>
   missingBibleFields(kind, entry, options).length === 0;
 
-/**
- * The gap list plus the size of the sheet it was measured against — what orders
- * the describe job's picks (emptiest FRACTION first, so one kind's much longer
- * sheet doesn't permanently outrank another's).
- */
+/** The gap list plus the size of the sheet it was measured against, which orders the describe job's picks (emptiest FRACTION first, so a kind's longer sheet doesn't permanently outrank another's). */
 export function bibleEntryCompleteness(kind, entry, { depth = 'full' } = {}) {
   const required = requiredFields(kind, normalizeDescribeDepth(depth));
   const missing = (entry && typeof entry === 'object')

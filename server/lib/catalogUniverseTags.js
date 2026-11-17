@@ -7,36 +7,22 @@
  * structured `catalog_ingredient_refs` link. Used by the boot-time repair and the bible→catalog
  * backfill.
  *
- * The original bible→catalog backfill stamped MACHINE tags onto every promoted
- * character/place/object: a literal `from-universe` marker plus a
- * `universe:<universeId>` id tag. Those are unreadable in the Catalog UI (a raw
- * UUID is meaningless to a human) and they leak an internal id into the tag
- * taxonomy. The structured universe link is already durable in
- * `catalog_ingredient_refs` (refKind `universe`, role `canon-<kind>`), so the
- * tag does NOT need to carry the id for querying — the ref table owns that.
- *
- * These pure helpers replace the machine tags with the friendly universe NAME
- * tag (e.g. "My Cool Universe") while preserving every user-supplied tag. They
- * are used by:
- *   - the boot-time data repair (`server/scripts/repairUniverseTags.js`) that
- *     rewrites existing rows once per install, and
- *   - the bible→catalog backfill (`server/scripts/migrateBibleToCatalog.js`)
- *     so NEW promotions stamp the friendly tag from the start.
+ * The original bible→catalog backfill stamped MACHINE tags (`from-universe` plus
+ * `universe:<universeId>`) that leak an internal id into the tag taxonomy. The
+ * structured link is durable in `catalog_ingredient_refs`, so the tag need not carry
+ * the id. These helpers swap them for the friendly universe NAME tag while preserving
+ * user tags; used by the boot-time repair (`server/scripts/repairUniverseTags.js`) and
+ * the backfill (`server/scripts/migrateBibleToCatalog.js`).
  *
  * Pure + dependency-free so they unit-test without a DB.
  */
 
-// The legacy machine marker tag (no id).
+
 export const LEGACY_UNIVERSE_MARKER_TAG = 'from-universe';
 
-// Prefix of the legacy id-carrying tag (`universe:<universeId>`).
 export const LEGACY_UNIVERSE_ID_TAG_PREFIX = 'universe:';
 
-/**
- * True when `tag` is one of the legacy machine universe tags
- * (`from-universe` or `universe:<id>`). Case-insensitive on the marker; the
- * id-tag match is prefix-based so any `universe:<anything>` is caught.
- */
+/** True for `from-universe` or any `universe:<anything>` (prefix match; case-insensitive). */
 export function isLegacyUniverseTag(tag) {
   if (typeof tag !== 'string') return false;
   const t = tag.trim().toLowerCase();
@@ -44,11 +30,7 @@ export function isLegacyUniverseTag(tag) {
   return t.startsWith(LEGACY_UNIVERSE_ID_TAG_PREFIX);
 }
 
-/**
- * Extract the universe id from a legacy `universe:<id>` tag, or null when the
- * tag isn't an id tag. The marker tag (`from-universe`) returns null — it
- * carries no id.
- */
+/** The id from a legacy `universe:<id>` tag, or null (the bare marker carries no id). */
 export function universeIdFromLegacyTag(tag) {
   if (typeof tag !== 'string') return null;
   const t = tag.trim();
@@ -58,21 +40,13 @@ export function universeIdFromLegacyTag(tag) {
 }
 
 /**
- * Compute the friendly tag set for an ingredient's tags.
+ * Compute the friendly tag set for an ingredient's tags: strips legacy machine tags,
+ * appends the universe NAME (via `nameForId`) per distinct id, and preserves user tags in
+ * order, de-duplicated by `canonicalKey` against kept tags and added names.
  *
- * - Strips every legacy machine universe tag (`from-universe`, `universe:<id>`).
- * - For each distinct universe id found in those legacy id tags, appends the
- *   friendly universe NAME (resolved via `nameForId(id)`) when one resolves.
- * - Preserves every other (user-supplied) tag, in order, de-duplicated by
- *   `canonicalKey` against both the kept tags AND the names just added (so
- *   "My Universe" and "my universe" don't both appear).
- * - When a universe id can't be resolved to a name (deleted universe, missing
- *   lookup), the id tag is still dropped but no name is added — the structured
- *   ref remains the source of truth, and re-running the repair after the
- *   universe re-syncs picks the name up.
- *
- * Returns `{ tags, changed }`. `changed` is false when nothing was rewritten,
- * so callers can skip a no-op DB write.
+ * Returns `{ tags, changed, unresolved }`. `changed` is false when nothing was rewritten
+ * (callers skip a no-op write); `unresolved` means a `universe:<id>` tag is still
+ * carried because its name did not resolve.
  *
  * @param {string[]} tags          existing ingredient tags
  * @param {(id:string)=>string|null|undefined} nameForId   universe id → name
@@ -81,12 +55,9 @@ export function universeIdFromLegacyTag(tag) {
 export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
   const input = Array.isArray(tags) ? tags : [];
 
-  // GATE on the `from-universe` marker: the backfill ALWAYS stamped the marker
-  // alongside `universe:<id>`, so its presence is what identifies a machine-
-  // tagged row. Without it, a `universe:<anything>` tag is a legitimate USER
-  // tag (e.g. a thematic `universe:marvel`) — leave the row completely untouched
-  // rather than rewriting/dropping a real tag or withholding the marker forever
-  // on an unresolvable user suffix.
+  // GATE on the `from-universe` marker, which the backfill always stamped alongside
+  // `universe:<id>`. Without it `universe:<anything>` is a legitimate USER tag
+  // (e.g. `universe:marvel`), so leave the row untouched.
   const hasMarker = input.some((t) => typeof t === 'string'
     && t.trim().toLowerCase() === LEGACY_UNIVERSE_MARKER_TAG);
   if (!hasMarker) return { tags: input, changed: false, unresolved: false };
@@ -106,11 +77,8 @@ export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
     kept.push(tag);
   }
 
-  // Resolve each id to a friendly name. When a name CAN'T be resolved yet (the
-  // universe arrived after this ingredient, or the local lookup misses), KEEP
-  // the `universe:<id>` machine tag so a later run can still friendlify it —
-  // dropping it here would lose the id permanently (the row would need a manual
-  // re-link). The structured ref in catalog_ingredient_refs still owns querying.
+  // An unresolvable name KEEPS the `universe:<id>` tag so a later run can still
+  // friendlify it; dropping it would lose the id permanently.
   const names = [];
   const unresolvedIdTags = [];
   for (const { id, original } of idTags) {
@@ -119,7 +87,6 @@ export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
     else unresolvedIdTags.push(original);
   }
 
-  // De-dup the friendly names against kept tags + each other.
   const seen = new Set(kept.map((t) => canonicalKey(t)));
   const addedNames = [];
   for (const name of names) {
@@ -129,8 +96,7 @@ export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
     addedNames.push(name);
   }
 
-  // Keep the `from-universe` marker only while an id is still unresolved, so the
-  // row stays flagged for a retry; drop it once every id resolved.
+  // Keep the marker only while an id is unresolved, so the row stays flagged for retry.
   const keepMarker = sawMarker && unresolvedIdTags.length > 0;
   const result = [
     ...kept,
@@ -139,14 +105,10 @@ export function friendlifyUniverseTags(tags, nameForId, canonicalKey) {
     ...(keepMarker ? [LEGACY_UNIVERSE_MARKER_TAG] : []),
   ];
 
-  // `changed` only when we actually rewrote something: a friendly name was
-  // added, OR a legacy tag was REMOVED (a resolved id-tag dropped, or the marker
-  // dropped). If every id is unresolved we leave the row untouched so the next
-  // run retries it instead of burning a no-op write.
+  // `changed` only when a name was added or a legacy tag removed; an all-unresolved row
+  // is left untouched so the next run retries without a no-op write.
   const removedLegacy = (idTags.length - unresolvedIdTags.length) > 0 || (sawMarker && !keepMarker);
   const changed = addedNames.length > 0 || removedLegacy;
-  // `unresolved` is true when this row STILL carries a legacy `universe:<id>`
-  // tag we couldn't friendlify yet — the repair driver uses it to withhold the
-  // completion marker so a future boot (after the universe arrives) retries.
+  // The repair driver uses `unresolved` to withhold its completion marker so a later boot retries.
   return { tags: result, changed, unresolved: unresolvedIdTags.length > 0 };
 }

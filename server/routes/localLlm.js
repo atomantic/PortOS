@@ -14,8 +14,8 @@ import { jevPolicyPatchSchema, resolveUntrustedContentPolicy } from '../lib/untr
 import { readSettingsStrict, updateSettingsWith } from '../services/settings.js'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
+import { validateRequest } from '../lib/validateRequest.js'
 import {
-  validateRequest,
   localLlmInstallSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
@@ -45,7 +45,7 @@ import {
   localLlmSpecModelDownloadSchema,
   localLlmDownloadPreflightSchema,
   localPersistentMindSetupApplySchema,
-} from '../lib/validation.js'
+} from '../lib/mediaValidation.js'
 import {
   getLlamaServerStatus,
   getLlamaServerUpdateStatus,
@@ -65,6 +65,7 @@ import { resetProviderReadinessCache } from '../services/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'
+import { z } from 'zod'
 import { getCatalog, searchCatalog, isBackend } from '../lib/localLlmCatalog.js'
 import { isAppleSilicon } from '../lib/platform.js'
 import {
@@ -190,8 +191,12 @@ router.get('/tool-use-models', asyncHandler(async (_req, res) => {
 // HF-repo-backed entries are enriched with the same per-quant variant picker +
 // RAM-aware default as the live Hugging Face search, so the recommended quant
 // fits this machine instead of being hard-coded per model.
+// Scalars only: a repeated key (`?backend=a&backend=b`) is a 400, while `backend` itself keeps its own check below.
+const catalogQuerySchema = z.object({ backend: z.string().optional(), q: z.string().optional(), variants: z.string().optional() })
+const loadedQuerySchema = z.object({ fresh: z.string().optional() })
+
 router.get('/catalog', asyncHandler(async (req, res) => {
-  const { backend, q, variants } = req.query
+  const { backend, q, variants } = validateRequest(catalogQuerySchema, req.query)
   if (!isBackend(backend)) throw new ServerError('backend must be "ollama" or "lmstudio"', { status: 400 })
   const installedModels = await listModels(backend)
   // getCatalog/searchCatalog normalize raw ids (no `@quant` suffix) — feed them the
@@ -666,7 +671,8 @@ const loadedObservation = observeModelResource('loaded-models', async () => {
   return { ollama, lmstudio, sourceErrors, disabled }
 }, 2000);
 router.get('/loaded', asyncHandler(async (req, res) => {
-  res.json(await loadedObservation.read({ fresh: req.query.fresh === '1' }));
+  const { fresh } = validateRequest(loadedQuerySchema, req.query)
+  res.json(await loadedObservation.read({ fresh: fresh === '1' }));
 }))
 
 // POST /api/local-llm/unload — body: { backend: 'ollama', modelId }.

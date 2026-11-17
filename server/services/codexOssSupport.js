@@ -1,73 +1,42 @@
 /**
- * Does the installed Codex CLI accept `--oss` / `--local-provider`?
+ * Does the installed Codex CLI accept `--oss` / `--local-provider` (Codex 0.153.0+)?
  *
- * PortOS ships a `codex-ollama` provider — the Codex harness (sandbox ladder,
- * `apply_patch`, approvals, session lifecycle) generating its tokens from a
- * local Ollama model. That swap is a pair of per-invocation flags Codex added
- * in 0.153.0, and PortOS does NOT rewrite `~/.codex/config.toml` to fake them
- * on an older binary: a config rewrite would re-point every `codex` run on the
- * machine, not just PortOS's.
+ * The `codex-ollama` provider needs those per-invocation flags; PortOS does NOT rewrite
+ * `~/.codex/config.toml` for older binaries (that would re-point every `codex` run on the machine).
+ * So an older CLI must fail CLOSED with a prerequisite finding naming the version, not die mid-run on an
+ * unknown flag or silently run the cloud model. `codex exec --help` is the source of truth, not `--version`.
  *
- * So on an older CLI the row must fail CLOSED and legibly — a prerequisite
- * finding naming the required version — rather than spawning and dying mid-run
- * on an unknown flag, or, worse, silently running the OpenAI cloud model the
- * user thought they had replaced.
+ * Sentinel discipline, as in `providerPrerequisites.js`:
+ *   - `null`: NOT PROBED (cold, expired, or the probe couldn't run); never reads as unsupported.
+ *   - `{ supported: true }` / `{ supported: false }`: help text was read and does / does not name both flags.
  *
- * `codex exec --help` is the source of truth, not the `--version` string: the
- * help text IS the contract, and a fork or a repackaged build can carry either
- * one without the other.
- *
- * **SENTINEL DISCIPLINE** (AGENTS.md), the same three-way split
- * `providerPrerequisites.js` runs on:
- *
- *   - `null` — NOT PROBED (cold cache, expired entry, or the probe itself could
- *     not run). Never reads as unsupported; an unprobed CLI must not take a
- *     working provider out of the fallback chain.
- *   - `{ supported: true }` — the help text names both flags.
- *   - `{ supported: false }` — the help text was read and does NOT name them.
- *
- * A probe that fails to spawn returns `null`, not `false`: "codex isn't here"
- * is the runtime table's finding, not this one's.
- *
- * No LLM call is made here — `--help` is a local process, safe under the
- * no-cold-bootstrap policy in AGENTS.md.
+ * No LLM call is made here; `--help` is a local process.
  */
 
 import { commandOutput } from '../lib/commandExists.js';
 import { CODEX_COMMAND } from '../lib/codex.js';
 import { isTestRunner } from '../lib/runtimeEnv.js';
 
-// Same window as the runtime `--version` sweep in providerRuntimeInstaller.js:
-// an expiry is "we no longer know", so a user who upgrades Codex from a
-// terminal stops being blocked within the TTL rather than until a restart.
+// Same window as the runtime `--version` sweep in providerRuntimeInstaller.js; expiry means "we no longer know".
 const SUPPORT_TTL_MS = 60_000;
 
 /** Both flags must be named — one without the other is not the contract. */
 const OSS_FLAGS = ['--oss', '--local-provider'];
 
-// Keyed by the command STRING the provider is configured with, so a wrapper
-// pinned to `/opt/tools/codex` is judged on the binary it will actually spawn
-// rather than on whatever `codex` resolves to on PATH.
+// Keyed by the configured command STRING so a pinned wrapper path is judged on the binary it will spawn.
 const supportCache = new Map();
 
 let refreshInFlight = new Map();
 
 const readHelp = (command) => commandOutput(command, ['exec', '--help'], { timeoutMs: 10_000 });
 
-// A caller that passes no `run` override gets this in production — but under
-// the test runner it answers NOT PROBED without spawning anything, the same
-// "an incidental test never asked for a real CLI probe" guard
-// `providerRuntimeInstaller.js` applies to the runtime `--version` sweep
-// (#9039). A test that wants the real spawn passes its own `run`, same as
-// every case in `codexOssSupport.test.js` already does.
+// Under the test runner this answers NOT PROBED without spawning (#9039); tests wanting a real spawn pass their own `run`.
 const defaultRun = (command) => (isTestRunner() ? Promise.resolve(null) : readHelp(command));
 
 const resolveCommand = (command) => (typeof command === 'string' && command.trim()) || CODEX_COMMAND;
 
 /**
- * The cached verdict for `command`, or `null` when nothing current is cached.
- * Synchronous — no spawn, no promise. This is what the `GET /api/providers`
- * peek path reads.
+ * The cached verdict for `command`, or `null` when nothing current is cached. Synchronous, no spawn.
  * @param {string} [command]
  * @returns {{supported: boolean}|null}
  */
@@ -78,10 +47,8 @@ export function peekCodexOssSupport(command) {
 }
 
 /**
- * The verdict for `command`, probing when nothing current is cached.
- *
- * Coalesced per command: a failure storm picking a fallback per failed run must
- * not fan out one `--help` spawn per run.
+ * The verdict for `command`, probing when nothing current is cached. Coalesced per command so a
+ * failure storm doesn't fan out one `--help` spawn per run.
  *
  * @param {string} [command]
  * @param {{fresh?: boolean, run?: (command: string) => Promise<string|null>}} [options]
@@ -97,8 +64,7 @@ export async function getCodexOssSupport(command, { fresh = false, run = default
   }
   const probe = (async () => {
     const help = await run(resolved).catch(() => null);
-    // Could not run it at all — NOT PROBED, and deliberately not cached: the
-    // next call should try again rather than sit on a non-answer for the TTL.
+    // Could not run it: NOT PROBED, deliberately not cached so the next call retries.
     if (help === null) return null;
     const support = { supported: OSS_FLAGS.every((flag) => help.includes(flag)) };
     supportCache.set(resolved, { at: Date.now(), support });
@@ -109,10 +75,8 @@ export async function getCodexOssSupport(command, { fresh = false, run = default
 }
 
 /**
- * Kick a probe in the background and swallow the result — for the synchronous
- * peek path, which cannot await but can make the NEXT read accurate. Errors are
- * logged, never thrown: this runs outside the request lifecycle, where an
- * unhandled rejection kills the process.
+ * Kick a probe in the background and swallow the result so the NEXT synchronous peek is accurate.
+ * Errors are logged, never thrown: this runs outside the request lifecycle.
  * @param {string} [command]
  */
 export function refreshCodexOssSupportInBackground(command) {

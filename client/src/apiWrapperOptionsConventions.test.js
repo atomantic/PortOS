@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: Every call `wrapper(…, { …silent… }, …)` to an export of `client/src/services/api*.js` must target a parameter that accepts/forwards `options`/`opts`/`...args` or destructures `silent`/`...rest`.

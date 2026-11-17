@@ -487,7 +487,7 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
   const persistRounds = useCallback((patch) => {
     const next = persistTailRef.current
       .catch(() => {})
-      .then(() => patchSettingsSlice('pipelineEditorialChecks', patch, { silent: true }).catch(() => null));
+      .then(() => patchSettingsSlice('pipelineEditorialChecks', patch).catch(() => null));
     persistTailRef.current = next;
     return next;
   }, []);

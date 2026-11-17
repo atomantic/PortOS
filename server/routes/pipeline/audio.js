@@ -75,21 +75,6 @@ router.post('/tts/preview', asyncHandler(async (req, res) => {
   res.send(wav);
 }));
 
-// Persist a one-off voice line to disk under PATHS.audio and return the
-// resulting filename. The audio stage's lines[] table calls this to render
-// individual dialogue lines; the bulk "render all dialogue" flow lands in
-// a follow-up. Mainly intended for the per-line Render button in the UI.
-const ttsSynthesizeSchema = z.object({
-  text: z.string().trim().min(1).max(4000),
-  voiceId: z.string().trim().max(200).optional(),
-});
-router.post('/tts/synthesize', asyncHandler(async (req, res) => {
-  const body = validateRequest(ttsSynthesizeSchema, req.body ?? {});
-  const result = await synthesizeToFile({ text: body.text, voiceId: body.voiceId })
-    .catch((err) => { throw mapServiceError(err); });
-  res.json(result);
-}));
-
 // Narrate arbitrary manuscript prose for read-aloud proofing (#1304). Splits
 // the text into sentence segments, synthesizes each via the local TTS engines,
 // and returns per-segment audio + duration + readability flags so the

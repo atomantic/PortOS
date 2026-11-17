@@ -74,7 +74,7 @@ export default function Models({ fixedTab, fixedRecordId } = {}) {
   const tab = fixedTab || params.tab;
   const recordId = fixedRecordId || params.recordId;
   const taskView = params.taskView || params.view || (fixedTab === 'performance' && params.assessmentKey ? 'results' : undefined);
-  if (tab === 'training') return <Navigate to="/settings/data-maintenance" replace />;
+  if (tab === 'training') return <Navigate to="/models/loras" replace />;
   if (tab === 'llms' && recordId === 'jev') return <Navigate to={`/models/decision-classifiers/jev${taskView ? '/' + taskView : ''}`} replace />;
   // An unknown slug lands on LLMs rather than rendering a blank page, matching
   // the section's default destination in App and the primary navigation.

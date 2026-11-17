@@ -21,6 +21,9 @@ import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
 import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
 import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideoPreviz.js';
 import { blenderShotsReady } from '../../../server/lib/musicVideoBlender.js';
+import { projectSpend as sharedProjectSpend } from '../../../server/lib/musicVideoSpend.js';
+
+export { SPEND_ADJUSTMENT_LANES, spendLaneLabel } from '../../../server/lib/musicVideoSpend.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -45,9 +48,12 @@ export const MUSIC_VIDEO_STAGES = [
 
 /**
  * Pages beside the steps: listed under them, unnumbered, and never a step the
- * project is "at". Assets is every still and clip made for the video.
+ * project is "at". The editor is the shots on a timeline under the player;
+ * Assets is every still and clip made for the video.
  */
 export const MUSIC_VIDEO_PAGES = [
+  // The editor fills the screen like an editing application, so its title is for screen readers only.
+  { id: 'editor', label: 'Editor', title: 'Editor', quietTitle: true },
   { id: 'assets', label: 'Assets', title: 'Assets' },
   { id: 'cleanup', label: 'Cleanup', title: 'Cleanup' },
 ];
@@ -77,9 +83,7 @@ export const currentProductionRun = (project) => {
 export function productionReviewStopGuidance(run, readiness, through = 'storyboard') {
   const reason = run?.stopReason || run?.error;
   if (!readiness || !reason || !['blocked', 'needs-human', 'stopped', 'failed'].includes(run.status)) return null;
-  const approvalStop = run.errorCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED'
-    || /^(?:Review and approve the current art direction|A reviewer must approve the current|Lyric alignment is provisional or changed|Production review needs human approval)/.test(reason);
-  if (!approvalStop) return null;
+  if (run.errorCode !== 'MUSIC_VIDEO_APPROVAL_REQUIRED' && run.stopCode !== 'MUSIC_VIDEO_APPROVAL_REQUIRED') return null;
   const stages = ['art', 'storyboard', 'proof'];
   const stage = stages.slice(0, stages.indexOf(through) + 1).find(key => !readiness[key]?.approved);
   const current = stage ? readiness[stage].problems?.[0]
@@ -104,30 +108,12 @@ export const projectServicesSummary = (project) => [
 ].join(' · ');
 
 /**
- * What the project has spent on paid generation across its production runs,
- * against the cap that applies now: the live/latest run's, else the autopilot
- * brief's budget. `capUsd` is null when nothing caps it.
+ * What the project has spent on paid generation (server/lib/musicVideoSpend.js): production runs,
+ * shot takes and, once the server attaches its render ledger (`renderSpend`), every paid render
+ * for the project by lane with its unpriced renders counted (#16506). Capped by the live/latest
+ * run's cap, else the autopilot brief's budget; `capUsd` is null when nothing caps it.
  */
-export function projectSpend(project) {
-  const runs = Array.isArray(project?.productionRuns) ? project.productionRuns : [];
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-  const autopilot = runs.reduce((sum, run) => sum + num(run?.usage?.spentUsd), 0);
-  // #10157: board-started fal takes record the estimate they were priced at.
-  let manual = 0;
-  let autoReview = 0;
-  for (const scene of Array.isArray(project?.scenes) ? project.scenes : []) {
-    for (const take of Array.isArray(scene?.takes) ? scene.takes : []) {
-      if (take?.spendKind === 'autoReview') autoReview += num(take.costUsd);
-      else if (take?.spendKind === 'manual') manual += num(take.costUsd);
-    }
-  }
-  const spentUsd = autopilot + manual + autoReview;
-  const run = currentProductionRun(project);
-  const runCap = run?.limits?.spendCapUsd;
-  const briefCap = project?.automation?.budgetUsd;
-  const capUsd = runCap != null ? runCap : (briefCap != null ? briefCap : null);
-  return { spentUsd, capUsd, autopilot, manual, autoReview, total: spentUsd };
-}
+export const projectSpend = (project) => sharedProjectSpend(project, currentProductionRun(project));
 
 /**
  * What the project has spent on fal.ai, by model, from the estimates its paid
@@ -505,7 +491,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   const cast = project?.castAndSets || null;
   const run = currentProductionRun(project);
   const planned = !!readiness?.storyboard.approved;
-  const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !(readiness.storyboard.problems || []).some((text) => !ART_APPROVAL_PROBLEM.test(text));
+  const shotsPlanned = (project?.scenes || []).length > 0 && !!readiness && !problemItemsOf(readiness.storyboard).some((p) => p.code !== ART_APPROVAL_CODE);
   const castStopped = castSetsPhase(cast) === 'stopped';
   const castDone = !!readiness?.art.approved;
   // Code and document renders draw the picture themselves; scene footage is optional there.
@@ -640,7 +626,7 @@ function approvalNeeds(project, readiness, run) {
   // Plan comes before Look, so an unplanned board is the director's own action whatever the art's state.
   const boardNeedsOwnAction = board && scenes.length === 0 && !documentShots;
   const pilotParked = !!run && RESUMABLE_RUN_STATUSES.has(run.status) && !!run.pilot?.scenes?.length && !readiness?.proof?.approved;
-  const planUnfinished = board && scenes.length > 0 && !documentShots && (readiness?.storyboard?.problems || []).some(planProblem);
+  const planUnfinished = board && scenes.length > 0 && !documentShots && problemItemsOf(readiness?.storyboard).some(planProblem);
   return { art, board, artUnwritten, castPhase, ownAction: castNeedsOwnAction || boardNeedsOwnAction, pilotParked, planUnfinished };
 }
 
@@ -692,12 +678,14 @@ function produceNextAction({ project, run }) {
 }
 
 // Final render: watch a current one, else render (again, once scene edits made the last one stale).
-function finalRenderAction({ project, renderBlockedByOther }) {
+function finalRenderAction({ project, readiness, renderBlockedByOther }) {
   const stale = isFinalRenderStale(project);
   if (project.renderHistoryId && !stale) return { id: 'goto-final', kind: 'goto', stage: 'review', anchor: 'mv-final-video', label: 'Watch final video', shortLabel: 'Watch' };
   return {
     id: 'render-final', kind: 'run', label: stale ? 'Re-render final video' : 'Render final video', shortLabel: stale ? 'Re-render' : 'Render',
-    disabled: renderBlockedByOther, reason: renderBlockedByOther ? 'Wait for the other project render to finish' : undefined,
+    ...(renderBlockedByOther ? { disabled: true, reason: 'Wait for the other project render to finish' }
+      : readiness?.renderable === false ? { disabled: true, reason: readiness.storyboard?.technicalProblems?.[0] || 'Finish the storyboard first' }
+        : { disabled: false }),
   };
 }
 
@@ -800,32 +788,35 @@ export const publishRowAnchor = (target) => `mv-post-${target}`;
 // The server names every unfinished shot in its own sentence; on a long song
 // that is dozens of near-identical lines. The director judges shots by
 // watching the preview, so each per-shot problem kind collapses into one count.
-const PER_SHOT_PROBLEMS = [
-  { test: /^Complete timing, action, staging, camera and transition for /, text: (n) => `${n} shot${n === 1 ? '' : 's'} missing timing, action, staging, camera or transition.` },
-  { test: /^Review lyric anchors for /, text: (n) => `${n} shot${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} lyric anchors reviewed.` },
-];
-/** Storyboard readiness problems with each per-shot kind folded into one count line, in first-seen order. */
+// A shot missing its timing ('shot-timing') and one missing only text fields count on one line.
+const perShotKind = (code) => (code === 'shot-timing' ? 'shot-incomplete' : code);
+const PER_SHOT_PROBLEMS = {
+  'shot-incomplete': (n) => `${n} shot${n === 1 ? '' : 's'} missing timing, action, staging, camera or transition.`,
+  'lyric-anchors': (n) => `${n} shot${n === 1 ? '' : 's'} need${n === 1 ? 's' : ''} lyric anchors reviewed.`,
+};
+/** The server's `{ code, message, sceneId? }` problems for one readiness section (art, storyboard or proof). */
+export const problemItemsOf = (section) => section?.problemItems || [];
+/** Problem items with each per-shot kind folded into one count item, in first-seen order. */
 export function summarizeStoryboardProblems(problems = []) {
-  const kindOf = (text) => PER_SHOT_PROBLEMS.find((k) => k.test.test(text));
   const counts = new Map();
-  for (const text of problems) { const kind = kindOf(text); if (kind) counts.set(kind, (counts.get(kind) || 0) + 1); }
-  return problems.flatMap((text) => {
-    const kind = kindOf(text);
-    if (!kind) return [text];
+  for (const { code } of problems) if (PER_SHOT_PROBLEMS[perShotKind(code)]) counts.set(perShotKind(code), (counts.get(perShotKind(code)) || 0) + 1);
+  return problems.flatMap((problem) => {
+    const kind = perShotKind(problem.code);
+    const line = PER_SHOT_PROBLEMS[kind];
+    if (!line) return [problem];
     if (!counts.has(kind)) return [];
-    const line = kind.text(counts.get(kind));
+    const folded = { code: kind, message: line(counts.get(kind)) };
     counts.delete(kind); // only the first of its kind carries the count line
-    return [line];
+    return [folded];
   });
 }
 
 // The server names each open change request as a readiness problem; the
 // checklist lists those requests on their own Feedback row instead.
-const FEEDBACK_PROBLEM = /^Resolve (art|storyboard|proof) feedback for /;
-const notFeedback = (text) => !FEEDBACK_PROBLEM.test(text);
+const notFeedback = (problem) => problem.code !== 'feedback';
 // Plan comes before Look, so the storyboard gate's "approve the art first" is Look's to settle, not Plan's.
-const ART_APPROVAL_PROBLEM = /^Review and approve the current art direction/;
-const planProblem = (text) => notFeedback(text) && !ART_APPROVAL_PROBLEM.test(text);
+const ART_APPROVAL_CODE = 'art-unapproved';
+const planProblem = (problem) => notFeedback(problem) && problem.code !== ART_APPROVAL_CODE;
 
 /**
  * Whether Make shows the animated proof: only while something needs it — a
@@ -888,15 +879,15 @@ function feedbackItem(project, stage, readiness, { optional = false } = {}) {
 }
 
 // Storyboard readiness problems, grouped by what the user has to go fix. The
-// server returns plain sentences; the first matching rule picks the group.
+// server tags each problem with a code; the first group listing it wins and the last takes the rest.
 const STORYBOARD_PROBLEM_GROUPS = [
   // A document storyboard needs a manifest from its current build; its message mentions timing, so it is matched first.
-  { id: 'manifest', label: 'Document shot manifest', test: /shot manifest/i, action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
-  { id: 'lyrics', label: 'Lyrics', test: /lyrics|instrumental/i, action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
+  { id: 'manifest', label: 'Document shot manifest', codes: ['manifest-stale'], action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } },
+  { id: 'lyrics', label: 'Lyrics', codes: ['lyrics-missing', 'instrumental-has-lyrics'], action: { label: 'Import lyrics', stage: 'setup', anchor: 'mv-lyrics-import' } },
   // The per-shot count lines ("3 shots missing timing, …") mention timing too; they belong to Shot details.
-  { id: 'timing', label: 'Lyric timing', test: /^(?!\d+ shots? ).*(alignment|timing|vocal|master song)/i, action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
-  { id: 'coverage', label: 'Shot coverage', test: /cover the master|gaps or overlaps|create a timed/i, action: { label: 'Open the treatment', stage: 'produce', anchor: 'mv-board-treatment' } },
-  { id: 'shots', label: 'Shot details', test: /./, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
+  { id: 'timing', label: 'Lyric timing', codes: ['alignment-unverified', 'word-timings', 'song-unanalyzed', 'anchor-word-untimed'], action: { label: 'Verify timing', stage: 'setup', anchor: 'mv-lyric-timing' } },
+  { id: 'coverage', label: 'Shot coverage', codes: ['coverage', 'no-shots'], action: { label: 'Open the treatment', stage: 'produce', anchor: 'mv-board-treatment' } },
+  { id: 'shots', label: 'Shot details', codes: null, action: { label: 'Edit the storyboard', anchor: APPROVAL_ANCHORS.storyboard } },
 ];
 
 /** One open checklist item per group of storyboard readiness problems, per-shot problems counted rather than listed. */
@@ -904,18 +895,16 @@ function storyboardProblemItems(readiness, scenes = []) {
   // Shots whose lyric anchors differ from the singing get a row of their own that names each shot.
   const anchors = lyricAnchorItem(readiness, scenes);
   const stale = staleRowsItem(readiness);
-  const problems = summarizeStoryboardProblems(readiness?.storyboard?.problems?.filter(planProblem)
-    .filter((text) => (!anchors || !ANCHOR_PROBLEM.test(text)) && (!stale || !STALE_ROWS_PROBLEM.test(text))));
+  const problems = summarizeStoryboardProblems(problemItemsOf(readiness?.storyboard).filter(planProblem)
+    .filter((p) => (!anchors || p.code !== 'lyric-anchors') && (!stale || p.code !== 'stale-rows')));
   if (readiness?.storyboard?.approved || (!problems.length && !anchors && !stale)) return [];
-  return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group, index) => {
-    const earlier = STORYBOARD_PROBLEM_GROUPS.slice(0, index);
-    const mine = problems.filter((text) => group.test.test(text) && !earlier.some((g) => g.test.test(text)));
+  return [...STORYBOARD_PROBLEM_GROUPS.flatMap((group) => {
+    const mine = problems.filter((p) => group.codes ? group.codes.includes(p.code) : !STORYBOARD_PROBLEM_GROUPS.some((g) => g.codes?.includes(p.code)));
     if (!mine.length) return [];
-    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details: mine, action: group.action }, readiness, scenes)];
+    return [namedShots({ id: `board-${group.id}`, label: group.label, done: false, details: mine.map((p) => p.message), action: group.action }, readiness, scenes, mine)];
   }), ...(stale ? [stale] : []), ...(anchors ? [anchors] : [])];
 }
 
-const MISSING_DETAILS_LINE = /^\d+ shots? missing timing, action, staging, camera or transition\.$/;
 const spanText = (startSec, endSec) => `${formatTimecode(startSec)}–${formatTimecode(endSec)}`;
 const gapSec = ({ startSec, endSec }) => `${(endSec - startSec).toFixed(2)} s`;
 const COVERAGE_TEXT = {
@@ -948,26 +937,25 @@ function checklistShotLabel(scenes, sceneId) {
  * button to its card) and say what is wrong with it, in place of the generic
  * sentence or count.
  */
-function namedShots(item, readiness, scenes) {
+function namedShots(item, readiness, scenes, problems) {
+  const detailsWithout = (kind) => problems.filter((p) => perShotKind(p.code) !== kind).map((p) => p.message);
   const label = (sceneId) => checklistShotLabel(scenes, sceneId);
   const byShot = (entries, text) => [...entries.reduce((map, entry) => map.set(entry.sceneId,
     [...(map.get(entry.sceneId) || []), text(entry)]), new Map())].map(([sceneId, lines]) => ({ sceneId, label: label(sceneId), text: lines.join(' · ') }));
   const coverage = readiness?.storyboard?.coverage;
   if (item.id === 'board-coverage' && coverage?.length) {
-    return { ...item, details: item.details.filter((text) => !/cover the master/.test(text)),
+    return { ...item, details: detailsWithout('coverage'),
       detail: 'Move these cuts so every moment of the song has exactly one shot.',
       shots: byShot(coverage, (c) => (COVERAGE_TEXT[c.issue] || (() => c.issue))(c)) };
   }
   const incomplete = readiness?.storyboard?.incompleteShots;
   if (item.id === 'board-shots' && incomplete?.length) {
-    return { ...item, details: item.details.filter((text) => !MISSING_DETAILS_LINE.test(text)),
+    return { ...item, details: detailsWithout('shot-incomplete'),
       shots: byShot(incomplete, (shot) => `Missing ${shot.missing.join(', ')}`) };
   }
   return item;
 }
 
-const ANCHOR_PROBLEM = /^Review lyric anchors for /;
-const STALE_ROWS_PROBLEM = /left from deleted shots\.$/;
 const ROW_ACTION_CHARS = 60;
 
 /**
@@ -1083,7 +1071,7 @@ const castDirectionRow = (phase, context) => CAST_DIRECTION_ROWS[phase](context)
 function approvalItem(project, readiness, key, label, waitingText) {
   const approved = !!readiness?.[key]?.approved;
   const stale = staleApprovalText(readiness?.[key]?.stale);
-  const blocker = readiness?.[key]?.problems?.find(notFeedback) || changeRequestBlocker(openChangeRequests(project, key));
+  const blocker = problemItemsOf(readiness?.[key]).find(notFeedback)?.message || changeRequestBlocker(openChangeRequests(project, key));
   const keepable = !!stale && !approved && !blocker && key !== 'proof';
   return {
     id: `approve-${key}`, label: `${label} approved`, done: approved, stale: !!stale,
@@ -1209,8 +1197,8 @@ const COMPOSITION_ITEMS = {
 function produceChecklist({ project, readiness, scenes, mode }) {
   const items = FOOTAGE_OPTIONAL_MODES.has(mode) ? [] : [footageItem(project, scenes)];
   const reviewed = approvalItem(project, readiness, 'storyboard', 'Timed storyboard', 'Ready for your review below.');
-  const planOpen = (readiness?.storyboard?.problems || []).some(planProblem) && !reviewed.stale;
-  const lookOpen = !planOpen && !reviewed.stale && (readiness?.storyboard?.problems || []).some((text) => ART_APPROVAL_PROBLEM.test(text));
+  const planOpen = problemItemsOf(readiness?.storyboard).some(planProblem) && !reviewed.stale;
+  const lookOpen = !planOpen && !reviewed.stale && problemItemsOf(readiness?.storyboard).some((p) => p.code === ART_APPROVAL_CODE);
   items.push(reviewed.done ? reviewed
     : planOpen ? { ...reviewed, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
       : lookOpen ? { ...reviewed, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
@@ -1236,7 +1224,7 @@ function produceChecklist({ project, readiness, scenes, mode }) {
 function reviewChecklist({ project, readiness }) {
   return [{
     id: 'final', label: 'Final video rendered', done: !!project.renderHistoryId && !isFinalRenderStale(project),
-    detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !readiness?.readyForProduction ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
+    detail: isFinalRenderStale(project) ? `${STALE_RENDER_MESSAGE}.${finishedOutside(project) && !(readiness?.renderable ?? readiness?.readyForProduction) ? ` ${FINISHED_OUTSIDE_RERENDER_NOTE}` : ''}` : null,
     action: project.renderHistoryId && !isFinalRenderStale(project) ? null : { label: project.renderHistoryId ? 'Re-render' : 'Render', anchor: 'mv-final-video' },
   }];
 }
@@ -1328,6 +1316,9 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     ) && take.dependencyState?.status === 'stale')).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
     if (staleFrames) make += ` · ${formatCount(staleFrames)} ${staleFrames === 1 ? 'frame' : 'frames'} out of date`;
+    // #16473: the server's advice by code, one item per shot.
+    const olderCharacters = (readiness?.storyboard?.adviceItems || []).filter((item) => item.code === 'character-reference-changed').length;
+    if (olderCharacters) make += ` · ${formatCount(olderCharacters)} from an older character reference`;
   } else if (mode === 'blender' && project.blenderShots?.total) {
     const film = project.blenderShots;
     make = `${formatCount(film.finalReady)} of ${formatCount(film.total)} finals done`;

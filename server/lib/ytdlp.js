@@ -1,14 +1,7 @@
 /**
- * `findYtDlp()` — cached discovery of the `yt-dlp` binary on PATH, mirrors `findFfmpeg()` in
- * `ffmpeg.js`.
+ * `findYtDlp()`: cached discovery of the `yt-dlp` binary on PATH, mirroring `findFfmpeg()` in `./ffmpeg.js` (a system binary, not an npm dependency, with the same "install it yourself" posture.
  *
- * Used by the track YouTube-import job. `resetYtDlpCache()` drops that cache after an in-place update
- * or a fresh install, so neither needs a server restart to take effect.
- *
- * yt-dlp discovery — mirrors `findFfmpeg()` in `./ffmpeg.js`. yt-dlp is a
- * system binary (not an npm dependency), same "install it yourself" posture
- * as ffmpeg: a Python-based downloader isn't something PortOS should vendor
- * or auto-install.
+ * PortOS shouldn't vendor or auto-install a Python downloader). Used by the track YouTube-import job; `resetYtDlpCache()` drops the cache after an in-place update or fresh install so neither needs a restart.
  */
 
 import { existsSync } from 'fs';
@@ -29,12 +22,5 @@ export const findYtDlp = async () => {
   return cachedYtDlpPath;
 };
 
-/**
- * Forget the resolved path so the next `findYtDlp()` probes disk again.
- *
- * An in-place update can relink the keg under a different prefix, and an
- * install performed while the server is running has to become visible without a
- * restart — both would otherwise keep serving the cached answer (including the
- * cached `null` from before the install).
- */
+/** Forget the resolved path so the next `findYtDlp()` probes disk again: an in-place update can relink the keg under another prefix and an install while running must become visible, else the cached answer (including a cached `null`) keeps serving. */
 export const resetYtDlpCache = () => { cachedYtDlpPath = undefined; };

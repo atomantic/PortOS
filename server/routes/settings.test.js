@@ -1670,9 +1670,10 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     });
   });
 
-  // Each music panel and the LoRA caption picker patch only the keys they own,
-  // so a save from one never drops a sibling's prefs or the hand-set knobs.
-  it('merges the music and LoRA caption prefs into their owned sub-slices', async () => {
+  // Each music panel patches only the keys it owns, so a save from one never
+  // drops a sibling's prefs. A retired loraTraining slice stored by an older
+  // install is neither validated nor disturbed.
+  it('merges the music prefs into their owned sub-slices and leaves a stored retired loraTraining slice intact', async () => {
     fs.writeFileSync(settingsFile, JSON.stringify({
       music: { designer: { describeTemplate: 'Example describe', lyricsTemplate: 'Example lyrics' }, chiptune: { publishSubdir: 'game/assets/music' } },
       loraTraining: { displaySleep: false, segmentation: false, defaults: { steps: 1200 } },
@@ -1681,15 +1682,13 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
     const app = buildApp();
     expect((await patch(app, 'music.chiptune', { providerId: 'example-provider', model: 'example-model' })).status).toBe(200);
     expect((await patch(app, 'music.designer', { describeTemplate: 'Example revised' })).status).toBe(200);
-    expect((await patch(app, 'loraTraining', { captionProviderId: 'example-provider', captionModel: 'example-vision' })).status).toBe(200);
+    expect((await request(app).put('/api/settings').send({ timezone: 'America/Los_Angeles', loraTraining: { captionModel: 42, defaults: { steps: 1 }, futureKey: true } })).status).toBe(200);
     expect(persisted()).toMatchObject({
       music: {
         designer: { describeTemplate: 'Example revised', lyricsTemplate: 'Example lyrics' },
         chiptune: { publishSubdir: 'game/assets/music', providerId: 'example-provider', model: 'example-model' },
       },
-      loraTraining: {
-        displaySleep: false, segmentation: false, defaults: { steps: 1200 }, captionProviderId: 'example-provider', captionModel: 'example-vision',
-      },
+      loraTraining: { captionModel: 42, defaults: { steps: 1 }, futureKey: true },
     });
   });
 

@@ -1,6 +1,6 @@
 name: Restore the test memo
 description: >-
-  Restore the trusted test memo (docs/GITHUB_ACTIONS.md "Test memo") for one
+  Restore the trusted test memo (docs/TEST_MEMO.md) for one
   job partition. The job saves it afterwards with actions/cache/save, passing
   the same runner-temp `portos-test-memo` path and this action's `key`
   output, and only from a trusted green run.
@@ -14,6 +14,14 @@ inputs:
       The job family plus its shard (e.g. `server-1of2`), or the family alone
       for an unsharded job. The preferred restore prefix and the saved key.
     required: true
+  merge-shards:
+    description: >-
+      The family's full-run shard count (FULL_SUITE_SHARDS in
+      scripts/ci-test-plan.js), or 0. When set, every full-run shard lineage
+      is restored too and merged in, so related selection sees a memo record
+      for every test, not only the one shard's slice. Up to 3.
+    required: false
+    default: '0'
 
 outputs:
   key:
@@ -26,12 +34,12 @@ runs:
     # The runner skips a selected test file whose every input — loaded
     # modules, fixtures, package versions, Node/platform, gating env — is
     # byte-identical to one a trusted green run verified. Pull requests only
-    # read. The scheduled, dispatched and called full runs save, so the cache
-    # holds nothing a PR branch wrote. Prefer the same partition's lineage,
-    # then any shard of this job family: scoped 1of1 plans have no full-run
-    # seed of their own. OS and architecture are in every key, so a platform
-    # reads only its own verdicts. Per-test content keys still decide reuse;
-    # unmatched files run normally.
+    # read. Pushes to main and the scheduled, dispatched and called full runs
+    # save, so the cache holds nothing a PR branch wrote. Prefer the same
+    # partition's lineage, then any shard of this job family: scoped 1of1
+    # plans have no full-run seed of their own. OS and architecture are in
+    # every key, so a platform reads only its own verdicts. Per-test content
+    # keys still decide reuse; unmatched files run normally.
     - name: Restore from the trusted memo cache
       id: restore
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -41,3 +49,82 @@ runs:
         restore-keys: |
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.partition }}-
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-
+
+    # A shard records only the tests in its slice. Related selection narrows
+    # a test only through its own record (scripts/lib/testMemo.js
+    # recordedReach), so a scoped 1of1 job that restored one shard would
+    # select the other shards' tests unnarrowed. Same trusted lineages, same
+    # read-only rule; the merge keeps the newer record per test.
+    # A cache version hashes the restore path, so a shard lineage restores only
+    # to the path it was saved from (portos-test-memo). Park each restore
+    # (the job's own first, then every shard's) in the shards directory before
+    # the next one reuses that path.
+    - name: Park the job's own restore
+      if: fromJSON(inputs.merge-shards) >= 1
+      shell: bash
+      run: |
+        if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
+          mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
+          mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/0"
+        fi
+
+    - name: Restore full-run shard 1 of the memo
+      if: fromJSON(inputs.merge-shards) >= 1
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-test-memo
+        key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-1of${{ inputs.merge-shards }}-
+        restore-keys: |
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-1of${{ inputs.merge-shards }}-
+
+    - name: Park full-run shard 1
+      if: fromJSON(inputs.merge-shards) >= 1
+      shell: bash
+      run: |
+        if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
+          mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
+          mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/1"
+        fi
+
+    - name: Restore full-run shard 2 of the memo
+      if: fromJSON(inputs.merge-shards) >= 2
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-test-memo
+        key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-2of${{ inputs.merge-shards }}-
+        restore-keys: |
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-2of${{ inputs.merge-shards }}-
+
+    - name: Park full-run shard 2
+      if: fromJSON(inputs.merge-shards) >= 2
+      shell: bash
+      run: |
+        if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
+          mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
+          mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/2"
+        fi
+
+    - name: Restore full-run shard 3 of the memo
+      if: fromJSON(inputs.merge-shards) >= 3
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/portos-test-memo
+        key: test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-3of${{ inputs.merge-shards }}-
+        restore-keys: |
+          test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-3of${{ inputs.merge-shards }}-
+
+    - name: Park full-run shard 3
+      if: fromJSON(inputs.merge-shards) >= 3
+      shell: bash
+      run: |
+        if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
+          mkdir -p "$RUNNER_TEMP/portos-test-memo-shards"
+          mv "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards/3"
+        fi
+
+    - name: Merge the full-run shard lineages
+      if: fromJSON(inputs.merge-shards) >= 1
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP/portos-test-memo-shards"
+        node scripts/merge-test-memo.js "$RUNNER_TEMP/portos-test-memo" "$RUNNER_TEMP"/portos-test-memo-shards/*

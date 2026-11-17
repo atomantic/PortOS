@@ -36,7 +36,6 @@ const agent = {
   status: 'active',
   currentAgentId: null,
   lastRunAt: new Date().toISOString(),
-  backoff: { currentDelayMs: 3600000, consecutiveIdles: 1, lastIdleAt: new Date().toISOString() },
   schedule: { mode: 'continuous', pauseBetweenRunsMs: 60000 },
   git: { branchName: 'feature-agent/example-fa-example', baseBranch: 'main' }
 };

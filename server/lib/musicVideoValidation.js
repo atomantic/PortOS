@@ -3,6 +3,7 @@
  */
 
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import { SPEND_ADJUSTMENT_LANES } from './musicVideoSpend.js';
 import { MUSIC_VIDEO_RENDER_TIERS, MUSIC_VIDEO_UPGRADE_METHODS } from './musicVideoRenderTier.js';
 import {
   ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
@@ -554,6 +555,8 @@ export const musicVideoCastInputsSchema = z.object({
   ingredientId: z.string().min(1).max(200).nullable(),
   guides: z.array(galleryImageName).max(IMAGE_REFERENCE_REQUEST_LIMIT),
   sheets: z.array(z.object({ id: z.string().min(1).max(80), imageId: galleryImageName }).strict()).max(IMAGE_REFERENCE_REQUEST_LIMIT),
+  // Every character reference sent (#16473); absent on a record from before it.
+  characters: z.array(z.object({ id: z.string().min(1).max(128), imageId: galleryImageName }).strict()).max(64).optional(),
 }).strict();
 
 export const musicVideoTakeInputSchema = z.object({
@@ -652,10 +655,12 @@ export const musicVideoTakeReviewSchema = z.object({
   acknowledgeRenderQuality: z.object({ basis: z.string().min(1), note: z.string().min(1).max(1000) }).strict().optional(),
   // The selected frame still matches the shot's current prompt (#15982).
   confirmFrame: z.literal(true).optional(),
+  // The take still matches its characters' current reference images (#16473), at the revision the warning showed.
+  acceptCharacterReferences: z.object({ revision: z.string().min(1).max(128) }).strict().optional(),
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
-}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined || r.confirmFrame !== undefined,
-  { message: 'status, note, acknowledgement or frame confirmation is required' });
+}).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined || r.confirmFrame !== undefined
+  || r.acceptCharacterReferences !== undefined, { message: 'status, note, acknowledgement or confirmation is required' });
 
 const colorMatchNumber = (key) => z.number().min(COLOR_MATCH_LIMITS[key][0]).max(COLOR_MATCH_LIMITS[key][1]);
 
@@ -916,7 +921,6 @@ export const musicVideoDocumentFileQuerySchema = z.object({
   draft: z.literal('1').optional(),
 }).strict();
 
-export const musicVideoDocumentDraftQuerySchema = z.object({ draft: z.literal('1').optional() }).strict();
 export const musicVideoDocumentCandidateSchema = z.object({
   directory: z.string().regex(MUSIC_VIDEO_DOCUMENT_DIRECTORY),
 }).strict();
@@ -1323,7 +1327,6 @@ export const musicVideoPromotionPlanSchema = z.object({
 }).strict();
 export const musicVideoPublishFrameSchema = z.object({ atSec: z.number().finite().min(0) }).strict();
 
-export const musicVideoPublishThumbnailSchema = z.object({ filename: z.string().min(1).max(300) }).strict();
 
 // Release cover art: a source (a kit thumbnail or a gallery image) composed
 // with the title and artist tag, or a fresh source image from a backend.
@@ -2660,4 +2663,18 @@ export const musicVideoProjectListQuerySchema = z.object({
   limit: z.string().optional(),
   offset: z.string().optional(),
   cursor: z.string().max(64).optional(),
+});
+
+/**
+ * A manual spend adjustment (#16506): `actualUsd` states what the lane really cost (the
+ * adjustment is the difference from what the project shows), `usd` adds a signed amount.
+ * Exactly one of the two.
+ */
+export const musicVideoSpendAdjustmentSchema = z.object({
+  lane: z.enum(SPEND_ADJUSTMENT_LANES),
+  actualUsd: z.number().finite().min(0).max(1_000_000).optional(),
+  usd: z.number().finite().min(-1_000_000).max(1_000_000).optional(),
+  note: z.string().trim().max(500).optional(),
+}).strict().refine((input) => (input.actualUsd == null) !== (input.usd == null), {
+  message: 'Give either actualUsd (what the lane really cost) or usd (an amount to add), not both',
 });

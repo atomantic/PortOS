@@ -1,3 +1,6 @@
+// @vitest-environment node
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: No `border-b-2` in a class string under `client/src/` outside `TabPills` and allowlisted files (see `client/src/AGENTS.md`).
  * Fix: Replace hand-rolled underline sub-navs with `TabPills` (`TabPills.mobileCompact`).

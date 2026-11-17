@@ -630,19 +630,6 @@ describe('Character mutation queue (#9817)', () => {
     expect(store.value.xp).toBe(107);
   });
 
-  it('reset is queued behind an in-flight mutation instead of being overwritten by it', async () => {
-    const { release, parkedSignal } = parkFirstWrite();
-    const xp = characterService.addXP(25, 'test', 'gain');
-    await parkedSignal;
-    const reset = characterService.resetCharacter();
-    await new Promise(r => setTimeout(r, 0));
-    release();
-    await Promise.all([xp, reset]);
-
-    expect(store.value.xp).toBe(0);
-    expect(store.value.events).toEqual([]);
-  });
-
   describe('federation apply', () => {
     const remote = (over = {}) => ({
       name: 'Remote', class: 'Wizard', xp: 100, hp: 15, maxHp: 15,

@@ -57,6 +57,25 @@ describe.skipIf(!runDb)('cos_tasks repository text PostgreSQL would refuse', () 
   });
 });
 
+// #16407: the stored form keeps JSON types, nulls and newlines; JSONB must hand them back unchanged.
+describe.skipIf(!runDb)('cos_tasks repository keeps typed metadata on PostgreSQL', () => {
+  it('reads { flag: true, n: 3, note: null } and a multi-line description back as written', async () => {
+    await query('DELETE FROM cos_tasks');
+    await query('DELETE FROM cos_task_lists');
+    const backend = __makePgCosTaskBackend({ query, withTransaction });
+    const next = [{ id: 'task-typed', status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Line one\nLine two',
+      approvalRequired: false, autoApproved: true, metadata: { flag: true, n: 3, note: null } }];
+    const { rows, version } = await backend.loadWorkingSet('user');
+    const plan = planListSave({ previous: rows, next, source: 'user' });
+    await backend.apply('user', { ...plan, expectedVersions: { user: version } });
+    const [saved] = (await backend.loadWorkingSet('user')).rows.map((row) => row.task);
+    expect(saved.metadata).toStrictEqual({ flag: true, n: 3, note: null });
+    expect(saved.description).toBe('Line one\nLine two');
+    const { rows: [column] } = await query('SELECT description FROM cos_tasks WHERE task_id = $1', ['task-typed']);
+    expect(column.description).toBe('Line one\nLine two');
+  });
+});
+
 // Two independently loaded stores have separate caches. The lock double does
 // not serialize them, just as two service processes cannot share a JS lock.
 // All task persistence below still uses real transactions in portos_test.

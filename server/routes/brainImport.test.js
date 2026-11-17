@@ -42,15 +42,6 @@ const buildApp = () => {
 };
 
 describe('brainImport routes', () => {
-  it('GET /sources returns the available sources list', async () => {
-    const res = await request(buildApp()).get('/api/brain/import/sources');
-    expect(res.status).toBe(200);
-    expect(res.body.sources).toBeInstanceOf(Array);
-    const chatgpt = res.body.sources.find((s) => s.id === 'chatgpt');
-    expect(chatgpt).toBeDefined();
-    expect(chatgpt.status).toBe('available');
-    expect(chatgpt.instructions.length).toBeGreaterThan(0);
-  });
 
   it('POST /chatgpt/preview returns 400 when payload is invalid', async () => {
     chatgptImport.parseExport.mockReturnValue({ ok: false, error: 'bad shape' });

@@ -7,35 +7,25 @@
  * a cycle for every one of them at once. `agentImportCycles.test.js` enforces it.
  */
 
-// activeAgents: direct spawn mode processes (Map<agentId, { process, task, runId, ... }>)
 export const activeAgents = new Map();
 
-// runnerAgents: runner-spawned agents (Map<agentId, { taskId, task, runId, model, ... }>)
 export const runnerAgents = new Map();
 
 // Completion events can outlive the runner process (hooks, forge checks and
 // persistence all await). Sweeps must not race them to the first terminal write.
 export const completingAgents = new Set();
 
-// userTerminatedAgents: agents the user explicitly killed (Set<agentId>)
 export const userTerminatedAgents = new Set();
 
-// pausedAgents: agents whose process is being stopped without finalizing the
-// task or cleaning up the worktree (Map<agentId, { pausedAt, reason }>)
+// pausedAgents: stopped without finalizing the task or cleaning up the worktree
 export const pausedAgents = new Map();
 
-// Waiters for a paused agent's process to ACTUALLY exit, keyed by agentId
-// (Map<agentId, Array<(exited: boolean) => void>>). See whenPausedAgentExits.
 const pausedExitWaiters = new Map();
 
 /**
- * Consume the pause flag on the way out of a close handler.
- *
- * The spawner close handlers (agentCliSpawning / agentTuiSpawning) and the
- * runner completion handler (agentLifecycle) all skip finalization for a paused
- * agent and drop the flag as they go. Deleting through here also releases anyone
- * waiting on the exit, so `whenPausedAgentExits` is an event rather than a poll —
- * and the two can't drift, because the delete IS the notification.
+ * Consume the pause flag on the way out of a close handler. Deleting through
+ * here also releases `whenPausedAgentExits` waiters, so the delete IS the
+ * notification.
  */
 export const consumePausedAgentExit = (agentId) => {
   pausedAgents.delete(agentId);
@@ -49,16 +39,12 @@ export const consumePausedAgentExit = (agentId) => {
  * Resolve once a paused agent's process is gone — `true` if the exit was
  * observed, `false` if the window closed first.
  *
- * Pausing STOPS a local process without waiting for it: `pauseAgent` returns
- * after the signal, and the close handler lands milliseconds later. A caller
- * that acts on the paused agent immediately (relaunch, which requeues the task
- * and retires the record) has to let that handler run first — once the record is
- * retired the handler no longer recognizes the exit as a pause and finalizes the
- * run, cleaning up the worktree the requeued task points at.
+ * `pauseAgent` returns after the signal and the close handler lands later. A
+ * caller that retires the record first (relaunch) must let that handler run, or
+ * it would finalize the run and clean up the worktree the requeued task uses.
  *
- * An agent that is not in `activeAgents` has nothing left to wait for: either
- * the handler already ran, or the run is runner-backed and its stop was
- * confirmed by an awaited RPC.
+ * An agent not in `activeAgents` has nothing to wait for: the handler already
+ * ran, or the run is runner-backed and its stop was confirmed by an awaited RPC.
  */
 export const whenPausedAgentExits = (agentId, timeoutMs) => {
   if (!activeAgents.has(agentId)) return Promise.resolve(true);
@@ -78,24 +64,13 @@ export const whenPausedAgentExits = (agentId, timeoutMs) => {
   });
 };
 
-// spawningTasks: tasks currently being spawned (Set<taskId>) — deduplication guard
 export const spawningTasks = new Set();
 
 // spawnedAgentCommands: OS pid → spawn metadata for agents this server started
-// (Map<pid, { fullCommand, agentId, taskId, model, workspacePath, prompt, registeredAt }>).
-//
-// Lived in `agents.js` until #3450. It had to move because it was the last edge
-// from the agent cluster into `agents.js`: `agentManagement.js` imported
-// `unregisterSpawnedAgent` from there, so `agents.js` could not import the
-// `killAgent` transition back without a cycle — it reached it through
-// `await import('./subAgentSpawner.js')` instead, and that same back-edge put
-// `agents.js` inside the `agentOrchestrator` facade's closure, where importing
-// the facade was forbidden too. With the map here (a module both sides already
-// import, and which imports nothing itself) the edge is gone and `agents.js`
-// takes a plain static `import … from './agentOrchestrator.js'`.
+// Kept here, not in `agents.js`, so `agents.js` can statically import the
+// orchestrator without an import cycle (#3450).
 const spawnedAgentCommands = new Map();
 
-// Register a spawned agent's full command (call when spawning).
 export const registerSpawnedAgent = (pid, data) => {
   spawnedAgentCommands.set(pid, {
     fullCommand: data.fullCommand,
@@ -108,46 +83,35 @@ export const registerSpawnedAgent = (pid, data) => {
   });
 };
 
-// Unregister a spawned agent (call when its process exits).
 export const unregisterSpawnedAgent = (pid) => { spawnedAgentCommands.delete(pid); };
 
-// Spawn metadata for a pid, or undefined when the pid is not one of ours.
 export const getSpawnedAgent = (pid) => spawnedAgentCommands.get(pid);
 
-// useRunner: whether CoS Runner mode is active
 export let useRunner = false;
 export const setUseRunner = (val) => { useRunner = val; };
 
-// Agents between worktree creation and `registerAgent` (Set<agentId>). The tree
-// exists seconds before any record names an owner, and a fresh agent branch sits
-// at the default branch's HEAD, so a reaper reads it as clean and merged. Listing
-// the id in `getActiveAgentIds()` hands every reaper that already consults it the
-// protection, without reordering branch-reconcile's MERGED-before-owner check.
+// Agents between worktree creation and `registerAgent` (Set<agentId>). A fresh
+// branch sits at the default HEAD, so a reaper would read it as clean and merged;
+// listing the id in `getActiveAgentIds()` protects it from every reaper that
+// consults it.
 export const dispatchingAgentIds = new Set();
 export const markAgentDispatching = (agentId) => { dispatchingAgentIds.add(agentId); };
 export const clearAgentDispatching = (agentId) => { dispatchingAgentIds.delete(agentId); };
 
-// Active agent IDs (direct-mode + runner-mode + mid-dispatch), for zombie/orphan detection.
-// Lives here in the side-effect-free state module so callers (cleanup jobs,
-// zombie sweeps) can read it without importing the heavier `subAgentSpawner.js`
-// orchestrator (which re-exports the whole agent-lifecycle module graph).
-// `subAgentSpawner` re-exports it for backward compatibility.
+// Lives here so cleanup jobs can read it without importing `subAgentSpawner.js`
+// (which re-exports the whole lifecycle graph); `subAgentSpawner` re-exports it.
 export const getActiveAgentIds = () => [...activeAgents.keys(), ...runnerAgents.keys(), ...dispatchingAgentIds];
 
 /**
  * Agent ids whose worktree must not be taken out from under them, from an
  * already-read agent list:
  *
- *   - the in-process maps, which are authoritative for THIS process;
- *   - every persisted `running` agent, which is how a run that survived a server
- *     restart (the maps are empty then) still counts;
- *   - every persisted `paused` agent — pausing deliberately preserves the tree as
- *     resume context, and a paused agent is absent from the maps.
+ *   - the in-process maps, authoritative for THIS process;
+ *   - every persisted `running` agent (restart survivors, absent from the maps);
+ *   - every persisted `paused` agent (pausing preserves the tree as resume context).
  *
- * Under-counting here removes a directory another run is mid-edit in, so the one
- * definition lives here rather than being restated by each reaper. Takes the
- * list instead of fetching it, both to stay off `cos.js`'s import path and so a
- * caller that already read the agents does not read them twice.
+ * Under-counting removes a directory another run is mid-edit in. Takes the list
+ * to stay off `cos.js`'s import path.
  *
  * @param {Array<{id?: string, status?: string}>} [agents]
  * @returns {Set<string>}
@@ -162,15 +126,11 @@ export const protectedAgentIds = (agents = []) => {
 
 // Does THIS process already own the agent's lifecycle?
 //
-// Ownership is split across the two maps by spawn mode, and which map an agent
-// lands in is not guessable from its `executionMode`: a runner-backed TUI
-// (`runner-tui`) is driven by the live `spawnTuiAgent` closure, so it registers
-// in `activeAgents` — NEVER in `runnerAgents`, even though the runner owns its
-// process and lists it in `/agents`. Only `spawnViaRunner` populates
-// `runnerAgents`. Consult this rather than either map alone: checking
-// `runnerAgents` by itself reads a live TUI as an unowned restart survivor,
-// which is exactly how `syncRunnerAgents` came to hoist running TUI agents and
-// let a stray runner `agent:completed` event double-finalize them.
+// Which map an agent lands in is not guessable from `executionMode`: a
+// runner-backed TUI (`runner-tui`) registers in `activeAgents`, NEVER in
+// `runnerAgents` (only `spawnViaRunner` populates that). Consult this, not either
+// map alone, or a live TUI reads as an unowned restart survivor and a stray runner
+// `agent:completed` event double-finalizes it.
 export const isAgentOwnedLocally = (agentId) => activeAgents.has(agentId) || runnerAgents.has(agentId);
 
 /**
@@ -189,7 +149,7 @@ export const hasActiveTaskOwner = (taskId, agents = {}) => {
   return false;
 };
 
-// Metadata booleans may arrive as true/'true' or false/'false' (JSON vs TASKS.md string round-trip)
+// Metadata booleans may arrive as true/'true' or false/'false' (typed rows vs rows stored before #16407 and peers on older versions)
 export { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 
 // Metadata strings may be absent, empty, or non-string (objects/numbers leak past `||` checks).

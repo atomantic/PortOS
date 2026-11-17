@@ -1,6 +1,6 @@
 import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { prepareProductionReview, approveProductionReview, reverifyProductionAlignment, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback } from './productionReviewService.js';
-import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
+import { alignmentBasisMatches, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
@@ -521,7 +521,7 @@ async function settleLyricTiming(projectId, run) {
   const reviewer = runReviewer(run);
   // A reused song's timing a director already verified on its source project, untouched since.
   const reusedBasis = run.brief.songFrom?.verifiedAlignmentBasis;
-  if (reusedBasis && reusedBasis === productionAlignmentBasis(project)) {
+  if (alignmentBasisMatches(project, reusedBasis)) {
     const notes = 'Lyric timing carried over unchanged from the source project, where it was verified.';
     await deps.verifyAlignment(projectId, { basis: reusedBasis, notes, reviewer });
     await record('approve', notes);
@@ -540,7 +540,7 @@ async function settleLyricTiming(projectId, run) {
   const matched = words.filter((w) => w.conf === 'matched').length;
   const notes = `Checked by the ${orchestrated ? 'orchestrator' : 'autopilot'}: ${timed} of ${cues.length} lines carry word timings; ${matched} of ${words.length} words were heard by the recognizer, the rest interpolated.`;
   const failedAlignment = projectAutonomousRun(project)?.output?.alignmentError;
-  const alignmentError = failedAlignment?.basis === productionAlignmentBasis(project) ? failedAlignment.message : null;
+  const alignmentError = alignmentBasisMatches(project, failedAlignment?.basis) ? failedAlignment.message : null;
   const held = timed < cues.length ? 'Lines without timings need a director.'
     : alignmentError ? `Lyric alignment failed (${alignmentError}), so these timings are guesses; a director needs to listen and verify them.`
       : matched / words.length < MIN_HEARD_WORD_SHARE ? 'Too little of the vocal was heard to trust these timings; a director needs to listen and verify them.'
@@ -1226,7 +1226,7 @@ const STAGES = {
     // with the storyboard's other open problems so one resume can clear them all.
     const storyboard = productionReadiness(project).storyboard;
     if (timingHeld && !storyboard.approved) {
-      const others = storyboard.problems.filter((p) => p !== ALIGNMENT_UNVERIFIED_PROBLEM);
+      const others = storyboard.problemItems.filter((p) => p.code !== 'alignment-unverified').map((p) => p.message);
       throw runError(409, 'MUSIC_VIDEO_APPROVAL_REQUIRED', trimTo([timingHeld, ...others].join(' '), 500));
     }
     // A medium conflict the run could not revise is named, so the director knows what to change.
@@ -2202,7 +2202,7 @@ async function onProductionEvent({ projectId, runId, run: production }) {
   } else if (['blocked', 'stopped'].includes(production.status) && run.status === 'running' && await settleBlockedProduction(projectId, run, runId)) {
     // A run set to approve settled the stop itself and production goes on.
   } else if (PRODUCTION_PARKED.has(production.status) && run.status === 'running') {
-    await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: 'PRODUCTION_PARKED' });
+    await park(projectId, 'needs-human', { error: reason || `Production is ${production.status}`, errorCode: production.stopCode === 'MUSIC_VIDEO_APPROVAL_REQUIRED' ? 'MUSIC_VIDEO_APPROVAL_REQUIRED' : 'PRODUCTION_PARKED' });
   }
 }
 

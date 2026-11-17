@@ -6,22 +6,7 @@ import PostCompletionActions from './PostCompletionActions';
 import { startRetryableSave } from './completionSave';
 import useListResource from '../../../hooks/useListResource';
 import ListLoadError from '../../ui/ListLoadError';
-
-// Exported so the Practice Library (practiceCatalog.js) derives its study-mode
-// rows from this list rather than re-typing them — a new mode shows up in the
-// catalog for free, which is the whole point of that page.
-export const MODES = [
-  { id: 'learn', label: 'Learn', desc: 'Progressive reveal — read and absorb line by line' },
-  { id: 'fill-blank', label: 'Fill in the Blank', desc: 'Fill missing words in partially shown lines' },
-  { id: 'sequence', label: 'Sequence Recall', desc: 'Given a line, type what comes next' },
-  { id: 'speed-run', label: 'Speed Run', desc: 'Recite the full sequence as fast as possible' },
-  { id: 'spaced', label: 'Spaced Repetition', desc: 'Focus on your weakest chunks with graduated hints' },
-];
-
-// The routable practice modes (`/post/memory/:itemId/:mode`). PostTab validates
-// the URL segment against this list and degrades an unknown one to the picker,
-// mirroring MorseTrainer's MORSE_MODE_IDS (issue #3249).
-export const MEMORY_PRACTICE_MODE_IDS = MODES.map(m => m.id);
+import { MEMORY_PRACTICE_MODES as MODES } from './trainerModes';
 
 /**
  * Route-facing entry point: resolves `itemId` to a memory item, then renders the

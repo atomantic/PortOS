@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -37,10 +37,16 @@ function deadExports(files, candidateNames = null) {
     }
   }
 
+  if (names.size === 0) return [];
+  // Match only candidate identifiers in C++ regex engine rather than allocating
+  // a RegExp match array for every word in the repository.
+  const needle = names.size <= 500
+    ? new RegExp(`\\b(?:${[...names].map(n => n.replace(/\$/g, '\\$')).join('|')})\\b`, 'g')
+    : WORD;
   const mentionedBy = new Map();
   for (const [file, source] of files) {
     if (/\.test\.[cm]?[jt]sx?$/.test(file) || /(^|\/)README\.md$/i.test(file)) continue;
-    for (const match of source.matchAll(WORD)) {
+    for (const match of source.matchAll(needle)) {
       if (!names.has(match[0])) continue;
       if (!mentionedBy.has(match[0])) mentionedBy.set(match[0], new Set());
       mentionedBy.get(match[0]).add(file);
@@ -106,19 +112,27 @@ function listTree(root) {
   return listing;
 }
 function readTree(root, file) {
-  if (root !== ROOT) return readFileSync(join(root, file), 'utf8');
-  if (!treeCache.sources.has(file)) treeCache.sources.set(file, readFileSync(join(root, file), 'utf8'));
+  if (root !== ROOT) {
+    try { return readFileSync(join(root, file), 'utf8'); } catch (err) { if (err.code === 'ENOENT') return null; throw err; }
+  }
+  if (!treeCache.sources.has(file)) {
+    try { treeCache.sources.set(file, readFileSync(join(root, file), 'utf8')); }
+    catch (err) { if (err.code === 'ENOENT') treeCache.sources.set(file, null); else throw err; }
+  }
   return treeCache.sources.get(file);
 }
 
 function trackedFilesFrom(root) {
-  return listTree(root)
-    .filter(file => /\.(?:[cm]?[jt]sx?|json|md)$/.test(file))
+  const out = [];
+  for (const file of listTree(root)) {
+    if (!/\.(?:[cm]?[jt]sx?|json)$/.test(file)) continue;
     // deadExports() declares from, and counts mentions in, neither of these, and
     // they are most of the tree's bytes: don't read them.
-    .filter(file => !/\.test\.[cm]?[jt]sx?$/.test(file) && !/(^|\/)README\.md$/i.test(file))
-    .filter(file => existsSync(join(root, file)))
-    .map(file => [file, readTree(root, file)]);
+    if (/\.test\.[cm]?[jt]sx?$/.test(file) || /(^|\/)package-lock\.json$/.test(file)) continue;
+    const source = readTree(root, file);
+    if (source !== null) out.push([file, source]);
+  }
+  return out;
 }
 
 // --- Re-export shims and test hooks (#16230) -------------------------------
@@ -143,11 +157,13 @@ function stripComments(source) {
 // underscore hook (a test importer never keeps a re-export alive), so a test
 // file is reduced to its `_`-prefixed words.
 function codeFiles(root = ROOT) {
-  return listTree(root).filter(file => /^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file) && existsSync(join(root, file)))
-    .map(file => {
-      const source = readTree(root, file);
-      return [file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source];
-    });
+  const out = [];
+  for (const file of listTree(root)) {
+    if (!/^(?:server|scripts|lib|autofixer|client\/src)\/.*\.[cm]?[jt]sx?$/.test(file)) continue;
+    const source = readTree(root, file);
+    if (source !== null) out.push([file, isTestFile(file) ? (source.match(/\b_[\w$]*/g) || []).join(' ') : source]);
+  }
+  return out;
 }
 
 // Lazy on purpose: this runs inside the structural-guard time budget, so words
@@ -201,13 +217,21 @@ function exportedNames(clause) {
     .map(part => part.split(/\s+as\s+/).pop().trim());
 }
 
+// A barrel (`index.js`) or an `export * from` shim has no per-name list to audit,
+// so it stays only while some production file imports it at all; a zero-importer
+// one is reported as `<file>:*`.
 function callerlessReExports(files, index = referenceIndex(files)) {
   const offenders = [];
   for (const [file, source] of files) {
-    if (!HOOK_SCOPE.test(file) || isTestFile(file) || /(^|\/)index\.js$/.test(file) || !source.includes('} from')) continue;
-    const reExports = [...stripComments(source).matchAll(REEXPORT)];
-    if (!reExports.length) continue;
+    if (!HOOK_SCOPE.test(file) || isTestFile(file)) continue;
+    const code = stripComments(source);
+    const reExports = [...code.matchAll(REEXPORT)];
+    const isBarrel = /(^|\/)index\.js$/.test(file);
+    const hasStar = /^export\s*\*\s*from/m.test(code);
+    if (!reExports.length && !hasStar) continue;
     const callers = [...index.importers(file)].filter(other => other !== file && !isTestFile(other));
+    if ((isBarrel || hasStar) && !callers.length) offenders.push(`${file}:*`);
+    if (isBarrel) continue;
     for (const match of reExports) {
       for (const name of exportedNames(match[1])) {
         if (!callers.some(other => index.mentions(other, name))) offenders.push(`${file}:${name}`);
@@ -316,6 +340,18 @@ describe('server dead exports', () => {
       ['server/services/shim.test.js', "import { onlyTested } from './shim.js';\nonlyTested;\n"],
     ];
     expect(callerlessReExports(files)).toEqual(['server/services/shim.js:orphan', 'server/services/shim.js:onlyTested']);
+  });
+
+  it('flags a zero-importer export-star shim and barrel, and keeps imported ones', () => {
+    const files = [
+      ['server/services/film/dead.js', "export * from './impl.js';\n"],
+      ['server/services/barrel/index.js', "export * from './impl.js';\n"],
+      ['server/services/film/live.js', "export * from './impl.js';\n"],
+      ['server/services/livebarrel/index.js', "export { a } from './impl.js';\n"],
+      ['server/routes/caller.js', "import { x } from '../services/film/live.js';\nimport { a } from '../services/livebarrel';\nx; a;\n"],
+      ['server/services/film/dead.test.js', "import { x } from './dead.js';\n"],
+    ];
+    expect(callerlessReExports(files)).toEqual(['server/services/film/dead.js:*', 'server/services/barrel/index.js:*']);
   });
 
   it('covers client/src/lib shims and hooks', () => {

@@ -8,10 +8,8 @@ import { PRIVATE_SECURITY_TASK_TYPE } from './privateSecurityPolicy.js';
 import { currentTaskTypeName } from './taskTypeRenames.js';
 import { PROGRAMMATIC_SCHEDULED_TASK_TYPES } from './taskTargetScope.js';
 
-// Rename table lives in taskTypeRenames.js (dependency-free, shared with the browser-safe classifier).
 export { TASK_TYPE_RENAMES, currentTaskTypeName } from './taskTypeRenames.js';
 
-// A task type's `task:`-prefixed schedule executions key, under its current name.
 export const taskExecutionKey = (taskType) => `task:${currentTaskTypeName(taskType.startsWith('task:') ? taskType.slice(5) : taskType)}`;
 
 export const SELF_IMPROVEMENT_TASK_TYPES = [
@@ -41,18 +39,14 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'api-contract',
   // Distinct from `ui-bugs` (console errors) and `accessibility`.
   'ui-lifecycle',
-  // Files under the `code-quality` category and the `observability` metric label.
   'observability',
-  // User-facing wording only; files under `ux` and the `copy` metric label.
   'copy',
   // The `better-*` missions map onto slashdo `do:better` scopes through
   // DO_BETTER_SCOPE_COVERAGE in lib/auditCatalog.js and schedule independently.
   // Structural cousin of `module-hygiene`; do-work is worktree-isolated.
   'better-complexity',
   'better-cognitive-load',
-  // Files under `code-quality` plus the `structural-drift` metric label.
   'better-structural-drift',
-  // Distinct from `console-errors` (runtime), `error-handling` and `ui-lifecycle`.
   'better-runtime-safety',
   // Server-side counterpart of `ui-bugs`; `better-runtime-safety` owns code-shape defects.
   'app-bugs',
@@ -69,7 +63,6 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // Distinct from `error-handling`, which owns per-call timeouts and retries.
   'reliability',
   'privacy',
-  // Metered spend; `performance` owns latency and throughput.
   'cost-efficiency',
   'feature-completeness',
   // Distinct from `ui-bugs` (one click on a fresh page) and `error-handling`.

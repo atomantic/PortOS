@@ -6,10 +6,9 @@ import { tmpdir } from 'node:os';
 import { runInNewContext } from 'node:vm';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import {
-  parseDockerPort,
-  parseNativePort,
-} from './lib/setupDbChoice.js';
+
+const parseNativePort = (value) => databaseSettings.parsePort(value, 5432);
+const parseDockerPort = (value) => databaseSettings.parsePort(value, 5561);
 
 const here = dirname(fileURLToPath(import.meta.url));
 const setupDbSrc = readFileSync(join(here, 'setup-db.js'), 'utf8');

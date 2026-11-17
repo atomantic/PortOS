@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { lstatSync, readFileSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -20,20 +20,17 @@ import { fileURLToPath } from 'url';
  * files (`data/…`, `~/…`) are never tracked, so a basename no tracked file
  * carries is verified by searching the tracked source for it instead: a
  * runtime file nothing reads or writes is as stale as a deleted module.
+ *
+ * Two more drift checks (#16550): a markdown link whose label names a `.md`
+ * file must open that file (`[docs/CONTRIBUTING.md](docs/OTHER.md)` sent
+ * agents to the wrong document), and no long root sentence may be restated
+ * verbatim in `docs/INSTRUCTION_RULE_DETAIL.md`, where the copy drifts.
  */
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 const git = (...args) => execFileSync('git', args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 const gitLines = (...args) => git(...args).split('\n').filter(Boolean);
-
-/**
- * Names that are intentionally cited as history: the prose says they are gone
- * and names them so a reader recognizes the retired file in old commits. This
- * list may only shrink — a new stale name gets fixed in the prose, not parked
- * here — and `pins the retired allowlist` below enforces that.
- */
-export const RETIRED_NAMES = Object.freeze([]);
 
 const FILE_TOKEN = /^(?:\.\/|~\/|<repo-root>\/)?([\w.][\w./-]*\.(?:jsx?|[cm]js|md|json|ya?ml))$/;
 /** Example names the prose uses as stand-ins (`foo.js:412`), never real files. */
@@ -75,17 +72,58 @@ const sourceMentions = (name) => {
   }
 };
 
-export const findStaleReferences = ({ files, tracked, mentions = sourceMentions, retired = RETIRED_NAMES }) => {
+export const findStaleReferences = ({ files, tracked, mentions = sourceMentions }) => {
   const stale = [];
   for (const file of files) {
     const text = readFileSync(join(REPO_ROOT, file), 'utf8');
     for (const { line, path } of extractFileTokens(text)) {
       const name = basename(path);
-      if (retired.includes(name) || tracked.has(name) || mentions(name)) continue;
+      if (tracked.has(name) || mentions(name)) continue;
       stale.push(`${file}:${line} \`${path}\` (no tracked file has this basename and no tracked source names it)`);
     }
   }
   return stale;
+};
+
+const MD_LINK = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * Links in `text` whose label names one or more `.md` files, none of which
+ * is the target's basename. Anchor-only targets (`#section`) are skipped.
+ */
+export const findMislabelledLinks = (text) => {
+  const bad = [];
+  text.split('\n').forEach((line, i) => {
+    for (const [, label, target] of line.matchAll(MD_LINK)) {
+      const named = [...label.replace(/`/g, '').matchAll(/([\w.-]+\.md)\b/g)].map((m) => m[1].toLowerCase());
+      const path = target.split(/[#?]/)[0];
+      if (!named.length || !path) continue;
+      if (!named.includes(basename(path).toLowerCase())) bad.push({ line: i + 1, label, target });
+    }
+  });
+  return bad;
+};
+
+/** Tracked markdown we own; symlinks (`.claude/commands/do/` into the slashdo submodule) are skipped. */
+const trackedMarkdownFiles = () => gitLines('ls-files', '--', '*.md').filter((file) => {
+  try {
+    return !lstatSync(join(REPO_ROOT, file)).isSymbolicLink();
+  } catch {
+    return false;
+  }
+});
+
+const LONG_SENTENCE = 120;
+
+/** Sentences over LONG_SENTENCE characters, list markers stripped. */
+export const longSentences = (text) => text.split('\n')
+  .flatMap((line) => line.replace(/^\s*(?:[-*]|\d+\.)\s+/, '').split(/(?<=[.!?])\s+/))
+  .map((s) => s.trim())
+  .filter((s) => s.length > LONG_SENTENCE);
+
+export const sharedLongSentences = (a, b) => {
+  const inA = new Set(longSentences(a));
+  return longSentences(b).filter((s) => inA.has(s));
 };
 
 describe('instruction file references', () => {
@@ -100,15 +138,6 @@ describe('instruction file references', () => {
 
   it('every backticked file name in an AGENTS.md matches a tracked file', () => {
     expect(findStaleReferences({ files, tracked })).toEqual([]);
-  });
-
-  it('pins the retired allowlist: still absent, still cited, never growing', () => {
-    expect(RETIRED_NAMES).toEqual([]);
-    const cited = new Set(files.flatMap((f) => extractFileTokens(readFileSync(join(REPO_ROOT, f), 'utf8')).map((t) => basename(t.path))));
-    for (const name of RETIRED_NAMES) {
-      expect(tracked.has(name), `${name} is tracked again — drop it from RETIRED_NAMES`).toBe(false);
-      expect(cited.has(name), `${name} is no longer cited by any AGENTS.md — drop it from RETIRED_NAMES`).toBe(true);
-    }
   });
 
   it('extracts file tokens and skips placeholders, globs, and anchors', () => {
@@ -127,11 +156,35 @@ describe('instruction file references', () => {
     ]);
   });
 
-  it('reports a stale name with file:line, and a source mention or the retired list clears it', () => {
-    const noSource = findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => false, retired: [] });
+  it('reports a stale name with file:line, and a source mention clears it', () => {
+    const noSource = findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => false });
     expect(noSource.length).toBeGreaterThan(0);
     expect(noSource.every((s) => /^server\/AGENTS\.md:\d+ `[^`]+` \(no tracked file has this basename and no tracked source names it\)$/.test(s))).toBe(true);
     expect(noSource.some((s) => s.includes('`server/lib/pgJson.js`'))).toBe(true);
-    expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true, retired: [] })).toEqual([]);
+    expect(findStaleReferences({ files: ['server/AGENTS.md'], tracked: new Set(), mentions: () => true })).toEqual([]);
+  });
+
+  it('every markdown link whose label names a .md file opens that file', () => {
+    const bad = trackedMarkdownFiles().flatMap((file) => findMislabelledLinks(readFileSync(join(REPO_ROOT, file), 'utf8'))
+      .map(({ line, label, target }) => `${file}:${line} [${label}](${target})`));
+    expect(bad).toEqual([]);
+  });
+
+  it('flags a label naming a different .md file than the target', () => {
+    const text = [
+      'See [docs/CONTRIBUTING.md](docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files).',
+      'Fine: [VERSIONING.md](./VERSIONING.md#regular-development), [detail](docs/X.md), [`server/AGENTS.md`](server/AGENTS.md), [ETHOS.md](#ethos).',
+    ].join('\n');
+    expect(findMislabelledLinks(text)).toEqual([
+      { line: 1, label: 'docs/CONTRIBUTING.md', target: 'docs/INSTRUCTION_RULE_DETAIL.md#agent-instruction-files' },
+    ]);
+  });
+
+  it('the rule-detail doc restates no long root sentence verbatim', () => {
+    const root = readFileSync(join(REPO_ROOT, 'AGENTS.md'), 'utf8');
+    const detail = readFileSync(join(REPO_ROOT, 'docs/INSTRUCTION_RULE_DETAIL.md'), 'utf8');
+    expect(sharedLongSentences(root, detail)).toEqual([]);
+    const restated = 'Every reusable-code directory is cataloged from module headers, and this sentence is long enough to count as a rule restatement.';
+    expect(sharedLongSentences(`- ${restated} Short.`, `Intro. ${restated}`)).toEqual([restated]);
   });
 });

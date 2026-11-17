@@ -794,3 +794,48 @@ describe('voice playback cancellation', () => {
     expect(voiceClient.isWebSpeechCapturing()).toBe(false);
   });
 });
+
+// The module now loads lazily, the first time voice is on, which is usually
+// after the socket connected: the `connect` handler that used to register the
+// tab has already been missed by then.
+describe('voice output candidacy at module load', () => {
+  let savedListeners;
+  let savedHasFocus;
+
+  beforeEach(() => {
+    savedListeners = new Map([...listeners].map(([event, handlers]) => [event, [...handlers]]));
+    savedHasFocus = document.hasFocus;
+    socket.connected = true;
+    socket.emit.mockClear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    socket.connected = false;
+    document.hasFocus = savedHasFocus;
+    listeners.clear();
+    for (const [event, handlers] of savedListeners) listeners.set(event, handlers);
+  });
+
+  const emittedEvents = () => socket.emit.mock.calls.map(([event]) => event);
+
+  it('announces and claims output when loaded into the focused tab of a connected socket', async () => {
+    document.hasFocus = () => true;
+    await import('./voiceClient.js');
+    expect(emittedEvents()).toEqual(['voice:output:available', 'voice:output:claim']);
+  });
+
+  it('only announces from an unfocused tab, so it cannot take output from the foreground one', async () => {
+    document.hasFocus = () => false;
+    await import('./voiceClient.js');
+    expect(emittedEvents()).toEqual(['voice:output:available']);
+  });
+
+  it('joins again on reconnect', async () => {
+    document.hasFocus = () => true;
+    await import('./voiceClient.js');
+    socket.emit.mockClear();
+    listeners.get('connect').at(-1)();
+    expect(emittedEvents()).toEqual(['voice:output:available', 'voice:output:claim']);
+  });
+});

@@ -227,6 +227,11 @@ export const eidoverseFoundationIdParamSchema = z.object({ id: foundationIdSchem
  * inherited one lives under `inheritedFoundationStorageKey()`'s disjoint namespace. Naming the
  * origin disambiguates them.
  */
+/** `?originInstanceId=` beside a foundation `:id`; unknown keys are ignored. */
+export const eidoverseFoundationQuerySchema = z.object({
+  originInstanceId: z.string().optional(),
+});
+
 export const eidoverseFoundationTargetSchema = z.object({
   id: foundationIdSchema,
   originInstanceId: instanceIdSchema.nullable().optional().default(null),

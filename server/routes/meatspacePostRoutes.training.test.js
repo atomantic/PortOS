@@ -6,7 +6,6 @@ vi.mock('../services/meatspacePostTraining.js', () => ({
   submitTrainingEntry: vi.fn(),
   submitTrainingRun: vi.fn(),
   getTrainingStats: vi.fn(),
-  getTrainingEntries: vi.fn(),
 }));
 
 import * as trainingService from '../services/meatspacePostTraining.js';
@@ -63,4 +62,13 @@ describe('POST /api/meatspace/post/training/runs (#4441)', () => {
     expect(response.status).toBe(400);
     expect(trainingService.submitTrainingRun).not.toHaveBeenCalled();
   });
+});
+
+describe('GET /api/meatspace/post/training reads', () => {
+  it('stats 400s on a repeated days key and never reads stats', async () => {
+    const res = await request(makeApp()).get('/api/meatspace/post/training/stats?days=7&days=30');
+    expect(res.status).toBe(400);
+    expect(trainingService.getTrainingStats).not.toHaveBeenCalled();
+  });
+
 });

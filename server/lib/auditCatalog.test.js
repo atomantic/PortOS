@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { QUOTA_BURN_PROMPT_PRESETS } from './quotaBurnPresets.js';
 import { requireSlashdoSubmoduleInCi } from './testHelper.js';
+import { LIGHT_FINDINGS_BATCH_EXCEPTION } from './dispatchLabels.js';
 import {
   applyDepfreeMode,
   AUDIT_DEFINITIONS,
@@ -220,6 +221,8 @@ describe('mode contracts + wrapper', () => {
   it('file-issues contract records findings via {trackerInstructions} and forbids edits', () => {
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('{trackerInstructions}');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('OVERRIDES');
+    // A separate item per finding must still let light same-area findings batch (#16569).
+    expect(FILE_ISSUES_MODE_CONTRACT).toContain(`as a separate item after the review**, except that ${LIGHT_FINDINGS_BATCH_EXCEPTION}`);
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('same `git status`');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('CI or release failure');
     expect(FILE_ISSUES_MODE_CONTRACT).toContain('recurring manual churn');

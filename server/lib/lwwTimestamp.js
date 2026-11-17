@@ -1,33 +1,18 @@
 /**
- * Last-writer-wins (LWW) timestamp comparison for cross-instance sync merges.
+ * Last-writer-wins timestamp comparison for cross-instance sync merges: `parseTsMs`, `compareNewerWins` (remote
+ * overwrites local iff strictly newer.
  *
- * Last-writer-wins timestamp comparison for cross-instance sync merges. `parseTsMs(s)` (Date.parse →
- * epoch ms or null), `compareNewerWins(candidate, incumbent)` (true iff candidate strictly newer;
- * unparseable-loses, tie → incumbent — used to decide remote-overwrites-local), `compareEarlierWins(a,
- * b)` (−1/0/1 earliest-wins tiebreak; unparseable-loses). Single source of the LWW polarity shared by
- * `mergeMediaCollectionsFromSync` / `mergeAuthorsFromSync` etc.
- *
- * Every per-record merge path (`mergeMediaCollectionsFromSync`,
- * `mergeAuthorsFromSync`, …) decides which side wins by comparing `updatedAt` /
- * `addedAt` strings. The sanitizers accept ANY `Date.parse`-able string (not
- * strictly ISO-8601), so the compare MUST parse to epoch ms — a lexicographic
- * string compare would mis-order two parseable-but-different-format timestamps.
- * These helpers are the single source of that rule so the polarity can't drift
- * between record kinds.
+ * Unparseable loses, tie keeps incumbent), `compareEarlierWins` (earliest-wins tiebreak). Sanitizers accept any
+ * `Date.parse`-able string, so compares must parse to epoch ms; a string compare would mis-order formats. Single
+ * source of the polarity shared by every `merge*FromSync` path.
  */
 
-/** Parse a timestamp string to epoch ms, or null when unparseable. */
 export function parseTsMs(s) {
   const n = typeof s === 'string' ? Date.parse(s) : NaN;
   return Number.isFinite(n) ? n : null;
 }
 
-/**
- * "Newer wins": true iff `candidate` is STRICTLY newer than `incumbent`.
- * Unparseable `candidate` never overrides; an unparseable `incumbent` loses to a
- * valid candidate; a tie (or both unparseable) breaks to the incumbent (local).
- * Used to decide whether a remote record overwrites the local copy.
- */
+// Unparseable candidate never overrides; unparseable incumbent loses to a valid candidate; tie breaks to the incumbent (local).
 export function compareNewerWins(candidate, incumbent) {
   const cMs = parseTsMs(candidate);
   const iMs = parseTsMs(incumbent);
@@ -36,13 +21,7 @@ export function compareNewerWins(candidate, incumbent) {
   return cMs > iMs;
 }
 
-/**
- * "Earliest wins" tiebreak for two records of the same key: returns -1 if `a` is
- * earlier (a wins), 1 if `b` is earlier, 0 on tie. Unparseable side LOSES — a
- * corrupted timestamp can't claim to be earliest; both unparseable → tie (0) so
- * the caller's default wins. Used to keep the earliest `addedAt` on a sync
- * replay (e.g. merging collection items by key).
- */
+// -1 if `a` is earlier, 1 if `b` is, 0 on tie. An unparseable side loses (a corrupt timestamp can't claim earliest); both unparseable is a tie.
 export function compareEarlierWins(a, b) {
   const aMs = parseTsMs(a);
   const bMs = parseTsMs(b);

@@ -1,31 +1,18 @@
 /**
- * Scheduled handler `universe-bible-describe` — fill in the blanks on universe
- * bible entries that are named but not actually described.
+ * Scheduled handler `universe-bible-describe`: fill in universe bible entries that are
+ * named but not described.
  *
- * PROGRAMMATIC: no agent is spawned. PortOS sends one headless expand prompt per
- * entry through the stage runner. Run from CoS → Schedule it uses the task's own
- * provider pin (or, unpinned, the install's active provider, like any other
- * task); run as a Quota Burn step it is pinned to the burning family's own
- * CLI/TUI provider, so a `codex` burn spends CODEX's subscription window. Both
- * paths go through this one implementation — see `scheduledHandlers/index.js`.
+ * PROGRAMMATIC: one headless expand prompt per entry through the stage runner. From CoS →
+ * Schedule it uses the task's provider pin (or the active provider); as a Quota Burn step
+ * it is pinned to the burning family's own CLI/TUI provider. See `scheduledHandlers/index.js`.
  *
- * This is the step that belongs BEFORE `universe-bible-images` in a plan: an
- * image rendered from a character row holding only a name is a generic figure
- * that has to be thrown away, and it has already spent the image quota. Order
- * the two jobs describe→images in the family's rotation (and optionally set the
- * image job's `requireDescribed`) and the backlog gets described first, then
- * rendered from something worth rendering.
+ * Order it BEFORE `universe-bible-images` in a plan: an image rendered from a name-only
+ * row is a generic figure that wastes image quota.
  *
- * "Not described" is `lib/universeBibleCompleteness.js`'s definition, at the
- * depth the job selects:
- *   - `core` — the entry is unusable without these (a character's
- *     physicalDescription / personality / background / motivations / visualNotes;
- *     a place's or object's description).
- *   - `full` — the whole sheet, which for a character is every field the
- *     character-sheet expand prompt fills.
- *
- * Category variations and composite sheets are deliberately out of scope: their
- * sanitizer already REQUIRES a prompt, so one cannot exist undescribed.
+ * "Not described" is `lib/universeBibleCompleteness.js`'s definition at the job's depth:
+ * `core` (fields the entry is unusable without) or `full` (every field the expand prompt
+ * fills). Category variations and composite sheets are out of scope: their sanitizer
+ * already REQUIRES a prompt.
  */
 
 import { expandUniverseCharacter } from '../universeCharacterExpand.js';
@@ -37,35 +24,24 @@ import { collectUniverseBacklog } from './universeBacklog.js';
 import { noProviderReason, resolveBurnProvider } from './providerPick.js';
 
 /**
- * Scope value → the canon kinds it selects. Both the keys and the kind lists are
- * derived from `BIBLE_FIELD`, and the job catalog renders its option list from
- * the same `BIBLE_DESCRIBE_SCOPES` — so a future canon kind (or a renamed one)
- * reaches the picker and the form together instead of orphaning stored jobs
- * whose `scope` no longer matches anything.
+ * Scope value → canon kinds, derived from `BIBLE_FIELD` (the job catalog renders its
+ * options from the same `BIBLE_DESCRIBE_SCOPES`) so a new or renamed kind cannot orphan stored jobs.
  */
 const SCOPE_KINDS = Object.freeze({
   all: BIBLE_KINDS,
   ...Object.fromEntries(BIBLE_KINDS.map((kind) => [BIBLE_FIELD[kind], [kind]])),
 });
 
-/**
- * One in-flight key per ENTRY (ids are unique, unlike the image job's labels),
- * namespaced so a described entry never shadows the same entry's pending render.
- */
+/** One in-flight key per ENTRY, namespaced so it never shadows the same entry's pending render. */
 export const describeInFlightKey = (universeId, kind, entryId) => `describe:${universeId}:${kind}:${entryId}`;
 
-/**
- * Every under-described entry in one universe. Unordered — `sortRows` below is
- * what ranks the ones actually picked.
- */
+/** Every under-described entry in one universe, unordered (`sortRows` ranks the picked ones). */
 export function findUnderdescribedEntries(universe, { scope = 'all', depth = 'full' } = {}) {
   const kinds = SCOPE_KINDS[scope] || SCOPE_KINDS.all;
   const rows = [];
   for (const kind of kinds) {
     for (const entry of universe?.[BIBLE_FIELD[kind]] || []) {
-      // Locked entries are protected from every AI rewrite path; picking one
-      // would spend a dispatch on an expand that returns `{ locked: true }`
-      // without an LLM call and changes nothing.
+      // Locked entries are protected from AI rewrites; the expand would spend a dispatch and change nothing.
       if (!entry?.id || entry.locked === true) continue;
       const { missing, required } = bibleEntryCompleteness(kind, entry, { depth });
       if (missing.length === 0) continue;
@@ -82,23 +58,14 @@ export function findUnderdescribedEntries(universe, { scope = 'all', depth = 'fu
 }
 
 /**
- * Emptiest first, by the FRACTION of the entry's own sheet that is blank rather
- * than the raw gap count. Raw counts would rank by kind rather than by need: a
- * character sheet has ~31 fields and an object two, so every half-written
- * character in the cast would outrank a completely blank object forever, and on
- * a large cast the places and objects would never be reached. The absolute gap
- * breaks ties (between two equally-empty entries the bigger one buys more per
- * call) and the id breaks those, so repeated runs walk a stable backlog rather
- * than reshuffling it.
+ * Emptiest first by the FRACTION of the entry's sheet that is blank, not raw gap count
+ * (a character has ~31 fields, an object two, so raw counts would starve places and
+ * objects). Ties: larger absolute gap, then id, for a stable backlog order.
  */
 export const sortByEmptiest = (rows) =>
   [...rows].sort((a, b) => b.blankRatio - a.blankRatio || b.missing - a.missing || a.id.localeCompare(b.id));
 
-/**
- * Rows this job would describe next, plus the total backlog so the page can say
- * "10 of 143". The universe walk + one-universe-per-run rule are shared with the
- * image job (`universeBacklog.js`).
- */
+/** Rows this job would describe next plus the total backlog; the walk is shared with the image job (`universeBacklog.js`). */
 async function collect(params, inFlight = new Set()) {
   const scope = typeof params?.scope === 'string' ? params.scope : 'all';
   const depth = normalizeDescribeDepth(params?.depth);
@@ -111,23 +78,11 @@ async function collect(params, inFlight = new Set()) {
 }
 
 /**
- * Which provider this handler prompts through, as `{ providerId, reason }`.
- *
- * `family` is the discriminator (see `scheduledHandlers/index.js`):
- *
- *   - A QUOTA BURN passes one, and the pin is the whole point: a family with no
- *     usable provider must NOT fall through to the install's active provider, or
- *     the expand calls would spend a DIFFERENT subscription while this family's
- *     window expires unused and its dispatch cap is charged for the privilege.
- *     No match ⇒ `providerId: null` plus the `reason` the caller reports.
- *   - An ORDINARY SCHEDULED RUN passes none. There is no window to pin to, so
- *     the task's own pin wins and an unpinned run leaves `providerId` null for
- *     the stage runner to resolve the active provider — exactly what every other
- *     scheduled task does. Never a refusal: "no pin" is a valid configuration.
- *
- * Returning the reason alongside (rather than a bare null) keeps "this family
- * cannot burn" distinguishable from "nothing was pinned", which is the same
- * sentinel-vs-empty rule the rest of the resolution paths follow.
+ * Which provider this handler prompts through, as `{ providerId, reason }`. A QUOTA BURN
+ * passes `family`: a family with no usable provider must NOT fall through to the active
+ * provider (it would spend a different subscription), so no match gives `providerId: null`
+ * plus the `reason`. An ordinary scheduled run uses the task's own pin or leaves null for
+ * the stage runner; "no pin" is valid, never a refusal.
  */
 export async function resolveDescribeProvider({ job, family } = {}) {
   if (!family?.id) return { providerId: job?.providerId || null };
@@ -147,8 +102,7 @@ export async function countPending({ params, job, family } = {}) {
   const next = picked?.rows.length || 0;
   return {
     count: total,
-    // Handed back to run() by the caller so the bible scan + provider lookup
-    // happen once per dispatch instead of twice — see the registry's contract.
+    // Handed back to run() so the scan and provider lookup happen once per dispatch.
     context: { ...collected, providerId: resolved.providerId, providerResolved: true },
     detail: total
       ? `${total} bible ${total === 1 ? 'entry is' : 'entries are'} under-described (${depth}) — ${next} queued next from "${picked.universeName}"`
@@ -162,31 +116,19 @@ const expandRow = (universeId, row, options) => (row.kind === BIBLE_KIND.CHARACT
   : expandUniverseCanonEntry(universeId, row.kind, row.id, options));
 
 /**
- * Describe the next batch, one LLM call per entry, sequentially.
- *
- * Sequential rather than fanned out on purpose: the whole point is to draw a
- * subscription window down at a steady rate, and a parallel fan-out against a
- * CLI provider mostly produces rate-limit refusals — which the denial ledger
- * then reads as "this family's short window is spent".
- *
- * A per-entry failure is absorbed, not propagated: one entry whose expand came
- * back empty must not discard the batch's earlier successes (the registry turns
- * a throw into "this job declined", which would also mean the successful writes
- * went unreported).
+ * Describe the next batch, one LLM call per entry, sequentially: parallel fan-out against
+ * a CLI provider yields rate-limit refusals that the denial ledger reads as a spent window.
+ * A per-entry failure is absorbed so earlier successes in the batch are still reported.
  */
 export async function run({ params, job, family, context, force = false } = {}) {
-  // `providerResolved` is the sentinel, not `providerId` truthiness: an ordinary
-  // scheduled run legitimately resolves to a NULL pin, and reading that as "the
-  // probe didn't resolve one" would repeat the provider lookup on every dispatch.
+  // `providerResolved` is the sentinel, not `providerId` truthiness: an unpinned run resolves to a NULL pin.
   const resolved = context?.providerResolved === true
     ? { providerId: context.providerId }
     : await resolveDescribeProvider({ job, family });
   if (resolved.reason) return { dispatched: false, reason: resolved.reason };
   const { providerId } = resolved;
 
-  // Reuse the probe's scan when the runner supplied it; the page's force path
-  // calls run() with no probe, so fall back to scanning here. A forced run
-  // ignores the cooldown: the user clicked ▶ on this exact job.
+  // The page's force path has no probe, so scan here; a forced run ignores the cooldown.
   const collected = context ?? await collect(params, force ? new Set() : await getQuotaBurnInFlight());
   const { picked, total, max, depth } = collected;
   if (!picked) return { dispatched: false, reason: 'every bible entry is already described' };
@@ -209,20 +151,15 @@ export async function run({ params, job, family, context, force = false } = {}) 
     }
   }
 
-  // Every entry failing is a provider problem, not progress — report it as a
-  // non-dispatch so the window's cap isn't charged for a burn that did nothing,
-  // and return BEFORE the cooldown stamp: a provider that was down for one tick
-  // must not park this batch for the ledger's whole six-hour TTL.
+  // All-failed is a provider problem: report a non-dispatch (no cap charge) BEFORE the
+  // cooldown stamp so a one-tick outage doesn't park the batch for the ledger's TTL.
   if (outcome.described === 0 && outcome.failed === picked.rows.length) {
     return { dispatched: false, reason: `every expand failed via ${providerLabel(providerId)} — ${failures[0] || 'unknown error'}` };
   }
 
-  // Stamp EVERY attempted entry of a batch that got somewhere, including the
-  // ones the model declined to fill. At `full` depth some fields are legitimately
-  // meant to stay blank (the expand prompt tells the model to leave the Ghost→Need
-  // chain alone for a bit-player), so an entry can be permanently "incomplete" —
-  // without the cooldown the plan would re-pick the same handful every tick and
-  // never reach the rest.
+  // Stamp EVERY attempted entry, including ones the model declined to fill: at `full`
+  // depth some fields legitimately stay blank, and without the cooldown the plan would
+  // re-pick the same handful every tick.
   await recordQuotaBurnInFlight(picked.rows.map((row) => describeInFlightKey(picked.universeId, row.kind, row.id)));
 
   console.log(`📖 Bible describe "${picked.universeName}" via ${providerLabel(providerId)} — described=${outcome.described} fields=${outcome.fields} skipped=${outcome.skipped} failed=${outcome.failed}`);

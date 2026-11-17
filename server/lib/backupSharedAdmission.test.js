@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { spawn } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import * as syncFs from 'node:fs';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { tmpdir, type as hostOsType } from 'node:os';
 import { pinPlatform } from './testHelper.js';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import { createBackupSharedAdmission } from './backupSharedAdmission.js';
 import { DISPOSABLE_ROOT_MARKER } from './dataRoot.js';
+import { processStartedAt } from './processIdentity.js';
 
 const roots = [];
 const children = [];
@@ -34,7 +35,7 @@ const childSource = `
       }, { timeoutMs: Number(process.env.ADMISSION_TEST_TIMEOUT || 5000) });
     } else {
       const release = await acquireBackupSnapshotCut({ timeoutMs: Number(process.env.ADMISSION_TEST_TIMEOUT || 5000) });
-      process.send({ type: 'entered' });
+      process.send({ type: 'entered', reclaimed: release.reclaimedLeases });
       await done;
       release();
       release(); // stale duplicate releases must be harmless
@@ -42,6 +43,23 @@ const childSource = `
     process.send({ type: 'finished' });
   } catch (error) { process.send({ type: 'rejected', code: error.code, message: error.message, blockers: error.blockers, owner: error.owner, recoveryPath: error.recoveryPath }); }
 `;
+const leasesDir = path => join(path, 'data/backup-admission/publications');
+// Seeds a lease the way an interrupted process would have left it. Never touches the real data/.
+async function seedLease(path, { name = 'seeded', owner = {}, uncertain = false } = {}) {
+  const dir = join(leasesDir(path), name);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'owner.json'), JSON.stringify({ version: 1, id: `id-${name}`, generation: 'g', pid: process.pid,
+    kind: 'publication', startedAt: new Date().toISOString(), ...owner }) + '\n');
+  if (uncertain) await writeFile(join(dir, 'uncertain'), 'x');
+  return dir;
+}
+// A PID that is provably gone: a child that has already exited.
+async function deadPid() {
+  const child = spawn(process.execPath, ['-e', '']);
+  const exited = once(child, 'exit');
+  await exited;
+  return child.pid;
+}
 async function root() {
   const path = await mkdtemp(join(tmpdir(), 'backup-shared-race-'));
   roots.push(path);
@@ -167,19 +185,93 @@ describe('shared snapshot admission between real server and runner processes', (
     } finally { restorePlatform(); }
   });
 
-  it('keeps a killed writer as a durable blocker across coordinator restarts', async () => {
+  it('reclaims the lease of a killed writer at the next cut and reports it', async () => {
     const path = await root();
     const writer = worker(path, 'publication', 'half pair');
     await writer.next('entered');
     await writer.crash();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const cut = worker(path, 'cut', '', 50);
-      const rejected = await cut.next('rejected');
-      expect(rejected).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ kind: 'publication', pid: writer.proc.pid })] });
-      expect(rejected.message).toContain('must not be removed by age or PID');
-    }
-    expect(existsSync(join(path, 'data/metadata.json'))).toBe(false);
+    expect(readdirSync(leasesDir(path))).toHaveLength(1);
+    const cut = worker(path, 'cut');
+    expect(await cut.next('entered')).toMatchObject({ reclaimed: 1 });
+    expect(readdirSync(leasesDir(path))).toEqual([]);
+    cut.finish();
+    await cut.next('finished');
+    // A later cut finds nothing left to retire.
+    const again = worker(path, 'cut');
+    expect(await again.next('entered')).toMatchObject({ reclaimed: 0 });
+    again.finish();
+    await again.next('finished');
+  });
+
+  it('retires dead-PID leases, with or without a recorded process start', async () => {
+    const path = await root();
+    const pid = await deadPid();
+    await seedLease(path, { name: 'modern', owner: { pid, processStartedAt: Date.now() - 60_000 } });
+    await seedLease(path, { name: 'legacy', owner: { pid } });
+    const cut = worker(path, 'cut');
+    expect(await cut.next('entered')).toMatchObject({ reclaimed: 2 });
+    expect(readdirSync(leasesDir(path))).toEqual([]);
+    cut.finish();
+    await cut.next('finished');
+  });
+
+  it('retires a lease whose PID was reused by a process that started at another time', async () => {
+    const path = await root();
+    await seedLease(path, { owner: { pid: process.pid, processStartedAt: processStartedAt(process.pid) - 3_600_000 } });
+    const cut = worker(path, 'cut');
+    expect(await cut.next('entered')).toMatchObject({ reclaimed: 1 });
+    cut.finish();
+    await cut.next('finished');
+  });
+
+  it('never retires a live writer: matching start, or a legacy lease with a live PID, still blocks', async () => {
+    const path = await root();
+    const live = await seedLease(path, { name: 'live', owner: { pid: process.pid, processStartedAt: processStartedAt(process.pid) } });
+    const legacy = await seedLease(path, { name: 'legacy', owner: { pid: process.pid } });
+    const cut = worker(path, 'cut', '', 50);
+    const rejected = await cut.next('rejected');
+    expect(rejected).toMatchObject({ code: 'BACKUP_SNAPSHOT_BUSY', blockers: [expect.objectContaining({ pid: process.pid }), expect.objectContaining({ pid: process.pid })] });
+    expect(rejected.message).toContain(live);
+    expect(rejected.message).toContain(legacy);
+    expect(readdirSync(leasesDir(path)).sort()).toEqual(['legacy', 'live']);
     expect(existsSync(join(path, 'data/backup-admission/cut'))).toBe(false);
+  });
+
+  it('keeps an uncertain lease from a dead owner blocking and names its path in the refusal', async () => {
+    const path = await root();
+    const dir = await seedLease(path, { owner: { pid: await deadPid() }, uncertain: true });
+    const unreadable = join(leasesDir(path), 'broken');
+    await mkdir(unreadable);
+    await writeFile(join(unreadable, 'owner.json'), '{broken');
+    const cut = worker(path, 'cut', '', 50);
+    const rejected = await cut.next('rejected');
+    expect(rejected.code).toBe('BACKUP_SNAPSHOT_BUSY');
+    expect(rejected.message).toContain(dir);
+    expect(rejected.message).toContain('uncertain');
+    expect(rejected.message).toContain(unreadable);
+    expect(rejected.message).toContain('docs/BACKUP_PUBLICATION_ADMISSION.md#interrupted-ownership-recovery');
+    expect(readdirSync(leasesDir(path)).sort()).toEqual(['broken', 'seeded']);
+  });
+
+  it('records the process start in new leases and decides ownership through injected probes', async () => {
+    const path = await root();
+    const directory = join(path, 'data/backup-admission');
+    const probes = { liveness: vi.fn(() => 'alive'), startedAt: vi.fn(() => 1000) };
+    const admission = createBackupSharedAdmission(directory, probes);
+    const lease = admission.tryPublication();
+    expect(lease.owner.processStartedAt).toBe(1000);
+    expect(admission.reclaimDeadPublications()).toEqual([]);
+    probes.startedAt.mockImplementation(pid => (pid === process.pid ? 1000 : null));
+    expect(admission.reclaimDeadPublications()).toEqual([]);
+    probes.startedAt.mockReturnValue(2000);
+    expect(admission.reclaimDeadPublications()).toEqual([expect.objectContaining({ pid: process.pid })]);
+    expect(admission.publications()).toEqual([]);
+    // A probe that cannot read the start never reads as death.
+    const unprobed = createBackupSharedAdmission(directory, { liveness: () => 'alive', startedAt: () => null });
+    const second = unprobed.tryPublication();
+    expect(second.owner.processStartedAt).toBeUndefined();
+    expect(unprobed.reclaimDeadPublications()).toEqual([]);
+    second.release();
   });
 
   it('preserves a crashed cut instead of letting another process steal it', async () => {

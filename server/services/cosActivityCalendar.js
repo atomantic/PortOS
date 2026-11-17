@@ -1,41 +1,15 @@
 /**
- * CoS Activity Calendar
+ * CoS Activity Calendar: the "runs per day" heatmap behind the dashboard widget and the Eidoverse activity district.
  *
- * The GitHub-style "runs per day" heatmap behind the dashboard widget and the
- * Eidoverse activity district.
+ * Derived on every read from the id->date index (`data/cos/agents/index.json`, kept by `archiveStaleAgents`)
+ * plus completed agents still in `state.agents`; both are process-cached, so reads cost no disk I/O.
+ * (Replaces the `data/cos/productivity.json` aggregate, which had no automatic writer; #7599.)
  *
- * Derived on every read from the two stores that agent history actually lives
- * in — the id→date-bucket index (`data/cos/agents/index.json`, maintained by
- * `archiveStaleAgents`) plus the completed agents still resident in
- * `state.agents` — so it is correct the moment a run finishes. Both are
- * process-cached (`loadAgentIndex` memoizes, `loadState` holds `stateCache`),
- * so event-triggered dashboard reads cost no disk I/O.
- *
- * It replaces the `data/cos/productivity.json` aggregate this used to read
- * (#7599). That file had no automatic writer: nothing in the server called the
- * incremental updater, so it only changed when a human opened the retired
- * Productivity page and pressed Refresh. On this repo's own install it had gone
- * four months without a write, which made every heatmap cell read zero.
- *
- * ## What a cell counts
- *
- * Every completed agent record, with no outcome filtering of any kind: not
- * success vs failure, and not the `isAgentHandoff` continuation rule that the
- * daily report and weekly digest apply.
- *
- * That is deliberate, and it is the only self-consistent choice available here.
- * The index stores a date per agent id and nothing else, so an outcome rule
- * could only ever be evaluated against the records still in `state.agents` —
- * roughly the last 24 hours, per `completedAgentRetentionMs`. Applying it there
- * and not to the archive would drop a provider swap from today's cell while
- * counting it in all ~90 older ones, so the grid would disagree with itself
- * along a moving 24-hour line. Answering properly for the archive means opening
- * every record's `metadata.json` — hundreds of files on a 30-second poll.
- *
- * So this is a VOLUME signal — how much ran on each day — and it is honest
- * about being one. Outcome is reported live and exactly by the Today and
- * Learning tiles beside the heatmap, which read `getTodayActivity` and task
- * learning rather than this grid.
+ * A cell counts every completed agent record, with no outcome filtering and no `isAgentHandoff` rule.
+ * The index stores only a date per id, so an outcome rule could be applied only to records still in
+ * `state.agents` (~24h) and the grid would disagree with itself along that moving line; doing it for the
+ * archive means opening every `metadata.json` on a 30-second poll. It is a VOLUME signal; the Today and
+ * Learning tiles report outcome.
  */
 
 import { scheduleDashboardExpiry } from './dashboardEvents.js';
@@ -43,33 +17,18 @@ import { loadState } from './cosState.js';
 import { loadAgentIndex } from './cosAgentIndex.js';
 
 /**
- * Day key for an instant, in UTC.
- *
- * UTC, not server-local, because that is what every other CoS agent-history day
- * key already is: `archiveStaleAgents` buckets a record under
- * `completedAt.slice(0, 10)`, and `getTodayActivity` / `generateReport` ask for
- * a day with `toISOString().split('T')[0]`. Keying the grid locally instead
- * would file a run in one cell and look for it in another on any install not
- * running `TZ=UTC`.
+ * Day key for an instant, in UTC: the same key `archiveStaleAgents`, `getTodayActivity` and `generateReport`
+ * use, so keying locally would file a run in one cell and look for it in another off `TZ=UTC`.
  */
 const dayKey = (date) => date.toISOString().slice(0, 10);
 
 /**
  * Completed runs per day, from `sinceStr` forward, across both stores.
  *
- * Live state is walked FIRST so its ids can be collected into a set the index
- * pass skips. That direction matters: a record caught mid-archive is in both
- * stores at once (`archiveStaleAgents` indexes it before evicting it from
- * state), and deduping the other way round would mean copying the whole index —
- * thousands of entries on an aged install — to overwrite a few dozen keys.
- *
- * Days before `sinceStr` are dropped as they are read rather than counted and
- * discarded later; the index spans an install's entire history while the grid
- * only ever asks for the last few weeks of it.
- *
- * `getAgentDates()` tallies the same index, but cannot be used here: it returns
- * `{date, count}` with the ids discarded, and the ids are exactly what the
- * live-state dedupe needs.
+ * Live state is walked FIRST so its ids can seed a set the index pass skips: a record caught mid-archive is
+ * in both stores (`archiveStaleAgents` indexes it before evicting it), and deduping the other way would
+ * copy the whole index. Days before `sinceStr` are dropped as read. `getAgentDates()` can't be used: it
+ * discards the ids the live-state dedupe needs.
  */
 async function countRunsByDate(sinceStr) {
   const [index, state] = await Promise.all([loadAgentIndex(), loadState()]);
@@ -95,9 +54,7 @@ async function countRunsByDate(sinceStr) {
 }
 
 /**
- * Activity calendar for the last N weeks, as a Sunday-aligned grid of exactly N
- * whole weeks ending with the current one.
- *
+ * Activity calendar for the last N weeks, as a Sunday-aligned grid of exactly N whole weeks ending with the current one.
  * @param {number} weeks - How many weeks of history to include (default 12)
  */
 export async function getActivityCalendar(weeks = 12) {
@@ -107,8 +64,7 @@ export async function getActivityCalendar(weeks = 12) {
   nextDay.setUTCHours(24, 0, 0, 0);
   scheduleDashboardExpiry('cos:day:changed', nextDay.getTime());
 
-  // Sunday of the current week, then back N-1 whole weeks — so the grid is
-  // exactly `weeks` columns wide whatever weekday it is read on.
+  // Sunday of the current week, then back N-1 whole weeks, so the grid is exactly `weeks` columns wide.
   const start = new Date(today);
   start.setUTCDate(today.getUTCDate() - today.getUTCDay() - (weeks - 1) * 7);
   start.setUTCHours(0, 0, 0, 0);
@@ -121,9 +77,7 @@ export async function getActivityCalendar(weeks = 12) {
   let totalTasks = 0;
 
   for (let i = 0; i < weeks * 7; i++) {
-    // Calendar arithmetic, not epoch-ms stepping. Both are exact here (`start`
-    // is UTC midnight and UTC has no DST), but this form says "the i-th day
-    // after start" without asking the reader to know that.
+    // Calendar arithmetic, not epoch-ms stepping: says "the i-th day after start" directly.
     const cursor = new Date(start);
     cursor.setUTCDate(start.getUTCDate() + i);
     const date = dayKey(cursor);

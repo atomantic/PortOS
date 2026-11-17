@@ -1005,18 +1005,8 @@ export default function Tribe() {
   const [ringsOpen, setRingsOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  // Bumped by every "Add / new relationship" trigger so the form can be
-  // surfaced (scrolled into view + Name focused). The form is statically
-  // rendered, so resetting an already-empty draft is otherwise invisible —
-  // especially on narrow screens where it sits below the fold.
-  const [focusTick, setFocusTick] = useState(0);
   const nameInputRef = useRef(null);
   const formRef = useRef(null);
-  // The form only mounts when `!loading`. An Add can fire while a reload is in
-  // flight (e.g. the post-save `tribe:changed` broadcast sets loading=true), so
-  // record a pending request and let the effect retry once the form mounts
-  // instead of consuming the tick against an unmounted form.
-  const pendingFocusRef = useRef(false);
   // Non-blocking duplicate-identifier report (#5908) — `null` until the first
   // fetch resolves, so "nothing yet" never briefly renders as "confirmed clean".
   const [duplicates, setDuplicates] = useState(null);
@@ -1024,8 +1014,10 @@ export default function Tribe() {
 
   const selectedId = draft.id;
 
+  // `loading` starts true and only gates the first paint: refreshes (including the
+  // post-mutation `tribe:changed` broadcast) must not unmount the page body, or
+  // OutreachQueue drafts and the sub-panels would be wiped on every save.
   const loadContacts = async (isCancelled = () => false) => {
-    setLoading(true);
     const result = await api.getTribePeople({ silent: true }).catch((err) => {
       if (!isCancelled()) toast.error(err.message || 'Failed to load Tribe');
       // null (not an empty list) so a failed fetch is distinguishable from a
@@ -1086,28 +1078,17 @@ export default function Tribe() {
     };
   }, []);
 
-  // Surface the contact form after an Add trigger. The form only exists once
-  // loading is done and a form-bearing tab is active, so this also re-runs on
-  // `loading`/`activeTab` and waits (keeping the pending flag set) until the
-  // form actually mounts — otherwise a tick that fires mid-reload is lost.
-  useEffect(() => {
-    if (!pendingFocusRef.current || loading) return;
-    const frame = requestAnimationFrame(() => {
-      if (!formRef.current) return; // still unmounted — retry on next dep change
-      formRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      nameInputRef.current?.focus();
-      pendingFocusRef.current = false;
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [focusTick, loading, activeTab]);
-
   // Reset to a blank draft and surface the form. The Focus and Map tabs have no
   // form, so fall back to Circle there; otherwise keep the user's current tab.
   const startNewRelationship = () => {
     setActiveTab((tab) => (tab === 'focus' || tab === 'map' ? 'circle' : tab));
     setDraft(emptyDraft());
-    pendingFocusRef.current = true;
-    setFocusTick((tick) => tick + 1);
+    // The state updates above flush before the next frame, so the form (mounted
+    // by the tab fallback if needed) exists by the time this runs.
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      nameInputRef.current?.focus();
+    });
   };
 
   const filteredContacts = useMemo(() => {

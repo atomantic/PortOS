@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: An async `useEffect` keyed to a switchable dependency must drop superseded responses (local flip flag `let active = true; …`, generation ref, or `AbortController`).
@@ -35,10 +36,10 @@ const ALLOWED = {
     'setLoading(false) is a load-finished latch, not a response written into state',
   'src/components/codeAnimation/CodeAnimationGallery.jsx':
     'deps are [items] of one fixed gallery query; each poster answer is applied by its own job id, so none can land under another record',
+  'src/components/imageGen/useImageGenPageRuntime.js':
+    'the active-job read is adopted through useMediaJobSse.start, whose run owner drops it when superseded or unmounted (ifIdle makes a re-run a no-op)',
   'src/components/voice/VoiceWidget.jsx':
     'deps are [enabled, navigate] — a session toggle, not a record identity',
-  'src/hooks/useImageGenPageRuntime.js':
-    'the active-job read is adopted through useMediaJobSse.start, whose run owner drops it when superseded or unmounted (ifIdle makes a re-run a no-op)',
   'src/pages/Browser.jsx':
     'deps are [showConfig, config] — a panel toggle re-reading its own config',
 };

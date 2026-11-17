@@ -33,6 +33,11 @@ const post = (app, filename, body = 'hello uploads') =>
   request(app).post('/api/uploads').send({ data: Buffer.from(body).toString('base64'), filename });
 
 describe('uploads routes (#4101)', () => {
+  it('rejects a repeated query key with 400 (bulk delete, #16428)', async () => {
+    const res = await request(buildApp()).delete('/api/uploads?confirm=true&confirm=true');
+    expect(res.status).toBe(400);
+  });
+
   afterAll(() => rmSync(dirname(PATHS.uploads), { recursive: true, force: true }));
 
   it('POST returns the full uploads response shape, not the attachments one', async () => {

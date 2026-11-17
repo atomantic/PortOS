@@ -167,16 +167,6 @@ describe('Apps Lifecycle Routes', () => {
       );
     });
 
-    it('reports the native process status independently of the web app', async () => {
-      appsService.getAppById.mockResolvedValue(mockApp);
-      pm2Service.getAppStatus.mockResolvedValue({ status: 'online' });
-
-      const response = await request(app).get('/api/apps/app-001/native-launch/status');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual({ processName: 'mixed-game', status: 'online' });
-    });
-
     it('rejects native launch when the app has no target', async () => {
       appsService.getAppById.mockResolvedValue({ ...mockApp, nativeLaunch: null });
 

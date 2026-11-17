@@ -1,22 +1,10 @@
 import { waitFor } from '@testing-library/react';
 import { expect } from 'vitest';
 
-// `user.type` dispatches one event per keystroke and `user.clear` empties the
-// field in its own event. Anything that reads state derived from the input right
-// after them — a submit click whose payload is asserted, a dirty-state check —
-// can observe a partial value (`2` instead of `20`, or the post-clear empty
-// string, which `Number('')` turns into 0). A `waitFor` on the payload cannot
-// rescue that: the call already happened with the wrong argument, and re-waiting
-// never produces a second one.
-//
-// Pinning the settled input value in between turns a load-dependent flake into
-// either a pass or an honest, immediately-legible failure.
+// `user.type` dispatches one event per keystroke and `user.clear` empties the field in its own event, so anything reading state derived from the input right after (a submit click whose payload is asserted, a dirty-state check) can observe a partial value (`2` instead of `20`, or the post-clear empty string `Number('')` turns into 0). A `waitFor` on the payload can't rescue it: the call already happened with the wrong argument.
+// Pinning the settled input value in between turns a load-dependent flake into a pass or an immediately-legible failure.
 
-// The timeout `waitFor` uses here is the suite-wide `asyncUtilTimeout` configured
-// in setup.js from src/test/timeouts.js — testing-library's 1000ms default is too
-// tight for these under parallel-worker CPU contention. Deliberately NOT overridden
-// per call: a local bound here would silently become the TIGHTER of the two the
-// next time the suite-wide budget moves.
+// The timeout is the suite-wide `asyncUtilTimeout` (setup.js, from src/test/timeouts.js): testing-library's 1000ms default is too tight under parallel-worker CPU contention. Deliberately not overridden per call, or a local bound would become the TIGHTER of the two when the suite-wide budget moves.
 const settled = (input, value) => waitFor(() => expect(input).toHaveValue(value));
 
 // A `type="number"` input reads its value back coerced, and empty as `null`.

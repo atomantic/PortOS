@@ -85,6 +85,16 @@ describe('audioModels — add / list / merge / remove', () => {
     expect(await svc.removeAudioModel({ engine: 'musicgen', id: 'not/there' })).toBe(false);
   });
 
+  it('treats Object.prototype names as unknown engines everywhere', async () => {
+    for (const engine of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      await expect(svc.addAudioModel({ engine, repo: 'org/repo' })).rejects.toMatchObject({ status: 400, code: 'AUDIO_MODEL_UNKNOWN_ENGINE' });
+      expect(await svc.removeAudioModel({ engine, id: 'org/repo' })).toBe(false);
+      expect(await svc.listUserModels(engine)).toEqual([]);
+      // Unknown ids fall back to the default engine rather than an inherited member.
+      expect((await svc.listEngineModels(engine)).map((m) => m.id)).toEqual(ENGINES.musicgen.models.map((m) => m.id));
+    }
+  });
+
   it('refuses to add over an unreadable registry and preserves its bytes', async () => {
     const registry = join(TEST_DATA_ROOT, 'audio-models.json');
     writeFileSync(registry, '{"musicgen":');

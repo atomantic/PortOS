@@ -107,7 +107,7 @@ function resolveClaim(local, remote, now) {
 function claimTriple(task) {
   const out = {};
   for (const key of CLAIM_METADATA_KEYS) {
-    if (task.metadata?.[key] !== undefined) out[key] = task.metadata[key];
+    if (task.metadata?.[key] != null) out[key] = task.metadata[key];
   }
   return out;
 }

@@ -1,77 +1,50 @@
 /**
  * Sprites — the published atlas layout sidecar and the runtime-contract check
- * (issue #2982).
+ * (#2982).
  *
- * The atlas PNG is the entire export: the compile manifest never leaves
- * `data/`, so a consuming app has had to hardcode the grid (idle at column 0,
- * walk phases from column 1, the frame count baked in as a constant). That
- * held by construction while every walk was 8 frames; since the count became
- * authorable (#2970) a 12-frame publish silently shifts every column the app
- * reads — no crash, no log, just the wrong pixels.
+ * The atlas PNG is the entire export, so consuming apps would hardcode the grid
+ * and a 12-frame publish (#2970) would silently shift every column they read.
  *
- * Two pieces close that gap:
+ * - `buildAtlasLayout` produces `<atlas-stem>.layout.json` beside the PNG so the
+ *   app resolves columns BY NAME and verifies `sourceAtlasSha256`. A per-track
+ *   column span (`tracks`) makes new tracks additive; each span states its
+ *   `rows` (#3017), so a non-directional track is read from row 0 regardless of facing.
+ * - `runtimeContractMismatch` compares compiled geometry against the app's
+ *   `publishBinding.runtimeContract` so an unconsumable publish is refused with
+ *   both numbers named.
  *
- * - `buildAtlasLayout` produces the `<atlas-stem>.layout.json` sidecar written
- *   beside the published PNG, so the app can resolve columns BY NAME and
- *   verify the atlas it loaded is the one the layout describes
- *   (`sourceAtlasSha256`). Alongside the flat `columns` list it carries a
- *   per-track column span (`tracks`), so a future multi-frame scanner action or
- *   an ambient loop is an additive track rather than a v2 rewrite. Each span
- *   also states how many `rows` its track occupies (#3017): a non-directional
- *   track — a tree in the wind, water, a lamp — is single-row, and a consumer
- *   reads row 0 for it regardless of which way the camera or the player faces.
- * - `runtimeContractMismatch` compares compiled geometry against the optional
- *   `publishBinding.runtimeContract` the app declared, so a publish the app
- *   cannot consume is refused with both numbers named instead of shipping.
+ * Playback speed is deliberately NOT part of the contract (distance-driven
+ * consumers have no fps concept): the authoring fps rides along as `previewFps`,
+ * labeled as metadata the consumer must ignore.
  *
- * Playback speed is deliberately NOT part of the contract. Distance-driven
- * consumers (the reference case advances the walk per unit of movement) have
- * no animation-fps concept at all, so PortOS's authoring fps is preview-only:
- * it rides along as `previewFps`, explicitly labeled as authoring metadata the
- * consumer must ignore.
- *
- * Pure and free of the image graph (no sharp, no fs, no state): publish.js
- * builds the payload before taking any write lock, and the shape is
- * unit-testable on its own.
- *
- * The span math itself lives one level down in `atlasGrid.js` (#3016), because
- * the compiler that WRITES the grid imports sharp and this module must not —
- * so the single definition of a column span has to sit below both. Since #3016
- * the two namespaces ARE unified: a track's span is named for its registry id
- * (#3015), the compiler persists that descriptor into the manifest geometry, and
- * `deriveTracks` prefers it. Only a *legacy* grid (compiled before #3016, or
- * imported) still falls back to minting a name from a column label, which is
- * what keeps a pre-#2986 `scanner` placeholder describable.
+ * Pure and free of the image graph (no sharp, fs or state): publish.js builds
+ * the payload before taking any write lock. Span math lives in `atlasGrid.js`
+ * (#3016) because the compiler that writes the grid imports sharp. A span is
+ * named for its registry id (#3015) and persisted by the compiler; `deriveTracks`
+ * prefers it, and only a legacy grid (pre-#3016 or imported) mints a name from a
+ * column label, which keeps a pre-#2986 `scanner` placeholder describable.
  */
 
 import { basename } from 'path';
 import { deriveTracks, resolveWalkFrameCount, ATLAS_DEFAULT_ROWS } from './atlasGrid.js';
 import { WALK_TRACK } from './animationTracks.js';
-// #3152 — the default table is the EFFECTIVE registry (compiled `walk` + the
-// user-defined store), not the compiled constant. Load-bearing here: the contract
-// check below iterates the table to find each track's `contractFrameCountField`,
-// so a compiled-only default would silently SKIP `scannerFrameCount` /
-// `ambientFrameCount` (and any user track's field) — publishing an atlas whose
-// span disagrees with the app's contract would then pass unchecked, which is
-// precisely the mismatch this function exists to refuse. Still sharp-free: the
-// store reaches only fs/path/crypto.
+// #3152: the default table is the EFFECTIVE registry (compiled `walk` + user
+// store). Load-bearing: the contract check iterates it for each track's
+// `contractFrameCountField`, so a compiled-only default would silently skip
+// scanner/ambient/user tracks and let a mismatched atlas publish. Sharp-free.
 import { getEffectiveAnimationTracks } from './animationTrackStore.js';
 
-// Bump only on a breaking shape change. Adding a field (or a new track) is
-// additive — consumers read `tracks`/`columns` by name, not by position.
+// Bump only on a breaking shape change; added fields and tracks are additive.
 export const ATLAS_LAYOUT_SCHEMA_VERSION = 1;
 export const ATLAS_LAYOUT_KIND = 'portos-sprite-atlas-layout';
 
-// Stated inside the file the app reads, so the "do not animate from this"
-// rule travels with the value instead of living only in our docs.
+// Stated inside the file so the "do not animate from this" rule travels with it.
 export const PREVIEW_FPS_NOTE = 'Authoring metadata only — the speed PortOS previews this walk at. '
   + 'The consuming app determines real playback (e.g. from movement distance); do not use this as a runtime frame rate.';
 
 /**
- * Sidecar path for a published atlas: `…/hero-atlas.png` →
- * `…/hero-atlas.layout.json`. The binding schema already forces a `.png`
- * destination; anything else keeps its full name plus the suffix rather than
- * silently truncating an unexpected extension.
+ * Sidecar path for a published atlas: `…/hero-atlas.png` → `…/hero-atlas.layout.json`.
+ * A non-`.png` name keeps its full name plus the suffix instead of truncating.
  */
 export function layoutSidecarPath(atlasDestPath) {
   const stem = atlasDestPath.replace(/\.png$/i, '');
@@ -79,12 +52,9 @@ export function layoutSidecarPath(atlasDestPath) {
 }
 
 /**
- * Build the layout sidecar payload for a compiled atlas.
- *
- * Deliberately carries NO publish timestamp: the payload is a pure function of
- * the atlas bytes and their geometry, so an unchanged republish produces
- * byte-identical content and the sidecar write stays idempotent (the publish
- * path compares the encoded bytes to decide whether anything actually changed).
+ * Build the layout sidecar payload for a compiled atlas. Deliberately carries NO
+ * publish timestamp: the payload is a pure function of the atlas bytes and
+ * geometry, so an unchanged republish is byte-identical (publish compares bytes).
  */
 export function buildAtlasLayout({
   characterId, geometry, atlasSha256, version, atlasDestPath,
@@ -94,15 +64,13 @@ export function buildAtlasLayout({
     throw new Error('Compiled atlas geometry has no column list');
   }
   const walkFrameCount = resolveWalkFrameCount(geometry);
-  // The grid's real height, so a span's `rows` is checked against (and defaulted
-  // to) the atlas actually being described rather than the canonical eight.
+  // The grid's real height, not the canonical eight.
   const rows = geometry.rows ?? (Array.isArray(geometry.directionOrder) ? geometry.directionOrder.length : null);
   return {
     schemaVersion: ATLAS_LAYOUT_SCHEMA_VERSION,
     kind: ATLAS_LAYOUT_KIND,
     characterId,
-    // Basename only: the sidecar sits beside the atlas, so a repo-relative
-    // path would just be a second copy of where the reader already is.
+    // Basename only: the sidecar sits beside the atlas.
     atlasFile: basename(atlasDestPath),
     atlasVersion: version ?? null,
     sourceAtlasSha256: atlasSha256,
@@ -111,26 +79,17 @@ export function buildAtlasLayout({
     rowOrder: Array.isArray(geometry.directionOrder) ? [...geometry.directionOrder] : null,
     columns: [...columns],
     columnCount: columns.length,
-    // Prefer the descriptor the compiler persisted (#3016) — the only thing
-    // that can describe two tracks of differing length — and fall back to the
-    // legacy column-name derivation for a grid compiled before it existed.
-    // Each span carries `rows` (#3017), so a consumer knows a non-directional
-    // track lives on row 0 regardless of facing without inspecting pixels.
-    // A geometry with no usable row count falls back to the canonical eight —
-    // the shape every such atlas really has. Stated rather than laundered
-    // through `undefined` to re-trigger a default.
+    // Prefer the compiler's persisted descriptor (#3016; the only thing that can
+    // describe tracks of differing length), else legacy column-name derivation.
+    // No usable row count falls back to the canonical eight, stated explicitly.
     tracks: deriveTracks(columns, walkFrameCount, geometry.tracks ?? null, rows ?? ATLAS_DEFAULT_ROWS),
     walkFrameCount,
-    // Every track publishes the same top-level convenience field its runtime
-    // contract declares. Re-emitting walkFrameCount here leaves its existing
-    // key position/null compatibility untouched; seeded scanner/ambient rows
-    // likewise retain their historical names and order.
+    // Each track publishes the top-level field its runtime contract declares;
+    // walkFrameCount and seeded scanner/ambient keep their historical names/order.
     ...Object.fromEntries(Object.values(animationTracks).flatMap((definition) => {
       const direct = geometry[definition.contractFrameCountField];
-      // Existing custom atlases can take the compiler's idempotent path after
-      // upgrade, leaving their immutable manifest without the new convenience
-      // field. Its persisted span is the same count and keeps the published
-      // sidecar uniform without forcing a pixel recompile.
+      // Atlases kept by the compiler's idempotent path may lack the convenience
+      // field; the persisted span has the same count, avoiding a recompile.
       const value = Number.isInteger(direct) ? direct : geometry.tracks?.[definition.id]?.count;
       return Number.isInteger(value) ? [[definition.contractFrameCountField, value]] : [];
     })),
@@ -141,13 +100,9 @@ export function buildAtlasLayout({
 
 /**
  * Compare compiled atlas geometry against an app's declared runtime contract.
- * Returns `null` when they agree (or when no contract was declared — an absent
- * contract publishes unchecked, exactly as before this existed), otherwise a
- * message naming BOTH the actual and expected numbers and the two ways to
- * resolve the disagreement.
- *
- * Callers pass describable geometry (a column list); publish.js asserts that
- * once, up front, for both this and `buildAtlasLayout`.
+ * Returns `null` when they agree or no contract was declared (publishes
+ * unchecked), otherwise a message naming BOTH numbers and how to resolve it.
+ * Callers pass describable geometry; publish.js asserts that up front.
  */
 export function runtimeContractMismatch(
   geometry,
@@ -165,9 +120,7 @@ export function runtimeContractMismatch(
     if (!Number.isInteger(expected)) continue;
     const direct = geometry[definition.contractFrameCountField];
     const spanCount = geometry.tracks?.[definition.id]?.count;
-    // Walk alone predates the per-track descriptor; preserve its imported-grid
-    // column fallback while every current/new track uses the generic two-rung
-    // field/span lookup.
+    // Walk alone predates the per-track descriptor and keeps its imported-grid column fallback.
     const actual = definition.id === WALK_TRACK
       ? resolveWalkFrameCount(geometry)
       : (Number.isInteger(direct) ? direct : (Number.isInteger(spanCount) ? spanCount : null));

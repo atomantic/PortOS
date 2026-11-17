@@ -28,13 +28,15 @@ but retains the durable owner with an uncertainty marker. Even a nested failure
 caught by its caller retains this blocker; ordinary errors after successful
 rollback release admission normally. The next snapshot refuses until recovery.
 
-Every owner has a random ID, process generation, PID, kind, and timestamp. Only
-the matching owner may release its directory. Neither elapsed time nor a missing
-PID permits automatic removal: a dead publication may have left an incomplete
-file/record pair, and a dead restore may have installed only part of its snapshot.
-A cut that cannot drain refuses with `BACKUP_SNAPSHOT_BUSY` and includes the
-blocking ownership records. The read-only `backupPublicationAdmissionStatus()`
-returns both cut and publication ownership, including unreadable records.
+Every owner records a random ID, generation, PID, OS process start, kind, and
+timestamp; only the matching owner may release its directory, and age never does.
+At cut time (#16388) a plain publication lease is retired when its PID is gone or
+was reused by a process with another start time (a lease without a recorded start
+needs a dead PID). `uncertain`, unreadable, live and cut/restore owners are never
+retired automatically. The cut logs one `⏭️` line and records `reclaimedLeases` in
+the manifest's `assetConsistency`. A cut that cannot drain refuses with
+`BACKUP_SNAPSHOT_BUSY`, naming each blocking path and the recovery section below;
+the Backup tab shows it. `backupPublicationAdmissionStatus()` reads all ownership.
 
 The control directory is machine-local authority. Backup excludes it
 unconditionally, and all full or selective restores preserve it. Upgrade and
@@ -45,21 +47,20 @@ external tools that write the data tree.
 
 ## Interrupted ownership recovery
 
-An interrupted owner is a recovery blocker, not evidence that its data is safe.
-Keep the recorded ID, PID, generation, timestamp, and directory path in the
-incident record. Stop both PortOS processes and any tool writing the affected
-data before examining it. Correlate the owner with logs, inspect the affected
+A blocking owner (`uncertain`, unreadable, running, or a cut/restore) is a
+recovery blocker, not evidence that its data is safe. Keep its ID, PID, generation,
+timestamp, and directory path in the incident record. Stop both PortOS processes
+and any tool writing the affected data, correlate the owner with logs, inspect the
 file/record pair, and finish or roll back that domain's interrupted publication.
 For a restore, also complete its cache/index and database recovery before
-reopening publication admission. A failed snapshot must remain failed.
+reopening admission. A failed snapshot stays failed.
 
-Only after the affected data has been verified may an operator explicitly retire
-that exact ownership directory while all writers remain stopped. Preserve its
-owner record with the recovery evidence; do not delete the entire control tree,
-clear ownership merely because its PID exited, or remove a record from a running
-process. Restart both processes after recovery. If the record is unreadable or
-the affected data cannot be established, retain the blocker and restore from a
-verified source with a deliberate recovery plan.
+Only after the data is verified may an operator retire that exact ownership
+directory while all writers remain stopped. Preserve its owner record with the
+recovery evidence; do not delete the control tree, clear an `uncertain` or
+cut/restore owner merely because its PID exited, or remove a record from a running
+process. Then restart both processes. If the record is unreadable or the data
+cannot be established, retain the blocker and restore from a verified source.
 
 ## Consistency while assets are changing
 
@@ -132,10 +133,10 @@ Admission inventory (`withBackupAssetPublication`):
 | Owner | Status |
 | --- | --- |
 | Music Designer take publication (`musicTakePublication.js`) | Covered (#9980) |
-| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/index.js`) | Covered |
+| Media-job completion: queue terminal row + `completed` fan-out (`mediaJobQueue/persistence.js`) | Covered |
 | Attach hooks on `completed` via `mediaJobImageHook.js` (writers-room, catalog, music-video scene image/video/cast-sets, CD scene image/music bed, FableLoom scene image/video, sprite references, deck cards, music studio) | Covered |
 | Pipeline filename hooks (`filenameHookFactory.js` comic pages and storyboards, `seasonCoverFilenameHook.js`) | Covered |
-| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/index.js`) | Covered: only an admitted snapshot commits it (#9982) |
+| Recovery commit of a completion whose terminal write failed (`mediaJobQueue/persistence.js`) | Covered: only an admitted snapshot commits it (#9982) |
 | Universe Builder completion listeners: collection filing, canon entry-ref append, and sidecar enrichment (`universeBuilderCollectionHook.js`); character reference sheet copy and pointer stamp (`universeCharacterSheet.js`) | Covered (#9982) |
 | Creative Director evaluation frames: render-completion sampling (`creativeDirector/sceneRunner.js`) and the resume pass that re-samples missing frames in place (`creativeDirector/completionHook.js`) | Covered from the first `${jobId}-fN.jpg` write through the scene row that names them (#9982) |
 | Creative Director render settlement (scene status and auto-accept, plan-step settle, seed-frame wait) and Music Video production step settlement (`musicVideo/productionService.js`) | Reference-only: these write no bytes, and the render they name was on disk before its admitted completion published |
@@ -146,7 +147,7 @@ Admission inventory (`withBackupAssetPublication`):
 | Gallery image deletion's universe canon purge (`galleryImageDeletion.js`) and character reference sheet deletion (`universeCharacterSheet.js`) | Covered from file removal through the universe pointer purge (#9982) |
 | Video-history deletion, including downloaded-video deletion (`videoGen/historyOps.js`) | Covered through file/history/index removal (#9982) |
 | Gallery video upload, download finalization and poster edits (`videoUpload.js`, `videoDownload.js`, `videoGen/poster.js`) | Covered (#9982): uploads lease byte installation through history and rollback; downloads lease poster creation through history and rollback after yt-dlp finishes; poster edits lease creation, history and cleanup |
-| LoRA dataset uploads, gallery imports, reference-sheet crops, generated completion/recovery copies, image/dataset deletion, and queued record edits (`loraDatasets.js`, `loraDatasetGenerate.js`) | Covered as complete file/record workflows (#9982) |
+| Retained LoRA dataset record edits from the surviving-trainer observer (`loraDatasets.js`) | Covered through the record commit (#9982); dataset uploads, crops and deletion are retired |
 | Voice Studio audition and character assignment (`voice/studio.js`) | Covered from source-file write/copy through profile-row commit and failed-write cleanup (#9982) |
 | Music Video development artifact import/generated save and vocal-stem attachment (`musicVideo/devArtifactService.js`, `musicVideo/vocalStem.js`) | Covered from final file copy/write through project-record commit and failed-write cleanup (#9982) |
 | Music-library upload copy and deletion (`pipeline/musicLibrary.js`) | Covered (#9982): the copy and the unlink each hold one lease; the delete route intentionally leaves existing issue/project references to the removed file |

@@ -1390,6 +1390,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
+    // One line per removal so a vanished checkout is attributable to this pass (#16618).
+    console.log(`${label}: removed ${b.worktreePath} at ${expectedHead.slice(0, 12)} (${mergedRetirement ? `head contained in ${mergeTarget}` : 'verified superseded'})`);
   }
   const latestPolicyHold = await readPolicyHold(expectedHead);
   if (latestPolicyHold) return { ok: false, reason: latestPolicyHold };
@@ -1892,8 +1894,8 @@ const verifyGate = 'Fetch the default branch for comparison before opening or up
 // Exported so the per-agent repo-state audit (services/agentRepoStateVerification.js)
 // hands a recovery agent the SAME merge procedure, rather than re-authoring a
 // `gh pr merge` line that loses these caveats.
-export const driveToMerge = (pr) => [
-  buildAutoMergeHandoffInstructions(pr),
+export const driveToMerge = (pr, { mergeHandoff = false } = {}) => [
+  buildAutoMergeHandoffInstructions(pr, { mergeHandoff }),
   'Opening (or approving) the PR is NOT the end state — a green PR left open is still an unfinished branch that this task will simply re-drive on its next run.',
   'A conflict-free branch with passing current-head required checks and satisfied configured reviews may merge behind the default branch. Base movement alone does not require rebasing or restarting CI.',
   `Wait for CI in-session by re-polling \`gh pr checks ${pr} --required\` every 30s so the run stays observable while CI is pending. \`no required checks reported\` right after the PR opens is late registration of an aggregator check, not an empty requirement set: read the branch rulesets (\`gh api --paginate repos/<owner>/<repo>/rules/branches/<base>\`) and classic protection before concluding nothing is required, and keep re-polling while either requires a check. Retain ownership while CI is pending unless the server accepts an exact-head backlog handoff; elapsed waiting time alone is not completion.`,
@@ -1912,7 +1914,7 @@ export const driveToMerge = (pr) => [
  *   (ABANDONED_WIP needs it — the uncommitted work only exists there, never in
  *   the primary checkout), and the drift facts feeding the supersession gate
  */
-export function desiredEndState(state, actions, { prNumber, worktreePath, collisionPaths, behind } = {}) {
+export function desiredEndState(state, actions, { prNumber, worktreePath, collisionPaths, behind, mergeHandoff = false } = {}) {
   const pr = prNumber ? String(prNumber) : '<num>';
   const stillNeeded = supersessionGate({ collisionPaths, behind });
   if (state === 'ABANDONED_WIP') {
@@ -1929,7 +1931,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
     if (!actionOn(actions, 'autoMerge')) {
       return `${stillNeeded} ${assess} ${bail} ${commit} ${verifyGate} Do NOT merge (auto-merge is disabled) — stop once the PR is open and report its URL.`;
     }
-    return `${stillNeeded} ${assess} ${bail} ${commit} ${verifyGate} ${driveToMerge(pr)}`;
+    return `${stillNeeded} ${assess} ${bail} ${commit} ${verifyGate} ${driveToMerge(pr, { mergeHandoff })}`;
   }
   if (state === 'NEEDS_PR') {
     const verify = `${stillNeeded} Verify the branch's work is complete and ready (tests pass, no stubs/TODO markers). If it is incomplete, finish it on this branch and verify the completed behavior; do not merely report it for another run, and do not open a half-baked PR. Preserve it without shipping only when required intent, credentials, or an external dependency makes completion genuinely impossible, and report that concrete blocker.`;
@@ -1945,7 +1947,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
     if (!actionOn(actions, 'autoMerge')) {
       return `${verify} If ready, ship it with ${openPr}. ${verifyGate} Do NOT merge (auto-merge is disabled) — stop once the PR is open and report its URL.`;
     }
-    return `${verify} If ready, ship it with ${openPr}. ${verifyGate} ${driveToMerge(pr)}`;
+    return `${verify} If ready, ship it with ${openPr}. ${verifyGate} ${driveToMerge(pr, { mergeHandoff })}`;
   }
   if (state === 'CONFLICTED') {
     // The conflict IS the supersession signal here — this PR has already been
@@ -1956,7 +1958,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
     if (!actionOn(actions, 'autoMerge')) {
       return `${resolve} Do NOT merge (auto-merge is disabled) — stop once the conflicts are resolved and pushed, and report the PR's URL.`;
     }
-    return `${resolve} ${driveToMerge(pr)}`;
+    return `${resolve} ${driveToMerge(pr, { mergeHandoff })}`;
   }
   // IN_REVIEW
   const canMerge = actionOn(actions, 'autoMerge');
@@ -1964,7 +1966,7 @@ export function desiredEndState(state, actions, { prNumber, worktreePath, collis
   // uses. Reconciliation must not request or assume a particular reviewer; its
   // merge gate is the forge's live CI and mergeability state.
   return `Drive the open PR toward green: inspect any existing review feedback and address it.${canMerge
-    ? ` Merge ONLY when CI is green and the PR is MERGEABLE. ${driveToMerge(pr)}`
+    ? ` Merge ONLY when CI is green and the PR is MERGEABLE. ${driveToMerge(pr, { mergeHandoff })}`
     : ' Do NOT merge (auto-merge is disabled) — stop once the PR is green and ready for the user to merge.'}`;
 }
 
@@ -2048,7 +2050,7 @@ async function dispatchHintLineForBranch(branchName, repoPath) {
  *   `appId` adds each branch's pre-mutation ownership recheck command.
  * @returns {Promise<string>}
  */
-export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId, detachedWorktrees = [] } = {}) {
+export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions, branchesPerAgent, repoPath, appId, detachedWorktrees = [], mergeHandoff = false } = {}) {
   // One gh round-trip per issue-derived branch — resolved in parallel (not
   // inline in the loop below) so N branches cost one round-trip's latency,
   // not N of them in series.
@@ -2093,7 +2095,8 @@ export async function formatInFlightForPrompt(inFlight, { defaultBranch, actions
       prNumber: b.openPr?.number,
       worktreePath: b.worktreePath,
       collisionPaths: b.collisionPaths,
-      behind: b.behind
+      behind: b.behind,
+      mergeHandoff
     })}`);
     lines.push('');
   });

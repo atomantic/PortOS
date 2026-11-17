@@ -39,7 +39,7 @@ import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskSt
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
-import { normalizeReviewers } from '../lib/validation.js';
+import { normalizeReviewers } from '../lib/cosValidation.js';
 import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
@@ -188,8 +188,8 @@ export async function handlePipelineProgression(task, agentId, success) {
     for (const key of ['provider', 'providerId', 'model', 'effort', 'executionOptions']) delete nextTask.metadata[key];
   }
   // The previous stage's agent payload must not travel: `description` above IS
-  // this stage's prompt, and addTask only promotes it to `metadata.prompt` when
-  // none is set — an inherited one made every stage after the first run on the
+  // this stage's prompt, and a `metadata.prompt` takes precedence over it for
+  // prompt builders — an inherited one made every stage after the first run on the
   // stage before it's instructions.
   delete nextTask.metadata.prompt;
   // Each stage is a new task with its own spawn budget. The prior stage's
@@ -568,7 +568,7 @@ async function completeJiraHandOff({ agentId, task, agentState, effectiveSuccess
       emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
     });
 
-    const prUrl = jiraCreatePR === false ? null : await createJiraPullRequest({
+    const prUrl = isFalsyMeta(jiraCreatePR) ? null : await createJiraPullRequest({
       agentId, task, workspace, jiraTicketId, jiraTicketRef, jiraBranch, outputBuffer, scannerMetadata: agentState?.metadata,
     });
 

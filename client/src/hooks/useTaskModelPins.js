@@ -2,13 +2,8 @@
  * Hook managing provider/model/effort pins for one CoS scheduled task with optimistic writes and
  * cascading clears when the provider or model changes.
  *
- * Provider/model/effort pins for one CoS scheduled task: optimistic write per change (`'' → null`
- * clears; picking a provider clears model+effort, picking a model clears the effort only when that
- * model has no tiers at all), rollback when `onUpdate` resolves falsy, a `saving` flag to gate "Run
- * Now", plus the derived `availableModels` (Antigravity base models, stale pin kept selectable),
- * `effectiveProviderId` and `defaultProviderLabel` a `ProviderModelSelector` needs. Use when: Any
- * surface that retargets a scheduled task's model (schedule card quick controls, config drawer Global
- * defaults) — don't re-roll the select/PUT/rollback trio.
+ * Provider/model/effort pins for one CoS scheduled task: optimistic write per change (`'' → null` clears; a provider pick clears model+effort, a model pick clears the effort only when the model has no tiers at all), rollback when
+ * `onUpdate` resolves falsy, a `saving` flag to gate "Run Now", plus the derived `availableModels`, `effectiveProviderId` and `defaultProviderLabel` a `ProviderModelSelector` needs. Use for any surface that retargets a scheduled task's model.
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
@@ -29,7 +24,6 @@ import { effortAwareModelOptions, effortSurvivingModel, mergeModelLists, resolve
  * these pins server-side (the "Run Now" button), per the repo's
  * "in-flight saves must gate dependent actions" convention — otherwise the user
  * picks a model and triggers a run before the server has it.
- *
  * @param {object} params
  * @param {string} params.taskType - Task id (e.g. `code-review`).
  * @param {object} params.config - The live task config from the schedule payload.

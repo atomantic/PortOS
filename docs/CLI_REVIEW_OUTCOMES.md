@@ -11,6 +11,17 @@ verdict uses this shape (use `findings` when the reviewer found defects):
 {"reviewer":"opencode","outcome":"reviewed","verdict":"clean"}
 ```
 
+When the task prompt gives this run's `agentId`, add it with the reviewer's
+1-based `round` and `changedLines` (added plus deleted lines in the diff that
+round reviewed, e.g. from `git diff --numstat`). PortOS then records the
+verdict on that running agent's record, and the CoS Learning tab shows clean
+rate per reviewer and per diff size. Recording changes nothing about when
+review runs; omit all three fields when no `agentId` was given:
+
+```json
+{"reviewer":"codex","outcome":"reviewed","verdict":"findings","agentId":"agent-example","round":2,"changedLines":140}
+```
+
 A successful exit, empty response, or progress prose is not a verdict. Report a
 failure with a bounded projection of the structured error instead:
 

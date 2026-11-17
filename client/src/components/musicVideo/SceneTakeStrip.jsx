@@ -88,6 +88,7 @@ export default function SceneTakeStrip({
           const savingMark = Boolean(saving?.has(takeControl.mark(take)));
           const savingAcknowledge = Boolean(take.takeId && saving?.has(takeControl.acknowledge(scene, take)));
           const savingConfirm = Boolean(take.takeId && saving?.has(takeControl.confirm(scene, take)));
+          const savingAccept = Boolean(take.takeId && saving?.has(takeControl.acceptCharacters(scene, take)));
           return (
             <li key={take.takeId || `legacy-${take.assetId}`} className={`${thumbClass} space-y-1`}
               onPointerDownCapture={(event) => { copyPointer.current = Boolean(event.target.closest('[data-asset-copy-trigger]')); }}
@@ -240,6 +241,20 @@ export default function SceneTakeStrip({
                     {savingConfirm && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
                     {savingConfirm ? 'Saving…' : 'Still matches'}
                   </button>
+                </div>
+              )}
+              {/* #16473: advice only. The take stays usable; "Still matches" keeps it for these references. */}
+              {isSelected && take.characterReferenceState && (
+                <div className="space-y-1 text-xs text-port-warning" data-testid="older-character-reference">
+                  <p className="break-words">{take.characterReferenceState.reasons.join(' · ')}</p>
+                  {onReview && take.takeId && (
+                    <button type="button" disabled={busy || savingAccept} className="inline-flex min-h-11 items-center gap-1 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
+                      title="Keep this take: record that it still matches the current character references. A later change to them warns again."
+                      onClick={() => onReview(take, { acceptCharacterReferences: { revision: take.characterReferenceState.revision } })}>
+                      {savingAccept && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
+                      {savingAccept ? 'Saving…' : 'Still matches'}
+                    </button>
+                  )}
                 </div>
               )}
               {noteFor === take.takeId && (

@@ -3,7 +3,7 @@ import ImageGenGallerySections from '../components/imageGen/ImageGenGallerySecti
 import ImageGenHeader from '../components/imageGen/ImageGenHeader';
 import ImageGenOverlays from '../components/imageGen/ImageGenOverlays';
 import ImageGenWorkspace from '../components/imageGen/ImageGenWorkspace';
-import { useImageGenPageRuntime } from '../hooks/useImageGenPageRuntime';
+import { useImageGenPageRuntime } from '../components/imageGen/useImageGenPageRuntime';
 
 export default function ImageGen() {
   const {

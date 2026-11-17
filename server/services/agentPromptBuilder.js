@@ -15,7 +15,7 @@ import { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 import { PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/cosValidation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, PR_OPENED_BY, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -73,7 +73,9 @@ import {
   promptOpensOwnPr,
   worktreeCommitGuidance,
 } from './promptSections/completion.js';
+import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody, prepareSandboxedReviewLoopBody } from './promptSections/reviewLifecycle.js';
+import { expandReviewVerdictRunId } from './promptSections/reviewerOutcome.js';
 
 export { promptOpensOwnPr } from './promptSections/completion.js';
 export { getAppWorkspace } from './promptSections/appContext.js';
@@ -93,12 +95,21 @@ function expandPortosApiUrl(prompt) {
   const parts = typeof prompt === 'string' ? [prompt] : [prompt?.userPrompt, prompt?.systemPrompt];
   if (!parts.some(part => typeof part === 'string' && part.includes(PORTOS_API_URL_TOKEN))) return prompt;
   const apiBase = localApiBaseUrl();
-  const expand = text => (typeof text === 'string' ? text.replaceAll(PORTOS_API_URL_TOKEN, () => apiBase) : text);
+  return expandPromptParts(prompt, text => text.replaceAll(PORTOS_API_URL_TOKEN, () => apiBase));
+}
+
+/** Apply a string transform to a finished prompt, a string or the split { userPrompt, systemPrompt } shape. */
+function expandPromptParts(prompt, expandText) {
+  const expand = text => (typeof text === 'string' ? expandText(text) : text);
   if (typeof prompt === 'string') return expand(prompt);
+  if (!prompt || typeof prompt !== 'object') return prompt;
+  const userPrompt = expand(prompt.userPrompt);
+  const systemPrompt = expand(prompt.systemPrompt);
+  if (userPrompt === prompt.userPrompt && systemPrompt === prompt.systemPrompt) return prompt;
   return {
     ...prompt,
-    ...('userPrompt' in prompt && { userPrompt: expand(prompt.userPrompt) }),
-    ...('systemPrompt' in prompt && { systemPrompt: expand(prompt.systemPrompt) }),
+    ...('userPrompt' in prompt && { userPrompt }),
+    ...('systemPrompt' in prompt && { systemPrompt }),
   };
 }
 
@@ -368,12 +379,17 @@ function fillReconcileAgentId(task, agentId) {
 // merge-owning section reads one value; an explicit per-task choice wins.
 const usesAutoMerge = (task) => isTruthyMeta(task.metadata?.useAutoMerge);
 
+// The pending-merge handoff is opt-in per app (`mergeHandoffMinQueuedRuns`), so
+// merge-owning sections read the pinned threshold and stay silent without it.
+const mergeHandoffEnabled = (task) => isMergeHandoffEnabled(task.metadata?.mergeHandoffMinQueuedRuns);
+
 async function pinAutoMergeChoice(task) {
-  if (isTruthyMeta(task.metadata?.useAutoMerge) || isFalsyMeta(task.metadata?.useAutoMerge)) return task;
   const { getAppById } = await import('./apps.js');
   const app = await getAppById(task.metadata?.app || PORTOS_APP_ID).catch(() => null);
-  const useAutoMerge = resolveUseAutoMerge(app || { id: task.metadata?.app || PORTOS_APP_ID }, task.metadata);
-  return { ...task, metadata: { ...task.metadata, useAutoMerge } };
+  const metadata = { ...task.metadata, mergeHandoffMinQueuedRuns: task.metadata?.mergeHandoffMinQueuedRuns ?? app?.mergeHandoffMinQueuedRuns ?? null };
+  if (isTruthyMeta(metadata.useAutoMerge) || isFalsyMeta(metadata.useAutoMerge)) return { ...task, metadata };
+  metadata.useAutoMerge = resolveUseAutoMerge(app || { id: task.metadata?.app || PORTOS_APP_ID }, task.metadata);
+  return { ...task, metadata };
 }
 
 // Checkout recovery gets the live sessions and PortOS-authored commits PortOS
@@ -434,7 +450,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
-  const finalizePrompt = prompt => expandPortosApiUrl(withDeepAudit(prompt));
+  // CLI review-outcome reports name this run so their verdicts land on its record (#16572).
+  const finalizePrompt = prompt => expandPromptParts(expandPortosApiUrl(withDeepAudit(prompt)), text => expandReviewVerdictRunId(text, options.agentId));
 
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
@@ -638,6 +655,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
       autoMerge: usesAutoMerge(task),
+      mergeHandoff: mergeHandoffEnabled(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
@@ -842,8 +860,8 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // localAgentLoopBody (the CLI-reviewer recipe) was already preloaded at the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
-    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: true, rprBody, localAgentLoopBody });
-    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) });
+    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: true, rprBody, localAgentLoopBody, mergeHandoff: mergeHandoffEnabled(task) });
+    if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) });
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
@@ -857,7 +875,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     }
   } else if (repositoryCleanupMergeTarget(task)) {
     // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) });
+    reviewLoopFollowUpSection = buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) });
   }
 
   // Build JIRA context section if applicable
@@ -1194,11 +1212,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     reviewPolicy,
     forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null,
     mergeAdmission: mergesOwnPr,
+    mergeHandoff: mergeHandoffEnabled(task),
   }));
-  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, humanLandsPr: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr }));
+  const pushCliCompletion = () => contractSections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion, mode: completionMode, canTypeSlashCommands: canTypeSlash, rendersInlinePrLifecycle, simplifyEnabled, noChangeSuccess, humanLandsPr: leavesPrForHuman(task), reviewPolicy, forgeCli: resolvedForgeCli, localReviewSection, localReviewRequired, postPrReview: rendersInlinePrLifecycle ? runsPrSideReviewLoop : null, mergeAdmission: mergesOwnPr, mergeHandoff: mergeHandoffEnabled(task) }));
   // Ahead of the completion workflow, whose TUI form ends on the sentinel write.
   // A repository-cleanup recovery lands its parent PR under the same lease (#12251).
-  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) }));
+  if (mergesOwnPr || repositoryCleanupMergeTarget(task)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) }));
 
   ({
     [COMPLETION_MODES.TOOL_FREE]: () => contractSections.push(buildToolFreeReasoningCompletionSection()),
@@ -1217,12 +1236,13 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
       autoMerge: usesAutoMerge(task),
+      mergeHandoff: mergeHandoffEnabled(task),
       workflowScope: task.metadata?.forgeWorkflowScope || null,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
-      contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
-      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) }));
+      contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: false, localAgentLoopBody, mergeHandoff: mergeHandoffEnabled(task), forgeCli: resolvedForgeCli }));
+      if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task), mergeHandoff: mergeHandoffEnabled(task) }));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;
       const sentinelTail = branchName ? `   ## Branch\n   ${branchName}` : '   ## Branch\n   <branch name>';
@@ -1265,6 +1285,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       reviewerPositions,
       forgeCli: resolvedForgeCli,
       workflowStep: localReviewSection ? 5 : 4,
+      mergeHandoff: mergeHandoffEnabled(task),
     }));
   }
 

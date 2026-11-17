@@ -60,6 +60,11 @@ const app = (providers) => {
 };
 
 describe('GET /api/providers/readiness', () => {
+  it('rejects a repeated query key with 400 (readiness, #16428)', async () => {
+    const res = await request(app([CLAUDE_OLLAMA])).get('/api/providers/readiness?providerId=a&providerId=b');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     readinessService.getProviderReadinessMap.mockResolvedValue({});
@@ -93,6 +98,11 @@ const frames = (text) => text
   .map((line) => JSON.parse(line.slice('data:'.length).trim()));
 
 describe('POST /api/providers/readiness/setup', () => {
+  it('rejects a repeated query key with 400 (setup, #16428)', async () => {
+    const res = await request(app([CLAUDE_OLLAMA])).post('/api/providers/readiness/setup?provider=a&provider=b');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     readinessService.getProviderReadinessMap.mockResolvedValue({});
@@ -203,6 +213,11 @@ const LLAMA_TUI = {
 };
 
 describe('POST /api/providers/readiness/serve-model', () => {
+  it('rejects a repeated query key with 400 (serve-model, #16428)', async () => {
+    const res = await request(app([CLAUDE_OLLAMA])).post('/api/providers/readiness/serve-model?provider=a&provider=b');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     llamaService.relaunchLlamaServerWithAlias.mockResolvedValue({ applied: true, reason: null, config: null });

@@ -113,7 +113,9 @@ describe.skipIf(!runDb)('ai_* connection graph store', () => {
     const conn = connection();
     const bind = binding(conn.id);
     await store.writeGraph({ connections: [conn], bindings: [bind], routes: [route(bind.id, 'claude-ollama')] });
-    await store.saveRouteModelAliases('claude-ollama', { 'hand-written': 'example-model' });
+    // No writer remains in code; installs that hand-authored aliases while the editor existed keep them.
+    await query('UPDATE ai_route_bindings SET model_alias_overrides = $1::jsonb WHERE provider_id = $2',
+      [JSON.stringify({ 'hand-written': 'example-model' }), 'claude-ollama']);
 
     // An import, a reconciliation re-import and a binding split all carry no
     // overrides. If the conflict update took them from EXCLUDED, this would

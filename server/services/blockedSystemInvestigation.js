@@ -18,14 +18,14 @@ const eligible = task => {
   const m = task?.metadata || {};
   const category = m.blockedCategory;
   return task?.taskType === 'internal' && task.status === 'blocked' && typeof category === 'string'
-    && m.spawnBudgetReconciledHold !== 'true'
+    && !isTruthyMeta(m.spawnBudgetReconciledHold)
     && !isInvestigationTask(task) && !isPrivateSecurityTask(task) && !isTruthyMeta(task.approvalRequired) && !isTruthyMeta(m.approvalRequired)
     && !(typeof m.blocker === 'string' && m.blocker.trim())
     && m.recoveryOrigin?.subsystem !== 'repository-cleanup'
     && m.taskOutcome?.recovery?.mode !== 'approval'
     && explicitPrCompletion(task) !== PR_COMPLETIONS.LEAVE_OPEN
-    && (!USER_DECISION_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
-    && (!PAUSED_BLOCKED_CATEGORIES.has(category) || category === 'task-recovery-exhausted')
+    && !USER_DECISION_BLOCKED_CATEGORIES.has(category)
+    && !PAUSED_BLOCKED_CATEGORIES.has(category)
     && ![category, m.lastErrorCategory].some(value => typeof value === 'string' && humanBoundaries.has(value.toLowerCase()));
 };
 const analysisFor = task => ({

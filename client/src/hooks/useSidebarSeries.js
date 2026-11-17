@@ -5,7 +5,7 @@
  * Use when: The sidebar pipeline-series section.
  */
 
-import * as api from '../services/api';
+import { listPipelineSeriesNames } from '../services/apiNavNames.js';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
 const SERIES_EVENTS = ['pipeline-series:changed'];
@@ -14,5 +14,5 @@ const SERIES_EVENTS = ['pipeline-series:changed'];
 // reloads when a series is created, renamed or deleted, and refreshes on window
 // focus (debounced 30s).
 export function useSidebarSeries() {
-  return useFocusRefreshedList(api.listPipelineSeriesNames, 'pipeline-series', SERIES_EVENTS);
+  return useFocusRefreshedList(listPipelineSeriesNames, 'pipeline-series', SERIES_EVENTS);
 }

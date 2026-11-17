@@ -38,3 +38,16 @@ it('exposes a failed refresh with an error notice and offers retry rather than c
   fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
   expect(shotRenders.retry).toHaveBeenCalledTimes(1);
 });
+
+it('enables Render final for a technically sound storyboard whose approvals went stale, with the approvals shown as advice', () => {
+  render(<RenderFinalButton project={{ ...project, composition: { mode: 'code' }, audioAnalysis: { durationSec: 8 }, trackId: 't1' }} renderJob={renderJob} readiness={{ readyForProduction: false, renderable: true, storyboard: { technicalProblems: [] } }} />);
+  expect(screen.getByRole('button', { name: /Render final/ })).not.toBeDisabled();
+  expect(screen.getByTestId('approval-advice').textContent).toContain('You can still render');
+});
+
+it('keeps Render final disabled on a technical problem, naming it', () => {
+  render(<RenderFinalButton project={project} renderJob={renderJob} readiness={{ readyForProduction: false, renderable: false, storyboard: { technicalProblems: ['Storyboard shots must cover the master without unintended gaps or overlaps.'] } }} />);
+  expect(screen.getByRole('button', { name: /Render final/ })).toBeDisabled();
+  expect(screen.getByText(/must cover the master/)).toBeTruthy();
+  expect(screen.queryByTestId('approval-advice')).toBeNull();
+});

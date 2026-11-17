@@ -50,16 +50,6 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
 }))
 
-vi.mock('./taskLearning.js', () => ({
-  getAdaptiveCooldownMultiplier: vi.fn().mockResolvedValue({
-    multiplier: 1.0,
-    reason: 'insufficient-data',
-    skip: false,
-    successRate: null,
-    completed: 0
-  })
-}))
-
 vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
@@ -154,7 +144,6 @@ import { writeFile } from 'fs/promises'
 import { isTaskTypeEnabledForApp, getAppById, getAppTaskTypeInterval, getAppTaskTypeOverrides, getActiveApps, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js'
 import { reconcileInventoryRows } from './branchReconcileInventoryPrune.js'
 import { getLocalParts } from '../lib/timezone.js'
-import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun } from './eventScheduler.js'
 import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 import { isInstanceFeatureEnabled } from './instanceFeatures.js'
@@ -1580,39 +1569,6 @@ describe('taskSchedule', () => {
     })
   })
 
-  describe('templates', () => {
-    it('should add a template task', async () => {
-      const template = {
-        name: 'Custom audit',
-        prompt: 'Run custom audit',
-        priority: 'HIGH'
-      }
-
-      const result = await addTemplateTask(template)
-      expect(result.id).toBeDefined()
-      expect(result.name).toBe('Custom audit')
-    })
-
-    it('round-trips a template through listing, the persisted payload, and delete', async () => {
-      // Store reads the file on every call, so each write is fed back as the next read.
-      mockSchedule()
-      const template = await addTemplateTask({ name: 'Round trip', prompt: 'test' })
-      const afterAdd = JSON.parse(writeFile.mock.calls.at(-1)[1])
-      expect(afterAdd.templates.map(t => t.id)).toContain(template.id)
-      readJSONFile.mockResolvedValue(afterAdd)
-      expect((await getTemplateTasks()).map(t => t.id)).toContain(template.id)
-
-      const result = await deleteTemplateTask(template.id)
-      expect(result.success).toBe(true)
-      const afterDelete = JSON.parse(writeFile.mock.calls.at(-1)[1])
-      expect(afterDelete.templates.map(t => t.id)).not.toContain(template.id)
-      readJSONFile.mockResolvedValue(afterDelete)
-      expect((await getTemplateTasks()).map(t => t.id)).not.toContain(template.id)
-
-      expect(await deleteTemplateTask(template.id)).toMatchObject({ error: expect.any(String) })
-    })
-  })
-
   describe('getDefaultPrompt', () => {
     it('should return prompt for known task type', () => {
       const prompt = getDefaultPrompt('security')
@@ -2534,26 +2490,12 @@ describe('taskSchedule', () => {
   })
 
   describe('getScheduleStatus', () => {
-    it('keeps learning advice separate from configured scheduling and dispatch', async () => {
+    it('reports the configured schedule with no learning adjustment fields', async () => {
       mockSchedule({ tasks: { security: { type: 'cron', cronExpression: '* * * * *', intervalMs: 60000, enabled: true } } })
-      getAdaptiveCooldownMultiplier.mockResolvedValue({
-        multiplier: 0, reason: 'skip-failing', skip: true, successRate: 13, completed: 8
-      })
-      try {
-        const before = await shouldRunTask('security')
-        expect(getAdaptiveCooldownMultiplier).not.toHaveBeenCalled()
-        const status = await getScheduleStatus()
-        const after = await shouldRunTask('security')
-        expect(after).toEqual(before)
-        expect(status.tasks.security).toMatchObject({
-          learningAdjusted: false, learningMultiplier: 1, adjustedIntervalMs: 60000,
-          learningAdvice: { advisoryOnly: true, multiplier: 0, adjustedIntervalMs: 0 }
-        })
-      } finally {
-        getAdaptiveCooldownMultiplier.mockResolvedValue({
-          multiplier: 1, reason: 'insufficient-data', skip: false, successRate: null, completed: 0
-        })
-      }
+      const status = await getScheduleStatus()
+      expect(status.tasks.security.intervalMs).toBe(60000)
+      expect(Object.keys(status.tasks.security).filter(k => k.startsWith('learning'))).toEqual([])
+      expect(status.tasks.security).not.toHaveProperty('adjustedIntervalMs')
     })
 
     it('refreshes missing inventory in the schedule response and persists current rows', async () => {
@@ -3235,10 +3177,9 @@ describe('taskSchedule', () => {
         expect(record.parkCounts).toEqual({ heldBackMerged: 4 })
       })
 
-      // The record, the log line and the schedule:perpetual-parked event all read
-      // from one value. Bounding only the record's copy would keep publishing the
+      // The record and the log line read from one value. Bounding only the record's copy would keep publishing the
       // un-shortened time — a "parked until" the task no longer honours.
-      it('parkPerpetual publishes the SHORTENED time on the parked event, not the raw cadence', async () => {
+      it('parkPerpetual records the SHORTENED time, not the raw cadence', async () => {
         parseCronToNextRun.mockReturnValue(null)
         cosEvents.emit.mockClear()
         mockSchedule({ tasks: { 'branch-reconcile': { type: 'on-demand', perpetual: true, enabled: true, recheckIntervalMs: 7 * 24 * 3600000 } } })
@@ -3246,9 +3187,7 @@ describe('taskSchedule', () => {
         const record = await parkPerpetual('branch-reconcile', 'app-1', {
           reason: 'merged-branches-held-back', actionableCount: 0, signature: null, notLaterThan: soon
         })
-        const parked = cosEvents.emit.mock.calls.find(([name]) => name === 'schedule:perpetual-parked')
-        expect(parked?.[1].parkedUntil).toBe(soon)
-        expect(parked[1].parkedUntil).toBe(record.parkedUntil)
+        expect(record.parkedUntil).toBe(soon)
       })
 
       // A cadence edit restamps every un-elapsed park. Without the bound

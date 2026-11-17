@@ -126,58 +126,12 @@ See [VERSIONING.md](./VERSIONING.md) for full details.
 
 ### Quick Reference
 
-1. Work on `main` branch (or feature branches merged to `main`)
+1. Work on a branch cut from a freshly fetched `origin/main` (a feature branch or a linked worktree), never directly on `main`
 2. PRs to `main` trigger CI tests
 3. Follow the [frozen candidate procedure](./VERSIONING.md#creating-a-release): capture `main` at kickoff, validate an isolated candidate, then merge it into `release` to publish
-4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development): verify your branch/upstream and working-tree state, preserve unrelated work, and explicitly fetch the intended base for comparison (the tracking branch may differ); integrate it only for conflicts, enforced branch policy, or evidenced integration risk. Run `npm run pregate` on POSIX, or `node scripts/pregate.js` on Windows, after any rebase and before every push; use `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows for CI's plan. See [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) and the [portos-ship skill](../.claude/skills/portos-ship/SKILL.md) for the full contract.
+4. Before pushing, follow [Regular Development](./VERSIONING.md#regular-development), then run `npm run pregate` (`node scripts/pregate.js` on Windows) after any rebase and before every push; add `-- --full` (`--full` with `node`) for CI's plan
 
-Pregate first checks installed package versions against all four workspace lockfiles without modifying dependency trees. Stale, missing, or unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate requires development dependencies (`npm ci --include=dev` in an owning workspace); a production-only installation cannot run its checks. Ordinary worktree links must be repaired only in their owning source checkout; a separate clone with its own locked installs is also suitable for validation. `--plan-only` prints the plan without checking installed dependencies.
-
-Test process containment keeps signal delivery separate from verified termination.
-After worker-pool closure, any discovered owned child gets a bounded report in
-`.cache/test-process-diagnostics/`; the CI launcher also retains `processes.json`
-in its attempt diagnostics. Reports contain repository-relative suite names,
-bounded worker IDs and fixed lifecycle/settlement categories, never raw process
-arguments, environments, PIDs or private paths. Suite attribution is captured at
-child construction and matched by a hash of the PID and birth identity. Children
-that bypass the observer (including grandchildren whose parent already exited)
-remain explicitly unattributed. Unknown/unconfirmed settlement retains the run
-root and fails the run; a successful signal alone does not authorize removal.
-Interrupted-run sweeps retain roots while their deferred escalation is pending.
-On POSIX, incomplete process inventories also retain stale roots; a dead runner
-does not prove its children exited. Pending identity checks apply to pool-close
-cleanup as well as later sweeps.
-
-`npm run pregate` on POSIX or `node scripts/pregate.js` on Windows is the lightweight local gate: lint/format checks, always-run and diff-selected structural guards, and directly owned unit tests. It selects edited test files, sibling tests for changed sources, and tests whose relative `import`, `import()` or `vi.mock` specifier resolves directly to a changed source (one hop, at most 25 suites per source; the overflow is listed under `skipped` in the report and left to CI), including untracked new tests, without expanding through transitive imports. Browser, database, build and boot-smoke suites stay with hosted CI. Run a focused public-boundary regression for changed behavior that has no sibling test; automatic selection does not replace engineering judgment.
-
-`npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on Windows explicitly runs the broad CI plan locally, including selected browser/DB/build/smoke stages when prerequisites are present. Missing prerequisites and `--skip-*` options remain explicit in the receipt. DB stages run last against `portos_test` only. Required hosted checks and configured reviews remain mandatory.
-
-The receipt at `.cache/pregate/report.json` records `validationMode` (`focused` or `ci`), exact tree/base/head, stage outcomes/durations and omitted suites. Focused mode marks server/client results as reduced coverage and is local evidence only. Structural guard reuse remains confined to an unchanged snapshot within one invocation. `--guards-only --merged-with origin/<base>` is available for focused integration diagnosis; hosting-provider repository rules remain the merge authority.
-
-Interrupting pregate (Ctrl-C or SIGTERM) does not leave tests running behind
-it: the running stage — including the test runner's npm and Vitest
-processes, which share that stage's process group — gets the signal and a
-5-second grace, then the group is killed until no member remains. Only then
-does pregate write an incomplete receipt (`passed: false`) and exit by the
-same signal. After every stage, on POSIX, pregate also kills anything still
-left in that stage's group, with a warning, so no stage's processes run into
-the next one or past pregate.
-
-On POSIX, `npm run pregate` is `exec node scripts/pregate.js`, so no shell wrapper sits
-between npm and pregate: a SIGTERM sent to the whole process group (a CI
-cancel, `kill -TERM -<pgid>`) cannot kill the wrapper and let npm return while
-pregate is still settling its stage. On Windows, where `cmd.exe` has no
-`exec`, the repository-root `exec.cmd` shim can run the same command when
-cmd's current-directory lookup is enabled. Hardened agent environments may set
-`NoDefaultCurrentDirectoryInExePath=1`, which prevents cmd from finding that
-shim; run `node scripts/pregate.js` directly instead (or
-`node scripts/pregate.js --full` for CI's plan). This Windows form does not
-change the POSIX signal behavior.
-
-PRs run the browser suites' smoke profile; the `[fidelity]` cases run nightly
-and on the release PR. To check them on a rendering PR before merging, run
-`node scripts/browser-fidelity.js --pr NUMBER` from the clean published head. See
-[Browser fidelity cases](GITHUB_ACTIONS.md#browser-fidelity-cases).
+What pregate runs, its receipt, interrupt and Windows behavior, and test process containment: [PREGATE.md](PREGATE.md). The full shipping contract: [AGENTS.md's Git Workflow](../AGENTS.md#git-workflow) and the [portos-ship skill](../.claude/skills/portos-ship/SKILL.md).
 
 ### Checkout-owned development caches
 
@@ -336,7 +290,7 @@ npm test --prefix server -- services/creativeDirector/videoAssembly.test.js
 
 `npm run pregate -- --full` on POSIX or `node scripts/pregate.js --full` on
 Windows runs the DB suite when the plan selects it, after every other stage,
-against `portos_test` only. For release validation by
+against `portos_test` only. When running the DB suite by
 hand, run `npm run test:db` after the server and client
 suites finish rather than alongside them. A concurrent run is supported —
 the database restore suite drains a timed-out case before the next one touches
@@ -387,7 +341,7 @@ passed is skipped, and new green results are recorded under
 `~/.portos/test-memo/`. Tree-wide scanners and anything that reads repository
 state are never memoized. `PORTOS_TEST_MEMO=off` disables it, and
 `PORTOS_TEST_MEMO_VERBOSE=1` lists the skipped files; see
-[GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md#test-memo).
+[TEST_MEMO.md](./TEST_MEMO.md).
 
 Pull requests into `main` run the tests for affected feature directories, with
 conservative fallbacks to the runner's related-test mode or the complete suite; a

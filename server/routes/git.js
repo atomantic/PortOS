@@ -209,14 +209,6 @@ router.post('/checkout', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/git/pull - Pull changes from remote
-router.post('/pull', asyncHandler(async (req, res) => {
-  const { path } = validateRequest(gitPathBodySchema, req.body);
-  assertAllowedWorkspace(path);
-  const result = await git.pull(path);
-  res.json(result);
-}));
-
 // POST /api/git/sync - Sync branch (pull then push)
 router.post('/sync', asyncHandler(async (req, res) => {
   const { path, branch } = validateRequest(gitOptionalBranchBodySchema, req.body);

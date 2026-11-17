@@ -29,6 +29,8 @@ vi.mock('../services/apiLocalLlm.js', pendingModule('../services/apiLocalLlm.js'
 vi.mock('../services/apiPipeline.js', pendingModule('../services/apiPipeline.js'));
 vi.mock('../services/apiPrompts', pendingModule('../services/apiPrompts'));
 vi.mock('../services/apiProviders', pendingModule('../services/apiProviders'));
+// useInstanceFeatures reads apiSystem.js directly, not the barrel (#16562).
+vi.mock('../services/apiSystem.js', pendingModule('../services/apiSystem.js'));
 vi.mock('../services/apiUniverseBuilder.js', pendingModule('../services/apiUniverseBuilder.js'));
 // Render-only 3D viewer: the pages here stay pending, and importing it pulls in
 // @react-three/fiber, which requires three's deprecated CommonJS build.
@@ -137,7 +139,7 @@ const RENDERED = [
   ['PipelineSeries', () => import('./PipelineSeries'), '/pipeline/series/:seriesId', '/pipeline/series/s1', 'Loading series'],
   ['PipelineSeriesRoadmap', () => import('./PipelineSeriesRoadmap'), '/pipeline/series/:seriesId/roadmap', '/pipeline/series/s1/roadmap', 'Loading reader map'],
   ['PipelineVoiceFingerprint', () => import('./PipelineVoiceFingerprint'), '/pipeline/series/:seriesId/voice', '/pipeline/series/s1/voice', 'Loading voice fingerprint'],
-  ['PromptManager', () => import('./PromptManager'), '/prompts', '/prompts', 'Loading prompts'],
+  ['PromptManager', () => import('./PromptManager'), '/prompts/:tab', '/prompts/stages', 'Loading prompts'],
   ['QuotaBurn', () => import('./QuotaBurn'), '/devtools/quota-burn', '/devtools/quota-burn', 'Loading burn plan'],
   ['RoundEditor', () => import('./RoundEditor'), '/rounds/:id', '/rounds/r1', 'Loading round'],
   ['SongBookViewer', () => import('./SongBookViewer'), '/songbook/:id', '/songbook/s1', 'Loading song'],

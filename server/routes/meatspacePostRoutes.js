@@ -27,6 +27,9 @@ import {
   trainingEntrySchema,
   trainingRunSubmitSchema,
   postProgressQuerySchema,
+  postDaysQuerySchema,
+  postLimitQuerySchema,
+  postSessionRangeQuerySchema,
 } from '../lib/postValidation.js';
 import * as postService from '../services/meatspacePost.js';
 import { reviewEvents } from '../services/review.js';
@@ -92,7 +95,8 @@ router.get('/post/benchmark/protocol', asyncHandler(async (req, res) => {
  * Session history with optional date range
  */
 router.get('/post/sessions', asyncHandler(async (req, res) => {
-  const sessions = await postService.getPostSessions(req.query.from, req.query.to);
+  const { from, to } = validateRequest(postSessionRangeQuerySchema, req.query);
+  const sessions = await postService.getPostSessions(from, to);
   res.json(sessions);
 }));
 
@@ -124,7 +128,8 @@ router.post('/post/sessions', asyncHandler(async (req, res) => {
  * Rolling averages and trends
  */
 router.get('/post/stats', asyncHandler(async (req, res) => {
-  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const { days: queryDays } = validateRequest(postDaysQuerySchema, req.query);
+  const rawDays = queryDays != null ? parseInt(queryDays, 10) : 30;
   const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
   const stats = await getPostStats(days);
   res.json(stats);
@@ -155,7 +160,8 @@ router.get('/post/progress', asyncHandler(async (req, res) => {
  * rotates its per-domain picks off exactly the same signal.
  */
 router.get('/post/recommendations', asyncHandler(async (req, res) => {
-  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : undefined;
+  const { limit: queryLimit } = validateRequest(postLimitQuerySchema, req.query);
+  const rawLimit = queryLimit != null ? parseInt(queryLimit, 10) : undefined;
   const limit = Number.isNaN(rawLimit) || rawLimit == null ? undefined : Math.max(1, Math.min(10, rawLimit));
   const result = await getPostRecommendations(limit != null ? { limit } : {});
   res.json(result);
@@ -262,7 +268,8 @@ router.get('/post/cognitive-progress', asyncHandler(async (req, res) => {
  * mastered and its review interval elapses.
  */
 router.get('/post/review/reps', asyncHandler(async (req, res) => {
-  const rawLimit = req.query.limit != null ? parseInt(req.query.limit, 10) : 2;
+  const { limit: queryLimit } = validateRequest(postLimitQuerySchema, req.query);
+  const rawLimit = queryLimit != null ? parseInt(queryLimit, 10) : 2;
   const limit = Number.isNaN(rawLimit) ? 2 : Math.max(0, Math.min(5, rawLimit));
   const reps = await postService.getPostReviewReps(new Date(), limit);
   res.json({ reps });
@@ -362,20 +369,11 @@ router.post('/post/training/runs', asyncHandler(async (req, res) => {
  * Training stats: practice counts, streaks, accuracy by drill type
  */
 router.get('/post/training/stats', asyncHandler(async (req, res) => {
-  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const { days: queryDays } = validateRequest(postDaysQuerySchema, req.query);
+  const rawDays = queryDays != null ? parseInt(queryDays, 10) : 30;
   const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
   const stats = await trainingService.getTrainingStats(days);
   res.json(stats);
-}));
-
-/**
- * GET /api/meatspace/post/training/entries
- * Recent training entries
- */
-router.get('/post/training/entries', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 100 });
-  const entries = await trainingService.getTrainingEntries(limit);
-  res.json(entries);
 }));
 
 // =============================================================================
@@ -398,7 +396,8 @@ router.post('/post/morse/rounds', asyncHandler(async (req, res) => {
  * accuracy (worst-first).
  */
 router.get('/post/morse/progress', asyncHandler(async (req, res) => {
-  const rawDays = req.query.days != null ? parseInt(req.query.days, 10) : 30;
+  const { days: queryDays } = validateRequest(postDaysQuerySchema, req.query);
+  const rawDays = queryDays != null ? parseInt(queryDays, 10) : 30;
   const days = Number.isNaN(rawDays) ? 30 : rawDays > 0 ? Math.min(rawDays, 365) : 0;
   const progress = await morseService.getMorseProgress(days);
   res.json(progress);

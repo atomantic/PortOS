@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import ProductionReviewPanel from './ProductionReviewPanel.jsx';
+import { problem, withProblems } from '../../test/musicVideoProblems.js';
 
 afterEach(() => { vi.unstubAllGlobals(); window.location.hash = ''; });
 
@@ -130,8 +131,8 @@ describe('Production proof playback evidence', () => {
   it('opens the missing prerequisites and offers no prototype render', () => {
     const review = reviewFixture();
     review.readiness.art.approved = false;
-    review.readiness.storyboard = { approved: false, problems: ['Verify alignment against the current master.', 'Import a matching document shot manifest.'] };
-    review.readiness.proof.problems = ['Approve the current lyric-timed storyboard before the animated proof.'];
+    review.readiness.storyboard = withProblems({ approved: false }, [problem('alignment-unverified', 'Verify alignment against the current master.'), problem('manifest-stale', 'Import a matching document shot manifest.')]);
+    review.readiness.proof = withProblems(review.readiness.proof, [problem('proof-needs-storyboard', 'Approve the current lyric-timed storyboard before the animated proof.')]);
     const prototype = { ...project, productionReview: { ...project.productionReview, proof: null, prototype: { excerptId: 'proof-a' } } };
     const onNavigate = vi.fn();
     render(<ProductionReviewPanel project={prototype} review={review} onOpenArtifact={vi.fn()} stage="proof" onNavigate={onNavigate} />);
@@ -157,7 +158,7 @@ describe('Production proof playback evidence', () => {
     recordPlayback();
     const changedReview = { ...review, readiness: { ...review.readiness,
       basis: { ...review.readiness.basis, proof: 'new-creative-basis' },
-      proof: { approved: false, problems: ['Render and watch a current animated chorus proof with the master song.'] },
+      proof: withProblems({ approved: false }, [problem('proof-needed', 'Render and watch a current animated chorus proof with the master song.')]),
     } };
     view.rerender(<ProductionReviewPanel project={project} review={changedReview} onOpenArtifact={vi.fn()} stage="proof" />);
     // The notes belonged to the old proof: they go, with the fields, until a new proof is rendered.
@@ -254,7 +255,7 @@ describe('Production proof playback evidence', () => {
 
   it('names the open change request that blocks approval in one line, leaving its controls to the step checklist', () => {
     const review = reviewFixture();
-    review.readiness.storyboard = { approved: false, problems: ['Resolve storyboard feedback for shot: Chorus: Land the leap on the downbeat'] };
+    review.readiness.storyboard = withProblems({ approved: false }, [problem('feedback', 'Resolve storyboard feedback for shot: Chorus: Land the leap on the downbeat')]);
     const withRequests = { ...project, scenes: [{ sceneId: 'scene-a', label: 'Chorus', startSec: 0, endSec: 10 }],
       productionReview: { ...project.productionReview, feedback: [
         { id: 'fb-open', stage: 'storyboard', target: 'shot: Chorus', text: 'Land the leap on the downbeat', decision: 'request-changes', basis: 'board' },
@@ -267,7 +268,7 @@ describe('Production proof playback evidence', () => {
   });
 
   it('keeps the art approval to one quiet line while there is no direction or guide to review', () => {
-    const review = reviewFixture(); review.readiness.art = { approved: false, problems: ['Attach a visual cast/environment sheet from Development artifacts.'] };
+    const review = reviewFixture(); review.readiness.art = withProblems({ approved: false }, [problem('art-guide-sheet', 'Attach a visual cast/environment sheet from Development artifacts.')]);
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="art" />);
     const box = screen.getByRole('region', { name: 'Approve: Art direction' });
     expect(box.textContent).toContain('Opens once the art direction is written and a visual guide is chosen.');
@@ -383,7 +384,7 @@ describe('Approval problems with unsaved edits', () => {
     [['Render and watch a current animated chorus proof with the master song.', 'Second problem.']],
   ])('lists every proof problem while planning edits are unsaved (%j)', (problems) => {
     const review = reviewFixture();
-    review.readiness.proof = { ...review.readiness.proof, approved: false, problems };
+    review.readiness.proof = withProblems({ ...review.readiness.proof, approved: false }, problems.map((message) => problem('proof-needed', message)));
     function Board() {
       const planning = useState({ ...project.productionReview.draft, cast: 'Edited cast' });
       return <ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" planning={planning} />;
@@ -395,7 +396,7 @@ describe('Approval problems with unsaved edits', () => {
 
   it('shows the first proof problem once, on the help line, and names an open change request ahead of it', () => {
     const review = reviewFixture();
-    review.readiness.proof = { ...review.readiness.proof, approved: false, problems: ['First problem.', 'Second problem.', 'Resolve proof feedback for chorus: hold longer'] };
+    review.readiness.proof = withProblems({ ...review.readiness.proof, approved: false }, [problem('proof-needed', 'First problem.'), problem('proof-needed', 'Second problem.'), problem('feedback', 'Resolve proof feedback for chorus: hold longer')]);
     const { unmount } = render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="proof" />);
     expect(screen.getAllByText(/First problem\./)).toHaveLength(1);
     expect(screen.getByText('Second problem.')).toBeTruthy();
@@ -413,9 +414,9 @@ describe('Approval problems with unsaved edits', () => {
   it('names the open Storyboard items and their shots on the storyboard card, with a link to the Storyboard step', () => {
     const review = reviewFixture();
     const board = { ...project, composition: { mode: 'concat' }, scenes: [{ sceneId: 's-a', label: 'Verse', startSec: 0, endSec: 4 }, { sceneId: 's-b', label: 'Chorus', startSec: 3.5, endSec: 8 }] };
-    review.readiness.storyboard = { approved: false,
-      problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.', 'Complete timing, action, staging, camera and transition for Chorus.'],
-      coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] };
+    review.readiness.storyboard = withProblems({ approved: false,
+      coverage: [{ sceneId: 's-b', issue: 'overlap', startSec: 3.5, endSec: 4 }], incompleteShots: [{ sceneId: 's-b', missing: ['staging'] }] },
+    [problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.'), problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Chorus.', 's-b')]);
     const onNavigate = vi.fn();
     render(<ProductionReviewPanel project={board} review={review} onOpenArtifact={vi.fn()} stage="storyboard" onNavigate={onNavigate} />);
     expect(screen.getByText('Finish these 2 items on the Storyboard step first:')).toBeTruthy();
@@ -497,6 +498,24 @@ describe('storyboard camera notes (#10589)', () => {
     review.readiness.storyboard = { approved: false, problems: [], camera: { staticRuns: [], snaplessChoruses: [], notes: [] } };
     render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
     expect(screen.queryByRole('note', { name: 'Camera variety notes' })).toBeNull();
+  });
+});
+
+// Uniquely catches the older-character-reference advice (#16473) going missing from review, being grouped by its
+// sentence rather than its code, or blocking approval.
+describe('shots rendered from an older character reference (#16473)', () => {
+  it('counts the advice items by code under the storyboard without blocking approval', () => {
+    const review = reviewFixture();
+    review.readiness.storyboard = { approved: false, problems: [], camera: { notes: [] }, adviceItems: [
+      { code: 'character-reference-changed', message: 'Opening: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+      { code: 'character-reference-changed', message: 'Chorus: clip rendered from an older character reference (Ada).', sceneId: 's2' },
+      { code: 'some-other-advice', message: 'Opening: frame rendered from an older character reference (lookalike text).', sceneId: 's3' },
+    ] };
+    render(<ProductionReviewPanel project={project} review={review} onOpenArtifact={vi.fn()} stage="storyboard" />);
+    const note = screen.getByRole('note', { name: 'Older character references' });
+    expect(within(note).getByText(/^2 shots rendered from an older character reference/)).toBeTruthy();
+    expect(within(note).getAllByRole('listitem')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Approve storyboard' }).disabled).toBe(false);
   });
 });
 

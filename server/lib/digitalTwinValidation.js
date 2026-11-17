@@ -616,6 +616,13 @@ export const feedbackInputSchema = z.object({
   documentsUsed: z.array(z.string()).optional()
 });
 
+// GET /feedback/recent — scalars only; parsePagination keeps the lenient limit fallback.
+export const feedbackRecentQuerySchema = z.object({
+  contentType: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional()
+});
+
 // =============================================================================
 // TIME CAPSULE SCHEMAS
 // =============================================================================

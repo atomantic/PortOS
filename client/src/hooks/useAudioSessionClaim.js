@@ -1,36 +1,12 @@
 // `useAudioSessionClaim(type)` returns `{ claim, release }` to hold one arbitrated iOS audio session
 // slot for surfaces owning their own AudioContext or mic stream.
 //
-// `useAudioSessionClaim(type)` → `{ claim, release }` — one arbitrated `acquireAudioSession(type)`
-// slot with a React lifecycle: `claim()` drops this instance's previous claim before taking a fresh
-// one, `release()` is idempotent, and unmount releases whatever is still held. Use when: A surface
-// owning its OWN `AudioContext` (MorseTrainer, the Security monitor) or `getUserMedia` stream
-// (`useSingToScore`/`useSingToVerify`) needs the iOS session. An output-only player on the shared
-// transport passes `audioSession: 'playback'` to `createLookaheadTransport` instead — don't hand-roll
-// either.
-//
-// useAudioSessionClaim — hold the document's iOS audio session for a surface
-// that owns its OWN AudioContext or `getUserMedia` stream, rather than driving
-// the shared lookahead transport (output-only players get the same behavior for
-// free by passing `audioSession: 'playback'` to `createLookaheadTransport`).
-//
-// What the session is and why it is arbitrated rather than assigned is in the
-// audio-session note in `lib/audioContext.js`. This hook is just the React
-// lifecycle around one `acquireAudioSession` claim:
-//
-// - ONE claim slot per hook instance. `claim()` hands back whatever this
-//   instance was already holding before taking a fresh one, so a re-entered
-//   play/capture can't strand a holder in the arbiter and pin the document.
-// - `release()` is idempotent, so every teardown path can call it without
-//   coordinating (the same contract `acquireAudioSession`'s release has).
-// - The claim is released on UNMOUNT too. That is the backstop for a lifecycle
-//   that ends without its normal teardown — a per-mount AudioContext close()d
-//   out from under an in-flight play never fires the `onended` that would
-//   otherwise release, and a stranded holder pins the page output-only (or
-//   record-capable) for the rest of the SPA session.
-//
-// Both callbacks are referentially stable, so they are safe in an effect dep
-// list and in a `useCallback` that must not re-create per render.
+// One `acquireAudioSession(type)` slot with a React lifecycle, for a surface owning its OWN `AudioContext` (MorseTrainer, the Security monitor) or `getUserMedia` stream (`useSingToScore`/`useSingToVerify`);
+// output-only players pass `audioSession: 'playback'` to `createLookaheadTransport` instead. Why the session is arbitrated is in the audio-session note in `lib/audioContext.js`.
+// - ONE claim slot per hook instance: `claim()` releases whatever this instance held before taking a fresh one, so a re-entered play/capture can't strand a holder and pin the document.
+// - `release()` is idempotent, so every teardown path can call it.
+// - Unmount releases too, the backstop for a lifecycle ending without its normal teardown (a per-mount AudioContext close()d mid-play never fires the `onended` that would release).
+// Both callbacks are referentially stable, safe in effect dep lists.
 
 import { useCallback, useEffect, useRef } from 'react';
 import { acquireAudioSession } from '../lib/audioContext.js';

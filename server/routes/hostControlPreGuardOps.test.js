@@ -15,10 +15,8 @@ const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => ({
   mcpTool: vi.fn(async () => ({ content: [{ type: 'text', text: '{}' }] })),
   createAgent: vi.fn(async (data) => ({ id: 'example-agent', ...data })),
-  clearCooldown: vi.fn(async () => ({ cooldownUntil: null })),
   healthCheck: vi.fn(async () => ({ healthy: true })),
   backfill: vi.fn(async () => 0),
-  resetSchedule: vi.fn(async () => ({ success: true })),
   setSubscription: vi.fn(async (family, enabled) => ({ applied: true, family, enabled })),
   saveSettings: vi.fn(async (update) => update({})),
   updateBrainMeta: vi.fn(async (data) => ({ ...data })),
@@ -41,11 +39,9 @@ vi.mock('../services/agentContextMcp.js', () => ({
 }));
 vi.mock('../services/agentPersonalities.js', () => ({ createAgent: effects.createAgent }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn(async () => {}) }));
-vi.mock('../services/appActivity.js', () => ({ clearAppCooldown: effects.clearCooldown }));
 vi.mock('../services/cosHealthMonitor.js', () => ({ runHealthCheck: effects.healthCheck }));
 vi.mock('../services/taskLearning.js', () => ({ backfillFromHistory: effects.backfill }));
 vi.mock('../services/reviewQueue.js', () => ({ __resetAlertsCache: vi.fn() }));
-vi.mock('../services/taskSchedule.js', () => ({ resetExecutionHistory: effects.resetSchedule }));
 vi.mock('../services/subscriptions.js', () => ({
   setSubscriptionEnabled: effects.setSubscription,
   getSubscriptionOverview: vi.fn(async () => ({ subscriptions: [] })),
@@ -111,9 +107,7 @@ const workflows = [
     userId: 'example-user', name: 'Example Bot', personality: { style: 'casual' },
   }, effects.createAgent, 201],
   ['post', '/api/cos/health/check', {}, effects.healthCheck, 200],
-  ['post', '/api/cos/app-activity/example-app/clear-cooldown', {}, effects.clearCooldown, 200],
   ['post', '/api/cos/learning/backfill', {}, effects.backfill, 200],
-  ['post', '/api/cos/schedule/reset', { taskType: 'example-task' }, effects.resetSchedule, 200],
   ['put', '/api/usage/subscriptions/enabled', { family: 'claude', enabled: true }, effects.setSubscription, 200],
   ['put', '/api/settings', { hideFirstRunCard: true }, effects.saveSettings, 200],
   ['put', '/api/brain/settings', { defaultModel: 'example-other-model' }, effects.updateBrainMeta, 200],

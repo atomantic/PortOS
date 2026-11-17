@@ -2,6 +2,7 @@
 
 import { TIMED_COOLDOWN_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import * as brainStorage from './brainStorage.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const TASK_REF_KIND = 'cos.task';
 
@@ -45,7 +46,7 @@ function legacyCleanupThread(thread, task) {
   // The older warning producer had no recoveryOrigin. Its complete task and
   // context signatures provide provenance; never infer it from a title alone.
   const warningMatch = task.description?.match(/^\[Recovery\] (?:Resolve merge conflict and clean up stale branch|Investigate and retry failed (?:PR|MR) for branch) (\S+) in (.+)$/);
-  return Boolean(task.metadata?.isRecovery === true && warningMatch
+  return Boolean(isTruthyMeta(task.metadata?.isRecovery) && warningMatch
     && /^An agent (?:failed to auto-merge branch|pushed branch) "/.test(task.metadata?.context || '')
     && /Original agent: .+, original task: .+\.$/.test(task.metadata?.context || '')
     && thread.title === `Agent cleanup issue: ${warningMatch[2]}`

@@ -3,6 +3,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as featureAgents from '../services/featureAgents.js';
 import { validateRequest, featureAgentSchema, featureAgentUpdateSchema, parsePagination } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -82,7 +83,7 @@ router.post('/:id/stop', asyncHandler(async (req, res) => {
 
 // GET /:id/runs - Run history
 router.get('/:id/runs', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 20, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 20, maxLimit: 500 });
   const runs = await featureAgents.getFeatureAgentRuns(req.params.id, limit);
   res.json(runs);
 }));

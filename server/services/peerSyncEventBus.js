@@ -59,6 +59,16 @@ export function emitMediaHistoryChanged({ kind, op, ids }) {
   safeEmit('media-history-changed', { kind, op, ids: list });
 }
 
+/**
+ * Local-only "this kind's whole list may have changed" invalidation, for a bulk
+ * pass that does not track which rows moved (the post-listen media index sweep).
+ * Open list views refetch on any event of their kind; per-record views match on
+ * `ids`, so the empty list leaves them alone.
+ */
+export function emitMediaListChanged(kind) {
+  safeEmit('media-history-changed', { kind, op: 'reconcile', ids: [] });
+}
+
 /** Local-only invalidation for open holder views (services/mediaHolders.js). */
 export function emitMediaHoldersChanged() {
   safeEmit('media-holders-changed', {});
@@ -186,7 +196,7 @@ export function deliverPeerSyncEvent(io, event) {
 
 async function deliverNow(io, event) {
   try {
-    const receives = RECEIVER_GATE_FOR_EVENT[event?.category];
+    const receives = Object.hasOwn(RECEIVER_GATE_FOR_EVENT, event?.category) ? RECEIVER_GATE_FOR_EVENT[event.category] : null;
     if (!io || !receives) return 0;
     const sockets = await io.in(PEER_SYNC_ROOM).fetchSockets();
     if (sockets.length === 0) return 0;

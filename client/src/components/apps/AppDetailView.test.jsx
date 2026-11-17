@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router';
 
 const socketHandlers = new Map();
@@ -47,25 +47,29 @@ vi.mock('../ui/Toast', () => ({
 vi.mock('../BrailleSpinner', () => ({ default: () => null }));
 vi.mock('../StatusBadge', () => ({ default: () => null }));
 vi.mock('./DeployPanel', () => ({ default: () => null }));
-vi.mock('./EditAppDrawer', () => ({ default: () => null }));
+vi.mock('./EditAppDrawer', () => ({ default: ({ onClose }) => <button onClick={onClose}>Close edit drawer</button> }));
 vi.mock('./DesktopLaunchProgress', () => ({ default: ({ online }) => <output data-testid="native-state">{online ? 'Running' : 'Exited'}</output> }));
 vi.mock('./tabs/OverviewTab', () => ({ default: ({ app }) => <output data-testid="overview-app">{app.id}</output> }));
-vi.mock('./tabs/TasksTab', () => ({ default: () => null }));
-vi.mock('./tabs/AutomationTab', () => ({ default: () => null }));
-vi.mock('./tabs/DocumentsTab', () => ({ default: () => null }));
-vi.mock('./tabs/GitTab', () => ({ default: () => null }));
-vi.mock('./tabs/GsdTab', () => ({ default: () => null }));
-vi.mock('./tabs/IssuesTab', () => ({ default: () => null }));
-vi.mock('./tabs/JiraTab', () => ({ default: () => null }));
-vi.mock('./tabs/ProcessesTab', () => ({ default: () => null }));
-vi.mock('./tabs/ReferencesTab', () => ({ default: () => null }));
-vi.mock('./tabs/SubmodulesTab', () => ({ default: () => null }));
-vi.mock('./tabs/DatadogTab', () => ({ default: () => <div data-testid="datadog-tab" /> }));
-vi.mock('./tabs/UpdateTab', () => ({ default: () => null }));
+vi.mock('./tabs/TasksTab', () => ({ default: () => <div data-testid="tab-tasks" /> }));
+vi.mock('./tabs/AutomationTab', () => ({ default: () => <div data-testid="tab-automation" /> }));
+vi.mock('./tabs/DocumentsTab', () => ({ default: () => <div data-testid="tab-documents" /> }));
+vi.mock('./tabs/GitTab', () => ({ default: () => <div data-testid="tab-git" /> }));
+vi.mock('./tabs/GsdTab', () => ({ default: () => <div data-testid="tab-gsd" /> }));
+vi.mock('./tabs/IssuesTab', () => ({ default: () => <div data-testid="tab-issues" /> }));
+vi.mock('./tabs/JiraTab', () => ({ default: () => <div data-testid="tab-jira" /> }));
+vi.mock('./tabs/ProcessesTab', () => ({ default: () => <div data-testid="tab-processes" /> }));
+vi.mock('./tabs/ReferencesTab', () => ({ default: () => <div data-testid="tab-references" /> }));
+vi.mock('./tabs/SubmodulesTab', () => ({ default: () => <div data-testid="tab-submodules" /> }));
+vi.mock('./tabs/DatadogTab', () => ({ default: () => <div data-testid="tab-datadog" /> }));
+vi.mock('./tabs/PullRequestsTab', () => ({ default: () => <div data-testid="tab-pull-requests" /> }));
+vi.mock('./tabs/QualityTab', () => ({ default: () => <div data-testid="tab-quality" /> }));
+vi.mock('./LaunchVideoPanel', () => ({ default: () => <div data-testid="tab-launch-video" /> }));
+vi.mock('./tabs/UpdateTab', () => ({ default: () => <div data-testid="tab-update" /> }));
 
 import * as api from '../../services/api';
 import AppDetailView, { APP_DETAIL_TAB_ICONS } from './AppDetailView';
 import { APP_DETAIL_TABS } from './constants';
+import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 
 const APP = {
   id: 'app-1',
@@ -77,10 +81,10 @@ const APP = {
 };
 
 function LocationProbe() {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const navigate = useNavigate();
   return <>
-    <output data-testid="location">{pathname}</output>
+    <output data-testid="location">{pathname}{search}</output>
     <button onClick={() => navigate('/apps/app-2/overview')}>View second app</button>
   </>;
 }
@@ -153,6 +157,16 @@ describe('AppDetailView header title', () => {
     expect(heading.parentElement).toHaveClass('flex-1', 'lg:flex-initial', 'min-w-0');
   });
 
+  it('re-opens the edit drawer on a reload carrying ?appTab and forgets the tab on close', async () => {
+    api.getApp.mockResolvedValue(APP);
+    renderDetail('/apps/app-1/overview?appTab=intelligence');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Close edit drawer' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Close edit drawer' })).toBeNull());
+    expect(screen.getByTestId('location')).toHaveTextContent('/apps/app-1/overview');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('appTab');
+  });
+
   it('does not display PM2 process names in the header', async () => {
     api.getApp.mockResolvedValue({
       ...APP,
@@ -218,7 +232,38 @@ describe('AppDetailView managed-app feature tabs', () => {
 
     await screen.findByRole('heading', { name: 'Example App' });
     expect(screen.queryByRole('tab', { name: 'DataDog' })).toBeNull();
-    expect(screen.getByTestId('datadog-tab')).toBeInTheDocument();
+    expect(await screen.findByTestId('tab-datadog')).toBeInTheDocument();
+  });
+
+  // Tabs are lazy chunks: each one must resolve behind the Suspense boundary both
+  // when the URL names it and when the tab pill is clicked from the default tab.
+  describe.each(APP_DETAIL_TABS.filter(t => t.id !== 'overview'))('lazy tab $id', ({ id, label }) => {
+    const FULL_APP = { ...APP, id: PORTOS_APP_ID, hasSubmodules: true };
+    const testId = `tab-${id}`;
+
+    beforeEach(() => {
+      instanceFeatureMock.features = [
+        { id: 'datadog', enabled: true },
+        { id: 'jira', enabled: true },
+        { id: 'gsd', enabled: true },
+      ];
+    });
+
+    it('renders from a deep link', async () => {
+      api.getApp.mockResolvedValue(FULL_APP);
+      renderDetail(`/apps/${FULL_APP.id}/${id}`);
+      expect(await screen.findByTestId(testId)).toBeInTheDocument();
+      expect(screen.queryByTestId('overview-app')).toBeNull();
+    });
+
+    it('renders after a tab click from Overview', async () => {
+      api.getApp.mockResolvedValue(FULL_APP);
+      renderDetail(`/apps/${FULL_APP.id}/overview`);
+      expect(await screen.findByTestId('overview-app')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('tab', { name: label }));
+      expect(await screen.findByTestId(testId)).toBeInTheDocument();
+      expect(screen.getByTestId('location')).toHaveTextContent(`/${id}`);
+    });
   });
 
   it('assigns a unique icon to every app-detail tab', () => {

@@ -1,13 +1,14 @@
 # Data Maintenance
 
-Open **Settings → Data Maintenance** (also available through the command palette
-and voice navigation) to inspect storage retained from retired features. Refresh
-measures current files. A failed or unsafe inventory is unavailable, never shown
-as zero bytes. The registry currently contains only LoRA retirement operations;
+Open **Models → LoRAs**. While `data/training-runs` or `data/lora-datasets` still
+holds files, a **Retired training data** section lists each with its measured size.
+A failed or unsafe inventory is unavailable, never shown as zero bytes. The
+section does not render on an install with nothing left, or for a caller without
+operator authority. The registry contains only LoRA retirement operations;
 archive retention and whole-checkout cleanup are separate workflows.
 
 LoRA training is retired. New training, dataset generation/captioning, resume and
-media-queue retries are refused. Old training URLs lead to Data Maintenance.
+media-queue retries are refused. Old training URLs (and `/settings/data-maintenance`) lead to Models → LoRAs.
 Use the reference-image inputs supported by your chosen image model for new work.
 PortOS does not convert a training dataset or checkpoint into a reference-image
 workflow automatically, and the page offers no unsupported Upgrade action.
@@ -19,7 +20,7 @@ workflow automatically, and the page offers no unsupported Upgrade action.
   checkpoints/adapters, training logs, caches and sample previews. Treat the
   category as unique data rather than assuming every checkpoint is reproducible.
 - `data/loras`: installed adapters, including trained and imported adapters.
-  These remain supported inference inputs. Use **Models → LoRAs** to manage them.
+  These remain supported inference inputs. Manage them in the same **Models → LoRAs** page.
 - Shared inference environments (mflux, MLX, torch/diffusers), media models and
   Hugging Face caches remain supported. Retirement does not uninstall them.
 
@@ -32,7 +33,10 @@ disabled. Existing cancellation controls remain available in **Active Queues**.
 A detached trainer whose queue record is missing is also observed through completion,
 and blocks maintenance until it exits. The retained run cancel endpoint
 (`POST /api/lora-training/runs/:id/cancel`) can cancel that observer-owned process;
-upgrade never kills it merely because the queue record is absent.
+upgrade never kills it merely because the queue record is absent. A retained run's
+checkpoint can still be made the deployed adapter with
+`POST /api/lora-training/runs/:id/promote-checkpoint` (`{ "step": <n> }`) once the
+run is no longer active.
 
 ## Explicit removal
 
@@ -40,20 +44,19 @@ Copy unique files you want to keep and verify your own backup coverage first.
 Backup settings, including the existing LoRA Time Machine exclusion, are unchanged.
 The page is not a backup system.
 
-1. Preview a supported removal. The server allowlist determines its exact category
-   and path; callers cannot supply filesystem paths. The preview reports files,
-   measured size and the consequence of removing that category.
-2. Cancel to leave everything intact, or type the exact confirmation shown.
-3. Confirm within five minutes. Changed inventory, symlinks, an unreadable tree,
-   outstanding captioning, a surviving trainer or queued/running media work refuses
-   removal. Refresh and preview again after resolving the reason.
+1. Choose **Delete** on a retired row. An inline confirm names the exact path, its
+   size and file count, and the consequence of removing that category. Cancel
+   leaves everything intact.
+2. Confirm. The client calls `DELETE /api/data-maintenance/:operationId`; the
+   server allowlist determines the path (callers cannot supply one) and the call
+   needs operator authority. A symlink, an unreadable tree, a surviving trainer or
+   queued/running media work refuses removal; resolve the reason and retry.
 
 Removal is permanent. There is no fake recovery/archive promise. A short admission
 gate prevents media submissions racing the removal. The server serializes removals,
-revalidates file identity, detaches the inspected directory and checks again before
-removing it under backup publication admission. Duplicate submissions with the same
-preview return the completed result while that preview remains valid. After a
-server restart, a new preview is required.
+detaches the inspected directory, revalidates its identity and contents, and checks
+again before removing it under backup publication admission. A second delete after
+completion reports that nothing remains.
 
 On a filesystem failure, the UI reports an incomplete removal instead of success.
 The error names the category and any detached `.maintenance-…` recovery directory;
@@ -67,6 +70,6 @@ removed by these operations.
 `server/services/dataMaintenance.js` owns the small operation registry. A new
 operation must specify its fixed path, data category, preservation warning and
 actual supported action. It must account for writers and shared consumers, reuse
-fresh-preview/confirmation admission, and add a public-boundary synthetic fixture
+the serialized delete path, and add a public-boundary synthetic fixture
 regression. Do not add arbitrary paths, speculative migrations, shared-runtime
 uninstallation or archive-cleanup operations to the registry.

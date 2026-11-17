@@ -1,7 +1,7 @@
 /**
  * TagPicker — chip-list tag editor with canonical-tag autocomplete.
  *
- * Backs the tag fields on CatalogIngredient.jsx + the Quick Idea widget. The
+ * Backs the tag fields on the catalog ingredient editor + the Quick Idea widget. The
  * selected tags render as removable chips; typing queries the canonical
  * `catalog_tags` table (`GET /api/catalog/tags?q=`, debounced) and shows a
  * suggestion dropdown. Enter / comma / picking a suggestion commits the current

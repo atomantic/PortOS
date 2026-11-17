@@ -991,3 +991,19 @@ describe('local LLM default switching', () => {
     expect(app.get('io').emit.mock.calls.some(([, payload]) => payload.event === 'complete')).toBe(true);
   });
 });
+
+describe('local LLM catalog and loaded query validation', () => {
+  it('GET /catalog 400s on a repeated backend key and never lists models', async () => {
+    listModels.mockClear();
+    const res = await request(makeApp()).get('/api/local-llm/catalog?backend=ollama&backend=lmstudio');
+    expect(res.status).toBe(400);
+    expect(listModels).not.toHaveBeenCalled();
+  });
+
+  it('GET /loaded 400s on a repeated fresh key and never reads residency', async () => {
+    getLoadedModels.mockClear();
+    const res = await request(makeApp()).get('/api/local-llm/loaded?fresh=1&fresh=0');
+    expect(res.status).toBe(400);
+    expect(getLoadedModels).not.toHaveBeenCalled();
+  });
+});

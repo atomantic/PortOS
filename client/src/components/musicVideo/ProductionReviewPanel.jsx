@@ -4,8 +4,8 @@ import ProofReviewContent, { ProofRenderControls } from './ProofReviewContent.js
 import ProductionReviewContext from './ProductionReviewContext.jsx';
 import OverlayTextCheck from './OverlayTextCheck.jsx';
 import ArtGuideDrafter from './ArtGuideDrafter.jsx';
-import { formatTimecode } from '../../utils/formatters.js';
-import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
+import { formatCount, formatTimecode } from '../../utils/formatters.js';
+import { ART_DIRECTION_ANCHOR, artDirectionGaps, changeRequestBlocker, openChangeRequests, problemItemsOf, stageChecklist, summarizeStoryboardProblems } from '../../lib/musicVideoStages.js';
 
 const EMPTY = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
@@ -73,10 +73,9 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
 
   // Per-shot storyboard problems arrive one sentence per shot; the card counts them instead (the preview is the review).
   // Open change requests are named in one line (and settled from the step's Feedback row), never repeated as problems.
-  const feedbackSentence = /^Resolve (art|storyboard|proof) feedback for /;
   const shownProblems = stage => {
-    const problems = (ready[stage].problems || []).filter(problem => !feedbackSentence.test(problem));
-    return stage === 'storyboard' ? summarizeStoryboardProblems(problems) : problems;
+    const problems = problemItemsOf(ready[stage]).filter(problem => problem.code !== 'feedback');
+    return (stage === 'storyboard' ? summarizeStoryboardProblems(problems) : problems).map(problem => problem.message);
   };
   // One line under the action buttons saying what approval still needs, or nothing when it can be given.
   const approvalHelp = stage => {
@@ -128,6 +127,8 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
   const label = labels[stage];
   // Art with no written direction or guide has nothing to approve: the box says
   // so in one line, and the step's checklist offers what produces them.
+  // #16473: shots rendered from an older character reference, grouped by the server's code; advice, never a blocker.
+  const olderCharacters = (ready?.storyboard?.adviceItems || []).filter(item => item.code === 'character-reference-changed');
   const artWaiting = key === 'art' && !!ready && !ready.art.approved && !ready.art.stale && !artDirectionGaps(project).ready;
   return <section id="mv-production-review" aria-label="Production review" className="space-y-3">
     {review.error && <p role="alert" className="text-port-error">{review.error}</p>}
@@ -159,6 +160,11 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {key === 'storyboard' && ready?.storyboard.camera?.notes?.length > 0 && <div role="note" aria-label="Camera variety notes" className="mt-2 text-xs text-port-text-muted">
           <p>Camera notes (they don&apos;t block approval):</p>
           <ul className="list-disc pl-5">{ready.storyboard.camera.notes.map(note => <li key={note}>{note}</li>)}</ul>
+        </div>}
+        {/* #16473: shots rendered from an older character reference, grouped by the server's code. Advice too. */}
+        {key === 'storyboard' && olderCharacters.length > 0 && <div role="note" aria-label="Older character references" className="mt-2 text-xs text-port-text-muted">
+          <p>{formatCount(olderCharacters.length)} {olderCharacters.length === 1 ? 'shot' : 'shots'} rendered from an older character reference (this doesn&apos;t block approval):</p>
+          <ul className="list-disc pl-5">{olderCharacters.map(item => <li key={item.sceneId}>{item.message}</li>)}</ul>
         </div>}
         {/* The overlay text pass (document compositions): advice too, shown before the shot list. */}
         {key === 'storyboard' && ready?.storyboard.text && <OverlayTextCheck report={ready.storyboard.text} busy={review.busy}

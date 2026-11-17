@@ -113,6 +113,8 @@ const hook = createMediaJobImageHook({
     // renderer places the take by it, so a later retime can't misalign lips.
     shotInstruction: await alignedShotInstruction(job.params?.shotInstruction, videoHistoryId),
     dependencies: job.params?.musicVideoDependencies ?? null,
+    // The character references the clip was sent (#16473); absent for a clip sent none.
+    ...(job.params?.musicVideoCastInputs ? { castInputs: job.params.musicVideoCastInputs } : {}),
     // Cast guide catalog data is outside the project snapshot. Keep a take
     // that used an untracked guide as a candidate until a director selects it.
     ...(extend ? { extend } : {}),

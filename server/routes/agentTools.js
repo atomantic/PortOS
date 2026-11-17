@@ -20,6 +20,7 @@ import {
   agentToolsFeedQuerySchema,
   agentToolsRelevantPostsQuerySchema
 } from '../lib/validation.js';
+import { agentToolsAccountQuerySchema, agentToolsPublishedQuerySchema, agentToolsDraftQuerySchema } from '../lib/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import * as agentActivity from '../services/agentActivity.js';
@@ -260,11 +261,7 @@ router.get('/relevant-posts', asyncHandler(async (req, res) => {
 
 // GET /submolts - List available submolts
 router.get('/submolts', asyncHandler(async (req, res) => {
-  const { accountId } = req.query;
-
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(agentToolsAccountQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/submolts account=${accountId}`);
 
@@ -281,11 +278,7 @@ router.get('/submolts', asyncHandler(async (req, res) => {
 // GET /post/:postId - Get post details + comments
 router.get('/post/:postId', asyncHandler(async (req, res) => {
   const { postId } = req.params;
-  const { accountId } = req.query;
-
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(agentToolsAccountQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/post/${postId}`);
 
@@ -308,11 +301,7 @@ router.get('/post/:postId', asyncHandler(async (req, res) => {
 
 // GET /rate-limits - Current rate limit status
 router.get('/rate-limits', asyncHandler(async (req, res) => {
-  const { accountId } = req.query;
-
-  if (!accountId) {
-    throw new ServerError('accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { accountId } = validateRequest(agentToolsAccountQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/rate-limits account=${accountId}`);
 
@@ -328,11 +317,7 @@ router.get('/rate-limits', asyncHandler(async (req, res) => {
 
 // GET /published - Aggregate published content across multiple days
 router.get('/published', asyncHandler(async (req, res) => {
-  const { agentId, accountId, days = '7' } = req.query;
-
-  if (!agentId || !accountId) {
-    throw new ServerError('agentId and accountId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { agentId, accountId, days } = validateRequest(agentToolsPublishedQuerySchema, req.query);
 
   const numDays = Math.min(Math.max(parseInt(days, 10) || 7, 1), 30);
   console.log(`🛠️ GET /api/agents/tools/published agent=${agentId} days=${numDays}`);
@@ -522,10 +507,7 @@ router.post('/check-posts', asyncHandler(async (req, res) => {
 
 // GET /drafts - List drafts for an agent
 router.get('/drafts', asyncHandler(async (req, res) => {
-  const { agentId } = req.query;
-  if (!agentId) {
-    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { agentId } = validateRequest(agentToolsDraftQuerySchema, req.query);
 
   console.log(`🛠️ GET /api/agents/tools/drafts agent=${agentId}`);
   const drafts = await agentDrafts.listDrafts(agentId);
@@ -544,10 +526,7 @@ router.post('/drafts', asyncHandler(async (req, res) => {
 // PUT /drafts/:draftId - Update a draft
 router.put('/drafts/:draftId', asyncHandler(async (req, res) => {
   const { draftId } = req.params;
-  const { agentId } = req.query;
-  if (!agentId) {
-    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { agentId } = validateRequest(agentToolsDraftQuerySchema, req.query);
 
   const data = validateRequest(updateDraftSchema, req.body);
 
@@ -562,10 +541,7 @@ router.put('/drafts/:draftId', asyncHandler(async (req, res) => {
 // DELETE /drafts/:draftId - Delete a draft
 router.delete('/drafts/:draftId', asyncHandler(async (req, res) => {
   const { draftId } = req.params;
-  const { agentId } = req.query;
-  if (!agentId) {
-    throw new ServerError('agentId required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const { agentId } = validateRequest(agentToolsDraftQuerySchema, req.query);
 
   console.log(`🛠️ DELETE /api/agents/tools/drafts/${draftId} agent=${agentId}`);
   const deleted = await agentDrafts.deleteDraft(agentId, draftId);

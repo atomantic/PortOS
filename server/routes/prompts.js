@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { forceQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { promptStageNameSchema, promptVariableKeySchema, promptStageCreateBodySchema, promptStageUpdateBodySchema, promptVariableCreateBodySchema, validateRequest, promptVariableUpdateBodySchema, promptJobSkillBodySchema, promptPreviewBodySchema } from '../lib/validation.js';
 import {
@@ -204,8 +205,9 @@ export function createPortOSPromptsRoutes(aiToolkit) {
   // DELETE /api/prompts/:stage - Delete a stage
   router.delete('/:stage', asyncHandler(async (req, res) => {
     const stageName = req.params.stage;
+    const { force } = validateRequest(forceQuerySchema, req.query);
 
-    if (isProtectedStage(stageName) && req.query.force !== 'true') {
+    if (isProtectedStage(stageName) && force !== 'true') {
       throw new ServerError(
         'Cannot delete protected stage. PortOS resolves this stage by name. Add ?force=true to delete anyway.',
         { status: 400, code: 'SYSTEM_STAGE_PROTECTED' }

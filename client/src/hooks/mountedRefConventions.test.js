@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: Use `hooks/useMounted.js` instead of hand-rolling a `useRef(true)` mounted-guard ref (StrictMode double-mounts leave un-rearmed refs stuck `false`).

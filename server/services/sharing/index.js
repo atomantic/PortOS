@@ -110,12 +110,6 @@ export async function initSharing({ io: socketIo } = {}) {
     sharingEvents.on('inbox-updated', (payload) => {
       io.emit('sharing:inbox-updated', payload);
     });
-    sharingEvents.on('watcher-attached', (payload) => {
-      io.emit('sharing:watcher-attached', payload);
-    });
-    sharingEvents.on('watcher-detached', (payload) => {
-      io.emit('sharing:watcher-detached', payload);
-    });
     sharingEvents.on('incompatible-manifest', (payload) => {
       io.emit('sharing:incompatible-manifest', payload);
     });
@@ -141,9 +135,6 @@ export async function initSharing({ io: socketIo } = {}) {
     // adopted-from-reverse row appears without a manual page reload.
     peerSyncEvents.on('subscription-created', (payload) => {
       io.emit('peerSync:subscription:created', payload);
-    });
-    sharingEvents.on('unshared', (payload) => {
-      io.emit('sharing:unshared', payload);
     });
     // Peer-driven annotation merges re-use the same `media:annotation:updated`
     // socket event the local PATCH route emits, so open UI consumers handle

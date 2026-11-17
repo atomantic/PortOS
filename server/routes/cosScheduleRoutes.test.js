@@ -21,14 +21,7 @@ vi.mock('../services/taskSchedule.js', () => ({
   getTaskInterval: vi.fn(),
   shouldRunTask: vi.fn(),
   updateTaskInterval: vi.fn(),
-  getDueTasks: vi.fn(),
   triggerOnDemandTask: vi.fn(),
-  getOnDemandRequests: vi.fn(),
-  clearOnDemandRequest: vi.fn(),
-  resetExecutionHistory: vi.fn(),
-  getTemplateTasks: vi.fn(),
-  addTemplateTask: vi.fn(),
-  deleteTemplateTask: vi.fn(),
   INTERVAL_TYPES: { ON_DEMAND: 'on-demand', CRON: 'cron' }
 }));
 
@@ -450,29 +443,6 @@ describe('CoS Schedule Routes', () => {
     });
   });
 
-  describe('GET /api/cos/schedule/due', () => {
-    it('should return due tasks', async () => {
-      taskSchedule.getDueTasks.mockResolvedValue([{ taskType: 'review' }]);
-
-      const response = await request(app).get('/api/cos/schedule/due');
-
-      expect(response.status).toBe(200);
-      expect(response.body.tasks).toHaveLength(1);
-    });
-  });
-
-  describe('GET /api/cos/schedule/due/:appId', () => {
-    it('should return due tasks for specific app', async () => {
-      taskSchedule.getDueTasks.mockResolvedValue([]);
-
-      const response = await request(app).get('/api/cos/schedule/due/my-app');
-
-      expect(response.status).toBe(200);
-      expect(response.body.appId).toBe('my-app');
-      expect(taskSchedule.getDueTasks).toHaveBeenCalledWith('my-app');
-    });
-  });
-
   describe('POST /api/cos/schedule/trigger', () => {
     it('should trigger an on-demand task', async () => {
       taskSchedule.triggerOnDemandTask.mockResolvedValue({ id: 'req-1' });
@@ -540,142 +510,6 @@ describe('CoS Schedule Routes', () => {
 
       expect(response.status).toBe(409);
       expect(response.body.error || response.body.message || '').toMatch(/disabled/i);
-    });
-  });
-
-  describe('GET /api/cos/schedule/on-demand', () => {
-    it('should return pending on-demand requests', async () => {
-      taskSchedule.getOnDemandRequests.mockResolvedValue([{ id: 'req-1' }]);
-
-      const response = await request(app).get('/api/cos/schedule/on-demand');
-
-      expect(response.status).toBe(200);
-      expect(response.body.requests).toHaveLength(1);
-    });
-  });
-
-  describe('DELETE /api/cos/schedule/on-demand/:requestId', () => {
-    it('should clear on-demand request', async () => {
-      taskSchedule.clearOnDemandRequest.mockResolvedValue({ id: 'req-1' });
-
-      const response = await request(app).delete('/api/cos/schedule/on-demand/req-1');
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-      expect(taskSchedule.clearOnDemandRequest.mock.calls[0][0]).toBe('req-1');
-    });
-
-    it('should return 404 if request not found', async () => {
-      taskSchedule.clearOnDemandRequest.mockResolvedValue(null);
-
-      const response = await request(app).delete('/api/cos/schedule/on-demand/req-999');
-
-      expect(response.status).toBe(404);
-    });
-  });
-
-  describe('POST /api/cos/schedule/reset', () => {
-    it('should reset execution history', async () => {
-      taskSchedule.resetExecutionHistory.mockResolvedValue({ success: true });
-
-      const response = await request(app)
-        .post('/api/cos/schedule/reset')
-        .send({ taskType: 'review' });
-
-      expect(response.status).toBe(200);
-      expect(taskSchedule.resetExecutionHistory.mock.calls[0][0]).toBe('review');
-    });
-
-    it('rejects missing or malformed taskType before resetting execution history', async () => {
-      for (const body of [{}, { taskType: '' }, { taskType: 42 }]) {
-        const response = await request(app)
-          .post('/api/cos/schedule/reset')
-          .send(body);
-
-        expect(response.status).toBe(400);
-      }
-      expect(taskSchedule.resetExecutionHistory).not.toHaveBeenCalled();
-    });
-
-    it('should return 404 on reset error', async () => {
-      taskSchedule.resetExecutionHistory.mockResolvedValue({ error: 'Task type not found' });
-
-      const response = await request(app)
-        .post('/api/cos/schedule/reset')
-        .send({ taskType: 'unknown' });
-
-      expect(response.status).toBe(404);
-    });
-  });
-
-  describe('GET /api/cos/schedule/templates', () => {
-    it('should return template tasks', async () => {
-      taskSchedule.getTemplateTasks.mockResolvedValue([{ id: 'tmpl-1' }]);
-
-      const response = await request(app).get('/api/cos/schedule/templates');
-
-      expect(response.status).toBe(200);
-      expect(response.body.templates).toHaveLength(1);
-    });
-  });
-
-  describe('POST /api/cos/schedule/templates', () => {
-    it('should add a template task', async () => {
-      taskSchedule.addTemplateTask.mockResolvedValue({ id: 'tmpl-1', name: 'Review' });
-
-      const response = await request(app)
-        .post('/api/cos/schedule/templates')
-        .send({ name: 'Review', description: 'Code review task' });
-
-      expect(response.status).toBe(200);
-      expect(response.body.success).toBe(true);
-    });
-
-    it('should return 400 if name is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/schedule/templates')
-        .send({ description: 'No name' });
-
-      expect(response.status).toBe(400);
-    });
-
-    it('should return 400 if description is missing', async () => {
-      const response = await request(app)
-        .post('/api/cos/schedule/templates')
-        .send({ name: 'No description' });
-
-      expect(response.status).toBe(400);
-    });
-  });
-
-  describe('DELETE /api/cos/schedule/templates/:templateId', () => {
-    it('should delete a template task', async () => {
-      taskSchedule.deleteTemplateTask.mockResolvedValue({ success: true });
-
-      const response = await request(app).delete('/api/cos/schedule/templates/tmpl-1');
-
-      expect(response.status).toBe(200);
-      expect(taskSchedule.deleteTemplateTask.mock.calls[0][0]).toBe('tmpl-1');
-    });
-
-    it('should return 404 on delete error', async () => {
-      taskSchedule.deleteTemplateTask.mockResolvedValue({ error: 'Template not found' });
-
-      const response = await request(app).delete('/api/cos/schedule/templates/tmpl-999');
-
-      expect(response.status).toBe(404);
-    });
-  });
-
-  describe('GET /api/cos/schedule/interval-types', () => {
-    it('returns exactly the two cadence variants, with perpetual described apart', async () => {
-      const response = await request(app).get('/api/cos/schedule/interval-types');
-
-      expect(response.status).toBe(200);
-      expect(response.body.types).toEqual({ ON_DEMAND: 'on-demand', CRON: 'cron' });
-      expect(Object.keys(response.body.descriptions).sort()).toEqual(['cron', 'on-demand']);
-      // `perpetual` is an orthogonal flag, so it must NOT appear as a type.
-      expect(typeof response.body.perpetual).toBe('string');
     });
   });
 

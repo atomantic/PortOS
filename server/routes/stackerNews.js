@@ -85,8 +85,6 @@ const requireId = (value, label = 'ID') => {
 };
 const emitChanged = (req, accountId) => req.app.get('io')?.emit('stacker-news:changed', { accountId });
 
-router.get('/capabilities', (_req, res) => res.json(stackerNews.stackerNewsCapabilities));
-
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await stackerNews.listAccounts() })));
 
 router.post('/accounts', asyncHandler(async (req, res) => {
@@ -190,11 +188,6 @@ router.post('/items/:id/analyze', asyncHandler(async (req, res) => {
   res.json(analysis);
 }));
 
-router.get('/items/:id/analyses', asyncHandler(async (req, res) => {
-  requireId(req.params.id, 'item ID');
-  res.json({ analyses: await stackerNews.listAnalyses(req.params.id) });
-}));
-
 router.post('/analyses/:id/feedback', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'analysis ID');
   const { feedback } = validateRequest(feedbackSchema, req.body);
@@ -206,11 +199,6 @@ router.post('/analyses/:id/feedback', asyncHandler(async (req, res) => {
 router.get('/accounts/:id/actions', asyncHandler(async (req, res) => {
   requireId(req.params.id, 'account ID');
   res.json({ actions: await stackerNews.listActions(req.params.id) });
-}));
-
-router.get('/actions/:id/events', asyncHandler(async (req, res) => {
-  requireId(req.params.id, 'action ID');
-  res.json({ events: await stackerNews.listActionEvents(req.params.id) });
 }));
 
 router.post('/actions', asyncHandler(async (req, res) => {

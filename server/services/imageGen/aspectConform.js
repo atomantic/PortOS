@@ -1,22 +1,11 @@
 /**
  * Image Gen — conform a provider's output to the requested aspect ratio.
  *
- * Codex's built-in image_gen tool takes no size argument: the requested canvas
- * rides the prompt as a hint and the model picks one of its native sizes. Most
- * of the time that lands on the asked-for shape, but not always — a 16:9 music
- * video production came back with 1254x1254 squares (mostly performance
- * close-ups), near-4:3 frames and 1536x1024 3:2 frames mixed in with its
- * 1672x941 widescreen stills, and every clip lane downstream inherited the
- * wrong shape (an OmniHuman lip-sync clip from a square still is 1080x1080).
- *
- * So the provider's completion handler runs the written frame through here
- * before the sidecar is written: a frame within `ASPECT_TOLERANCE` of the
- * requested ratio is left byte-for-byte alone; anything else is cropped to the
- * largest rectangle of the requested ratio, positioned by sharp's attention
- * strategy so a close-up keeps the face rather than a geometric centre. The
- * crop never upscales — it keeps the provider's native resolution on the long
- * side it can afford. The fal clip lane applies the same crop box to the frames
- * it uploads (videoGen/falFrameAspect.js).
+ * Codex's image_gen takes no size argument, so it sometimes returns the wrong shape (and
+ * every downstream clip lane inherits it). Frames within `ASPECT_TOLERANCE` are left
+ * byte-for-byte alone; others are cropped to the largest requested-ratio rectangle,
+ * positioned by sharp's attention strategy, never upscaling. The fal clip lane applies the
+ * same crop box (videoGen/falFrameAspect.js).
  */
 
 import sharp from 'sharp';
@@ -29,9 +18,7 @@ const ASPECT_TOLERANCE = 0.02;
 const positive = (n) => Number.isFinite(Number(n)) && Number(n) > 0;
 
 /**
- * The crop box that conforms a `srcW`x`srcH` frame to `targetW:targetH`, or
- * `null` when the frame is already within tolerance (or the input is unusable).
- *
+ * Crop box conforming a frame to the target ratio, or null when within tolerance or unusable.
  * @returns {{ width: number, height: number }|null}
  */
 export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_TOLERANCE) {
@@ -45,11 +32,8 @@ export function aspectCropSize(srcW, srcH, targetW, targetH, tolerance = ASPECT_
   return { width: Math.max(1, width), height: Math.max(1, height) };
 }
 
-/**
- * Crop the PNG at `pngPath` in place to the requested aspect ratio when it is
- * off. Returns `{ from, to }` (`"WxH"` strings) when it cropped, else `null`.
- * A frame sharp cannot read is left for the existing invalid-image paths.
- */
+// Crops the PNG in place when off-ratio; returns `{ from, to }` or null. Unreadable frames
+// are left for the existing invalid-image paths.
 export async function conformImageAspect(pngPath, targetW, targetH) {
   if (!positive(targetW) || !positive(targetH)) return null;
   const meta = await sharp(pngPath).metadata().catch(() => null);

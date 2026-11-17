@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CheckCircle, ChevronRight, Feather, Lightbulb, Repeat2, RotateCcw, Save, Sparkles, Timer } from 'lucide-react';
+import { ArrowLeft, CheckCircle, Feather, RotateCcw, Save, Sparkles } from 'lucide-react';
 import { evaluateRhetoricAttempt, getLoadedLlmModels, submitTrainingEntry, updatePostConfig } from '../../../services/api';
 import useProviderModels from '../../../hooks/useProviderModels';
 import { isEmbeddingModel, isLocalEndpoint, isLocalInstanceProvider, isOllamaBackedProvider, localBackendForProvider, mergeModelLists } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
 import toast from '../../ui/Toast';
 import { uuidv4 } from '../../../lib/uuid';
+import { RHETORIC_MODES } from './trainerModes';
 
 const TRAINING_MODULE = 'rhetoric';
 const ROUND_SIZE = 5;
@@ -16,74 +17,6 @@ const TRAINING_TYPES = {
   progressia: 'rhetoric-progressia',
   brainstorm: 'rhetoric-brainstorm',
 };
-
-export const RHETORIC_MODES = [
-  {
-    id: 'meter', label: 'Iambic Pentameter', icon: Timer, color: 'text-cyan-400', bgColor: 'bg-cyan-500/20',
-    description: 'Write a ten-syllable line with a rising da-DUM pulse.',
-    example: 'The rain returns to silver every street.',
-    prompts: [
-      'Write a line about an empty train station.',
-      'Write a line that turns from doubt to hope.',
-      'Write a line containing the word “winter”.',
-      'Write a line spoken by someone keeping a secret.',
-      'Write a line that ends on a strong one-syllable noun.',
-    ],
-    checklist: ['about ten syllables', 'mostly iambic (da-DUM) feet', 'a clear image or thought'],
-  },
-  {
-    id: 'diacope', label: 'Diacope', icon: Feather, color: 'text-amber-400', bgColor: 'bg-amber-500/20',
-    description: 'Make emphasis through repetition separated by a word or phrase.',
-    example: 'Run, for the door is closing. Run!',
-    prompts: [
-      'Write a warning using “stay”.',
-      'Write a plea using “listen”.',
-      'Write a defiant line using “no”.',
-      'Write a comic line using “again”.',
-      'Write a sentence where the repeated word changes meaning.',
-    ],
-    checklist: ['the repeated word is exact or intentionally varied', 'a meaningful gap separates the repetitions', 'the repetition adds urgency or emphasis'],
-  },
-  {
-    id: 'chiasmus', label: 'Chiasmus', icon: Repeat2, color: 'text-rose-400', bgColor: 'bg-rose-500/20',
-    description: 'Cross a phrase’s terms or structure so the second half mirrors the first in reverse.',
-    example: 'We shape our tools, and thereafter our tools shape us.',
-    prompts: [
-      'Write a line about learning that reverses its key terms.',
-      'Turn a choice between freedom and safety into a crossed sentence.',
-      'Write a compact chiasmus about listening and speaking.',
-      'Use a reversal to show a friendship changing over time.',
-      'Write a comic chiasmus about making plans and plans making trouble.',
-    ],
-    checklist: ['two paired terms or structures appear in reverse order', 'the reversal changes or sharpens the thought', 'the syntax stays clear when read aloud'],
-  },
-  {
-    id: 'progressia', label: 'Progressia', icon: ChevronRight, color: 'text-purple-400', bgColor: 'bg-purple-500/20',
-    description: 'Build an idea step by step until the final phrase lands harder.',
-    example: 'A spark became a flame, a flame became a signal.',
-    prompts: [
-      'Escalate a whisper into a public alarm.',
-      'Build a three-step progression from want to need to obsession.',
-      'Turn a small kindness into a changed life.',
-      'Escalate a disagreement without using the word “anger”.',
-      'Build from a single drop of water to a flood.',
-    ],
-    checklist: ['at least three discernible steps', 'each step intensifies or transforms the last', 'the final step feels earned'],
-  },
-  {
-    id: 'brainstorm', label: 'Rhetorical Brainstorm', icon: Lightbulb, color: 'text-green-400', bgColor: 'bg-green-500/20',
-    description: 'Generate several angles quickly, then choose the one with voltage.',
-    example: 'One subject, three stances: praise it, attack it, confess about it.',
-    prompts: [
-      'Brainstorm three openings for a story about a locked room.',
-      'Argue for, against, and sideways about convenience.',
-      'Find three metaphors for a difficult conversation.',
-      'Write three headlines for the same surprising event.',
-      'Describe one ordinary object as sacred, dangerous, and ridiculous.',
-    ],
-    checklist: ['at least three distinct attempts', 'the angles are genuinely different', 'one version takes an unexpected turn'],
-  },
-];
 
 const modeFor = (id) => RHETORIC_MODES.find((mode) => mode.id === id) || null;
 const newRoundId = () => uuidv4();

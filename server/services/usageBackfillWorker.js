@@ -4,6 +4,7 @@ import { readdir } from 'fs/promises';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
 import { readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import {
+  isSelfContainedRun,
   mergeUsageClaims,
   readMeasuredUsage,
   reconcileRunUsage,
@@ -156,6 +157,10 @@ export async function scanHistoricalUsage({
     if (!metadata || !metadata.providerId || typeof metadata.workspacePath !== 'string' || !metadata.workspacePath
       || typeof metadata.startTime !== 'string' || typeof metadata.endTime !== 'string'
       || !Number.isFinite(Date.parse(metadata.startTime)) || !Number.isFinite(Date.parse(metadata.endTime))) continue;
+    // One HTTP request has no transcript to backfill, and its settled markers
+    // are not evidence that it billed any: re-reading "what it claimed" would
+    // take a session away from the CLI run that owns it.
+    if (isSelfContainedRun(metadata)) continue;
     const parentPending = !reconciled.has(runId) && !metadata.usageReconciled
       && Boolean(transcriptFamily(metadata));
     // The sibling pass has no parent-family precondition: an Ollama-backed run

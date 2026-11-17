@@ -7,6 +7,12 @@ const api = vi.hoisted(() => ({
   getDigitalTwinSettings: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
+// useInstanceFeatures reads apiSystem.js directly (#16562); the barrel mock above
+// never provided getInstanceFeatures, so keep the hook on its fail-open path.
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn(() => Promise.reject(new Error('features unavailable'))),
+}));
 vi.mock('../services/socket', async () => {
   const { EventEmitter } = await import('node:events');
   return { default: new EventEmitter() };

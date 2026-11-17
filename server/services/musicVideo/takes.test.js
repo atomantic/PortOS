@@ -126,8 +126,8 @@ describe('cast inputs on a new still (#14154)', () => {
     { takeId: 'mvt-old', kind: 'image', assetId: 'start.png', status: 'candidate' },
   ] }] });
 
-  // Uniquely catches a new still dropping the guides it was sent, or a clip take storing them.
-  it('records the snapshot on image and end-frame takes, including an empty one, and not on a clip', () => {
+  // Uniquely catches a new still dropping the guides it was sent, or a clip losing the character references it was sent (#16473).
+  it('records the snapshot on image, end-frame and clip takes, including an empty one', () => {
     const empty = { ingredientId: null, guides: [], sheets: [] };
     const { appended } = appendSceneTakes(project(), 's1', [
       { kind: 'image', assetId: 'frame.png', source: 'generated', castInputs },
@@ -137,7 +137,7 @@ describe('cast inputs on a new still (#14154)', () => {
     expect(appended[0].castInputs).toEqual(castInputs);
     expect(appended[0]).not.toHaveProperty('dependencies');
     expect(appended[1].castInputs).toEqual(empty);
-    expect(appended[2]).not.toHaveProperty('castInputs');
+    expect(appended[2].castInputs).toEqual(castInputs);
   });
 
   it('records what a generated still was rendered for, and skips an import, a clip, and a late job', () => {

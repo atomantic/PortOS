@@ -1,16 +1,7 @@
 /**
- * Image Gen — shared "the CLI exited without writing an image" narrator.
- *
- * Both cloud-CLI providers finish the same way when no PNG lands: they hold a
- * rolling tail of the child's stdout narration and have to turn it into the
- * most useful error they can — the model's own words (content declines,
- * tool-failure notes) beat a fixed guess, with a provider-specific enablement
- * hint as the fallback when it said nothing usable.
- *
- * `buildNoImageReason` owns that pipeline (strip ANSI → drop structural noise →
- * keep the last few narration lines → cap length) so the two error narrations
- * can't drift; each provider supplies only what actually differs: its own
- * structural line filter, its fallback hint, and how it phrases the result.
+ * Image Gen — shared "the CLI exited without writing an image" narrator. The model's own
+ * words (declines, tool-failure notes) beat a fixed guess, with a provider hint as
+ * fallback; one pipeline keeps the two cloud-CLI narrations from drifting.
  */
 
 import { stripAnsi } from '../../lib/ansiStrip.js';
@@ -38,12 +29,8 @@ export function buildNoImageReason(stdoutTail = '', { hint, dropLine, describe }
   return said ? describe(said) : hint;
 }
 
-/**
- * The other way a run can end without an image: it wrote a file that decodes
- * fine and has no content (issue #4173). Same narrator, different input — the
- * verdict is a `reason` from `lib/imageFrameStats.js`, not stdout — so the UI
- * says something true instead of rendering a black tile.
- */
+// Frames that decode but have no content (#4173): the verdict is a `reason` from
+// `lib/imageFrameStats.js`, not stdout.
 const DEGENERATE_FRAME_DETAIL = {
   'solid-fill': 'it is a single flat color',
   'fully-transparent': 'it is fully transparent',

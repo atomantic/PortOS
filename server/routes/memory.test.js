@@ -15,7 +15,6 @@ vi.mock('../services/memoryBackend.js', () => ({
   getMemory: vi.fn(),
   getMemoryVersion: vi.fn(),
   getMemoryVersions: vi.fn(),
-  getRelatedMemories: vi.fn(),
   createMemory: vi.fn(),
   updateMemory: vi.fn(),
   updateMemoryEmbedding: vi.fn(),

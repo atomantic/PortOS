@@ -1,36 +1,15 @@
 /**
- * Quota-burn step → scheduled-task REFERENCE, plus its per-invocation overrides.
- *
- * A burn step used to BE its work: a copied prompt in a free-form `params` bag
- * keyed by a `jobType` from a quota-only enum, with no durable link back to the
- * scheduled task it was cloned from. Preset identity was never persisted at all
- * — both `quotaBurnPresets.js` and the client's `matchedPreset` re-derived it by
- * comparing prompt text, so editing one word of a shipped prompt orphaned the
- * step. This module replaces that with a reference the step actually stores.
+ * Quota-burn step → scheduled-task REFERENCE, plus its per-invocation overrides. A step stores a reference instead of a copied prompt, so preset identity no longer depends on prompt text.
  *
  * Two reference kinds, discriminated on `kind`:
- *   - `builtin` — a PortOS scheduled task TYPE (`ux`, `security`, …), plus the
- *     managed app it targets when the type requires one. Scope rules come from
- *     `taskTargetScope.js`, the same contract the schedule's own request gate
- *     reads.
- *   - `custom`  — an app custom scheduled job, addressed by its id. The job
- *     record owns its app scope, so the reference deliberately stores no
- *     `appId`: a second copy could disagree with the job it points at.
+ *   - `builtin`: a PortOS scheduled task TYPE (`ux`, `security`, …) plus the managed app it targets when the type requires one (scope rules from `taskTargetScope.js`).
+ *   - `custom`: an app custom scheduled job by id. The job owns its app scope, so the reference stores no `appId` (a second copy could disagree).
+ * Anything the burn wants to do differently from the task's saved settings lives in `overrides` (provider/model/effort/params); unset inherits, and nothing writes back to the schedule.
  *
- * Everything the burn wants to do DIFFERENTLY from the task's saved settings
- * lives in `overrides` (provider / model / effort / run params). An unset
- * override inherits; nothing here ever writes back to the schedule.
+ * Pure: shape, normalization, and a resolver that takes the catalog as an argument; no storage, provider I/O, or imports out of `lib/`.
  *
- * Pure: shape, normalization, and a resolver that takes the catalog as an
- * argument. No storage, no provider I/O, no imports out of `lib/`.
- *
- * `evaluateOnDemandEligibility` below is deliberately WIDER than the burn: it is
- * the one gate ladder for invoking a built-in scheduled task on demand, read
- * both by this module's resolver (so the page can say why a step cannot run) and
- * by `taskSchedule.triggerOnDemandTask` (so dispatch refuses for the same
- * reasons). It lives here because the reason codes and their prose already do,
- * and because a `lib/` module is the only place both a service and a display
- * path can share without one importing the other (#6405).
+ * `evaluateOnDemandEligibility` is deliberately WIDER than the burn: the one gate ladder for invoking a built-in scheduled task on demand, read by this resolver (so the page can say why a step
+ * cannot run) and by `taskSchedule.triggerOnDemandTask` (so dispatch refuses for the same reasons). It lives in `lib/` so a service and a display path can share it (#6405).
  */
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
@@ -45,13 +24,8 @@ export const QUOTA_BURN_TASK_REF_KIND = Object.freeze({
 });
 
 /**
- * Why a step is retained but not dispatchable. A code so the client can react
- * (offer "pick another task", "re-enable it in Scheduled Tasks") and a
- * human-readable `reason` so the row can say it without a lookup table.
- *
- * A step is never DELETED for being unavailable — its label, order, overrides
- * and run-once state are the user's, and a task that comes back should find its
- * step exactly as it left it.
+ * Why a step is retained but not dispatchable: a code the client can react to plus a human-readable `reason`. A step is never DELETED for being unavailable
+ * (its label, order, overrides and run-once state are the user's, and a returning task should find its step intact).
  */
 export const QUOTA_BURN_UNAVAILABLE = Object.freeze({
   /** A legacy `jobType` payload that migration has not converted to a reference yet. */
@@ -68,19 +42,9 @@ export const QUOTA_BURN_UNAVAILABLE = Object.freeze({
   WRONG_SCOPE: 'wrong-scope',
   /** The task exists and is enabled, but is not something a burn may invoke. */
   INCOMPATIBLE: 'incompatible',
-  /**
-   * The master CoS Improve switch is off — or its state could not be read, which
-   * fails closed into the same verdict. Its own code rather than `DISABLED`: the
-   * referenced task is not switched off and telling the user to re-enable it in
-   * Scheduled Tasks would send them to a toggle that is already on. The fix
-   * lives in CoS → Config, and every step reports it at once.
-   */
+  /** The master CoS Improve switch is off or unreadable (fails closed). Its own code, not `DISABLED`: the fix is in CoS → Config and every step reports it at once. */
   IMPROVEMENT_DISABLED: 'improvement-disabled',
-  /**
-   * A quality audit the target repository cannot have findings for (a UI audit
-   * of a repo with no UI) — see `resolveAuditApplicability`. A step carrying
-   * the user's `runInapplicableAudit` override is exempt.
-   */
+  /** A quality audit the target repo cannot have findings for (see `resolveAuditApplicability`); exempt with the step's `runInapplicableAudit` override. */
   NOT_APPLICABLE: 'not-applicable',
 });
 
@@ -89,20 +53,14 @@ const MAX_REF_FIELD = 64;
 const nullable = (value, max) => trimTo(value, max) || null;
 
 /**
- * Normalize a stored/submitted task reference. Returns `null` when the payload
- * carries no usable reference — the caller then decides whether that is a
- * legacy step (keep it, mark it for migration) or nothing at all.
- *
- * Never GUESSES a kind: a payload missing `kind`, or naming one that is not in
- * the enum, is not a reference. Inferring one from the presence of `taskType`
- * would be exactly the "silently downgrade a reference" failure the reference
- * model exists to remove.
- */
+ /**
+  * Normalize a stored/submitted task reference, or `null` when there is no usable one (the caller decides if that is a legacy step). Never GUESSES a kind:
+  * inferring one from `taskType` would silently downgrade a reference.
+  */
 export function normalizeQuotaBurnTaskRef(raw) {
   if (!isPlainObject(raw)) return null;
   if (raw.kind === QUOTA_BURN_TASK_REF_KIND.BUILTIN) {
-    // A step saved before a task rename (TASK_TYPE_RENAMES) resolves to the
-    // current name, or it would read as an unknown task and never run again.
+    // A step saved before a task rename (TASK_TYPE_RENAMES) resolves to the current name, or it reads as an unknown task and never runs.
     const taskType = currentTaskTypeName(trimTo(raw.taskType, MAX_REF_FIELD));
     if (!taskType) return null;
     return { kind: QUOTA_BURN_TASK_REF_KIND.BUILTIN, taskType, appId: nullable(raw.appId, MAX_REF_FIELD) };
@@ -116,17 +74,10 @@ export function normalizeQuotaBurnTaskRef(raw) {
 }
 
 /**
- * A step's per-invocation overrides bag, normalized to JSON-ish scalars.
- *
- * `params` stays free-form for the same reason the legacy bag did — each task
- * type owns which run parameters it reads — but its DEPTH is enforced, so a
- * hand-edited config cannot smuggle a prototype or a nested blob through.
- *
- * The two length caps are REQUIRED, and injected rather than imported: this
- * module has to stay free of `quotaBurnConfig.js` (which imports it, not the
- * other way round), and restating its numbers as defaults here would be a
- * second bounds table — exactly what `QUOTA_BURN_BOUNDS` exists to prevent.
- */
+ /**
+  * A step's per-invocation overrides bag, normalized to JSON-ish scalars. `params` stays free-form (each task type owns what it reads) but its DEPTH is enforced.
+  * The two length caps are REQUIRED and injected: this module must stay free of `quotaBurnConfig.js` (which imports it), and defaults here would be a second bounds table.
+  */
 export function normalizeQuotaBurnOverrides(raw, { maxParamLength, maxFieldLength }) {
   const value = isPlainObject(raw) ? raw : {};
   return {
@@ -139,9 +90,7 @@ export function normalizeQuotaBurnOverrides(raw, { maxParamLength, maxFieldLengt
 }
 
 /**
- * The scalar-only `params` map shared by the overrides bag and the legacy job
- * bag. `maxParamLength` comes from `QUOTA_BURN_BOUNDS`, per the note above.
- */
+ /** The scalar-only `params` map shared by the overrides bag and the legacy job bag; `maxParamLength` comes from `QUOTA_BURN_BOUNDS`. */
 export function normalizeQuotaBurnParams(raw, maxParamLength) {
   if (!isPlainObject(raw)) return {};
   const clean = {};
@@ -157,13 +106,10 @@ export function normalizeQuotaBurnParams(raw, maxParamLength) {
 const unavailable = (code, reason) => ({ code, reason });
 
 /**
- * The master Improve rung, shared by every kind of step and by the schedule's
- * own on-demand lane so the switch is read the same way everywhere.
- *
- * Three input states, per the sentinel rule: `undefined` is "the caller did not
- * check" and goes unjudged, `null` is "checked and could not tell" and fails
- * CLOSED, a boolean is the answer.
- */
+ /**
+  * The master Improve rung, shared by every step kind and the schedule's on-demand lane. `undefined` = caller did not check (unjudged), `null` = checked and could not tell
+  * (fails CLOSED), boolean = the answer.
+  */
 function improvementVerdict(improvementEnabled) {
   if (improvementEnabled === undefined || improvementEnabled === true) return null;
   return unavailable(
@@ -175,35 +121,19 @@ function improvementVerdict(improvementEnabled) {
 }
 
 /**
- * The ONE gate ladder deciding whether a built-in scheduled task may be invoked
- * on demand — read by `taskSchedule.triggerOnDemandTask` before it queues a
- * request, and by the quota-burn catalog to say why a step cannot run. Two
- * consumers, one ladder: a gate added here reaches dispatch and the page in the
- * same change, which is the step-level version of what `evaluateFamily` already
- * does for a burn family (docs/QUOTA-BURN.md).
- *
- * Pure, and the catalog is an ARGUMENT: the facts about a task type live in the
- * schedule store, the instance-feature service and the app store, so the caller
- * resolves them and hands them in as `entry`.
- *
- *   entry === undefined  the caller has no catalog — every per-type rung goes
- *                        unjudged, so a read taken before the schedule store is
- *                        up cannot mass-orphan a user's plan.
- *   entry === null       the catalog was read and this type is not on it.
- *   entry === object     `{ enabled, featureEnabled, feature, eligible, appIds }`,
- *                        each key `undefined` when that fact is unknown.
- *     `eligible`        — false for a type another automation owns
- *                         (`invocation.userInvokable === false`).
- *     `appIds`          — the managed apps with this type switched ON. Supplied
- *                         only by a caller that ENFORCES per-app enablement (see
- *                         `enabledAppIdsByTaskType`); omitted, the rung is
- *                         skipped, which is how a human "Run Now" keeps its
- *                         deliberate override of the app's cadence switch.
- *
- * Target SCOPE is judged with or without an entry, deliberately: it is a
- * property of the reference itself, so a hand-edited step that dropped its
- * required app is broken whether or not a catalog is to hand.
- */
+ /**
+  * The ONE gate ladder deciding whether a built-in scheduled task may be invoked on demand, read by `taskSchedule.triggerOnDemandTask` and the quota-burn catalog,
+  * so a gate added here reaches dispatch and the page together (docs/QUOTA-BURN.md). Pure; the catalog is an ARGUMENT supplied as `entry`:
+  *
+  *   entry === undefined  no catalog: every per-type rung goes unjudged (a read before the schedule store is up must not mass-orphan a plan).
+  *   entry === null       the catalog was read and this type is not on it.
+  *   entry === object     `{ enabled, featureEnabled, feature, eligible, appIds }`, each `undefined` when unknown.
+  *     `eligible`  false for a type another automation owns (`invocation.userInvokable === false`).
+  *     `appIds`    managed apps with this type switched ON; supplied only by a caller that ENFORCES per-app enablement (see `enabledAppIdsByTaskType`);
+  *                 omitted, the rung is skipped (a human "Run Now" keeps its override of the cadence switch).
+  *
+  * Target SCOPE is judged with or without an entry: it is a property of the reference itself.
+  */
 export function evaluateOnDemandEligibility({ taskType, appId = null, entry, improvementEnabled } = {}) {
   if (entry === null) return unavailable(QUOTA_BURN_UNAVAILABLE.UNKNOWN_TASK, `Unknown task type '${taskType}'`);
   if (isPlainObject(entry)) {
@@ -233,14 +163,10 @@ export function evaluateOnDemandEligibility({ taskType, appId = null, entry, imp
 }
 
 /**
- * `Map<taskType, appId[]>` of the managed apps that have each built-in type
- * switched ON, derived from app records the caller already loaded.
- *
- * An app with no override for a type is NOT in its list: no override means
- * disabled (`apps.isTaskTypeEnabledForApp`), which is the same reading the
- * scheduled fire applies. Shared so the burn catalog and the schedule's own
- * on-demand lane cannot disagree about which apps a type may target.
- */
+ /**
+  * `Map<taskType, appId[]>` of apps with each built-in type switched ON, from already-loaded app records. No override means disabled (`apps.isTaskTypeEnabledForApp`),
+  * matching the scheduled fire, so the burn catalog and the on-demand lane agree.
+  */
 export function enabledAppIdsByTaskType(apps) {
   const byTaskType = new Map();
   for (const app of apps || []) {
@@ -254,37 +180,23 @@ export function enabledAppIdsByTaskType(apps) {
 }
 
 /**
- * Resolve one normalized step against the live task catalog and return its
- * `{ code, reason }` unavailability, or `null` when the step is good to run.
- *
- * The catalog is an ARGUMENT, not an import: resolution needs the schedule
- * store and the per-app job store, which are services, and this module must
- * stay in `lib/`. Callers pass plain lookup maps:
- *
- *   builtin: { [taskType]: { enabled, featureEnabled, feature, eligible, appIds } }
- *             — the `entry` shape `evaluateOnDemandEligibility` reads, which is
- *               where every built-in rung is decided.
- *   custom:  { [jobId]: { enabled, eligible, appId } }
- *   improvementEnabled: the master CoS Improve switch (`null` = unreadable).
- *
- * An EMPTY catalog answers only the questions that need one. Existence, enabled
- * state, eligibility and the Improve switch all go unjudged — with no
- * `builtin`/`custom` map the step keeps whatever the normalizer already decided
- * rather than being declared dangling, so a caller reading the plan before the
- * schedule store is up cannot mass-orphan a user's plan. Target SCOPE is the
- * exception, and deliberately so: it is a property of the reference itself,
- * decidable from the payload alone, so it is judged either way.
- */
+ /**
+  * Resolve one normalized step against the live task catalog; returns `{ code, reason }` or `null` when good to run. The catalog is an ARGUMENT (it needs services; this stays in `lib/`):
+  *
+  *   builtin: { [taskType]: { enabled, featureEnabled, feature, eligible, appIds } }  (the `entry` shape `evaluateOnDemandEligibility` reads)
+  *   custom:  { [jobId]: { enabled, eligible, appId } }
+  *   improvementEnabled: master CoS Improve switch (`null` = unreadable).
+  *
+  * With no `builtin`/`custom` map, existence/enabled/eligibility/Improve go unjudged and the step keeps the normalizer's verdict (no mass-orphaning before the store is up).
+  * Target SCOPE is judged either way (decidable from the payload alone).
+  */
 export function resolveQuotaBurnStepAvailability(step, catalog = {}) {
-  // A legacy step's verdict is decided by the payload itself, not by the
-  // catalog — the reference it will eventually point at does not exist yet.
+  // A legacy step's verdict comes from the payload, not the catalog (its future reference doesn't exist yet).
   if (step?.unavailable?.code === QUOTA_BURN_UNAVAILABLE.LEGACY_UNMIGRATED) return step.unavailable;
   const ref = step?.taskRef;
   if (!ref) return step?.unavailable || null;
 
-  // The reference's OWN problems outrank the master switch: a user who turns
-  // Improve back on should not then discover a dangling job the page could have
-  // named all along.
+  // The reference's OWN problems outrank the master switch, so re-enabling Improve doesn't reveal a dangling job the page could have named.
   const specific = ref.kind === QUOTA_BURN_TASK_REF_KIND.CUSTOM
     ? customJobAvailability(ref, catalog)
     : evaluateOnDemandEligibility({
@@ -313,12 +225,7 @@ function customJobAvailability(ref, catalog) {
 }
 
 /**
- * The same resolution applied across a whole normalized config, returning a new
- * config. Non-mutating, so a status read can stamp availability for the page
- * without the derived verdict ever reaching disk — it is a fact about the
- * catalog RIGHT NOW, and persisting it would go stale the moment a task is
- * re-enabled.
- */
+ /** The same resolution across a whole normalized config, returning a new config; non-mutating so the derived verdict (true only RIGHT NOW) never reaches disk. */
 export function applyQuotaBurnAvailability(config, catalog = {}) {
   const families = Object.fromEntries(Object.entries(config?.families || {}).map(([id, family]) => [
     id,
@@ -328,14 +235,10 @@ export function applyQuotaBurnAvailability(config, catalog = {}) {
 }
 
 /**
- * Whether a step may be dispatched through the reference path.
- *
- * Three independent gates, deliberately spelled out rather than folded into
- * `enabled`: the user switched it off, the catalog says it cannot run, or it
- * has no reference to run at all. The third is an un-migrated legacy step, and
- * since #6381 retired the quota-only executor there is nothing else for it to
- * run through — it stays visible and refused rather than dispatched.
- */
+ /**
+  * Whether a step may be dispatched through the reference path. Three independent gates: user switched it off, catalog says it cannot run, or it has no reference
+  * (an un-migrated legacy step: #6381 retired the quota-only executor, so it stays visible and refused).
+  */
 export function quotaBurnStepIsDispatchable(step) {
   return step?.enabled !== false && !step?.unavailable && Boolean(step?.taskRef);
 }

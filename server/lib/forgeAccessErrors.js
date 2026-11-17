@@ -1,39 +1,24 @@
 /**
- * Tell a PERMANENT `gh` no-access failure apart from a transient one, and log it
- * at most once per scope+repo.
+ * Tell a PERMANENT `gh` no-access failure apart from a transient one, and log it at most once per scope+repo.
  *
- * `Could not resolve to a Repository` is GitHub's 404-for-no-access: the repo
- * exists, the credential in use cannot see it. That does not heal on its own the
- * way a network blip or a rate limit does — it stays broken until the credential
- * changes — so it must NOT ride `execGh`'s consecutive-failure backoff (which
- * caps at 15 minutes and then re-fires and re-logs forever), and the polling
- * jobs must not narrate it once per tick.
- *
- * Pure except for the process-lifetime de-dup set behind `logForgeNoAccessOnce`.
- * Once per process (rather than a re-log window) is deliberate: the remedy is a
- * credential change, which on this install means a `gh auth login` or an edit to
- * the app record — both user actions that carry their own feedback.
+ * `Could not resolve to a Repository` is GitHub's 404-for-no-access: it only heals when the credential changes, so
+ * it must NOT ride `execGh`'s consecutive-failure backoff, and polling jobs must not narrate it each tick. Pure
+ * except for the process-lifetime de-dup set behind `logForgeNoAccessOnce` (once per process is deliberate: the
+ * remedy is a user action with its own feedback).
  */
 
-// `gh pr list` / `gh repo view` answer a no-access repo through GraphQL, which
-// reports it as an unresolvable node rather than an HTTP status; `gh api` and
-// the REST-backed subcommands answer with the status line instead (gh's own
-// "Not Found" phrasing carries it — `gh: Not Found (HTTP 404)`), so these two
-// patterns cover both transports.
-//
-// Deliberately narrow. Widening the GraphQL arm to other node types would
-// classify a deleted PR or a renamed user — an ordinary missing SUB-resource —
-// as a credential problem and print a remedy that does not apply.
+// `gh pr list` / `gh repo view` report no-access through GraphQL as an unresolvable node; `gh api`
+// and REST-backed subcommands report the status line (`gh: Not Found (HTTP 404)`). Deliberately
+// narrow: widening the GraphQL arm would classify a deleted PR or renamed user as a credential problem.
 const NO_ACCESS_PATTERNS = [
   /could not resolve to a repository/i,
   /\bHTTP 404\b/i,
 ];
 
 /**
- * True when `text` is `gh` stderr describing a no-access/404, not a transient
- * failure.
+ * True when `text` is `gh` stderr describing a no-access/404, not a transient failure.
+ *
  * @param {string|null|undefined} text
- * @returns {boolean}
  */
 export function isForgeNoAccessMessage(text) {
   if (typeof text !== 'string' || !text.trim()) return false;
@@ -41,11 +26,9 @@ export function isForgeNoAccessMessage(text) {
 }
 
 /**
- * True when an `execGh` rejection is a no-access/404. Prefers the `ghNoAccess`
- * flag `execGh` stamps on, and falls back to re-reading the stderr/message for a
- * caller that received the error through a wrapper that dropped the flag.
+ * True when an `execGh` rejection is a no-access/404; prefers the `ghNoAccess` flag, else re-reads stderr/message.
+ *
  * @param {unknown} err
- * @returns {boolean}
  */
 export function isForgeNoAccessError(err) {
   if (!err || typeof err !== 'object') return false;
@@ -54,25 +37,19 @@ export function isForgeNoAccessError(err) {
 }
 
 /**
- * The one actionable line a no-access repo gets. Names the fix rather than the
- * symptom: an owner-match against a locally logged-in account already covers the
- * common multi-account case, so what is left to say is "pin the account".
+ * The one actionable line a no-access repo gets; names the fix (pin the account).
+ *
  * @param {string} repoSpec
- * @returns {string}
  */
 export function forgeNoAccessRemedy(repoSpec) {
   return `${repoSpec} is not visible to the gh account PortOS resolved for it — `
     + 'log in to the owning account (`gh auth login`) or pin it on the app record\'s Forge account field';
 }
 
-// A credential that REACHES the repo but lacks an OAuth scope. Like no-access it
-// is permanent until the credential changes, so `execGh` keeps it out of the
-// backoff too. Three phrasings, because GitHub answers per transport: GraphQL
-// ("refusing to allow an OAuth App to create or update workflow … without
-// `workflow` scope"), REST ("needs the \"gist\" scope"), and gh's own preflight
-// ("missing required scopes [workflow]"). Deliberately NOT
-// "Resource not accessible by integration": that is a permission grant on an
-// App token, which no scope refresh fixes.
+// A credential that REACHES the repo but lacks an OAuth scope: permanent until it changes, so
+// `execGh` keeps it out of the backoff too. GitHub phrases it per transport (GraphQL "without `workflow`
+// scope", REST "needs the \"gist\" scope", gh preflight "missing required scopes [workflow]").
+// Deliberately NOT "Resource not accessible by integration": an App-token grant no scope refresh fixes.
 const MISSING_SCOPE_PATTERNS = [
   /without [`'"]?([\w:.-]+)[`'"]? scope/i,
   /needs? the [`'"]?([\w:.-]+)[`'"]? scope/i,
@@ -82,9 +59,8 @@ const MISSING_SCOPE_PATTERNS = [
 const SCOPE_NAME = /^[a-z][a-z0-9:_.-]*$/i;
 
 /**
- * The OAuth scope names a `gh` failure says the token lacks, [] when it says
- * nothing of the kind. Names are validated: they end up in a displayed command
- * and a spawn argument, so a malformed capture never reaches either.
+ * Scope names a `gh` failure says the token lacks, [] if none; validated since they reach a displayed command and spawn argument.
+ *
  * @param {string|null|undefined} text
  * @returns {string[]}
  */
@@ -100,18 +76,15 @@ export function parseForgeMissingScopes(text) {
 }
 
 /**
- * Whether the refusal names a personal access token rather than an OAuth login.
- * `gh auth refresh` only re-scopes the keyring's OAuth token; a PAT has to be
- * reissued with the scope, so the refresh must not be offered for it.
+ * Whether the refusal names a PAT: `gh auth refresh` only re-scopes OAuth tokens, a PAT must be reissued.
+ *
  * @param {string|null|undefined} text
- * @returns {boolean}
  */
 export const isForgePersonalTokenRefusal = (text) => typeof text === 'string' && /personal access token/i.test(text);
 
 /**
- * Scopes a missing-scope `execGh` rejection names. Prefers the `ghMissingScopes`
- * `execGh` stamps on, falling back to re-reading stderr/message for a caller that
- * received the error through a wrapper that dropped it.
+ * Scopes a missing-scope `execGh` rejection names; prefers `ghMissingScopes`, else re-reads stderr/message.
+ *
  * @param {unknown} err
  * @returns {string[]}
  */
@@ -122,12 +95,7 @@ export function forgeMissingScopesOf(err) {
   return fromStderr.length > 0 ? fromStderr : parseForgeMissingScopes(err.message);
 }
 
-/**
- * Scopes the one-click refresh may request. Refreshing grants whatever is named
- * once the user approves it in their browser, so this is a closed set of
- * ordinary working scopes — never `admin:*` or `delete_repo`. A scope outside it
- * still gets the printed command; PortOS just won't drive it.
- */
+/** Scopes the one-click refresh may request: a closed set of ordinary working scopes (never `admin:*` or `delete_repo`) since the user approves whatever is named; others still get the printed command. */
 export const REFRESHABLE_FORGE_SCOPES = Object.freeze([
   'repo', 'workflow', 'read:org', 'gist', 'project', 'read:project',
   'read:packages', 'write:packages', 'notifications', 'read:user', 'user:email',

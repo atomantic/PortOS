@@ -1,7 +1,7 @@
 /** A narrowly recognized, disposable preview adaptation. Never used by exports. */
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
@@ -108,7 +108,8 @@ async function shippedEntrypoint(directory) {
   return { original, template };
 }
 
-// Why the executable/style helper graph differs from the shipped one, or null.
+// Why the executable/style helper graph differs from the shipped one, or null:
+// `{ reason, file }`, naming the first differing file.
 // The whole graph must match, not only engine.js.
 async function shippedHelpersMismatch(directory, template) {
   const helpers = [
@@ -116,16 +117,22 @@ async function shippedHelpersMismatch(directory, template) {
     ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
     ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/', import.meta.url))],
   ];
+  const { isStaleShippedHelper } = await import('./compositionDocument.js');
   try {
-    for (const [name, root] of helpers) if (!(await read(directory, name)).equals(await read(root, name))) return 'custom-helper';
+    for (const [name, root] of helpers) {
+      const found = await read(directory, name);
+      if (found.equals(await read(root, name))) continue;
+      // An earlier shipped copy is brought current by the engine update, unlike an authored one.
+      return { reason: 'custom-helper', file: name, ...(isStaleShippedHelper(name, found) ? { upgradable: true } : {}) };
+    }
     // Font bytes affect exact parity too; only canonical entrypoint/CSS names apply.
     const css = `${template}\n${await read(join(ROOT, 'shared'), 'lyricType.css')}`;
     for (const match of css.matchAll(/url\(['"]?([^)'"\s]+)['"]?\)/g)) {
       const name = match[1];
       const root = name.includes('archivo') || name.includes('ibm-plex-mono-500') ? join(ROOT, 'shared') : join(ROOT, 'layered');
-      if (!(await read(directory, name)).equals(await read(root, name))) return 'custom-font';
+      if (!(await read(directory, name)).equals(await read(root, name))) return { reason: 'custom-font', file: name };
     }
-  } catch { return 'missing-helper'; }
+  } catch (error) { return { reason: 'missing-helper', ...(error.path ? { file: basename(error.path) } : {}) }; }
   return null;
 }
 
@@ -138,8 +145,8 @@ async function shippedHelpersMismatch(directory, template) {
 export async function shippedLayeredDocument(directory) {
   const entry = await shippedEntrypoint(directory);
   if (entry.reason) return { shipped: false, reason: entry.reason, ...(entry.upgradable ? { upgradable: true } : {}) };
-  const reason = await shippedHelpersMismatch(directory, entry.template);
-  return reason ? { shipped: false, reason } : { shipped: true };
+  const mismatch = await shippedHelpersMismatch(directory, entry.template);
+  return mismatch ? { shipped: false, ...mismatch } : { shipped: true };
 }
 
 /** `directory` is the caller's already-owned staged composition copy. */
@@ -153,7 +160,7 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
   if (scenes.some(scene => scene.media?.kind === 'video'
     && (!Number.isFinite(scene.media.fps) || scene.media.fps <= 10))) return declined('unsupported-video-fps');
   const mismatch = await shippedHelpersMismatch(directory, template);
-  if (mismatch) return declined(mismatch);
+  if (mismatch) return { ...declined(mismatch.reason), ...(mismatch.file ? { file: mismatch.file } : {}), ...(mismatch.upgradable ? { upgradable: true } : {}) };
   let source = original.toString();
   for (const [from, to] of [
     ["  const canvas = document.getElementById('stage');", "  let canvas = document.getElementById('stage');"],

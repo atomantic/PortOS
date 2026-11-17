@@ -1,32 +1,16 @@
-/**
- * The universe-walking half of every universe-backed burn job.
- *
- * Both the describe job and the images job answer the same two questions — "how
- * much work is outstanding across every universe" and "which single universe do
- * I chew on this run" — and differ only in what counts as a row. Written twice,
- * the pick rule drifted immediately: the ONE-universe-per-run rule below is a
- * correction of an earlier version that spread the cap across universes and
- * produced a cap the run never honored, and a second copy is a second chance to
- * regress it.
- */
+/** The universe-walking half of every universe-backed burn job: outstanding-work count and single-universe pick, shared so the pick rule cannot drift between jobs. */
 
 import { getUniverse, listUniverses } from '../universeBuilder.js';
 import { QUOTA_BURN_BOUNDS } from '../../lib/quotaBurnConfig.js';
 
-// Bounds come from the catalog descriptor the client renders its min/max from —
-// hardcoding them here would let a raised cap change the accepted range in the
-// form without changing what the jobs actually run.
+// From the catalog descriptor the client renders its min/max from, so the form and jobs agree.
 const ENTRY_BOUNDS = QUOTA_BURN_BOUNDS.maxEntries;
 
 /** `params.maxEntries` clamped into the range the job form advertises. */
 export const clampMaxEntries = (params) =>
   Math.min(ENTRY_BOUNDS.max, Math.max(ENTRY_BOUNDS.min, Number(params?.maxEntries) || ENTRY_BOUNDS.default));
 
-/**
- * The universes a job targets: the one it names, or all of them. A universe
- * deleted since the job was configured must not wedge the family — report zero
- * pending and let the next job in the plan take the window.
- */
+/** The universes a job targets: the one it names, or all. A deleted universe reports zero pending rather than wedging the family. */
 export async function loadUniverses(params) {
   const id = typeof params?.universeId === 'string' ? params.universeId.trim() : '';
   if (!id || id === 'all') return listUniverses();
@@ -34,25 +18,14 @@ export async function loadUniverses(params) {
 }
 
 /**
- * Walk the targeted universes, count the whole backlog, and pick the FIRST
- * universe that has work — capped to `maxEntries`.
+ * Walk the targeted universes, count the whole backlog, and pick the FIRST universe with
+ * work, capped to `maxEntries`. One universe per run: each job's `run` makes a single
+ * batched call against one universe, so spreading the cap never held.
  *
- * One universe per run because each job's `run` makes a single batched call
- * against one universe (one render collection, or one describe batch reported
- * under one name). Spreading the budget across several produced a cap the run
- * never honored and a status line that advertised more universes than it
- * touched.
- *
- * `rowsFor(universe)` returns that universe's outstanding rows, already filtered
- * for the cooldown. `sortRows` (optional) orders the pick — applied ONLY to the
- * universe actually chosen, since every other universe contributes nothing but
- * its row count and sorting those is pure waste on a path that runs for every
- * configured job on every config-page load.
- *
- * Returns `{ picked, total, max }`, where `picked` carries the universe's id and
- * name rather than the record: the probe's return value is handed to the client
- * inside the status payload, and a universe record is a multi-megabyte blob that
- * neither job's `run` reads more than two fields of.
+ * `rowsFor(universe)` returns outstanding rows (cooldown already applied). `sortRows`
+ * orders only the chosen universe's rows; others contribute just a count. Returns
+ * `{ picked, total, max }`; `picked` carries id and name, not the multi-megabyte record,
+ * because the probe result goes to the client in the status payload.
  */
 export async function collectUniverseBacklog(params, { rowsFor, sortRows } = {}) {
   const max = clampMaxEntries(params);

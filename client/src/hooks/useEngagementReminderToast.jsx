@@ -7,7 +7,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import toast from '../components/ui/Toast';
-import * as api from '../services/api';
+import { updateInstanceFeature } from '../services/apiSystem.js';
+import { claimReviewQueueDelivery } from '../services/apiReview.js';
 import { useActionQueue } from './useActionQueue';
 import { actionSelectionLink } from '../components/ActionQueuePreview';
 import { INSTANCE_FEATURES_CHANGED } from '../constants/events.js';
@@ -19,7 +20,7 @@ function ReminderToast({ t, action }) {
   const handleDisable = async () => {
     if (!canDisable || disabling) return;
     setDisabling(true);
-    const result = await api.updateInstanceFeature(action.featureId, false, { silent: true }).catch((error) => {
+    const result = await updateInstanceFeature(action.featureId, false, { silent: true }).catch((error) => {
       toast.error(error.message || 'Could not disable this feature on the instance');
       return null;
     });
@@ -79,7 +80,7 @@ export function useEngagementReminderToast() {
     if (!error && document.visibilityState !== 'hidden') {
       for (const action of data?.items || []) {
         if (action.id !== 'product:daily-post') continue;
-        api.claimReviewQueueDelivery(action.id, { silent: true }).then((result) => {
+        claimReviewQueueDelivery(action.id, { silent: true }).then((result) => {
           if (!active || !result.claimed) return;
           toast((t) => <ReminderToast t={t} action={action} />, {
             id: `engagement-reminder-${action.id}:${action.occurrence}:${result.generation}`,

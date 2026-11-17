@@ -23,10 +23,7 @@ import usePendingListRows from '../../hooks/usePendingListRows';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
-import CharacterDetailEditor from '../universe/CharacterDetailEditor';
 import ObjectAttachmentsEditor from '../universe/ObjectAttachmentsEditor';
-import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
-import CharacterLoraChip from '../loraTraining/CharacterLoraChip';
 import Pill from '../ui/Pill';
 import CollapsibleSection from '../ui/CollapsibleSection';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
@@ -366,14 +363,6 @@ export default function CanonCard({
   // render the actual series name. Null/empty falls back to the id-tooltip
   // form for callers that don't have the map handy.
   seriesNameMap = null,
-  // Universe-only character extensions. When provided + kind is 'characters',
-  // CanonCard reveals an Expand → CharacterDetailEditor section and a
-  // Reference Sheet panel. NounsStage (series view) omits this so the
-  // per-series cast list stays focused on naming + visual refs.
-  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted, castList }
-  // `castList` (the universe-wide character list) feeds the relationship-link
-  // target picker in CharacterDetailEditor (#1287).
-  characterExtensions = null,
   // Universe-only object extensions. When provided + kind is 'objects',
   // CanonCard reveals an Attachments editor (object↔character emotional
   // attachment links, #1288). NounsStage (series view) omits this.
@@ -466,11 +455,10 @@ export default function CanonCard({
   // Render still requires a description (the prompt source) + an actual
   // handler from the parent. Pending state is checked inside EntryThumbSlot.
 
-  const showCharacterSheet = kind.key === 'characters' && !!characterExtensions && !!onPatchEntry;
   const canRender = !!onRender && !!description.trim();
   const thumbnail = (
     <EntryThumbSlot
-      size={showCharacterSheet ? 'sheet' : 'sm'}
+      size="sm"
       inFlightJobId={inFlightJobId || null}
       imageRefs={refs}
       primaryImageRef={entry.primaryImageRef || null}
@@ -530,51 +518,12 @@ export default function CanonCard({
         editable={!!onPatchEntry && !locked}
         onPatch={(patch) => onPatchEntry?.(entry.id, patch)}
       />
-      {kind.key === 'characters' && !showCharacterSheet ? (
+      {kind.key === 'characters' ? (
         <WardrobeSection
           wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}
           editable={!!onPatchEntry && !locked}
           onChange={(next) => onPatchEntry?.(entry.id, { wardrobes: next })}
         />
-      ) : null}
-      {/* Universe-only: extended character detail editor + AI expand action.
-          Hidden when the caller didn't pass `characterExtensions` (pipeline
-          series view). Locked characters render read-only inputs. */}
-      {showCharacterSheet ? (
-        <CharacterDetailEditor
-          key={entry.id}
-          portrait={thumbnail}
-          entry={entry}
-          universeId={characterExtensions.universeId}
-          characters={characterExtensions.castList || []}
-          onPatch={(patch) => onPatchEntry(entry.id, patch)}
-          onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
-          expanding={!!characterExtensions.expanding}
-          disabled={locked}
-        >
-          <WardrobeSection
-            wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}
-            editable={!locked}
-            onChange={(next) => onPatchEntry(entry.id, { wardrobes: next })}
-          />
-          <CharacterReferenceSheetPanel
-            universeId={characterExtensions.universeId}
-            entry={entry}
-            locked={locked}
-            onSheetCompleted={characterExtensions.onSheetCompleted}
-            onSheetDeleted={characterExtensions.onSheetDeleted}
-            onOpenLightbox={(filename) => onPreview?.(filename, { isSheet: true })}
-          />
-          {/* Trained-LoRA link + dataset entry point (machine-local — the
-              chip resolves from this machine's lora sidecars). */}
-          <div className="mt-2">
-            <CharacterLoraChip
-              entryId={entry.id}
-              ingredientId={entry.ingredientId || null}
-              universeId={characterExtensions.universeId}
-            />
-          </div>
-        </CharacterDetailEditor>
       ) : null}
       {/* Universe-only: object↔character attachment editor (#1288). Hidden when
           the caller didn't pass `objectExtensions` (pipeline series view).
@@ -792,7 +741,7 @@ export default function CanonCard({
   return (
     <EntryCard
       locked={locked}
-      thumbnail={showCharacterSheet ? null : thumbnail}
+      thumbnail={thumbnail}
       title={title}
       body={body}
       actions={actions}

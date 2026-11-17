@@ -75,7 +75,8 @@ describe('MusicVideo project load recovery (#9761)', () => {
     if (path === '/music-video') {
       expect(screen.getByTestId('mv-project-grid')).toHaveTextContent(PROJECT_NO_CLIP.name);
     } else {
-      expect(screen.getByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+      // The workspace is its own chunk (#16565), so it renders once that import settles.
+      expect(await screen.findByRole('heading', { level: 2, name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
       expect(screen.getByRole('tab', { name: /^Storyboard/ })).toHaveAttribute('aria-selected', 'true');
     }
   });
@@ -718,7 +719,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
 
     it('keeps the build shortcut disabled while creative setup is being edited, then runs after Cancel', async () => {
       await openProject({ ...PROJECT_WITH_CLIP, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, renderHistoryId: 'rh-9' }, 'story');
-      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Set up creative direction' })); });
+      await act(async () => {});
       const build = screen.getByRole('button', { name: 'Build the publishing kit' });
       expect(build).toBeDisabled();
       expect(build).toHaveAttribute('title', 'Save or cancel the creative setup before building the publishing kit.');

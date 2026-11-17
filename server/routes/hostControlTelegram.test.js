@@ -46,7 +46,6 @@ const bridgeEffects = vi.hoisted(() => ({
   cleanup: vi.fn(async () => {}),
   sendMessage: vi.fn(async () => ({ success: true })),
   updateCachedForwardTypes: vi.fn(),
-  reload: vi.fn(async () => {}),
 }));
 vi.mock('../services/telegramBridge.js', () => bridgeEffects);
 
@@ -78,7 +77,6 @@ describe('Telegram bot and bridge operator authority', () => {
       ['put', '/api/telegram/config', { token: 'new-token', chatId: '87654321' }, telegramEffects.init, 200],
       ['post', '/api/telegram/test', { message: 'Hello from test' }, telegramEffects.sendMessage, 200],
       ['put', '/api/telegram/method', { method: 'mcp-bridge' }, bridgeEffects.init, 200],
-      ['post', '/api/telegram/bridge/reload', {}, bridgeEffects.reload, 200],
       ['delete', '/api/telegram/config', {}, bridgeEffects.cleanup, 200],
     ] });
   });

@@ -22,11 +22,12 @@ import { matchesSpawnBudgetProof, newSpawnBudgetEpisode, validSpawnBudgetEpisode
  */
 
 import { DEVELOPMENT_ACTIVE_STATUSES, developmentWorkIdentity, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isTruthyMeta, sameMetaValue } from '../lib/metadataFlags.js';
 import { reviewerModelsFromDefaults } from '../lib/reviewerConfig.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, hasKnownPrefix, toRepresentableTask, PRIORITY_VALUES } from '../lib/taskParser.js';
-import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema, validateRequest } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS, cosTaskTypeSchema } from '../lib/cosValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, isAgentPausedTask, resolvePausedTaskResume, retirePausedAgent } from '../lib/taskPauseHold.js';
@@ -34,7 +35,7 @@ import { REQUEUED_AT_KEY } from '../lib/taskRequeue.js';
 import { resolveTaskStatusTransition, isTerminalTaskStatus } from '../lib/taskStatusTransition.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
 import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
-import { splitTaskPromptFields, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../lib/cosTaskPrompt.js';
+import { isPromptPayload, splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
 import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
@@ -47,59 +48,14 @@ import { buildQueuedTask } from './cosTaskIntake.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
-// First non-empty line of a string — used by addTask's dedup, since stored
-// descriptions are flattened to a single line by generateTasksMarkdown. Declared
+// First non-empty line of a string — addTask's duplicate key, so two tasks that
+// differ only in a multi-line body still collide. Declared
 // in the dependency-free text leaf and re-exported here at the address this
 // module's callers already import it from.
 import { firstLine } from '../lib/textUtils.js';
 export { firstLine };
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
-
-// Heading the update path stamps on text it lifts out of a multi-line description
-// edit and into the newline-safe note, so the provenance survives a later read.
-const DESCRIPTION_OVERFLOW_HEADING = '(from description)';
-
-/**
- * Normalize a multi-line `description` on the UPDATE path, preserving the body.
- *
- * Markdown task rows are ONE-LINE records: `generateTasksMarkdown` emits the
- * description into `- [ ] #id | PRIORITY | <description>` and
- * `parseTasksMarkdown` reads only that first line. `addTask` has collapsed a
- * multi-line description for exactly that reason since #4153 — `writeTaskUpdate`
- * did not, so saving a multi-line edit from the task editor's textarea wrote the
- * extra lines into the file as free text. Reparsing then silently truncated the
- * description, scraped any `  - key: value` line into the task's OWN metadata
- * (re-targeting its app/provider/prompt), and minted a phantom auto-approved
- * task out of any pasted `- [ ] #id | …` row that the spawner would then run
- * (#7240).
- *
- * Unlike `addTask` this never DROPS the remainder. The full submitted text goes
- * to `metadata.prompt` when the task has none; when it already has one, the text
- * is appended to `metadata.context` instead, because `updateTask` must not
- * overwrite a real prompt (the contract in `server/lib/cosTaskPrompt.js`). Both
- * fields round-trip newlines through the JSON sentinel, and `taskContextBlock`
- * already renders prompt + note together — nothing is lost and nothing is
- * silently replaced. An explicitly-cleared prompt (`''`) counts as present, the
- * same absent-vs-cleared rule the rest of the store follows.
- *
- * Returns `null` when there is nothing to normalize; never mutates its input.
- */
-function normalizeUpdatedDescription(description, metadata) {
-  if (typeof description !== 'string' || !description.includes('\n')) return null;
-  const nextMetadata = { ...metadata };
-  if (typeof nextMetadata[TASK_PROMPT_KEY] === 'string') {
-    const block = `${DESCRIPTION_OVERFLOW_HEADING}\n${description}`;
-    const existing = typeof nextMetadata[TASK_CONTEXT_KEY] === 'string' ? nextMetadata[TASK_CONTEXT_KEY] : '';
-    // Re-saving the same edit must not grow the note without bound.
-    if (!existing.includes(block)) {
-      nextMetadata[TASK_CONTEXT_KEY] = existing ? `${existing}\n\n${block}` : block;
-    }
-  } else {
-    nextMetadata[TASK_PROMPT_KEY] = description;
-  }
-  return { description: firstLine(description), metadata: nextMetadata };
-}
 
 // The `blockedCategory` vocabulary lives in `lib/taskBlockCategories.js` — the
 // pause logic, the failure reaper below, and the investigation auto-retry all
@@ -116,16 +72,6 @@ export { PAUSED_BLOCKED_CATEGORIES };
 // a multi-line note edit can't overwrite the payload (see `splitTaskPromptFields`).
 const LEGACY_DIRECT_FIELDS = ['context', 'prompt', 'model', 'provider', 'effort', 'executionOptions', 'temperature', 'thinking', 'app', 'orchestrationMode', 'orchestrationProfile'];
 
-// Equality for metadata values across a fresh markdown re-parse: primitives by
-// ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
-// sides are independent parses with different references but equal content.
-const metaValueEqual = (a, b) => {
-  if (a === b) return true;
-  if (a && b && typeof a === 'object' && typeof b === 'object') {
-    return JSON.stringify(a) === JSON.stringify(b);
-  }
-  return false;
-};
 
 /**
  * Does an `updateTask` patch change a task's EDITABLE CONTENT (vs only its
@@ -158,7 +104,7 @@ function isContentEdit(updates, existingMetadata = {}) {
     const existing = (existingMetadata && typeof existingMetadata === 'object') ? existingMetadata : {};
     for (const [key, value] of Object.entries(updates.metadata)) {
       if (CLAIM_KEY_SET.has(key) || key === 'updatedAt') continue; // claim keys + the stamp never count
-      if (!metaValueEqual(value, existing[key])) return true;      // a non-claim key counts only if it CHANGED
+      if (!sameMetaValue(value, existing[key])) return true;      // a non-claim key counts only if it CHANGED
     }
   }
   return false;
@@ -644,40 +590,22 @@ async function addTaskAttempt(taskData, taskType, { raw = false, ignoreTaskId = 
     if (id !== newTask.id) newTask = { ...newTask, id };
   }
 
-  // Route a multi-line context payload to `metadata.prompt` (#4153). Applied to
-  // BOTH branches — the raw path is how the generator, the reference-watch
-  // analysis, and the repo-study filer queue their pre-built tasks, and they
-  // carry the same kind of multi-thousand-character body the direct-write path
-  // does. One classification, at CREATE only: `updateTask` deliberately leaves
-  // both fields alone, because the task editor's textarea is seeded from the
-  // NOTE and re-classifying a multi-line edit of it would overwrite the task's
-  // real prompt. A producer that already wrote `metadata.prompt` wins over the
-  // inference. See `server/lib/cosTaskPrompt.js` for the full contract.
-  // Markdown task rows are one-line records. Preserve every generated prompt
-  // in the newline-safe metadata field before persistence, including raw
-  // on-demand tasks that bypass the queue generator's normalization pass.
+  // Classify a multi-line `context` payload as `metadata.prompt` (#4153), at CREATE
+  // only: the task editor's textarea is seeded from the NOTE, so re-classifying
+  // on `updateTask` would overwrite the task's real prompt. A producer-written
+  // `metadata.prompt` wins over the inference. See `server/lib/cosTaskPrompt.js`.
   //
-  // This runs BEFORE the context reclassification below on purpose: a producer
-  // that hands over a multi-line description AND a multi-line context note (the
-  // pr-reviewer generator's security-scan summary) means the description is the
-  // prompt and the note is the note. Reclassifying first promoted the note to
-  // `prompt`, which then counted as an explicit producer prompt and silently
-  // discarded the stage instructions — Stage 2 ran with no gate rules and no
-  // output contract.
-  if (typeof newTask.description === 'string' && newTask.description.includes('\n')) {
-    newTask = {
-      ...newTask,
-      description: firstLine(newTask.description),
-      metadata: {
-        ...(newTask.metadata || {}),
-        prompt: typeof newTask.metadata?.prompt === 'string'
-          ? newTask.metadata.prompt
-          : newTask.description,
-      },
-    };
+  // A multi-line DESCRIPTION is stored as written and is itself the prompt:
+  // prompt builders fall back to it when there is no `metadata.prompt`. Skip the
+  // promotion in that case — a producer that hands over a multi-line description
+  // AND a multi-line context note (the pr-reviewer generator's security-scan
+  // summary) means the description is the prompt and the note stays a note;
+  // promoting the note made it the "explicit" prompt, which Stage 2 then rendered
+  // as its instructions.
+  if (!isPromptPayload(newTask.description)) {
+    const splitMetadata = splitTaskPromptFields(newTask.metadata);
+    if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
   }
-  const splitMetadata = splitTaskPromptFields(newTask.metadata);
-  if (splitMetadata !== newTask.metadata) newTask = { ...newTask, metadata: splitMetadata };
 
   // Never accept proof supplied by an intake caller. A record with prior run
   // accounting is not a new episode merely because it was inserted here.
@@ -906,7 +834,7 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
   // Provenance is owned by the store, not by callers carrying task snapshots.
   // Compatibility only: retain historical membership for independently upgraded peers.
   delete updatedMetadata[RELEASE_ATTEMPTS_KEY];
-  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] !== undefined) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
+  if (current.metadata?.[RELEASE_ATTEMPTS_KEY] != null) updatedMetadata[RELEASE_ATTEMPTS_KEY] = current.metadata[RELEASE_ATTEMPTS_KEY];
   // Older peers may still use complete membership to authorize recovery. A
   // dispatch omitted by this version makes that historical record incomplete.
   if (spawnBudgetOperation?.kind === 'dispatch' && updatedMetadata[RELEASE_ATTEMPTS_KEY]?.complete === true) {
@@ -918,9 +846,9 @@ async function applySpawnBudgetOperation({ current, taskId, taskType, updatedMet
   // A reconciliation never grants a retry. Keep the hold until an explicit
   // reset, including when a stale completion supplies its older metadata.
   delete updatedMetadata.spawnBudgetReconciledHold;
-  if (current.metadata?.spawnBudgetReconciledHold === 'true') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  if (isTruthyMeta(current.metadata?.spawnBudgetReconciledHold)) updatedMetadata.spawnBudgetReconciledHold = true;
   const kind = spawnBudgetOperation?.kind;
-  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = 'true';
+  if (kind === 'reconcile') updatedMetadata.spawnBudgetReconciledHold = true;
   const oldCount = spawnBudgetCount(current.metadata?.totalSpawnCount ?? 0);
   const nextCount = spawnBudgetCount(updatedMetadata.totalSpawnCount ?? 0);
   if (kind === 'completion') {
@@ -1041,7 +969,7 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
   // retries and stale completion patches cannot revoke its durable owner.
   if (current.metadata?.releaseSynchronization && updates.metadata) {
     const nextMetadata = storedForm({ ...current, metadata: { ...current.metadata, ...updates.metadata } }, taskType).metadata;
-    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !isDeepStrictEqual(current.metadata[key], nextMetadata[key]))) {
+    if (RELEASE_SYNC_FROZEN_METADATA_KEYS.some(key => !sameMetaValue(current.metadata[key], nextMetadata[key]))) {
       return { error: 'Release synchronization dispatch ownership is immutable' };
     }
   }
@@ -1151,25 +1079,19 @@ async function writeTaskUpdateLocked(taskId, updates, taskType, { now, suppressD
     if (updatedMetadata[key] === undefined) delete updatedMetadata[key];
   });
 
-  // Collapse a multi-line description to the one-line record the markdown row can
-  // hold, re-homing the body into prompt/context rather than dropping it (#7240).
-  const normalizedDescription = normalizeUpdatedDescription(updates.description, updatedMetadata);
-  const nextMetadata = normalizedDescription ? normalizedDescription.metadata : updatedMetadata;
-  const nextDescription = normalizedDescription ? normalizedDescription.description : updates.description;
-
   // Update the task. Through `toRepresentableTask` so the object we return and
   // emit on `tasks:changed` is the one the file will hold — repairing only inside
   // generateTasksMarkdown would leave every consumer reading the pre-repair status
   // until something re-read the file (#7239).
   const updatedTask = toRepresentableTask({
     ...tasks[taskIndex],
-    ...(updates.description && { description: nextDescription }),
+    ...(updates.description && { description: updates.description }),
     ...(updates.priority && {
       priority: updates.priority.toUpperCase(),
       priorityValue: PRIORITY_VALUES[updates.priority.toUpperCase()] || 2
     }),
     ...(updates.status && { status: updates.status }),
-    metadata: nextMetadata
+    metadata: updatedMetadata
   });
 
   tasks[taskIndex] = updatedTask;
@@ -1283,9 +1205,9 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now(), 
         { localHistory: !!local && hasSpawnHistory(local.metadata), remoteHistory: hasSpawnHistory(remote.metadata) });
       if (attempts === undefined) delete task.metadata[RELEASE_ATTEMPTS_KEY];
       else task.metadata[RELEASE_ATTEMPTS_KEY] = attempts;
-      if ((!local || localEpoch === remoteEpoch) && (local?.metadata?.spawnBudgetReconciledHold === 'true'
-        || remote.metadata?.spawnBudgetReconciledHold === 'true')) {
-        task.metadata.spawnBudgetReconciledHold = 'true';
+      if ((!local || localEpoch === remoteEpoch) && (isTruthyMeta(local?.metadata?.spawnBudgetReconciledHold)
+        || isTruthyMeta(remote.metadata?.spawnBudgetReconciledHold))) {
+        task.metadata.spawnBudgetReconciledHold = true;
       }
       // Only an explicit chain of prior dispatch tuples establishes ancestry;
       // a higher counter alone cannot order concurrent peer dispatches.
@@ -1680,7 +1602,6 @@ export async function challengeTask(taskId, { reason, evidence, reviewer } = {},
     const updated = await writeTaskUpdateLocked(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
     if (updated?.error) return updated;
     console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
-    cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
     return updated;
   });
 }
@@ -1723,7 +1644,7 @@ export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy }
     return { task, updated, nextStatus, resolvedType };
   });
   if (resolution.error) return resolution;
-  const { task, updated, nextStatus, resolvedType } = resolution;
+  const { task, updated, nextStatus } = resolution;
 
   if (outcome === 'escalated') {
     // Surface the dispute to the single PortOS user as an approval-required
@@ -1751,7 +1672,6 @@ export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy }
   }
 
   console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
-  cosEvents.emit('task:challenge-resolved', { taskId, taskType: resolvedType, outcome });
   return updated;
 }
 

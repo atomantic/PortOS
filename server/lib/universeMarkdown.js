@@ -6,8 +6,8 @@
  *
  * This module is intentionally pure: it reads a universe-shaped record and
  * returns text without touching storage, the filesystem, or the network.
- * Filename normalization mirrors client/src/lib/universeMarkdownFilename.js;
- * change both helpers in the same commit and run their shared contract cases.
+ * The client re-exports the filename helpers (client/src/lib/universeMarkdownFilename.js),
+ * so the browser download name and the server attachment name cannot drift.
  */
 
 const CANON_ENTRY_FIELD_ORDER = Object.freeze({

@@ -190,8 +190,12 @@ const FACTORY_RE = /\bvi\.mock\(\s*(['"])([^'"]+)\1\s*,\s*(?:async\s*)?\(\s*\)\s
 
 const exportCache = new Map();
 
-/** `file:line — spec mocks <key>` for each key the real module does not export. */
-export function mockDrift(testFile, rawSource, { root, allowed = new Map() }) {
+/**
+ * `file:line — spec mocks <key>` for each key the real module does not export.
+ * Allowlist keys that excused a violation are added to `used`, so callers can
+ * fail on entries the scan no longer needs (see `unusedAllowed`).
+ */
+export function mockDrift(testFile, rawSource, { root, allowed = new Map(), used = new Set() }) {
   const masked = mask(rawSource);
   const rel = relative(root, testFile).split(sep).join('/');
   const violations = [];
@@ -207,10 +211,18 @@ export function mockDrift(testFile, rawSource, { root, allowed = new Map() }) {
     if (!exportCache.has(target)) exportCache.set(target, exportNames(target));
     const exported = exportCache.get(target);
     for (const key of keys) {
-      if (key === '__esModule' || exported.has(key) || allowed.has(`${rel}|${m[2]}|${key}`)) continue;
+      if (key === '__esModule' || exported.has(key)) continue;
+      const allowKey = `${rel}|${m[2]}|${key}`;
+      if (allowed.has(allowKey)) {
+        used.add(allowKey);
+        continue;
+      }
       const line = rawSource.slice(0, m.index).split('\n').length;
       violations.push(`${rel}:${line} — ${m[2]} mocks ${key}`);
     }
   }
   return violations;
 }
+
+/** Allowlist entries (`<test file>|<module specifier>|<key>`) the scan never needed. */
+export const unusedAllowed = (allowed, used) => [...allowed.keys()].filter((k) => !used.has(k));

@@ -755,6 +755,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
     if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
+    else if (seekRequest.pause) audioRef.current.pause?.();
   }, [seekRequest]);
   // Back and Next move the song; it keeps playing or stays paused as it was.
   const seekTo = useCallback((t) => {
@@ -1003,18 +1004,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const exactActive = documentVariant && touched && !playing && !cold.active && !outro.active;
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
-      {composite && !film && (
-        <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
+      {/* The source picker names what plays; only a preview missing part of the composition says so. */}
+      {documentVariant && !nativeDrawing && (
+        <p className="text-xs text-port-text-muted">The template's beat reactions, cards and HUD show only in the paused frame for now.</p>
       )}
-      {film && (
-        <p className="text-xs text-port-text-muted">Each shot's newest Blender render cut on the song, with the film look, shot effects and title card drawn live. No cut is assembled; a shot without a render stays black for its length.</p>
-      )}
-      {documentVariant && (
-        <p className="text-xs text-port-text-muted">{nativeDrawing
-          ? "Plays the selected takes with the template's camera moves, beat reactions, cards, HUD and words. Paused, it shows the composition's exact frame."
-          : "Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's beat reactions, cards and HUD appear only there for now."}</p>
-      )}
-      <figure ref={figureRef} aria-label={pictureLabel} className={`relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black ${filmFrame ? 'mx-auto' : ''}`}
+      <figure ref={figureRef} data-preview-picture aria-label={pictureLabel} className={`relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black ${filmFrame ? 'mx-auto' : ''}`}
         style={nativeDrawing ? { aspectRatio: `${nativeData.render.width} / ${nativeData.render.height}` } : filmFrame || undefined}>
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
         <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * fps)}
@@ -1050,72 +1044,73 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {!cold.active && !outro.active && (lyricLayerSteady ? overlay : cardLayer.overlay)}
         {documentVariant && <ExactDocumentFrame ref={exactRef} project={project} time={time} active={exactActive} lookOn={lookOn} />}
       </figure>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <div className="min-w-0 basis-full text-[11px] text-port-text-muted @min-[32rem]/mv-preview:flex-1 @min-[32rem]/mv-preview:basis-auto">
-          {shot && cold.active && (
-            <span className="tabular-nums">Before the song · shot {index + 1} of {timed.length} · {formatDurationSec(cold.time)}</span>
+      <div data-preview-controls className="space-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="min-w-0 basis-full text-[11px] text-port-text-muted @min-[32rem]/mv-preview:flex-1 @min-[32rem]/mv-preview:basis-auto">
+            {shot && cold.active && (
+              <span className="tabular-nums">Before the song · shot {index + 1} of {timed.length} · {formatDurationSec(cold.time)}</span>
+            )}
+            {shot && !cold.active && (
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <ShotStepper scenes={timed} time={time} onSeek={seekTo} onEditShot={editShot} keys />
+                <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
+                {film && (filmGap || filmClip) && (
+                  <span>{filmGap ? 'No shot here' : `${filmClip.quality === 'final' ? 'Final' : 'Preview'} render${filmClip.stale ? ', out of date' : ''}`}</span>
+                )}
+                {filmCutEffect && (
+                  <span>{`${MUSIC_VIDEO_CUT_EFFECT_LABELS[filmCutEffect.style]} (drawn in cuts)`}</span>
+                )}
+              </div>
+            )}
+            {!film && !cardInFrame && shot && !picture?.referenceImageId && !picture?.videoHistoryId && (
+              <p className="line-clamp-2 break-words">
+                <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}
+              </p>
+            )}
+            {(cardOnly || lyricsOn) && failed && <p className="text-port-error">{cardOnly ? 'The title card' : 'The lyrics'} could not be drawn over the animatic.</p>}
+            {cardOverWords && cardLayer.failed && !failed && <p className="text-port-error">The title card could not be drawn over the animatic.</p>}
+          </div>
+          {cold.seconds > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (cold.active) { cold.stop(); return; }
+                outro.stop();
+                cold.start();
+              }}
+              aria-pressed={cold.active}
+              title={`The ${formatDurationSec(cold.seconds)} before the song, then the song. Playing the song from its start plays this first too.`}
+              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${cold.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            >
+              <Clapperboard size={14} aria-hidden="true" /> Cold open
+            </button>
           )}
-          {shot && !cold.active && (
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <ShotStepper scenes={timed} time={time} onSeek={seekTo} onEditShot={editShot} keys />
-              <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
-              {film && (filmGap || filmClip) && (
-                <span>{filmGap ? 'No shot here' : `${filmClip.quality === 'final' ? 'Final' : 'Preview'} render${filmClip.stale ? ', out of date' : ''}`}</span>
-              )}
-              {filmCutEffect && (
-                <span>{`${MUSIC_VIDEO_CUT_EFFECT_LABELS[filmCutEffect.style]} (drawn in cuts)`}</span>
-              )}
-            </div>
+          {outro.seconds > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (outro.active) { outro.stop(); return; }
+                audioRef.current?.pause?.();
+                outro.start();
+              }}
+              aria-pressed={outro.active}
+              title={`The ending that plays for ${outro.seconds}s after the song`}
+              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            >
+              <Scissors size={14} aria-hidden="true" /> Ending
+            </button>
           )}
-          {!film && !cardInFrame && shot && !picture?.referenceImageId && !picture?.videoHistoryId && (
-            <p className="line-clamp-2 break-words">
-              <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}
-            </p>
+          {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
+          {lyricsAvailable && (
+            <button
+              type="button"
+              onClick={() => setLyricsOn((on) => !on)}
+              aria-pressed={lyricsOn}
+              className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${lyricsOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            >
+              <Captions size={14} aria-hidden="true" /> Lyrics
+            </button>
           )}
-          {(cardOnly || lyricsOn) && failed && <p className="text-port-error">{cardOnly ? 'The title card' : 'The lyrics'} could not be drawn over the animatic.</p>}
-          {cardOverWords && cardLayer.failed && !failed && <p className="text-port-error">The title card could not be drawn over the animatic.</p>}
-        </div>
-        {cold.seconds > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              if (cold.active) { cold.stop(); return; }
-              outro.stop();
-              cold.start();
-            }}
-            aria-pressed={cold.active}
-            title={`The ${formatDurationSec(cold.seconds)} before the song, then the song. Playing the song from its start plays this first too.`}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${cold.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
-          >
-            <Clapperboard size={14} aria-hidden="true" /> Cold open
-          </button>
-        )}
-        {outro.seconds > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              if (outro.active) { outro.stop(); return; }
-              audioRef.current?.pause?.();
-              outro.start();
-            }}
-            aria-pressed={outro.active}
-            title={`The ending that plays for ${outro.seconds}s after the song`}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
-          >
-            <Scissors size={14} aria-hidden="true" /> Ending
-          </button>
-        )}
-        {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
-        {lyricsAvailable && (
-          <button
-            type="button"
-            onClick={() => setLyricsOn((on) => !on)}
-            aria-pressed={lyricsOn}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${lyricsOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
-          >
-            <Captions size={14} aria-hidden="true" /> Lyrics
-          </button>
-        )}
       </div>
       {shot && !cold.active && (
         <FrameStepper
@@ -1128,11 +1123,14 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           keys
         />
       )}
+      </div>
       <audio
+        data-preview-scrub
         ref={audioRef}
         src={audioUrl}
         controls
         preload="metadata"
+        data-song-clock="0"
         aria-label={songLabel}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => { outro.stop(); setTouched(true); setTime(e.currentTarget.currentTime); }}

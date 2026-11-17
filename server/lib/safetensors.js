@@ -1,31 +1,15 @@
 /**
  * Minimal safetensors header reader + FLUX.2 size-variant detector.
  *
- * Used by the LoRA service to tell a Klein-4B LoRA (transformer hidden dim
- * 3072) apart from a Klein-9B LoRA (hidden dim 4096) so the picker can hide
- * weights that diffusers would reject at load time with a tensor-shape
- * mismatch (which `scripts/lora_utils.py` swallows, producing a silent
- * base render). The Civitai `baseModel` string distinguishes the two too,
- * but self-trained / hand-dropped LoRAs have no sidecar — the file header is
- * the only ground truth there.
- *
- * Safetensors layout: bytes[0..8) = little-endian u64 header length N, then
- * bytes[8..8+N) = a UTF-8 JSON object mapping tensor name → { dtype, shape,
- * data_offsets } (plus an optional `__metadata__` key). We read ONLY that
- * header — never the multi-hundred-MB tensor payload that follows.
+ * Used by the LoRA service to tell a Klein-4B LoRA (transformer hidden dim 3072) from Klein-9B (4096) so the picker hides weights diffusers would reject with a tensor-shape mismatch (which `scripts/lora_utils.py` swallows into a silent base render). Civitai's `baseModel` also distinguishes them, but self-trained/hand-dropped LoRAs have no sidecar; the file header is the only ground truth. Layout: bytes[0..8) = little-endian u64 header length N, then bytes[8..8+N) = UTF-8 JSON (tensor name → { dtype, shape, data_offsets }, plus optional `__metadata__`). Only that header is read, never the tensor payload.
  */
 
 import { open } from 'fs/promises';
 
-// Sanity bound: a real safetensors header is a few KB to low-MB. Anything
-// past this is a corrupt/garbage length we refuse to allocate for.
+// Sanity bound: a real header is a few KB to low-MB; anything past this is a corrupt length we refuse to allocate for.
 const MAX_HEADER_BYTES = 100 * 1024 * 1024; // 100 MB
 
-/**
- * Read and parse the JSON header of a safetensors file. Returns the parsed
- * object (tensor-name → descriptor) or `null` if the file is missing,
- * truncated, or doesn't look like safetensors. Never throws.
- */
+/** Read and parse a safetensors JSON header (tensor-name → descriptor); `null` if the file is missing, truncated, or not safetensors. Never throws. */
 export const readSafetensorsHeader = async (path) => {
   let handle = null;
   try {
@@ -33,8 +17,7 @@ export const readSafetensorsHeader = async (path) => {
     const lenBuf = Buffer.alloc(8);
     const { bytesRead } = await handle.read(lenBuf, 0, 8, 0);
     if (bytesRead < 8) return null;
-    // readBigUInt64LE → Number is safe for any realistic header length (well
-    // under 2^53); the MAX_HEADER_BYTES guard rejects anything absurd.
+    // readBigUInt64LE → Number is safe for any realistic length; MAX_HEADER_BYTES rejects absurd ones.
     const headerLen = Number(lenBuf.readBigUInt64LE(0));
     if (!Number.isFinite(headerLen) || headerLen <= 0 || headerLen > MAX_HEADER_BYTES) return null;
     const jsonBuf = Buffer.alloc(headerLen);
@@ -43,27 +26,20 @@ export const readSafetensorsHeader = async (path) => {
     const parsed = JSON.parse(jsonBuf.toString('utf-8'));
     return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
-    // Missing file, partial write, non-safetensors blob, malformed JSON —
-    // all map to "can't determine" so callers fall back gracefully.
+    // Missing file, partial write, non-safetensors blob or malformed JSON all mean "can't determine".
     return null;
   } finally {
     if (handle) await handle.close().catch(() => {});
   }
 };
 
-// FLUX.2 denoiser hidden dims. Klein-4B = 3072, Klein-9B = 4096. LoRA tensors
-// project off those dims, so the values surface both directly (e.g. img_in)
-// and ×4 in the fused MLP/attention-out linears (12288 / 16384) — match both.
+// FLUX.2 denoiser hidden dims (Klein-4B = 3072, Klein-9B = 4096). LoRA tensors project off those dims, so they appear directly (e.g. img_in) and ×4 in fused MLP/attention-out linears (12288 / 16384).
 const DIMS_9B = new Set([4096, 16384]);
 const DIMS_4B = new Set([3072, 12288]);
 
 /**
- * Inspect a parsed safetensors header and classify it as a FLUX.2 Klein
- * `'4b'` / `'9b'` LoRA, or `null` when it can't be determined.
- *
- * Only transformer-block tensors are considered. Text-encoder tensors are
- * skipped on purpose: T5-XXL's own hidden dim is 4096, so a 4B LoRA that also
- * trains the text encoder would otherwise be mis-flagged as 9B.
+ * Classify a parsed safetensors header as a FLUX.2 Klein `'4b'` / `'9b'` LoRA, or `null` when undeterminable. Only transformer-block tensors count: T5-XXL's own hidden dim is 4096,
+ * so a 4B LoRA that also trains the text encoder would be mis-flagged as 9B.
  */
 export const detectFlux2VariantFromHeader = (header) => {
   if (!header || typeof header !== 'object') return null;
@@ -71,9 +47,7 @@ export const detectFlux2VariantFromHeader = (header) => {
   let saw4b = false;
   for (const [name, desc] of Object.entries(header)) {
     if (name === '__metadata__') continue;
-    // FLUX denoiser blocks are named `*single_transformer_blocks*` /
-    // `*transformer_blocks*` (diffusers) — the discriminating tensors. Skip
-    // everything else (VAE, text encoders, misc).
+    // FLUX denoiser blocks are `*single_transformer_blocks*` / `*transformer_blocks*` (diffusers); skip VAE, text encoders, misc.
     if (!/transformer_blocks/.test(name)) continue;
     const shape = desc?.shape;
     if (!Array.isArray(shape)) continue;
@@ -82,48 +56,27 @@ export const detectFlux2VariantFromHeader = (header) => {
       else if (DIMS_4B.has(dim)) saw4b = true;
     }
   }
-  // A well-formed LoRA is one variant or the other, never both. If a malformed
-  // file somehow shows both, refuse to guess.
+  // A well-formed LoRA is one variant, never both; a malformed file showing both is not guessed.
   if (saw9b && !saw4b) return '9b';
   if (saw4b && !saw9b) return '4b';
   return null;
 };
 
-/**
- * Convenience: read a file and classify it in one call. Returns `'4b'` /
- * `'9b'` / `null`.
- */
+/** Read a file and classify it in one call: `'4b'` / `'9b'` / `null`. */
 export const detectFlux2Variant = async (path) =>
   detectFlux2VariantFromHeader(await readSafetensorsHeader(path));
 
 /**
- * LoRA safetensors key layouts.
+ * LoRA safetensors key layouts. Downloaded LoRAs ship in mutually incompatible key conventions and a runtime that fuses one layout silently no-ops (or renders noise) on another;
+ * the tensor names determine it, so it is classified once at install time instead of failing opaquely in a Python render.
  *
- * Downloaded LoRAs ship in several mutually incompatible key conventions, and
- * a runtime that fuses one layout silently no-ops (or renders noise) on
- * another. The layout is fully determined by the tensor names in the header,
- * so we classify it once at install time instead of discovering it as an
- * opaque failure deep inside a Python render.
+ * - `bare`: module paths with no wrapper prefix (`transformer_blocks.0.attn1.to_k.lora_A.weight`).
+ * - `comfyui`: the same under a `diffusion_model.` prefix (ComfyUI-targeted LTX-2 / WAN LoRAs); the LTX-2 MLX loader strips it, so it is fusable.
+ * - `diffusers`: PEFT/diffusers prefixes (`transformer.`, `base_model.model.`, `unet.`, `text_encoder…`); fusable for diffusers image runners, NOT the LTX-2 video loader.
+ * - `kohya`: kohya_ss / LyCORIS `lora_down.weight` + `lora_up.weight` pairs (usually `lora_unet_…` flattened names, per-module `alpha`); never fusable by a `lora_A`/`lora_B` reader.
+ * - `not_a_lora`: header parsed but holds no LoRA tensors (a checkpoint, VAE, embedding).
  *
- * - `bare`      — module paths with no wrapper prefix:
- *                 `transformer_blocks.0.attn1.to_k.lora_A.weight`
- * - `comfyui`   — the same paths under a `diffusion_model.` prefix (what
- *                 ComfyUI-targeted LTX-2 / WAN LoRAs ship as). The LTX-2 MLX
- *                 loader strips that prefix itself, so it is fusable.
- * - `diffusers` — PEFT/diffusers wrapper prefixes (`transformer.`,
- *                 `base_model.model.`, `unet.`, `text_encoder…`). Fusable for
- *                 diffusers-based image runners, NOT for the LTX-2 video
- *                 loader (whose keys carry no such prefix).
- * - `kohya`     — kohya_ss / LyCORIS training output: `lora_down.weight` +
- *                 `lora_up.weight` pairs (usually with `lora_unet_…`
- *                 underscore-flattened module names and per-module `alpha`
- *                 scalars). Never fusable by an `lora_A`/`lora_B` reader.
- * - `not_a_lora`— header parsed fine but holds no LoRA tensors at all (a full
- *                 checkpoint, a VAE, an embedding).
- *
- * `null` (rather than a member of this map) is the "couldn't determine"
- * sentinel — an unreadable/corrupt/non-safetensors file. Callers must NOT
- * treat it as `not_a_lora`.
+ * `null` (not a member of this map) is the "couldn't determine" sentinel for an unreadable/non-safetensors file; callers must NOT treat it as `not_a_lora`.
  */
 export const LORA_KEY_LAYOUTS = Object.freeze({
   BARE: 'bare',
@@ -135,22 +88,12 @@ export const LORA_KEY_LAYOUTS = Object.freeze({
 
 export const LORA_KEY_LAYOUT_VALUES = Object.freeze(Object.values(LORA_KEY_LAYOUTS));
 
-/**
- * Is `layout` one of the layouts this module actually knows? Callers that read
- * a layout back out of persisted state (a LoRA sidecar) must validate before
- * trusting it — an unrecognized string would otherwise fall through
- * `videoLoraLayoutIssue`'s known cases and get reported as "no LoRA tensors".
- */
+/** Is `layout` a layout this module knows? Layouts read back from persisted state (a LoRA sidecar) must be validated, or an unrecognized string falls through `videoLoraLayoutIssue` as "no LoRA tensors". */
 export const isKnownLoraKeyLayout = (layout) => LORA_KEY_LAYOUT_VALUES.includes(layout);
 
-// `lora_A` / `lora_B` (diffusers/PEFT rank pair) anywhere in a dotted key.
-// Case-insensitive: some trainers emit lowercase `lora_a`/`lora_b` (upstream's
-// own LTX trainer normalizes exactly that spelling on export), and treating
-// those as "no rank tensors" would misreport a usable LoRA as `not_a_lora`.
+// `lora_A` / `lora_B` (diffusers/PEFT rank pair) in a dotted key. Case-insensitive: some trainers (upstream's LTX trainer on export) emit `lora_a`/`lora_b`, which would otherwise misreport a usable LoRA as `not_a_lora`.
 const LORA_AB_RE = /(^|\.)lora_(A|B)(\.|$)/i;
-// kohya/LyCORIS rank pair. Also matched under a `diffusion_model.` prefix —
-// real-world LTX-2 LoRAs ship `diffusion_model.<path>.lora_down.weight`, which
-// looks ComfyUI-shaped but is NOT fusable by an lora_A/lora_B reader.
+// kohya/LyCORIS rank pair, also under `diffusion_model.` (real LTX-2 LoRAs ship `diffusion_model.<path>.lora_down.weight`: ComfyUI-shaped but NOT fusable by an lora_A/lora_B reader).
 const LORA_DOWN_UP_RE = /(^|\.)lora_(down|up)(\.|$)/i;
 // kohya's underscore-flattened module namespace (`lora_unet_…`, `lora_te1_…`).
 const KOHYA_PREFIX_RE = /^lora_(unet|te\d*)_/i;
@@ -158,13 +101,8 @@ const KOHYA_PREFIX_RE = /^lora_(unet|te\d*)_/i;
 const DIFFUSERS_PREFIX_RE = /^(transformer|base_model|unet|text_encoder\w*)\./;
 
 /**
- * Classify the LoRA key layout of a parsed safetensors header. Returns one of
- * `LORA_KEY_LAYOUTS`, or `null` when the header is missing/unparsable.
- *
- * Mixed files exist (a kohya LoRA that also ships a `diffusion_model.`-prefixed
- * copy of the same deltas), so each tensor votes and the winner is the most
- * common layout. Ties resolve toward the least-fusable layout — refusing a
- * render with a clear reason beats emitting noise.
+ * Classify the LoRA key layout of a parsed header: a `LORA_KEY_LAYOUTS` value, or `null` when missing/unparsable. Mixed files exist (a kohya LoRA also shipping a `diffusion_model.`-prefixed copy),
+ * so each tensor votes and the most common layout wins; ties go to the least-fusable layout (refusing with a clear reason beats emitting noise).
  */
 export const classifyLoraKeyLayoutFromHeader = (header) => {
   if (!header || typeof header !== 'object') return null;
@@ -180,8 +118,7 @@ export const classifyLoraKeyLayoutFromHeader = (header) => {
       counts[LORA_KEY_LAYOUTS.KOHYA] += 1;
       continue;
     }
-    // Everything below needs an actual rank tensor — bare `alpha` scalars and
-    // non-LoRA tensors carry no layout signal of their own.
+    // Everything below needs an actual rank tensor; bare `alpha` scalars and non-LoRA tensors carry no layout signal.
     if (!LORA_AB_RE.test(name)) continue;
     if (name.startsWith('diffusion_model.')) counts[LORA_KEY_LAYOUTS.COMFYUI] += 1;
     else if (DIFFUSERS_PREFIX_RE.test(name)) counts[LORA_KEY_LAYOUTS.DIFFUSERS] += 1;
@@ -199,25 +136,14 @@ export const classifyLoraKeyLayoutFromHeader = (header) => {
   return winner || LORA_KEY_LAYOUTS.NOT_A_LORA;
 };
 
-/**
- * Convenience: read a file and classify its LoRA key layout in one call.
- * Returns a `LORA_KEY_LAYOUTS` value, or `null` when the file can't be read.
- */
+/** Read a file and classify its LoRA key layout in one call: a `LORA_KEY_LAYOUTS` value, or `null` when unreadable. */
 export const classifyLoraKeyLayout = async (path) =>
   classifyLoraKeyLayoutFromHeader(await readSafetensorsHeader(path));
 
-// Layouts the LTX-2 MLX loader can actually fuse. Its fuser pairs
-// `<module>.lora_A.weight` with `<module>.lora_B.weight` after stripping a
-// leading `diffusion_model.` — so bare and ComfyUI-prefixed files work, and
-// nothing else does.
+// Layouts the LTX-2 MLX loader can fuse: it pairs `<module>.lora_A.weight` with `.lora_B.weight` after stripping a leading `diffusion_model.`, so only bare and ComfyUI-prefixed files work.
 const VIDEO_FUSABLE_LAYOUTS = new Set([LORA_KEY_LAYOUTS.BARE, LORA_KEY_LAYOUTS.COMFYUI]);
 
-/**
- * Why a layout can't be fused into the LTX-2 video transformer, as a
- * user-facing phrase — or `null` when it is fusable. `null` layout (couldn't
- * classify) is deliberately permissive: an unreadable header is not evidence
- * of an unusable file, and the caller already checked the file exists.
- */
+/** Why a layout can't be fused into the LTX-2 video transformer, as a user-facing phrase, or `null` when fusable. A `null` layout (couldn't classify) is permissive: an unreadable header isn't evidence of an unusable file. */
 export const videoLoraLayoutIssue = (layout) => {
   if (layout == null || VIDEO_FUSABLE_LAYOUTS.has(layout)) return null;
   if (layout === LORA_KEY_LAYOUTS.KOHYA) {

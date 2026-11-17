@@ -32,9 +32,9 @@ import { updateTask, addTask, getTaskById, reviveBlockedTask } from './cosTaskSt
 import { evaluateTasks } from './cosTaskGenerator.js';
 import { forceSpawnTask } from './cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../lib/taskPauseHold.js';
-import { terminateAgentViaRunner, killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
+import { killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from './cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../lib/runnerAgentLiveness.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
@@ -56,8 +56,6 @@ import { buildInvestigationFingerprint } from '../lib/investigationTasks.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { readHostShutdownMarker, clearHostShutdownMarker, HOST_SHUTDOWN_REASON } from '../lib/hostShutdown.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
 import * as shellService from './shell.js';
 
 import { exec } from '../lib/childProcess.js';
@@ -85,13 +83,10 @@ function runnerFailureError(result, fallbackMessage, failCode) {
 }
 
 /**
- * Shared runner-mode termination path for terminateAgent and killAgent.
- * Calls runnerFn, marks the task blocked, and cleans up. Returns the runner
- * result shape (`{ success, error?, status? }`) — callers decide whether a
- * failure throws (killAgent, whose route surfaces status) or is returned for
- * internal orchestration to inspect (terminateAgent, whose route is
- * fire-and-forget). The runner's HTTP `status` is preserved on failure so
- * killAgent can distinguish a genuine 404 from a 5xx infra error.
+ * Runner-mode kill path for killAgent. Calls runnerFn, marks the task
+ * blocked, and cleans up. Returns the runner result shape
+ * (`{ success, error?, status? }`); the runner's HTTP `status` is preserved on
+ * failure so killAgent can distinguish a genuine 404 from a 5xx infra error.
  */
 async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReason) {
   const agentInfo = runnerAgents.get(agentId);
@@ -250,11 +245,6 @@ async function markAgentPaused(agentId, agentInfo, pausedAt, reason) {
     at: pausedAt,
     data: { reason: reason || null, workspacePath: agentInfo?.workspacePath ?? null },
   });
-  release(agentId);
-  if (agentInfo?.executionId) {
-    errorExecution(agentInfo.executionId, { message: reason ? `Agent paused by user: ${reason}` : 'Agent paused by user', code: 'agent-paused' });
-    completeExecution(agentInfo.executionId, { success: false, paused: true });
-  }
 }
 
 /**
@@ -820,79 +810,6 @@ function resumeOverrideMetadata({ context, provider, model, effort, executionOpt
 }
 
 /**
- * Terminate an agent (graceful SIGTERM with SIGKILL fallback).
- */
-export async function terminateAgent(agentId) {
-  // Recorded ahead of both arms, so the request lands whichever one runs.
-  await recordInterrupt(agentId, { reason: 'terminated-by-user', signal: 'SIGTERM' });
-
-  // Check if agent is in runner mode
-  if (runnerAgents.has(agentId)) {
-    return terminateRunnerAgent(agentId, terminateAgentViaRunner, 'Agent terminated by user', 'Terminated by user');
-  }
-
-  // Direct mode
-  const agent = activeAgents.get(agentId);
-
-  // terminateAgent stays result-shaped (not a throw): its route path is
-  // fire-and-forget (cosAgentLifecycle emits `agent:terminate` and returns
-  // `{ success: true }` before termination runs), and its other callers are
-  // internal orchestration (including the event handler) that
-  // inspect the result rather than a thrown ServerError. Only pauseAgent and
-  // killAgent — whose routes surface an HTTP status — throw (issue #2534).
-  if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
-  }
-
-  // Track as user-terminated so the close handler doesn't re-queue
-  userTerminatedAgents.add(agentId);
-
-  // Drain pending batched stdout/stderr before the terminal record so it
-  // doesn't land after completion (the close handler also drains; idempotent).
-  await agent.flushOutput?.();
-
-  // Mark agent as completed immediately with termination status
-  await completeAgent(agentId, { success: false, error: 'Agent terminated by user' });
-
-  // Block task immediately (don't defer to close handler — prevents requeue on server restart)
-  if (agent.taskId) {
-    const task = await getTaskById(agent.taskId).catch(() => null);
-    if (task) {
-      await updateTask(agent.taskId, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason: 'Terminated by user',
-          blockedCategory: 'user-terminated',
-          blockedAt: new Date().toISOString()
-        }
-      }, task.taskType || 'user');
-    }
-  }
-
-  // Kill the process — killProcessTree so a Windows cmd.exe-wrapped shim's
-  // real child isn't orphaned (#2243), and `processGroup` so a credential-
-  // bootstrap wrapper's harness goes down with it rather than outliving the
-  // terminated run (#7496).
-  killProcessTree(agent.process, 'SIGTERM', { processGroup: agent.processGroup });
-
-  // Give it a moment, then force kill if still running
-  const killTimer = setTimeout(() => {
-    if (activeAgents.has(agentId)) {
-      killProcessTree(agent.process, 'SIGKILL', { processGroup: agent.processGroup });
-      unregisterSpawnedAgent(agent.pid);
-      activeAgents.delete(agentId);
-    }
-  }, 5000);
-
-  // Store the timer so the close handler can clear it when the process exits cleanly
-  const agentEntry = activeAgents.get(agentId);
-  if (agentEntry) agentEntry.killTimer = killTimer;
-
-  return { success: true, agentId };
-}
-
-/**
  * Get list of active agents.
  */
 export function getActiveAgents() {
@@ -1321,8 +1238,7 @@ async function runCleanupOrphanedAgents() {
       // agent onto the same work. Old records use `useRunner`, while newer
       // records carry the more precise executionMode.
       const executionMode = agent.metadata?.executionMode;
-      const runnerOwned = agent.metadata?.useRunner === true
-        || agent.metadata?.useRunner === 'true'
+      const runnerOwned = isTruthyMeta(agent.metadata?.useRunner)
         || executionMode === 'runner'
         || executionMode === 'runner-tui';
       if (!runnerProbe.available && runnerOwned) {
@@ -1572,7 +1488,7 @@ export async function handleOrphanedTask(taskId, agentId, getTaskByIdFn, { agent
   }
 
   if (isDeliveryCleanupHeld(task.metadata)) return;
-  if (task.metadata?.spawnBudgetReconciledHold === 'true') return;
+  if (isTruthyMeta(task.metadata?.spawnBudgetReconciledHold)) return;
   const ctx = { taskId, agentId, task, agentMetadata, agentStartedAt };
   const guard = classifyOrphanGuard(task, agentMetadata);
   const dispatchAgent = { id: agentId, taskId, startedAt: agentStartedAt, metadata: agentMetadata };

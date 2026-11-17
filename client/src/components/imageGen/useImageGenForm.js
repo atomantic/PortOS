@@ -1,0 +1,879 @@
+/**
+ * Owns Image Gen form fields, model/LoRA catalog loading, legacy and remix URL restoration,
+ * image-input object URLs, mode-dependent capabilities, and image-pick/remix actions.
+ *
+ * Use when: Image Gen form compositions that need the complete prompt, model, conditioning-image,
+ * cleaner, and handoff lifecycle.
+ */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import useListResource from '../../hooks/useListResource';
+import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
+import { appendTriggerWords } from '../../lib/loraTriggers';
+import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
+import { universeStylePreset, withUniverseLabel } from '../../lib/universeStylePreset';
+import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../../lib/runnerFamilies';
+import {
+  FAL_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_DEFAULT_MODEL,
+  IMAGE_GEN_MODE,
+  LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  cloudPromptRequired,
+  deriveAvailableBackends,
+  imageGenReadiness,
+  isI2iCapableMode,
+  pickI2iMode,
+  referenceSlotsFor,
+  supportsReferenceStrength,
+} from '../../lib/imageGenBackends';
+import { clampImageDimensions } from '../../lib/imageGenResolutions';
+import { peerModelRequiresInput } from '../../lib/federatedMediaReadiness.js';
+import { isHardwareCompatible } from '../../utils/systemCapabilities';
+import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
+import useMounted from '../../hooks/useMounted';
+import toast from '../ui/Toast';
+import {
+  getGalleryImages,
+  getImageGenStatus,
+  getSettings,
+  listImageModels,
+  listLorasFull,
+} from '../../services/api';
+
+const REFERENCE_SLOT_COUNT = 16;
+const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
+const IMAGE_GEN_RESTORE_PARAM_KEYS = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
+async function fetchImageFile(url, filename) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const blob = await response.blob();
+  return new File([blob], filename, { type: blob.type || 'image/png' });
+}
+
+// A render's sidecar names its inputs by basename: a gallery pick stays in the
+// gallery, an upload was staged into image-refs. Resolves null when neither
+// still holds the file.
+async function fetchRenderInput(filename) {
+  for (const dir of ['images', 'image-refs']) {
+    const url = `/data/${dir}/${encodeURIComponent(filename)}`;
+    const file = await fetchImageFile(url, filename).catch(() => null);
+    if (file) return { file, url, inGallery: dir === 'images' };
+  }
+  return null;
+}
+
+const IMAGE_GEN_HANDOFF_PARAM_KEYS = ['remix', ...IMAGE_GEN_RESTORE_PARAM_KEYS, 'initImageFile'];
+
+const revokeIfBlob = (url) => {
+  if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+};
+
+// Stable fetchers for useListResource — the hook re-runs on identity change.
+// Silent: the form renders a failed catalog read itself, with Retry.
+const loadImageModels = () => listImageModels({ silent: true });
+const loadLoraLibrary = () => listLorasFull({ silent: true });
+
+export function useImageGenForm({ searchParams, setSearchParams, backend, handoffStylePreset = null }) {
+  const {
+    status,
+    effectiveMode,
+    isLocalMode,
+    isCloudMode,
+    cloudModeLabel,
+    availableBackends,
+    remoteTarget,
+    remoteTargetActive,
+    localBackendPending,
+    setSelectedMode,
+    configureBackends,
+  } = backend;
+  // The local model catalog and LoRA library. A failed read stays distinct
+  // from an empty list: the form shows it with Retry, and a Remix handoff that
+  // needs the catalog waits for it or reports the failure (never "no models").
+  const modelCatalog = useListResource(loadImageModels);
+  const loraCatalog = useListResource(loadLoraLibrary);
+  const models = modelCatalog.items;
+  const modelsLoaded = modelCatalog.state !== 'loading';
+  const modelsLoadFailed = modelCatalog.state === 'error';
+  const availableLoras = loraCatalog.items;
+  const lorasLoaded = loraCatalog.state !== 'loading';
+  const lorasLoadFailed = loraCatalog.state === 'error';
+  const [settingsLoadFailed, setSettingsLoadFailed] = useState(false);
+  const loraFilenameFromUrl = searchParams.get('lora');
+  const loraLookupSequenceRef = useRef(0);
+  const [loraHandoff, setLoraHandoff] = useState(() => loraFilenameFromUrl
+    ? { filename: loraFilenameFromUrl, status: 'pending' } : null);
+  const [remixHandoff, setRemixHandoff] = useState(null);
+  const remixLookupSequenceRef = useRef(0);
+  const remixHandoffPending = remixHandoff?.status === 'loading' || remixHandoff?.status === 'restoring';
+  const [prompt, setPrompt] = useState('');
+  const [negativePrompt, setNegativePrompt] = useState('');
+  const [optionsOpen, setOptionsOpen] = useState(() => (
+    window.matchMedia?.('(min-width: 1024px)').matches ?? false
+  ));
+  const [stylePreset, setStylePreset] = useState(null);
+  const [selectedUniverse, setSelectedUniverse] = useState(null);
+  const [modelId, setModelId] = useState('');
+  const [width, setWidth] = useState(1024);
+  const [height, setHeight] = useState(1024);
+  const [steps, setSteps] = useState('');
+  const [guidance, setGuidance] = useState('');
+  const [cfgScale, setCfgScale] = useState(7);
+  const [quantize, setQuantize] = useState('8');
+  const [seed, setSeed] = useState('');
+  const [selectedLoras, setSelectedLoras] = useState([]);
+  const [agyModel, setAgyModel] = useState('');
+  const [savedAgyModel, setSavedAgyModel] = useState('');
+  const [runwayModel, setRunwayModel] = useState('');
+  const [savedRunwayModel, setSavedRunwayModel] = useState('');
+  // Per-render fal.ai model ('' = the Settings default) and that default, for
+  // the picker's "Settings default (…)" row.
+  const [falModel, setFalModel] = useState('');
+  const [savedFalModel, setSavedFalModel] = useState('');
+  const [higgsfieldModel, setHiggsfieldModel] = useState('');
+  const [savedHiggsfieldModel, setSavedHiggsfieldModel] = useState('');
+  const [googleModel, setGoogleModel] = useState('');
+  const [savedGoogleModel, setSavedGoogleModel] = useState('');
+  const [savedLocalModelId, setSavedLocalModelId] = useState(null);
+  const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
+  const initImagePreviewRef = useRef(initImage.previewUrl);
+  initImagePreviewRef.current = initImage.previewUrl;
+  const mountedRef = useMounted();
+  const pickSeqRef = useRef({ init: 0, refs: [] });
+  const [initImageStrength, setInitImageStrength] = useState(0.4);
+  const [galleryPicker, setGalleryPicker] = useState(null);
+  const [referenceImages, setReferenceImages] = useState(() => Array.from({ length: REFERENCE_SLOT_COUNT }, () => ({ ...EMPTY_REF_SLOT })));
+  const [batchCount, setBatchCount] = useState(1);
+  const [cleanC2PA, setCleanC2PA] = useState(true);
+  const [denoise, setDenoise] = useState(false);
+  const [verifyImage, setVerifyImage] = useState(false);
+  const [savedCleanC2PAByMode, setSavedCleanC2PAByMode] = useState({});
+  const [savedDenoiseByMode, setSavedDenoiseByMode] = useState({});
+  const wantI2iModeRef = useRef(false);
+
+  useEffect(() => {
+    const desktopOptions = window.matchMedia?.('(min-width: 1024px)');
+    if (!desktopOptions) return undefined;
+    const syncOptionsToViewport = () => setOptionsOpen(desktopOptions.matches);
+    syncOptionsToViewport();
+    desktopOptions.addEventListener('change', syncOptionsToViewport);
+    return () => desktopOptions.removeEventListener('change', syncOptionsToViewport);
+  }, []);
+
+  const reloadBackends = useCallback(() => getSettings().then((settings) => {
+    setSettingsLoadFailed(false);
+    const backends = deriveAvailableBackends(settings);
+    const perMode = {
+      external: resolveCleanersFromConfig(settings?.imageGen?.external, IMAGE_GEN_MODE.EXTERNAL),
+      local: resolveCleanersFromConfig(settings?.imageGen?.local, IMAGE_GEN_MODE.LOCAL),
+      codex: resolveCleanersFromConfig(settings?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
+      grok: resolveCleanersFromConfig(settings?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
+      agy: resolveCleanersFromConfig(settings?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
+      runway: resolveCleanersFromConfig(settings?.imageGen?.runway, IMAGE_GEN_MODE.RUNWAY),
+      fal: resolveCleanersFromConfig(settings?.imageGen?.fal, IMAGE_GEN_MODE.FAL),
+      higgsfield: resolveCleanersFromConfig(settings?.imageGen?.higgsfield, IMAGE_GEN_MODE.HIGGSFIELD),
+      google: resolveCleanersFromConfig(settings?.imageGen?.google, IMAGE_GEN_MODE.GOOGLE),
+    };
+    const c2 = {
+      external: perMode.external.cleanC2PA,
+      local: perMode.local.cleanC2PA,
+      codex: perMode.codex.cleanC2PA,
+      grok: perMode.grok.cleanC2PA,
+      agy: perMode.agy.cleanC2PA,
+      runway: perMode.runway.cleanC2PA,
+      fal: perMode.fal.cleanC2PA,
+      higgsfield: perMode.higgsfield.cleanC2PA,
+      google: perMode.google.cleanC2PA,
+    };
+    const dn = {
+      external: perMode.external.denoise,
+      local: perMode.local.denoise,
+      codex: perMode.codex.denoise,
+      grok: perMode.grok.denoise,
+      agy: perMode.agy.denoise,
+      runway: perMode.runway.denoise,
+      fal: perMode.fal.denoise,
+      higgsfield: perMode.higgsfield.denoise,
+      google: perMode.google.denoise,
+    };
+    const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+    const next = configureBackends(backends, saved);
+    setSavedAgyModel(settings?.imageGen?.agy?.model || '');
+    setSavedRunwayModel(settings?.imageGen?.runway?.model || RUNWAY_IMAGE_DEFAULT_MODEL);
+    setSavedFalModel(settings?.imageGen?.fal?.model || '');
+    setSavedHiggsfieldModel(settings?.imageGen?.higgsfield?.model || '');
+    setSavedGoogleModel(settings?.imageGen?.google?.model || '');
+    setSavedLocalModelId(settings?.imageGen?.local?.modelId || '');
+    setSavedCleanC2PAByMode(c2);
+    setSavedDenoiseByMode(dn);
+    setCleanC2PA(c2[next] === true);
+    setDenoise(dn[next] === true);
+  }).catch(() => {
+    setSettingsLoadFailed(true);
+    setSavedLocalModelId('');
+  }), [configureBackends]);
+
+  const switchMode = useCallback((next) => {
+    setSelectedMode(next);
+    setCleanC2PA(savedCleanC2PAByMode[next] === true);
+    setDenoise(savedDenoiseByMode[next] === true);
+  }, [savedCleanC2PAByMode, savedDenoiseByMode, setSelectedMode]);
+
+  useEffect(() => { reloadBackends(); }, [reloadBackends]);
+
+  const restoreActiveJob = useCallback((activeJob) => {
+    setStylePreset(null);
+    setSelectedUniverse(null);
+    if (activeJob.prompt) setPrompt(activeJob.prompt);
+    if (activeJob.negativePrompt != null) setNegativePrompt(activeJob.negativePrompt);
+    if (activeJob.modelId) setModelId(activeJob.modelId);
+    if (activeJob.width) setWidth(activeJob.width);
+    if (activeJob.height) setHeight(activeJob.height);
+    if (activeJob.steps != null) setSteps(activeJob.steps);
+    if (activeJob.guidance != null) setGuidance(activeJob.guidance);
+    if (activeJob.seed != null) setSeed(activeJob.seed);
+    if (activeJob.quantize != null) setQuantize(String(activeJob.quantize));
+  }, []);
+
+  useEffect(() => {
+    if (modelId || savedLocalModelId === null || !models.length) return;
+    const preferredId = models.some((model) => model.id === savedLocalModelId)
+      ? savedLocalModelId
+      : LOCAL_IMAGEGEN_DEFAULT_MODEL;
+    setModelId(models.some((model) => model.id === preferredId) ? preferredId : models[0].id);
+  }, [models, savedLocalModelId, modelId]);
+
+  useEffect(() => {
+    if (!loraFilenameFromUrl) return;
+    setLoraHandoff((current) => current?.filename === loraFilenameFromUrl
+      ? current : { filename: loraFilenameFromUrl, status: 'pending' });
+  }, [loraFilenameFromUrl]);
+
+  useEffect(() => {
+    const sequence = ++loraLookupSequenceRef.current;
+    if (loraHandoff?.status !== 'pending') return;
+    // Settings must finish before switching: a late saved cloud default must
+    // never overwrite this explicit, session-only Test intent.
+    if (savedLocalModelId === null || !modelsLoaded || !lorasLoaded) return;
+    const fail = (error) => {
+      if (mountedRef.current && sequence === loraLookupSequenceRef.current) setLoraHandoff({ ...loraHandoff, status: 'error', error });
+    };
+    if (settingsLoadFailed || modelsLoadFailed || lorasLoadFailed) {
+      fail('Could not load the LoRA test settings or catalogs. Reload this page to retry.');
+      return;
+    }
+    const match = availableLoras.find((lora) => lora.filename === loraHandoff.filename);
+    if (!match) {
+      fail(`This LoRA is no longer installed. Install it from ${getNavPageForPath('/models/loras')?.breadcrumb || 'the LoRAs page'}, then try Test again.`);
+      return;
+    }
+    if (!availableBackends.some((entry) => entry.id === IMAGE_GEN_MODE.LOCAL)) {
+      fail('LoRA Test needs a local image backend. Configure one in Settings → Media, then try Test again.');
+      return;
+    }
+    const compatible = models.filter((model) => model.enabled !== false
+      && isHardwareCompatible(model.hardwareCompatibility)
+      && loraCompatKeysMatch(loraFamilyOf(match), loraCompatKey(model)));
+    // Preserve a compatible current model, then prefer the install pin.
+    const candidates = [...compatible].sort((a, b) => {
+      const rank = (model) => model.id === modelId ? 0 : model.id === savedLocalModelId ? 1 : 2;
+      return rank(a) - rank(b);
+    });
+    const resolve = async () => {
+      for (const model of candidates) {
+        const probe = await getImageGenStatus(IMAGE_GEN_MODE.LOCAL, model.id).catch(() => null);
+        if (!mountedRef.current || sequence !== loraLookupSequenceRef.current) return;
+        if (imageGenReadiness(probe) !== 'ready') continue;
+        setModelId(model.id);
+        switchMode(IMAGE_GEN_MODE.LOCAL);
+        setOptionsOpen(true);
+        setSelectedLoras([{
+          filename: match.filename,
+          name: match.name,
+          scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
+        }]);
+        setPrompt((current) => appendTriggerWords(current, match.triggerWords || []));
+        setLoraHandoff({ filename: match.filename, status: 'resolved' });
+        setSearchParams((previous) => {
+          const next = new URLSearchParams(previous);
+          next.delete('lora');
+          return next;
+        }, { replace: true });
+        return;
+      }
+      fail('No compatible local image runtime is ready for this LoRA. Set up a matching model in Settings → Media, then try Test again.');
+    };
+    resolve();
+  }, [loraHandoff, savedLocalModelId, modelsLoaded, lorasLoaded, settingsLoadFailed,
+    modelsLoadFailed, lorasLoadFailed, availableLoras, availableBackends, models, modelId, switchMode, setSearchParams, mountedRef]);
+
+  const dismissLoraHandoff = useCallback(() => {
+    setLoraHandoff(null);
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.delete('lora');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  useEffect(() => {
+    const initFile = searchParams.get('initImageFile');
+    const present = IMAGE_GEN_RESTORE_PARAM_KEYS.filter((key) => searchParams.get(key) != null);
+    if (!initFile && present.length === 0) return;
+    const get = (key) => searchParams.get(key);
+    if (handoffStylePreset) setStylePreset(handoffStylePreset);
+    if (get('prompt')) {
+      setPrompt(get('prompt'));
+      setStylePreset(handoffStylePreset);
+      setSelectedUniverse(null);
+    }
+    if (get('negativePrompt')) setNegativePrompt(get('negativePrompt'));
+    if (get('modelId')) setModelId(get('modelId'));
+    if (get('width')) setWidth(Number(get('width')));
+    if (get('height')) setHeight(Number(get('height')));
+    if (get('seed') != null) setSeed(get('seed'));
+    if (get('steps')) setSteps(get('steps'));
+    if (get('guidance')) setGuidance(get('guidance'));
+    if (get('quantize')) setQuantize(get('quantize'));
+    if (initFile && initImage.source == null) {
+      pickSeqRef.current.init += 1;
+      setInitImage({ source: 'gallery', file: null, name: initFile, previewUrl: `/data/images/${initFile}` });
+      wantI2iModeRef.current = true;
+    }
+    if (searchParams.get('remix')) return;
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      IMAGE_GEN_HANDOFF_PARAM_KEYS.forEach((key) => next.delete(key));
+      return next;
+    }, { replace: true });
+  }, []);
+
+  const normalizeImageOrientation = async (file) => {
+    const bitmap = await window.createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => null);
+    if (!bitmap) return file;
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) return file;
+    const newName = file.name.replace(/\.[^.]+$/, '.png');
+    return new File([blob], newName, { type: 'image/png' });
+  };
+
+  const readImageDimensions = async (file) => {
+    const bitmap = await window.createImageBitmap(file).catch(() => null);
+    if (!bitmap) return null;
+    const dimensions = { width: bitmap.width, height: bitmap.height };
+    bitmap.close?.();
+    return dimensions;
+  };
+
+  // Remix restores the render's init and reference images too, so the same
+  // inputs can be re-run on another model. A render without inputs clears them.
+  const restoreRemixInputs = useCallback(async (image) => {
+    const initName = typeof image.initImageFilename === 'string' ? image.initImageFilename : null;
+    const refNames = (Array.isArray(image.referenceImageFilenames) ? image.referenceImageFilenames : [])
+      .filter((name) => typeof name === 'string' && name).slice(0, REFERENCE_SLOT_COUNT);
+    const initPick = ++pickSeqRef.current.init;
+    const refPicks = Array.from({ length: REFERENCE_SLOT_COUNT }, (_, index) => {
+      pickSeqRef.current.refs[index] = (pickSeqRef.current.refs[index] ?? 0) + 1;
+      return pickSeqRef.current.refs[index];
+    });
+    revokeIfBlob(initImagePreviewRef.current);
+    setInitImage({ source: null, file: null, name: null, previewUrl: null });
+    setReferenceImages((previous) => {
+      previous.forEach((slot) => revokeIfBlob(slot.previewUrl));
+      return previous.map(() => ({ ...EMPTY_REF_SLOT }));
+    });
+    if (!initName && !refNames.length) return;
+    const [initInput, ...refInputs] = await Promise.all([initName ? fetchRenderInput(initName) : null, ...refNames.map(fetchRenderInput)]);
+    if (!mountedRef.current) return;
+    const missing = [initName && !initInput ? initName : null, ...refNames.filter((_, index) => !refInputs[index])].filter(Boolean);
+    if (missing.length) toast.error(`Could not restore ${missing.length === 1 ? 'input image' : 'input images'}: ${missing.join(', ')}`);
+    if (initInput && initPick === pickSeqRef.current.init) {
+      setInitImage(initInput.inGallery
+        ? { source: 'gallery', file: null, name: initName, previewUrl: initInput.url }
+        : { source: 'upload', file: initInput.file, name: initName, previewUrl: initInput.url });
+      if (typeof image.initImageStrength === 'number') setInitImageStrength(image.initImageStrength);
+      wantI2iModeRef.current = true;
+    }
+    const strengths = Array.isArray(image.referenceImageStrengths) ? image.referenceImageStrengths : [];
+    const restoredRefs = refInputs.map((input, index) => (input
+      ? { file: input.file, previewUrl: input.url, strength: typeof strengths[index] === 'number' ? strengths[index] : 1.0 }
+      : null)).filter(Boolean);
+    setReferenceImages((previous) => previous.map((slot, index) => (
+      index < restoredRefs.length && refPicks[index] === pickSeqRef.current.refs[index] ? restoredRefs[index] : slot
+    )));
+  }, [mountedRef]);
+
+  const handleRemix = useCallback((item, { applyModel = true, restoreInputs = true } = {}) => {
+    const image = item?.raw || item;
+    setStylePreset(null);
+    setSelectedUniverse(null);
+    setPrompt(image.prompt ?? image.metadata?.prompt ?? '');
+    setNegativePrompt(image.negativePrompt ?? image.negative_prompt ?? image.metadata?.negativePrompt ?? '');
+    if (image.seed != null) setSeed(String(image.seed));
+    if (image.steps) setSteps(String(image.steps));
+    if (image.guidance != null) setGuidance(String(image.guidance));
+    if (image.quantize) setQuantize(String(image.quantize));
+    if (image.width) setWidth(image.width);
+    if (image.height) setHeight(image.height);
+    if (applyModel && image.modelId && models.some((model) => model.id === image.modelId)) setModelId(image.modelId);
+    const sidecarFilenames = image.loraFilenames?.length
+      ? image.loraFilenames
+      : (image.loraPaths || []).map((path) => path.split(/[\\/]/).pop());
+    const restored = sidecarFilenames.map((filename, index) => {
+      const match = availableLoras.find((lora) => lora.filename === filename);
+      return match ? { filename: match.filename, name: match.name, scale: image.loraScales?.[index] ?? 1.0 } : null;
+    }).filter(Boolean);
+    setSelectedLoras(restored);
+    if (restoreInputs) restoreRemixInputs(image);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [availableLoras, models, restoreRemixInputs]);
+
+  const handlePickInitImage = async (event) => {
+    const raw = event.target.files?.[0];
+    if (!raw) return;
+    const myPick = ++pickSeqRef.current.init;
+    const file = await normalizeImageOrientation(raw);
+    if (!mountedRef.current) return;
+    if (myPick !== pickSeqRef.current.init) return;
+    revokeIfBlob(initImagePreviewRef.current);
+    setInitImage({ source: 'upload', file, name: file.name, previewUrl: URL.createObjectURL(file) });
+    const dimensions = await readImageDimensions(file);
+    if (myPick !== pickSeqRef.current.init) return;
+    const clamped = dimensions && clampImageDimensions(dimensions.width, dimensions.height);
+    if (clamped) {
+      setWidth(clamped.width);
+      setHeight(clamped.height);
+    }
+  };
+
+  const handleClearInitImage = () => {
+    pickSeqRef.current.init += 1;
+    revokeIfBlob(initImage.previewUrl);
+    setInitImage({ source: null, file: null, name: null, previewUrl: null });
+  };
+
+  const handlePickGalleryInitImage = (item) => {
+    if (!item?.filename) return;
+    pickSeqRef.current.init += 1;
+    if (item.raw) {
+      handleRemix(item.raw, { applyModel: false, restoreInputs: false });
+      setPrompt(item.raw.prompt || '');
+    }
+    revokeIfBlob(initImage.previewUrl);
+    setInitImage({ source: 'gallery', file: null, name: item.filename, previewUrl: item.previewUrl || `/data/images/${item.filename}` });
+  };
+
+  const handlePickReferenceImage = async (slotIndex, event) => {
+    const raw = event.target.files?.[0];
+    if (!raw) return;
+    const sequences = pickSeqRef.current.refs;
+    const myPick = sequences[slotIndex] = (sequences[slotIndex] ?? 0) + 1;
+    const file = await normalizeImageOrientation(raw);
+    if (!mountedRef.current) return;
+    if (myPick !== pickSeqRef.current.refs[slotIndex]) return;
+    const previewUrl = URL.createObjectURL(file);
+    setReferenceImages((previous) => {
+      const next = [...previous];
+      revokeIfBlob(next[slotIndex]?.previewUrl);
+      next[slotIndex] = { file, previewUrl, strength: next[slotIndex]?.strength ?? 1.0 };
+      return next;
+    });
+  };
+
+  const handleClearReferenceImage = (slotIndex) => {
+    pickSeqRef.current.refs[slotIndex] = (pickSeqRef.current.refs[slotIndex] ?? 0) + 1;
+    setReferenceImages((previous) => {
+      const next = [...previous];
+      revokeIfBlob(next[slotIndex]?.previewUrl);
+      next[slotIndex] = { ...EMPTY_REF_SLOT };
+      return next;
+    });
+  };
+
+  const handleReferenceStrengthChange = (slotIndex, strength) => {
+    setReferenceImages((previous) => {
+      const next = [...previous];
+      next[slotIndex] = { ...next[slotIndex], strength };
+      return next;
+    });
+  };
+
+  const handlePickGalleryReferenceImage = async (slotIndex, item) => {
+    if (!item?.filename) return;
+    const sequences = pickSeqRef.current.refs;
+    const myPick = sequences[slotIndex] = (sequences[slotIndex] ?? 0) + 1;
+    const isCurrent = () => mountedRef.current && myPick === pickSeqRef.current.refs[slotIndex];
+    const file = await fetchImageFile(`/data/images/${encodeURIComponent(item.filename)}`, item.filename).catch((error) => {
+      if (isCurrent()) toast.error(`Failed to load reference image: ${error.message}`);
+      return null;
+    });
+    if (!file || !isCurrent()) return;
+    setReferenceImages((previous) => {
+      const next = [...previous];
+      revokeIfBlob(next[slotIndex]?.previewUrl);
+      next[slotIndex] = { file, previewUrl: item.previewUrl || `/data/images/${item.filename}`, strength: next[slotIndex]?.strength ?? 1.0 };
+      return next;
+    });
+  };
+
+  const handleGallerySelect = (item) => {
+    if (galleryPicker?.kind === 'reference') handlePickGalleryReferenceImage(galleryPicker.slot, item);
+    else handlePickGalleryInitImage(item);
+  };
+
+  const previewUrlsRef = useRef({ init: null, refs: [] });
+  useEffect(() => {
+    previewUrlsRef.current = {
+      init: initImage.previewUrl,
+      refs: referenceImages.map((slot) => slot.previewUrl),
+    };
+  });
+  useEffect(() => () => {
+    const { init, refs } = previewUrlsRef.current;
+    revokeIfBlob(init);
+    for (const url of refs) revokeIfBlob(url);
+  }, []);
+
+  const currentModel = models.find((model) => model.id === modelId);
+  const isFlux3Model = currentModel?.runner === 'flux3';
+  const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
+  const sharesFlux2Venv = isFlux2Model || usesDiffusersRunner(currentModel);
+  const isEditOnlyModel = currentModel?.editOnly === true;
+  const editImageMissing = isLocalMode && isEditOnlyModel && initImage.source == null;
+  const isQwen21Model = currentModel?.pipelineClass === 'QwenImage21Pipeline';
+  const i2iCapable = remoteTargetActive
+    ? remoteTarget.acceptsInput('initImage') || initImage.source != null
+    : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
+  const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
+  const isHiggsfieldMode = effectiveMode === IMAGE_GEN_MODE.HIGGSFIELD;
+  const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
+  // A model that declares its own reference cap (separate from any init image).
+  const localDeclaredRefs = Number.isInteger(currentModel?.maxReferenceImages) && currentModel.maxReferenceImages > 0;
+  const referenceSlotCount = remoteTargetActive
+    ? (remoteTarget.acceptsInput('referenceImages') ? 4 : 0)
+    : referenceSlotsFor(effectiveMode, {
+    hasInitImage: initImage.source != null,
+    // fal.ai's edit models take 9–14 references (a mood board is the point),
+    // so it gets every form slot; the per-model cap below still bounds it.
+    maxSlots: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? REFERENCE_SLOT_COUNT
+      : isLocalMode && localDeclaredRefs ? Math.min(REFERENCE_SLOT_COUNT, currentModel.maxReferenceImages)
+        : (isLocalMode && (isQwen21Model || isFlux3Model)) || isFalMode || isGoogleMode ? 10 : 4,
+    localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model || localDeclaredRefs,
+    localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
+    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL)
+      : isHiggsfieldMode ? (higgsfieldModel || savedHiggsfieldModel || HIGGSFIELD_IMAGE_DEFAULT_MODEL)
+        : isGoogleMode ? (googleModel || savedGoogleModel || GOOGLE_IMAGE_DEFAULT_MODEL) : null,
+  });
+  const activeStylePresets = useMemo(() => [
+    selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
+    stylePreset,
+  ].filter(Boolean), [selectedUniverse, stylePreset]);
+  const styledPrompt = useMemo(
+    () => composeStyledPrompt(prompt, negativePrompt, activeStylePresets).prompt,
+    [prompt, negativePrompt, activeStylePresets],
+  );
+  const activeReferenceImages = useMemo(
+    () => referenceImages.slice(0, referenceSlotCount),
+    [referenceImages, referenceSlotCount],
+  );
+  const populatedRefs = useMemo(
+    () => activeReferenceImages.filter((slot) => slot.file != null),
+    [activeReferenceImages],
+  );
+  const droppedRefCount = useMemo(
+    () => referenceImages.slice(referenceSlotCount).filter((slot) => slot.file != null).length,
+    [referenceImages, referenceSlotCount],
+  );
+  const unsupportedLocalInputs = isLocalMode && !remoteTargetActive && currentModel?.runner === 'moss-swift'
+    && (selectedLoras.length > 0 || initImage.source != null || referenceImages.some(slot => slot.file != null));
+  const remoteUnsupportedInputs = useMemo(() => {
+    if (!remoteTargetActive) return null;
+    const model = remoteTarget.model;
+    const present = [
+      ['an init image', initImage.source != null && !remoteTarget.acceptsInput('initImage')],
+      ['reference images', populatedRefs.length > 0 && !remoteTarget.acceptsInput('referenceImages')],
+      ['LoRA weights', selectedLoras.length > 0],
+    ].filter(([, unsupported]) => unsupported).map(([label]) => label);
+    if (present.length) {
+      return `The selected peer model cannot take ${present.join(' and ')} — clear it to render on this peer.`;
+    }
+    if (peerModelRequiresInput(model) && initImage.source == null) {
+      return `${model?.modelName || 'The selected peer model'} renders only from a source image — add an init image, or pick a text-to-image model.`;
+    }
+    return null;
+  }, [remoteTargetActive, remoteTarget.model, remoteTarget.acceptsInput, initImage.source, populatedRefs.length, selectedLoras.length]);
+  const remoteBlocked = remoteTargetActive
+    ? (remoteTarget.blockedReason || remoteUnsupportedInputs)
+    : null;
+  const hasCloudInputImage = initImage.source != null || populatedRefs.length > 0;
+  const cloudNeedsPrompt = cloudPromptRequired(effectiveMode, hasCloudInputImage) && !prompt.trim();
+  const cloudPromptHint = hasCloudInputImage
+    ? `${cloudModeLabel} always needs a prompt, even with a reference image`
+    : `${cloudModeLabel} text-to-image needs a prompt`;
+  const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
+  const currentCompatKey = loraCompatKey(currentModel);
+  const testLora = availableLoras.find((lora) => lora.filename === loraHandoff?.filename);
+  const loraHandoffPending = loraHandoff?.status === 'pending'
+    || (!!loraFilenameFromUrl && loraFilenameFromUrl !== loraHandoff?.filename);
+  const loraHandoffError = loraHandoff?.error || (loraHandoff?.status === 'resolved' && (
+    !isLocalMode || remoteTargetActive || !currentModel || !testLora
+    || !loraCompatKeysMatch(loraFamilyOf(testLora), currentCompatKey)
+    || !selectedLoras.some((lora) => lora.filename === testLora.filename)
+  ) ? 'LoRA Test needs the selected adapter and a compatible local model. Restore that selection or cancel this test.' : null);
+  const loraHandoffBlocked = loraHandoffPending || !!loraHandoffError;
+  const needsHfTokenGate = isLocalMode && !!currentModel?.requiresHfToken && !isFlux2Model;
+  const statusReadiness = imageGenReadiness(status);
+  const statusReady = statusReadiness === 'ready';
+  const statusUnknown = statusReadiness === 'unknown';
+  const notConnected = status && status.connected === false;
+
+  useEffect(() => {
+    if (!wantI2iModeRef.current) return;
+    if (i2iCapable) {
+      wantI2iModeRef.current = false;
+      return;
+    }
+    if (!availableBackends.length) return;
+    const mode = pickI2iMode(availableBackends);
+    if (mode) {
+      switchMode(mode);
+      wantI2iModeRef.current = false;
+    }
+  }, [availableBackends, i2iCapable, switchMode]);
+
+  const ensureI2iCapableMode = useCallback(() => {
+    if (i2iCapable) return;
+    const mode = pickI2iMode(availableBackends);
+    if (mode) switchMode(mode);
+    else wantI2iModeRef.current = true;
+  }, [i2iCapable, availableBackends, switchMode]);
+
+  const setGalleryInitImage = useCallback((filename) => {
+    pickSeqRef.current.init += 1;
+    revokeIfBlob(initImagePreviewRef.current);
+    setInitImage({ source: 'gallery', file: null, name: filename, previewUrl: `/data/images/${filename}` });
+    setInitImageStrength(0.4);
+  }, []);
+
+  const handleModelChange = useCallback((nextModelId) => {
+    setModelId(nextModelId);
+    setSteps('');
+    setGuidance('');
+  }, []);
+
+  const handleResolutionChange = useCallback((nextWidth, nextHeight) => {
+    setWidth(nextWidth);
+    setHeight(nextHeight);
+  }, []);
+
+  const consumeRemixHandoff = useCallback(() => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      IMAGE_GEN_HANDOFF_PARAM_KEYS.forEach((key) => next.delete(key));
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const lookupRemixHandoff = useCallback((filename) => {
+    const sequence = ++remixLookupSequenceRef.current;
+    setRemixHandoff({ filename, status: 'loading' });
+    getGalleryImages([filename], { silent: true }).then((items) => {
+      if (sequence !== remixLookupSequenceRef.current) return;
+      const record = items?.[0];
+      setRemixHandoff(record
+        ? { filename, status: 'restoring', record }
+        : { filename, status: 'missing' });
+    }).catch(() => {
+      if (sequence === remixLookupSequenceRef.current) {
+        setRemixHandoff({ filename, status: 'error' });
+      }
+    });
+  }, []);
+
+  const remixHandoffFilename = searchParams.get('remix');
+  useEffect(() => {
+    if (!remixHandoffFilename) return;
+    lookupRemixHandoff(remixHandoffFilename);
+    return () => { remixLookupSequenceRef.current += 1; };
+  }, [remixHandoffFilename, lookupRemixHandoff]);
+
+  useEffect(() => {
+    if (!remixHandoff) return;
+    if (remixHandoff.status === 'missing' || remixHandoff.status === 'error') {
+      consumeRemixHandoff();
+      return;
+    }
+    if (remixHandoff.status !== 'restoring') return;
+    if (modelsLoadFailed || lorasLoadFailed) {
+      setRemixHandoff({ ...remixHandoff, status: 'error', failure: 'catalog' });
+      consumeRemixHandoff();
+      return;
+    }
+    if (!modelsLoaded || !lorasLoaded) return;
+    handleRemix(remixHandoff.record);
+    setRemixHandoff(null);
+    consumeRemixHandoff();
+  }, [remixHandoff, modelsLoaded, lorasLoaded, modelsLoadFailed, lorasLoadFailed, handleRemix, consumeRemixHandoff]);
+
+  useEffect(() => {
+    if (remixHandoffFilename) return;
+    setRemixHandoff((current) => (
+      current?.status === 'loading' || current?.status === 'restoring' ? null : current
+    ));
+  }, [remixHandoffFilename]);
+
+  const retryRemixHandoff = useCallback(() => {
+    const filename = remixHandoff?.filename;
+    if (!filename) return;
+    if (remixHandoff.failure === 'catalog') {
+      if (modelsLoadFailed) modelCatalog.retry();
+      if (lorasLoadFailed) loraCatalog.retry();
+    }
+    lookupRemixHandoff(filename);
+  }, [remixHandoff, modelsLoadFailed, lorasLoadFailed, lookupRemixHandoff, modelCatalog.retry, loraCatalog.retry]);
+
+  const dismissRemixHandoff = useCallback(() => {
+    remixLookupSequenceRef.current += 1;
+    setRemixHandoff(null);
+    consumeRemixHandoff();
+  }, [consumeRemixHandoff]);
+
+  return {
+    fields: {
+      prompt,
+      setPrompt,
+      negativePrompt,
+      setNegativePrompt,
+      optionsOpen,
+      setOptionsOpen,
+      stylePreset,
+      setStylePreset,
+      selectedUniverse,
+      setSelectedUniverse,
+      modelId,
+      setModelId,
+      width,
+      setWidth,
+      height,
+      setHeight,
+      steps,
+      setSteps,
+      guidance,
+      setGuidance,
+      cfgScale,
+      setCfgScale,
+      quantize,
+      setQuantize,
+      seed,
+      setSeed,
+      selectedLoras,
+      setSelectedLoras,
+      agyModel,
+      setAgyModel,
+      runwayModel, setRunwayModel,
+      falModel,
+      setFalModel,
+      higgsfieldModel,
+      setHiggsfieldModel,
+      googleModel,
+      setGoogleModel,
+      batchCount,
+      setBatchCount,
+      cleanC2PA,
+      setCleanC2PA,
+      denoise,
+      setDenoise,
+      verifyImage,
+      setVerifyImage,
+    },
+    catalogs: {
+      models,
+      modelsState: modelCatalog.state,
+      modelsError: modelCatalog.error,
+      retryModels: modelCatalog.retry,
+      availableLoras,
+      lorasState: loraCatalog.state,
+      lorasError: loraCatalog.error,
+      retryLoras: loraCatalog.retry,
+    },
+    settings: {
+      savedAgyModel,
+      savedRunwayModel,
+      savedFalModel,
+      savedHiggsfieldModel,
+      savedGoogleModel,
+      savedCleanC2PAByMode,
+      savedDenoiseByMode,
+      reloadBackends,
+    },
+    images: {
+      initImage,
+      initImageStrength,
+      setInitImageStrength,
+      galleryPicker,
+      setGalleryPicker,
+      activeReferenceImages,
+      handlePickInitImage,
+      handleClearInitImage,
+      handlePickReferenceImage,
+      handleClearReferenceImage,
+      clearReferenceImages: () => referenceImages.forEach((_, index) => handleClearReferenceImage(index)),
+      handleReferenceStrengthChange,
+      handleGallerySelect,
+    },
+    derived: {
+      loraHandoffBlocked,
+      unsupportedLocalInputs,
+      currentModel,
+      isFlux2Model,
+      sharesFlux2Venv,
+      isEditOnlyModel,
+      isQwen21Model,
+      i2iCapable,
+      referenceSlotCount,
+      showReferenceStrength: supportsReferenceStrength(effectiveMode) && isFlux2Model,
+      styledPrompt,
+      activeStylePresets,
+      populatedRefs,
+      droppedRefCount,
+      remoteUnsupportedInputs,
+      remoteBlocked,
+      remoteTargetActive,
+      editImageMissing,
+      cloudNeedsPrompt,
+      cloudPromptHint,
+      currentRunnerFamily,
+      currentCompatKey,
+      needsHfTokenGate,
+      statusReady,
+      statusUnknown,
+      notConnected,
+      localBackendPending,
+      isAsyncMode: isLocalMode || isCloudMode || remoteTargetActive,
+    },
+    actions: {
+      handleModelChange,
+      handleResolutionChange,
+      handleRemix,
+      switchMode,
+      ensureI2iCapableMode,
+      setGalleryInitImage,
+      restoreActiveJob,
+    },
+    loraTest: {
+      pending: loraHandoffPending,
+      error: loraHandoffError,
+      dismiss: dismissLoraHandoff,
+    },
+    remix: {
+      state: remixHandoff,
+      pending: remixHandoffPending,
+      retry: retryRemixHandoff,
+      dismiss: dismissRemixHandoff,
+    },
+  };
+}

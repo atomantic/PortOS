@@ -111,9 +111,9 @@ function storeCodeVideo(project, { providerId, model, sections, timelineIds }) {
   return normalizeComposition({ ...(project.composition || {}), mode: 'code', codeVideo });
 }
 
-async function writeComposition(projectId, run, sections, timelineIds, authoringBasis) {
+async function writeComposition(projectId, run, sections, timelineIds, authoringBasis, startedBy) {
   const { project } = await mutateProjectRecord(projectId, (current) => {
-    assertProductionApproval(current, 'storyboard');
+    assertProductionApproval(current, 'storyboard', { startedBy });
     if (productionReviewBasis(current).storyboard !== authoringBasis) throw new ServerError('The approved storyboard changed during authoring.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
     return { project: {
       ...current,
@@ -128,9 +128,9 @@ async function writeComposition(projectId, run, sections, timelineIds, authoring
  * Generate every section. Replaces stored functions for the sections the
  * model returned; a section it omitted keeps its previous function.
  */
-export async function generateMusicVideoCode(projectId, { providerId, model, effort } = {}) {
+export async function generateMusicVideoCode(projectId, { providerId, model, effort, startedBy } = {}) {
   const project = await requireProject(projectId);
-  assertProductionApproval(project, 'storyboard');
+  assertProductionApproval(project, 'storyboard', { startedBy });
   const timeline = buildCodeTimeline(project);
   if (!timeline.sections.length) {
     throw new ServerError('Code-rendered video needs a song duration — analyze the track or time a scene or lyric line', { status: 422, code: 'NO_TIMELINE' });
@@ -146,7 +146,7 @@ export async function generateMusicVideoCode(projectId, { providerId, model, eff
   });
   const run = await runModel({ providerId, model, effort, automation: project.automation, prompt, beforeSubmit: async () => {
     const current = await getProject(projectId);
-    assertProductionApproval(current, 'storyboard');
+    assertProductionApproval(current, 'storyboard', { startedBy });
     if (productionReviewBasis(current).storyboard !== productionReviewBasis(project).storyboard) throw new ServerError('The approved storyboard changed before authoring.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   } });
   const parsed = extractCodeSections(run.text);
@@ -154,15 +154,15 @@ export async function generateMusicVideoCode(projectId, { providerId, model, eff
   if (!sections.length) {
     throw new ServerError('The model did not return a section function', { status: 422, code: 'NO_SECTION_SOURCE' });
   }
-  const updated = await writeComposition(projectId, run, sections, timeline.sections.map((section) => section.id), productionReviewBasis(project).storyboard);
+  const updated = await writeComposition(projectId, run, sections, timeline.sections.map((section) => section.id), productionReviewBasis(project).storyboard, startedBy);
   console.log(`✅ Music-video code stored sections=${sections.length}`);
   return { project: updated, providerId: run.providerId, model: run.model };
 }
 
 /** Replace one section function. Every other stored function stays. */
-export async function regenerateMusicVideoCodeSection(projectId, sectionId, { providerId, model, effort } = {}) {
+export async function regenerateMusicVideoCodeSection(projectId, sectionId, { providerId, model, effort, startedBy } = {}) {
   const project = await requireProject(projectId);
-  assertProductionApproval(project, 'storyboard');
+  assertProductionApproval(project, 'storyboard', { startedBy });
   const timeline = buildCodeTimeline(project);
   if (!timeline.sections.some((section) => section.id === sectionId)) {
     throw new ServerError('That section is not on the code timeline', { status: 404, code: 'SECTION_NOT_FOUND' });
@@ -178,14 +178,14 @@ export async function regenerateMusicVideoCodeSection(projectId, sectionId, { pr
   });
   const run = await runModel({ providerId, model, effort, automation: project.automation, prompt, beforeSubmit: async () => {
     const current = await getProject(projectId);
-    assertProductionApproval(current, 'storyboard');
+    assertProductionApproval(current, 'storyboard', { startedBy });
     if (productionReviewBasis(current).storyboard !== productionReviewBasis(project).storyboard) throw new ServerError('The approved storyboard changed before authoring.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   } });
   const sections = acceptSources(extractCodeSections(run.text), [sectionId]);
   if (!sections.length) {
     throw new ServerError('The model did not return that section', { status: 422, code: 'NO_SECTION_SOURCE' });
   }
-  const updated = await writeComposition(projectId, run, sections, timeline.sections.map((section) => section.id), productionReviewBasis(project).storyboard);
+  const updated = await writeComposition(projectId, run, sections, timeline.sections.map((section) => section.id), productionReviewBasis(project).storyboard, startedBy);
   console.log(`✅ Music-video code replaced section=${sectionId}`);
   return { project: updated, providerId: run.providerId, model: run.model, sectionId };
 }

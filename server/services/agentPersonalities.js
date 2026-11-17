@@ -8,20 +8,13 @@
 
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import EventEmitter from 'events';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 
 const AGENTS_FILE = join(PATHS.agentPersonalities, 'agents.json');
 const store = createCachedStore(AGENTS_FILE, { agents: {} }, { context: 'agentPersonalities' });
 const loadAgents = store.load;
 
-// Event emitter for agent personality changes
-export const agentPersonalityEvents = new EventEmitter();
 export const invalidateCache = store.invalidateCache;
-
-export function notifyChanged(action = 'update', agentId = null) {
-  agentPersonalityEvents.emit('changed', { action, agentId, timestamp: Date.now() });
-}
 
 /**
  * Get all agent personalities
@@ -74,7 +67,6 @@ export async function createAgent(agentData) {
   };
 
   await store.mutate((data) => { data.agents[id] = agent; });
-  notifyChanged('create', id);
 
   console.log(`🤖 Created agent personality: ${agent.name} (${id})`);
   return { id, ...agent };
@@ -109,7 +101,6 @@ export async function updateAgent(id, updates) {
   });
 
   if (!agent) return null;
-  notifyChanged('update', id);
 
   console.log(`📝 Updated agent personality: ${agent.name} (${id})`);
   return { id, ...agent };
@@ -128,7 +119,6 @@ export async function deleteAgent(id) {
   });
 
   if (agentName === null) return false;
-  notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted agent personality: ${agentName} (${id})`);
   return true;

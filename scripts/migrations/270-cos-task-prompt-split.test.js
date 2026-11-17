@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration, { splitPromptMetadata } from './270-cos-task-prompt-split.js';
-import { parseTasksMarkdown, generateTasksMarkdown } from '../../server/lib/taskParser.js';
+import { parseTasksMarkdown, generateTasksMarkdown } from '../../server/lib/legacyTaskMarkdown.js';
 
 const STAMP = '2026-08-15T12:00:00.000Z';
 const AGENT_BODY = 'Improve Example App\n\n## Phase 1\n- Read PLAN.md\n## Phase 2\nShip a PR.';

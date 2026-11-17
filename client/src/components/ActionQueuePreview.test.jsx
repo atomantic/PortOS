@@ -10,7 +10,7 @@ import { __resetActionQueue } from '../hooks/useActionQueue';
 import { ACTION_QUEUE_CHANGED } from '../constants/events';
 
 const mock = vi.hoisted(() => ({ getReviewQueue: vi.fn(), on: vi.fn(), off: vi.fn() }));
-vi.mock('../services/api', () => ({ getReviewQueue: mock.getReviewQueue }));
+vi.mock('../services/apiReview.js', () => ({ getReviewQueue: mock.getReviewQueue }));
 vi.mock('../services/socket', () => ({ default: { on: mock.on, off: mock.off } }));
 
 const required = { id: 'health:disk', source: 'health', required: true, title: 'Disk needs attention', reason: 'Free space is low' };

@@ -124,6 +124,7 @@ import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideoLimits.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 
 describe('musicVideo routes', () => {
   let app;
@@ -531,7 +532,7 @@ describe('musicVideo routes', () => {
       expect(svc.updateProject).toHaveBeenCalledWith('mv-1', {
         lyricCues: [{ text: 'one', startSec: 1, endSec: 3 }, { text: 'two', startSec: 3, endSec: null }],
         lyricMarkers: [],
-      });
+      }, { edit: false });
     });
 
     it('appends plain lines after the existing cues, anchoring the sheet\'s markers after them', async () => {
@@ -548,7 +549,7 @@ describe('musicVideo routes', () => {
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 1 },
           { type: 'direction', label: 'Shouts', kind: 'shouted', line: 2 },
         ],
-      });
+      }, { edit: false });
     });
 
     it('422s when the text holds no lyric lines, and 404s for a missing project', async () => {
@@ -582,7 +583,7 @@ describe('musicVideo routes', () => {
           { type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 1 },
           { type: 'section', label: 'Chorus', kind: 'chorus', line: 2 },
         ],
-      });
+      }, { edit: false });
     });
 
     it('if-empty never replaces lines the project already has, and skips a track with no lyrics', async () => {
@@ -1025,7 +1026,7 @@ describe('musicVideo routes', () => {
     it('POST /:id/render kicks off the render and returns the jobId', async () => {
       const r = await request(app).post('/api/music-video/mv-1/render').send({});
       expect(r.status).toBe(200);
-      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1', { resumable: true });
+      expect(renderSvc.renderMusicVideo).toHaveBeenCalledWith('mv-1', { resumable: true, startedBy: DIRECTOR_STARTED });
       expect(r.body).toEqual({ jobId: 'job-1' });
     });
 

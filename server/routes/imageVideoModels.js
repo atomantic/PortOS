@@ -13,7 +13,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { PATHS, rmGuarded } from '../lib/fileUtils.js';
+import { rmGuarded } from '../lib/fileUtils.js';
 import { getHfCacheRoot, listLinkedSharedBlobs, releaseSharedBlobs } from '../lib/hfCache.js';
 import {
   getImageModels,
@@ -24,8 +24,8 @@ import {
   removeUserModelEntry,
 } from '../lib/mediaModels.js';
 import { publicTextEncoderOption, videoTextEncoderOptions } from '../lib/videoTextEncoders.js';
-import { emptyToUndefined, validateRequest } from '../lib/validation.js';
-import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES, searchHuggingfaceModels } from '../lib/huggingfaceModel.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { ADDABLE_IMAGE_RUNNERS, ADDABLE_VIDEO_RUNTIMES } from '../lib/huggingfaceModel.js';
 import { addModelFromHuggingface } from '../services/mediaModelInstall.js';
 import { getMediaModelStorage } from '../services/mediaModelStorage.js';
 import { isModelStoreBackend, isSafeModelStoreKey, removeModelStoreItem } from '../services/modelStoreStorage.js';
@@ -137,20 +137,6 @@ Research primary upstream documentation, model cards, license, hardware requirem
     worktreeChangesExpected: true,
   }, 'user');
   res.status(task.duplicate ? 200 : 201).json({ id: task.id, status: task.status, duplicate: !!task.duplicate });
-}));
-
-// GET /search — free-text HuggingFace Hub search for candidate base-model
-// repos. Backs the manager UI's discovery box; the user adds one by feeding its
-// id into POST /install/huggingface (which runs the full classify/refuse pass).
-const modelSearchSchema = z.object({
-  query: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
-  pipeline: z.preprocess(emptyToUndefined, z.string().max(60).optional()),
-  limit: z.coerce.number().int().min(1).max(50).optional(),
-});
-router.get('/search', asyncHandler(async (req, res) => {
-  const { query, pipeline, limit } = validateRequest(modelSearchSchema, req.query);
-  const items = await searchHuggingfaceModels(query || '', { pipeline, limit: limit || 12 });
-  res.json({ items });
 }));
 
 // POST /install/huggingface — add a custom base model from an HF repo. Strict:

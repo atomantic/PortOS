@@ -6,7 +6,7 @@ import { readClipboard } from '../lib/clipboard';
 import useClickOutside from '../hooks/useClickOutside';
 import useEscapeKey from '../hooks/useEscapeKey';
 import useTerminalFullscreen from '../hooks/useTerminalFullscreen';
-import { useShellSession, MAX_SESSIONS } from '../hooks/useShellSession';
+import { useShellSession, MAX_SESSIONS } from '../components/shell/useShellSession';
 import TerminalHotKeys from '../components/shell/TerminalHotKeys';
 import ShellSessionTabs from '../components/shell/ShellSessionTabs';
 import ShellProviderLauncher from '../components/shell/ShellProviderLauncher';

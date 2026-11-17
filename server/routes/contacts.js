@@ -4,7 +4,6 @@ import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import * as contactsSync from '../services/contactsSync.js';
-import * as identityResolve from '../services/identityResolve.js';
 import * as tribeContacts from '../services/tribeContacts.js';
 
 const router = Router();
@@ -25,28 +24,6 @@ router.get('/status', asyncHandler(async (req, res) => {
 router.post('/sync', asyncHandler(async (req, res) => {
   const result = await contactsSync.runSync();
   res.json(result);
-}));
-
-const searchQuerySchema = z.object({
-  q: z.string().max(200).optional(),
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-});
-
-router.get('/search', asyncHandler(async (req, res) => {
-  const q = validateRequest(searchQuerySchema, req.query);
-  const contacts = await contactsSync.searchContacts(q);
-  res.json({ contacts });
-}));
-
-const resolveQuerySchema = z.object({
-  handle: z.string().min(1).max(200),
-});
-
-router.get('/resolve', asyncHandler(async (req, res) => {
-  const { handle } = validateRequest(resolveQuerySchema, req.query);
-  const ctx = await identityResolve.loadResolverContext();
-  const resolution = identityResolve.resolveHandle(handle, ctx);
-  res.json(resolution);
 }));
 
 const enrichBodySchema = z.object({

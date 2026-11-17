@@ -32,7 +32,6 @@ const PREVIOUS_DEFAULT_CAP = 5;
 
 /**
  * Rewrite every family still on the old default cap. Pure — exported for the test.
- *
  * @param {object} config raw parsed quota-burn config
  * @returns {{ config: object, lifted: string[] }} the family ids that changed
  */

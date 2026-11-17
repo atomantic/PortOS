@@ -25,9 +25,8 @@ import { ServerError } from '../lib/errorHandler.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
-import { DAY, safeDate } from '../lib/fileUtils.js';
+import { safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { getAppById, isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
@@ -77,7 +76,6 @@ export { INTERVAL_TYPES, ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 export { DEFAULT_TASK_INTERVALS, INSTALL_WIDE_TASK_TYPES, SELF_IMPROVEMENT_TASK_TYPES, getTaskTypeInvocation, requiresManagedAppTarget, requiresInstallWideTarget, isProgrammaticScheduledTaskType, stripManagedAgentOptionsFromOverride } from './taskScheduleRegistry.js';
 export { loadSchedule } from './taskScheduleStore.js';
 export { recordTaskTypeFailure, recordTaskTypeSuccess } from './taskScheduleBackoff.js';
-export { addTemplateTask, deleteTemplateTask, getTemplateTasks } from './taskScheduleTemplates.js';
 
 // Settings whose edit is not an "I've addressed the cause" signal, so saving
 // one leaves a failure-parked task parked (see the unpark block below).
@@ -94,65 +92,6 @@ export const createFeatureGate = () => {
     return enabledByFeature.get(featureId);
   };
 };
-
-/**
- * Get an advisory interval recommendation; dispatch does not apply learning adjustments
- */
-async function getPerformanceAdjustedInterval(taskType, baseIntervalMs) {
-  const taskTypeKey = `task:${taskType}`;
-
-  const cooldownInfo = await getAdaptiveCooldownMultiplier(taskTypeKey).catch(() => ({
-    multiplier: 1.0,
-    reason: 'error-fallback',
-    skip: false,
-    successRate: null,
-    completed: 0
-  }));
-
-  if (cooldownInfo.reason === 'insufficient-data' || cooldownInfo.reason === 'error-fallback') {
-    // Also check legacy keys for migration period
-    const legacyKeys = [`self-improve:${taskType}`, `app-improve:${taskType}`];
-    for (const key of legacyKeys) {
-      const legacyInfo = await getAdaptiveCooldownMultiplier(key).catch(() => null);
-      if (legacyInfo && legacyInfo.reason !== 'insufficient-data' && legacyInfo.reason !== 'error-fallback') {
-        const adjustedIntervalMs = Math.round(baseIntervalMs * legacyInfo.multiplier);
-        return {
-          adjustedIntervalMs,
-          multiplier: legacyInfo.multiplier,
-          reason: legacyInfo.reason,
-          successRate: legacyInfo.successRate,
-          dataPoints: legacyInfo.completed,
-          skip: legacyInfo.skip,
-          adjusted: legacyInfo.multiplier !== 1.0,
-          recommendation: legacyInfo.recommendation
-        };
-      }
-    }
-
-    return {
-      adjustedIntervalMs: baseIntervalMs,
-      multiplier: 1.0,
-      reason: cooldownInfo.reason,
-      successRate: null,
-      dataPoints: cooldownInfo.completed || 0,
-      adjusted: false
-    };
-  }
-
-  const adjustedIntervalMs = Math.round(baseIntervalMs * cooldownInfo.multiplier);
-
-
-  return {
-    adjustedIntervalMs,
-    multiplier: cooldownInfo.multiplier,
-    reason: cooldownInfo.reason,
-    successRate: cooldownInfo.successRate,
-    dataPoints: cooldownInfo.completed,
-    skip: cooldownInfo.skip,
-    adjusted: cooldownInfo.multiplier !== 1.0,
-    recommendation: cooldownInfo.recommendation
-  };
-}
 
 // ============================================================
 // Unified getters/setters (replace split self/app functions)
@@ -629,7 +568,6 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
       emitLog('info', `🔀 branch-reconcile retained ${row.branch || row.path || 'repository scan'}: ${row.reason}${row.nextAction ? ` — ${row.nextAction}` : ''}`, { appId });
     }
   }
-  cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts, skipCauses });
   return record;
 }
 
@@ -1445,7 +1383,6 @@ export async function getScheduleStatus() {
     tasks: {},
     templates: schedule.templates,
     onDemandRequests,
-    learningAdjustmentsActive: 0,
     dataInputCatalog: getTaskDataInputCatalog()
   };
 
@@ -1459,10 +1396,6 @@ export async function getScheduleStatus() {
     if (invocation.visibility === 'hidden') continue;
     const execution = schedule.executions[`task:${taskType}`] || { lastRun: null, count: 0, perApp: {} };
     const promptInfo = getTaskTypePromptInfo(taskType);
-
-    // Historical recommendations are advisory, not the effective schedule
-    const baseInterval = interval.intervalMs || DAY;
-    const learningInfo = await getPerformanceAdjustedInterval(taskType, baseInterval);
 
     // Check global shouldRun status
     const check = await shouldRunTask(taskType, null, { featureEnabled, schedule });
@@ -1531,13 +1464,6 @@ export async function getScheduleStatus() {
       totalAppCount,
       appSchedules,
       status: check,
-      learningAdjusted: false,
-      learningMultiplier: 1,
-      learningAdvice: { ...learningInfo, advisoryOnly: true },
-      successRate: learningInfo.successRate,
-      dataPoints: learningInfo.dataPoints,
-      adjustedIntervalMs: interval.intervalMs ?? null,
-      recommendation: learningInfo.recommendation,
       description: interval.description || getTaskTypeDescription(taskType),
       promptMode: promptInfo.mode,
       ...(promptInfo.description ? { promptDescription: promptInfo.description } : {}),
@@ -1622,10 +1548,6 @@ export async function getScheduleStatus() {
       taskStatus.reconcileOutcomes = Object.fromEntries(outcomes);
     }
     status.tasks[taskType] = taskStatus;
-
-    if (learningInfo.adjusted) {
-      status.learningAdjustmentsActive++;
-    }
   }
 
   return status;
@@ -1801,8 +1723,6 @@ export async function getUpcomingTasks(limit = 10) {
       lastRunFormatted: execution.lastRun ? formatRelativeTime(new Date(execution.lastRun).getTime()) : 'never',
       runCount: execution.count,
       successRate: check.successRate ?? null,
-      learningAdjusted: check.learningApplied || false,
-      adjustmentMultiplier: check.adjustmentMultiplier || 1.0,
       description: interval.description || getTaskTypeDescription(taskType)
     });
   }

@@ -1,26 +1,9 @@
 /**
- * Finish a video draft (#3696) — decide whether one stored render can be
- * re-rendered on its declared delivery model, and which model that is.
+ * Finish a video draft (#3696): decide whether one stored render can be re-rendered on its declared delivery model, and which model that is.
  *
- * A draft is finishable only when the record alone is enough to reproduce the
- * same composition at higher quality. That means all of:
- *   - it was written by the finish-aware writer (`renderInputsVersion`), so its
- *     conditioning inventory can be trusted. Legacy records predate the field
- *     and degrade to "not finishable" rather than being assumed unconditioned —
- *     absent must never read as "empty" here.
- *   - it used NO conditioning inputs (`conditioning` is an empty array) and is
- *     a plain text-to-video render. Image / FFLF / extend / a2v / IC drafts
- *     have no durable reference to re-render from, so Finish is not offered for
- *     them at all (deliberate first slice — see issue #3696).
- *   - it is a single render, not a stitched/chained/upscaled derivative.
- *   - it carries the resolved seed it actually rendered with.
- *   - its model declares a `finishModelId` AND that delivery model is present
- *     in the model list this install can actually run.
- *
- * Mirrors `finishTargetForModel` in `server/lib/videoFinishProfiles.js`; the
- * registry edges themselves are server-declared and ride to the client on the
- * `/api/video-gen/status` model entries, so there is no client-side pair table
- * to drift.
+ * A draft is finishable only when the record alone reproduces the same composition at higher quality: written by the finish-aware writer (`renderInputsVersion`; legacy records degrade to "not finishable", absent must never read as "empty"),
+ * NO conditioning inputs and a plain text-to-video render (image / FFLF / extend / a2v / IC drafts have no durable reference; deliberate first slice), a single render (not stitched/chained/upscaled), the resolved seed it rendered with, and a model
+ * declaring a `finishModelId` that is present in the runnable model list. Mirrors `finishTargetForModel` in `server/lib/videoFinishProfiles.js`; registry edges are server-declared and ride on the `/api/video-gen/status` model entries, so there is no client pair table to drift.
  */
 
 // Mirror of RENDER_INPUTS_VERSION in server/services/videoGen/generateVideoHelpers.js.
@@ -31,11 +14,8 @@ const hasResolvedSeed = (seed) => seed != null && seed !== '' && Number.isFinite
 const hasPrompt = (prompt) => typeof prompt === 'string' && prompt.trim() !== '' && prompt !== '(no prompt)';
 
 /**
- * True when `record` is a fully reproducible text-to-video render — i.e. the
- * record itself carries every input the re-render needs. Independent of model
- * availability, so callers can explain "no compatible model" separately from
+ * True when `record` is a fully reproducible text-to-video render (carries every input the re-render needs), independent of model availability so callers can explain "no compatible model" separately.
  * "this draft isn't reproducible".
- *
  * @param {object|null|undefined} record - RAW video history record
  */
 export const isReproducibleTextToVideo = (record) => {
@@ -52,7 +32,6 @@ export const isReproducibleTextToVideo = (record) => {
 /**
  * Resolve the delivery model a stored draft finishes into, or `null` when the
  * draft isn't finishable on this install.
- *
  * @param {object|null|undefined} record - RAW video history record
  * @param {Array<object>} models - video model entries from the status payload
  * @returns {object|null} the delivery model entry
@@ -67,15 +46,8 @@ export const finishTargetForRecord = (record, models) => {
 };
 
 /**
- * True when `model` sits at the DELIVERY end of the finish graph — i.e. some
- * other entry in `models` names it as its `finishModelId`.
- *
- * Mirror of `isDeliveryVideoModel` in `server/lib/videoFinishProfiles.js`, which
- * is what `draftDecodeDeclineReason` consults: a delivery model always decodes
- * on its own decoder, whatever a request asked for. The client needs the same
- * reading so the decode picker SHOWS what the render will do instead of
- * offering a draft decode the server will silently decline.
- *
+ * True when `model` sits at the DELIVERY end of the finish graph (another entry names it as its `finishModelId`). Mirror of `isDeliveryVideoModel` in `server/lib/videoFinishProfiles.js`, which `draftDecodeDeclineReason` consults:
+ * a delivery model always decodes on its own decoder, and the decode picker must SHOW that instead of offering a draft decode the server will silently decline.
  * @param {object|null|undefined} model
  * @param {Array<object>} models - video model entries from the status payload
  */

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { spotifyOauthCallbackQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -66,7 +67,7 @@ router.get('/oauth/callback', asyncHandler(async (req, res) => {
   const settingsUrl = (error) => (error
     ? `/brain/spotify?oauthError=${encodeURIComponent(error)}`
     : '/brain/spotify?oauthConnected=1');
-  const { code, error: authError } = req.query;
+  const { code, error: authError } = validateRequest(spotifyOauthCallbackQuerySchema, req.query);
   if (authError) return res.redirect(settingsUrl(String(authError)));
   if (!code) return res.redirect(settingsUrl('Missing authorization code'));
   const callback = await spotifyAuth.handleCallback(String(code), requestRedirectOptions(req)).then((result) => ({ result }))

@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunOwner } from '../lib/aiToolkit/internal/runOwnership.js';
-import { setAIToolkit } from './runner.js';
+import { finalizeRunRecord, serializeRunDeletion, setAIToolkit } from './runner.js';
 import { recoverInterruptedRuns } from './interruptedRunRecovery.js';
 
 vi.mock('./providers.js', () => ({ isOllamaBackedProvider: () => false }));
@@ -73,5 +74,37 @@ describe('boot interrupted-run recovery', () => {
     expect(reported).not.toHaveBeenCalled();
     for (const [id, original] of Object.entries(originals)) expect(await readRun(id)).toEqual(JSON.parse(JSON.stringify(original)));
     expect(hooks.onRunCanceled).not.toHaveBeenCalled();
+  });
+
+  // Recovery runs after listen (#16557), so DELETE /api/runs/:id can land while it works.
+  it('leaves a run deleted after recovery read it deleted, with no hook', async () => {
+    await seed('deleted-mid-recovery');
+    const runDir = join(directory, 'runs', 'deleted-mid-recovery');
+    // The liveness probe runs between recovery's read and its finalize.
+    const isDead = () => { rmSync(runDir, { recursive: true, force: true }); return true; };
+    expect(await recoverInterruptedRuns({ isDead, now: () => END })).toEqual({ recovered: 0 });
+    expect(existsSync(runDir)).toBe(false);
+    expect(hooks.onRunCanceled).not.toHaveBeenCalled();
+  });
+
+  it('makes a delete wait for a finalize already rewriting the same run', async () => {
+    await seed('contended');
+    const metadataPath = join(directory, 'runs', 'contended', 'metadata.json');
+    let seenAtDelete;
+    const deleteRun = serializeRunDeletion(async (runId) => {
+      seenAtDelete = JSON.parse(await readFile(metadataPath, 'utf8'));
+      await rm(join(directory, 'runs', runId), { recursive: true });
+      return true;
+    });
+    const finalized = finalizeRunRecord({ runId: 'contended', output: '', exitCode: null, success: false,
+      startTime: Date.parse(START), onlyIfRecorded: true, extras: { canceled: true } });
+    const deleted = deleteRun('contended');
+    await Promise.all([finalized, deleted]);
+    expect(seenAtDelete.canceled).toBe(true);
+    expect(existsSync(join(directory, 'runs', 'contended'))).toBe(false);
+    // And the other order: a finalize queued behind a delete creates nothing.
+    expect(await finalizeRunRecord({ runId: 'contended', output: '', exitCode: null, success: false,
+      startTime: Date.parse(START), onlyIfRecorded: true })).toBeNull();
+    expect(existsSync(join(directory, 'runs', 'contended'))).toBe(false);
   });
 });

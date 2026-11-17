@@ -4,19 +4,11 @@
  */
 
 import { resolveExecutionOptions } from './executionOptions.js';
+import { isTruthyMeta } from './metadataFlags.js';
+
 /**
- * Per-run generation controls a task may pin on top of its provider record.
- *
- * A task form or schedule entry can carry `temperature`, `thinking` and
- * `effort` for ONE dispatch. They are layered onto a copy of the provider here
- * rather than written back to it: the saved record is shared by every other
- * run, and the child-environment composer turns the copy into OpenCode's
- * dynamic `agent.build` config downstream.
- *
- * Every value arrives untrusted — a COS-TASKS.md round-trip hands back strings,
- * and the task form can submit an empty field — so each override applies only
- * when it validates, and an invalid one leaves the provider's own setting
- * alone rather than overwriting it with `NaN`/`undefined`.
+ * Per-run generation controls a task may pin on top of its provider record: `temperature`, `thinking` and `effort` for ONE dispatch, layered onto a copy of the provider (the saved record is shared by every other run; the child-environment composer turns the copy into OpenCode's dynamic `agent.build` config).
+ * Every value arrives untrusted (rows stored before #16407 and peers on older versions hold strings; the form can submit an empty field), so each override applies only when it validates, and an invalid one leaves the provider's setting alone rather than writing `NaN`/`undefined`.
  */
 
 /** `thinking` values a provider record accepts, string forms included. */
@@ -26,15 +18,9 @@ const THINKING_VALUES = [true, false, 'true', 'false'];
 const MIN_TEMPERATURE = 0;
 const MAX_TEMPERATURE = 2;
 
-/**
- * `provider` with this task's valid generation overrides layered on top.
- *
- * An empty temperature field is treated as absent, not as 0 — `Number('')` is
- * 0, which would silently pin greedy decoding on a task whose author only
- * cleared the box. A blank effort also inherits the provider's saved default.
- */
+/** `provider` with this task's valid generation overrides layered on. An empty or null temperature is absent, not 0 (`Number('')` and `Number(null)` are 0, which would silently pin greedy decoding for a task whose author only cleared the box); a blank effort inherits the provider's saved default. */
 export function applyTaskGenerationOverrides(provider, metadata) {
-  const temperature = metadata?.temperature === '' ? NaN : Number(metadata?.temperature);
+  const temperature = metadata?.temperature === '' || metadata?.temperature === null ? NaN : Number(metadata?.temperature);
   const thinking = metadata?.thinking;
   const overridden = {
     ...provider,
@@ -45,7 +31,9 @@ export function applyTaskGenerationOverrides(provider, metadata) {
     ...(Number.isFinite(temperature) && temperature >= MIN_TEMPERATURE && temperature <= MAX_TEMPERATURE
       ? { temperature }
       : {}),
-    ...(THINKING_VALUES.includes(thinking) ? { thinking } : {}),
+    // As a boolean: stored rows before #16407 hold `'true'`/`'false'`, and spawn-time readers
+    // (cliChildEnv) test `thinking === false`.
+    ...(THINKING_VALUES.includes(thinking) ? { thinking: isTruthyMeta(thinking) } : {}),
     ...(typeof metadata?.effort === 'string' && metadata.effort.trim()
       ? { effort: metadata.effort.trim() }
       : {}),

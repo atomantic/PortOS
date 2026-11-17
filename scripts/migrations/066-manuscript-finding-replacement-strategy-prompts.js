@@ -1,26 +1,9 @@
 /**
- * Unify the finding-shape contract across the manuscript-completeness and
- * manuscript-fix prompts by making the `suggestion` field's meaning explicit.
+ * Unify the finding-shape contract across the manuscript-completeness and manuscript-fix prompts by making the `suggestion` field's meaning explicit.
  *
- * Background: the `comic-structure` category (migration 057) repurposed
- * `suggestion` as a COMPLETE panel-by-panel replacement document, while every
- * narrative category uses it as delta advice. Nothing in the contract declared
- * which one a given finding was — the fix step inferred it from the category.
- *
- * This migration ships a `replacementStrategy: 'delta' | 'full-page'` field on
- * each finding in both prompts:
- *   - completeness prompt: emit `replacementStrategy` in the output contract
- *     ('full-page' for comic-structure, 'delta' for everything else) so the
- *     overloaded use of `suggestion` is declared, not inferred.
- *   - fix prompt: branch on the strategy — substitute a full-page suggestion
- *     directly vs. synthesize an edit from delta advice.
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old templates until this migration rewrites them. Customization-
- * safe: only installs whose copy still hashes to a known prior shipped version
- * are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * The `comic-structure` category (migration 057) repurposed `suggestion` as a COMPLETE panel-by-panel replacement document while narrative categories use it as delta advice, and nothing declared which a finding was (the fix step inferred it from the category). This ships a `replacementStrategy: 'delta' | 'full-page'` field on each finding in both prompts:
+ * the completeness prompt emits it ('full-page' for comic-structure, 'delta' otherwise); the fix prompt branches on it (substitute a full-page suggestion directly vs. synthesize an edit from delta advice).
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep old templates until this rewrites them. Customization-safe: only copies hashing to a known prior shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

@@ -39,7 +39,7 @@
 
 export const BACKUP_ASSET_OWNERS = Object.freeze([
   { id: 'music-take-publication', status: 'admitted', modules: ['services/musicTakePublication.js'] },
-  { id: 'media-job-completion', status: 'admitted', modules: ['services/mediaJobQueue/index.js'] },
+  { id: 'media-job-completion', status: 'admitted', modules: ['services/mediaJobQueue/persistence.js'] },
   { id: 'mood-board-poster-completion', status: 'admitted', modules: ['services/moodBoard/completePoster.js'] },
   { id: 'media-job-attach-hooks', status: 'admitted', modules: ['services/mediaJobImageHook.js'] },
   { id: 'music-video-dcp', status: 'admitted', modules: ['services/musicVideo/dcp.js'] },
@@ -64,7 +64,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
   {
     id: 'lora-dataset-workflows',
     status: 'admitted',
-    modules: ['services/loraDatasets.js', 'services/loraDatasetGenerate.js'],
+    modules: ['services/loraDatasets.js'],
   },
   { id: 'voice-studio', status: 'admitted', modules: ['services/voice/studio.js'] },
   {

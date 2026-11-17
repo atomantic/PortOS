@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: Use `formatCount`, `formatPercent`, `formatUsd`, and `formatDateTime` (`utils/formatters.js`) instead of bare `.toLocaleString()` or hand-rolled `toFixed` percent/USD strings (see root `AGENTS.md`).

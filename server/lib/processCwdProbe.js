@@ -1,15 +1,7 @@
 /**
  * Is any process running with its working directory inside a directory?
  *
- * `hasProcessCwdInside(dir)` — true when any process (via `lsof -d cwd`) has its working directory
- * inside `dir`. Fails CLOSED: no `lsof`, an unsupported platform or an empty/unreadable listing reads
- * as occupied. Backs the ownerless-foreign-worktree release in `worktreeManager.js`.
- *
- * Used to tell an abandoned foreign worktree (its terminal session exited) from
- * one a person or tool is still sitting in. The answer is tri-state collapsed
- * to a boolean that fails CLOSED: anything the probe cannot establish (no
- * `lsof`, a platform without it, an unreadable or implausible listing) reads as
- * "occupied", never as "nobody is there".
+ * `hasProcessCwdInside(dir)` (via `lsof -d cwd`) backs the ownerless-foreign-worktree release in `worktreeManager.js`, telling an abandoned worktree (terminal session exited) from one a person or tool is sitting in. Fails CLOSED: anything the probe can't establish (no `lsof`, an unsupported platform, an empty/unreadable/implausible listing) reads as "occupied", never "nobody is there".
  */
 
 import { realpathSync } from 'node:fs';
@@ -36,8 +28,7 @@ function parseLsofCwds(stdout) {
 export async function hasProcessCwdInside(dir, { platform = process.platform, run = promisify(execFile) } = {}) {
   if (!dir) return true;
   if (platform !== 'darwin' && platform !== 'linux') return true;
-  // lsof exits non-zero when it merely could not read some other user's process,
-  // while still printing what it saw; the listing is judged on content below.
+  // lsof exits non-zero when it merely couldn't read another user's process while still printing what it saw; the listing is judged on content below.
   const out = await run('lsof', ['-a', '-d', 'cwd', '-Fn'], { timeout: LSOF_TIMEOUT_MS, maxBuffer: LSOF_MAX_BUFFER })
     .then(r => r.stdout, err => err?.stdout ?? null);
   const cwds = out == null ? [] : parseLsofCwds(out);

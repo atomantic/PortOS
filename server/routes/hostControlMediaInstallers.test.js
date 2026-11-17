@@ -38,14 +38,18 @@ vi.mock('../lib/setupScriptRunner.js', async (importOriginal) => ({
     return child;
   }),
 }));
-vi.mock('../services/pipeline/musicGen.js', () => ({
-  ENGINES: { example: {
+vi.mock('../services/pipeline/musicGen.js', () => {
+  const ENGINES = { example: {
     id: 'example', name: 'Example Music', installEnv: 'INSTALL_EXAMPLE_MUSIC',
     venvDefault: '/example/music', resolvePython: () => '/example/music/bin/python',
-  } },
-  isEnginePlatformSupported: vi.fn(() => true),
-  isEngineHealthy: vi.fn(async () => state.installed.has('music')),
-}));
+  } };
+  return {
+    ENGINES,
+    findEngine: (id) => (Object.hasOwn(ENGINES, id) ? ENGINES[id] : null),
+    isEnginePlatformSupported: vi.fn(() => true),
+    isEngineHealthy: vi.fn(async () => state.installed.has('music')),
+  };
+});
 vi.mock('../services/videoGen/runtimes.js', () => ({
   BYOV_RUNTIME_INFO: { example: {
     id: 'example', label: 'Example Video', installEnvVar: 'INSTALL_EXAMPLE_VIDEO',
@@ -163,7 +167,6 @@ describe('media installer operator authority (#9513)', () => {
   it('keeps status aliases read-only and contained rendering separate from installation', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
     for (const path of [
-      '/api/music/setup/runtime-status?runtime=example',
       '/api/music/setup/runtime-install?runtime=example',
       '/api/video-gen/setup/runtime-status?runtime=example',
       '/api/video-gen/setup/runtime-install?runtime=example',

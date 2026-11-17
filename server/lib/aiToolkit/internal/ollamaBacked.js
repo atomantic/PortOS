@@ -1,20 +1,8 @@
 /**
  * Whether `provider` is served by an Ollama daemon rather than its nominal
- * cloud/CLI backend. Covers three shapes: the built-in `ollama` API provider
- * itself (id match — its `endpoint` carries the daemon URL, not `envVars`);
- * an `api`-type provider whose `endpoint` points at Ollama (generic local
- * setups); and the Claude-Ollama CLI/TUI pattern — a `claude` process that
- * carries the `ollamaBacked` marker or an `ANTHROPIC_BASE_URL` pointed at
- * Ollama, running the full Claude Code harness but generating tokens from a
- * local model, so its model list must come from Ollama (filtered to
- * tool-use-capable models) rather than the static Anthropic list.
- *
- * Lives in `internal/` rather than `providers.js` so the model-fetcher table
- * (`internal/modelFetchers.js`) can key its ollama row on it without importing
- * back into `providers.js` and forming a module cycle. Re-exported from
- * `providers.js` (and from `server/services/providers.js`) so hosts can
- * classify providers the same way this module's own refresh dispatch does,
- * instead of re-deriving the shape check and risking drift.
+ * backend: the built-in `ollama` id, an `api` provider whose `endpoint` points at
+ * Ollama, or a Claude-Ollama CLI/TUI harness (marker or `ANTHROPIC_BASE_URL`).
+ * Lives here to avoid an import cycle with `modelFetchers.js`; re-exported from `providers.js`.
  */
 export function isOllamaBackedProvider(provider) {
   if (provider?.id === 'ollama') return true;
@@ -25,15 +13,8 @@ export function isOllamaBackedProvider(provider) {
 
 /**
  * Normalize an Ollama base URL (strip trailing slash + an OpenAI-compat `/v1`)
- * so two providers pointed at the same daemon through differently-spelled URLs
- * resolve to the same string.
- *
- * Lives here beside {@link isOllamaBackedProvider} rather than in `providers.js`
- * so `internal/modelFetchers.js` can build a refresh group key on it without
- * importing back into `providers.js` and forming a module cycle. Deliberately
- * NOT re-exported from `providers.js`: `ollamaRefreshGroupKey` is the contract
- * hosts group on, and exporting the normalizer alongside it only invites a
- * caller to re-derive the grouping rule and drift from the real dispatch.
+ * so differently-spelled URLs for one daemon compare equal. Deliberately NOT
+ * re-exported: `ollamaRefreshGroupKey` is the contract hosts group on.
  */
 export function ollamaBaseFromProvider(provider) {
   const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || 'http://localhost:11434');
@@ -41,52 +22,12 @@ export function ollamaBaseFromProvider(provider) {
 }
 
 /**
- * `planned` held to what an Ollama daemon will actually serve — the one place
- * PortOS decides what `numCtx` means to a context window.
- *
- * It is the window the daemon was launched with, so it is an upper BOUND over
- * whatever a planning ladder resolved, and the answer outright when nothing
- * else declared one. It is NOT a fallback rung under the declared windows: a
- * catalog entry of 40,960 on a daemon launched at 8,192 still gets 8,192. With
- * no ceiling `planned` passes through untouched, `null` included — unknown must
- * not become a new answer.
- *
- * Shared rather than restated because the two ends drifted (#7466): the
- * pre-dispatch gate (`providerStatus.js#knownContextWindow`) clamped while the
- * prompt budgeter (`server/services/stageRunner.js#effectiveContextWindow`)
- * ranked `numCtx` last, so a chunked stage was built against the model's
- * declared window and then refused before it dispatched. The gate, the budgeter
- * and the browser's provider-card meter now all call this.
- *
- * The ceiling itself walks TWO rungs, in the same order
- * `server/lib/ollamaContext.js#resolveOllamaContextLength` walks to decide what
- * to launch the daemon with — so the budgeter and the launcher answer the same
- * question the same way:
- *
- *   1. `provider.numCtx` — the window this provider's own record asks for.
- *   2. `provider.runtimeContextWindow` — the window the daemon is ACTUALLY
- *      running at, stamped by the host (see {@link withRuntimeContextWindow}).
- *      This is the ambient `OLLAMA_CONTEXT_LENGTH` rung, which this directory
- *      cannot resolve for itself, and it ranks BELOW `numCtx` for the same
- *      reason `resolveOllamaContextLength` does: explicit provider config wins,
- *      and an unsaved `numCtx` being edited in the provider form must not be
- *      overruled by the window the daemon happens to be serving right now.
- *
- * Each rung is validated independently: a zero / negative / non-numeric
- * `numCtx` falls THROUGH to the runtime rung rather than collapsing the whole
- * ceiling to "none", so a malformed record cannot silently widen the budget.
- *
- * One deliberate limit, conservative (it can only under-plan): only an Ollama
- * daemon is sent `numCtx` (the runner moves such a run to the native
- * `/api/chat`, see ./ollamaNativeChat.js, because `/v1` ignores `num_ctx`);
- * every other OpenAI-compatible endpoint has no such knob, so there the field
- * describes a window nothing enforces and must never refuse a request. Hence the `isOllamaBackedProvider` gate —
- * and why this lives beside that predicate rather than in its own module, which
- * would add a module to the import closure of every suite reaching either end
- * of one rule.
- *
- * For an Ollama-backed CLI/TUI harness `numCtx` is the window the daemon is
- * reloaded UP TO, so a daemon already running wider keeps its wider window.
+ * `planned` held to what an Ollama daemon will actually serve: the one place
+ * `numCtx` becomes a context window (gate, budgeter and meter share it). The
+ * ceiling is an upper BOUND on `planned` (and the answer when none was declared);
+ * with no ceiling `planned` passes through, `null` included. Rungs as in
+ * `ollamaContext.js#resolveOllamaContextLength`: `numCtx`, then host-stamped
+ * `runtimeContextWindow`, each validated independently. Only Ollama is sent `numCtx`.
  *
  * @param {object|null|undefined} provider
  * @param {number|null|undefined} planned — whatever the caller's ladder resolved
@@ -102,34 +43,11 @@ export function clampToRuntimeContextWindow(provider, planned) {
 }
 
 /**
- * `provider` carrying the window its Ollama daemon is ACTUALLY running at —
- * the write side of the `runtimeContextWindow` rung
- * {@link clampToRuntimeContextWindow} reads.
- *
- * Declared here beside its reader, for the same reason the ceiling itself is
- * declared once: a field whose meaning is stated in two modules is a field the
- * two will eventually disagree about (#7466).
- *
- * It exists because the ceiling has a rung this directory cannot resolve. PortOS
- * also sets the daemon-wide window through the ambient `OLLAMA_CONTEXT_LENGTH`
- * env var (`server/lib/ollamaContext.js#resolveOllamaContextLength`), and on an
- * install that uses that rung with `numCtx` unset, the budgeter planned at the
- * model's catalog window, the gate admitted it, and the call died at dispatch
- * with `exceed_context_size_error` (#7472). The toolkit may not import out to
- * where that lives, and the browser cannot read server env at all — so the HOST
- * resolves it and hands it in as data on the provider projection, rather than
- * the clamp reaching out for it. Server side that is
- * `ollamaContext.js#withOllamaRuntimeContextWindow`; the browser takes the same
- * number off the provider-readiness payload.
- *
- * In-memory ONLY. `runtimeContextWindow` describes the process running right
- * now — relaunch the daemon at another window and a stored copy would be a lie
- * — so it must never reach `providers.json`, exactly like the observed windows
- * `mergeObservedContextWindows` folds onto the same projection.
- *
- * Returns the SAME object when there is nothing to add, so a host with no
- * ambient window allocates nothing and compares identically. `null` in must
- * stay `null` out: "PortOS did not set a window" is not a window.
+ * `provider` carrying the window its Ollama daemon is ACTUALLY running at (the
+ * `runtimeContextWindow` rung {@link clampToRuntimeContextWindow} reads). The
+ * ambient `OLLAMA_CONTEXT_LENGTH` cannot be resolved here, so the HOST passes it
+ * in as data. In-memory ONLY: never persist to `providers.json`. Returns the
+ * SAME object when there is nothing to add.
  *
  * @param {object|null|undefined} provider
  * @param {number|null|undefined} ceiling — the window the daemon is held at

@@ -649,7 +649,11 @@ in `server/lib/maintenanceSequence.js` and can be run two ways:
   (a task disabled since, a blocked task, a transient claim probe) HOLDS the run
   with its reason and is retried on each completion and on a slow sweep; Stop
   ends dispatching (a task already queued or running is not recalled) and Resume
-  picks the ladder up from its ledger. One running run per app.
+  picks the ladder up from its ledger. One running run per app. Resume and
+  re-pinning a pending step have no button: use `node scripts/portos-api.js post
+  /api/cos/schedule/maintenance-runs/<id>/resume` and `patch
+  /api/cos/schedule/maintenance-runs/<id>/steps/<stepId>
+  '{"providerId":"…","model":"…"}'`.
 - **Later, under quota gates, from this page.** An empty family plan offers
   **Populate maintenance sequence** and **Populate and start sequence** after
   choosing an app. The latter saves first, enables Quota Burn and the family,

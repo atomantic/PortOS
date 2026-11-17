@@ -46,11 +46,11 @@ const TABBED_PAGES = [
   // path, which is how the two-deep Elements modes are declared.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
     nestedIdSources: [
-      { parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' },
+      { parent: 'morse', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'MORSE_MODES' },
       { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
-      { parent: 'memory/elements', file: 'client/src/components/meatspace/post/ElementsSong.jsx', constName: 'PRACTICE_MODES' },
+      { parent: 'memory/elements', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'ELEMENTS_PRACTICE_MODES' },
       { parent: 'wordplay', file: 'client/src/components/meatspace/post/WordplayTrainer.jsx', constName: 'GAME_MODES' },
-      { parent: 'rhetoric', file: 'client/src/components/meatspace/post/RhetoricTrainer.jsx', constName: 'RHETORIC_MODES' },
+      { parent: 'rhetoric', file: 'client/src/components/meatspace/post/trainerModes.js', constName: 'RHETORIC_MODES' },
       { parent: 'progress', file: 'client/src/components/meatspace/post/PostProgress.jsx', constName: 'PROGRESS_SUBROUTES' },
     ] },
 ];
@@ -191,7 +191,7 @@ describe('nav contract — generated section child navigation', () => {
       ['Access', ['API Access', 'Credentials', 'Security', 'Sharing']],
       ['Agents', ['AI Assignments', 'Autofixer', 'Orchestration Profiles', 'Prompts']],
       ['Integrations', ['MortalLoom', 'OpenClaw', 'Telegram', 'Voice']],
-      ['System', ['Backup', 'Data Maintenance', 'Database', 'Features', 'General', 'Software']],
+      ['System', ['Backup', 'Database', 'Features', 'General', 'Software']],
     ]);
     expect(getSectionNavTabs('Settings').every((tab) => tab.navGroup)).toBe(true);
   });
@@ -437,7 +437,7 @@ describe('resolveNavCommand — fuzzy matching', () => {
     // persisted, so paths prove the move actually landed.
     expect(resolveNavCommand('media models')?.path).toBe('/models/media');
     expect(resolveNavCommand('loras')?.path).toBe('/models/loras');
-    expect(resolveNavCommand('lora training')?.path).toBe('/settings/data-maintenance');
+    expect(resolveNavCommand('lora training')?.path).toBe('/models/loras');
     expect(resolveNavCommand('embeddings')?.path).toBe('/models/embeddings');
     expect(resolveNavCommand('prompt guard')?.path).toBe('/models/llms/abuse');
     expect(resolveNavCommand('abuse-guard')?.path).toBe('/models/llms/abuse');

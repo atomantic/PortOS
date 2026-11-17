@@ -9,6 +9,7 @@ import { safeJSONParse } from '../lib/jsonIo.js';
 import { isUpstreamOwner, UPSTREAM_OWNER } from '../lib/gitRemote.js';
 import { cosEvents } from './cosEvents.js';
 import { execGit } from '../lib/execGit.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 let scanTail = Promise.resolve();
 const ACTIVE_AGENT_STATUSES = new Set(['running', 'queued', 'finalizing', 'paused']);
@@ -42,7 +43,7 @@ function withActiveAgentOwnership(tasks, peerTasks, agents) {
 
 function reviewFollowUpPrNumber(task, target) {
   const metadata = task?.metadata || {};
-  if (metadata.reviewLoopFollowUp !== true && metadata.reviewLoopFollowUp !== 'true') return null;
+  if (!isTruthyMeta(metadata.reviewLoopFollowUp)) return null;
   let url;
   try { url = new URL(metadata.reviewLoopPRUrl || metadata.prUrl); } catch { return null; }
   const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/);

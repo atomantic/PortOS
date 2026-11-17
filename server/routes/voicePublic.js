@@ -16,6 +16,8 @@
  */
 
 import { Router } from 'express';
+import { voiceEngineQuerySchema } from '../lib/queryValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { TTS_ENGINE_CONFIG_KEYS } from '../lib/voiceEngines.js';
 import { voiceSynthesizeBodySchema } from '../lib/apiContractSchemas.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -72,7 +74,7 @@ router.post('/synthesize', requireExposedOrHostControl, asyncHandler(async (req,
 // GET /api/voice/public/voices?engine=kokoro|piper — enumerate available voices
 // for the given engine (or the configured default when unspecified).
 router.get('/voices', asyncHandler(async (req, res) => {
-  res.json(await listVoices(validEngine(req.query?.engine)));
+  res.json(await listVoices(validEngine(validateRequest(voiceEngineQuerySchema, req.query).engine)));
 }));
 
 // GET /api/voice/public/engines — discover the available engines + the

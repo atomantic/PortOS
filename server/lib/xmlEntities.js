@@ -1,31 +1,7 @@
 /**
- * Shared XML / HTML entity decoder.
+ * Shared dependency-free XML/HTML entity decoder.
  *
- * Shared dependency-free XML/HTML entity decoder. `decodeXmlEntities(str, extraEntities?)` —
- * single-pass (double-decode-safe) decode of the five predefined named entities + decimal/hex numeric
- * refs, with an optional caller-supplied extra-entity map (e.g. `{ nbsp: ' ', zwnj: '' }`).
- * Unknown/out-of-range refs left untouched. Used by the Apple Health XML parser, Claude changelog
- * feed, Pinterest RSS, generic feeds, and Gmail HTML-to-text.
- *
- * A single dependency-free decoder for the entity references that appear in the
- * various feeds and exports PortOS parses (Apple Health `export.xml`, GitHub
- * release Atom feeds, Pinterest/RSS/Atom feeds, Gmail HTML bodies). It replaces
- * what used to be four near-identical private copies (issue #1876).
- *
- * Handles, in a single left-to-right pass:
- *   - the five predefined named entities (`&amp;` `&lt;` `&gt;` `&quot;` `&apos;`)
- *   - decimal numeric refs (`&#NN;`)
- *   - hex numeric refs (`&#xNN;` / `&#XNN;`)
- *   - any extra named entities supplied by the caller (e.g. `&nbsp;`, `&zwnj;`)
- *
- * Single-pass is intentionally double-decode-safe: because `&amp;` is consumed
- * in the same scan as everything else, a literal `&amp;lt;` in the source
- * decodes to `&lt;` (not `<`) — the scanner does not re-examine the `&` it just
- * emitted. Unknown entities and out-of-range numeric code points are left
- * untouched rather than dropped or thrown on, so one malformed reference can't
- * corrupt or abort the surrounding parse.
- *
- * Imported directly by the SongBook paste and Beeper browser wrappers.
+ * `decodeXmlEntities(str, extraEntities?)`, a single left-to-right pass decoding the five predefined named entities, decimal (`&#NN;`) and hex (`&#xNN;`) refs and a caller-supplied extra-entity map (e.g. `{ nbsp: ' ', zwnj: '' }`). Replaces four private copies (#1876); used by the Apple Health `export.xml` parser, GitHub/Claude changelog Atom feeds, Pinterest/RSS, Gmail HTML-to-text and the SongBook paste and Beeper browser wrappers. Single-pass is double-decode-safe (`&amp;` is consumed in the same scan, so a literal `&amp;lt;` decodes to `&lt;`, not `<`), and unknown entities and out-of-range code points are left untouched rather than dropped or thrown on, so one malformed reference can't corrupt or abort the surrounding parse.
  */
 
 const NAMED_ENTITIES = {
@@ -56,9 +32,7 @@ export function decodeXmlEntities(str, extraEntities) {
       const cp = code[1] === 'x' || code[1] === 'X'
         ? parseInt(code.slice(2), 16)
         : parseInt(code.slice(1), 10);
-      // Leave out-of-range / non-Unicode code points untouched — String
-      // .fromCodePoint throws a RangeError for cp < 0 or > 0x10FFFF. A malformed
-      // numeric entity in one record must not fail the whole parse/import.
+      // Leave out-of-range / non-Unicode code points untouched: `String.fromCodePoint` throws RangeError for cp < 0 or > 0x10FFFF, and one malformed entity must not fail the whole parse/import.
       return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
     }
     if (extraEntities && Object.prototype.hasOwnProperty.call(extraEntities, code)) {

@@ -1,41 +1,12 @@
 /**
- * POST progressive multiplication ladder (pure, side-effect-free).
+ * POST progressive multiplication ladder (pure).
  *
- * Pure progressive multiplication ladder — mastery-gated difficulty rungs (`[1,1]` → `[1,2]` →
- * `[1,1,1]` → …). Resolves the user's current level from per-level speed+accuracy stats so the plain
- * multiplication drill ramps up instead of starting at a fixed hard difficulty. On by default. Built
- * on `postProgression.js`.
- *
- * The plain multiplication drill used to start at a fixed 2-digit × 2-digit
- * difficulty (e.g. `56 × 91`) for everyone, which is far too hard as a warm-up.
- * This module replaces that with a mastery-gated difficulty ladder: a new user
- * starts at single-digit × single-digit and only climbs to the next rung once
- * they have demonstrated *speed* mastery (fast AND accurate) at the current one.
- *
- * The ladder grows the way the user asked for it: add a digit, then add a
- * factor, alternating so mental load rises gently rather than jumping straight
- * to large products.
- *
- * Unlike the generic `postAdaptive.js` knob (which only tunes a symmetric
- * `maxDigits`), this ladder can express asymmetric (1×2) and multi-factor
- * (1×1×1) rungs, which is what a real "ramp up" needs.
- *
- * Progression is derived from scored session history: each generated drill
- * stamps its `level` into the task config, so later we can bucket answered
- * questions by level and measure per-level accuracy + response time.
- *
- * The generic mastery/floor machinery lives in `postProgression.js` (shared
- * with the cognitive-drill ladders); this module is the multiplication-specific
- * ladder + the speed-target curve, wired onto that helper. Its public API is
- * unchanged — it is the reference ladder the shared helper was extracted from.
+ * mastery-gated difficulty rungs (`[1,1]` → `[1,2]` → `[1,1,1]` → …) resolved from per-level speed+accuracy stats, so the plain multiplication drill ramps up from single-digit × single-digit (it once started everyone at a fixed 2-digit × 2-digit, far too hard as a warm-up) and climbs only after *speed* mastery (fast AND accurate) at the current rung. On by default. It alternates adding a digit and adding a factor so mental load rises gently, and unlike `postAdaptive.js` (symmetric `maxDigits`) it can express asymmetric (1×2) and multi-factor (1×1×1) rungs. Progression derives from scored session history: each drill stamps its `level` into the task config. The generic mastery/floor machinery lives in `postProgression.js` (shared with the cognitive-drill ladders); this is the multiplication-specific ladder plus speed-target curve, the reference ladder the helper was extracted from.
  */
 
 import { createProgression, PROGRESSION_MASTERY_DEFAULTS } from './postProgression.js';
 
-// Ordered difficulty ladder. Each entry lists the digit-count of every factor
-// in a problem, so `[1, 2]` = single-digit × double-digit and `[1, 1, 1]` =
-// three single-digit factors. Rungs are hand-authored (not computed) so the
-// progression is explicit and easy to reason about / test.
+// Ordered difficulty ladder: each entry lists every factor's digit count (`[1, 2]` = single × double, `[1, 1, 1]` = three single-digit factors). Hand-authored so the progression is explicit and testable.
 export const MULTIPLICATION_LADDER = [
   [1, 1], // 7 × 8
   [1, 2], // 7 × 84
@@ -50,54 +21,37 @@ export const MULTIPLICATION_LADDER = [
 export const MAX_MULTIPLICATION_LEVEL = MULTIPLICATION_LADDER.length - 1;
 
 export const MASTERY_DEFAULTS = {
-  // Answered questions accumulated at a level before it can be judged mastered.
-  // ~1–2 sessions of the default 10-question drill.
+  // Answered questions accumulated at a level before it can be judged mastered (~1-2 sessions of the default 10-question drill).
   minSamples: 12,
   // Fraction of answered questions that must be correct.
   targetAccuracy: 0.9,
-  // Speed target scales with total digit count so harder rungs get more time.
-  // A [1,1] rung (2 total digits) targets ~4.4s but is floored at minTargetMs.
+  // Speed target scales with total digit count: a [1,1] rung targets ~4.4s but is floored at minTargetMs.
   baseMsPerFactorDigit: 2200,
   minTargetMs: 4000,
-  // Stats window (days) the mastery signal is read over. Mastery is judged over
-  // this rolling window so "fast enough to advance" reflects recent performance,
-  // NOT stale reps — but earned rungs never age out (see `floorLevel` below).
+  // Stats window (days) mastery is read over, so "fast enough to advance" reflects recent performance, NOT stale reps (earned rungs never age out: see `floorLevel`).
   windowDays: 30,
-  // Answered questions slower than this are clamped before averaging, so one
-  // walked-away-from-the-tab answer can't inflate a rung's avgResponseMs and
-  // make it feel un-masterable. Mirrors scoreDrill's per-question clamp; set at
-  // the default multiplication time limit (120s).
+  // Answered questions slower than this are clamped before averaging so one walked-away tab can't inflate a rung's avgResponseMs (mirrors scoreDrill's clamp; the default 120s limit).
   responseMsCap: 120000,
 };
 
-/**
- * The factor-digit spec for a ladder level (clamped into range).
- * @returns {number[]} e.g. [1, 2]
- */
+/** The factor-digit spec for a ladder level (clamped), e.g. [1, 2]. */
 export function ladderFactors(level) {
   return MULTIPLICATION_LADDER[clampMultiplicationLevel(level)];
 }
 
-/**
- * Short human label for a level, e.g. `1×2-digit` or `1×1×1-digit`.
- */
+/** Short human label for a level, e.g. `1×2-digit` or `1×1×1-digit`. */
 export function describeMultiplicationLevel(level) {
   return `${ladderFactors(level).join('×')}-digit`;
 }
 
-// Per-level response-time target (ms): scales with the total number of digits
-// across all factors, floored at `minTargetMs`. This is the multiplication
-// ladder's speed curve, handed to the shared helper so it can gate mastery on
-// speed (fast AND accurate) rather than accuracy alone.
+// Per-level response-time target (ms): scales with total digits across factors, floored at `minTargetMs`; the speed curve handed to the shared helper to gate mastery on speed, not accuracy alone.
 function multiplicationSpeedTarget(level, opts) {
   const options = { ...MASTERY_DEFAULTS, ...opts };
   const totalDigits = MULTIPLICATION_LADDER[level].reduce((a, b) => a + b, 0);
   return Math.max(options.minTargetMs, options.baseMsPerFactorDigit * totalDigits);
 }
 
-// Shared progression resolver for the multiplication ladder. `mastery` carries
-// the extra `baseMsPerFactorDigit`/`minTargetMs` fields the speed curve reads;
-// the generic helper ignores keys it doesn't use.
+// Shared progression resolver; `mastery` carries the extra `baseMsPerFactorDigit`/`minTargetMs` fields the speed curve reads (the generic helper ignores keys it doesn't use).
 const progression = createProgression({
   levels: MULTIPLICATION_LADDER,
   describeLevel: describeMultiplicationLevel,
@@ -109,17 +63,12 @@ export function clampMultiplicationLevel(level) {
   return progression.clampLevel(level);
 }
 
-/**
- * Per-question response-time target (ms) for a level. Scales with the total
- * number of digits across all factors, floored at `minTargetMs`.
- */
+/** Per-question response-time target (ms) for a level: scales with total digits across factors, floored at `minTargetMs`. */
 export function speedTargetMs(level, opts = MASTERY_DEFAULTS) {
   return progression.speedTargetMs(level, opts);
 }
 
-/**
- * Whether a level's aggregated stat clears the mastery bar: enough samples,
- * high accuracy, and average response time within the level's speed target.
+/** Whether a level's aggregated stat clears the mastery bar: enough samples, high accuracy, and average response time within the speed target.
  * @param {{samples?: number, accuracy?: number, avgResponseMs?: number}} stat
  */
 export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
@@ -127,19 +76,8 @@ export function isLevelMastered(stat, level, opts = MASTERY_DEFAULTS) {
 }
 
 /**
- * Resolve the user's current ladder level from per-level performance stats.
- *
- * Walks the ladder up from the earned `floorLevel` and stops at the first rung
- * the user has NOT yet mastered (over the recent window) — so they stay there
- * accumulating fast-and-accurate reps until the speed bar is cleared, then
- * advance. Returns a transparent explainer with every rung's status so the UI
- * can show the ladder.
- *
- * `floorLevel` is the highest rung the user has EVER generated (all-time, not
- * windowed). It is the anti-demotion floor: because mastery is judged over a
- * rolling window, a rung's samples fall to 0 once its evidence ages out — but
- * you only ever reach a higher rung by having cleared the ones below it, so
- * earned progress must not be lost when it ages out.
+ * Resolve the user's current ladder level from per-level stats: walk up from the earned `floorLevel` and stop at the first rung NOT yet mastered over the recent window, returning an explainer with every rung's status for the UI.
+ * `floorLevel` is the highest rung EVER generated (all-time): the anti-demotion floor, since a rung's samples fall to 0 once evidence ages out but a higher rung is only reached by clearing those below.
  *
  * @param {Record<number|string, {samples:number, accuracy:number, avgResponseMs:number}>} levelStats
  * @param {object} [opts] - override MASTERY_DEFAULTS thresholds
@@ -155,8 +93,7 @@ export function resolveMultiplicationLevel(levelStats = {}, opts = {}, floorLeve
     atHardest: res.atHardest,
     currentMastered: res.currentMastered,
     floorLevel: res.floorLevel,
-    // Re-key each rung to the multiplication shape (`factors` from the generic
-    // `descriptor`), preserving the exact fields the ladder always exposed.
+    // Re-key each rung to the multiplication shape (`factors` from the generic `descriptor`), preserving the fields the ladder always exposed.
     levels: res.levels.map(rung => ({
       level: rung.level,
       factors: rung.descriptor,

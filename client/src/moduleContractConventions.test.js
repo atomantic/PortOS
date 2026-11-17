@@ -1,3 +1,5 @@
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: Member reads on `CONTRACT_MODULES` and literal `vi.mock` factories must only reference real exports (via `scripts/lib/mockContractScan.js`), and no browser `alert`/`confirm`/`prompt` (`client/src/AGENTS.md`).
  * Fix: Fix the missing export/member name, update the mock factory, or replace `alert`/`confirm`/`prompt` with inline confirmations or toasts.
@@ -12,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
 import { trackedSourceFiles } from './test/trackedFiles.js';
 import { lineOf, maskComments } from './test/classNameScan.js';
-import { mockDrift as scanMockDriftIn } from '../../scripts/lib/mockContractScan.js';
+import { mockDrift as scanMockDriftIn, unusedAllowed } from '../../scripts/lib/mockContractScan.js';
 
 const CLIENT_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -111,7 +113,8 @@ export function blockingDialogs(rawSource, file) {
     .map((match) => `${file}:${lineOf(source, match.index)} — ${match[0].replace(/\s*\($/, '')}()`);
 }
 
-const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { root: CLIENT_ROOT, allowed: MOCK_ADAPTERS });
+const usedAdapters = new Set();
+const scanMockDrift = (testFile, source) => scanMockDriftIn(testFile, source, { root: CLIENT_ROOT, allowed: MOCK_ADAPTERS, used: usedAdapters });
 
 const read = (file) => readFileSync(join(CLIENT_ROOT, file), 'utf8');
 
@@ -163,6 +166,7 @@ describe('module contract conventions', () => {
   it('mocks only members the real modules export', () => {
     const drift = trackedTestFiles().flatMap((file) => scanMockDrift(join(CLIENT_ROOT, file), read(file)));
     expect(drift, 'delete the dead key, or mock the module that really exports it').toEqual([]);
+    expect(unusedAllowed(MOCK_ADAPTERS, usedAdapters), 'delete the stale MOCK_ADAPTERS entry').toEqual([]);
   }, 60_000); // reads every tracked client test file; a loaded runner overran the 15s default
 
   it('never calls the browser alert/confirm/prompt dialogs', () => {

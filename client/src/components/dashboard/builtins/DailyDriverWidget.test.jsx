@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../services/api', () => mocks);
+// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
+vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: mocks.getInstanceFeatures,
+}));
 
 const renderWidget = (dashboardState = {}) =>
   render(

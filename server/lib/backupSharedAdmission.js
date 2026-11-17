@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { type as hostOsType } from 'node:os';
 import { PATHS } from './paths.js';
 import { assertNotRealDataWrite } from './testDataIsolation.js';
+import { processLiveness, processStartedAt } from './processIdentity.js';
 
 const busy = (message, details = {}) => Object.assign(new Error(message), {
   status: 503, code: 'BACKUP_SNAPSHOT_BUSY', ...details,
@@ -18,10 +19,16 @@ const busy = (message, details = {}) => Object.assign(new Error(message), {
  * Atomic directory creation is available on Windows as well as POSIX. Readers
  * register BEFORE checking the cut gate; the cutter creates its gate BEFORE
  * checking readers. A reader racing the cutter therefore either gets drained
- * or observes the gate and never starts its mutation. No PID/age reclamation:
- * a crashed writer may have left half a publication behind.
+ * or observes the gate and never starts its mutation.
+ *
+ * Recovery is deliberately narrow. Age never retires anything. `reclaimDeadPublications`
+ * retires a plain (not `uncertain`) publication lease only when its owner is provably
+ * gone: the PID no longer exists, or the PID now belongs to a process that started at a
+ * different time than the one recorded in the lease (PID reuse). A lease with no recorded
+ * start (written by an older version) is retired only for a dead PID. A live owner, an
+ * unreadable record, an `uncertain` lease and any snapshot/restore cut owner always block.
  */
-export function createBackupSharedAdmission(directory, { io = fs, makeId = randomUUID, assertWrite = assertNotRealDataWrite, syncDirectories = hostOsType() !== 'Windows_NT' } = {}) {
+export function createBackupSharedAdmission(directory, { io = fs, makeId = randomUUID, assertWrite = assertNotRealDataWrite, syncDirectories = hostOsType() !== 'Windows_NT', liveness = processLiveness, startedAt = processStartedAt } = {}) {
   const readers = join(directory, 'publications');
   const cutPath = join(directory, 'cut');
   const generation = makeId();
@@ -56,8 +63,13 @@ export function createBackupSharedAdmission(directory, { io = fs, makeId = rando
       return { ...owner, path, ...(exists(join(path, 'uncertain')) ? { uncertain: true } : {}) };
     } catch { return { path, unreadable: true }; }
   };
+  // Resolved once per instance: the probe spawns a process and our own start never changes.
+  let ownStart;
+  const ownProcessStart = () => (ownStart === undefined ? (ownStart = startedAt(process.pid)) : ownStart);
   const writeOwner = (path, kind) => {
-    const owner = { version: 1, id: makeId(), generation, pid: process.pid, kind, startedAt: new Date().toISOString() };
+    const processStart = ownProcessStart();
+    const owner = { version: 1, id: makeId(), generation, pid: process.pid, kind, startedAt: new Date().toISOString(),
+      ...(Number.isFinite(processStart) ? { processStartedAt: processStart } : {}) };
     const fd = io.openSync(join(path, 'owner.json'), 'wx', 0o600);
     try { io.writeFileSync(fd, JSON.stringify(owner) + '\n'); io.fsyncSync(fd); }
     finally { io.closeSync(fd); }
@@ -115,7 +127,34 @@ export function createBackupSharedAdmission(directory, { io = fs, makeId = rando
     try { return io.readdirSync(readers).map(name => describe(join(readers, name))); }
     catch (error) { if (error.code === 'ENOENT') return []; throw error; }
   };
-  return { tryPublication, reserveCut, publications, cutPending: () => exists(cutPath),
+  // Provably gone: the PID is absent, or it was recycled for a process that started at a
+  // different time. An unprobeable start never counts as evidence of death.
+  const ownerGone = lease => {
+    if (liveness(lease.pid) === 'dead') return true;
+    if (!Number.isFinite(lease.processStartedAt)) return false;
+    const current = startedAt(lease.pid);
+    return Number.isFinite(current) && current !== lease.processStartedAt;
+  };
+  const reclaimDeadPublications = () => {
+    const reclaimed = [];
+    for (const lease of publications()) {
+      if (lease.unreadable || lease.uncertain || lease.kind !== 'publication' || !ownerGone(lease)) continue;
+      try {
+        // Nonce re-check immediately before retiring, so only the exact record judged gone is removed.
+        const current = describe(lease.path);
+        if (current.id !== lease.id || current.uncertain || current.unreadable) continue;
+        io.unlinkSync(join(lease.path, 'owner.json'));
+        io.rmdirSync(lease.path);
+        syncDir(readers);
+        reclaimed.push({ id: lease.id, pid: lease.pid, startedAt: lease.startedAt });
+      } catch (error) {
+        // The lease stays a blocker; the cut reports it when it cannot drain.
+        console.warn(`⚠️ Could not reclaim dead publication lease ${lease.id}: ${error.message}`);
+      }
+    }
+    return reclaimed;
+  };
+  return { tryPublication, reserveCut, publications, reclaimDeadPublications, cutPending: () => exists(cutPath),
     status: () => ({ cut: exists(cutPath) ? describe(cutPath) : null, publications: publications() }) };
 }
 

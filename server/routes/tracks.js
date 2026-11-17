@@ -40,6 +40,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
@@ -176,9 +177,10 @@ async function requireTrack(id) {
 // passes `limit`/`offset`, the response becomes the bounded
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const list = await tracks.listTracks();
-  if (!isPaginationRequested(req.query)) return res.json(list);
-  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  if (!isPaginationRequested(page)) return res.json(list);
+  res.json(paginateArray(list, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Shared music library — every uploaded/generated track sits here. The studio

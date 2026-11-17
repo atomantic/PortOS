@@ -17,6 +17,7 @@ import storyRoutes from './musicVideoStory.js';
 import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
+import spendRoutes from './musicVideoSpend.js';
 import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
 import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -38,6 +39,7 @@ import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
 import { prepareCodeRender } from '../services/musicVideo/codeRender.js';
+import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 import { generateMusicVideoCode, regenerateMusicVideoCodeSection } from '../services/musicVideo/codeGeneration.js';
 import { getActivePublishKitBuild } from '../services/musicVideo/publishKit.js';
 import { planProject } from '../services/musicVideo/planner.js';
@@ -336,6 +338,7 @@ router.use('/', storyRoutes);
 router.use('/', festivalPacketRoutes);
 router.use('/', researchSeedRoutes);
 router.use('/', blenderRoutes);
+router.use('/', spendRoutes);
 
 // --- Pre-production treatment (#8980) ---
 // A structured brief, a compiled whole-song arc, per-shot direction keyed to
@@ -422,15 +425,18 @@ router.post('/:id/lyrics/import', asyncHandler(async (req, res) => {
   const lyricMarkers = append
     ? [...(project.lyricMarkers || []), ...offsetLyricMarkers(markers, existing.length)]
     : markers;
-  const updated = await updateProject(project.id, { lyricCues, lyricMarkers });
-  res.json({ project: updated, imported: cues.length, format: detected });
+  // `?edit=1`: the tab applies the edit result itself, so the reply carries it instead of the project.
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  const updated = await updateProject(project.id, { lyricCues, lyricMarkers }, { edit: answerEdit });
+  res.json(answerEdit ? { ...updated, imported: cues.length, format: detected } : { project: updated, imported: cues.length, format: detected });
 }));
 
 // Import the linked track's lyric sheet ("Use track lyrics", and the
 // autopilot kickoff with `mode: 'if-empty'`, which never replaces lines).
 router.post('/:id/lyrics/import-track', asyncHandler(async (req, res) => {
   const { mode = 'replace' } = validateRequest(musicVideoLyricsImportTrackSchema, req.body || {});
-  res.json(await importTrackLyrics(req.params.id, { mode }));
+  const answerEdit = validateRequest(musicVideoProjectPatchQuerySchema, req.query).edit === '1';
+  res.json(await importTrackLyrics(req.params.id, { mode, edit: answerEdit }));
 }));
 
 // Word-level alignment (#9074) as a job (#10155). It runs when the director
@@ -478,13 +484,6 @@ router.post('/:id/song/prepare', asyncHandler(async (req, res) => {
 router.post('/:id/song/keep-timing', asyncHandler(async (req, res) => {
   const { keepSongTiming } = await import('../services/musicVideo/songAudio.js');
   res.json(await presentProjectForRead(await keepSongTiming(req.params.id)));
-}));
-
-// The lyric timing playthrough: the aligned words drawn by the shipped template over a
-// plain frame, laid out as scenes, for checking word timing before any picture exists.
-router.get('/:id/lyrics/playthrough/preview', asyncHandler(async (req, res) => {
-  const { buildLyricPlaythroughPreview } = await import('../services/musicVideo/lyricPlaythrough.js');
-  res.json(await buildLyricPlaythroughPreview(await requireProject(req.params.id)));
 }));
 
 // The same words alone on a transparent page, laid over the storyboard animatic's frames.
@@ -624,7 +623,7 @@ router.get('/:id/sharing-copy/download', asyncHandler(async (req, res) => {
 // videoTimeline). Per-project mutex returns 409 with the live jobId for re-attach.
 // A shot-by-shot render started here picks up again after a server restart.
 router.post('/:id/render', asyncHandler(async (req, res) => {
-  res.json(await renderMusicVideo(req.params.id, { resumable: true }));
+  res.json(await renderMusicVideo(req.params.id, { resumable: true, startedBy: DIRECTOR_STARTED }));
 }));
 
 // Read-only: the live final-render job for a project (null when none runs on
@@ -735,12 +734,12 @@ router.get('/:id/code/document', asyncHandler(async (req, res) => {
 
 router.post('/:id/code/generate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
-  res.json(await generateMusicVideoCode(req.params.id, body));
+  res.json(await generateMusicVideoCode(req.params.id, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.post('/:id/code/sections/:sectionId/regenerate', asyncHandler(async (req, res) => {
   const body = validateRequest(musicVideoCodeGenerateSchema, req.body || {});
-  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, body));
+  res.json(await regenerateMusicVideoCodeSection(req.params.id, req.params.sectionId, { ...body, startedBy: DIRECTOR_STARTED }));
 }));
 
 router.use('/', compositionRoutes);

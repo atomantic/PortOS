@@ -1,44 +1,20 @@
 /**
- * WHERE a provider's endpoint points.
+ * WHERE a provider's endpoint points: this machine (loopback), another host in the private network (LAN / tailnet / `.local`, a "fleet" provider), or the public internet.
  *
- * WHERE a provider's endpoint points: this machine (loopback), another host
- * inside the private network (LAN / tailnet / `.local` — a "fleet" provider), or
- * the public internet — and which local daemon (Ollama / LM Studio) a record
- * names, so callers can fold in live-installed models or decide whether a
- * missing API key is a real gap.
- *
- * `isPrivateNetworkEndpoint` is re-exported directly from
- * `server/lib/localEndpoint.js` — the authoritative implementation, not a
- * browser copy. Browser MIRROR of `localBackendForProvider` in
- * `server/lib/localProviderRuntime.js` and `isLocalInstanceEndpoint` in
- * `server/lib/localEndpoint.js` — keep those two in lockstep; the server
- * copies are authoritative and stricter (they gate actions), these only label UI.
+ * `isPrivateNetworkEndpoint` is re-exported from `server/lib/localEndpoint.js` (authoritative, not a browser copy). The rest is a browser MIRROR of `localBackendForProvider` in
+ * `server/lib/localProviderRuntime.js` and `isLocalInstanceEndpoint` in `server/lib/localEndpoint.js`; the server copies are stricter (they gate actions), these only label UI.
  *
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
 /**
- * Classify a provider as a local-LLM backend by its id/endpoint/name, so callers
- * can fold in live-installed models (Ollama/LM Studio) that aren't in the
- * provider's stored `models` list. Ollama's native + OpenAI-compat ports are
- * 11434; LM Studio defaults to 1234. The stable provider ids (`ollama` /
- * `lmstudio`) are checked too — AI Assignments' curated provider payload
- * omits `endpoint`, and a renamed display name would otherwise miss detection.
+ * Classify a provider as a local-LLM backend by id/endpoint/name so callers can fold in live-installed models (Ollama/LM Studio) missing from its stored `models`.
+ * Ollama's ports are 11434; LM Studio defaults to 1234. Stable ids (`ollama` / `lmstudio`) are checked too: AI Assignments' curated payload omits `endpoint`.
  *
- * A deliberately CHEAPER client labeler than `localBackendForProvider` in
- * server/lib/localProviderRuntime.js — not a mirror (#6818). The SERVER copy is
- * authoritative and stricter: it parses the endpoint as a URL and requires a
- * loopback/bind-all host, so a peer machine's daemon on the same port is not
- * claimed as local. This one only labels UI, so it stays a cheap regex; if it
- * ever gates an action, take the server's rules with it.
- *
- * The pr-reviewer stage pickers (`PipelineStageConfig.jsx`) are downstream of
- * this, the sandboxed actions stage included — but they only choose which model
- * list to SHOW. The pin a stage saves is re-validated at spawn time by
- * `modelPinIsOffered` (server/lib/localProviderRuntime.js), so a
- * misclassification here degrades to a confusing dropdown, never to a model the
- * provider was not allowed to run.
- *
+ * A deliberately CHEAPER client labeler than `localBackendForProvider` in server/lib/localProviderRuntime.js, not a mirror (#6818): the server copy parses the
+ * endpoint as a URL and requires a loopback/bind-all host. This one only labels UI; if it ever gates an action, take the server's rules with it.
+ * The pr-reviewer stage pickers (`PipelineStageConfig.jsx`) only choose which model list to SHOW; the saved pin is re-validated at spawn by `modelPinIsOffered`,
+ * so a misclassification degrades to a confusing dropdown, never to a model the provider may not run.
  * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
   * Matches by NAME as well, so pair it with isLocalInstanceProvider before claiming this machine's install state.
@@ -63,28 +39,17 @@ export const localBackendForProvider = (provider) => {
 // cannot disagree on a loopback alias like `http://127.0.0.2:11434`.
 export const isLocalEndpoint = isLoopbackEndpoint;
 
-// THE private-network classification (RFC1918 LAN ranges, link-local, the
-// Tailscale CGNAT range, `.local`/`.ts.net`/`.internal` names, single-label
-// hosts) — imported directly from the server leaf instead of a browser copy,
-// so the two documented edge cases (`http://127.1`, a bracketless IPv6
-// literal) can't disagree between client and server again. (Imported, not
-// re-exported directly, because isFleetProvider below reads it too.)
+// THE private-network classification (RFC1918, link-local, Tailscale CGNAT, `.local`/`.ts.net`/`.internal`, single-label hosts), imported from the server leaf rather than a
+// browser copy so edge cases (`http://127.1`, bracketless IPv6) can't disagree. Imported, not re-exported directly, because isFleetProvider reads it too.
 import { isLoopbackEndpoint, isPrivateNetworkEndpoint } from '../../../server/lib/localEndpoint.js';
 export { isPrivateNetworkEndpoint };
 
 /**
- * Does this provider talk to a daemon on THIS machine?
+ * Does this provider talk to a daemon on THIS machine? Client mirror of `isLocalInstanceEndpoint` in server/lib/localEndpoint.js, and the guard for anything that explains
+ * a provider by inspecting this machine ("is `lms` installed here?"): a provider named for LM Studio but pointed at another tailnet box matches
+ * {@link localBackendForProvider} by NAME and would otherwise offer to start a server it does not own.
  *
- * Client mirror of `isLocalInstanceEndpoint` in
- * server/lib/localEndpoint.js, and the guard for anything that explains
- * a provider by inspecting the machine PortOS runs on — "is `lms` installed
- * here?", "start it from Models → Runtimes". A provider named for LM Studio
- * but pointed at another box on the tailnet matches
- * {@link localBackendForProvider} by NAME, so without this it collected this
- * machine's install state and offered to start a server it does not own.
- *
- * A blank endpoint reads as local, unlike the server's copy: the record simply
- * hasn't named one, and every default it can fall back to is a loopback URL.
+ * A blank endpoint reads as local, unlike the server's copy: every default it can fall back to is a loopback URL.
  *
  * @param {{endpoint?:string}} provider
  * @returns {boolean}
@@ -119,11 +84,9 @@ export const isFleetHostConfigured = (host, providers = []) => {
   const hostAddress = (host.peerAddress || '')?.toLowerCase();
 
   return providers.some((p) => {
-    // 1. Direct endpoint string equality
     const pEndpoint = typeof p?.endpoint === 'string' ? p.endpoint.toLowerCase().replace(/\/+$/, '') : '';
     if (hostEndpoint && pEndpoint === hostEndpoint) return true;
 
-    // 2. Parsed hostname/IP match
     if (pEndpoint && URL.canParse(pEndpoint)) {
       const pUrl = new URL(pEndpoint);
       const pHost = pUrl.hostname.toLowerCase();
@@ -132,7 +95,6 @@ export const isFleetHostConfigured = (host, providers = []) => {
       }
     }
 
-    // 3. OpenCode TUI provider configuration check
     if (p?.envVars?.OPENCODE_CONFIG_CONTENT) {
       try {
         const config = typeof p.envVars.OPENCODE_CONFIG_CONTENT === 'string'
@@ -150,7 +112,6 @@ export const isFleetHostConfigured = (host, providers = []) => {
           }
         }
       } catch {
-        // ignore parse error
       }
     }
 

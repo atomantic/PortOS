@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { ArrowRight, BookOpen, Bot, Box, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, PanelLeftClose, PanelLeftOpen, Pencil, Play, Send, Settings, Trash2, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, Bot, Box, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, PanelLeftClose, PanelLeftOpen, Pencil, Play, Scissors, Send, Settings, Trash2, Users } from 'lucide-react';
 import { useLocalStorageBool } from '../../hooks/useLocalStorageBool.js';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
@@ -10,7 +10,7 @@ import { MUSIC_VIDEO_PAGES } from '../../lib/musicVideoStages.js';
 // One icon per step: the phone's bottom bar collapses to icons, and a repeated
 // glyph would be a repeated destination.
 const STAGE_ICONS = {
-  setup: Music, story: BookOpen, 'cast-sets': Users, board: LayoutGrid, previz: Box, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
+  setup: Music, story: BookOpen, 'cast-sets': Users, board: LayoutGrid, previz: Box, produce: Clapperboard, review: Film, publish: Send, editor: Scissors, assets: Images, cleanup: Trash2,
 };
 
 // The page's scroll body (the route is full-width, so the page owns its
@@ -151,8 +151,9 @@ const DOCK_CLASSES = 'min-w-0 max-xl:order-first max-xl:col-span-full xl:sticky 
  * to show in place of the title. `cancelRender` (`{ onCancel, cancelling }`, or
  * null) puts a stop control beside a running final render's progress.
  * `lead` (the step checklist) opens the step; `review` is the step's approval.
- * With `playerFirst` the player and the approval sit together at the top of the
- * step; otherwise the player docks at the side and the approval closes the step.
+ * With `playerFirst` and a `review` the player and the approval sit together at
+ * the top of the step; otherwise the player docks at the side and any approval
+ * closes the step.
  * `previewExpanded` gives that side player the main column above the step.
  */
 export default function MusicVideoLayout({
@@ -164,9 +165,11 @@ export default function MusicVideoLayout({
   const headerRef = useRef(null);
   const rootRef = useRef(null);
   const dockRef = useRef(null);
-  // On a step reviewed by watching (Shots, Final render) the player is the main
+  // On a step reviewed by watching with an approval (Final render) the player is the main
   // element: full width at the top of the step with the approval beside it, not a side column.
-  const sideDock = !!dock && !playerFirst;
+  // A watched step with no approval panel (Shots) docks the player at the side too, so the
+  // checklist, the shot sheet and the board flow down beside it instead of under an empty gap.
+  const sideDock = !!dock && (!playerFirst || !review);
   const expandedDock = sideDock && previewExpanded;
   useEffect(() => {
     if (expandedDock) dockRef.current?.scrollIntoView?.({ block: 'start' });
@@ -179,7 +182,7 @@ export default function MusicVideoLayout({
     if (!header || !root || typeof ResizeObserver === 'undefined') return undefined;
     // The dock's height fits the page's scroll area, which is shorter than the window whenever
     // the app shows a bar above it; sized to the window, the dock's last panel sat out of reach.
-    const scroller = root.closest('main');
+    const scroller = root.closest(`#${MUSIC_VIDEO_SCROLL_ID}`) || root.closest('main');
     const apply = () => {
       root.style.setProperty('--mv-header-h', `${Math.round(header.getBoundingClientRect().height)}px`);
       if (scroller) root.style.setProperty('--mv-scroll-h', `${scroller.clientHeight}px`);
@@ -217,7 +220,20 @@ export default function MusicVideoLayout({
   });
   // The phone bar ends with the pages (Assets), icon only like the steps.
   const tabs = [...stepTabs, ...MUSIC_VIDEO_PAGES.map((entry) => ({ id: entry.id, label: entry.label, icon: STAGE_ICONS[entry.id] }))];
-  const showSpend = spend.spentUsd > 0 || spend.capUsd > 0;
+  const showSpend = spend.spentUsd > 0 || spend.capUsd > 0 || spend.unpriced > 0;
+  const spendTitle = `Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · shot takes and tests ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)}${spend.unpriced ? ` · ${spend.unpriced} unpriced` : ''} (estimates)`;
+  const spendPill = (
+    <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
+      {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}{spend.unpriced ? ' +' : ''}
+    </Pill>
+  );
+  // The pill opens Project settings › Spend: the lanes behind it and the true-up.
+  const spendBadge = onOpenSettings ? (
+    <button type="button" onClick={() => onOpenSettings('spend')} title={spendTitle} aria-label={`Spend ${formatUsd(spend.spentUsd)}: open the breakdown`}
+      className="inline-flex shrink-0 items-center rounded-full focus-visible:ring-2 focus-visible:ring-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
+      {spendPill}
+    </button>
+  ) : <span title={spendTitle}>{spendPill}</span>;
   const stageEntry = [...progress.stages, ...MUSIC_VIDEO_PAGES].find((entry) => entry.id === stage);
   // Play runs something; an arrow goes somewhere (a step, or a Project settings tab).
   const ActionIcon = nextAction?.kind === 'run' ? Play : ArrowRight;
@@ -311,13 +327,7 @@ export default function MusicVideoLayout({
               <span className="hidden sm:inline">{autopilot.label}</span>
             </button>
           )}
-          {showSpend && (
-            <Pill size="xs" tone={spend.capUsd != null && spend.spentUsd >= spend.capUsd ? 'warning' : 'muted'}>
-              <span title={`Paid generation used, against the cap. Autopilot ${formatUsd(spend.autopilot ?? 0)} · manual takes ${formatUsd(spend.manual ?? 0)} · auto-review ${formatUsd(spend.autoReview ?? 0)} (estimates)`}>
-                {formatUsd(spend.spentUsd)}{spend.capUsd != null ? ` / ${formatUsd(spend.capUsd)}` : ' · no cap'}
-              </span>
-            </Pill>
-          )}
+          {showSpend && spendBadge}
           {attention}
         </div>
         {nextAction?.disabled && nextAction.reason && <p role="status" className="text-xs text-port-text-muted">{nextAction.reason}</p>}
@@ -351,14 +361,14 @@ export default function MusicVideoLayout({
           aria-labelledby={`mv-step-title-${stage}`}
           className={`min-w-0 space-y-3 ${expandedDock ? 'xl:col-start-2 xl:row-start-2' : ''}`}
         >
-          <div className="space-y-0.5">
+          <div className={stageEntry?.quietTitle ? 'sr-only' : 'space-y-0.5'}>
             <h3 id={`mv-step-title-${stage}`} className="text-xl font-semibold">{stageEntry?.title || stageEntry?.label}</h3>
             {/* The step checklist already says what done means, item by item; the line stands in only without one. */}
             {stageEntry?.doneWhen && !lead && <p className="text-sm text-port-text-muted">{stageEntry.doneWhen}</p>}
           </div>
           {lead}
-          {playerFirst && (dock || review) && (
-            <div className={`grid min-w-0 items-start gap-3 ${dock && review ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
+          {playerFirst && review && (
+            <div className={`grid min-w-0 items-start gap-3 ${dock ? 'xl:grid-cols-[minmax(0,3fr)_minmax(20rem,2fr)]' : ''}`}>
               {dock && <div className="min-w-0">{dock}</div>}
               {review}
             </div>

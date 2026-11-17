@@ -52,7 +52,6 @@ export {
   recordEnvironmentalFailure,
   ENVIRONMENTAL_ERROR_CATEGORIES,
   recalculateModelTierMetrics,
-  recalculateDurationStats,
   getWindowedStats
 } from './metrics.js';
 
@@ -68,11 +67,7 @@ export {
   deriveFailureSignalAvoidance,
   getRoutingAccuracy,
   getPerformanceSummary,
-  getAdaptiveCooldownMultiplier,
   getSkippedTaskTypes,
-  shouldSkipTaskType,
-  checkAndRehabilitateSkippedTasks,
-  getSkippedTaskTypesWithStatus,
   getTaskTypeConfidence,
   getConfidenceLevels
 } from './routing.js';

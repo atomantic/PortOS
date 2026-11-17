@@ -4,12 +4,21 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 // The panel fires getActivities()/getCalendarAccounts() on mount; stub them so the
 // read view renders without network. The badge assertions below only care about
 // the static read-mode markup.
+const { getInstanceFeatures } = vi.hoisted(() => ({
+  getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [{ id: 'post', enabled: true }] })),
+}));
 vi.mock('../../services/api', () => ({
   getActivities: vi.fn(() => Promise.resolve([])),
   getCalendarAccounts: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),
-  getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [{ id: 'post', enabled: true }] })),
+  getInstanceFeatures,
   updateGoal: vi.fn(() => Promise.resolve({})),
+}));
+
+// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
 }));
 
 import * as api from '../../services/api';

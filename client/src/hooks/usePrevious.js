@@ -1,27 +1,14 @@
 /**
  * Returns the value from the previous render — snapshot updated in a `useEffect`.
  *
- * `usePreviousSync` has the same shape, but its snapshot is updated *during* render. Use when:
- * Compare-and-act on prop/state change from inside a `useEffect`. The prior value gates an in-render
- * `setState` (React's "adjusting state on prop change" pattern); the during-render update avoids an
- * extra discard/rerun cycle.
+ * `usePreviousSync` has the same shape but updates its snapshot *during* render, for compare-and-act on prop/state change (the prior value gates an in-render `setState`, avoiding an extra discard/rerun cycle).
  */
 
 import { useEffect, useRef } from 'react';
 
 /**
- * Returns the value from the previous render. On the first render, returns
- * `initialValue` (default `undefined`).
- *
- * The snapshot is updated in a `useEffect`, so the returned value reflects
- * the *committed* prior value. Use this when the prior value is read from a
- * `useEffect` (post-commit) — e.g. fire a callback when a derived boolean
- * transitions from false to true.
- *
- * If you need the prior value to drive a synchronous `setState` during render
- * (React's "adjusting state on prop change" pattern), use `usePreviousSync`
- * — `usePrevious`'s effect-based snapshot would force one extra
- * discard-and-rerun cycle before the ref updates.
+ * Returns the value from the previous render (`initialValue` on the first, default `undefined`). The snapshot updates in a `useEffect`, so this is the *committed* prior value, for reading from a `useEffect` (e.g. fire when a boolean goes false → true).
+ * To drive a synchronous `setState` during render ("adjusting state on prop change"), use `usePreviousSync`: the effect-based snapshot would force an extra discard-and-rerun.
  */
 export function usePrevious(value, initialValue) {
   const ref = useRef(initialValue);
@@ -30,19 +17,8 @@ export function usePrevious(value, initialValue) {
 }
 
 /**
- * Returns the value from the previous render and updates the snapshot
- * *during* render (not in an effect). On the first render, returns
- * `initialValue` (default `undefined`).
- *
- * Use this for React's "adjusting state on prop change" pattern, where the
- * prior value gates an in-render `setState` and you want React to discard
- * the in-progress render and re-run once with the new state — the
- * during-render ref update means the re-run sees the snapshot already
- * advanced, so the condition is false and the setState is skipped.
- *
- * Mutating a ref during render is supported by React (refs are escape
- * hatches and not tracked for re-renders); it is the idiomatic way to
- * snapshot the prior render's value synchronously.
+ * Returns the value from the previous render and updates the snapshot *during* render. For "adjusting state on prop change", where the prior value gates an in-render `setState`: the during-render ref update means the
+ * re-run sees the snapshot already advanced, so the condition is false and the setState is skipped. Mutating a ref during render is supported by React for this.
  */
 export function usePreviousSync(value, initialValue) {
   const ref = useRef(initialValue);

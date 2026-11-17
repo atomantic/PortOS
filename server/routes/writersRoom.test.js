@@ -233,6 +233,13 @@ describe('writersRoom routes', () => {
   });
 
   describe('exercises', () => {
+  it('filters exercises by the first non-empty workId when the key repeats (#16428)', async () => {
+    svc.listExercises.mockResolvedValue([]);
+    const res = await request(app).get('/api/writers-room/exercises?workId=&workId=wr-work-1&workId=other');
+    expect(res.status).toBe(200);
+    expect(svc.listExercises).toHaveBeenCalledWith({ workId: 'wr-work-1' });
+  });
+
     it('POST /exercises clamps duration via schema (rejects 30 seconds)', async () => {
       const r = await request(app).post('/api/writers-room/exercises').send({ durationSeconds: 30 });
       expect(r.status).toBe(400);

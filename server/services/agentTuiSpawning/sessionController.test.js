@@ -85,8 +85,6 @@ function makeController({
     tuiConfig,
     cwd: '/tmp/workspace',
     rawFile: '/tmp/workspace/raw.txt',
-    executionId: 'exec-1',
-    laneName: 'lane-1',
     launchShape: 'direct',
     prOwnership: { prOpenedBy: 'agent-inline', prClaimExpected: true, taskOpenPR: true },
     mergeGateIsOwed,

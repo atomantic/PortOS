@@ -1,8 +1,4 @@
-/**
- *  Filename validation, containment checks, and approved asset resolution.
- *
- * Filename/traversal validation, path containment, and approved image-asset resolvers.
- */
+/** Filename validation, containment checks, and approved image-asset resolution. */
 import { existsSync, statSync } from 'fs';
 import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { platform } from 'os';
@@ -11,28 +7,16 @@ import { PATHS } from './paths.js';
 import { escapeRegExp } from './textUtils.js';
 
 /**
- * Validate a user-supplied filename is a safe basename with one of the
- * allowed extensions — refuses path-traversal, null bytes, separators, and
- * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
- * so calling routes don't have to repeat the check.
- * Substring `..` is intentionally allowed (e.g. `foo..bar.png` is fine);
- * only the exact-string traversal cases are rejected. Path separators (`/`
- * and `\`) are rejected on every platform — the same input gets posted
- * from Windows clients too.
+ /**
+ * Throws a 400 VALIDATION_ERROR unless `filename` is a safe basename with an allowed extension: refuses traversal, null bytes, separators (both `/` and `\\`,
+ * on every platform) and exact `.`/`..`; substring `..` is allowed (`foo..bar.png`).
  *
  * @param {string} filename
  * @param {{ extensions: string[], subject?: string, requiredMessage?: string }} opts
- *   - `extensions`: list of allowed extensions including the leading dot
- *     (`['.png']`, `['.safetensors']`, etc.). Case-insensitive match. Each
- *     entry MUST be a non-empty string starting with `.` — otherwise a bare
- *     suffix like `'png'` would also match `'not-an-imagepng'` and weaken
- *     the validation, so we treat that as a programmer error and throw.
- *   - `subject`: optional noun for the error message ("LoRA filename" →
- *     "Invalid LoRA filename"). Defaults to "filename".
- *   - `requiredMessage`: optional exact message used when `filename` is
- *     missing/empty. When omitted, derived from `subject` (e.g.
- *     `'LoRA filename required'`).
- */
+ *   - `extensions`: case-insensitive, each a non-empty string starting with `.` (a bare `png` would also match `not-an-imagepng`, so that is a programmer error and throws).
+ *   - `subject`: noun for the error message ("LoRA filename"); defaults to "filename".
+ *   - `requiredMessage`: exact message for a missing/empty filename; derived from `subject` when omitted.
+  */
 export function assertSafeFilename(filename, { extensions, subject = 'filename', requiredMessage } = {}) {
   if (!Array.isArray(extensions) || extensions.length === 0) {
     throw new Error('assertSafeFilename: extensions allowlist is required');
@@ -50,8 +34,7 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
       : `${Subject} required`;
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  // Null bytes terminate C strings — some POSIX syscalls treat the prefix
-  // as a separate path. Reject up front so it can't reach the FS layer.
+  // Null bytes terminate C strings; some POSIX syscalls treat the prefix as a separate path.
   if (filename.includes('\0')) {
     throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -61,20 +44,10 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
 }
 
 /**
- * `assertSafeFilename`'s non-throwing twin: the same rule as a predicate, for
- * callers that must report a bad name as *data* rather than fail the request.
- * Both share this implementation so the gate and the verdict can never disagree.
- *
- * Rejects: empty/non-string, null bytes (they terminate C strings, so some
- * POSIX syscalls treat the prefix as a separate path), `.`/`..`, any path
- * separator, anything that isn't already a pure basename, and any extension
- * outside `extensions`. The basename equality check is kept alongside the
- * separator check so e.g. `subdir\foo.png` is rejected on both counts.
- *
- * `extensions` must be dot-prefixed, and unlike `assertSafeFilename` this does
- * not police that for you — a bare suffix like `png` would also match
- * `not-an-imagepng`. Pass a module constant, never a caller-supplied list.
- */
+ /**
+  * `assertSafeFilename`'s non-throwing twin (shared implementation, so gate and verdict cannot disagree), for callers that report a bad name as data.
+  * Unlike the assert, `extensions` is NOT policed for the leading dot: pass a module constant, never a caller-supplied list.
+  */
 export function isSafeFilename(filename, extensions) {
   if (!isTopLevelEntryName(filename)) return false;
   const lower = filename.toLowerCase();
@@ -82,15 +55,10 @@ export function isSafeFilename(filename, extensions) {
 }
 
 /**
- * `isSafeFilename`'s traversal half, without the extension gate: true when
- * `name` addresses exactly one entry directly inside some directory.
- *
- * For callers that cannot allowlist extensions but must still refuse traversal.
- * Naming a single entry makes a subsequent `join(dir, name)` safe in the
- * filesystem sense, not just lexically: with no separator there is no
- * intermediate component for a symlink to redirect, which a `resolve`/`relative`
- * containment check cannot see. `isSafeFilename` is layered on this.
- */
+ /**
+  * `isSafeFilename`'s traversal half, without the extension gate: true when `name` addresses exactly one entry directly inside a directory.
+  * With no separator there is no intermediate component for a symlink to redirect, which a `resolve`/`relative` containment check cannot see.
+  */
 export function isTopLevelEntryName(name) {
   if (!name || typeof name !== 'string') return false;
   if (name.includes('\0')) return false;
@@ -100,32 +68,18 @@ export function isTopLevelEntryName(name) {
 }
 
 /**
- * True when `candidatePath` resolves to a location strictly inside `dir`.
- *
- * The root itself is NOT reported as "inside", which is the desired behavior
- * for file containment. `pathContainment.js` owns the root-inclusive variant
- * (`isPathAtOrInsideDir`) for guards that police a whole tree; the two are
- * deliberately separate declarations rather than one importing the other,
- * because that module is a leaf `fileCore.js` reaches and this one drags
- * `errorHandler`/`paths` — see the budget in `importScoping.test.js`.
- *
- * Uses an anchored-prefix idiom (`resolvePath(dir) + PATH_SEP`): appending the
- * platform separator means a sibling whose name merely *starts with* the root
- * (`/data/uploads-evil` vs `/data/uploads`) can't slip past a bare
- * `startsWith(root)` check.
- *
- * Comparison is case-INSENSITIVE on Windows and macOS, whose filesystems are.
- * A bare `startsWith` there reports `C:\\Users\\Foo\\wt` as outside
- * `C:\\Users\\foo`, even though both name the same directory — so a managed
- * worktree read as `worktree-unmanaged-location` and was silently never reaped.
- * Case-folding only ever makes containment recognize paths that ARE the same
- * file on that platform; it can never admit a path from outside the root, so
- * the security posture is unchanged. Linux stays case-sensitive.
- *
- * @param {string} dir - the containing directory (absolute or relative)
- * @param {string} candidatePath - the path to test
- * @returns {boolean}
- */
+ /**
+  * True when `candidatePath` resolves strictly inside `dir` (the root itself is NOT inside).
+  * `pathContainment.js` owns the root-inclusive variant; the two stay separate because that module is a leaf `fileCore.js` reaches and this one drags
+  * `errorHandler`/`paths` (see the budget in `importScoping.test.js`).
+  *
+  * Anchored prefix (`resolvePath(dir) + PATH_SEP`) so a sibling like `/data/uploads-evil` can't pass a bare `startsWith`.
+  * Comparison is case-INSENSITIVE on Windows and macOS, whose filesystems are; this only recognises paths that ARE the same file, so it never admits a path from outside the root.
+  *
+  * @param {string} dir - the containing directory (absolute or relative)
+  * @param {string} candidatePath - the path to test
+  * @returns {boolean}
+  */
 const CASE_INSENSITIVE_FS = platform() === 'win32' || platform() === 'darwin';
 
 export function isPathInsideDir(dir, candidatePath) {
@@ -138,62 +92,33 @@ export function isPathInsideDir(dir, candidatePath) {
 }
 
 /**
- * Build a single-root path resolver that returns a function with the same
- * signature as `resolveGalleryImage` / `resolveImageRef` / `resolveTemplateAsset`.
- *
- * Defense in depth (applied on every call):
- *  1. `basename()` strips dirs (so `../../etc/passwd` → `passwd`).
- *  2. Reject `.`/`..`/empty basenames outright.
- *  3. `resolve` + `startsWith(rootPrefix)` so unicode tricks can't escape.
- *  4. Optional extension allow-list (case-insensitive) before any FS syscall.
- *  5. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
- *     directories (the root itself would otherwise pass an existsSync check
- *     and flow into ffmpeg / image-gen as an "image path" where it'd fail in
- *     confusing ways). Note: `statSync` follows symlinks, so a symlink under
- *     the root pointing to a regular file outside still passes. PortOS is
- *     single-user (see AGENTS.md "Security Model") so we accept that — for
- *     symlink rejection, swap to `lstatSync`.
- *
- * Pass `{ mustExist: false }` at call time for code paths that intentionally
- * skip the existence check (e.g. when the path is resolved at request time
- * but read later — TOCTOU between resolve and use isn't worth the extra
- * syscall, and the downstream renderer surfaces a clear error if the file
- * vanished).
- *
- * @param {() => string} getRoot - Thunk returning the absolute directory.
- *   A thunk (not a literal) so tests that mutate `PATHS.x` at mock-eval
- *   time still steer the resolver — the value is captured on first call
- *   and cached thereafter (recomputed only if the thunk later returns a
- *   different value, which production code never does).
- * @param {object} [opts]
- * @param {string[]} [opts.extensions] - allowed extensions WITHOUT the leading
- *   dot (`['png', 'jpg', 'jpeg', 'webp']`). When omitted, all extensions are
- *   accepted (matches the legacy gallery/refs behavior — extension checks
- *   happen elsewhere on those paths).
- * @param {boolean} [opts.cache=false] - Memoize successful resolutions. Only
- *   safe for shipped/stable assets (templates) where the basename → path
- *   binding is stable for the process lifetime; never enable for user-mutable
- *   dirs (gallery, refs) since deletions would be masked.
- * @returns {(name: string, opts?: { mustExist?: boolean }) => string|null}
- */
+ /**
+  * Build a single-root path resolver with the same signature as `resolveGalleryImage` / `resolveImageRef` / `resolveTemplateAsset`.
+  *
+  * Defense in depth on every call: `basename()` strips dirs; `.`/`..`/empty basenames are rejected; `resolve` + `startsWith(rootPrefix)`; optional extension allow-list
+  * before any FS syscall; and with `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects directories. `statSync` follows symlinks, so a symlink under the root to a
+  * regular file outside still passes (accepted per AGENTS.md "Security Model"; swap to `lstatSync` to reject).
+  * Pass `{ mustExist: false }` at call time to skip the existence check (TOCTOU between resolve and use isn't worth a syscall).
+  *
+  * @param {() => string} getRoot - Thunk returning the absolute directory, so tests that mutate `PATHS.x` at mock-eval time still steer the resolver
+  *   (captured on first call; recomputed only if the thunk returns a different value).
+  * @param {object} [opts]
+  * @param {string[]} [opts.extensions] - allowed extensions WITHOUT the leading dot; all accepted when omitted.
+  * @param {boolean} [opts.cache=false] - Memoize successful resolutions. Only for shipped/stable assets (templates); never for user-mutable dirs (deletions would be masked).
+  * @returns {(name: string, opts?: { mustExist?: boolean }) => string|null}
+  */
 export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
   if (typeof getRoot !== 'function') {
     throw new Error('makePathResolver: getRoot must be a function returning the root dir');
   }
-  // Escape regex metacharacters in each extension before interpolating —
-  // current callers pass plain alphanumeric tokens (png/jpg/jpeg/webp), but
-  // the exported factory shouldn't behave incorrectly if a future caller
-  // passes an extension containing `.`/`+`/etc.
+  // Escape regex metacharacters so a future extension containing `.`/`+` can't misbehave.
   const extRegex = Array.isArray(extensions) && extensions.length > 0
     ? new RegExp(`\\.(${extensions
       .map((e) => escapeRegExp(String(e).replace(/^\./, '')))
       .join('|')})$`, 'i')
     : null;
   const memo = cache ? new Map() : null;
-  // Resolved-root cache so the hot path doesn't re-run `resolvePath(root) +
-  // PATH_SEP` per call. Recomputes only when `getRoot()` returns a different
-  // value — picks up test-time `PATHS.x = ...` mutation on first call, then
-  // stays warm for the rest of the process.
+  // Resolved-root cache; recomputed only when `getRoot()` returns a different value.
   let _root = null;
   let _rootAbsPrefix = null;
 
@@ -202,10 +127,7 @@ export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
     const safe = basename(name);
     if (!safe || safe === '.' || safe === '..') return null;
     if (extRegex && !extRegex.test(safe)) return null;
-    // Refresh the root cache BEFORE the memo lookup so a getRoot() that
-    // suddenly returns a new value (e.g. a test re-mocks `PATHS.x` mid-run)
-    // invalidates the memo too — otherwise the old root's cached
-    // resolutions would shadow the new root forever.
+    // Refresh the root BEFORE the memo lookup so a changed root also invalidates the memo (else old resolutions shadow the new root).
     const root = getRoot();
     if (root !== _root) {
       _root = root;
@@ -220,71 +142,44 @@ export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
       if (memo) memo.set(cacheKey, localPath);
       return localPath;
     }
-    // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
-    // treat those as "not a valid reference" too rather than bubbling a 500
-    // out of the route layer.
+    // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O; treat those as "not a valid reference" rather than a 500.
     let resolved = null;
     try {
       const stat = statSync(localPath, { throwIfNoEntry: false });
       resolved = stat?.isFile() ? localPath : null;
     } catch { /* falls through to null */ }
-    // Only cache successful resolutions — a missing-then-installed asset
-    // should pick up on the next call (e.g. setup-data.js racing a render).
+    // Cache only successful resolutions so a later-installed asset is picked up.
     if (memo && resolved) memo.set(cacheKey, resolved);
     return resolved;
   };
 }
 
 /**
- * Resolve a user-supplied gallery image filename to an absolute path under
- * `PATHS.images`. Returns `null` on any failure so callers can decide whether
- * to throw, log-and-skip, or substitute a fallback. See `makePathResolver`
- * for the defense-in-depth checks. Late-binds via a thunk so tests that
- * mutate `PATHS.images` at mock-eval time still steer the resolver.
- */
+ /** Resolve a gallery image filename to an absolute path under `PATHS.images`, or `null` (see `makePathResolver`). */
 export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 
 /**
- * Resolve a user-supplied reference-image filename to an absolute path under
- * `PATHS.imageRefs`. Multi-reference uploads land in a sibling dir to keep
- * them out of the gallery enumeration; same defense-in-depth as the gallery
- * resolver but anchored at the refs root.
- */
+ /** Resolve a reference-image filename under `PATHS.imageRefs` (a sibling dir, kept out of gallery enumeration). */
 export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 
 /**
- * Resolve an Image Cleaner temp init/result filename to an absolute path under
- * `PATHS.imageCleanTmp` (issue #2264). The GPU FLUX round-trip stages the
- * sync-cleaned init bytes here and renders the result back here, so the runner
- * must accept this root as a valid `initImagePath` source. Same defense-in-depth
- * as the gallery/refs resolvers, anchored at the temp root.
- */
+ /** Resolve an Image Cleaner temp init/result filename under `PATHS.imageCleanTmp`; the runner accepts this root as an `initImagePath` source. */
 export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
 
 /**
- * Resolve a peer-uploaded conditioning image staged under
- * `PATHS.federatedMediaInbox` to an absolute path. The provider maps an
- * accepted asset id onto one of these before handing the job to the local
- * generator, so the runner must accept this root as a valid `initImagePath` /
- * reference / keyframe source.
- *
- * Extension-restricted at the resolver rather than only at upload: the upload
- * endpoint already MIME-allowlists, but this is the boundary the *runner*
- * crosses, and a second check here means a hand-written file in the inbox still
- * cannot become an arbitrary path argument to the generator.
- */
+ /**
+  * Resolve a peer-uploaded conditioning image staged under `PATHS.federatedMediaInbox`; the runner accepts this root as an init/reference/keyframe source.
+  * Extension-restricted here too (not only at upload) since this is the boundary the runner crosses.
+  */
 export const resolveFederatedMediaAsset = makePathResolver(() => PATHS.federatedMediaInbox, {
   extensions: ['png', 'jpg', 'jpeg', 'webp'],
 });
 
 /**
- * Resolve a sprite reference asset used as an image-gen init image (issue
- * #2896 — anchors i2i from the locked main reference; uploaded design
- * references). `data/sprites/` is a server-managed NESTED tree, so unlike
- * the single-level basename resolvers above this accepts only an absolute
- * path already inside the sprites root (no basename fallback — a bare
- * filename is ambiguous across records) and validates containment.
- */
+ /**
+  * Resolve a sprite reference asset used as an image-gen init image. `data/sprites/` is a NESTED tree, so this accepts only an absolute path already inside the
+  * sprites root (no basename fallback: a bare filename is ambiguous across records).
+  */
 export function resolveSpriteImageInput(rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
   const resolved = resolvePath(rawPath);
@@ -292,83 +187,49 @@ export function resolveSpriteImageInput(rawPath) {
 }
 
 /**
- * Resolve a shipped visual template filename (e.g. character reference-sheet
- * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
- * successful resolutions because the template assets are shipped and stable
- * for the lifetime of the process — keeps reference-sheet rendering off the
- * statSync hot path.
- */
+ /** Resolve a shipped visual template filename under `PATHS.visualTemplates`; cached because the assets are stable for the process lifetime. */
 export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates, {
   extensions: ['png', 'jpg', 'jpeg', 'webp'],
   cache: true,
 });
 
 /**
- * Resolve a user-supplied screenshot filename to an absolute path under
- * `PATHS.screenshots`. Used by the vision-test endpoint, whose `imagePath`
- * comes straight from `req.body` — basenaming the input (and rejecting any
- * non-image extension or missing file) stops `../` traversal and absolute-path
- * escapes from reading arbitrary files off disk and forwarding their contents
- * to an external vision provider. Returns `null` on any failure so the caller
- * can surface a clean error. See `makePathResolver` for the defense-in-depth
- * checks. Late-binds via a thunk so tests that mutate `PATHS.screenshots` still
- * steer the resolver.
- */
+ /**
+  * Resolve a screenshot filename under `PATHS.screenshots` for the vision-test endpoint, whose `imagePath` comes straight from `req.body`: basenaming plus the
+  * extension/existence checks stop `../` and absolute-path escapes from reading arbitrary files and forwarding them to an external vision provider.
+  */
 export const resolveScreenshot = makePathResolver(() => PATHS.screenshots, {
   extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'],
 });
 
 /**
- * Resolve any user-supplied image input (init image OR multi-reference image)
- * to an absolute path under one of PortOS's approved image roots — the
- * gallery (`PATHS.images`), the multi-ref upload dir (`PATHS.imageRefs`),
- * or the shipped visual-template dir (`PATHS.visualTemplates`). Used by the
- * image-gen runner to re-validate paths that originated from internal
- * features (gallery picks, reference-sheet renders) which may legitimately
- * cross dir boundaries.
- *
- * Accepts both basename input (`"foo.png"`) and already-resolved absolute
- * paths (the local image-gen runner re-validates the same input on every
- * call so we need to accept both shapes).
- *
- * @param {string} rawPath - basename or absolute path
- * @returns {string|null} validated absolute path, or null
- */
-// Pairs of (PATHS-key, resolver). Read PATHS at CALL time so tests that
-// mutate `PATHS.x` at mock-eval time still steer the prefix dispatch — a
-// module-load snapshot would freeze the pre-mock paths.
+ /**
+  * Resolve any user-supplied image input (init or multi-reference) to an absolute path under an approved image root (gallery, multi-ref dir, template dir, ...).
+  * Accepts basenames and already-resolved absolute paths (the local runner re-validates the same input on every call).
+  *
+  * @param {string} rawPath - basename or absolute path
+  * @returns {string|null} validated absolute path, or null
+  */
+ // Pairs of (PATHS-key, resolver), read at CALL time so tests that mutate `PATHS.x` still steer prefix dispatch.
 const IMAGE_INPUT_RESOLVERS = [
   ['images', resolveGalleryImage],
   ['imageRefs', resolveImageRef],
   ['visualTemplates', resolveTemplateAsset],
-  // Image Cleaner temp init images (issue #2264) — the GPU FLUX round-trip
-  // stages sync-cleaned bytes here as the img2img init.
   ['imageCleanTmp', resolveImageCleanTmp],
-  // Peer-uploaded conditioning images (#4348) — an allowlisted peer's init /
-  // reference / keyframe bytes, staged for the one federated render they were
-  // uploaded for.
   ['federatedMediaInbox', resolveFederatedMediaAsset],
-  // Sprite reference assets (issue #2896) — the locked main reference /
-  // uploaded design reference as the anchors' i2i init. Absolute-only
-  // (returns null on basename input, so the fall-through loop skips it).
+  // Sprite resolver is absolute-only (null on basename input, so the fall-through loop skips it).
   ['sprites', resolveSpriteImageInput],
 ];
 
 export function resolveImageInputPath(rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
-  // For ABSOLUTE inputs, dispatch by prefix. The single-root resolvers
-  // basename their input for defense-in-depth, so trying them in order on an
-  // absolute path can silently redirect a `/data/templates/foo.png` input
-  // to `/data/images/foo.png` whenever a same-named file lives in the gallery.
-  // Validate against the matching root only.
+  // ABSOLUTE inputs dispatch by prefix: the single-root resolvers basename their input, so trying them in order could redirect `/data/templates/foo.png` to a same-named gallery file.
   const resolvedInput = resolvePath(rawPath);
   for (const [key, resolver] of IMAGE_INPUT_RESOLVERS) {
     const rootPrefix = resolvePath(PATHS[key]) + PATH_SEP;
     if (resolvedInput.startsWith(rootPrefix)) return resolver(rawPath);
   }
-  // For basename / relative input (no matching prefix), fall through the
-  // resolvers in order. First match wins; basename collisions across roots
-  // are accepted as ambiguous and resolve to the first defined root.
+  // Basename/relative input falls through the resolvers in order; first match wins.
   for (const [, resolver] of IMAGE_INPUT_RESOLVERS) {
     const candidate = resolver(rawPath);
     if (candidate) return candidate;

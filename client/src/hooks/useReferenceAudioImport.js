@@ -16,25 +16,9 @@ import {
 import useSseJobSlot from './useSseJobSlot.js';
 
 /**
- * One round reference-audio-import job slot (#2120) — download + extract a
- * reference's audio from a URL via yt-dlp into the uploads dir, streaming SSE
- * progress. The deferred convenience path from the reference-audio analysis
- * feature (#2106); upload/mic capture remain the primary attach paths.
- *
- * A thin wrapper over the generic `useSseJobSlot` (#2368) — call it once per UI
- * surface that can independently kick off an import so each owns its own job +
- * SSE subscription (a shared slot would let a second kickoff orphan the first's
- * in-flight job).
- *
- * `onComplete(filename, context)` fires once the download lands a file in the
- * uploads dir — `context` is whatever was passed to `start(url, context)`,
- * captured at kickoff so a slow-finishing job still attaches to the right
- * target even if the caller's own state changed while it was in flight.
- *
- * `target` is `{ roundId, referenceId }` for a reference that is already saved
- * (or null for an unsaved draft row). It is read at each kickoff, and the server
- * attaches the finished file to that reference itself (#9943), so `onComplete`
- * only has to mirror it into the editor draft.
+ * One round reference-audio-import job slot (#2120): download + extract a reference's audio from a URL via yt-dlp into the uploads dir, streaming SSE progress (the deferred convenience path from #2106; upload/mic capture remain primary).
+ * A thin wrapper over `useSseJobSlot` (#2368): call it once per UI surface that can independently kick off an import so each owns its own job + SSE subscription (a shared slot would let a second kickoff orphan the first's in-flight job).
+ * `onComplete(filename, context)` fires once the download lands a file; `context` is whatever was passed to `start(url, context)`, captured at kickoff so a slow job still attaches to the right target. `target` is `{ roundId, referenceId }` for an already-saved reference (null for an unsaved draft row), read at each kickoff; the server attaches the finished file itself (#9943), so `onComplete` only mirrors it into the editor draft.
  */
 export default function useReferenceAudioImport({ onComplete, target = null } = {}) {
   const { active, percent, stage, start, cancel } = useSseJobSlot({

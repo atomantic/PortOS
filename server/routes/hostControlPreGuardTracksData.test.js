@@ -26,7 +26,6 @@ const effects = vi.hoisted(() => ({
   signalSetup: vi.fn(async () => ({ ok: true })),
   signalSync: vi.fn(async () => ({ ok: true })),
   applyRemote: vi.fn(async () => ({ applied: true })),
-  probe: vi.fn(() => false),
 }));
 vi.mock('../services/auth.js', async (importOriginal) => ({
   ...await importOriginal(),
@@ -36,12 +35,6 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
   getSettings: vi.fn(async () => ({})),
 }));
-// The repo probe's first host read is `existsSync(path)`; every other caller
-// keeps the real filesystem.
-vi.mock('fs', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, existsSync: (path) => (path === '/example/project' ? effects.probe(path) : actual.existsSync(path)) };
-});
 vi.mock('../services/tracks/index.js', async () => ({
   ...await import('../services/tracks/logic.js'),
   getTrack: effects.getTrack,
@@ -73,8 +66,6 @@ vi.mock('../services/signalSync.js', () => ({ checkSetup: effects.signalSetup, r
 vi.mock('../services/dataSync.js', () => ({ applyRemote: effects.applyRemote }));
 vi.mock('../services/sharing/tombstoneGc.js', () => ({ TOMBSTONE_GRACE_MS: 24 * 60 * 60 * 1000 }));
 vi.mock('../services/sharing/peerPullAuthorization.js', () => ({}));
-vi.mock('../services/pm2.js', () => ({}));
-vi.mock('../services/aiDetect.js', () => ({}));
 
 
 const gameId = 'game-11111111-1111-4111-8111-111111111111';
@@ -90,7 +81,6 @@ const workflows = [
   ['post', '/api/signal/sync', {}, effects.signalSync, 200],
   setupCheck,
   ['post', '/api/sync/digitalTwin/apply', { data: {} }, effects.applyRemote, 200],
-  ['post', '/api/detect/repo', { path: '/example/project' }, effects.probe, 200],
 ];
 
 const mounts = [
@@ -102,7 +92,6 @@ const mounts = [
   ['/api/lora-training', (await import('./loraTraining.js')).default],
   ['/api/signal', (await import('./signal.js')).default],
   ['/api/sync', (await import('./dataSync.js')).default],
-  ['/api/detect', (await import('./detect.js')).default],
 ];
 
 beforeEach(() => {

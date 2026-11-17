@@ -13,6 +13,7 @@ import { z } from 'zod';
 import { universeStarterPatch } from '../../lib/universeStarters.js';
 import { ServerError, asyncHandler } from '../../lib/errorHandler.js';
 import { validateRequest, llmSchema, isPaginationRequested, paginateArray } from '../../lib/validation.js';
+import { paginationQuerySchema } from '../../lib/queryValidation.js';
 import { recordRenderPinFields } from '../../lib/sharedSchemas.js';
 import { pruneStaleReferenceSheets } from '../../lib/storyBible.js';
 import * as svc from '../../services/universeBuilder.js';
@@ -119,10 +120,11 @@ const patchSchema = z.object({
 // `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const universes = await svc.listUniverses();
-  if (!isPaginationRequested(req.query)) {
+  const query = validateRequest(paginationQuerySchema, req.query);
+  if (!isPaginationRequested(query)) {
     return res.json(universes);
   }
-  res.json(paginateArray(universes, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(universes, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
@@ -203,25 +205,6 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 
 router.get('/:id/runs', asyncHandler(async (req, res) => {
   res.json(await svc.listRuns(req.params.id));
-}));
-
-// Bulk lock/unlock every variation in a category bucket. Powers the
-// per-bucket "Lock all / Unlock all" affordance on the variations grid.
-// Omit `category` in the body to apply to every variation in every bucket;
-// pass `includeSheets: true` to also flip composite sheets in the same call.
-const setVariationsLockAllSchema = z.object({
-  locked: z.boolean(),
-  category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX).nullable().optional(),
-  includeSheets: z.boolean().optional(),
-});
-router.patch('/:id/variations/lock-all', asyncHandler(async (req, res) => {
-  const body = validateRequest(setVariationsLockAllSchema, req.body ?? {});
-  const result = await svc.setVariationsLockAll(req.params.id, {
-    categoryKey: body.category || null,
-    locked: body.locked,
-    includeSheets: body.includeSheets === true,
-  }).catch((err) => { throw mapServiceError(err); });
-  res.json(result);
 }));
 
 export default router;

@@ -18,6 +18,14 @@ app.use(express.json());
 app.use('/api/pipeline', manuscriptRoutes);
 app.use(errorMiddleware);
 
+describe('GET /pipeline/series/:id/manuscript query validation', () => {
+  it('400s on a repeated type key before the series is read', async () => {
+    const res = await request(app).get('/api/pipeline/series/ser-7/manuscript?type=prose&type=teleplay');
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});
+
 describe('GET /pipeline/findings/:commentId/locate (#1608)', () => {
   it('returns the owning series + comment when the id resolves', async () => {
     locateComment.mockResolvedValueOnce({ seriesId: 'ser-7', comment: { id: 'c-1', issueNumber: 3 } });

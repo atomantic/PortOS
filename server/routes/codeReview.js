@@ -2,10 +2,12 @@ import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES } from '../lib/codeRev
 import { Router } from 'express'
 import { z } from 'zod'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
-import { validateRequest, cliReviewerOutcomeSchema, reportReviewerFailureSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/validation.js'
+import { validateRequest } from '../lib/validateRequest.js'
+import { cliReviewerOutcomeSchema, isToolFreeReviewer, isProviderReviewer, isReviewerConfigFault, reviewerModelsFromDefaults, normalizeReviewerEffort, reviewerEffortLevels, reviewerEffortsFromDefaults } from '../lib/cosValidation.js'
 import { reviewerAccessFailureCode } from '../lib/reviewerHealth.js'
 import { getSettings } from '../services/settings.js'
 import { verifyReviewerIdentities } from '../services/reviewerIdentity.js'
+import { getReviewerVerdictStats, recordReviewerVerdict } from '../services/reviewerVerdicts.js'
 import { runLocalCodeReview, getCodeReviewDefaults, getReviewerCliInstalled, getProviderReviewCapability, withoutResolvedUnsupportedFaults, reportReviewerFailure, reportReviewerSuccess } from '../services/codeReview.js'
 
 const router = Router()
@@ -149,19 +151,20 @@ router.post('/local', asyncHandler(async (req, res) => {
 router.post('/cli-outcome', asyncHandler(async (req, res) => {
   const body = validateRequest(cliReviewerOutcomeSchema, req.body)
   if (body.outcome === 'reviewed') {
-    return res.json({ recorded: await reportReviewerSuccess(body.reviewer) })
+    const recorded = await reportReviewerSuccess(body.reviewer)
+    if (!body.agentId) return res.json({ recorded })
+    const run = await recordReviewerVerdict(body)
+    return res.json({ recorded, ...run })
   }
   const code = reviewerAccessFailureCode(body.reviewer, body.failure)
   const recorded = code ? await reportReviewerFailure(body.reviewer, { code }) : false
   res.json({ recorded, code })
 }))
 
-// Universal failure reporting for agents/runners. Explicitly tracks quota limits,
-// provider outages, and unavailable reviewers to activate fallback tiers.
-router.post('/report-failure', asyncHandler(async (req, res) => {
-  const body = validateRequest(reportReviewerFailureSchema, req.body)
-  const recorded = await reportReviewerFailure(body.reviewer, { reason: body.reason, error: body.error })
-  res.json({ recorded })
+// GET /api/code-review/verdict-stats — clean rate per reviewer and per reviewed
+// diff size, from the verdicts runs recorded above. Read by the CoS Learning tab.
+router.get('/verdict-stats', asyncHandler(async (_req, res) => {
+  res.json(await getReviewerVerdictStats())
 }))
 
 export default router

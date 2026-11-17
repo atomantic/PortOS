@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { Plus, Film, Wand2 } from 'lucide-react';
@@ -6,6 +6,8 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
+import { lazyWithReload } from '../utils/lazyWithReload.js';
 import Banner from '../components/ui/Banner.jsx';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import {
@@ -25,12 +27,15 @@ import AutonomousStartDrawer from '../components/musicVideo/AutonomousStartDrawe
 import { automationDraftFrom, automationFromDraft } from '../lib/musicVideoAutomation.js';
 import { listUniverseNames } from '../services/apiUniverseBuilder.js';
 import { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicVideo/MusicVideoLayout.jsx';
-import ProjectWorkspace from '../components/musicVideo/ProjectWorkspace.jsx';
 import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
 import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
 import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+
+// The open-project workspace (and, through it, every stage) is its own chunk, so
+// the project list never downloads it (#16565).
+const ProjectWorkspace = lazyWithReload(() => import('../components/musicVideo/ProjectWorkspace.jsx'));
 
 // Automation first: a new project defaults to autopilot with the free tools.
 const emptyCreateForm = () => ({
@@ -205,9 +210,12 @@ export default function MusicVideo() {
   ) : null;
   // A full record replaces its summary in the index list; the project card
   // derives from whichever it holds, so no summary-only field can go stale.
+  // `renderSpend` is attached only when the server presents a read (#16506); a mutation or run
+  // event's record without it keeps the one already held until the next read or spend event.
   const replaceProject = (next) => {
-    setSelectedProject((prev) => (prev?.id === next.id ? next : prev));
-    summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? next : p)));
+    const withSpend = (prev) => (next.renderSpend || !prev?.renderSpend ? next : { ...next, renderSpend: prev.renderSpend });
+    setSelectedProject((prev) => (prev?.id === next.id ? withSpend(prev) : prev));
+    summaries.setItems((prev) => prev.map((p) => (p.id === next.id ? withSpend(p) : p)));
   };
   // Open a project the page just received whole (created, forked, started).
   const openProject = (proj) => {
@@ -281,7 +289,15 @@ export default function MusicVideo() {
     };
     const events = ['music-video:autonomous', 'music-video:production'];
     events.forEach((e) => socket.on(e, onRunEvent));
-    return () => events.forEach((e) => socket.off(e, onRunEvent));
+    // A paid render landed in a project's spend ledger, or an adjustment changed it.
+    const onRenderSpend = ({ projectId, renderSpend }) => {
+      if (projectId && renderSpend) setSelectedProject((prev) => (prev?.id === projectId ? { ...prev, renderSpend } : prev));
+    };
+    socket.on('music-video:render-spend', onRenderSpend);
+    return () => {
+      events.forEach((e) => socket.off(e, onRunEvent));
+      socket.off('music-video:render-spend', onRenderSpend);
+    };
   }, []);
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
@@ -609,38 +625,40 @@ export default function MusicVideo() {
           </div>
         )}
         {selected && (
-          <ProjectWorkspace
-            key={selected.id}
-            selected={selected}
-            unsavedSceneFields={unsavedSceneFields}
-            takesRef={takesRef}
-            mergeFetchedProject={mergeFetchedProject}
-            applyEdit={applyEdit}
-            reloadOpenProject={reloadOpenProject}
-            tracks={tracks}
-            trackLibrary={trackLibrary}
-            trackName={trackName}
-            youtube={youtube}
-            separation={separation}
-            lyricAlign={lyricAlign}
-            midi={midi}
-            renderJob={renderJob}
-            videoSettings={videoSettings}
-            publishing={publishing}
-            analyzing={analyzing}
-            cloning={cloning}
-            replaceProject={replaceProject}
-            patchProject={patchProject}
-            patchScene={patchScene}
-            openProject={openProject}
-            prepareSong={prepareSong}
-            onAnalyze={handleAnalyze}
-            onClone={handleClone}
-            onTrackImported={onTrackImported}
-            onRename={handleRename}
-            renameForm={renameForm}
-            deletion={deletion}
-          />
+          <Suspense fallback={<PageSkeleton header="bar" label="Loading project" tabs={1} cards={3} sidebar={false} />}>
+            <ProjectWorkspace
+              key={selected.id}
+              selected={selected}
+              unsavedSceneFields={unsavedSceneFields}
+              takesRef={takesRef}
+              mergeFetchedProject={mergeFetchedProject}
+              applyEdit={applyEdit}
+              reloadOpenProject={reloadOpenProject}
+              tracks={tracks}
+              trackLibrary={trackLibrary}
+              trackName={trackName}
+              youtube={youtube}
+              separation={separation}
+              lyricAlign={lyricAlign}
+              midi={midi}
+              renderJob={renderJob}
+              videoSettings={videoSettings}
+              publishing={publishing}
+              analyzing={analyzing}
+              cloning={cloning}
+              replaceProject={replaceProject}
+              patchProject={patchProject}
+              patchScene={patchScene}
+              openProject={openProject}
+              prepareSong={prepareSong}
+              onAnalyze={handleAnalyze}
+              onClone={handleClone}
+              onTrackImported={onTrackImported}
+              onRename={handleRename}
+              renameForm={renameForm}
+              deletion={deletion}
+            />
+          </Suspense>
         )}
       </div>
     </div>

@@ -10,7 +10,7 @@ Moved from the root `AGENTS.md` Module Organization section (#16087). Root keeps
 ## Where new code lives
 
 - Pure helpers → `server/lib/` or `client/src/lib/`
-- React hooks → `client/src/hooks/` (`use…`)
+- React hooks → `client/src/hooks/` (`use…`) only when two or more modules import them. A hook with a single importer lives next to that owner (`components/<feature>/useX.js` beside the component, or the page's component directory, never `pages/`) with its test, so the catalog lists only reusable hooks; move it into `hooks/` when a second importer appears. A hook whose only importer is another co-located hook moves with that hook's owner.
 - Formatting helpers (pure, no React) → `client/src/utils/`
 - HTTP / socket / browser clients → `client/src/services/` (API wrappers `api*`)
 - Express handlers → `server/routes/`, validated with `validateRequest` + `lib/validation.js` schemas

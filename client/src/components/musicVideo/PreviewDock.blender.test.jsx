@@ -62,7 +62,6 @@ describe('PreviewDock Blender film', () => {
     await act(async () => answer(blenderFilmState()));
     expect(screen.getByLabelText('Film preview')).toBeTruthy();
     expect(screen.getByLabelText('Clip for Cold open').getAttribute('src')).toBe(mediaUrl('s010/final/shot.mp4'));
-    expect(screen.getByText(/No cut is assembled/)).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Storyboard animatic' })).toBeEnabled();
   });
 

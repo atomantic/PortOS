@@ -182,17 +182,6 @@ describe('mood-board routes', () => {
     });
   });
 
-  describe('POST /:id/backfill-prompts', () => {
-    it('404s when the board is missing and returns the updated board otherwise', async () => {
-      svc.backfillGalleryPrompts.mockResolvedValueOnce(null);
-      expect((await request(makeApp()).post('/api/mood-boards/nope/backfill-prompts')).status).toBe(404);
-      svc.backfillGalleryPrompts.mockResolvedValueOnce({ id: 'mb-1', items: [{ id: 'i1', caption: 'p' }] });
-      const res = await request(makeApp()).post('/api/mood-boards/mb-1/backfill-prompts');
-      expect(res.status).toBe(200);
-      expect(res.body.items[0].caption).toBe('p');
-    });
-  });
-
   describe('POST /:id/x-post', () => {
     it('imports into the board named by the path', async () => {
       svc.importXPost.mockResolvedValueOnce({ board: { id: 'mb-1' }, added: 2 });
@@ -253,5 +242,14 @@ describe('mood-board generate routes', () => {
     expect(startGenerateJob).not.toHaveBeenCalled();
     getGenerateJob.mockReturnValue({ status: 'queued', items: [] });
     expect((await request(makeApp()).get('/api/mood-boards/example/generate')).body.status).toBe('queued');
+  });
+});
+
+describe('mood-board list query validation', () => {
+  it('GET / 400s on a repeated pagination key and never lists boards', async () => {
+    vi.clearAllMocks();
+    const res = await request(makeApp()).get('/api/mood-boards?limit=1&limit=2');
+    expect(res.status).toBe(400);
+    expect(svc.listBoards).not.toHaveBeenCalled();
   });
 });

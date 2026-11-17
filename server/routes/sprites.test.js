@@ -144,6 +144,11 @@ function makeApp() {
 }
 
 describe('sprites routes', () => {
+  it('rejects a repeated query key with 400 (list, #16428)', async () => {
+    const res = await request(app).get('/api/sprites?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
   let app;
   beforeEach(() => { app = makeApp(); vi.clearAllMocks(); });
 

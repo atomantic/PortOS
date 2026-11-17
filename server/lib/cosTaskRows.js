@@ -3,16 +3,15 @@
  * and the task store share, so a Postgres backend and an in-memory backend cannot
  * drift apart.
  *
- * Row model for the `cos_tasks` queues: the stored form of a task (the old Markdown round-trip's
- * normalization), the recent-completed working-set rule, fractional queue `position` assignment, and
- * `planListSave` (turn "the whole list changed" into "only these rows changed"). Shared by the
- * Postgres and in-memory repository backends so they cannot drift
+ * It owns the stored form of a task (`storedForm`), the recent-completed working-set
+ * rule, fractional queue `position` assignment, and `planListSave` (turn "the whole
+ * list changed" into "only these rows changed").
  *
- * A task is stored in its normalized form: exactly what the old Markdown
- * round-trip produced (scalar metadata read back as strings, nullish metadata
- * dropped, one-line descriptions). Consumers were written against that shape and
- * still carry helpers (`isTruthyMeta`, ...) for it; storing anything else would
- * change their behavior as a side effect of changing the storage.
+ * A task is stored in its normalized form (`storedForm`): metadata keeps its JSON
+ * types and nulls, the description keeps its line breaks. Rows written before
+ * #16407 hold the retired Markdown round-trip's shape instead (scalar metadata as
+ * strings, nulls dropped, one-line descriptions), and so do tasks from peers on
+ * older versions, so readers accept both (`isTruthyMeta`, `Number(...)`).
  *
  * Queue order is (status section, priority high to low, position). `position`
  * only breaks ties inside a status+priority, and is fractional so a task can be
@@ -20,7 +19,7 @@
  */
 
 import { isDeepStrictEqual } from 'node:util';
-import { generateTasksMarkdown, parseTasksMarkdown } from './taskParser.js';
+import { hasKnownPrefix, PRIORITY_VALUES, toRepresentableTask } from './taskParser.js';
 
 /** Completed tasks stay in the working set (what `getAllTasks()` readers see) this long... */
 export const WORKING_SET_COMPLETED_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
@@ -43,16 +42,109 @@ export function completionStamp(task) {
   return Number.isFinite(stamp) ? stamp : 0;
 }
 
+// --- Stored form --------------------------------------------------------------
+
+const ROW_ID = /^([\w-]+)\s*$/;
+const METADATA_KEY = /^\s*(\w+)$/;
+// Every line break a description can carry, written back as `\n`. An older peer's
+// stored form throws on a lone `\r`, U+2028 or U+2029 (its line patterns' `.` stops
+// there), so none of them may reach the wire.
+const LINE_BREAK = /\r\n?|[\u2028\u2029]/g;
+
 /**
- * The task as it is stored and read back. Round-trips through the single-row
- * Markdown form: a lossy-by-design normalization every existing consumer expects.
- * That includes the id: one without a registered prefix reads back as `task-<id>`,
- * so the stored id, not the incoming one, is the row key.
+ * The id a task is stored under: unregistered prefixes gain `task-`, trailing
+ * whitespace is dropped. An id outside `[\w-]` (a newline, a `|`, inner
+ * whitespace) is refused, as the Markdown rows that defined these ids could not
+ * hold it.
+ */
+function storedId(id) {
+  const text = `${id}`;
+  const match = text.includes('\n') ? null : ROW_ID.exec(text);
+  if (!match) return null;
+  return hasKnownPrefix(match[1]) ? match[1] : `task-${match[1]}`;
+}
+
+/**
+ * A metadata key as it is stored: leading whitespace dropped, first character
+ * lower-cased (legacy Title-Case keys), anything but a bare word dropped. The
+ * rule predates #16407 and is kept so a key reads the same on every version.
+ */
+function storedKey(key) {
+  const match = key.includes('\n') ? null : METADATA_KEY.exec(key);
+  if (!match) return null;
+  return match[1].charAt(0).toLowerCase() + match[1].slice(1);
+}
+
+/**
+ * A top-level metadata value as it is stored: JSON types as they are (strings,
+ * finite numbers, booleans, null), objects and arrays as their JSON. A value JSON
+ * cannot hold (NaN, Infinity, a bigint) is kept as its string, as it always was.
+ */
+function storedValue(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
+  if (typeof value === 'object') {
+    const json = JSON.stringify(value);
+    return json === undefined ? undefined : JSON.parse(json);
+  }
+  return String(value);
+}
+
+/**
+ * Metadata as it is stored. `undefined` is dropped (absent means "not set");
+ * `null` is kept. Rows written before #16407, and tasks from peers on older
+ * versions, hold every scalar as a string with nulls dropped, so readers accept
+ * both forms (`isTruthyMeta`, `Number(...)`).
+ */
+function storedMetadata(metadata) {
+  const stored = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === undefined) continue;
+    const storedAs = storedKey(key);
+    const storedAsValue = storedAs === null ? undefined : storedValue(value);
+    // A null never erases a value an earlier key (`Context` before `context`) stored here.
+    if (storedAsValue === undefined || (storedAsValue === null && Object.hasOwn(stored, storedAs))) continue;
+    stored[storedAs] = storedAsValue;
+  }
+  return stored;
+}
+
+/**
+ * The approval flags as they are stored. The user queue carries only the hold
+ * (`approvalRequired === true`); the internal queue also holds a task whose
+ * `autoApproved` is `false`. A stored task is auto-approved exactly when it is not
+ * held.
+ */
+function storedApproval(task, internal) {
+  const held = internal ? Boolean(task.approvalRequired || task.autoApproved === false) : task.approvalRequired === true;
+  return { approvalRequired: held, autoApproved: !held };
+}
+
+/** The description, line breaks and all, trimmed at both ends. */
+function storedDescription(description) {
+  return `${description}`.replace(LINE_BREAK, '\n').trim();
+}
+
+/**
+ * The task as it is stored and read back. Metadata keeps its JSON types and nulls,
+ * and the description keeps its line breaks (#16407). The id can change: one
+ * without a registered prefix is stored as `task-<id>`, so the stored id, not the
+ * incoming one, is the row key.
  */
 export function storedForm(task, source) {
-  const [stored] = parseTasksMarkdown(generateTasksMarkdown([task], source === 'internal'));
-  if (!stored) throw new Error(`Task ${task?.id} cannot be stored`);
-  return stored;
+  const representable = toRepresentableTask(task);
+  const id = storedId(representable.id);
+  if (!id) throw new Error(`Task ${task?.id} cannot be stored`);
+  return {
+    id,
+    status: representable.status,
+    priority: representable.priority,
+    priorityValue: PRIORITY_VALUES[representable.priority],
+    ...storedApproval(representable, source === 'internal'),
+    description: storedDescription(representable.description),
+    metadata: storedMetadata(representable.metadata),
+    section: representable.status,
+  };
 }
 
 /** The projection columns of a stored task. */

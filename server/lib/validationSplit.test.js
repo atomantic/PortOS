@@ -15,6 +15,7 @@ import * as mediaValidation from './mediaValidation.js';
 import * as pipelineValidation from './pipelineValidation.js';
 import * as spriteValidation from './spriteValidation.js';
 import * as sharedSchemas from './sharedSchemas.js';
+import * as githubValidation from './githubValidation.js';
 
 // Issues #1151 and #1831 split validation.js's domain schema groups into per-
 // domain files, with validation.js re-exporting them so existing deep imports
@@ -106,7 +107,7 @@ describe('validation.js transitional re-exports (issues #1151, #1831)', () => {
   });
 
   it('the new #1831 domain files do NOT import back from validation.js (cycle guard)', () => {
-    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation]) {
+    for (const mod of [agentValidation, cosValidation, mediaValidation, pipelineValidation, spriteValidation, githubValidation]) {
       // validateRequest / parsePagination live only in validation.js — if a
       // domain file re-imported the barrel they'd leak through `export *`.
       expect(mod.validateRequest).toBeUndefined();
@@ -342,5 +343,66 @@ describe('validateRequest imports go to the leaf (#16096)', () => {
     const src = readFileSync(path.join(repoRoot, 'server/lib/validateRequest.js'), 'utf8');
     const specs = [...src.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]);
     expect(specs).toEqual(['./errorHandler.js']);
+  });
+});
+
+// #16559: validation.js is the server's top merge-conflict hotspot, so it may
+// only shrink. New schemas land in a domain `*Validation.js` file, and a caller
+// that needs nothing declared in the barrel imports the declaring module.
+// Own exports are the barrel's `export const|function|…` declarations and its
+// local `export { … }` lists; `export … from` re-exports are not counted: a moved domain
+// may keep one for existing deep imports, or drop it once every importer is
+// re-pointed (githubValidation.js, #16604).
+const OWN_EXPORT_CEILING = 285;
+const OWN_DECLARATION_RE = /^export\s+(?:async\s+)?(?:const|let|var|function\*?|class)\s+([A-Za-z_$][\w$]*)/gm;
+const LOCAL_EXPORT_LIST_RE = /^export\s*\{([^}]*)\}\s*(?:;|$)/gm;
+
+const ownExportNames = (src) => {
+  const names = new Set([...src.matchAll(OWN_DECLARATION_RE)].map((m) => m[1]));
+  for (const m of src.matchAll(LOCAL_EXPORT_LIST_RE)) {
+    for (const part of m[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+      names.add(part.split(/\s+as\s+/).pop().trim());
+    }
+  }
+  return names;
+};
+
+describe('validation.js stops growing (#16559)', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const validationPath = path.join(repoRoot, 'server/lib/validation.js');
+  const barrelSrc = readFileSync(validationPath, 'utf8');
+  const ownNames = ownExportNames(barrelSrc);
+  const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*(['"])([^'"\n]+)\2/g;
+
+  it(`declares at most ${OWN_EXPORT_CEILING} own exports`, () => {
+    expect(
+      ownNames.size,
+      `validation.js now declares ${ownNames.size} own exports (ceiling ${OWN_EXPORT_CEILING}). Put the new schema in its domain *Validation.js file instead; after moving exports out, lower OWN_EXPORT_CEILING to the new count.`,
+    ).toBeLessThanOrEqual(OWN_EXPORT_CEILING);
+  });
+
+  it('counts every own export the module actually exposes', () => {
+    // Control: a counter that missed a declaration form would let the ceiling pass vacuously.
+    for (const name of ownNames) expect(validation).toHaveProperty(name);
+    expect(ownNames.has('appIconQuerySchema')).toBe(true);
+    expect(ownNames.has('optionalBooleanMap')).toBe(true);
+    expect(ownNames.has('validateRequest')).toBe(false);
+    expect(ownExportNames(`${barrelSrc}\nexport const plantedSchema = z.string();\n`).size).toBe(ownNames.size + 1);
+  });
+
+  it('no server source statically imports only names declared outside validation.js through it', () => {
+    const offenders = [];
+    for (const rel of trackedFiles(repoRoot, ['server/**/*.js', 'server/**/*.jsx'])) {
+      if (/\.test\.jsx?$/.test(rel)) continue;
+      const abs = path.join(repoRoot, rel);
+      // Comments quote example imports (validation.js's own header does), so drop them first.
+      const src = readFileSync(abs, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      for (const m of src.matchAll(IMPORT_RE)) {
+        if (!m[3].startsWith('.') || path.resolve(path.dirname(abs), m[3]) !== validationPath) continue;
+        const names = m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0]).filter(Boolean);
+        if (names.length && !names.some((name) => ownNames.has(name))) offenders.push(`${rel}: ${names.join(', ')}`);
+      }
+    }
+    expect(offenders, 'import these names from their declaring module (validateRequest.js or a domain *Validation.js)').toEqual([]);
   });
 });

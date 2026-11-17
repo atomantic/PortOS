@@ -1,37 +1,22 @@
 /**
  * The fixed registry of executable Eidoverse world controllers (#7456).
  *
- * A controller's BEHAVIOR is code PortOS ships. An INSTALL is data a mind or a
- * user authors, and all it may say about behavior is an id. This module is the
- * only bridge between the two, and it resolves by **id against a fixed
- * directory — never by a caller-supplied path**, for exactly the reason
- * `eidoverseResilienceContributions.js` does: an install arrives from an HTTP
- * body or a mind's tool call, and "import the module this request names" is
- * arbitrary code execution wearing a feature's clothes. There is deliberately
- * no path-taking export here at all; the assay's own `loadContributionModule`
- * exists only because a local CLI is handed a path on purpose.
+ * BEHAVIOR is code PortOS ships; an INSTALL is authored data that may only name an
+ * id. This is the only bridge, resolving by id against a fixed directory, never a
+ * caller path (see `eidoverseResilienceContributions.js`: importing a request-named
+ * module is arbitrary code execution). No path-taking export exists here.
  *
  * A definition declares:
- *   - `id`: the slug an install names. Must match its filename's slug.
+ *   - `id`: the slug an install names; must match its filename's slug.
  *   - `title` / `summary`: what an author sees when choosing one.
- *   - `configSchema`: a Zod schema for the install's `config`, so a bad config
- *     is refused at INSTALL time rather than discovered on the first tick.
- *   - `createState(config)`: the controller's initial durable state.
- *   - `step(state, { tick, config })`: advances one tick SYNCHRONOUSLY,
- *     returning `{ state, effects? }`. See `lib/eidoverseControllers.js` for
- *     the sandbox rules the supervisor enforces on the result.
- *   - `invariants` (optional): the same `(state, tick) => …` predicates the
- *     resilience assay runs, reused below.
+ *   - `configSchema`: Zod schema for the install's `config` (refused at INSTALL time).
+ *   - `createState(config)`: initial durable state.
+ *   - `step(state, { tick, config })`: advances one tick SYNCHRONOUSLY, returning
+ *     `{ state, effects? }` (sandbox rules: `lib/eidoverseControllers.js`).
+ *   - `invariants` (optional): `(state, tick) => …` predicates the assay reuses.
  *
- * **This registry is the assay's second contribution source.** #7460 shipped
- * `eidoverseResilienceContributions.js` resolving contributions by id out of a
- * fixture directory, with a note that executable controllers would become a
- * second source behind the same resolver. `controllerAssayContributions()` is
- * that source: every shipped controller is replayable by the agent-free assay
- * with no extra authoring, so a `controller` foundation can name its
- * controller's id as its `contributionId` and be gated for promotion on the
- * evidence that it still runs with its author gone. Neither the assay CLI nor
- * the promote path changes shape to get this.
+ * `controllerAssayContributions()` is the assay's second contribution source, so a
+ * `controller` foundation can name its controller's id as its `contributionId`.
  */
 
 import { readdir } from 'node:fs/promises';
@@ -41,8 +26,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const DEFINITIONS_DIR = fileURLToPath(new URL('./eidoverseControllerDefinitions/', import.meta.url));
 const DEFINITION_SUFFIX = '.controller.js';
 
-// Shipped modules cannot change under a running process, so the directory is
-// read and imported once and the result held for the lifetime of the process.
+// Shipped modules cannot change under a running process: import once.
 let definitionsPromise = null;
 
 async function importDefinition(file) {
@@ -68,8 +52,7 @@ async function loadDefinitions() {
 }
 
 function definitions() {
-  // A failed load must not poison the process: clear the memo so the next
-  // caller retries rather than inheriting a rejected promise forever.
+  // A failed load clears the memo so the next caller retries.
   if (!definitionsPromise) {
     definitionsPromise = loadDefinitions().catch((error) => {
       definitionsPromise = null;
@@ -80,13 +63,8 @@ function definitions() {
 }
 
 /**
- * The shipped controller with this id, or `null` when none matches.
- *
- * Null rather than a throw, so an install naming an id this version does not
- * ship reads as one refusal reason beside the others — and so a supervisor
- * pass over a ledger written by a NEWER install (a downgrade, a restored
- * backup) disarms that one controller with a reason instead of failing the
- * whole pass.
+ * The shipped controller with this id, or `null`: an unknown id reads as one refusal
+ * reason, and a ledger from a NEWER install disarms that controller instead of failing the pass.
  */
 export async function findControllerDefinitionById(controllerId) {
   return (await definitions()).get(controllerId) || null;
@@ -97,12 +75,7 @@ export async function listControllerDefinitionIds() {
   return [...(await definitions()).keys()];
 }
 
-/**
- * What an author needs to choose a controller: id, title, summary, and the
- * example config the definition documents itself with. The Zod schema itself
- * is NOT projected — a mind needs to know what a controller is for, and the
- * install refusal tells it precisely what a bad config got wrong.
- */
+/** What an author needs to choose a controller: id, title, summary, example config (not the Zod schema). */
 export async function describeControllerDefinitions() {
   return [...(await definitions()).values()].map((definition) => ({
     id: definition.id,
@@ -113,28 +86,17 @@ export async function describeControllerDefinitions() {
 }
 
 /**
- * Every shipped controller, shaped as an agent-free resilience-assay
- * contribution (`{ id, description, createSandbox, invariants }`).
- *
- * `createSandbox()` builds the controller's own initial state from its example
- * config and wraps `step` in the shape the harness calls — which is the same
- * shape the supervisor calls, so the assay is replaying the real tick path and
- * not a parallel description of it. `applyDisturbance` is generic on purpose:
- * the harness's disturbances are about the ENVIRONMENT (a reconnect, a host
- * restart, a missing optional dependency), and a controller that only keeps
- * durable state in `state` survives all three by construction. The
- * `restart-world-host` case proves that by re-serializing the state and
- * throwing away everything else, which is exactly what a restart does.
+ * Every shipped controller, shaped as a resilience-assay contribution
+ * (`{ id, description, createSandbox, invariants }`). `createSandbox()` wraps the
+ * real `step` the supervisor calls. `applyDisturbance` is generic: it re-serializes
+ * the state and discards everything else, which is what a restart does.
  */
 export async function controllerAssayContributions() {
   return [...(await definitions()).values()].map((definition) => ({
     id: definition.id,
     description: definition.summary,
     createSandbox() {
-      // Through the definition's own schema, so the replay runs against the
-      // config an INSTALL would get (defaults applied), and so a definition
-      // whose documented example no longer satisfies its own schema fails the
-      // assay instead of quietly replaying something no install could produce.
+      // Through the definition's own schema, so a stale documented example fails the assay instead of replaying something no install could produce.
       const config = definition.configSchema.parse(definition.exampleConfig ?? {});
       return {
         worldState: definition.createState(config),

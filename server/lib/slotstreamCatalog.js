@@ -1,29 +1,14 @@
 /**
  * Which checkpoints Slotstream is offered, and which files of one are fetched.
  *
- * `slotstreamModels.js` answers "what is on disk and how much memory will a
- * start want". This module answers the question before it: which mixture-of-
- * experts checkpoints are worth streaming from SSD at all, and — once one is
- * picked — which files of that Hugging Face repo actually belong in the cache.
- *
- * Pure on purpose: no network, no filesystem. `services/slotstreamModelManager.js`
- * does the fetching and the disk writing, so the selection rules stay testable
- * against a plain sibling list.
+ * this answers which mixture-of-experts checkpoints are worth streaming from SSD, and which files of the picked Hugging Face repo belong in the cache). Pure: no network or filesystem; `services/slotstreamModelManager.js` does the fetching and writing, so the selection rules test against a plain sibling list.
  */
 
 import { HF_REPO_ID_RE } from './huggingfaceLora.js';
 
 /**
- * Curated streaming candidates.
- *
- * The technique only pays off on a mixture-of-experts checkpoint: the bytes are
- * dominated by routed experts, of which a handful are active per token, so a
- * fixed cache slot pool can serve a model many times larger than RAM. A dense
- * checkpoint of the same size would stream every byte of every layer for every
- * token and crawl — which is why this is a curated list rather than an open
- * Hugging Face search. `approxBytes` is a display hint only; the real size is
- * read from the Hub at preview time, so a repo that grows cannot make PortOS
- * under-reserve disk.
+ * Curated streaming candidates. Streaming pays off only on a mixture-of-experts checkpoint (bytes dominated by routed experts, a handful active per token, so a fixed cache slot pool serves a model many times larger than RAM); a dense checkpoint would stream every byte of every layer per token and crawl,
+ * hence a curated list, not an open HF search. `approxBytes` is a display hint only (the real size is read from the Hub at preview time, so a repo that grows can't make PortOS under-reserve disk).
  */
 export const SLOTSTREAM_CATALOG = Object.freeze([
   Object.freeze({
@@ -73,34 +58,17 @@ export function resolveSlotstreamRepo(value) {
   return isSlotstreamRepoId(trimmed) ? trimmed : null;
 }
 
-/**
- * The cache subdirectory one repo occupies.
- *
- * A checkpoint's directory NAME is the id `listSlotstreamCachedModels` reports
- * and the value a start hands `--model`, so it must be ONE path segment:
- * `owner/name` written literally would nest two levels deep and make the cache
- * walk report the owner as the checkpoint. The repo id carries exactly one `/`
- * (the id rule permits no others), so flattening that single separator is
- * lossless and the same repo always maps to the same directory.
- */
+/** The cache subdirectory one repo occupies. The directory NAME is the id `listSlotstreamCachedModels` reports and a start hands `--model`, so it must be ONE path segment (a literal `owner/name` would nest and make the cache walk report the owner as the checkpoint); the repo id carries exactly one `/`, so flattening it is lossless and stable. */
 export const slotstreamModelDirName = (repo) => String(repo).replace('/', '__');
 
-// Formats a Slotstream/MLX-style checkpoint directory is made of. `.safetensors`
-// is the weights; the rest is config and tokenizer, all small.
+// Formats a Slotstream/MLX-style checkpoint directory is made of: `.safetensors` weights plus small config and tokenizer files.
 const KEEP_FILE_RE = /\.(safetensors|json|txt|model|jinja|tiktoken)$/i;
 
-// Repos routinely mirror the SAME weights in formats this runtime never loads
-// (PyTorch `.bin`/`.pth`, GGUF, ONNX) or ship an `original/` copy of them.
-// Fetching those can double or triple a 100 GB+ pull for nothing, so they are
-// dropped even though they'd pass the extension check on name alone.
+// Repos mirror the SAME weights in formats this runtime never loads (PyTorch `.bin`/`.pth`, GGUF, ONNX) or ship an `original/` copy; fetching those can double or triple a 100 GB+ pull, so they're dropped even if the extension passes.
 const SKIP_PATH_RE = /(^|\/)(original|onnx|openvino|coreml)\//i;
 
 /**
- * The repo-relative files a checkpoint download should fetch, in a stable order.
- *
- * Rejects any name that is not a plain relative path: an absolute path or a
- * `..` segment coming back from the Hub must not be able to steer a write out
- * of the checkpoint directory.
+ * The repo-relative files a checkpoint download should fetch, in a stable order. Rejects any name that isn't a plain relative path (an absolute path or `..` segment from the Hub must not steer a write out of the checkpoint directory).
  *
  * @param {Array<string|{rfilename?: string}>} siblings
  * @returns {string[]}
@@ -110,13 +78,10 @@ export function selectSlotstreamRepoFiles(siblings) {
     .map((row) => (typeof row === 'string' ? row : row?.rfilename))
     .filter((name) => typeof name === 'string' && name);
 
-  // De-duplicated: a repeated sibling would otherwise be counted twice toward
-  // the size the user approves and fetched twice.
+  // De-duplicated: a repeated sibling would count twice toward the size the user approves and be fetched twice.
   return [...new Set(
     names
-      // Split on BOTH separators: a `..\` segment is not a traversal on the
-      // supported platform, but the guard should not be the thing that depends
-      // on which platform this runs on.
+      // Split on BOTH separators: a `..\` segment isn't a traversal on the supported platform, but the guard shouldn't depend on the platform it runs on.
       .filter((name) => !/^[/\\]/.test(name) && !name.split(/[/\\]/).includes('..'))
       .filter((name) => KEEP_FILE_RE.test(name) && !SKIP_PATH_RE.test(name)),
   )].sort();

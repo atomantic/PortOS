@@ -5,16 +5,20 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, posix, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, passedTestFiles, planTestMemo, readVitestDependencies,
-  recordTestMemo, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
+  MEMO_UNRECORDED_LINE_LIMIT, VITEST_PROJECT_NAMES,
+  clearVitestDependencies, fileResultsFromReport, findVitestDependenciesFile, memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies,
+  recordTestMemo, seedVitestDependencies, vitestDependenciesPath, vitestShardHashInput, vitestShardRange, vitestShardSlice, writeSelectionFile,
 } from './testMemoRunner.js';
+import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
+import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -65,7 +69,7 @@ describe('planTestMemo and recordTestMemo', () => {
       const impact = buildCiTestPlan([source], { trackedFiles: [guard, source] });
       expect(impact.full).toBe(false);
       const memo = plan({ mode: impact.server.mode, repoFiles: impact.server.files, repoSources: impact.server.sources,
-        listTests: () => ['lib/layering.test.js'], readRecord: () => [guard], readEntry: () => true });
+        listTests: () => ['lib/layering.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
       expect(memo.selected).toContain(guard);
       expect(memo.skipped).toEqual([]);
       expect(memo.run).toContain(guard);
@@ -132,11 +136,21 @@ describe('planTestMemo and recordTestMemo', () => {
       parallel: { modules: ['lib/x.test.js', 'lib/x.js'], files: { 'lib/x.test.js': [0, 1] } },
     } }));
     expect(readVitestDependencies(twice, 'server').get('server/lib/x.test.js')).toEqual(['server/lib/newDep.js', 'server/lib/x.js', 'server/lib/x.test.js']);
+    // Vitest 5.1 writes version 2: each file maps to `{ at, deps }`; an unknown version is no records at all.
+    const v2 = join(root, 'v2.json');
+    writeFileSync(v2, JSON.stringify({ version: 2, projects: { parallel: {
+      modules: ['lib/x.test.js', 'lib/x.js'], config: { at: 1, deps: [] }, files: { 'lib/x.test.js': { at: 1, deps: [0, 1] } },
+    } } }));
+    expect(readVitestDependencies(v2, 'server').get('server/lib/x.test.js')).toEqual(['server/lib/x.js', 'server/lib/x.test.js']);
+    writeFileSync(v2, JSON.stringify({ version: 3, projects: {} }));
+    expect(readVitestDependencies(v2, 'server')).toBeNull();
     expect(dependencies.get('server/lib/a.test.js')).toEqual(['server/lib/a.js', 'server/lib/a.test.js']);
 
-    const written = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed, dependencies, source: 'local', commit: 'abc' });
+    const { written } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed, dependencies, source: 'local', commit: 'abc' });
     expect(written).toBe(2);
-    expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual(['server/lib/a.js', 'server/lib/a.test.js']);
+    // A v2 record: each loaded module's digest, so related selection can narrow it.
+    expect(readMemoRecord(memoDir, 'server', 'server/lib/a.test.js')).toEqual({ modules: ['server/lib/a.js', 'server/lib/a.test.js'],
+      digests: ['server/lib/a.js', 'server/lib/a.test.js'].map((rel) => createHash('sha256').update(FILES[rel]).digest('hex').slice(0, 16)) });
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/a.test.js').floor.key, { test: 'server/lib/a.test.js', workspace: 'server' })).toMatchObject({ source: 'local', commit: 'abc' });
     expect(readMemoEntry(memoDir, cold.verdicts.get('server/lib/b.test.js').floor.key, { test: 'server/lib/b.test.js', workspace: 'server' })).toBeNull();
@@ -150,7 +164,7 @@ describe('planTestMemo and recordTestMemo', () => {
     writeFileSync(join(root, 'server/lib/b.js'), "export const load = () => import('./lazy.js'); // edited mid-run\n");
     const bPassed = { testResults: [{ name: join(root, 'server/lib/b.test.js'), status: 'passed', assertionResults: [{ status: 'passed' }] }] };
     writeFileSync(reportPath, JSON.stringify(bPassed));
-    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: midRun, passed: passedTestFiles(fileResultsFromReport(reportPath), clean), dependencies, source: 'local', commit: 'abc' })).toBe(0);
+    expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: midRun, passed: passedTestFiles(fileResultsFromReport(reportPath), clean), dependencies, source: 'local', commit: 'abc' }).written).toBe(0);
     expect(readMemoRecord(memoDir, 'server', 'server/lib/b.test.js')).toBeNull();
     clearVitestDependencies(root, 'server');
     expect(findVitestDependenciesFile(root, 'server')).toBeNull();
@@ -172,6 +186,16 @@ describe('planTestMemo and recordTestMemo', () => {
     const related = plan({ mode: 'related', repoFiles: ['server/lib/c.test.js'], repoSources: ['server/lib/lazy.js'] });
     expect(related.selected).toEqual(['server/lib/b.test.js', 'server/lib/c.test.js']);
     expect(plan({ mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
+    // Sibling shards whose memo state selects different related lists still
+    // own each test by the candidate set alone, so none falls between them.
+    const related2 = (repoFiles, index) => plan({ mode: 'related', repoFiles, repoSources: [], shard: { index, count: 2 } });
+    const all = TESTS.map((t) => `server/${t}`);
+    const owners = [1, 2].map((index) => related2(all, index).slice);
+    expect(owners.flat().sort()).toEqual(all);
+    // Each one-test selection lands on the shard that owns it in the wide list.
+    for (const test of all) {
+      expect([1, 2].map((index) => related2([test], index).slice)).toEqual(owners.map((own) => (own.includes(test) ? [test] : [])));
+    }
 
     // The memo off: nothing is read, nothing is skipped.
     writeMemoEntry(memoDir, plan().verdicts.get('server/lib/c.test.js').floor.key, { test: 'server/lib/c.test.js', workspace: 'server', source: 'local' });
@@ -182,6 +206,254 @@ describe('planTestMemo and recordTestMemo', () => {
     // Nothing is analyzed for a files plan with the memo off: the list is the plan.
     expect(off.verdicts.size).toBe(0);
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
+  });
+
+  // The #16424 probe: real Vitest records what each test loaded, the record
+  // narrows related selection, and a deliberately broken lazily imported
+  // module is still caught by the tests the narrowed plan selects.
+  it('catches a broken lazily imported module through record-narrowed selection, from a real Vitest depfile', () => {
+    // realpath: Vitest reports resolved paths, and macOS tmpdir is a symlink.
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-memo-probe-')));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-probe-store-'));
+    const probe = {
+      ...FILES,
+      'server/lib/probeHub.js': "export const load = () => import('./probeLazy.js');\nexport const hub = 1;\n",
+      'server/lib/probeLazy.js': 'export const answer = () => 42;\n',
+      // Globals, not `import … from 'vitest'`: the fixture's vitest package is a stub.
+      'server/lib/user.test.js': "import { load } from './probeHub.js';\nit('reads the lazy answer', async () => { expect((await load()).answer()).toBe(42); });\n",
+      'server/lib/bystander.test.js': "import { hub } from './probeHub.js';\nit('never loads the lazy module', () => { expect(hub).toBe(1); });\n",
+      'server/vitest.probe.config.mjs': "export default { cacheDir: '.cache/vitest', test: { globals: true, include: ['lib/**/*.test.js'], maxWorkers: 1 } };\n",
+    };
+    writeRepo(root, probe);
+    const tests = ['lib/a.test.js', 'lib/b.test.js', 'lib/bystander.test.js', 'lib/c.test.js', 'lib/user.test.js'];
+    const user = 'server/lib/user.test.js';
+    const bystander = 'server/lib/bystander.test.js';
+    const report = join(root, 'report.json');
+    const vitest = (files, extra = []) => spawnSync(process.execPath, [join(import.meta.dirname, '../../server/node_modules/vitest/vitest.mjs'),
+      'run', ...files.map((rel) => rel.replace(/^server\//, '')), '--config', 'vitest.probe.config.mjs', '--reporter=json', `--outputFile=${report}`, ...extra], {
+      cwd: join(root, 'server'), encoding: 'utf8', timeout: 60000,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_MEMO: 'off' },
+    });
+
+    // A trusted green full run records both suites (v2 records, with digests).
+    const full = plan({ listTests: () => tests, repoFiles: [user, bystander] });
+    const green = vitest(full.run, ['--experimental.recordDependencies']);
+    expect(green.status, green.stderr).toBe(0);
+    const dependencies = readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server');
+    expect(dependencies?.get(user)).toContain('server/lib/probeLazy.js');
+    expect(dependencies.get(bystander)).not.toContain('server/lib/probeLazy.js');
+    const passed = passedTestFiles(fileResultsFromReport(report), { repoRoot: root, status: 0, runReport: { reason: 'passed', errorCount: 0 } });
+    expect(passed).toEqual(expect.arrayContaining([user, bystander]));
+    recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed, dependencies, source: 'ci', commit: 'abc' });
+    expect(readMemoRecord(memoDir, 'server', bystander).digests).toHaveLength(dependencies.get(bystander).length);
+
+    // Break the lazy module. Before #16424 the hub's lazy edge selected every importer.
+    writeFileSync(join(root, 'server/lib/probeLazy.js'), 'export const answer = () => 41;\n');
+    const related = (overrides = {}) => plan({ mode: 'related', listTests: () => tests, repoFiles: [], repoSources: ['server/lib/probeLazy.js'], ...overrides });
+    const unnarrowed = related({ readRecord: (dir, scope, test) => ({ modules: readMemoRecord(dir, scope, test)?.modules ?? null, digests: null }) });
+    expect(unnarrowed.selected).toEqual([bystander, user]);
+    const narrowed = related();
+    expect(narrowed.narrowed).toBeGreaterThanOrEqual(2);
+    expect(narrowed.selected).toEqual([user]);
+    expect(narrowed.run).toEqual([user]);
+    const red = vitest(narrowed.run);
+    expect(red.status).toBe(1);
+    expect(fileResultsFromReport(report)).toEqual([expect.objectContaining({ file: join(root, user), status: 'failed' })]);
+  }, 120000);
+
+  // #16545: a passed file that stores nothing re-runs on every trusted run,
+  // and the only trace used to be a lower count in one summary line.
+  it('names every passed file it could not record, with the reason each key was refused', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-store-'));
+    const guard = 'server/lib/layering.test.js'; // always-run guard: never analyzed in a files plan
+    const dynamic = 'server/lib/dynamic.test.js';
+    const marked = 'server/lib/markedMember.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [guard]: "import { it } from 'vitest';\nit('g', () => {});\n",
+      [dynamic]: "import { it } from 'vitest';\nconst load = (name) => import(name);\nit('d', () => {});\n",
+      'server/lib/markedMember.js': '// test-memo: never\nexport const m = 1;\n',
+      [marked]: "import { it } from 'vitest';\nimport { m } from './markedMember.js';\nit('m', () => {});\n",
+    });
+    const a = 'server/lib/a.test.js';
+    const c = 'server/lib/c.test.js';
+    const files = [a, c, dynamic, guard, marked];
+    const cold = plan({ repoFiles: files });
+    // Vitest recorded a.test.js only; c.test.js is edited while the run is in flight.
+    const dependencies = new Map([[a, ['server/lib/a.js', a]]]);
+    writeFileSync(join(root, c), `${FILES[c]}// edited mid-run\n`);
+    const { written, unrecorded } = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed: files, dependencies, source: 'ci', commit: 'abc' });
+    expect(written).toBe(2);
+    expect(unrecorded).toEqual([
+      { test: c, declared: false, reason: 'floor key: an input changed while the run was in flight; recorded key: Vitest recorded no modules for this file' },
+      { test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: Vitest recorded no modules for this file` },
+      { test: guard, declared: true, reason: 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)' },
+      { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: Vitest recorded no modules for this file' },
+    ]);
+    // No depfile at all (a Vitest that stopped writing one) is a different cause from a file missing in it.
+    const none = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: plan({ repoFiles: [dynamic] }), passed: [dynamic], dependencies: null, source: 'ci' });
+    expect(none).toEqual({ written: 0, unrecorded: [{ test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: no readable Vitest dependency file` }] });
+    // A file stored under one key is recorded; the other key's refusal is not reported.
+    const recordedOnly = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: plan({ repoFiles: [dynamic] }), passed: [dynamic], dependencies: new Map([[dynamic, [dynamic]]]), source: 'ci' });
+    expect(recordedOnly).toEqual({ written: 1, unrecorded: [] });
+
+    // One line per file the memo should have taken, then one count for the declared ones.
+    expect(memoUnrecordedLines(unrecorded)).toEqual([
+      `🧠   not recorded: ${c} (${unrecorded[0].reason})`,
+      `🧠   not recorded: ${dynamic} (${unrecorded[1].reason})`,
+      '🧠   not recorded: 2 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).',
+    ]);
+    expect(memoUnrecordedLines([])).toEqual([]);
+    const many = Array.from({ length: MEMO_UNRECORDED_LINE_LIMIT + 3 }, (_, index) => ({ test: `server/lib/t${index}.test.js`, reason: 'floor key: x; recorded key: y', declared: false }));
+    const lines = memoUnrecordedLines(many);
+    expect(MEMO_UNRECORDED_LINE_LIMIT).toBe(40);
+    expect(lines).toHaveLength(MEMO_UNRECORDED_LINE_LIMIT + 1);
+    expect(lines.at(-1)).toBe('🧠   not recorded: 3 more files not listed.');
+    expect(lines.at(-2)).toContain(`server/lib/t${MEMO_UNRECORDED_LINE_LIMIT - 1}.test.js`);
+  });
+
+  // The cause #16545 found: a browser profile runs under `--testNamePattern`,
+  // Vitest calls that run partial and writes no dependency record for a file
+  // without a previous one, and the runner clears the depfile before each run.
+  // Pinned against the installed Vitest so a release that changes either side
+  // fails here instead of silently stopping the records again.
+  it('records a case-filtered run from a real Vitest depfile only when the files were seeded', () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'portos-memo-filtered-')));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-filtered-store-'));
+    const filtered = 'server/lib/filtered.test.js';
+    const idle = 'server/lib/idle.test.js';
+    writeRepo(root, {
+      ...FILES,
+      'server/lib/onlyFast.js': 'export const fast = 1;\n',
+      'server/lib/onlySlow.js': 'export const slow = 1;\n',
+      // Globals, not `import … from 'vitest'`: the fixture's vitest package is a stub.
+      [filtered]: [
+        "it('fast case', async () => { expect((await import('./onlyFast.js')).fast).toBe(1); });",
+        "it('[local-performance] slow case', async () => { expect((await import('./onlySlow.js')).slow).toBe(1); });",
+      ].join('\n'),
+      [idle]: "it('never selected', () => {});\n",
+      'server/vitest.probe.config.mjs': "export default { cacheDir: '.cache/vitest', test: { globals: true, include: ['lib/**/*.test.js'], maxWorkers: 1 } };\n",
+    });
+    const caseFilter = ['--testNamePattern=^(?!.*\\[local-performance\\]).*$'];
+    const report = join(root, 'report.json');
+    const vitest = (files) => spawnSync(process.execPath, [join(import.meta.dirname, '../../server/node_modules/vitest/vitest.mjs'),
+      'run', ...files.map((rel) => rel.replace(/^server\//, '')), '--config', 'vitest.probe.config.mjs', '--reporter=json', `--outputFile=${report}`,
+      '--experimental.recordDependencies', ...caseFilter], {
+      cwd: join(root, 'server'), encoding: 'utf8', timeout: 60000,
+      env: { ...process.env, PORTOS_CI_TEST_SELECTION: '', PORTOS_TEST_MEMO: 'off' },
+    });
+    const filteredPlan = () => plan({ listTests: () => ['lib/filtered.test.js', 'lib/idle.test.js'], repoFiles: [filtered], caseFilter });
+    const record = (planned) => recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: planned, source: 'ci', commit: 'abc',
+      passed: passedTestFiles(fileResultsFromReport(report), { repoRoot: root, namePattern: true, status: 0, runReport: { reason: 'passed', errorCount: 0 } }),
+      dependencies: readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server') });
+
+    // Unseeded: Vitest writes the depfile but no record for the file.
+    const unseeded = filteredPlan();
+    expect(vitest(unseeded.run).status).toBe(0);
+    expect(findVitestDependenciesFile(root, 'server')).toBe(vitestDependenciesPath(root, 'server'));
+    expect(readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server').get(filtered)).toBeUndefined();
+
+    // Seeded: the record is what the cases that ran loaded. The seed for a file that never ran stays empty and is dropped.
+    clearVitestDependencies(root, 'server');
+    const seeded = filteredPlan();
+    seedVitestDependencies(root, 'server', [...seeded.run, idle]);
+    expect(vitest(seeded.run).status).toBe(0);
+    const dependencies = readVitestDependencies(findVitestDependenciesFile(root, 'server'), 'server');
+    expect(dependencies.get(filtered)).toEqual(['server/lib/filtered.test.js', 'server/lib/onlyFast.js']);
+    expect(dependencies.has(idle)).toBe(false);
+    expect(record(seeded)).toEqual({ written: 2, unrecorded: [] });
+    // Stored without digests: a filtered record must never narrow related selection for a run that skips nothing.
+    expect(readMemoRecord(memoDir, 'server', filtered)).toEqual({ modules: ['server/lib/filtered.test.js', 'server/lib/onlyFast.js'], digests: null });
+    expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
+
+    // The entry vouches for this filter only: no filter, or another one, runs the file.
+    expect(plan({ listTests: () => ['lib/filtered.test.js'], repoFiles: [filtered] }).skipped).toEqual([]);
+    expect(plan({ listTests: () => ['lib/filtered.test.js'], repoFiles: [filtered], caseFilter: ['--testNamePattern=\\[fidelity\\]'] }).skipped).toEqual([]);
+    // A module only the skipped case loads is outside this filter's verdict; one a case that ran loads is inside it.
+    writeFileSync(join(root, 'server/lib/onlySlow.js'), 'export const slow = 2;\n');
+    expect(filteredPlan().skipped).toEqual([{ test: filtered, via: 'recorded' }]);
+    writeFileSync(join(root, 'server/lib/onlyFast.js'), 'export const fast = 2;\n');
+    expect(filteredPlan().skipped).toEqual([]);
+  }, 120000);
+
+  // Pull requests run the smoke profile and only trusted runs, on the full
+  // profile, save the memo (#16546). Every key input but the profile's env value
+  // and case filter must still match, and the reuse runs one way only.
+  it('lets a smoke run skip a file on a trusted full-profile entry, never the reverse', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-profile-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-profile-store-'));
+    writeRepo(root, FILES);
+    const test = 'server/lib/a.test.js';
+    const profilePlan = (profile, overrides = {}) => plan({
+      repoFiles: [test], listTests: () => ['lib/a.test.js'],
+      env: { NODE_ENV: 'test', PORTOS_BROWSER_TEST_PROFILE: profile }, caseFilter: browserTestProfileArgs(profile),
+      acceptVerdictsFrom: browserProfileAcceptedVerdicts(profile), ...overrides,
+    });
+    const recordGreen = (planned) => recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: planned, passed: [test], source: 'ci', commit: 'abc',
+      dependencies: new Map([[test, [test, 'server/lib/a.js']]]) });
+
+    expect(recordGreen(profilePlan('full'))).toEqual({ written: 2, unrecorded: [] });
+    expect(profilePlan('full').skipped).toEqual([{ test, via: 'recorded' }]);
+    expect(profilePlan('smoke').skipped).toEqual([{ test, via: 'recorded', from: 'full profile' }]);
+    expect(profilePlan('smoke', { readRecord: () => null }).skipped).toEqual([{ test, via: 'floor', from: 'full profile' }]);
+    // Without the accepted full verdict, the profile line alone keeps smoke from matching.
+    expect(profilePlan('smoke', { acceptVerdictsFrom: [] }).skipped).toEqual([]);
+    expect(profilePlan('fidelity').skipped).toEqual([]);
+    // The rest of the key is this run's: Node, platform, another keyed env var, and the file's bytes.
+    expect(profilePlan('smoke', { nodeVersion: '24.2.0' }).skipped).toEqual([]);
+    expect(profilePlan('smoke', { platform: 'darwin' }).skipped).toEqual([]);
+    expect(profilePlan('smoke', { env: { NODE_ENV: 'test', PORTOS_BROWSER_TEST_PROFILE: 'smoke', CI: 'true' } }).skipped).toEqual([]);
+    writeFileSync(join(root, 'server/lib/a.js'), 'export const a = 2;\n');
+    expect(profilePlan('smoke').skipped).toEqual([]);
+    expect(profilePlan('smoke', { readRecord: () => null }).skipped).toEqual([]);
+
+    // A smoke verdict skipped the fidelity cases, so it never vouches for a full run.
+    rmSync(memoDir, { recursive: true, force: true });
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-profile-store-'));
+    expect(recordGreen(profilePlan('smoke'))).toEqual({ written: 2, unrecorded: [] });
+    expect(profilePlan('smoke').skipped).toEqual([{ test, via: 'recorded' }]);
+    expect(profilePlan('full').skipped).toEqual([]);
+    expect(profilePlan('full', { readRecord: () => null }).skipped).toEqual([]);
+  });
+
+  it('seeds every project name the workspace configs run files under', () => {
+    const projects = vitestCaptureProjects({ include: [], exclude: [] }, { cacheDir: 'x' }).map((project) => project.test.name);
+    expect(VITEST_PROJECT_NAMES).toEqual(['', ...projects]);
+  });
+
+  it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
+    root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-never-store-'));
+    const guard = 'server/lib/layering.test.js'; // always-run guard
+    const listed = 'server/lib/moduleSummaries.test.js'; // TEST_MEMO_NEVER entry
+    const marked = 'server/lib/marked.test.js';
+    const ordinary = 'server/lib/c.test.js';
+    writeRepo(root, {
+      ...FILES,
+      [guard]: "import { it } from 'vitest';\nit('g', () => {});\n",
+      [listed]: "import { it } from 'vitest';\nit('l', () => {});\n",
+      [marked]: "// test-memo: never\nimport { it } from 'vitest';\nit('m', () => {});\n",
+    });
+    const files = [guard, listed, marked, ordinary];
+    const mixed = plan({ repoFiles: files });
+    expect(mixed.unanalyzed).toBe(3);
+    for (const test of [guard, listed, marked]) expect(mixed.verdicts.has(test)).toBe(false);
+    expect(mixed.verdicts.has(ordinary)).toBe(true);
+    expect(mixed.run).toEqual([guard, listed, marked, ordinary].sort());
+
+    writeMemoEntry(memoDir, mixed.verdicts.get(ordinary).floor.key, { test: ordinary, workspace: 'server', source: 'local' });
+    const warm = plan({ repoFiles: files });
+    expect(warm.skipped).toEqual([{ test: ordinary, via: 'floor' }]);
+    expect(warm.run).toEqual([guard, listed, marked].sort());
+
+    // A plan made only of never-memoized files analyzes nothing and says so.
+    const only = plan({ repoFiles: [guard, marked] });
+    expect(only.verdicts.size).toBe(0);
+    expect(only.run).toEqual([guard, marked].sort());
+    expect(memoSummaryLine(only)).toContain('2 never-memoized guards not analyzed.');
+    // Related mode still resolves every closure: the marker only prunes files-mode plans.
+    expect(plan({ mode: 'related', repoFiles: [marked], repoSources: [] }).unanalyzed).toBe(0);
   });
 
   it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {

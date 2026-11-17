@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, within, act } from '@testing-library/react';
 import PostSessionResults from './PostSessionResults';
 import PostSessionSummary from './PostSessionSummary';
-import { usePostSession } from '../../../hooks/usePostSession';
+import { usePostSession } from './usePostSession';
 import { generatePostDrill, submitPostSession } from '../../../services/api';
 
 vi.mock('../../../services/api', () => ({

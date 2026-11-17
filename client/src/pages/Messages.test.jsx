@@ -31,6 +31,11 @@ vi.mock('../services/api', () => ({
   getMessageAccounts: vi.fn(() => Promise.resolve([])),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
 }));
+// useInstanceFeatures reads apiSystem.js directly, not the api barrel (#16562).
+vi.mock('../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: vi.fn(() => Promise.resolve({ features: featureMock.features })),
+}));
 
 import { __resetInstanceFeatureCache } from '../hooks/useInstanceFeatures.js';
 import Messages, { TABS } from './Messages';

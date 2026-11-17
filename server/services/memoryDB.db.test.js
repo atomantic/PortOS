@@ -287,11 +287,6 @@ describe.skipIf(!runDb)('memoryDB CRUD (#3447)', () => {
     const rows = await query('SELECT source_id, target_id, link_type FROM memory_links WHERE source_id = ANY($1)', [[older.id, newer.id]]);
     expect(rows.rows).toEqual([{ source_id: newer.id, target_id: older.id, link_type: 'supersedes' }]);
 
-    const fromNewer = (await memoryDB.getRelatedMemories(newer.id)).find((r) => r.id === older.id);
-    expect(fromNewer).toMatchObject({ linkType: 'supersedes', direction: 'outgoing', note: 'replaces it', createdBy: 'task-1', linkId: typed.linkId });
-    const fromOlder = (await memoryDB.getRelatedMemories(older.id)).find((r) => r.id === newer.id);
-    expect(fromOlder).toMatchObject({ linkType: 'supersedes', direction: 'incoming' });
-
     // The same pair may carry a second, different relationship; the legacy call is still a symmetric pair.
     await memoryDB.linkMemories(newer.id, older.id);
     const pair = await query('SELECT source_id, link_type FROM memory_links WHERE source_id = ANY($1) ORDER BY link_type, source_id', [[older.id, newer.id]]);
@@ -615,68 +610,6 @@ describe.skipIf(!runDb)('memoryDB search (#3447)', () => {
     expect((await memoryDB.hybridSearchMemories('pantry', VEC_UNSEEN)).memories.map((m) => m.id)).toEqual([pantry.id]);
   });
 
-  it('surfaces explicit links first, then embedding neighbours, for a single memory', async () => {
-    await memoryDB.linkMemories(quasar.id, pantry.id);
-    const related = await memoryDB.getRelatedMemories(quasar.id);
-
-    const linked = related.find((r) => r.id === pantry.id);
-    expect(linked.relationship).toBe('linked');
-    expect(linked.similarity).toBe(1.0);
-
-    const similar = related.find((r) => r.id === zebrafish.id);
-    expect(similar.relationship).toBe('similar');
-    expect(similar.similarity).toBeCloseTo(0.995, 3);
-
-    // A record that isn't in the table has no relations (and doesn't throw).
-    expect(await memoryDB.getRelatedMemories('00000000-0000-4000-8000-00000000dead')).toEqual([]);
-  });
-
-  it('resolves when explicit links exceed the limit, and still fills a larger limit with neighbours', async () => {
-    // 11 explicit links from one embedded hub: more than the default limit of 10,
-    // which used to make the similarity query's LIMIT negative and throw.
-    const hub = await memoryDB.createMemory({ type: 'fact', content: 'Hub memory with many explicit links.' }, VEC_FAR);
-    for (let i = 0; i < 11; i++) {
-      const spoke = await memoryDB.createMemory({ type: 'fact', content: `Spoke ${i} linked to the hub.` }, VEC_UNSEEN);
-      await memoryDB.linkMemories(hub.id, spoke.id);
-    }
-
-    const capped = await memoryDB.getRelatedMemories(hub.id, 10);
-    expect(capped).toHaveLength(10);
-    expect(capped.every((r) => r.relationship === 'linked')).toBe(true);
-
-    // Force the ANN candidate shortage independently of vacuum timing, table
-    // statistics and physical tie order. The service must still fill both slots.
-    const originalQuery = pg.Pool.prototype.query;
-    let indexedRows = Infinity;
-    const probe = vi.spyOn(pg.Pool.prototype, 'query').mockImplementation(async function (sql, params) {
-      if (typeof sql !== 'string' || !sql.includes('ORDER BY embedding <=> $1')) {
-        return originalQuery.call(this, sql, params);
-      }
-      const client = await this.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query('SET LOCAL enable_seqscan = off');
-        await client.query('SET LOCAL enable_sort = off');
-        await client.query('SET LOCAL hnsw.ef_search = 1');
-        const iterative = await client.query("SELECT current_setting('hnsw.iterative_scan', true) AS mode");
-        if (iterative.rows[0].mode !== null) await client.query('SET LOCAL hnsw.iterative_scan = off');
-        const plan = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-        expect(JSON.stringify(plan.rows)).toContain('idx_memories_embedding');
-        const result = await client.query(sql, params);
-        indexedRows = result.rows.length;
-        return result;
-      } finally {
-        try { await client.query('ROLLBACK'); }
-        finally { client.release(); }
-      }
-    });
-    try {
-      const filled = await memoryDB.getRelatedMemories(hub.id, 13);
-      expect(indexedRows).toBeLessThan(2);
-      expect(filled).toHaveLength(13);
-      expect(filled.filter((r) => r.relationship === 'similar')).toHaveLength(2);
-    } finally { probe.mockRestore(); }
-  });
 });
 
 // ---------------------------------------------------------------------------

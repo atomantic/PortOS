@@ -7,12 +7,6 @@ vi.mock('../services/contactsSync.js', () => ({
   checkSetup: vi.fn(async () => ({ ok: true, sourceCount: 2, rawContactRows: 100 })),
   getStatus: vi.fn(async () => ({ cache: { contactCount: 50, syncedAt: null }, state: {}, setup: { ok: true } })),
   runSync: vi.fn(async () => ({ ok: true, contactCount: 50, sourceCount: 2 })),
-  searchContacts: vi.fn(async () => [{ id: 'c1', displayName: 'Jane' }]),
-}));
-
-vi.mock('../services/identityResolve.js', () => ({
-  loadResolverContext: vi.fn(async () => ({})),
-  resolveHandle: vi.fn(() => ({ displayName: 'Jane', source: 'contacts', handle: '+1555' })),
 }));
 
 vi.mock('../services/tribeContacts.js', () => ({
@@ -45,12 +39,6 @@ describe('contacts routes (#2415)', () => {
     const res = await request(makeApp()).post('/api/contacts/sync');
     expect(res.status).toBe(200);
     expect(res.body.contactCount).toBe(50);
-  });
-
-  it('GET /resolve', async () => {
-    const res = await request(makeApp()).get('/api/contacts/resolve?handle=%2B15551234567');
-    expect(res.status).toBe(200);
-    expect(res.body.displayName).toBe('Jane');
   });
 
   it('POST /enrich-tribe dry run', async () => {

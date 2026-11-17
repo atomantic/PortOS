@@ -35,6 +35,7 @@ vi.mock('../services/pipeline/musicGen.js', async () => {
     composeMusicLyrics: actual.composeMusicLyrics,
     ENGINES,
     DEFAULT_ENGINE_ID: 'musicgen',
+    findEngine: (id) => (Object.hasOwn(ENGINES, id) ? ENGINES[id] : null),
     getEngine: (id) => ENGINES[id] || ENGINES.musicgen,
     getEngineModel: (id, modelId) => (ENGINES[id] || ENGINES.musicgen).models.find((m) => m.id === modelId) || null,
     isEngineReady: (engineId) => (gen.readyByEngine ? gen.readyByEngine[engineId] === true : gen.ready),
@@ -569,24 +570,10 @@ describe('music routes', () => {
     expect(sse.run).not.toHaveBeenCalled();
   });
 
-  it('GET /setup/runtime-status reports music runtime readiness', async () => {
-    gen.ready = false;
-    const missing = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
-    expect(missing.status).toBe(200);
-    expect(missing.body).toMatchObject({
-      runtime: 'acestep',
-      label: 'ACE-Step',
-      installed: false,
-      venvPath: null,
-      expectedVenvPath: '/v/ace',
-      installEnvVar: 'INSTALL_ACESTEP',
-    });
-
-    gen.ready = true;
-    const ready = await request(app).get('/api/music/setup/runtime-status?runtime=acestep');
-    expect(ready.status).toBe(200);
-    expect(ready.body.installed).toBe(true);
-    expect(ready.body.venvPath).toBe('/v/ace/bin/python3');
+  it('POST /setup/runtime-install 400s on a repeated runtime key without spawning', async () => {
+    const r = await request(app).post('/api/music/setup/runtime-install?runtime=acestep&runtime=minimax-music3');
+    expect(r.status).toBe(400);
+    expect(setup.spawn).not.toHaveBeenCalled();
   });
 
   it('GET /setup/runtime-install reports status without spawning', async () => {
@@ -834,6 +821,15 @@ describe('music routes', () => {
   it('refuses over-limit caption previews instead of returning a shortened caption', async () => {
     const preview = await request(app).post('/api/music/prompt-preview').send({ prompt: 'x'.repeat(8001) });
     expect(preview.status).toBe(400);
+    expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('POST /generate 400s an Object.prototype engine name instead of falling back to the default engine', async () => {
+    for (const engine of ['constructor', '__proto__', 'toString']) {
+      const r = await request(app).post('/api/music/generate').send({ prompt: 'warm folk', engine });
+      expect(r.status, engine).toBe(400);
+      expect(r.body.code, engine).toBe('PIPELINE_MUSIC_UNKNOWN_ENGINE');
+    }
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
   });
 
@@ -1239,5 +1235,61 @@ describe('music routes', () => {
     expect(r.body.code).toBe('PIPELINE_MUSIC_BUSY');
     expect(r.body.context.jobId).toBe('existing-job');
     expect(mediaQueue.enqueue).not.toHaveBeenCalled();
+  });
+
+  describe("engine names are checked against the engine table own keys", () => {
+    const PROTO_KEYS = ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"];
+
+    it("GET /models/:engine lists a real engine and 404s unknown and prototype names", async () => {
+      models.list.mockResolvedValue([{ id: "m" }]);
+      const ok = await request(app).get("/api/music/models/musicgen");
+      expect(ok.status).toBe(200);
+      expect(models.list).toHaveBeenCalledWith("musicgen");
+      models.list.mockClear();
+      for (const name of ["nope", ...PROTO_KEYS]) {
+        const r = await request(app).get(`/api/music/models/${name}`);
+        expect(r.status, name).toBe(404);
+        expect(r.body.code, name).toBe("AUDIO_MODEL_UNKNOWN_ENGINE");
+      }
+      expect(models.list).not.toHaveBeenCalled();
+    });
+
+    it("POST /models rejects unknown and prototype engine names with 400 before touching the registry", async () => {
+      for (const engine of ["nope", ...PROTO_KEYS]) {
+        const r = await request(app).post("/api/music/models").send({ engine, repo: "org/repo" });
+        expect(r.status, engine).toBe(400);
+        expect(r.body.code, engine).toBe("AUDIO_MODEL_UNKNOWN_ENGINE");
+      }
+      expect(models.add).not.toHaveBeenCalled();
+      expect(sse.run).not.toHaveBeenCalled();
+    });
+
+    it("POST /models still accepts a real engine", async () => {
+      const r = await request(app).post("/api/music/models").send({ engine: "musicgen", repo: "org/repo" });
+      expect(r.status).toBe(200);
+      expect(models.add).toHaveBeenCalled();
+    });
+
+    it("runtime-install routes accept a real runtime and 400 unknown and prototype names", async () => {
+      const ok = await request(app).get("/api/music/setup/runtime-install?runtime=musicgen");
+      expect(ok.status).toBe(200);
+      for (const runtime of ["nope", ...PROTO_KEYS]) {
+        for (const method of ["get", "post"]) {
+          const r = await request(app)[method](`/api/music/setup/runtime-install?runtime=${runtime}`);
+          expect(r.status, `${method} ${runtime}`).toBe(400);
+          expect(r.body.code, `${method} ${runtime}`).toBe("UNKNOWN_MUSIC_RUNTIME");
+        }
+      }
+    });
+
+    it("POST /prompt-preview accepts a real engine and 400s unknown and prototype names", async () => {
+      const ok = await request(app).post("/api/music/prompt-preview").send({ engine: "musicgen", prompt: "warm rhodes" });
+      expect(ok.status).toBe(200);
+      for (const engine of ["nope", ...PROTO_KEYS]) {
+        const r = await request(app).post("/api/music/prompt-preview").send({ engine, prompt: "warm rhodes" });
+        expect(r.status, engine).toBe(400);
+        expect(r.body.code, engine).toBe("PIPELINE_MUSIC_UNKNOWN_ENGINE");
+      }
+    });
   });
 });

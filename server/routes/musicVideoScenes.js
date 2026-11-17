@@ -4,20 +4,19 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoColorMatchTakePatchSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoColorMatchTakePatchSchema, musicVideoContinueShotSchema, musicVideoPoolUseSchema, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema, musicVideoTakeSelectSchema } from '../lib/musicVideoValidation.js';
 import { renderShotDownload } from '../services/musicVideo/shotDownload.js';
 import { Router } from 'express';
 import { z } from 'zod';
-import { musicVideoContinueShotSchema, musicVideoPoolUseSchema } from '../lib/musicVideoValidation.js';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, musicVideoSceneCreateSchema, musicVideoSceneUpdateSchema, musicVideoSceneReorderSchema, musicVideoVaryWipesSchema, musicVideoSceneSplitSchema, musicVideoLyricCutSchema, musicVideoSceneStartSchema, musicVideoSceneEndSchema, musicVideoSceneFrameRenderSchema, musicVideoSceneFramesRenderSchema, musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema, musicVideoTakeInputSchema, musicVideoTakeReviewSchema, musicVideoPerformanceRepairSchema, musicVideoApproveFinalSchema, musicVideoUpgradeSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { addProjectScene, updateScene, deleteScene, reorderProjectScenes, varyProjectWipes, splitProjectScene, cutProjectScenesOnLyrics, mergeProjectNextScene, mergeProjectPreviousScene, moveProjectSceneStart, moveProjectSceneEnd, appendSceneTakes, selectSceneTake, placeMediaPoolItem, reviewSceneTake, checkSceneTakePlate, rejectUnusedSceneTakes, swapProjectSceneFrames } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { approveFinal, upgradeApproved } from '../services/musicVideo/finalUpgrade.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
-import { musicVideoTakeSelectSchema } from '../lib/musicVideoValidation.js';
+import { renderedTakeCost } from '../services/musicVideo/renderSpend.js';
 
 const router = Router();
 
@@ -170,6 +169,7 @@ router.post('/:id/scenes/:sceneId/takes', asyncHandler(async (req, res) => {
   }
   const { scene, appended, edit } = await appendSceneTakes(req.params.id, req.params.sceneId, [{
     kind, assetId, source, provider: provider ?? (source === 'generated' ? 'portos' : null), originalName, use, sourceImageId, inputAssets, castInputs, replaceSelection, expectedSelection,
+    ...(await renderedTakeCost(req.params.id, kind, assetId)),
   }], { edit: true });
   res.status(201).json({ scene, take: appended[0], edit });
 }));
@@ -224,7 +224,7 @@ router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(asyn
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {
   const review = validateRequest(musicVideoTakeReviewSchema, req.body);
-  if (review.acknowledgeRenderQuality || review.confirmFrame) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
+  if (review.acknowledgeRenderQuality || review.confirmFrame || review.acceptCharacterReferences) review.reviewer = req.portosAuthContext.enabled ? await requireProductionReviewer(req) : { kind: 'local', label: 'Local operator' };
   const { scene, edit } = await reviewSceneTake(req.params.id, req.params.sceneId, req.params.takeId, review, { edit: true });
   res.json({ ...scene, edit });
 }));

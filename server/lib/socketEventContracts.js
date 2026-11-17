@@ -78,6 +78,18 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
       },
     },
   },
+  'cos:reviewer-verdict:recorded': {
+    direction: 'server-to-client',
+    summary: 'A CLI reviewer verdict was recorded on its running agent; the Learning tab re-reads its verdict stats. CoS subscribers only.',
+    payloadSchema: {
+      type: 'object', required: ['agentId', 'reviewer', 'verdict'], additionalProperties: false,
+      properties: {
+        agentId: { type: 'string' },
+        reviewer: { type: 'string' },
+        verdict: { type: 'string', enum: ['clean', 'findings'] },
+      },
+    },
+  },
   'cos:agent:feedback': {
     direction: 'server-to-client',
     summary: 'Persisted agent feedback after the pending-feedback index has been updated; CoS subscribers only.',
@@ -104,6 +116,10 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   'music-video:render-cleanup': {
     direction: 'server-to-client', summary: 'Derived render cleanup changed; refresh the project render inventory.',
     payloadSchema: { type: 'object', required: ['projectId'], properties: { projectId: { type: 'string' } }, additionalProperties: false },
+  },
+  'music-video:render-spend': {
+    direction: 'server-to-client', summary: "A paid render reached the project's spend ledger, or a spend adjustment changed; apply the project's new render spend summary.",
+    payloadSchema: { type: 'object', required: ['projectId', 'renderSpend'], properties: { projectId: { type: 'string' }, renderSpend: { type: 'object' } }, additionalProperties: false },
   },
   'music-video:blender': {
     direction: 'server-to-client',
@@ -734,11 +750,6 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client',
     summary: 'Invalidate queue snapshots after job, progress, archive or hold changes.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  'training:dataset:changed': {
-    direction: 'server-to-client',
-    summary: 'Dataset changes were persisted; reread this dataset.',
-    payloadSchema: { type: 'object', properties: { datasetId: { type: 'string' } }, required: ['datasetId'], additionalProperties: false },
   },
   'training:checkpoints:changed': {
     direction: 'server-to-client',

@@ -150,6 +150,7 @@
   "/post/:tab/:subtab/:mode": "full",
   "/privacy/:tab": "full",
   "/prompts": "full",
+  "/prompts/:tab": "full",
   "/rapid-reader": "full",
   "/rapid-reader/:id": "full",
   "/review": "full",

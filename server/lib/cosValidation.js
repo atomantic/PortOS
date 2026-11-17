@@ -207,6 +207,13 @@ const taskStatusInputSchema = z.preprocess(
   z.enum(TASK_STATUS_VALUES).optional()
 );
 
+// Query schemas for the CoS insight/learning/workflow reads. Counts stay strings: each handler
+// clamps or defaults them itself, so a bad number degrades exactly as before; unknown keys are stripped.
+export const cosActivityCalendarQuerySchema = z.object({ weeks: z.string().optional() });
+export const cosDecisionsQuerySchema = z.object({ limit: z.string().optional(), type: z.string().optional() });
+export const cosDigestCompareQuerySchema = z.object({ week1: z.string().optional(), week2: z.string().optional() });
+export const cosWorkflowQuerySchema = z.object({ hours: z.string().optional() });
+
 export const cosTaskTypeSchema = z.enum(['user', 'internal']);
 export const cosTaskDeleteQuerySchema = z.object({ type: cosTaskTypeSchema.default('user') });
 
@@ -696,6 +703,11 @@ export const cliReviewerOutcomeSchema = z.discriminatedUnion('outcome', [
     reviewer: cliReviewerIdentitySchema,
     outcome: z.literal('reviewed'),
     verdict: z.enum(['clean', 'findings']),
+    // Optional so reports from prompts built before #16572 still validate; with
+    // agentId the verdict is also recorded on that running agent's record.
+    agentId: z.string().regex(/^[A-Za-z0-9_-]{1,200}$/).optional(),
+    round: z.number().int().min(1).max(1000).optional(),
+    changedLines: z.number().int().min(0).max(10_000_000).optional(),
   }).strict(),
   z.object({
     reviewer: cliReviewerIdentitySchema,
@@ -709,12 +721,6 @@ export const cliReviewerOutcomeSchema = z.discriminatedUnion('outcome', [
     }).strict(),
   }).strict(),
 ]);
-
-export const reportReviewerFailureSchema = z.object({
-  reviewer: z.string().max(80).refine(isReviewer),
-  reason: z.enum(['quota', 'unavailable', 'provider_error', 'configuration', 'malformed']).optional(),
-  error: z.string().max(2048).optional(),
-}).strict();
 
 // Global Code Review Loop defaults (settings.codeReview). Surfaced on the AI
 // Providers page; TaskAddForm + ScheduleTab seed from this when the user

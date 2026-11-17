@@ -24,13 +24,14 @@ import {
 import toast from '../components/ui/Toast';
 import Banner from '../components/ui/Banner';
 import { useLockToggle } from '../hooks/useLockToggle';
-import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from '../hooks/useStoryStepRuns.jsx';
+import useFieldDraft from '../hooks/useFieldDraft';
+import { StoryStepRunProvider, useStoryStepRun, useStoryRunMonitor } from '../components/storyBuilder/useStoryStepRuns.jsx';
 import {
   getStoryBuilderSteps, listStorySessions, getStorySession, createStorySession,
   updateStorySession, setStoryCurrentStep, lockStoryStep, unlockStoryStep,
   generateStoryStep, refineStoryStep, setStoryIssueLock, generateStoryIssues,
   setStorySessionSync, reconcileStorySession,
-  getUniverse, getPipelineSeries, listPipelineIssues,
+  getUniverse, updateUniverse, patchUniverseCanonEntry, getPipelineSeries, listPipelineIssues,
   IMPORTER_CONTENT_TYPES,
   getProviders, listCatalogIngredientsByIds,
 } from '../services/api';
@@ -488,14 +489,37 @@ const STATUS_BADGE = {
 
 // ── Per-step content panels ────────────────────────────────────────────────
 
-function FieldBlock({ label, value }) {
+const FIELD_INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-gray-200 focus:border-port-accent focus:outline-none';
+
+// Static read-only display by default. Passing `onCommit` (only while the step is
+// unlocked) swaps in a buffered input that commits on blur, so a small fix needs
+// neither an AI refine call nor a trip to another page.
+function FieldBlock({ label, value, onCommit, singleLine = false }) {
+  const id = useId();
+  const draft = useFieldDraft(value, (next) => onCommit?.(next));
+  if (!onCommit) {
+    return (
+      <div>
+        <div className="text-xs uppercase tracking-wide text-gray-500 mb-0.5">{label}</div>
+        <div className="text-sm text-gray-200 whitespace-pre-wrap">{value || <span className="text-gray-600 italic">— empty —</span>}</div>
+      </div>
+    );
+  }
+  const Control = singleLine ? 'input' : 'textarea';
   return (
     <div>
-      <div className="text-xs uppercase tracking-wide text-gray-500 mb-0.5">{label}</div>
-      <div className="text-sm text-gray-200 whitespace-pre-wrap">{value || <span className="text-gray-600 italic">— empty —</span>}</div>
+      <label htmlFor={id} className="block text-xs uppercase tracking-wide text-gray-500 mb-0.5">{label}</label>
+      <Control
+        id={id}
+        {...(singleLine ? { type: 'text' } : { rows: 3 })}
+        value={draft.value} onChange={draft.onChange} onBlur={draft.onBlur}
+        className={FIELD_INPUT_CLASS}
+      />
     </div>
   );
 }
+
+const splitList = (text) => text.split(',').map((t) => t.trim()).filter(Boolean);
 
 // A compact timeline of the reader map's emotional beats: each beat is a bar
 // positioned along the arc (normalized from `atArcPosition`) with its height
@@ -629,7 +653,7 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   );
 }
 
-function StepPanel({ session, universe, series, issues, issuesState, issuesError, retryIssues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onRegisterDraftFlush, onUniverseCharRef }) {
+function StepPanel({ session, universe, series, issues, issuesState, issuesError, retryIssues, stepId, locked, onChanged, onSeriesUpdate, onIssuesUpdate, onFlushPending, onRegisterDraftFlush, onUniverseCharRef, onSessionFields, onUniverseUpdate }) {
   const { start, busy, phase, op } = useStoryStepRun(stepId);
   const arc = series?.arc || {};
   const isRunning = (which) => busy && op === which;
@@ -685,11 +709,33 @@ function StepPanel({ session, universe, series, issues, issuesState, issuesError
     </button>
   );
 
+  // Inline edits write straight to the owning record (no AI call) and fold the
+  // server's answer into local state. A rejected write toasts and leaves the
+  // persisted value showing, so the field visibly snaps back.
+  const commitSession = (key) => async (text) => {
+    const next = text.trim();
+    if (key === 'title' && !next) { toast.error('Title cannot be empty'); return; }
+    const updated = await updateStorySession(session.id, { [key]: next }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Save failed'); return null; });
+    if (updated) onSessionFields?.({ [key]: updated[key] ?? next });
+  };
+  const saveUniverse = async (patch) => {
+    if (!universe?.id) return;
+    const updated = await updateUniverse(universe.id, patch, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Save failed'); return null; });
+    if (updated) onUniverseUpdate?.(updated);
+  };
+  const commitInfluences = (key) => (text) => saveUniverse({
+    influences: { embrace: universe?.influences?.embrace || [], avoid: universe?.influences?.avoid || [], [key]: splitList(text) },
+  });
+
+  const editUniverse = !locked && universe?.id ? true : undefined;
+
   if (stepId === 'idea') {
     return (
       <div className="space-y-3">
-        <FieldBlock label="Working title" value={session.title} />
-        <FieldBlock label="Starter idea" value={session.seedIdea} />
+        <FieldBlock label="Working title" value={session.title} singleLine onCommit={locked ? undefined : commitSession('title')} />
+        <FieldBlock label="Starter idea" value={session.seedIdea} onCommit={locked ? undefined : commitSession('seedIdea')} />
         <div className="flex items-center gap-2 flex-wrap">
           {!locked && genButton('Expand idea with AI', Boolean((universe?.logline || '').trim()))}
           {!locked && issuesHaveContent && backfillButton()}
@@ -704,11 +750,11 @@ function StepPanel({ session, universe, series, issues, issuesState, issuesError
   if (stepId === 'universeAesthetic') {
     return (
       <div className="space-y-3">
-        <FieldBlock label="Logline" value={universe?.logline} />
-        <FieldBlock label="Premise" value={universe?.premise} />
-        <FieldBlock label="Style notes" value={universe?.styleNotes} />
-        <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} />
-        <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} />
+        <FieldBlock label="Logline" value={universe?.logline} onCommit={editUniverse && ((t) => saveUniverse({ logline: t.trim() }))} />
+        <FieldBlock label="Premise" value={universe?.premise} onCommit={editUniverse && ((t) => saveUniverse({ premise: t.trim() }))} />
+        <FieldBlock label="Style notes" value={universe?.styleNotes} onCommit={editUniverse && ((t) => saveUniverse({ styleNotes: t.trim() }))} />
+        <FieldBlock label="Influences — embrace" value={(universe?.influences?.embrace || []).join(', ')} singleLine onCommit={editUniverse && commitInfluences('embrace')} />
+        <FieldBlock label="Influences — avoid" value={(universe?.influences?.avoid || []).join(', ')} singleLine onCommit={editUniverse && commitInfluences('avoid')} />
         <div className="border-t border-port-border pt-3">
           {/* Keyed by universe id so an in-flight base-style render's spinner +
               completion stay scoped to one universe across a selection change. */}
@@ -793,7 +839,7 @@ function StepPanel({ session, universe, series, issues, issuesState, issuesError
     );
   }
   if (stepId === 'characters') {
-    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} onUniverseCharRef={onUniverseCharRef} />;
+    return <StepCharacters session={session} universe={universe} locked={locked} onChanged={onChanged} onUniverseCharRef={onUniverseCharRef} onUniverseUpdate={onUniverseUpdate} />;
   }
   if (stepId === 'issues') {
     return <IssuesPanel session={session} series={series} issues={issues} issuesState={issuesState} issuesError={issuesError} retryIssues={retryIssues} onChanged={onChanged} />;
@@ -825,7 +871,32 @@ function StepPanel({ session, universe, series, issues, issuesState, issuesError
 // `composeCanonStyledPrompt` helper + `useSingleImageRender` jobId lifecycle →
 // EntryThumbSlot (spinner → image), and persists the resulting filename onto
 // the universe canon entry's imageRefs.
-function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRef }) {
+// Buffered physicalDescription editor for one character row. Commits on blur
+// through the canon-entry PATCH (never a full characters[] replace, which could
+// clobber a sibling's just-persisted imageRefs), so the preview button beside it
+// works the moment a description exists.
+function CharacterDescriptionField({ character, universeId, onUniverseUpdate }) {
+  const id = useId();
+  const draft = useFieldDraft(character.physicalDescription, async (text) => {
+    const result = await patchUniverseCanonEntry(universeId, 'characters', character.id, { physicalDescription: text.trim() }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Save failed'); return null; });
+    if (result?.universe) onUniverseUpdate?.(result.universe);
+  });
+  const fallback = Array.isArray(character.descriptor) ? character.descriptor.map((d) => d.value).join(', ') : '';
+  return (
+    <div>
+      <label htmlFor={id} className="sr-only">{`Description for ${character.name}`}</label>
+      <textarea
+        id={id} rows={2}
+        value={draft.value} onChange={draft.onChange} onBlur={draft.onBlur}
+        placeholder={fallback || 'Describe their appearance to enable a preview'}
+        className="w-full bg-port-card border border-port-border rounded px-2 py-1 text-xs text-gray-300 focus:border-port-accent focus:outline-none"
+      />
+    </div>
+  );
+}
+
+function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRef, onUniverseUpdate }) {
   const cast = universe?.characters || [];
   // Universe canon renders, so they resolve the universe's pin ladder (see renderPinLadder).
   const { imageCfg } = useImageRenderSettings({ record: universe, target: RENDER_TARGET.UNIVERSE_BIBLE });
@@ -907,7 +978,11 @@ function StepCharacters({ session, universe, locked, onChanged, onUniverseCharRe
           />
           <div className="flex-1 min-w-0">
             <div className="font-medium text-sm">{c.name} {c.locked && <Lock className="w-3 h-3 inline text-port-success" />}</div>
-            <div className="text-xs text-gray-400">{c.physicalDescription || (Array.isArray(c.descriptor) ? c.descriptor.map((d) => d.value).join(', ') : '')}</div>
+            {!locked && universe?.id ? (
+              <CharacterDescriptionField character={c} universeId={universe.id} onUniverseUpdate={onUniverseUpdate} />
+            ) : (
+              <div className="text-xs text-gray-400">{c.physicalDescription || (Array.isArray(c.descriptor) ? c.descriptor.map((d) => d.value).join(', ') : '')}</div>
+            )}
           </div>
           {!locked && (
             <button
@@ -1174,6 +1249,12 @@ function StoryBuilderDetail({ storyId, stepParam }) {
       });
       return { ...cur, characters: nextChars };
     });
+  }, []);
+
+  // Inline Step 1 edits (title / seedIdea) merge just the patched fields; the
+  // response is the raw record, not the recomputed view the rest of `session` is.
+  const applySessionFields = useCallback((fields) => {
+    setSession((prev) => (prev ? { ...prev, ...fields } : prev));
   }, []);
 
   // ── Embedded ArcCanvas wiring (plotArc step) ──────────────────────────────
@@ -1559,6 +1640,8 @@ function StoryBuilderDetail({ storyId, stepParam }) {
                 onFlushPending={flushPending}
                 onRegisterDraftFlush={registerDraftFlush}
                 onUniverseCharRef={applyUniverseCharRef}
+                onSessionFields={applySessionFields}
+                onUniverseUpdate={setUniverse}
               />
             </div>
           </section>

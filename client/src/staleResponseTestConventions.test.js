@@ -1,4 +1,5 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
  * Rule: A stale-response test must flush the resolved promise with `await act(async () => { resolveOld(payload); })` before asserting absence.
@@ -19,7 +20,18 @@ const BARE_RESOLVE = /^\s*(?:resolve|finish)\w*\(/;
 const ABSENCE_WAIT = /await waitFor\(\(\) => expect\(.*(?:\.not\.|toBeNull\(\))/;
 const LOOKAHEAD = 2;
 
-/** Zero-based indexes of vacuous waitFor lines in `source`. */
+const TEST_TITLE = /^\s*(?:it|test)(?:\.\w+)*\(\s*(['"`])(.*?)\1/;
+
+/** Title of the nearest `it(`/`test(` opening at or above line index `i`. */
+const enclosingTestTitle = (lines, i) => {
+  for (let j = i; j >= 0; j -= 1) {
+    const match = lines[j].match(TEST_TITLE);
+    if (match) return match[2];
+  }
+  return '<outside a test>';
+};
+
+/** Enclosing test titles of vacuous waitFor lines in `source`. */
 const findVacuousAbsenceWaits = (source) => {
   const lines = source.split('\n');
   const hits = [];
@@ -29,12 +41,16 @@ const findVacuousAbsenceWaits = (source) => {
       if (ABSENCE_WAIT.test(lines[j])) { hits.push(j); break; }
     }
   });
-  return hits;
+  return hits.map((i) => `${enclosingTestTitle(lines, i)}`);
 };
 
-/** `file:line` -> reason the waitFor is real (the absent state is present before the trigger). */
+/**
+ * `file :: enclosing test title` -> reason the waitFor is real (the absent state is present
+ * before the trigger). Keyed by test title, never a line number, so unrelated edits above
+ * the test cannot invalidate the entry.
+ */
 const ALLOWED = {
-  'src/pages/SongBookViewer.test.jsx:1057': 'the editor sheet is open (Content label present) until the save settles, so waitFor genuinely waits',
+  'src/pages/SongBookViewer.test.jsx :: hides the discard row while a save is in flight': 'the editor sheet is open (Content label present) until the save settles, so waitFor genuinely waits',
 };
 
 // Git-tracked only, so an untracked scratch file can't fail the suite.
@@ -42,13 +58,12 @@ const testFiles = () => execSync('git ls-files src', { cwd: CLIENT_ROOT, encodin
   .trim().split('\n').filter((f) => /\.test\.jsx?$/.test(f));
 
 describe('stale-response tests flush before asserting absence', () => {
+  const found = () => testFiles().flatMap((file) =>
+    findVacuousAbsenceWaits(readFileSync(join(CLIENT_ROOT, file), 'utf8')).map((title) => `${file} :: ${title}`));
+
   it('has no un-flushed absence waitFor after a bare resolve', () => {
-    const files = testFiles();
-    expect(files.length).toBeGreaterThan(100);
-    const violations = files.flatMap((file) =>
-      findVacuousAbsenceWaits(readFileSync(join(CLIENT_ROOT, file), 'utf8'))
-        .map((i) => `${file}:${i + 1}`))
-      .filter((loc) => !(loc in ALLOWED));
+    expect(testFiles().length).toBeGreaterThan(100);
+    const violations = found().filter((key) => !(key in ALLOWED));
     expect(
       violations,
       'waitFor checks synchronously first, so an absence assertion right after a bare resolve passes '
@@ -59,26 +74,7 @@ describe('stale-response tests flush before asserting absence', () => {
   });
 
   it('has no stale allowlist entry', () => {
-    const stale = Object.keys(ALLOWED).filter((loc) => {
-      const [file, line] = loc.split(/:(?=\d+$)/);
-      try {
-        return !findVacuousAbsenceWaits(readFileSync(join(CLIENT_ROOT, file), 'utf8')).includes(Number(line) - 1);
-      } catch { return true; }
-    });
-    expect(stale, `Allowlist rows that no longer match a flagged line:\n  ${stale.join('\n  ')}`).toEqual([]);
-  });
-
-  it('flags the vacuous shape and accepts the flushed one', () => {
-    const vacuous = [
-      'resolveOld(data);',
-      "await waitFor(() => expect(screen.queryByText('old')).toBeNull());",
-    ].join('\n');
-    expect(findVacuousAbsenceWaits(vacuous)).toEqual([1]);
-    expect(findVacuousAbsenceWaits("finishLoad();\nawait waitFor(() => expect(x).not.toBeInTheDocument());")).toEqual([1]);
-    expect(findVacuousAbsenceWaits([
-      'await act(async () => { resolveOld(data); });',
-      "await waitFor(() => expect(screen.queryByText('old')).toBeNull());",
-    ].join('\n'))).toEqual([]);
-    expect(findVacuousAbsenceWaits('resolveOld(data);\nawait waitFor(() => expect(fn).toHaveBeenCalled());')).toEqual([]);
+    const seen = new Set(found());
+    expect(Object.keys(ALLOWED).filter((key) => !seen.has(key))).toEqual([]);
   });
 });

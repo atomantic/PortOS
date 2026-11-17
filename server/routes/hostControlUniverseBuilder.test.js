@@ -9,7 +9,7 @@ const auth = vi.hoisted(() => ({ enabled: false }));
 const effects = vi.hoisted(() => Object.fromEntries([
   'expand', 'variations', 'refine', 'promote', 'sort', 'extract', 'refineCharacter',
   'expandCharacter', 'reviewCast', 'augment', 'differentiate', 'mergeAI',
-  'describe', 'expandImages', 'correctImage', 'analyzeStyle', 'render', 'sheet',
+  'describe', 'expandImages', 'correctImage', 'analyzeStyle', 'render',
   'persistIds', 'update', 'get', 'merge', 'applyImage', 'applyAugment', 'backfill',
   'lock', 'gallery', 'create', 'delete', 'listRuns',
 ].map(name => [name, vi.fn(async () => ({ id: 'example-world', name: 'Example World' }))])));
@@ -71,10 +71,6 @@ vi.mock('../services/universeVisionExpand.js', () => ({
 }));
 vi.mock('../services/universeStyleReference.js', () => ({ analyzeUniverseStyleReference: effects.analyzeStyle }));
 vi.mock('../services/universeBuilderRender.js', () => ({ renderUniverseJobs: effects.render }));
-vi.mock('../services/universeCharacterSheet.js', () => ({
-  renderCharacterReferenceSheet: effects.sheet, deleteCharacterReferenceSheet: vi.fn(),
-  listSheetVariants: vi.fn(() => []), getCharacterReferenceSheet: vi.fn(),
-}));
 vi.mock('../services/universeGraph.js', () => ({ buildUniverseGraph: vi.fn() }));
 
 import universeRoutes from './universeBuilder/index.js';
@@ -102,7 +98,6 @@ const generation = [
   ['post', `${world}/canon/character/example-character/correct-from-image`, { image: 'example.png', ...picker }, effects.correctImage, 200],
   ['post', `${base}/analyze-style-reference`, { image: 'example.png', prompt: 'Example style', ...picker }, effects.analyzeStyle, 200],
   ['post', `${world}/render`, { mode: 'codex', extraStyle: 'Example style' }, effects.render, 200],
-  ['post', `${character}/render-reference-sheet`, { overridePrompt: 'Example sheet prompt' }, effects.sheet, 200],
 ];
 const mounts = [[base, universeRoutes]];
 
@@ -135,7 +130,6 @@ describe('Universe Builder agent workflows behind the default-deny gate (#10669,
       ['patch', `${world}/canon/character/example-character/lock`, { locked: true }, effects.lock, 200],
     ] });
     expect(effects.expand).toHaveBeenLastCalledWith(expect.objectContaining(picker));
-    expect(effects.sheet).toHaveBeenLastCalledWith('example-world', 'example-character', { overridePrompt: 'Example sheet prompt' });
   });
 
   it('keeps remote history reads open', async () => {

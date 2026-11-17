@@ -1,4 +1,4 @@
-/** Public acceptance routes: frozen promotion, stale detection, failed-run isolation and downstream discovery. */
+/** Public acceptance routes: frozen promotion, stale detection, and failed-run isolation. */
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { chmod, mkdir, readFile, writeFile } from 'fs/promises';
@@ -84,50 +84,7 @@ async function finishedRun({ id, revision }, { verdict = 'pass', bytes = 'exampl
 }
 
 describe.skipIf(!ready)('Production acceptance', () => {
-  it('pages accepted assets without repeats when a newer acceptance arrives between requests', async () => {
-    const projectIds = Array.from({ length: 3 }, () => randomUUID());
-    const tied = '9998-01-01T00:00:00.000Z';
-    const accepted = acceptedAt => ({ acceptedAt, videoId: randomUUID(), revisionId: randomUUID() });
-    ids.push(...projectIds);
-    for (const [index, id] of projectIds.entries()) {
-      await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
-        [id, 'Synthetic accepted short', { acceptedOutput: accepted(index < 2 ? tied : '9997-01-01T00:00:00.000Z') }]);
-    }
-    const expected = projectIds.slice(0, 2).sort().reverse().concat(projectIds[2]);
-
-    const first = await get('/accepted-assets?limit=1');
-    expect(first.status).toBe(200);
-    expect(first.body.items.map(item => item.projectId)).toEqual([expected[0]]);
-    expect(first.body.nextCursor).toBeTruthy();
-
-    const newerId = randomUUID();
-    const missingTimestampId = randomUUID();
-    ids.push(newerId, missingTimestampId);
-    await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
-      [newerId, 'Newer accepted short', { acceptedOutput: accepted('9999-01-01T00:00:00.000Z') }]);
-    await query('INSERT INTO code_animation_projects (id, title, data) VALUES ($1, $2, $3)',
-      [missingTimestampId, 'Older accepted short', { acceptedOutput: accepted(null) }]);
-    const seen = [expected[0]];
-    const cursors = new Set();
-    let cursor = first.body.nextCursor;
-    while (cursor) {
-      expect(cursors.has(cursor)).toBe(false);
-      cursors.add(cursor);
-      const response = await get(`/accepted-assets?limit=1&cursor=${encodeURIComponent(cursor)}`);
-      expect(response.status).toBe(200);
-      for (const item of response.body.items) {
-        expect(seen).not.toContain(item.projectId);
-        seen.push(item.projectId);
-      }
-      cursor = response.body.nextCursor;
-    }
-    expect(seen.slice(0, 3)).toEqual(expected);
-    expect(seen).toContain(missingTimestampId);
-    expect(seen).not.toContain(newerId);
-    expect((await get('/accepted-assets?cursor=NaN')).status).toBe(400);
-  });
-
-  it('promotes a passing run, separates evidence dimensions, marks Media History and lists the short downstream', async () => {
+  it('promotes a passing run, separates evidence dimensions, marks Media History', async () => {
     const p = await project();
     const run = await finishedRun(p);
     const accepted = await post(`/projects/${p.id}/accepted-output`, { runId: run.runId });
@@ -144,8 +101,6 @@ describe.skipIf(!ready)('Production acceptance', () => {
     expect(view.accepted.evidence.sound.unverified.map(item => item.dimension)).toContain('hearing');
 
     expect((await loadHistory()).find(entry => entry.id === run.videoId).codeAnimation.acceptance).toMatchObject({ projectId: p.id, runId: run.runId });
-    const assets = (await get('/accepted-assets')).body.items.find(item => item.projectId === p.id);
-    expect(assets).toMatchObject({ videoId: run.videoId, sourceHash: p.revision.sourceHash, packageUrl: `/api/code-animation/projects/${p.id}/revisions/${p.revision.id}/package` });
   });
 
   it.each(['read', 'save'])('returns committed acceptance on history %s failure and recovers from durable intent on the next read', async failure => {
@@ -175,9 +130,7 @@ describe.skipIf(!ready)('Production acceptance', () => {
     // A fresh service instance has no in-memory queue/intent from the request,
     // as after restart. Only the persisted project tells it what to recover.
     const restarted = await import('./acceptance.js?recovery');
-    const recovered = failure === 'read'
-      ? await restarted.getProductionAcceptance(p.id)
-      : (await restarted.listAcceptedAssets({ limit: 50 })).items.find(item => item.projectId === p.id);
+    const recovered = await restarted.getProductionAcceptance(p.id);
     expect(recovered.acceptanceProjection).toMatchObject({ status: 'synced', decisionId: durable.acceptanceProjection.decisionId });
     const after = await store.getProjectRecord(p.id);
     expect(after.acceptedOutput).toEqual(durable.acceptedOutput);
@@ -222,7 +175,7 @@ describe.skipIf(!ready)('Production acceptance', () => {
     await store.acknowledgeAcceptanceProjection(p.id, older.acceptanceProjection.decisionId);
     expect((await store.getProjectRecord(p.id)).acceptanceProjection).toEqual(newer.acceptanceProjection);
     historyFault.beforeSave = null;
-    await get('/accepted-assets');
+    await get(`/projects/${p.id}/acceptance`);
     expect((await loadHistory()).filter(entry => entry.codeAnimation?.acceptance?.projectId === p.id).map(entry => entry.id)).toEqual([second.videoId]);
     expect((await store.getProjectRecord(p.id)).acceptedOutput).toEqual(newer.acceptedOutput);
   });

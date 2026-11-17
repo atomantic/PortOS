@@ -19,15 +19,17 @@ const toast = vi.hoisted(() => {
   return mock;
 });
 
-vi.mock('../services/api', () => ({
-  search: (...args) => search(...args),
+vi.mock('../services/apiCore.js', () => ({ search: (...args) => search(...args) }));
+vi.mock('../services/apiPalette.js', () => ({
   getPaletteManifest: (...args) => getPaletteManifest(...args),
-  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
   runPaletteAction: (...args) => runPaletteAction(...args),
+}));
+vi.mock('../services/apiSystem.js', () => ({ getInstanceFeatures: (...args) => getInstanceFeatures(...args) }));
+vi.mock('../services/apiDashboard.js', () => ({
   getDashboardLayouts: (...args) => getDashboardLayouts(...args),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve()),
-  listCatalogIngredients: (...args) => listCatalogIngredients(...args),
 }));
+vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredients: (...args) => listCatalogIngredients(...args) }));
 
 vi.mock('./ui/Toast', () => ({ default: toast }));
 

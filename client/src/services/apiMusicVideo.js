@@ -28,7 +28,7 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit } = {}, options =
   return request(`/music-video?${query}`, options);
 };
 // Live `{ id, name }` rows for the sidebar's Music Video sub-nav.
-export const listMusicVideoProjectNames = (options = {}) => request('/music-video/names', options);
+export { listMusicVideoProjectNames } from './apiNavNames.js';
 // Built-in character styles a project loads through `concept.characterStyleId`,
 // each with this install's character sheet (`referenceImageId`, or null).
 export const listMusicVideoCharacterStyles = (options = {}) => request('/music-video/character-styles', options);
@@ -137,7 +137,8 @@ export const planMusicVideoProject = (id, body = {}, options = {}) => request(`/
 // Import timed lyric cues (#8964) from pasted LRC / SRT / WebVTT / plain lines.
 // Body: { text, format?: 'auto'|'lrc'|'srt'|'text', mode?: 'replace'|'append' }.
 // Resolves to { project, imported, format }.
-export const importMusicVideoLyrics = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import`, {
+// `edit: true` answers `{ edit, imported, … }` (the board edit result) instead of the project.
+export const importMusicVideoLyrics = (id, body, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import${edit ? '?edit=1' : ''}`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
@@ -145,7 +146,7 @@ export const importMusicVideoLyrics = (id, body, options = {}) => request(`/musi
 // cues and its `[Chorus]`/`[Spoken, close]` tags become lyric markers.
 // Body `{ mode?: 'replace' | 'if-empty' }` — `if-empty` never replaces lines.
 // Resolves to { project, imported, markers, skipped }.
-export const importMusicVideoTrackLyrics = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track`, {
+export const importMusicVideoTrackLyrics = (id, body = {}, { edit = false, ...options } = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/import-track${edit ? '?edit=1' : ''}`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
@@ -949,3 +950,12 @@ export const cancelMusicVideoLyricVerify = (jobId, options = {}) => request(`/mu
 
 export const captureMusicVideoPublishFrame = (id, atSec, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/publish-kit/frame`, { method: 'POST', body: JSON.stringify({ atSec }), ...options });
+// #16506: manual adjustments that true up a project's render spend (a project read carries the spend itself).
+// An adjustment body is { lane, actualUsd } (what the lane really cost) or { lane, usd } (an amount to add), plus an optional note.
+const spendPath = (id) => `/music-video/${encodeURIComponent(id)}/spend`;
+export const addMusicVideoSpendAdjustment = (id, body, options = {}) => request(`${spendPath(id)}/adjustments`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const deleteMusicVideoSpendAdjustment = (id, adjustmentId, options = {}) => request(`${spendPath(id)}/adjustments/${encodeURIComponent(adjustmentId)}`, {
+  method: 'DELETE', ...options,
+});

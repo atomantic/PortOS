@@ -1,31 +1,15 @@
 /**
  * Fork-head coordinates — where a cross-repository pull request's branch lives.
  *
- * A PR opened from a fork has no `origin/<headRefName>`: the branch is in the
- * contributor's repository, and the forge only exposes its tip on origin as the
- * read-only `refs/pull/<n>/head`, which nothing can push back to. Every PortOS
- * path that means "work on this PR's branch" therefore needs a second address
- * for it — the fork's clone URL plus the owner whose login names the remote.
- *
- * This module is that address, as a validated value object, so the four places
- * that touch it agree on one shape: the forge read that produces it
- * (`appPullRequests.js`), the task metadata that persists it
- * (`agentWorktreeCleanup.js`, `prRemediationFollowUp.js`), the spawn path that
- * threads it (`agentWorkspacePrep.js`), and the git layer that consumes it
- * (`worktreeManager.js`, which deliberately has no forge client of its own).
- *
- * Pure and fail-closed: anything that isn't a usable pair returns `null`, which
- * every caller reads as "no fork coordinates" and falls back to its existing
- * origin-only behavior rather than guessing.
+ * A fork PR has no `origin/<headRefName>`; origin only exposes the read-only `refs/pull/<n>/head`,
+ * so "work on this PR's branch" needs the fork's clone URL plus the owner login that names the
+ * remote. Pure and fail-closed: anything that isn't a usable pair returns `null`, which callers read
+ * as "no fork coordinates" and fall back to origin-only behavior.
  */
 
 /**
- * Coerce forge-supplied (or metadata-round-tripped) fork coordinates into the
- * canonical `{ remoteUrl, ownerLogin }` pair, or `null` when they are unusable.
- *
- * The leading-`-` rejection is not cosmetic: both values reach a `git` argv, and
- * a value starting with `-` would be parsed as an option rather than as a URL or
- * a name.
+ * Coerce forge-supplied (or metadata-round-tripped) coordinates into `{ remoteUrl, ownerLogin }`, or
+ * `null`. Leading-`-` values are rejected: both reach a `git` argv and would parse as options.
  *
  * @param {unknown} value - candidate coordinates
  * @returns {{remoteUrl: string, ownerLogin: string}|null}
@@ -40,14 +24,8 @@ export function normalizeForkHead(value) {
 }
 
 /**
- * The deterministic git remote name for a fork's owner.
- *
- * Deterministic so a re-run (a second review round, a retried remediation)
- * reuses the remote it already added instead of accumulating one per attach —
- * and so teardown can leave it in place, which is what makes the reuse free.
- *
- * Forge logins are conventionally `[A-Za-z0-9-]`, but the value arrives from a
- * forge read, so anything outside git's safe remote-name set is folded to `-`.
+ * Deterministic git remote name for a fork's owner (`fork-<login>`, null when nothing survives), so
+ * re-runs reuse the remote. Characters outside git's safe remote-name set fold to `-`.
  *
  * @param {unknown} ownerLogin
  * @returns {string|null} e.g. `fork-contributor`, or null when nothing survives
@@ -61,17 +39,8 @@ export function forkRemoteName(ownerLogin) {
 }
 
 /**
- * Read a task's fork coordinates out of its metadata.
- *
- * The key is deliberately generic (`forkHead`, not a review-loop-specific
- * name): both producers of a task pointed at a pre-existing PR branch — the
- * review-loop follow-up and the public-PR remediation agent — write it, and
- * `agentWorkspacePrep` is the single reader that threads it into
- * `createWorktree`. Naming it in one place is what keeps them from drifting,
- * the same job `resolveTaskTargetBranch` does for the branch name itself.
- *
- * Re-validates on read because task metadata round-trips through the tasks
- * markdown file, which a human may edit.
+ * A task's fork coordinates from its metadata. `forkHead` is deliberately generic: every producer of a
+ * task aimed at an existing PR branch writes it. Re-validated on read since the tasks file may be hand-edited.
  *
  * @param {object} metadata - task metadata
  * @returns {{remoteUrl: string, ownerLogin: string}|null}
@@ -81,18 +50,9 @@ export function resolveTaskForkHead(metadata) {
 }
 
 /**
- * Read fork coordinates off a `gh pr view`/`gh pr list --json` row.
- *
- * `gh pr view --json headRepository` answers `{id, name, nameWithOwner}` — it
- * carries no clone URL — so the remote URL is composed from the PR's OWN origin
- * plus `nameWithOwner`. That also keeps GitHub Enterprise correct: the fork is
- * on the same host as the PR, never hardcoded to github.com.
- *
- * A same-repo head returns null: `origin/<branch>` already resolves it, and
- * adding a fork remote for it would be wrong.
- *
- * Requires `isCrossRepository`, `headRepository`, `headRepositoryOwner`, and
- * `url` in the caller's `--json` field list.
+ * Fork coordinates from a `gh pr view`/`gh pr list --json` row (needs `isCrossRepository`,
+ * `headRepository`, `headRepositoryOwner`, `url`). `headRepository` has no clone URL, so it is composed
+ * from the PR's OWN origin plus `nameWithOwner` (GitHub Enterprise stays correct). Same-repo head: null.
  *
  * @param {object} pr - a gh PR row
  * @returns {{remoteUrl: string, ownerLogin: string}|null}
@@ -104,8 +64,7 @@ export function forkHeadFromGithubPr(pr) {
   const nameWithOwner = typeof pr?.headRepository?.nameWithOwner === 'string' && pr.headRepository.nameWithOwner.trim()
     ? pr.headRepository.nameWithOwner.trim()
     : (ownerLogin && repoName ? `${ownerLogin}/${repoName}` : '');
-  // The PR URL's scheme+host, without constructing a URL object for a value the
-  // forge may have omitted entirely.
+  // Scheme+host of the PR URL, tolerating a value the forge omitted.
   const [, origin] = /^(https?:\/\/[^/]+)\//.exec(typeof pr?.url === 'string' ? pr.url : '') || [];
   if (!ownerLogin || !nameWithOwner || !origin) return null;
   return normalizeForkHead({ remoteUrl: `${origin}/${nameWithOwner}.git`, ownerLogin });

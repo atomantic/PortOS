@@ -4,8 +4,8 @@
  * That single variable is what makes every store facade pick the file backend
  * instead of the developer's live Postgres. Vitest supplies `NODE_ENV=test`
  * only when the variable is UNSET, and PortOS itself runs under PM2 with
- * `NODE_ENV=development` (`ecosystem.config.cjs`) — so a commit fired from a
- * PortOS-spawned shell ran `.githooks/pre-commit` -> `npm test --prefix server`
+ * `NODE_ENV=development` (`ecosystem.config.cjs`) — so a shell spawned by PortOS
+ * running `npm test --prefix server`
  * with `development` inherited, and hundreds of suites aimed at the real
  * database. Measured on the reproduction: 457 failures across 43 files under
  * `NODE_ENV=development`, versus 1 under `NODE_ENV=test`.

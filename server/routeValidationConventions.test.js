@@ -1,6 +1,6 @@
 /**
  * Rule: Every route handler reading `req.body` or `req.query` must validate it with `validateRequest`, `validate`, `parseBody`, or `…Schema.safeParse/parse` (see root `AGENTS.md`).
- * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED` / `UNVALIDATED_QUERY_BASELINE`.
+ * Fix: Add a Zod schema in `lib/validation.js` (or `lib/aiToolkit/validation.js` / `cos-runner/requestSchemas.js`) and pass `req.body` / `req.query` to `validateRequest(schema, …)`; prune resolved entries from `ALLOWED_UNVALIDATED`.
  * What this guard cannot see:
  *   - Lexer-assisted scan (`lib/sourceScan.js`): cannot see field-by-field validation in a helper, handlers delegated to a named function, or `router.route(…).post(…)`.
  *   - `parsePagination(req.query)` only clamps limit/offset and does not count as validation.
@@ -123,137 +123,6 @@ const scanWith = (finder) => trackedRouteSources().flatMap((file) => (
 const scanTree = () => scanWith(findUnvalidatedBodyHandlers);
 const scanQueries = () => scanWith(findUnvalidatedQueryHandlers);
 
-// Handlers that already read `req.query` without a schema call on the query
-// object. Shrink-only: delete a line when it validates or disappears; never add
-// one. Keyed by file + verb + path so an unrelated edit above the handler does
-// not churn the list (#10024).
-const UNVALIDATED_QUERY_BASELINE = [
-  'lib/aiToolkit/routes/runs.js DELETE /',
-  'lib/aiToolkit/routes/runs.js GET /',
-  'routes/agentPersonalities.js GET /',
-  'routes/agentTools.js DELETE /drafts/:draftId',
-  'routes/agentTools.js GET /drafts',
-  'routes/agentTools.js GET /post/:postId',
-  'routes/agentTools.js GET /published',
-  'routes/agentTools.js GET /rate-limits',
-  'routes/agentTools.js GET /submolts',
-  'routes/agentTools.js PUT /drafts/:draftId',
-  'routes/albums.js GET /',
-  'routes/appleHealth.js GET /correlation',
-  'routes/appleHealth.js GET /metrics/:metricName',
-  'routes/appleHealth.js GET /metrics/:metricName/daily',
-  'routes/apps/agents.js GET /:id/agents',
-  'routes/apps/taskTypes.js GET /:id/work-items',
-  'routes/apps/viteTls.js GET /:id/vite-host-check',
-  'routes/artists.js GET /',
-  'routes/authors.js GET /',
-  'routes/automationSchedules.js GET /',
-  'routes/avatar.js GET /model.glb',
-  'routes/brainCrud.js GET /admin',
-  'routes/brainCrud.js GET /ideas',
-  'routes/brainCrud.js GET /projects',
-  'routes/brainDailyLog.js GET /daily-log',
-  'routes/brainDigest.js GET /digests',
-  'routes/brainDigest.js GET /reviews',
-  'routes/brainImport.js GET /chatgpt/archive/:name',
-  'routes/brainOnThisDay.js GET /on-this-day',
-  'routes/browser.js GET /downloads/:name',
-  'routes/calendar.js GET /agenda',
-  'routes/calendar.js GET /events',
-  'routes/calendar.js GET /google/oauth/callback',
-  'routes/calendar.js GET /review/history',
-  'routes/catalog.js DELETE /types/:id',
-  'routes/catalog.js GET /ingredients/:id',
-  'routes/catalog.js GET /scraps',
-  'routes/catalog.js GET /sync',
-  'routes/codeAnimation.js GET /accepted-assets',
-  'routes/codeAnimation.js GET /projects',
-  'routes/codeAnimation.js GET /projects/:id/history',
-  'routes/cosInsightRoutes.js GET /activity-calendar',
-  'routes/cosInsightRoutes.js GET /decisions',
-  'routes/cosInsightRoutes.js GET /recent-tasks',
-  'routes/cosLearningRoutes.js GET /digest/compare',
-  'routes/cosLearningRoutes.js GET /learning/insights',
-  'routes/cosScheduleRoutes.js GET /upcoming',
-  'routes/cosTemplateRoutes.js GET /templates/popular',
-  'routes/cosWorkflowRoutes.js GET /workflow',
-  'routes/creativeCommissions.js GET /',
-  'routes/creativeDirector.js GET /:id',
-  'routes/digital-twin/documents.js GET /documents',
-  'routes/digital-twin/feedback.js GET /feedback/recent',
-  'routes/eidoverseWorldRoutes.js DELETE /foundations/:id',
-  'routes/eidoverseWorldRoutes.js GET /foundations/:id',
-  'routes/eidoverseWorldRoutes.js POST /foundations/:id/adopt',
-  'routes/featureAgents.js GET /:id/runs',
-  'routes/games.js GET /',
-  'routes/harnesses.js GET /',
-  'routes/harnesses.js POST /action',
-  'routes/harnesses.js POST /models/refresh',
-  'routes/imageGen.js GET /regen/availability',
-  'routes/imageGen.js GET /status',
-  'routes/imageGenSetup.js POST /install',
-  'routes/jira.js GET /instances/:instanceId/board-columns/:projectKey',
-  'routes/jira.js GET /instances/:instanceId/projects/:projectKey/epics',
-  'routes/jira.js GET /reports',
-  'routes/localLlm.js GET /catalog',
-  'routes/localLlm.js GET /loaded',
-  'routes/loras.js GET /',
-  'routes/loras.js GET /suggestions',
-  'routes/meatspacePostRoutes.js GET /post/morse/progress',
-  'routes/meatspacePostRoutes.js GET /post/recommendations',
-  'routes/meatspacePostRoutes.js GET /post/review/reps',
-  'routes/meatspacePostRoutes.js GET /post/sessions',
-  'routes/meatspacePostRoutes.js GET /post/stats',
-  'routes/meatspacePostRoutes.js GET /post/training/entries',
-  'routes/meatspacePostRoutes.js GET /post/training/stats',
-  'routes/mediaCollections.js GET /',
-  'routes/memory.js GET /:id/related',
-  'routes/messages.js GET /drafts',
-  'routes/messages.js POST /debug/test-token',
-  'routes/moodBoard.js GET /',
-  'routes/music.js POST /setup/runtime-install',
-  'routes/openclaw.js GET /sessions/:id/messages',
-  'routes/peerSync.js GET /cos-agent-archive',
-  'routes/peerSync.js GET /integrity',
-  'routes/peerSync.js GET /manifest',
-  'routes/peerSync.js GET /record',
-  'routes/peerSync.js GET /subscriptions',
-  'routes/pipeline/covers.js GET /issues/:id/comic.pdf',
-  'routes/pipeline/covers.js GET /series/:id/seasons/:seasonId/volume.pdf',
-  'routes/pipeline/issues.js GET /issues/recent',
-  'routes/pipeline/manuscript.js GET /series/:id/manuscript',
-  'routes/pipeline/series.js GET /series',
-  'routes/platformAccounts.js GET /',
-  'routes/prompts.js DELETE /:stage',
-  'routes/providers.js GET /codex/account',
-  'routes/providers.js GET /codex/models',
-  'routes/providers.js GET /fleet-host',
-  'routes/providers.js GET /readiness',
-  'routes/providers.js POST /readiness/serve-model',
-  'routes/providers.js POST /readiness/setup',
-  'routes/providers.js POST /runtimes/install',
-  'routes/quotaBurn.js GET /',
-  'routes/review.js GET /items',
-  'routes/sharing.js GET /subscriptions',
-  'routes/spotify.js GET /oauth/callback',
-  'routes/sprites.js GET /',
-  'routes/storyBuilder.js GET /',
-  'routes/tracks.js GET /',
-  'routes/tribe.js GET /care',
-  'routes/tribe.js GET /outreach',
-  'routes/tribe.js GET /people/:id/touchpoints',
-  'routes/universeBuilder/canon.js GET /:id/characters/integrity',
-  'routes/universeBuilder/crud.js GET /',
-  'routes/uploads.js DELETE /',
-  'routes/usage.js GET /claude-code',
-  'routes/videoDownload.js GET /downloads',
-  'routes/videoGen.js POST /setup/runtime-install',
-  'routes/videoTimeline.js GET /projects',
-  'routes/voice.js GET /voices',
-  'routes/voicePublic.js GET /voices',
-  'routes/writersRoom.js GET /exercises',
-];
-
 describe('route handlers validate req.body (#9950, #10024)', () => {
   it('scans the route tree', () => {
     // A broken `git ls-files` would otherwise let the assertions below pass by scanning nothing.
@@ -357,27 +226,15 @@ describe('the unvalidated-body recognizer', () => {
 });
 
 describe('route handlers validate req.query (#10024)', () => {
-  it('has no unvalidated req.query read outside the burn-down baseline', () => {
-    const baseline = new Set(UNVALIDATED_QUERY_BASELINE);
-    const offenders = scanQueries().filter((key) => !baseline.has(key));
+  it('has no unvalidated req.query read', () => {
+    const offenders = scanQueries();
     expect(
       offenders,
       'These handlers read `req.query` with no schema on the query object. Add a Zod schema '
-      + 'and call `validateRequest(schema, req.query)` (toolkit routes: `lib/aiToolkit/validation.js`). '
-      + 'Do NOT add a line to UNVALIDATED_QUERY_BASELINE — that list only shrinks.\n'
+      + 'and call `validateRequest(schema, req.query)` (shared shapes: `lib/queryValidation.js`; toolkit routes: `lib/aiToolkit/validation.js`). '
+      + 'There is no allowlist for query reads.\n'
       + `Offenders:\n  ${offenders.join('\n  ')}`,
     ).toEqual([]);
-  });
-
-  it('only baselines handlers that still exist and are still unvalidated', () => {
-    const live = new Set(scanQueries());
-    const stale = UNVALIDATED_QUERY_BASELINE.filter((key) => !live.has(key));
-    expect(
-      stale,
-      `These baseline entries are compliant or gone — delete them from UNVALIDATED_QUERY_BASELINE:\n  ${stale.join('\n  ')}`,
-    ).toEqual([]);
-    expect(new Set(UNVALIDATED_QUERY_BASELINE).size).toBe(UNVALIDATED_QUERY_BASELINE.length);
-    expect([...UNVALIDATED_QUERY_BASELINE].sort()).toEqual(UNVALIDATED_QUERY_BASELINE);
   });
 });
 

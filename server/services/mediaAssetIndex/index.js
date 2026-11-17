@@ -3,10 +3,16 @@
  *
  * The index is a DERIVED Postgres mirror of on-disk media (see db.js). This
  * module owns its lifecycle:
- *   - initMediaAssetIndex() — called once at boot (after the DB gate). Subscribes
- *     to the existing image/video `completed` events so a freshly generated
- *     asset is indexed immediately, then runs a full reconcile so the index
- *     matches disk regardless of any events missed while the server was down.
+ *   - initMediaAssetIndex() — awaited once at boot (after the DB gate). Ensures
+ *     the schema and subscribes to the existing image/video `completed` events
+ *     so a freshly generated asset is indexed immediately. It does NOT sweep the
+ *     library: that is the slowest part of boot and grows with it (#16556).
+ *   - reconcileMediaAssetIndexAtBoot() — fire-and-forget after `listen()`. Runs
+ *     the full reconcile (so the index matches disk regardless of events missed
+ *     while the server was down) and the restored-media tombstone check. Until it
+ *     finishes the gallery serves the previous boot's rows, then open list views
+ *     get a refetch notice; every write goes through queueMediaIndexRefresh, so a
+ *     live hook cannot interleave with it.
  *   - unindexImage() / unindexVideo() — the delete-side mirror of those hooks,
  *     called by the media delete paths so a row dies with its file (#2738).
  *   - The reconcile + row I/O live in db.js; the pure transforms in logic.js.
@@ -30,6 +36,10 @@ import { imageMediaKey, imageToRow, videoMediaKey, videoToRow } from './logic.js
 export { reconcileMediaAssets } from './db.js';
 
 let subscribed = false;
+// Armed by a successful init and consumed by the post-listen sweep, so the sweep
+// runs once per boot and never on a boot whose init bailed (escape hatch, DB
+// unreachable, an earlier migration step threw).
+let bootReconcilePending = false;
 
 // Index a single just-generated image. The 'completed' event carries the
 // filename; the full metadata is in the sidecar the generator just wrote.
@@ -103,9 +113,10 @@ export async function unindexVideo(id, options = {}) {
 }
 
 /**
- * Boot init: subscribe the completed-hooks (once) + run a full reconcile.
- * No-op under the escape hatch or when Postgres is unreachable (the boot DB
- * gate already fail-fasts a required-but-missing DB; this just stays quiet).
+ * Boot init: ensure the schema + subscribe the completed-hooks (once), then arm
+ * the post-listen sweep. No-op under the escape hatch or when Postgres is
+ * unreachable (the boot DB gate already fail-fasts a required-but-missing DB;
+ * this just stays quiet).
  */
 export async function initMediaAssetIndex() {
   if (isFileBackend()) {
@@ -126,8 +137,35 @@ export async function initMediaAssetIndex() {
     videoGenEvents.on('completed', (p) => { onVideoCompleted(p).catch((err) => console.error(`❌ Media index video hook: ${err.message}`)); });
     subscribed = true;
   }
+  bootReconcilePending = true;
+  return { ok: true };
+}
 
-  const result = await reconcileMediaAssets();
+/**
+ * The boot sweep, run fire-and-forget after `listen()`. Never rejects: each half
+ * logs its own failure, and a failed reconcile still lets the tombstone check run
+ * (it reads disk, not the index). Resolves to the reconcile result, or a
+ * `{ ok: false, reason }` when init never armed it or it already ran this boot.
+ */
+export async function reconcileMediaAssetIndexAtBoot() {
+  if (!bootReconcilePending) return { ok: false, reason: 'not-armed' };
+  bootReconcilePending = false;
+  const result = await reconcileMediaAssets().catch((err) => {
+    console.error(`❌ Media asset index boot reconcile failed: ${err.message}`);
+    return { ok: false, reason: 'reconcile-failed' };
+  });
+  // A gallery opened before the sweep finished read the previous boot's rows and
+  // does not poll, so tell open list views to refetch. Queued, not emitted
+  // directly: a render that completed mid-sweep has its row write waiting behind
+  // the sweep, and its own completion event already reached the client, so a
+  // notice ahead of that write would be the last refresh and miss it.
+  if (result.ok) {
+    await queueMediaIndexRefresh(async () => {
+      const { emitMediaListChanged } = await import('../peerSyncEventBus.js');
+      emitMediaListChanged('image');
+      emitMediaListChanged('video');
+    }).catch((err) => console.error(`❌ Media index boot refresh notice failed: ${err.message}`));
+  }
   // Put Back from the OS Trash restores files with no PortOS event; this boot
   // pass is where a locally owned item that came back sheds its delete record.
   await import('../mediaRestoreTombstones.js')

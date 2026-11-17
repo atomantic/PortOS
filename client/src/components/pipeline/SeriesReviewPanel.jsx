@@ -249,7 +249,7 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
   }, [seriesId, feedback, review]);
 
   const cancelReview = useCallback(async () => {
-    await cancelPipelineSeriesReview(seriesId, { silent: true }).catch(() => null);
+    await cancelPipelineSeriesReview(seriesId).catch(() => null);
   }, [seriesId]);
 
   const startFix = useCallback(async () => {

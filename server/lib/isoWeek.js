@@ -3,26 +3,15 @@
  *
  * ISO-8601 week identity — the single source of the `YYYY-Www` week id. `getWeekId(date)` keys on the
  * ISO week-numbering **year** (the calendar year of that week's Thursday), not `date.getFullYear()`,
- * so one ISO week is never split across two ids and two weeks never collide on one (#3465). Also
+ * so one ISO week is never split across two ids and two weeks never collide on one. Also
  * `isoWeekParts`, `getIsoWeekNumber`, `getIsoWeekYear`, `parseWeekId` (null on garbage),
  * `weekStartFromWeekId` (local-midnight Monday of that id; null on garbage), and
  * `isoWeeksInYear(year)` (52, or 53 in a leap-week year). Shared by weekly digest filenames.
  *
- * The one place PortOS turns a date into a `YYYY-Www` week id. The weekly
- * digest (`services/weeklyDigest.js`) and the since-retired CoS productivity
- * aggregate each used to carry their own copy, and both paired the ISO week
- * NUMBER with the CALENDAR year (#3465). Those two disagree at either end of
- * the year, which split one ISO week across two ids (breaking week aggregates
- * and week-over-week lookups) and collided two different weeks onto a single
- * id (a late-December digest overwriting the early-January one).
- *
- * The year here is the ISO week-numbering year — the calendar year of that
- * week's Thursday — so every day of an ISO week shares one id and no id is
- * ever reused. `2025-12-29` (Mon) and `2026-01-01` (Thu) are both `2026-W01`.
- *
- * Dates are read through their LOCAL calendar components (a task completed at
- * 23:00 local belongs to that local day, not the UTC one); the arithmetic then
- * runs in UTC so DST transitions can't shift a day boundary.
+ * `2025-12-29` (Mon) and `2026-01-01` (Thu) are both `2026-W01`. Dates are read
+ * through their LOCAL calendar components (a task completed at 23:00 local
+ * belongs to that local day); the arithmetic then runs in UTC so DST
+ * transitions can't shift a day boundary.
  */
 
 const MS_PER_DAY = 86400000;
@@ -39,8 +28,7 @@ function isoWeekThursday(date) {
 }
 
 /**
- * Split a date into its ISO week-numbering year and week number.
- *
+ * Split a date into its ISO week-numbering `{ year, week }`.
  * @param {Date} [date]
  * @returns {{ year: number, week: number }}
  */
@@ -62,9 +50,7 @@ export function getIsoWeekYear(date = new Date()) {
 }
 
 /**
- * Week identifier in `YYYY-Www` form (zero-padded week), keyed on the ISO
- * week-numbering year. Stable and collision-free across a New Year boundary.
- *
+ * Week id in `YYYY-Www` form (zero-padded), keyed on the ISO week-numbering year.
  * @param {Date} [date]
  * @returns {string}
  */
@@ -74,9 +60,7 @@ export function getWeekId(date = new Date()) {
 }
 
 /**
- * Parse a `YYYY-Www` week id. Returns null for anything else, so callers can
- * distinguish "unparseable" from a real week rather than reading NaN.
- *
+ * Parse a `YYYY-Www` week id into `{ year, week }`; null for anything else (never NaN).
  * @param {string} weekId
  * @returns {{ year: number, week: number } | null}
  */
@@ -92,12 +76,9 @@ export function parseWeekId(weekId) {
 
 /**
  * Local-midnight Monday of the ISO week identified by `weekId`.
- * Inverse of `getWeekId` for a well-formed id; null for the same garbage
- * `parseWeekId` rejects, so a caller can tell "unparseable" from a real Monday.
- *
- * Arithmetic runs in UTC on the local Y-M-D (same as `isoWeekThursday`) so a
- * DST spring-forward cannot skip the Monday; the returned Date is then rebuilt
- * from those UTC Y-M-D parts as a local midnight.
+ * Inverse of `getWeekId`; null for the garbage `parseWeekId` rejects.
+ * Arithmetic runs in UTC so a DST spring-forward cannot skip the Monday; the
+ * result is rebuilt from the UTC Y-M-D parts as a local midnight.
  *
  * @param {string} weekId
  * @returns {Date | null}
@@ -116,9 +97,8 @@ export function weekStartFromWeekId(weekId) {
 
 /**
  * How many ISO weeks a week-numbering year holds — 52, or 53 in a "leap week"
- * year (2015, 2020, 2026, …). December 28th is always in the last ISO week of
- * its own numbering year, so this derives the answer from the same math as
- * every other export rather than re-deriving the leap rule.
+ * year. December 28th is always in the last ISO week of its own year, which
+ * reuses the same math as every other export.
  *
  * @param {number} year
  * @returns {number} 52 or 53

@@ -1102,9 +1102,9 @@ export function resumePointerMetadata(pointer, agentId, task) {
   }
   if (!shouldStripTaskTargetBranch(task?.metadata)) return {};
   // `undefined`, not `null`: `updateTask` DELETES undefined keys from the merged
-  // metadata, while a null survives the merge and TASKS.md serializes it as the
-  // literal string `"null"` — which reads back as a truthy `existingBranch` and
-  // sends the next attempt looking for a branch named "null". The keys are still
+  // metadata, while a null is stored as a present value (and older installs read
+  // it back as the string `"null"`, a truthy `existingBranch` that sends the next
+  // attempt looking for a branch named "null"). The keys are still
   // present on the returned patch, so callers can tell a clear from a no-op.
   return {
     existingBranch: undefined,
@@ -1394,7 +1394,7 @@ function inheritProviderPins(sourceMeta) {
     if (sourceMeta.model) pins.model = sourceMeta.model;
   }
   if (sourceMeta.effort) pins.effort = sourceMeta.effort;
-  if (sourceMeta.executionOptions !== undefined) pins.executionOptions = sourceMeta.executionOptions;
+  if (sourceMeta.executionOptions != null) pins.executionOptions = sourceMeta.executionOptions;
   return pins;
 }
 
@@ -1540,9 +1540,8 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // Routing key, and the one field here that turns a serialization slip into a
   // dead PR: a follow-up whose `app` doesn't resolve is BLOCKED by
   // prepareAgentWorkspace before it starts, so the PR it exists to land sits
-  // open forever. Left undefined (not `null`) for a PortOS-local task —
-  // generateTasksMarkdown drops nullish metadata, so the key never reaches the
-  // task file to be re-read as an app literally named "null".
+  // open forever. Left undefined (not `null`) for a PortOS-local task, so the
+  // stored form drops the key instead of keeping an explicit null app.
   const appId = originalTask?.metadata?.app;
   const sourceTaskDesc = originalTask?.description || 'CoS automated task';
   const firstLine = sourceTaskDesc.split(/[\r\n]/).find(l => l.trim()) || sourceTaskDesc;

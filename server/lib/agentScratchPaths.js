@@ -1,32 +1,12 @@
 /**
- * Runtime scratch PortOS itself writes into an agent worktree.
+ * Runtime scratch PortOS itself writes into an agent worktree (pipeline state, never work product).
  *
- * These files are pipeline state, never work product: the public-review harness
- * materializes a screened input bundle into the worktree it hands a reviewer
- * model, and nothing ever commits it. `git status` cannot tell that apart from a
- * half-finished feature, so a worktree holding ONLY scratch reads as "dirty with
- * uncommitted work" at every stage of the teardown chain — `removeWorktree`
- * preserved it, `reapMergedWorktrees` held it, repo-state verification filed a
- * recovery agent run against it, and branch-reconcile dispatched it to a
- * coordinator that came back "no real work product, a human should discard it".
- * Two `pr-reviewer` worktrees survived that chain indefinitely.
- *
- * Naming them here makes the classification deterministic, and
- * `classifyWorktreeDirt` (worktreeManager.js) subtracts them for every caller —
- * so the whole chain sees a clean tree rather than each consumer learning the
- * names. Kept in `lib/` (not beside the writer in `services/modelAbuseGuard.js`)
- * so the classifier can ask without importing that module's provider graph.
- *
- * Pregate also writes its local validation receipt at one reserved file path.
- * Every pushed claim therefore carries this runtime state; treating it as
- * unique ignored work would block retirement after a successful delivery.
- * Match only that file, never the containing cache directory or descendants.
- * Its producer is scripts/lib/pregateReport.js (PREGATE_REPORT_PATH).
- *
- * Only the STATIC names live here. The completion sentinel is the same concept
- * but its name embeds a run id (`agentSentinel.js`'s `doneSentinelName(agentId)`),
- * and ignoring another run's sentinel would be wrong — so `removeWorktree` passes
- * that one through `classifyWorktreeDirt`'s per-call `ignoredPaths` instead.
+ * `git status` cannot tell scratch from a half-finished feature, so a worktree holding ONLY scratch would read as dirty at
+ * every teardown stage; `classifyWorktreeDirt` (worktreeManager.js) subtracts these names for every caller. Kept in `lib/`
+ * so the classifier avoids importing the writer's provider graph. The pregate validation receipt
+ * (scripts/lib/pregateReport.js, PREGATE_REPORT_PATH) is matched as that one exact file, never its cache directory.
+ * Only STATIC names live here: the completion sentinel embeds a run id (`doneSentinelName(agentId)`), so `removeWorktree`
+ * passes it via `classifyWorktreeDirt`'s per-call `ignoredPaths`.
  */
 
 /** The screened input bundle handed to a public-review model. */
@@ -34,32 +14,22 @@ export const PUBLIC_REVIEW_INPUT_FILENAME = 'PORTOS_PUBLIC_REVIEW_INPUT.json';
 /** Directory of read-only PR patches materialized alongside it. */
 export const PUBLIC_REVIEW_PATCH_DIRNAME = '.portos-public-review';
 
-/**
- * Worktree-relative paths (files or directory roots) that are PortOS runtime
- * scratch. A directory entry also covers everything under it.
- */
+/** Worktree-relative scratch paths (files or directory roots); a directory covers everything under it. */
 export const AGENT_SCRATCH_PATHS = [PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME];
 
 /**
- * Does this worktree-relative path sit at, or under, one of `roots`? Pure.
- *
- * The prefix half is why `classifyWorktreeDirt`'s `ignoredPaths` needed this
- * rather than a `Set.has`: git collapses an untracked directory to its root
- * (`.portos-public-review/`) but expands it to individual files under `-uall`,
- * and both spellings have to name the same thing.
+ * Does this worktree-relative path sit at, or under, one of `roots`? Pure. The prefix half matters because git collapses
+ * an untracked directory to its root (`.portos-public-review/`) but expands it to files under `-uall`.
  *
  * @param {string} path - worktree-relative path from `git status --porcelain`
  * @param {string[]} roots - file or directory-root paths
- * @returns {boolean}
  */
 export function matchesScratchRoot(path, roots = []) {
   if (typeof path !== 'string' || !roots.length) return false;
   const strip = (value) => String(value ?? '').trim().replace(/\/+$/, '');
   const normalized = strip(path);
   if (!normalized) return false;
-  // Both sides are stripped: `ignoredPaths: ['build/']` is the conventional way to
-  // spell a directory, and matching it only in its slashless form would silently
-  // ignore the option rather than fail loudly.
+  // Both sides stripped: `ignoredPaths: ['build/']` is the conventional directory spelling and must not be silently ignored.
   return roots.some((root) => {
     const base = strip(root);
     return Boolean(base) && (normalized === base || normalized.startsWith(`${base}/`));
@@ -67,10 +37,9 @@ export function matchesScratchRoot(path, roots = []) {
 }
 
 /**
- * Is this worktree-relative path PortOS's own runtime scratch rather than work
- * product? The pregate receipt is an exact file; review scratch uses roots.
+ * Is this worktree-relative path PortOS's own runtime scratch rather than work product?
+ *
  * @param {string} path
- * @returns {boolean}
  */
 export const isAgentScratchPath = (path) => path === '.cache/pregate/report.json'
   || matchesScratchRoot(path, AGENT_SCRATCH_PATHS);

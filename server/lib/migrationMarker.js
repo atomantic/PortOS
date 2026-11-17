@@ -1,16 +1,6 @@
 /**
- * Shared marker-file helpers for one-time migration / repair / reconcile scripts.
- *
- * ~11 boot-time scripts under server/scripts/ gate their idempotent walk on a
- * small JSON "applied" / "migrated" marker under data/. They used to hand-roll
- * three near-identical helpers each — `markerExists` / `readMarker` /
- * `writeMarker` — built on `readFile(...).catch(() => null)` and a non-atomic
- * `writeFile(JSON.stringify(...))`. This module collapses those into the shared
- * `tryReadFile` / `atomicWrite` primitives from fileUtils, so a crash mid-write
- * can't leave a truncated marker that a later boot misreads as "not applied".
- *
- * All three operate on a marker filename relative to PATHS.data. Pass just the
- * filename (e.g. 'universes.migrated.json'); the helper anchors it under data/.
+ * Shared marker-file helpers for one-time migration / repair / reconcile scripts (filenames relative to
+ * PATHS.data). Atomic writes keep a crash from leaving a truncated marker misread as "not applied".
  */
 
 import { join } from 'path';
@@ -21,8 +11,7 @@ function markerPath(filename) {
 }
 
 /**
- * True when the marker file is present (any readable content), else false.
- * Mirrors the old `raw != null` boolean gate used by the migrate*ToDB scripts.
+ * True when the marker file is present (any readable content).
  * @param {string} filename - Marker filename relative to data/.
  * @returns {Promise<boolean>}
  */
@@ -33,8 +22,7 @@ export async function markerExists(filename) {
 
 /**
  * Parsed marker payload, or null when the file is missing / empty / not valid
- * JSON. Mirrors the old `readMarker` (read → JSON.parse with a null fallback)
- * used by the backfill / repair / reconcile scripts.
+ * JSON.
  * @param {string} filename - Marker filename relative to data/.
  * @returns {Promise<any|null>}
  */
@@ -45,8 +33,7 @@ export async function readMarker(filename) {
 }
 
 /**
- * Atomically write the marker payload as pretty-printed JSON. Uses fileUtils'
- * `atomicWrite` (temp file + rename) so a crash can't leave a partial marker.
+ * Atomically write the marker payload as pretty-printed JSON.
  * @param {string} filename - Marker filename relative to data/.
  * @param {object} payload - JSON-serializable marker contents.
  * @returns {Promise<void>}

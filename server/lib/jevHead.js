@@ -10,32 +10,24 @@
  * abstention floor downstream is unchanged. Also `JEV_HEAD_SLUG` and the train/adopt route schemas.
  * Pure; the store is `services/jevHeads.js`.
  *
- * Phase 1 of scope adherence (#7643) scores a change against the repository's
- * own `PRD.md` / `GOALS.md` clauses with the checkpoint's stock zero-shot NLI
- * classifier. This module describes the optional alternative: a small head fit
- * on THIS install's history, sitting on the same frozen encoder.
+ * This is the optional alternative to scope adherence's stock zero-shot NLI
+ * classifier: a small head fit on THIS install's history over the same frozen
+ * encoder. Three properties are load-bearing:
  *
- * Three properties are load-bearing and none of them is negotiable:
+ *  1. **The head emits the checkpoint's OWN three labels** (`JEV_LABELS`, in
+ *     that order), so everything downstream — `normalizeJevScores`,
+ *     `decideFromScores`, every abstention floor in `jevDecisions.js` — is
+ *     byte-identical whether a head is adopted or not.
+ *  2. **A head names the encoder revision it was fit on.** A different
+ *     checkpoint is a different vector space; the loader refuses a mismatch
+ *     rather than degrading.
+ *  3. **A head cannot be adopted unless it beats BOTH baselines** (stock
+ *     zero-shot AND majority class) on the held-out gold set; beating only one
+ *     means it learned the label prior or a skewed corpus.
  *
- *  1. **The head emits the checkpoint's OWN three labels.** `JEV_LABELS`, in
- *     that order. Everything downstream — `normalizeJevScores`,
- *     `decideFromScores`, every per-option abstention floor in
- *     `jevDecisions.js` — is byte-identical whether a head is adopted or not.
- *     A head changes which numbers come out of the encoder, never what the
- *     numbers mean or what may be decided from them.
- *  2. **A head names the encoder revision it was fit on.** Embeddings from a
- *     different checkpoint are a different vector space; a head applied across
- *     one would produce confident nonsense with nothing to signal it. The
- *     loader refuses a mismatch rather than degrading.
- *  3. **A head cannot be adopted unless it beats BOTH baselines** on the
- *     held-out gold set — the stock zero-shot classifier AND the majority
- *     class. Beating only the majority class means it learned the label prior;
- *     beating only zero-shot on a corpus whose prior it memorized means the
- *     same thing from the other side.
- *
- * A head is also a DERIVED RECORD OF PRIVATE DATA: it encodes the operator's
- * merged pull requests, closed issues and their own judgement calls. Weights
- * live under `data/jev/` and are machine-local — see the ADR
+ * A head is also a DERIVED RECORD OF PRIVATE DATA (merged PRs, closed issues,
+ * the operator's judgement calls). Weights live under `data/jev/` and are
+ * machine-local — see the ADR
  * [privacy records machine-local](../../docs/decisions/2026-08-08-privacy-records-machine-local.md).
  *
  * Pure: no I/O, no process state. `services/jevHeads.js` owns the files.
@@ -48,25 +40,16 @@ import { JEV_DECISION_IDS } from './jevDecisions.js';
 export const JEV_HEAD_SCHEMA_VERSION = 1;
 
 /**
- * Architectures a head may declare.
- *
- * `linear` is the default and the honest one: a 3-way logistic regression over
- * a frozen 4B encoder's pooled state. `mlp1` buys one hidden layer for a
- * corpus large enough to support it. Nothing deeper ships — the issue's own
- * out-of-scope list rules out touching the encoder, and a deep head on a few
- * hundred weak labels is a memorizer with a validation score.
+ * Architectures a head may declare: `linear` (3-way logistic regression over the
+ * frozen encoder's pooled state, the default) or `mlp1` (one hidden layer, for a
+ * larger corpus). Nothing deeper: on a few hundred weak labels it just memorizes.
  */
 export const JEV_HEAD_ARCHITECTURES = Object.freeze(['linear', 'mlp1']);
 
 /**
- * Hard ceiling on a head's parameter count.
- *
- * Weights ship as JSON so the compatibility check, the backup retention
- * decision and code review are all inspectable without a numpy import. That
- * only stays true while the artifact is small: 2M parameters is ~40 MB of
- * JSON, which is already past "inspectable" and far past anything a few
- * hundred weakly-labelled examples can fit. A trainer that wants more is
- * asking the wrong question.
+ * Hard ceiling on a head's parameter count. Weights ship as JSON so they stay
+ * inspectable without numpy, which holds only while small: 2M parameters is
+ * ~40 MB of JSON, far past what a few hundred weak labels can fit.
  */
 export const JEV_HEAD_MAX_PARAMS = 2_000_000;
 
@@ -74,35 +57,25 @@ export const JEV_HEAD_MAX_PARAMS = 2_000_000;
 export const JEV_HEAD_MAX_HIDDEN = 256;
 
 /**
- * The pooling both sides must agree on.
- *
- * openjev's 4B NLI checkpoint is a causal decoder, so the LAST non-padding
- * token is the only position that has attended to the whole pair. Declared in
- * the artifact rather than assumed, so a future pooling change makes an old
- * head unloadable instead of silently re-pooled — `scripts/jev_head_kit.py`
- * mirrors this string and refuses one it does not implement.
+ * The pooling both sides must agree on. The checkpoint is a causal decoder, so
+ * the LAST non-padding token is the only position that has attended to the
+ * whole pair. Declared in the artifact so a future change makes an old head
+ * unloadable instead of silently re-pooled; `scripts/jev_head_kit.py` mirrors
+ * this string and refuses one it does not implement.
  */
 export const JEV_HEAD_POOLING = 'last-token';
 
 /**
- * The charset a head's on-disk slug may use.
- *
- * A head is addressed by SLUG — its decision id — and the sidecar resolves that
- * slug inside a directory the Node service owns. A slug is not a path, and this
- * is what keeps it from becoming one. `jevHead.test.js` asserts every shipped
- * decision id satisfies it, so a future decision named with a colon or a slash
- * fails at test time rather than at the first adoption.
+ * The charset a head's on-disk slug may use. The sidecar resolves the slug
+ * (the decision id) inside a directory the Node service owns; this keeps it
+ * from becoming a path. `jevHead.test.js` asserts every decision id satisfies it.
  */
 const JEV_HEAD_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
  * The slug a decision's head is addressed by, or null if the id cannot be one.
- *
- * The mapping is identity TODAY, and this function is where that is decided —
- * not re-derived at the four sites that need it (the store's filenames, the
- * router's `head` argument, the sidecar's resolve, the panel's row key). A
- * decision id that is not slug-safe fails here rather than by producing a
- * filename nobody meant to write.
+ * The mapping is identity today, decided only here so a non-slug-safe id fails
+ * here rather than producing a filename nobody meant to write.
  */
 export const jevHeadSlug = (decisionId) => (
   typeof decisionId === 'string' && JEV_HEAD_SLUG.test(decisionId) ? decisionId : null
@@ -123,11 +96,7 @@ const layerSchema = z.object({
   bias: vector(),
 }).strict();
 
-/**
- * The three numbers an operator is shown before adopting anything, and the
- * three the adoption gate reads. All are accuracy on the SAME held-out gold
- * split, so they are directly comparable.
- */
+/** The accuracies shown before adoption and read by the gate, all on the SAME gold split. */
 export const jevHeadMetricsSchema = z.object({
   trained: z.number().min(0).max(1),
   stockZeroShot: z.number().min(0).max(1),
@@ -141,21 +110,18 @@ export const jevHeadSchema = z.object({
   decisionId: z.enum(JEV_DECISION_IDS),
   architecture: z.enum(JEV_HEAD_ARCHITECTURES),
   pooling: z.literal(JEV_HEAD_POOLING),
-  // The frozen encoder this head's input space belongs to. `revision` is the
-  // gate; the other two are for the operator reading the panel.
+  // The frozen encoder this head's input space belongs to; `revision` is the gate.
   baseModel: z.object({
     id: z.string().min(1),
     repository: z.string().min(1),
     revision: z.string().min(1),
   }).strict(),
-  // Declared, then checked against the first layer: a head whose stated input
-  // width disagrees with its own weights would fail deep inside a forward pass.
+  // Checked against the first layer so a mismatch fails at parse, not in a forward pass.
   hiddenSize: z.number().int().min(1),
   labels: z.array(z.enum(JEV_LABELS)).length(JEV_LABELS.length),
   layers: z.array(layerSchema).min(1).max(2),
   metrics: jevHeadMetricsSchema,
-  // Which corpus produced it, so a head can be traced back to a build without
-  // the corpus itself having to survive.
+  // Traces a head to its corpus build without the corpus surviving.
   corpusHash: z.string().min(8),
   corpusSources: z.array(z.string().min(1)).min(1),
   trainedAt: z.string().min(1),
@@ -171,18 +137,11 @@ export function countHeadParams(head) {
   }, 0);
 }
 
-/**
- * Validate a head artifact's SHAPE — schema, dimensions, size bound.
- *
- * Separate from `isHeadCompatible` on purpose: a structurally broken head is a
- * trainer bug an operator cannot fix, while an incompatible one is a correct
- * artifact for a different encoder. They point at opposite remedies, so they
- * report different codes.
- */
-// Every structural rejection in `parseJevHead` reports the same thing: a
-// trainer bug the operator cannot fix. One frozen value rather than nine
-// identical literals, so the branch CONDITIONS — which are the content — are
-// not buried in boilerplate.
+// Validate a head artifact's SHAPE (schema, dimensions, size bound) in
+// `parseJevHead`. Separate from `isHeadCompatible`: a structurally broken head is
+// a trainer bug the operator cannot fix, an incompatible one a correct artifact
+// for a different encoder, so they report different codes. Every structural
+// rejection shares this one frozen value.
 const INVALID = Object.freeze({ ok: false, code: 'jev-head-invalid' });
 
 export function parseJevHead(raw) {
@@ -193,8 +152,7 @@ export function parseJevHead(raw) {
 
   const first = head.layers[0];
   if (first.weight.some((row) => row.length !== head.hiddenSize)) return INVALID;
-  // Every layer's bias must be one entry per output row, and each layer's
-  // output width must be the next layer's input width.
+  // One bias per output row; each layer's output width is the next one's input width.
   for (const [position, layer] of head.layers.entries()) {
     if (layer.bias.length !== layer.weight.length) return INVALID;
     const next = head.layers[position + 1];
@@ -212,12 +170,9 @@ export function parseJevHead(raw) {
 }
 
 /**
- * Whether a head may be applied on this machine's installed encoder.
- *
- * Revision equality, not "close enough". The head's inputs are hidden states
- * from one specific checkpoint; a different revision is a different vector
- * space, and applying a head across one yields confident numbers with nothing
- * anywhere to signal that they are meaningless.
+ * Whether a head may be applied on this machine's installed encoder. Revision
+ * equality, not "close enough": a different revision is a different vector
+ * space and would yield confident, meaningless numbers.
  */
 export function isHeadCompatible(head, { repository, revision } = {}) {
   if (!head?.baseModel) return false;
@@ -227,16 +182,12 @@ export function isHeadCompatible(head, { repository, revision } = {}) {
 /**
  * THE ADOPTION GATE.
  *
- * A trained head is worth running only if it beats the stock zero-shot
- * classifier AND the majority-class baseline on the held-out gold set. Both,
- * strictly.
- *
- * Beating only the majority class means it learned the label prior and nothing
- * about the product. Beating only zero-shot, while losing to a constant
- * prediction, means the gold split is so skewed that accuracy is not measuring
- * anything — a head that "wins" there would be adopted on the strength of the
- * corpus's imbalance. Ties lose: the stock classifier needs no corpus, no
- * training run, and no privacy argument, so it wins every draw.
+ * A trained head must strictly beat BOTH the stock zero-shot classifier and the
+ * majority-class baseline on the held-out gold set. Beating only the majority
+ * class means it learned the label prior; beating only zero-shot while losing
+ * to a constant means the split is too skewed for accuracy to measure
+ * anything. Ties lose: the stock classifier needs no corpus, training run or
+ * privacy argument.
  */
 export function headBeatsBaselines(metrics) {
   const parsed = jevHeadMetricsSchema.safeParse(metrics);
@@ -246,11 +197,8 @@ export function headBeatsBaselines(metrics) {
 }
 
 /**
- * The one-line verdict the panel renders beside the numbers.
- *
- * Returns the reason a head is NOT adoptable, or `null` when it is. Naming the
- * losing baseline matters: "did not beat the stock scorer" and "did not beat
- * always guessing the most common label" send an operator to different places.
+ * The reason a head is NOT adoptable, or `null` when it is. Names the losing
+ * baseline because each sends an operator somewhere different.
  */
 export function headAdoptionBlocker(metrics) {
   const parsed = jevHeadMetricsSchema.safeParse(metrics);
@@ -262,17 +210,13 @@ export function headAdoptionBlocker(metrics) {
 }
 
 /**
- * Route input for starting a training run.
+ * Route input for starting a training run. Validated from HERE, not through
+ * `lib/validation.js`, whose barrel would drag this module into every suite's
+ * static import closure (`server/lib/importScoping.test.js`).
  *
- * Validated from HERE rather than through `lib/validation.js`, for the same
- * reason `jevScoreRequestSchema` is: re-exporting a one-route schema through
- * that barrel drags this module into the static import closure of every suite
- * that reaches it (`server/lib/importScoping.test.js`).
- *
- * `.strict()`, and deliberately carrying NO repository path: a head is trained
- * on THIS install's own checkout, and a client-supplied path would turn a
- * training button into an arbitrary-directory reader with a `gh` token beside
- * it. Same reasoning as `scopeAdherenceRequestSchema`.
+ * `.strict()` and deliberately NO repository path: a client-supplied path would
+ * turn a training button into an arbitrary-directory reader with a `gh` token
+ * beside it. Same as `scopeAdherenceRequestSchema`.
  */
 export const jevHeadTrainRequestSchema = z.object({
   architecture: z.enum(JEV_HEAD_ARCHITECTURES).optional(),
@@ -281,8 +225,7 @@ export const jevHeadTrainRequestSchema = z.object({
 /** Route input for adopting or discarding an artifact. */
 export const jevHeadActionRequestSchema = z.object({
   decisionId: z.enum(JEV_DECISION_IDS),
-  // Which artifact to discard. Ignored by adoption, which only ever promotes a
-  // candidate.
+  // Which artifact to discard; ignored by adoption, which only promotes a candidate.
   adopted: z.boolean().optional(),
 }).strict();
 

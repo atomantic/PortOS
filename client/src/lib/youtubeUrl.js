@@ -9,28 +9,12 @@
  */
 
 /**
- * The YouTube ingest options Quick Capture offers, over the canonical
- * single-video URL rule in `server/lib/youtubeUrl.js`.
- *
- * `isYoutubeVideoUrl` is re-exported from that leaf rather
- * than copied. Quick Capture swaps its whole submit path (brain capture →
- * YouTube ingest) on the predicate and reveals the options panel from it, so a
- * looser client answer would offer options for a URL the server refuses. The
- * throwing form the routes use lives in `server/lib/youtubeUrlAssert.js`, which
- * this deliberately does not reach for.
+ * The YouTube ingest options Quick Capture offers, over the canonical single-video URL rule in `server/lib/youtubeUrl.js`. `isYoutubeVideoUrl` is re-exported rather than copied: Quick Capture swaps its whole submit path (brain capture → YouTube ingest) on that predicate, so a looser client answer would offer options for a URL the server refuses. The throwing form the routes use (`server/lib/youtubeUrlAssert.js`) is deliberately not reached for.
  */
 export { isYoutubeVideoUrl } from '../../../server/lib/youtubeUrl.js';
 
 /**
- * The three artifacts an ingest can produce, as ONE table.
- *
- * `key` is the request field the server reads, `settingKey` the
- * `youtube-ingest-settings.json` field holding its default, and `fallback` what
- * to use before those settings load. Everything that enumerates the switches —
- * the checkbox row, the initial state, the settings-seed mapping, the
- * "pick at least one" guard, the summary line, and the settings form — derives
- * from this, so adding a fourth artifact is one row plus the server field rather
- * than seven edit sites that silently half-work if one is missed.
+ * The three artifacts an ingest can produce, as ONE table: `key` is the request field the server reads, `settingKey` the `youtube-ingest-settings.json` field holding its default, `fallback` the value before settings load. Everything enumerating the switches (checkbox row, initial state, settings seed, "pick at least one" guard, summary line, settings form) derives from it, so a fourth artifact is one row plus the server field.
  */
 export const INGEST_OPTIONS = [
   {

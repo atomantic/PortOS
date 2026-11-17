@@ -609,7 +609,7 @@ describe('the composer', () => {
 
 // The composer's send lifecycle (#53, wired on the durable outbox from #36).
 // `useBeeperOutbox` has its own thorough unit coverage
-// (`hooks/useBeeperOutbox.test.jsx`) — what matters HERE is that the composer
+// (`beeper/useBeeperOutbox.test.jsx`) — what matters HERE is that the composer
 // wires the right props to it and renders what it reports, at the same page
 // boundary the rest of this file tests through.
 describe('the composer sends', () => {

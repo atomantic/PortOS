@@ -31,10 +31,19 @@ const SHARED_WALKER_CALL = /\bcollect(?:Server|Client)Sources\s*\(|\bread(?:Serv
 const RECURSIVE_READDIR = /readdirSync\s*\([^)]*\brecursive\s*:\s*true/;
 const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm, '');
 
+/**
+ * Blank string literals that read as embedded code (they contain whitespace or a
+ * call paren): a test's fixture snippet such as "execFileSync('git', ['ls-files'])"
+ * is data under test, not a scan. Bare tokens ('git', 'ls-files', an import
+ * specifier) stay visible because the detectors above match on them.
+ */
+const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
+const blankLiterals = (source) => source.replace(STRING_LITERAL, (lit) => (/[\s(]/.test(lit.slice(1, -1)) ? '""' : lit));
+
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
-  const code = stripLineComments(source);
-  return (GIT_CALL.test(source) && GIT_ENUMERATION.test(source)) || TRACKED_HELPER.test(source)
+  const code = blankLiterals(stripLineComments(source));
+  return (GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
     || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code);
 };
 
@@ -55,14 +64,7 @@ const crossRootNamedFile = (ownRoot) => new RegExp(
 );
 
 /**
- * True when `source` (the test at `relPath`) reads a file from the *other*
- * runner's tree with `readFileSync` but never spells that file's name out as
- * a single literal anywhere in its own source — the shape `pathContractTests`
- * (ci-test-plan.js, #6363) cannot reach by `git grep`-ing for a basename that
- * is never written down. A test that instead names the target directly
- * (`join(here, '../../client/src/lib/x.js')`, one literal carrying both the
- * cross-root prefix and the extension) passes, because that literal is
- * exactly what the basename lookup matches.
+ * True when `source` (the test at `relPath`) reads a file from the *other* runner's tree with `readFileSync` but never spells that file's name out as a single literal, the shape `pathContractTests` (ci-test-plan.js, #6363) can't reach by `git grep`-ing for a basename never written down. A test that names the target directly (`join(here, '../../client/src/lib/x.js')`: one literal with both the cross-root prefix and the extension) passes, since that literal is what the basename lookup matches.
  */
 export const readsUnnamedCrossRootFile = (source, relPath) => {
   if (!/readFileSync\s*\(/.test(source)) return false;

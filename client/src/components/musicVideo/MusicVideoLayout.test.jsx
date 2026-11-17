@@ -12,7 +12,7 @@ const progressFor = (current, states = {}) => ({
 });
 
 describe('music-video step navigation', () => {
-  it('lists the eight steps with a state word and one fact each, then Assets, and opens a step on click', () => {
+  it('lists the eight steps with a state word and one fact each, then the pages (Editor, Assets, Cleanup), and opens a step on click', () => {
     const onStageChange = vi.fn();
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project', version: 2 }} stage="board" trackLabel="Example Track"
       onStageChange={onStageChange} progress={progressFor('board', { setup: 'done', 'cast-sets': 'done' })}
@@ -30,7 +30,7 @@ describe('music-video step navigation', () => {
       '6Shots' + 'Not started',
       '7Final render' + 'Not started',
       '8Publish' + 'Not started',
-      'Assets', 'Cleanup',
+      'Editor', 'Assets', 'Cleanup',
     ]);
     expect(steps[2]).toHaveAttribute('aria-current', 'step');
     fireEvent.click(steps[0]);
@@ -38,10 +38,12 @@ describe('music-video step navigation', () => {
     fireEvent.click(steps[5]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
     fireEvent.click(steps[8]);
+    expect(onStageChange).toHaveBeenCalledWith('editor');
+    fireEvent.click(steps[9]);
     expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Previz, Not started', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
+      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Previz, Not started', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Editor', 'Assets', 'Cleanup',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();
@@ -174,6 +176,23 @@ describe('player-first steps', () => {
     const panel = screen.getByRole('tabpanel');
     const order = ['Checklist', 'Preview', 'Approval', 'Work'].map((name) => within(panel).getByRole(name === 'Preview' ? 'complementary' : 'region', { name }));
     for (let i = 1; i < order.length; i += 1) expect(order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // Uniquely catches the Shots step stacking its checklist over a full-width player again.
+  it('docks the player in the side column when the step has no approval panel, so the work flows beside it', () => {
+    render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project' }} stage="board"
+      onStageChange={() => {}} progress={progressFor('board')} spend={{ spentUsd: 0 }} playerFirst
+      lead={<section aria-label="Checklist">checklist</section>} dock={<aside aria-label="Preview">preview</aside>}>
+      <section aria-label="Work">work</section>
+    </MusicVideoLayout>);
+    const panel = screen.getByRole('tabpanel');
+    // Checklist and work share the step column; the player sits outside it, in the sticky side column.
+    expect(within(panel).getByRole('region', { name: 'Checklist' })).toBeTruthy();
+    expect(within(panel).getByRole('region', { name: 'Work' })).toBeTruthy();
+    expect(within(panel).queryByRole('complementary', { name: 'Preview' })).toBeNull();
+    const dockCell = screen.getByRole('complementary', { name: 'Preview' }).parentElement;
+    expect(dockCell.className).toMatch(/xl:sticky/);
+    expect(dockCell.parentElement.className).toMatch(/xl:grid-cols-\[13rem_minmax\(0,1fr\)_minmax\(20rem,24rem\)\]/);
   });
 
   it('docks the player at the side and closes the step with the approval otherwise', () => {

@@ -28,7 +28,7 @@ vi.mock('../../lib/heavyJobClaim.js', () => ({
 vi.mock('./db.js', () => ({
   getRun: (...args) => fixture.read(...args),
   listActiveRuns: async () => fixture.active || [fixture.run],
-  updateRun: (...args) => fixture.save(...args), getRunRequired: vi.fn(), listRuns: vi.fn(), deleteRun: vi.fn(),
+  updateRun: (...args) => fixture.save(...args), getRunRequired: vi.fn(), listRuns: vi.fn(),
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => ({ loraTraining: { stallWatchdog: false } }) }));
 vi.mock('../loraDatasets.js', () => ({ updateDataset: (...args) => fixture.saveDataset(...args) }));

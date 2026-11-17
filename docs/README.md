@@ -81,6 +81,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [features/artist-submission-profile.md](./features/artist-submission-profile.md) | Artist-curated bios, credits, statements and links that agents read when filling festival and distributor forms |
 | [features/music-renderer-benchmarks.md](./features/music-renderer-benchmarks.md) | Technical and full-length listening evidence for local music renderer profiles |
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
+| [INSTRUCTION_RULE_DETAIL.md](./INSTRUCTION_RULE_DETAIL.md) | Full wording of rules whose short form lives in the `AGENTS.md` files |
 | [LOCAL_REVIEW_LIFECYCLE.md](./LOCAL_REVIEW_LIFECYCLE.md) | Durable one-time pre-PR review, recovery and hosted-feedback continuation |
 | [PR_REVIEW_ATTRIBUTION.md](./PR_REVIEW_ATTRIBUTION.md) | Completed local reviewer model receipts and additive PR labels |
 | [CODE_REVIEW_DIAGNOSTICS.md](./CODE_REVIEW_DIAGNOSTICS.md) | Privacy-safe CLI deadline phases, process timing and a synthetic review probe |
@@ -88,7 +89,8 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
-| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers (Nov 11 and Nov 14 reviews) |
+| [PREGATE.md](./PREGATE.md) | The local pre-push gate: what it runs, its receipt, interrupts and test process containment |
+| [TEST_MEMO.md](./TEST_MEMO.md) | Test memo: skipping verified test files, record-aware related selection |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |
@@ -153,6 +155,6 @@ Comms & voice: [beeper](./features/beeper.md) ([mirror](./features/beeper-mirror
 
 - [Runway model catalog](RUNWAY_MODELS.md) — supported operations, public schema source, caching, refresh and workflow limits.
 
-- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and explicit removal.
+- [Data Maintenance](DATA_MAINTENANCE.md) — retained retired-feature storage, LoRA training retirement and inline removal on the LoRAs page.
 
 - [Offline greybox reference sequences](GREYBOX_SEQUENCES.md) — fixed-time blocking and per-camera reference exports.

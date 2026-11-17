@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,7 +44,7 @@ it('publishes only completed CLI models, dedupes provider variants, and leaves r
       await record({ ok: true, verdict: 'clean', findings: 'NO FINDINGS', model });
     }
     expect((await run('labels')).labels).toEqual([]);
-    await record({ ok: true, verdict: 'clean', findings: 'NO FINDINGS', model: 'anthropic/claude-opus-5-20251001', attributionError: 'REVIEW_ATTRIBUTION_FAILED' });
+    await record({ ok: true, verdict: 'clean', findings: 'NO FINDINGS', model: 'anthropic/claude-opus-5-20251001' });
     await record({ ok: true, verdict: 'findings', findings: 'Private findings never persisted', model: 'claude-opus-5' });
     await record({ ok: true, verdict: 'clean', findings: 'NO FINDINGS', model: 'gpt-5.6-sol', backend: 'provider:private-account' });
     expect(await readFile(join(cwd, '.git/portos-local-review-models'), 'utf8')).toBe('opus-5\nopus-5\ngpt-5-6-sol\n');
@@ -54,12 +54,24 @@ it('publishes only completed CLI models, dedupes provider variants, and leaves r
       expect(result.createCommands).toHaveLength(2);
       expect(result.createCommands.every(command => command.startsWith(`${cli} label create`))).toBe(true);
       const prompt = buildPrAttributionSection({ model: 'claude-opus-5', forgeCli: cli });
-      expect(prompt).toContain('apply/verify additive');
-      expect(prompt).toContain('Preserve existing labels');
-      expect(prompt).toContain('requested forge users');
+      expect(prompt).toContain('PR_REVIEW_ATTRIBUTION.md');
     }
     await run('reset');
     expect((await run('labels')).labels).toEqual([]);
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+it('skips reviewer labels instead of failing when the receipt cannot be read (#16571)', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'portos-review-attr-bad-'));
+  try {
+    await exec('git', ['init', '--quiet'], { cwd });
+    await mkdir(join(cwd, '.git/portos-local-review-models'));
+    const { stdout } = await exec(process.execPath, [script, 'labels'], { cwd });
+    expect(JSON.parse(stdout)).toEqual({ labels: [], createCommands: [], skipped: true });
+    await exec(process.execPath, [script, 'reset'], { cwd });
+    await expect(exec(process.execPath, [script, 'bogus'], { cwd })).rejects.toBeTruthy();
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -69,11 +81,10 @@ it('wires receipts into required and optional pre-PR review execution, excluding
   const policy = { reviewers: ['provider:example', 'codex'], forgeReviewerUsernames: ['external-user'], optionalReviewers: ['provider:example'], reviewerModels: { codex: 'configured-model' }, reviewerEfforts: {}, reviewerMaxRounds: {}, reviewStopMode: 'all' };
   const section = buildLocalReviewLoopSection({ taskId: 'example-task', branchName: 'example', baseBranch: 'main', reviewPolicy: policy });
   expect(section).toContain('"recordAttribution":true');
-  expect(section).toContain("jq -e '.attributionError != null'");
-  expect(section).toContain('Stop publication, not review-blocked');
-  expect(section).toContain('retained private response');
+  // A receipt failure never blocks the review or publication (#16571).
+  expect(section).not.toContain('attributionError');
   const guide = await readFile(fileURLToPath(new URL('../../docs/PR_REVIEW_ATTRIBUTION.md', import.meta.url)), 'utf8');
-  expect(guide).toContain('Record required and optional completed reviews alike');
+  expect(guide).toContain('Required and optional completed reviews alike count');
   expect(buildPrAttributionSection()).toContain('PR_REVIEW_ATTRIBUTION.md');
   expect(guide).toContain('failed-start, unavailable, malformed and no-verdict attempts add nothing');
   const pinnedLocal = buildLocalReviewLoopSection({ branchName: 'example', baseBranch: 'main', reviewPolicy: { ...policy, reviewers: ['ollama'], reviewerModels: { ollama: 'example-model' } } });

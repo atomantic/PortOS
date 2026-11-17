@@ -7,14 +7,13 @@ import { uploadSingle } from '../lib/multipart.js';
 import { parseZip, collectZipEntry, createZipBudget, createZipByteLimit } from '../lib/zipStream.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { healthIngestSchema, appleHealthLatestMetricsQuerySchema } from '../lib/appleHealthValidation.js';
+import { healthIngestSchema, appleHealthLatestMetricsQuerySchema, appleHealthRangeQuerySchema } from '../lib/appleHealthValidation.js';
 import { ingestHealthData } from '../services/appleHealthIngest.js';
 import { importAppleHealthXml } from '../services/appleHealthXml.js';
 import { importClinicalRecords } from '../services/appleHealthClinical.js';
 import {
   getMetricSummary,
   getDailyAggregates,
-  getAvailableDateRange,
   getCorrelationData,
   getAvailableMetrics,
   getLatestMetricValues
@@ -72,7 +71,7 @@ router.get('/metrics/latest', asyncHandler(async (req, res) => {
 // Returns summary stats for a metric over a date range
 router.get('/metrics/:metricName', asyncHandler(async (req, res) => {
   const { metricName } = req.params;
-  const { from, to } = req.query;
+  const { from, to } = validateRequest(appleHealthRangeQuerySchema, req.query);
   const summary = await getMetricSummary(metricName, from, to);
   res.json(summary);
 }));
@@ -81,22 +80,15 @@ router.get('/metrics/:metricName', asyncHandler(async (req, res) => {
 // Returns daily aggregated values for a metric over a date range
 router.get('/metrics/:metricName/daily', asyncHandler(async (req, res) => {
   const { metricName } = req.params;
-  const { from, to } = req.query;
+  const { from, to } = validateRequest(appleHealthRangeQuerySchema, req.query);
   const daily = await getDailyAggregates(metricName, from, to);
   res.json(daily);
-}));
-
-// GET /api/health/range
-// Returns available date range from all health day files
-router.get('/range', asyncHandler(async (req, res) => {
-  const range = await getAvailableDateRange();
-  res.json(range);
 }));
 
 // GET /api/health/correlation
 // Returns merged HRV + alcohol + steps + blood data for correlation analysis
 router.get('/correlation', asyncHandler(async (req, res) => {
-  const { from, to } = req.query;
+  const { from, to } = validateRequest(appleHealthRangeQuerySchema, req.query);
   const data = await getCorrelationData(from, to);
   res.json(data);
 }));

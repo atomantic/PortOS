@@ -322,7 +322,8 @@ export async function admitIdleReviewTask({
  * The user tier otherwise spawns EVERY pending row, so `autoApproved` carried no
  * weight in the user file — and that is exactly where its `false` is most
  * informative. A strict row always parses auto-approved, so `false` on a user row
- * can only come from the parser's RECOVERY match (taskParser.js), which cannot
+ * can only come from the legacy parser's RECOVERY match (legacyTaskMarkdown.js,
+ * read by db-migration 018), which cannot
  * tell a genuine legacy row from a task-shaped SENTENCE sitting at column 0 inside
  * a legacy multi-line description body (#7300). Spawning that is an agent run
  * minted from prose. The row is preserved and stays pending for a human.

@@ -15,15 +15,17 @@ import { formatErrorAnnotation, writeStepSummary } from './lib/githubOutput.js';
 import { reportWindowsCrashDiagnostics } from './ci-windows-crash-diagnostics.js';
 import { RUN_DIAGNOSTIC_MAX_BYTES, replayContext, replayDiagnostic, collectionDiagnostic, validCollectionDiagnostic, diagnosticTestFile, persistTestDiagnostic, processExitDiagnostic } from './ci-test-diagnostics.js';
 import { browserShardSlice } from './lib/browserSuites.js';
-import { browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
+import { browserProfileAcceptedVerdicts, browserTestProfileArgs, browserTestProfileFiles, assertBrowserProfileExecuted, BROWSER_FIDELITY_ONLY_FILES } from './lib/browserTestProfiles.js';
 import {
   clearVitestDependencies, createToolVersionResolver, currentCommit, fileResultsFromReport, findVitestDependenciesFile,
-  memoSummaryLine, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, writeSelectionFile,
+  memoSummaryLine, memoUnrecordedLines, passedTestFiles, planTestMemo, readVitestDependencies, recordTestMemo, seedVitestDependencies, writeSelectionFile,
 } from './lib/testMemoRunner.js';
 import { resolveMemoDir } from './lib/testMemoStore.js';
 import { guardInputSnapshot } from './lib/pregateReport.js';
 import { browserOwnerExcludes, TEST_SCOPES, workspaceOf } from './lib/workspaceTests.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
+import { CI_GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards } from './lib/guardBudget.js';
+import { getAlwaysRunTests } from './ci-test-plan.js';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -433,14 +435,17 @@ function runNpmWithReport(scope, script, extraArgs, reportPath, env, abortSignal
   });
 }
 
+/** The case-selecting Vitest arguments of the active browser profile; they are also a test-memo key input. */
+const browserProfileArgs = () => (process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+  ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : []);
+
 // `scope` here is the workspace npm runs in; `name` is only the runner scope shown on the duration line.
 export async function spawnNpm(scope, script, extraArgs, label, {
   run = runNpm, diagnose = reportWindowsCrashDiagnostics, onResult = () => {}, name = scope,
 } = {}) {
   console.log(`Running ${scope} ${label}${extraArgs.length ? ` (${extraArgs.length} selector argument(s))` : ''}.`);
   const startedAt = Date.now();
-  const profileArgs = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
-    ? browserTestProfileArgs(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const profileArgs = browserProfileArgs();
   const result = await run(scope, script, [...extraArgs, ...profileArgs]);
   recordVitestDuration(name, label, startedAt);
   onResult(result);
@@ -494,6 +499,23 @@ export async function spawnNpm(scope, script, extraArgs, label, {
   return retry.status || result.status;
 }
 
+/**
+ * 1 when an always-run guard in `files` ran over CI_GUARD_BUDGET_MS, naming each
+ * one; 0 otherwise. A guard with no reading (it crashed, or ran nothing) is
+ * left to the test status, which already fails that run.
+ */
+function guardBudgetStatus(files, durations) {
+  const timed = Object.fromEntries(files.filter(file => typeof durations[file] === 'number').map(file => [file, durations[file]]));
+  const slowest = Object.entries(timed).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([file, durationMs]) => ({ file, durationMs }));
+  if (slowest.length > 0) console.log(`⏱️ Always-run guards, slowest of ${Object.keys(timed).length}: ${describeGuardDurations(slowest)} (budget ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s).`);
+  const over = overBudgetGuards(timed, CI_GUARD_BUDGET_MS);
+  if (over.length === 0) return 0;
+  const detail = `${describeGuardDurations(over)} over the ${(CI_GUARD_BUDGET_MS / 1000).toFixed(1)}s per-file budget. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`;
+  console.error(`❌ Always-run guard over its time budget: ${detail}`);
+  console.error(formatErrorAnnotation('Always-run guard over its time budget', detail));
+  return 1;
+}
+
 async function main() {
   const scope = process.argv[2];
   if (!Object.hasOwn(TEST_SCOPES, scope)) {
@@ -509,6 +531,9 @@ async function main() {
   // Same one-shot rule: pregate's guard stage asks for per-file wall times.
   const durationsPath = process.env.PORTOS_PREGATE_DURATIONS_PATH;
   delete process.env.PORTOS_PREGATE_DURATIONS_PATH;
+  // Set by ci.yml's Linux server job only; a nested runner a test spawns must not inherit it.
+  const enforceGuardBudget = process.env.CI_GUARD_BUDGET === 'enforce';
+  delete process.env.CI_GUARD_BUDGET;
   const mode = process.env.CI_TEST_MODE || 'full';
   const inputFiles = JSON.parse(process.env.CI_TEST_FILES || '[]');
   // Explicit planner selectors must respect the same browser and DB ownership as
@@ -566,13 +591,16 @@ async function main() {
   // run already verified, and the list reaches Vitest as a file because a
   // related set can exceed the Windows command-line limit.
   if (memoDir) clearVitestDependencies(repoRoot, scope);
-  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard,
+  const caseFilter = browserProfileArgs();
+  const acceptVerdictsFrom = process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined
+    ? browserProfileAcceptedVerdicts(process.env.PORTOS_BROWSER_TEST_PROFILE) : [];
+  const plan = planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard, caseFilter, acceptVerdictsFrom,
     ...(process.env.PORTOS_CI_BROWSER_OWNER === 'browser' ? { shardSlice: browserShardSlice } : {}),
     toolVersion: createToolVersionResolver() });
   if (memoDir) {
     console.log(memoSummaryLine(plan));
     if (process.env.PORTOS_TEST_MEMO_VERBOSE === '1') {
-      for (const { test, via } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key)`);
+      for (const { test, via, from } of plan.skipped) console.log(`🧠   skipped ${test} (${via} key${from ? `, ${from} verdict` : ''})`);
     }
   }
   // Pregate supplies only guards that passed earlier in this invocation, after
@@ -589,27 +617,46 @@ async function main() {
     process.exitCode = 0;
     return;
   }
-  const selection = writeSelectionFile({ scope, include: plan.run, exclude: [] });
-  process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+  // Hosted CI holds the always-run guards to their per-file budget (#16551).
+  // They run first as their own Vitest pass, so a related or full selection's
+  // heavy suites do not stretch their wall times; pregate only reports them.
+  const budgeted = enforceGuardBudget ? new Set(getAlwaysRunTests()) : new Set();
+  const guardRun = plan.run.filter(test => budgeted.has(test));
+  const rest = plan.run.filter(test => !budgeted.has(test));
+  const passes = guardRun.length > 0 && rest.length > 0
+    ? [[guardRun, `${label}: always-run guards`], [rest, label]] : [[plan.run, label]];
   const extraArgs = memoDir && !readOnlyMemo ? ['--experimental.recordDependencies'] : [];
+  // Vitest records nothing for a case-filtered run unless each file already has a record to merge into.
+  if (extraArgs.length && caseFilter.length) seedVitestDependencies(repoRoot, scope, plan.run);
   const passed = [];
   const durations = {};
+  let interrupted = false;
+  const onResult = (result) => {
+    if (result.interrupted) interrupted = true;
+    for (const { file, durationMs } of result.fileResults ?? []) {
+      if (durationMs !== null) durations[relative(repoRoot, file).split(sep).join('/')] = durationMs;
+    }
+    passed.push(...passedTestFiles(result.fileResults ?? [], {
+      repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
+    }));
+  };
+  let status = 0;
   try {
-    process.exitCode = await spawnNpm(workspace, script, extraArgs, label, {
-      name: scope,
-      onResult: (result) => {
-        for (const { file, durationMs } of result.fileResults ?? []) {
-          if (durationMs !== null) durations[relative(repoRoot, file).split(sep).join('/')] = durationMs;
-        }
-        passed.push(...passedTestFiles(result.fileResults ?? [], {
-          repoRoot, namePattern: process.env.PORTOS_BROWSER_TEST_PROFILE !== undefined, status: result.status, runReport: result.runReport,
-        }));
-      },
-    });
+    for (const [index, [include, passLabel]] of passes.entries()) {
+      if (interrupted) break;
+      const selection = writeSelectionFile({ scope, include, exclude: [] });
+      process.env.PORTOS_CI_TEST_SELECTION = selection.path;
+      try {
+        status = (await spawnNpm(workspace, script, extraArgs, passLabel, { name: scope, onResult })) || status;
+      } finally {
+        rmSync(selection.dir, { recursive: true, force: true });
+      }
+      if (index === 0 && guardRun.length > 0) status = guardBudgetStatus(guardRun, durations) || status;
+    }
   } finally {
-    rmSync(selection.dir, { recursive: true, force: true });
     if (durationsPath) writeFileSync(durationsPath, JSON.stringify(durations));
   }
+  process.exitCode = status;
   if (!memoDir || passed.length === 0) return;
   // PR jobs restore trusted memos, but ci.yml never saves their new entries.
   // Avoid expensive post-success closure hashing/writes that cannot be reused
@@ -618,12 +665,14 @@ async function main() {
     console.log('🧠 Test memo: read-only for pull requests; no cache publication.');
     return;
   }
-  const written = recordTestMemo({
+  const { written, unrecorded } = recordTestMemo({
     scope, repoRoot, memoDir, plan, passed: [...new Set(passed)],
     dependencies: readVitestDependencies(findVitestDependenciesFile(repoRoot, scope), scope),
     source: process.env.CI ? 'ci' : 'local', commit: currentCommit(repoRoot),
   });
   console.log(`🧠 Test memo: recorded ${written} green entries for ${new Set(passed).size} passed files.`);
+  // A passed file that stores nothing re-runs on every trusted run; say which and why.
+  for (const line of memoUnrecordedLines(unrecorded)) console.log(line);
 }
 
 if (isDirectlyInvoked(import.meta.url)) await main();

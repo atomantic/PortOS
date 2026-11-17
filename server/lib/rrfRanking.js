@@ -1,19 +1,7 @@
 /**
- * Reciprocal Rank Fusion (RRF) scoring helper.
+ * Reciprocal Rank Fusion (RRF) scoring helper (Cormack, Clarke, Buettcher 2009, "Reciprocal Rank Fusion outperforms Condorcet and individual Rank Learning Methods").
  *
- * Pure `reciprocalRankFusion(textResults, vectorResults, options)` — merges two ranked lists via RRF
- * scoring (Cormack 2009). Used by `catalogDB.hybridSearchIngredients`.
- *
- * Pure function — no imports from services. Extracted from
- * server/services/catalogDB.js hybridSearchIngredients (inline ~64 lines).
- *
- * RRF merges two ranked lists (e.g. FTS + vector similarity) into a single
- * score: score += weight / (K + rank) for each list the item appears in.
- * Default K=60 follows the original Cormack et al. paper.
- *
- * References:
- *   Cormack, G.V., Clarke, C.L., Buettcher, S. (2009). Reciprocal Rank Fusion
- *   outperforms Condorcet and individual Rank Learning Methods.
+ * `reciprocalRankFusion(textResults, vectorResults, options)` merges two ranked lists (e.g. FTS + vector similarity) into one score, `score += weight / (K + rank)` per list the item appears in (default K=60 per the paper). Pure; extracted from `server/services/catalogDB.js` `hybridSearchIngredients`.
  */
 
 /**

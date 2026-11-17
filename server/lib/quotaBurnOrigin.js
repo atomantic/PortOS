@@ -1,40 +1,20 @@
 /**
- * Quota-burn PROVENANCE carried on an on-demand scheduled-task request, and the
- * metadata an on-demand engine stamps from it.
+ * Quota-burn PROVENANCE carried on an on-demand scheduled-task request, and the metadata an on-demand engine stamps from it.
  *
- * A burn step no longer queues its own synthesized task: it asks the schedule to
- * run a task the user already owns (`quotaBurnInvoke.js` →
- * `taskSchedule.triggerOnDemandTask` with `origin: 'quota-burn'`). Acceptance is
- * therefore ASYNCHRONOUS — the request lands on the schedule now and one of the
- * two on-demand engines (`cos.js#spawnDequeuePriority0OnDemand`,
- * `cosTaskGenerator.js#spawnPriority0OnDemand`) generates the task later — so
- * the "which burn was this?" facts have to ride ON the request and be stamped
- * onto the task the engine produces.
+ * A burn step asks the schedule to run a task the user owns (`quotaBurnInvoke.js` → `taskSchedule.triggerOnDemandTask` with `origin: 'quota-burn'`). Acceptance is ASYNCHRONOUS
+ * (`cos.js#spawnDequeuePriority0OnDemand` / `cosTaskGenerator.js#spawnPriority0OnDemand` generate the task later), so the "which burn was this?" facts ride ON the request.
  *
- * Pure, and deliberately import-light (`objects.js` only): `taskScheduleConstants.js`
- * declares the origin strings and is reached by a large share of the server suite,
- * so this module must never pull the quota-burn config graph in behind it
- * (server/AGENTS.md, "Import scoping"). That is also why `onDemandOrigin` below
- * is copied through as an opaque string rather than validated against the enum.
+ * Pure and import-light (`objects.js` only): `taskScheduleConstants.js` declares the origin strings and is reached by much of the server suite, so this must not pull the quota-burn
+ * config graph in (server/AGENTS.md "Import scoping"); hence `onDemandOrigin` is copied as an opaque string, not validated against the enum.
  *
- * These are the same provenance keys the retired `quotaBurnJobs/agentPrompt.js`
- * executor stamped, on purpose: `cosTaskGenerator.js#isCooldownExemptTask`, the
- * runner's completion continuation, and `quotaBurnDenials.js` all read them off
- * the finished agent, and they had to keep arriving unchanged when the burn's
- * origin moved (#6381) or a burn would have stopped being cooldown-exempt and a
- * refusal would have been credited to nobody. `QUOTA_BURN_PROVENANCE_FIELDS` below is the one place they
- * are named.
+ * The provenance keys are the same ones the retired `quotaBurnJobs/agentPrompt.js` stamped: `isCooldownExemptTask`, the runner's completion continuation and
+ * `quotaBurnDenials.js` read them off the finished agent and must keep seeing them unchanged (#6381). `QUOTA_BURN_PROVENANCE_FIELDS` is the one place they are named.
  */
 
 import { isPlainObject, POLLUTING_KEYS } from './objects.js';
 import { trimTo } from './textUtils.js';
 
-/**
- * The `origin` a quota-burn on-demand request carries. Declared here rather
- * than in `taskScheduleConstants.js` so the stamp below can gate on it without
- * importing upward out of `lib/`; that module re-exports it as
- * `ON_DEMAND_ORIGINS.QUOTA_BURN`, so there is still exactly one literal.
- */
+/** The `origin` a quota-burn on-demand request carries; declared here so the stamp can gate on it without importing upward (`taskScheduleConstants.js` re-exports it as `ON_DEMAND_ORIGINS.QUOTA_BURN`). */
 export const QUOTA_BURN_REQUEST_ORIGIN = 'quota-burn';
 
 /** Explicit runs bypass cadence switches; automated burns and refills do not. */
@@ -46,29 +26,13 @@ export function isManualOnDemandRequest(request) {
 const MAX_FIELD = 64;
 
 /**
- * THE quota-burn provenance block: the facts that say which burn a task is, in
- * one place. Every hop that persists or projects them derives from this table
- * rather than naming keys, so a fifth fact is one row here instead of four
- * hand-written lines that can each be forgotten independently — which is exactly
- * how `quotaBurnStepId` came to reach disk but never reach the agent (#6406).
+ * THE quota-burn provenance block: the facts that say which burn a task is. Every hop that persists or projects them derives from this table, so a new fact is one row
+ * (`quotaBurnStepId` once reached disk but not the agent, #6406). Hops: `onDemandRequestMetadata` (on-demand engines), `cosTaskStore.js#addTask` (synchronous custom-job lane),
+ * `agentLifecycle.js` (agent projection the runner and denial ledger read).
  *
- * The three hops:
- *   - `onDemandRequestMetadata` below (raw path — the on-demand engines).
- *   - `cosTaskStore.js#addTask` (non-raw path — the synchronous custom-job lane).
- *   - `agentLifecycle.js` (the agent projection the runner and the denial
- *     ledger read a finished run back out of).
- *
- * The PERSISTED and cross-peer shape stays FLAT (`quotaBurnFamily`, …), not a
- * nested `quotaBurn` object. CoS tasks federate as markdown replicated between
- * peers that upgrade independently (`cosTaskMerge.js`), and `metadata.quotaBurnFamily`
- * is what makes a burn cooldown-exempt and what credits a refusal to a family —
- * so a nested-only write would make a burn queued on a new peer read as an
- * ordinary task on an older one, for no functional gain. `quotaBurnProvenance`
- * still ACCEPTS a nested block, so a producer may hand its provenance over as a
- * unit and a task that ever arrives in that shape resolves identically.
- *
- * Readers coerce, because a COS-TASKS.md round-trip hands every scalar back as a
- * string: a task written by a previous release must still read as burn-provenanced.
+ * The PERSISTED and cross-peer shape stays FLAT (`quotaBurnFamily`, …), not nested: CoS tasks federate as markdown between independently upgrading peers (`cosTaskMerge.js`),
+ * and a nested-only write would read as an ordinary task on an older peer. `quotaBurnProvenance` still ACCEPTS a nested block.
+ * Readers coerce because rows stored before #16407 and peers on older versions hold every scalar as a string.
  */
 const asId = (value) => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
 const asEpochMs = (value) => {
@@ -77,38 +41,22 @@ const asEpochMs = (value) => {
 };
 
 export const QUOTA_BURN_PROVENANCE_FIELDS = Object.freeze([
-  // Which provider family's window this run is spending, and the key the denial
-  // ledger and the plan walk attribute a finished run by. ABSENT — never a
-  // placeholder — on a manual maintenance run pinned to a provider outside every
-  // subscription family, which spends no window at all; `maintenanceRunId` below
-  // is that run's attribution instead (see `normalizeQuotaBurnProvenance`).
+  // The provider family window this run spends; the key the denial ledger and plan walk attribute by. ABSENT (never a placeholder) on a manual run pinned to a provider outside every
+  // subscription family; `maintenanceRunId` is that run's attribution (see `normalizeQuotaBurnProvenance`).
   { field: 'family', taskKey: 'quotaBurnFamily', agentKey: 'taskQuotaBurnFamily', read: asId },
-  // The reset of the SHORT rolling window that will refuse first, so a refused
-  // run blocks the family until that window rolls rather than re-dispatching
-  // into the same wall. See quotaBurnDenials.js.
+  // Reset of the SHORT rolling window that refuses first, so a refused run blocks the family until it rolls (quotaBurnDenials.js).
   { field: 'limitingResetAt', taskKey: 'quotaBurnLimitingResetAt', agentKey: 'taskQuotaBurnLimitingResetAt', read: asEpochMs },
   // Which STEP of the burn plan asked.
   { field: 'stepId', taskKey: 'quotaBurnStepId', agentKey: 'taskQuotaBurnStepId', read: asId },
-  // The on-demand REQUEST this task was generated for. Absent — never null, never
-  // synthesized — on the synchronous custom-job lane, which queues the task itself
-  // and has no request to name; a fake id would make a join over it silently wrong.
+  // The on-demand REQUEST this task was generated for; absent (never null or synthesized) on the synchronous custom-job lane, where a fake id would corrupt joins.
   { field: 'requestId', taskKey: 'quotaBurnRequestId', agentKey: 'taskQuotaBurnRequestId', read: asId },
-  // The MANUAL maintenance run that asked (`services/maintenanceRun.js`), absent
-  // on an automatic burn. It is what lets the quota-burn runner leave a manual
-  // run's agents alone — the run walks its own ladder, outside the family's
-  // plan, its completion ledger and its window gates — while the family
-  // attribution above still credits a refusal to the window it actually spent.
-  // It is also the ONLY attribution a family-less manual run has, which is why
-  // `hasQuotaBurnProvenance` accepts either key.
+  // The MANUAL maintenance run that asked (`services/maintenanceRun.js`); absent on an automatic burn. Lets the runner leave a manual run's agents to its own ladder while family
+  // attribution still credits a refusal to the window spent. The ONLY attribution a family-less manual run has, so `hasQuotaBurnProvenance` accepts either key.
   { field: 'maintenanceRunId', taskKey: 'quotaBurnMaintenanceRunId', agentKey: 'taskQuotaBurnMaintenanceRunId', read: asId },
 ].map(Object.freeze));
 
 /**
- * Read the provenance block off anything carrying it — task metadata, an
- * `addTask` payload, or a producer's own `quotaBurn` block. A field the source
- * does not carry (or carries unreadably) is ABSENT from the result, so callers
- * can tell "not recorded" from a legitimate value without a sentinel of their own.
- */
+ /** Read the provenance block off task metadata, an `addTask` payload or a producer's `quotaBurn` block; a field not carried (or unreadable) is ABSENT from the result. */
 export function quotaBurnProvenance(source) {
   const block = {};
   if (!isPlainObject(source)) return block;
@@ -132,13 +80,10 @@ export function quotaBurnTaskMetadata(block) {
 }
 
 /**
- * The provenance projection `agentLifecycle` stamps onto the agent record.
- * agent.metadata is a hand-picked projection of task.metadata, so EVERY
- * persisted field is listed here by construction — a field that reaches disk
- * cannot fail to reach the runner's completion continuation or the denial ledger.
- * `null` (not absent) for a field the task never carried, matching the rest of
- * that projection's "not recorded" convention.
- */
+ /**
+  * The provenance projection `agentLifecycle` stamps onto the agent record. agent.metadata is a hand-picked projection of task.metadata, so EVERY persisted field is listed
+  * by construction. `null` (not absent) for a field the task never carried.
+  */
 export function quotaBurnAgentMetadata(taskMetadata) {
   const block = quotaBurnProvenance(taskMetadata);
   return Object.fromEntries(
@@ -147,28 +92,20 @@ export function quotaBurnAgentMetadata(taskMetadata) {
 }
 
 /**
- * Whether a task carries attributable burn provenance at all.
- *
- * EITHER attribution key is enough. A family says which subscription window the
- * run spends; a `maintenanceRunId` says which manual ladder asked. A manual run
- * pinned to a provider that belongs to no subscription family (an OpenCode TUI,
- * a local-model wrapper) carries only the second — it is fully attributable,
- * just not to a window — and it must still be cooldown-exempt, or the ladder's
- * own steps queue behind the app cooldown every other CoS task re-stamps.
- */
+ /**
+  * Whether a task carries attributable burn provenance. EITHER key suffices: a family names the window spent, a `maintenanceRunId` names the manual ladder. A manual run on a
+  * provider outside every subscription family carries only the latter and must still be cooldown-exempt.
+  */
 export const hasQuotaBurnProvenance = (taskMetadata) => {
   const block = quotaBurnProvenance(taskMetadata);
   return Boolean(block.family || block.maintenanceRunId);
 };
 
 /**
- * Whether the family's burn PLAN owns this task: burn-provenanced, and not a
- * manual maintenance run's. The one rule the plan's sequence walk and its
- * completion continuation both apply — a manual run spends the family's
- * window (so the denial ledger still hears about it) but walks its own ladder,
- * so the plan neither advances on it nor waits for it. `burnPlanOwnsAgent` is
- * the same rule over the agent projection (`quotaBurnAgentMetadata`).
- */
+ /**
+  * Whether the family's burn PLAN owns this task: burn-provenanced and not a manual maintenance run's (which spends the window but walks its own ladder, so the plan neither advances
+  * on it nor waits). `burnPlanOwnsAgent` is the same rule over the agent projection.
+  */
 export function burnPlanOwnsTask(taskMetadata) {
   const block = quotaBurnProvenance(taskMetadata);
   return Boolean(block.family) && !block.maintenanceRunId;
@@ -189,44 +126,18 @@ const scalarParams = (raw) => {
 };
 
 /**
- * Normalize the `burn` block of an on-demand request. Returns `null` unless it
- * names the burn step that asked AND an attribution for the run — without both,
- * nothing downstream can attribute it, and an unattributable burn is worse than
- * no burn: `isCooldownExemptTask` would treat an ordinary task as burn-exempt,
- * and the denial ledger would credit a refusal to the wrong family.
- *
- * Attribution is the family whose window is being spent OR the manual
- * maintenance run that asked. An AUTOMATIC burn never carries a run id, so for
- * it the family stays strictly required, exactly as before — it exists to draw
- * down one named window and a family-less automatic burn would spend whatever
- * the daemon picked. A MANUAL run pinned to a provider outside every
- * subscription family (`services/maintenanceRun.js`) has no window to name and
- * says so by omitting `family` rather than borrowing a real one: `null` here is
- * "this run spends no subscription", not "we could not work it out". That is
- * what keeps `recordBurnAgentCompletion` and the quota-burn plan walk from
- * crediting its refusals and completions to a subscription it never touched.
- *
- * `overrides` carries the three per-invocation settings the generated task can
- * absorb AFTER generation — the provider, model and reasoning effort the spawner
- * reads straight off `task.metadata` — plus the step's run `params`.
- *
- * The params are here for a reason the other three are not: they have to reach
- * the PROMPT, so they cannot ride the post-generation
- * `onDemandRequestMetadata` stamp below. Both on-demand engines pull them off
- * the request and hand them to `prepareManagedAppImprovementTask` as
- * `runOverrides`, which layers them over the task's saved `taskMetadata` BEFORE
- * the mode banner is chosen and the prompt is rendered. That is what lets a step
- * migrated from an issues-only burn preset pin `fileIssues: true` explicitly and
- * keep filing even against an audit type whose shipped scheduled default is
- * `false` (#6381) — without it a migrated burn would silently run the task's
- * saved mode and start writing code.
- *
- * Shallow scalars only, and validated for real one hop later: the generator
- * sanitizes them through `sanitizeTaskMetadata`'s allowlist, the same door a
- * stored override passes. Copied here rather than imported from
- * `quotaBurnTaskRef.js` so this module keeps its one-import budget — it is
- * reached by a large share of the server suite.
- */
+ /**
+  * Normalize the `burn` block of an on-demand request. Returns `null` unless it names the burn step AND an attribution: an unattributable burn would make `isCooldownExemptTask`
+  * treat an ordinary task as exempt and credit a refusal to the wrong family.
+  *
+  * Attribution is the family whose window is spent OR the manual maintenance run. An AUTOMATIC burn never carries a run id, so family stays required. A MANUAL run pinned outside every
+  * subscription family omits `family` (`null` means "spends no subscription"), keeping `recordBurnAgentCompletion` and the plan walk from crediting a subscription it never touched.
+  *
+  * `overrides` carries provider, model and reasoning effort (absorbed AFTER generation off `task.metadata`) plus the step's run `params`. Params must reach the PROMPT, so both engines hand
+  * them to `prepareManagedAppImprovementTask` as `runOverrides`, layered over the saved `taskMetadata` before the mode banner is chosen (#6381: a migrated issues-only burn pins
+  * `fileIssues: true` even against a default-false audit type). Shallow scalars only; the generator validates them via `sanitizeTaskMetadata`. Copied rather than imported from
+  * `quotaBurnTaskRef.js` to keep this module's one-import budget.
+  */
 export function normalizeQuotaBurnProvenance(raw) {
   if (!isPlainObject(raw)) return null;
   const family = trimTo(raw.family, MAX_FIELD);
@@ -250,30 +161,14 @@ export function normalizeQuotaBurnProvenance(raw) {
 }
 
 /**
- * The metadata BOTH on-demand engines merge onto the task they just generated
- * for a request — `cos.js#spawnDequeuePriority0OnDemand` and
- * `cosTaskGenerator.js#spawnPriority0OnDemand`, either of which may drain any
- * given request. One helper rather than the expression written out twice: the
- * engines are an exact mirror, and a rule repeated in two places is a rule that
- * eventually holds in one.
- *
- * `onDemand` says the task came out of the request queue at all; `onDemandOrigin`
- * says WHO asked, and is what `perpetualRefillPlan` reads to decide whether the
- * completed run may continue its perpetual drain. They are separate keys because
- * they are separate facts — folding "a human asked" into `onDemand` is what made
- * a burn indistinguishable from a Run Now, and forced the exclusion to be
- * re-asserted as a second key-specific rule in `cos.js`.
- *
- * `null` origin means "not recorded", which every reader treats as a human Run:
- * that is what a request queued before the field existed is.
- *
- * The burn keys are gated on the ORIGIN, not merely on a `burn` block that
- * parses. `triggerOnDemandTask` refuses to persist one on any other origin, so
- * the two can only disagree in a hand-edited schedule — and stamping there would
- * be the worst of both: `isCooldownExemptTask` would treat an ordinary human Run
- * as burn-exempt and the denial ledger would credit its refusal to a family that
- * never dispatched it, while the refill planner still drained it as a human Run.
- */
+ /**
+  * The metadata BOTH on-demand engines merge onto the task they generated (`cos.js#spawnDequeuePriority0OnDemand`, `cosTaskGenerator.js#spawnPriority0OnDemand`), one helper so the mirrored engines agree.
+  * `onDemand` says the task came from the request queue; `onDemandOrigin` says WHO asked (read by `perpetualRefillPlan`); separate keys keep a burn distinguishable from a Run Now.
+  * A `null` origin is "not recorded" and every reader treats it as a human Run.
+  *
+  * Burn keys are gated on the ORIGIN, not merely a parseable `burn` block: `triggerOnDemandTask` refuses to persist one on another origin, so only a hand-edited schedule could disagree,
+  * and stamping there would make a human Run cooldown-exempt and credit its refusal to a family that never dispatched it.
+  */
 export function onDemandRequestMetadata(request) {
   const burn = request?.origin === QUOTA_BURN_REQUEST_ORIGIN
     ? normalizeQuotaBurnProvenance(request.burn)
@@ -283,10 +178,7 @@ export function onDemandRequestMetadata(request) {
     onDemand: true,
     onDemandOrigin: nullable(request?.origin),
     ...(burn ? {
-      // One spread of the shared block, so this path cannot carry a different
-      // set of provenance keys than the non-raw `addTask` mapping does. An
-      // unreadable reset (and an unnamed request) drops out rather than being
-      // written as null — see QUOTA_BURN_PROVENANCE_FIELDS.
+      // One spread of the shared block so this path carries the same keys as the non-raw `addTask` mapping; an unreadable reset or unnamed request drops out rather than being written null.
       ...quotaBurnTaskMetadata({ ...burn, requestId }),
       ...(burn.overrides.providerId ? { provider: burn.overrides.providerId } : {}),
       ...(burn.overrides.model ? { model: burn.overrides.model } : {}),

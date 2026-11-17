@@ -18,8 +18,6 @@ import { mergePersistentMindMaintainer } from '../lib/persistentMindMaintainer.j
  * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
  */
 
-import { readFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
 import { join } from 'path';
 import { getActiveProvider } from './providers.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
@@ -30,14 +28,12 @@ import { clearStaleActiveAgents } from './appActivity.js';
 // engine in cosTaskGenerator.js so the two can no longer drift (#6618).
 import { drainOnDemandRequests } from './onDemandDrain.js';
 import { logCosScheduleUpdate } from './userActionScheduleLog.js';
-import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from './eventScheduler.js';
 import { COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { recordJobExecution } from './autonomousJobs.js';
-import { safeJSONParse, sleep, isTopLevelEntryName } from '../lib/fileUtils.js';
+import { sleep } from '../lib/fileUtils.js';
 import { ON_DEMAND_ORIGINS } from './taskScheduleConstants.js';
 import { currentTaskTypeName } from '../lib/taskTypeRenames.js';
-import { ServerError } from '../lib/errorHandler.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
@@ -53,7 +49,7 @@ import { mergePersistentMindThinkingPresets } from '../lib/persistentMindThinkin
 import { useRunner, spawningTasks, hasActiveTaskOwner } from './agentState.js';
 
 // Shared state management (extracted to avoid circular deps)
-import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, SCRIPTS_DIR, isDaemonRunning, setDaemonRunning } from './cosState.js';
+import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning } from './cosState.js';
 
 // Events and logging
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -445,74 +441,6 @@ async function bootDaemon(state) {
     metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
-  // Performance summary (10 min)
-  scheduleEvent({
-    id: 'cos-performance-summary',
-    type: 'interval',
-    intervalMs: 10 * 60 * 1000,
-    handler: async () => {
-      const perfSummary = await getPerformanceSummary().catch(() => null);
-      if (perfSummary && perfSummary.totalCompleted > 0) {
-        emitLog('info', `Performance: ${perfSummary.overallSuccessRate}% success over ${perfSummary.totalCompleted} tasks`, {
-          successRate: perfSummary.overallSuccessRate,
-          totalCompleted: perfSummary.totalCompleted,
-          topPerformers: perfSummary.topPerformers.length,
-          needsAttention: perfSummary.needsAttention.length
-        });
-      }
-    },
-    metadata: { description: 'CoS performance summary' }
-  });
-
-  // Learning insights (20 min)
-  scheduleEvent({
-    id: 'cos-learning-insights',
-    type: 'interval',
-    intervalMs: 20 * 60 * 1000,
-    handler: async () => {
-      const learningInsights = await getLearningInsights().catch(() => null);
-      if (learningInsights?.recommendations?.length > 0) {
-        const recommendations = learningInsights.recommendations.slice(0, 3);
-        for (const rec of recommendations) {
-          // A recommendation is advice re-announced every cycle, not a fault — stdout only.
-          const level = rec.type === 'warning' || rec.type === 'action' ? 'info' : 'debug';
-          emitLog(level, `🧠 Learning: ${rec.message}`, { recommendationType: rec.type });
-        }
-        cosEvents.emit('learning:recommendations', {
-          recommendations,
-          insights: {
-            bestPerforming: learningInsights.insights?.bestPerforming?.slice(0, 2) || [],
-            worstPerforming: learningInsights.insights?.worstPerforming?.slice(0, 2) || [],
-            commonErrors: learningInsights.insights?.commonErrors?.slice(0, 2) || []
-          },
-          totals: learningInsights.totals
-        });
-      }
-    },
-    metadata: { description: 'CoS learning insights' }
-  });
-
-  // Rehabilitation check (2 hours)
-  scheduleEvent({
-    id: 'cos-rehabilitation-check',
-    type: 'interval',
-    intervalMs: 2 * 60 * 60 * 1000,
-    handler: async () => {
-      const s = await loadState();
-      const gracePeriodMs = (s.config.rehabilitationGracePeriodDays || 7) * 24 * 60 * 60 * 1000;
-      const result = await checkAndRehabilitateSkippedTasks(gracePeriodMs).catch(err => {
-        emitLog('warn', `⚠️ checkAndRehabilitateSkippedTasks failed: ${err?.message || err}`, { stack: err?.stack || '' });
-        return { count: 0 };
-      });
-      if (result.count > 0) {
-        emitLog('success', `Auto-rehabilitated ${result.count} skipped task type(s)`, {
-          rehabilitated: result.rehabilitated?.map(r => r.taskType) || []
-        });
-      }
-    },
-    metadata: { description: 'CoS rehabilitation check for skipped tasks' }
-  });
-
   // Pending-merge drain (30 min). `evaluateTasks` also sweeps opportunistically,
   // but evaluation is event-driven — with no periodic evaluation timer that drain
   // fires roughly once per restart, so a green merge-only PR opened while PortOS
@@ -641,13 +569,9 @@ async function teardownDaemon() {
   // Cancel all scheduled events
   cancelEvent('cos-health-check');
   cancelEvent('cos-recording-maintenance');
-  cancelEvent('cos-performance-summary');
-  cancelEvent('cos-learning-insights');
-  cancelEvent('cos-rehabilitation-check');
   cancelEvent('cos-improvement-check');
   cancelEvent('cos-runtime-verification');
   cancelEvent('cos-pending-merge-sweep');
-  cancelEvent('cos-initialized-retirement-recovery');
   (await import('./prWatcher.js')).cancelHandoffFollowUps();
   await unregisterJobSchedules();
 
@@ -998,35 +922,6 @@ export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
 
   await processOrphanedTasks(userTaskData.grouped.in_progress || []);
   await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
-}
-
-/**
- * List generated scripts
- */
-export async function listScripts() {
-  await ensureDirectories();
-  const files = await readdir(SCRIPTS_DIR);
-  return files.filter(f => f.endsWith('.sh')).map(f => f.replace('.sh', ''));
-}
-
-/**
- * Get script content
- */
-export async function getScript(name) {
-  if (!isTopLevelEntryName(name) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-    throw new ServerError('Invalid script name', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const scriptPath = join(SCRIPTS_DIR, `${name}.sh`);
-  const metaPath = join(SCRIPTS_DIR, `${name}.json`);
-
-  if (!existsSync(scriptPath)) return null;
-
-  const content = await readFile(scriptPath, 'utf-8');
-  const metadata = existsSync(metaPath)
-    ? safeJSONParse(await readFile(metaPath, 'utf-8'), {}, { logError: true, context: `script metadata ${name}` })
-    : {};
-
-  return { name, content, metadata };
 }
 
 /**

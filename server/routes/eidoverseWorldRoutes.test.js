@@ -4,7 +4,6 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 const mocks = vi.hoisted(() => ({
-  augment: vi.fn(),
   listFoundations: vi.fn(),
   packageCandidate: vi.fn(),
   promoteFoundation: vi.fn(),
@@ -13,11 +12,9 @@ const mocks = vi.hoisted(() => ({
   deleteFoundation: vi.fn(),
   getFoundationByRef: vi.fn(),
   adoptFoundation: vi.fn(),
-  ensurePresence: vi.fn(),
   getProjectionStatus: vi.fn(),
   getStatus: vi.fn(),
   project: vi.fn(),
-  say: vi.fn(),
   updateConfig: vi.fn(),
   describeControllerDefinitions: vi.fn(),
   listControllers: vi.fn(),
@@ -29,12 +26,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../services/eidoverseWorld.js', () => ({
-  augmentEidoverseWorld: mocks.augment,
-  ensureEidoverseWorldPresence: mocks.ensurePresence,
   getEidoverseWorldProjectionStatus: mocks.getProjectionStatus,
   getEidoverseWorldStatus: mocks.getStatus,
   projectEidoverseWorld: mocks.project,
-  sayInEidoverseWorld: mocks.say,
   updateEidoverseWorldConfig: mocks.updateConfig,
 }));
 
@@ -91,10 +85,7 @@ describe('Eidoverse world routes', () => {
       projection: { lastRunAt: '2026-01-01T00:00:00.000Z' },
     });
     mocks.updateConfig.mockResolvedValue({ world: 'portos', human: { name: 'example-user' } });
-    mocks.ensurePresence.mockResolvedValue({ connected: true, role: 'owner' });
     mocks.project.mockResolvedValue({ success: true, summary: { operationCount: 0 } });
-    mocks.augment.mockResolvedValue({ success: true, applied: 1 });
-    mocks.say.mockResolvedValue({ success: true });
   });
 
   it('returns private world status from the service boundary', async () => {
@@ -170,26 +161,6 @@ describe('Eidoverse world routes', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.updateConfig).toHaveBeenCalledWith(payload);
-  });
-
-  it('rejects verbs outside the bounded augmentation contract', async () => {
-    const res = await request(makeApp()).post('/api/eidoverse/world/augment').send({
-      operations: [{ verb: 'behavior', args: {} }],
-    });
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(mocks.augment).not.toHaveBeenCalled();
-  });
-
-  it('passes valid augmentation and chat requests to the service', async () => {
-    const operations = [{ verb: 'spawn', args: { id: 'example-prop', lib: 'eidoverse/assets/models/example.glb' } }];
-    const augmentResponse = await request(makeApp()).post('/api/eidoverse/world/augment').send({ operations });
-    const sayResponse = await request(makeApp()).post('/api/eidoverse/world/say').send({ text: 'Example message' });
-
-    expect(augmentResponse.status).toBe(200);
-    expect(mocks.augment).toHaveBeenCalledWith(operations);
-    expect(sayResponse.status).toBe(200);
-    expect(mocks.say).toHaveBeenCalledWith('Example message');
   });
 
   // #7455 — the promote path's HTTP boundary. What matters here is that the
@@ -280,6 +251,20 @@ it('reports a promote refusal as a verdict and never moves the layer itself', as
 
     await request(makeApp()).delete('/api/eidoverse/world/foundations/tide-beacon?originInstanceId=instance-aaaa');
     expect(mocks.deleteFoundation).toHaveBeenLastCalledWith('tide-beacon', { originInstanceId: 'instance-aaaa' });
+  });
+
+  it('refuses a repeated originInstanceId on every foundation :id route before the ledger is reached', async () => {
+    const path = '/api/eidoverse/world/foundations/tide-beacon';
+    const query = '?originInstanceId=instance-aaaa&originInstanceId=instance-bbbb';
+    const responses = [
+      await request(makeApp()).get(path + query),
+      await request(makeApp()).delete(path + query),
+      await request(makeApp()).post(path + '/adopt' + query),
+    ];
+    expect(responses.map((r) => r.status)).toEqual([400, 400, 400]);
+    expect(mocks.getFoundationByRef).not.toHaveBeenCalled();
+    expect(mocks.deleteFoundation).not.toHaveBeenCalled();
+    expect(mocks.adoptFoundation).not.toHaveBeenCalled();
   });
 
   it('rejects a malformed origin before it can be assembled into a storage key', async () => {

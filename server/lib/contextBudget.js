@@ -16,30 +16,18 @@ import { chunkRawText } from './catalogChunking.js';
 export const CHARS_PER_TOKEN = 4;
 export const DEFAULT_OUTPUT_RESERVE_TOKENS = 8_000;
 export const DEFAULT_SAFETY_MARGIN = 0.1;
-// Minimum manuscript token budget a chunked editorial pass guarantees, even when a
-// large re-sent context block (the reverse-outline scene map, character arcs,
-// plotline coverage, …) would otherwise consume the whole usable window. A
-// manuscript-consuming LLM check re-sends its fixed context as `overheadTokens` on
-// every chunk; on a small/fallback window + a large reverse outline that overhead
-// can meet or exceed the usable input budget, slicing the manuscript chunk to ''
-// so a default-enabled check runs on NO prose (#1459). The floor reserves at least
-// this many tokens for the manuscript by trimming the (bounded) context
-// contribution — manuscript text keeps budget priority over re-sent context.
-// ~6K chars: a few paragraphs, enough for the model to find something per chunk.
+// Minimum manuscript token budget a chunked pass guarantees (~6K chars). Re-sent
+// context (scene map, arcs, ...) is trimmed first, since on a small window its overhead
+// could otherwise slice the manuscript chunk to '' and run a check on NO prose (#1459).
 export const MANUSCRIPT_FLOOR_TOKENS = 1_500;
-// Marker appended to a context block that had to be clipped, so the model can tell
-// the context was truncated rather than genuinely ending there.
+// Appended to a clipped context block so the model knows it was truncated.
 const CONTEXT_TRIM_MARKER = '\n…[context trimmed to fit the model window]…';
-// Conservative floor when a provider declares no usable window at all — matches
-// Ollama's historical default so we never plan for more than we can be sure of.
+// Floor when a provider declares no usable window (Ollama's default).
 export const FALLBACK_CONTEXT_WINDOW = 8_192;
 
-// Output reserve for a LOCAL model whose window is known. A caller's generic
-// reserve (8K) was sized for cloud windows; on a 16K local daemon it alone is
-// half the window, so a prompt that fits with ample room to answer was refused
-// before dispatch. The local reserve is the larger of a modest floor and an
-// eighth of the window, never more than a quarter of the window (so the floor
-// cannot swallow a tiny window) and never more than the caller declared.
+// Output reserve for a LOCAL model with a known window: the generic 8K reserve is
+// sized for cloud windows and would eat half a 16K local window. The larger of a floor
+// and window/8, capped at window/4 and at the caller's declared reserve.
 export const LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS = 2_048;
 export const LOCAL_OUTPUT_RESERVE_WINDOW_DIVISOR = 8;
 export const LOCAL_OUTPUT_RESERVE_MAX_WINDOW_DIVISOR = 4;
@@ -48,8 +36,7 @@ export const LOCAL_OUTPUT_RESERVE_MAX_WINDOW_DIVISOR = 4;
  * The output reserve to plan (and cap generation at) for a local model:
  * `min(declared, floor(window / 4), max(LOCAL_OUTPUT_RESERVE_FLOOR_TOKENS, floor(window / 8)))`
  * — 2,048 on a 16K window, 4,096 on 32K, 1,024 on 4K.
- * Returns `null` when either input is missing or not a positive number — an
- * unknown window or an undeclared reserve is not something to shrink.
+ * Returns `null` when either input is missing or not a positive number (nothing to shrink).
  *
  * @param {number|null|undefined} declaredReserveTokens
  * @param {number|null|undefined} contextWindow
@@ -67,14 +54,10 @@ export function localOutputReserveTokens(declaredReserveTokens, contextWindow) {
 /** chars/4 token estimate. Conservative (real tokenizers pack denser). */
 export const estimateTokens = (text) => Math.ceil(String(text ?? '').length / CHARS_PER_TOKEN);
 
-/** Same heuristic for a char *count* (e.g. a run's stored `promptLength`) —
- * keeps every token-estimation site on one formula. */
+/** Same heuristic for a char *count*, keeping every estimation site on one formula. */
 export const estimateTokensFromChars = (chars) => Math.ceil((chars || 0) / CHARS_PER_TOKEN);
 
-// Token cost of the separator `sectionsCorpus` inserts between packed sections
-// (mirrors its `\n\n---\n\n` join). The packer budgets for it so a chunk packed
-// to the token limit doesn't overflow `usableChars` by the separators and get
-// its last section's tail trimmed by the consumer's slice.
+// Token cost of the `\n\n---\n\n` join `sectionsCorpus` inserts; budgeted so a full chunk's tail isn't sliced off.
 const SECTION_SEPARATOR_TOKENS = estimateTokens('\n\n---\n\n');
 
 const clampMargin = (m) => (Number.isFinite(m) && m >= 0 && m < 1 ? m : DEFAULT_SAFETY_MARGIN);
@@ -82,11 +65,7 @@ const clampMargin = (m) => (Number.isFinite(m) && m >= 0 && m < 1 ? m : DEFAULT_
 const resolveWindow = (contextWindow) =>
   (Number(contextWindow) > 0 ? Number(contextWindow) : FALLBACK_CONTEXT_WINDOW);
 
-/**
- * Usable INPUT token budget for the manuscript text itself, after reserving
- * output space, a safety margin, and any fixed prompt/context overhead
- * (template scaffolding, canon JSON, the finding, etc.).
- */
+/** Usable INPUT token budget for the manuscript after output reserve, safety margin and fixed overhead. */
 export function usableInputTokens({
   contextWindow,
   overheadTokens = 0,
@@ -98,30 +77,17 @@ export function usableInputTokens({
 }
 
 /**
- * Char cap for a SINGLE-block manuscript/script pass — a stage that sends one big
- * content block (the drafted manuscript, comic script, or POV passage) plus fixed
- * prompt overhead, with no separate trimmable context block (so the richer
- * `fitContextToManuscriptFloor` doesn't apply). Returns the usable INPUT budget in
- * chars (window − overhead − output reserve − safety margin), floored at a
- * manuscript minimum so a small/local provider window never sizes the content to
- * empty, and free to grow to fill a large window.
+ * Char cap for a SINGLE-block manuscript/script pass (one big content block plus fixed
+ * overhead, no trimmable context block, so `fitContextToManuscriptFloor` doesn't apply).
+ * Returns the usable INPUT budget in chars (window − overhead − output reserve − margin),
+ * floored at a manuscript minimum so a small window never sizes the content to empty
+ * (#1459) and free to grow on a large window (#1488: a fixed 48–60K-char floor
+ * overflowed small local windows). The caller appends its own truncation marker.
  *
- * This replaces the historical `Math.max(CONTENT_MAX, budgetChars)` floor at the
- * standalone pipeline stages (#1488). That pinned a fixed 48–60K-char floor
- * regardless of the resolved window, so a genuinely small (e.g. 8K) local provider
- * overflowed: the floor (~12–15K manuscript tokens) plus overhead + output reserve
- * exceeded the window. Flooring at the manuscript minimum instead keeps the #1459
- * philosophy — never starve the content block to empty — while respecting the
- * provider window: a small window trims the content to fit (the caller appends its
- * own `[… truncated …]` marker), a large window scales up exactly as before.
- *
- * The floor is itself capped by what the raw window can hold after fixed overhead
- * (the output reserve is generated by the model, not part of the input prompt, so
- * it doesn't bound what we send). On a window big enough to seat the floor this cap
- * is a no-op; on a genuinely tiny window — or one whose overhead alone is large —
- * the manuscript is trimmed *below* the floor (down to 0 only when overhead already
- * meets/exceeds the window) rather than overflowing the real context. So the floor
- * is reserved *within* the provider window, never beyond it.
+ * The floor is itself capped by the raw window after fixed overhead (the output reserve
+ * is generated, not part of the input prompt), so on a tiny or heavy-overhead window the
+ * manuscript is trimmed *below* the floor (to 0 only when overhead meets the window)
+ * rather than overflowing the real context.
  */
 export function manuscriptContentBudgetChars({
   contextWindow,
@@ -130,37 +96,23 @@ export function manuscriptContentBudgetChars({
   safetyMargin = DEFAULT_SAFETY_MARGIN,
   floorTokens = MANUSCRIPT_FLOOR_TOKENS,
 } = {}) {
-  // Preferred size: the usable input budget (which holds back the output reserve),
-  // floored at the manuscript minimum (the explicit 0 guards a negative floor), and
-  // free to grow to fill a large window.
+  // The explicit 0 guards a negative floor.
   const budgetTokens = usableInputTokens({ contextWindow, overheadTokens, outputReserveTokens, safetyMargin });
   const desiredTokens = Math.max(0, floorTokens, budgetTokens);
-  // Hard ceiling: the raw window after overhead, ignoring the (generated) output
-  // reserve. The floor may exceed `budgetTokens`, but must never exceed this — else
-  // the prompt itself overflows the provider's context on a tiny/heavy-overhead
-  // window (#1488 codex review). usableInputTokens floors at 0, so this is 0 when
-  // overhead ≥ window.
+  // Hard ceiling: the raw window after overhead (output reserve ignored). The floor may
+  // exceed `budgetTokens` but never this. 0 when overhead ≥ window.
   const windowCapTokens = usableInputTokens({ contextWindow, overheadTokens, outputReserveTokens: 0, safetyMargin });
   return Math.min(desiredTokens, windowCapTokens) * CHARS_PER_TOKEN;
 }
 
 /**
- * Decide how much of a re-sent context block (the reverse-outline scene map,
- * character arcs, plotline coverage, …) a chunked manuscript pass can afford,
- * guaranteeing the manuscript itself at least `floorTokens` of input budget.
+ * How much of a re-sent context block (scene map, character arcs, ...) a chunked
+ * manuscript pass can afford, guaranteeing the manuscript at least `floorTokens`
+ * (#1459). `fixedOverheadTokens` (template scaffolding, NOT trimmable) is always
+ * reserved; only `contextTokens` is squeezed.
  *
- * A manuscript-consuming LLM check re-sends a fixed context block as overhead on
- * every chunk. On a small/fallback window + a large reverse outline that overhead
- * can meet or exceed the usable input budget, slicing the manuscript chunk to ''
- * so a default-enabled check runs on no prose (#1459). This caps the context
- * contribution so the manuscript keeps `floorTokens` of priority. `fixedOverhead`
- * (the prompt template scaffolding + the finding JSON contract — NOT trimmable) is
- * always reserved; only `contextTokens` (the trimmable block) is squeezed.
- *
- * Returns the allowed context budget as both tokens and chars (chars/4). Never
- * returns more than the context already needs, and never less than 0. When the
- * window comfortably fits everything the input is unchanged (`allowedContextTokens
- * === contextTokens`, `trimmed === false`).
+ * Returns the allowed budget as tokens and chars, within [0, contextTokens];
+ * unchanged (`trimmed === false`) when everything fits.
  */
 export function capContextOverhead({
   contextWindow,
@@ -172,17 +124,14 @@ export function capContextOverhead({
 } = {}) {
   const wantContext = Math.max(0, contextTokens);
   const floor = Math.max(0, floorTokens);
-  // Budget left for INPUT (manuscript + trimmable context) after the fixed,
-  // non-trimmable overhead — but NOT subtracting the trimmable context (that's
-  // what we're sizing). usableInputTokens already floors at 0.
+  // Input budget after fixed overhead, NOT subtracting the trimmable context (that is what we size).
   const inputBudget = usableInputTokens({
     contextWindow,
     overheadTokens: fixedOverheadTokens,
     outputReserveTokens,
     safetyMargin,
   });
-  // Reserve the manuscript floor first (but never go negative), then let context
-  // have whatever's left — capped at what it actually wants.
+  // Manuscript floor first; context gets what's left.
   const allowedContextTokens = Math.min(wantContext, Math.max(0, inputBudget - floor));
   return {
     allowedContextTokens,
@@ -192,10 +141,8 @@ export function capContextOverhead({
 }
 
 /**
- * Trim a context string to fit `maxChars`, preferring a newline boundary so a
- * line-oriented block (the scene map, plotline coverage) is cut between lines, and
- * appending a marker so the model knows the context was truncated. A string within
- * budget passes through unchanged; a 0/negative budget yields ''. Pure — no I/O.
+ * Trim a context string to `maxChars`, preferring a newline boundary and appending a
+ * marker. Within budget passes through; a 0/negative budget yields ''.
  */
 export function trimContextToBudget(text, maxChars) {
   const s = String(text ?? '');
@@ -204,33 +151,23 @@ export function trimContextToBudget(text, maxChars) {
   if (cap <= CONTEXT_TRIM_MARKER.length) return '';
   const bodyBudget = cap - CONTEXT_TRIM_MARKER.length;
   const slice = s.slice(0, bodyBudget);
-  // Prefer cutting at the last newline so a line-structured block stays coherent,
-  // but only if that doesn't throw away most of the budget.
+  // Cut at the last newline unless that discards most of the budget.
   const lastNl = slice.lastIndexOf('\n');
   const body = lastNl > bodyBudget * 0.5 ? slice.slice(0, lastNl) : slice;
   return `${body}${CONTEXT_TRIM_MARKER}`;
 }
 
 /**
- * Trim a map of re-sent context blocks so they fit a manuscript-floor budget for
- * `contextWindow`, and report the overhead the (trimmed) context now costs. This is
- * the single place that decides the floor (#1459): a manuscript-consuming editorial
- * check re-sends these blocks (scene map, character arcs, plotline coverage, …) on
- * every chunk, so on a small/fallback window + a large reverse outline they can
- * consume the whole usable budget and slice the manuscript chunk to ''. Here we cap
- * the context's token contribution (`capContextOverhead`) and actually shrink the
- * strings (`trimContextToBudget`) so the manuscript keeps `floorTokens` of priority
- * AND the rendered prompt still fits the window (capping the token math without
- * shrinking the strings would overflow the real prompt).
+ * Trim a map of re-sent context blocks to fit a manuscript-floor budget and report the
+ * overhead the trimmed context costs. The single place that decides the floor (#1459):
+ * caps the token contribution (`capContextOverhead`) AND shrinks the strings
+ * (`trimContextToBudget`), since capping only the token math would overflow the real prompt.
  *
- * The LARGEST blocks are trimmed first — the issue's analysis is that `sceneMap`
- * grows unbounded with scene count while the others (plotlineMap, character arcs)
- * are bounded — so the bounded context survives and the unbounded one absorbs the
- * cut. Each block degrades gracefully when trimmed (the checks already handle an
- * absent block), and trimming is strictly better than feeding the model no prose.
+ * The LARGEST blocks are trimmed first: `sceneMap` grows unbounded with scene count
+ * while the others are bounded, so it absorbs the cut. Checks already handle an absent block.
  *
- * @param context - { [varName]: string } of trimmable context blocks (non-strings
- *   are coerced; an empty / non-object input yields `{}` and no trimming).
+ * @param context - { [varName]: string } of trimmable blocks (non-strings coerced;
+ *   an empty / non-object input yields `{}`).
  * @returns { context: { [varName]: string } (trimmed copy),
  *            overheadTokens: number (fixedOverheadTokens + trimmed context tokens),
  *            trimmed: boolean }
@@ -261,19 +198,13 @@ export function fitContextToManuscriptFloor(context, {
     return { context: blocks, overheadTokens: fixed + contextTokens, trimmed: false };
   }
 
-  // Trim the largest block first (by char length) so the unbounded scene map
-  // absorbs the cut while bounded blocks survive. Drive the loop on the TOKEN
-  // budget, not aggregate chars: `estimateTokens` ceilings per block, so several
-  // small blocks could fit the char budget yet still sum to more than
-  // `allowedContextTokens` — and the manuscript would undershoot its floor. Re-sum
-  // the per-block token estimate after each trim and keep shrinking the current
-  // largest until the total token cost is within budget.
+  // Largest first. Drive the loop on the TOKEN budget, not aggregate chars:
+  // `estimateTokens` ceilings per block, so small blocks could fit the char budget yet
+  // exceed `allowedContextTokens` and starve the manuscript floor. Re-sum after each trim.
   const largestFirst = entries.map(([k]) => k).sort((a, b) => blocks[b].length - blocks[a].length);
   const tokenSum = () => entries.reduce((n, [k]) => n + estimateTokens(blocks[k]), 0);
   for (const k of largestFirst) {
     if (tokenSum() <= allowedContextTokens) break;
-    // Chars this block must give back so the TOTAL token cost fits: the current
-    // overshoot (tokens) converted to chars, removed from this (largest) block.
     const overshootTokens = tokenSum() - allowedContextTokens;
     blocks[k] = trimContextToBudget(blocks[k], Math.max(0, blocks[k].length - overshootTokens * CHARS_PER_TOKEN));
   }
@@ -282,20 +213,13 @@ export function fitContextToManuscriptFloor(context, {
 }
 
 /**
- * Expand one section into `{ section, tokens }` units that each fit the usable
- * budget. A section within budget passes through unchanged. An over-budget
- * section that follows the `${header}\n\n${body}` convention every consumer
- * uses (its `text` is the header-prefixed `content`) is split on `body` — via
- * the shared, lossless `chunkRawText` boundary splitter (paragraph → newline →
- * sentence → whitespace → hard cut), with the header preserved on each piece
- * via the retained meta fields. So downstream `sectionsCorpus(chunk.sections)`
- * re-attaches identical issue attribution and the consumers' first-wins
- * finding-merge still dedups across the sub-chunks. `maxChunks: Infinity`
- * disables `chunkRawText`'s chunk-count ceiling so an arbitrarily long section
- * is never trimmed — the whole point of this split. A section that can't be
- * split that way (no string body, or a header that alone exceeds the budget)
- * passes through as one over-budget unit the caller truncates, exactly as
- * before.
+ * Expand one section into `{ section, tokens }` units that each fit the usable budget.
+ * An over-budget section following the `${header}\n\n${body}` convention (its `text` is the
+ * header-prefixed `content`) is split on `body` via the lossless `chunkRawText`, with the
+ * header preserved on each piece so `sectionsCorpus` re-attaches identical issue attribution
+ * and first-wins finding-merge still dedups across sub-chunks. `maxChunks: Infinity` so a
+ * long section is never trimmed. An unsplittable section (no string body, or header alone
+ * over budget) passes through as one over-budget unit the caller truncates.
  */
 function expandSection(section, text, tokens, usableTokens, usableChars) {
   if (tokens <= usableTokens) return [{ section, tokens }];
@@ -317,22 +241,17 @@ function expandSection(section, text, tokens, usableTokens, usableChars) {
 /**
  * Plan how to feed a multi-section manuscript to a model with a given window.
  *
- * @param sections - [{ ...meta, text }] where `text` is the section's full
- *   contribution to the corpus (header + body). Order is preserved. A section
- *   that also carries a string `content` (so `text === \`${header}\n\n${content}\``)
- *   can be split when it alone overflows the window.
+ * @param sections - [{ ...meta, text }] where `text` is the section's full corpus
+ *   contribution (header + body); order is preserved. A section also carrying a string
+ *   `content` (`text === \`${header}\n\n${content}\``) can be split when it alone overflows.
  * @returns
  *   { mode: 'whole',   usableTokens, usableChars, totalTokens }
  *   { mode: 'chunked', usableTokens, usableChars, totalTokens,
  *     chunks: [{ sections, tokens }] }
  *
- * When a single section is larger than the usable budget it is split into
- * multiple header-preserving sub-chunks (on paragraph/sentence boundaries) so
- * its tail is reviewed instead of truncated — unless it can't be split that way
- * (no string body / a header that alone exceeds the budget), in which case it
- * stays one over-budget unit the caller truncates, as before. A corpus that
- * fits the window (including the empty / single-fitting-section case) is
- * `whole`.
+ * An oversized single section is split into header-preserving sub-chunks so its tail
+ * is reviewed (#1386); an unsplittable one stays one over-budget unit the caller
+ * truncates. A corpus that fits (including empty) is `whole`.
  */
 export function planManuscriptPass({
   contextWindow,
@@ -347,33 +266,22 @@ export function planManuscriptPass({
   const withTokens = list.map((s) => ({ section: s, tokens: estimateTokens(s?.text) }));
   const totalTokens = withTokens.reduce((n, x) => n + x.tokens, 0);
 
-  // Everything fits → one call. The whole-corpus render joins the sections with
-  // a separator, so the fit decision counts those too — otherwise a corpus that
-  // only fits *without* separators is mislabeled `whole` and the consumer's
-  // slice trims its tail.
+  // The fit decision counts separators, or a corpus fitting only without them is mislabeled `whole`.
   const renderedTokens = totalTokens + Math.max(0, list.length - 1) * SECTION_SEPARATOR_TOKENS;
   if (renderedTokens <= usableTokens) {
     return { mode: 'whole', usableTokens, usableChars, totalTokens };
   }
 
-  // Over budget → expand any over-budget section into header-preserving
-  // sub-sections (so an oversized single section's tail is reviewed, not
-  // truncated — #1386), then greedily first-fit order-preserving chunks.
+  // Expand over-budget sections (#1386), then first-fit chunks.
   const units = withTokens.flatMap(({ section, tokens }) =>
     expandSection(section, section?.text, tokens, usableTokens, usableChars));
 
-  // A lone section that couldn't be split stays one over-budget `whole` pass —
-  // identical to the prior behavior (the caller truncates it). Only emit
-  // `chunked` when there's genuinely more than one unit to feed.
+  // A lone unsplittable section stays one over-budget `whole` pass (caller truncates).
   if (units.length <= 1) {
     return { mode: 'whole', usableTokens, usableChars, totalTokens };
   }
 
-  // Greedy first-fit packing, order-preserving. Each chunk stays under the
-  // usable budget unless a single (unsplittable) section already exceeds it.
-  // The join separator between packed sections is counted so a chunk's rendered
-  // corpus never overflows usableChars (and gets sliced) once the consumer
-  // re-joins the sections.
+  // Greedy first-fit, order-preserving; separators counted so a re-joined chunk never overflows usableChars.
   const chunks = [];
   let cur = [];
   let curTokens = 0;

@@ -99,14 +99,14 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
     };
 
     if (isCreate) {
-      const created = await api.createFeatureAgent(payload, { silent: true }).catch(() => null);
+      const created = await api.createFeatureAgent(payload).catch(() => null);
       setSaving(false);
       if (created) {
         toast.success('Feature agent created');
         onSave?.(created);
       }
     } else {
-      const updated = await api.updateFeatureAgent(agent.id, payload, { silent: true }).catch(() => null);
+      const updated = await api.updateFeatureAgent(agent.id, payload).catch(() => null);
       setSaving(false);
       if (updated) {
         toast.success('Config saved');

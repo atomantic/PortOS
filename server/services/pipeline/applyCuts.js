@@ -46,68 +46,6 @@ export {
 const stageTextOf = (stage) => (stage?.output?.trim() || stage?.input?.trim() || '');
 
 /**
- * Dry-run preview of cuts. Returns the impact without applying.
- *
- * @param {string} seriesId
- * @param {Array<{ id: string, anchorQuote: string, subtype: string|null, issueNumber?: number, issueId?: string, stageId?: string }>} comments
- * @param {{ safeTypesOnly?: boolean, allowTypes?: string[], minFatPercent?: number }} opts
- * @returns {Promise<{ preview: Array<{ issueNumber: number, issueId: string, stageId: string, before: string, after: string, applied: number, refused: number, refusedDetails: Array }>, totalApplied: number, totalRefused: number }>}
- */
-export async function previewCuts(seriesId, comments, { safeTypesOnly = true, allowTypes = SAFE_CUT_TYPES } = {}) {
-  const sections = await collectManuscriptSections(seriesId);
-  const byIssue = new Map();
-  for (const s of sections) {
-    const key = `${s.issueId}:${s.stageId}`;
-    if (!byIssue.has(key)) byIssue.set(key, s);
-  }
-
-  // Group comments by section.
-  const commentsBySection = new Map();
-  for (const c of comments) {
-    const key = c.issueId && c.stageId
-      ? `${c.issueId}:${c.stageId}`
-      : (c.issueNumber != null
-        ? sections.find((s) => s.number === c.issueNumber)?.let?.((s) => `${s.issueId}:${s.stageId}`)
-        : null);
-    if (!key) continue;
-    if (!commentsBySection.has(key)) commentsBySection.set(key, []);
-    commentsBySection.get(key).push(c);
-  }
-
-  const preview = [];
-  let totalApplied = 0;
-  let totalRefused = 0;
-
-  for (const [key, sectionComments] of commentsBySection) {
-    const section = byIssue.get(key);
-    if (!section) continue;
-
-    const { applicable, refused } = planCutsForSection(section.content || '', sectionComments, {
-      safeTypesOnly,
-      allowTypes,
-    });
-
-    const after = applicable.length > 0 ? applyCutsToText(section.content || '', applicable) : section.content;
-
-    preview.push({
-      issueNumber: section.number,
-      issueId: section.issueId,
-      stageId: section.stageId,
-      before: section.content || '',
-      after,
-      applied: applicable.length,
-      refused: refused.length,
-      refusedDetails: refused,
-    });
-
-    totalApplied += applicable.length;
-    totalRefused += refused.length;
-  }
-
-  return { preview, totalApplied, totalRefused };
-}
-
-/**
  * Apply cuts to manuscript sections. Writes through the serialized stage-write
  * path with runHistory snapshots for undo.
  *

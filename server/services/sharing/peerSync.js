@@ -30,7 +30,7 @@ import { flushBaseHashes, withBaseHashFlushBatch } from '../../lib/conflictJourn
 import { recordEvents, registerSubscriptionAdapter } from './recordEvents.js';
 import { getPeers, enqueueReciprocalSync } from '../instances.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instanceIdentity.js';
-import { peerSyncPushSchema } from '../../lib/validation.js';
+import { peerSyncPushSchema } from '../../lib/peerSyncValidation.js';
 import { instanceEvents } from '../instanceEvents.js';
 import { getIssue } from '../pipeline/issues.js';
 import { listCollections } from '../mediaCollections.js';

@@ -9,7 +9,6 @@
 import { join } from 'path';
 import { dashboardEvents, scheduleDashboardExpiry } from './dashboardEvents.js';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { cosEvents } from './cosEvents.js';
 
 const DATA_DIR = PATHS.cos;
 const DECISION_FILE = join(DATA_DIR, 'decisions.json');
@@ -28,7 +27,6 @@ export const DECISION_TYPES = {
   QUEUE_FULL: 'queue_full',                 // Too many tasks in queue
   CAPACITY_FULL: 'capacity_full',           // Max concurrent agents reached (global or per-project)
   TASK_SELECTED: 'task_selected',           // Task was selected to run
-  REHABILITATION: 'rehabilitation',         // Skipped task type retried
   IDLE: 'idle'                              // No work available after full evaluation
 };
 
@@ -101,7 +99,6 @@ export async function recordDecision(type, reason, context = {}) {
     data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
 
     await saveDecisions(data);
-    cosEvents.emit('decision', { ...prev });
     return prev;
   }
 
@@ -127,9 +124,6 @@ export async function recordDecision(type, reason, context = {}) {
   data.stats.byType[type] = (data.stats.byType[type] || 0) + 1;
 
   await saveDecisions(data);
-
-  // Emit event for real-time updates
-  cosEvents.emit('decision', decision);
 
   return decision;
 }
@@ -179,7 +173,6 @@ export async function getDecisionSummary() {
     DECISION_TYPES.TASK_SKIPPED,
     DECISION_TYPES.TASK_SWITCHED,
     DECISION_TYPES.INTERVAL_ADJUSTED,
-    DECISION_TYPES.REHABILITATION,
     DECISION_TYPES.CAPACITY_FULL,
     DECISION_TYPES.COOLDOWN_ACTIVE
   ];
@@ -215,66 +208,3 @@ export async function getDecisionSummary() {
     hasImpactfulDecisions: impactfulDecisions.length > 0
   };
 }
-
-/**
- * Get patterns in decisions (for insights)
- */
-export async function getDecisionPatterns() {
-  const data = await loadDecisions();
-
-  // Analyze task types that are frequently skipped
-  const skippedTasks = {};
-  const switchedFrom = {};
-
-  for (const d of data.decisions) {
-    if (d.type === DECISION_TYPES.TASK_SKIPPED && d.context?.taskType) {
-      skippedTasks[d.context.taskType] = (skippedTasks[d.context.taskType] || 0) + 1;
-    }
-    if (d.type === DECISION_TYPES.TASK_SWITCHED && d.context?.fromTask) {
-      switchedFrom[d.context.fromTask] = (switchedFrom[d.context.fromTask] || 0) + 1;
-    }
-  }
-
-  // Find most skipped tasks
-  const frequentlySkipped = Object.entries(skippedTasks)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([taskType, count]) => ({ taskType, count }));
-
-  return {
-    frequentlySkipped,
-    totalSkips: Object.values(skippedTasks).reduce((a, b) => a + b, 0),
-    totalSwitches: Object.values(switchedFrom).reduce((a, b) => a + b, 0),
-    stats: data.stats
-  };
-}
-
-/**
- * Clear old decisions (keep last N days)
- */
-export async function cleanupOldDecisions(daysToKeep = 7) {
-  const data = await loadDecisions();
-  const cutoff = Date.now() - daysToKeep * 24 * 60 * 60 * 1000;
-
-  const before = data.decisions.length;
-  data.decisions = data.decisions.filter(
-    d => new Date(d.timestamp).getTime() > cutoff
-  );
-  const removed = before - data.decisions.length;
-
-  if (removed > 0) {
-    await saveDecisions(data);
-  }
-
-  return { removed, remaining: data.decisions.length };
-}
-
-// Export types for easy importing
-export default {
-  recordDecision,
-  getRecentDecisions,
-  getDecisionSummary,
-  getDecisionPatterns,
-  cleanupOldDecisions,
-  DECISION_TYPES
-};

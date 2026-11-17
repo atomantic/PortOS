@@ -2,13 +2,10 @@
  * Read-only view of the user's own `~/.codex/config.toml` model routing.
  *
  * WHY THIS EXISTS. Third-party bridges re-point the Codex CLI by writing
- * top-level routing keys — a base URL, a named model provider, a model catalog
- * — into that file. Every `codex` invocation on the machine then runs through
- * whatever the file names, PortOS's own spawns included, while the AI Providers
- * card keeps reporting the signed-in ChatGPT account's readiness and the quota
- * meters keep reporting that account's limits. Nothing is wrong with choosing
- * such a bridge; the failure is that PortOS reports one thing and does another.
- * This module is what lets it say so.
+ * top-level routing keys (base URL, model provider, model catalog) into that
+ * file, so every `codex` spawn, PortOS's included, runs through it while the
+ * AI Providers card still reports the ChatGPT account's readiness and quota.
+ * This module lets PortOS say so.
  *
  * READ ONLY, ALWAYS. Never write, repair, or migrate this file — it is the
  * user's, several tools edit it, and a rewrite by PortOS can silently unpick
@@ -43,13 +40,7 @@ export const CODEX_ROUTING_KEYS = Object.freeze(['openai_base_url', 'model_provi
 const KEY_ASSIGNMENT = /^\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_.-]+))\s*=\s*(.*)$/;
 const TABLE_HEADER = /^\s*\[/;
 
-/**
- * Strip a TOML scalar's surrounding quotes; a non-string value returns null.
- *
- * Triple quotes come FIRST, or a single-line `"""http://…"""` matches the
- * empty basic string `""` and reports a base URL of `''` — present but blank,
- * which is the "absent vs empty" collapse the repo's sentinel rule forbids.
- */
+/** Strip a TOML scalar's quotes; non-string returns null. Triple quotes must be tried FIRST or `"""x"""` matches the empty string `""`. */
 const stringValue = (raw) => {
   const trimmed = String(raw ?? '').trim();
   const tripled = /^"""([\s\S]*)"""$|^'''([\s\S]*)'''$/.exec(trimmed);
@@ -60,7 +51,7 @@ const stringValue = (raw) => {
 
 /**
  * Which routing keys `tomlText` assigns at the top level, and the base URL it
- * points at. Pure — exported for tests.
+ * points at. Pure.
  *
  * @returns {{overridden: boolean, keys: string[], baseUrl: string|null}}
  */
@@ -77,8 +68,7 @@ export function parseCodexRoutingOverride(tomlText) {
     const stripped = line.trim();
     if (stripped === '' || stripped.startsWith('#')) continue;
     if (TABLE_HEADER.test(line)) {
-      // Everything after the first table header belongs to that table, so no
-      // later assignment is top-level however the file is ordered.
+      // Everything after the first table header belongs to that table.
       inTable = true;
       continue;
     }
@@ -86,9 +76,7 @@ export function parseCodexRoutingOverride(tomlText) {
     if (!match) continue;
     const value = match[4];
     const fence = /^("""|''')/.exec(value.trim());
-    // A multi-line string opened and not closed on this line swallows the lines
-    // that follow — otherwise a base URL quoted inside a prompt would read as
-    // an assignment.
+    // An unclosed multi-line string swallows following lines, so quoted text in a prompt isn't read as an assignment.
     if (fence && value.trim().indexOf(fence[1], fence[1].length) === -1) openHeredoc = fence[1];
     if (inTable) continue;
     const key = match[1] ?? match[2] ?? match[3];
@@ -99,9 +87,7 @@ export function parseCodexRoutingOverride(tomlText) {
   return { overridden: keys.length > 0, keys, baseUrl };
 }
 
-// Cache-only reads: `GET /api/providers` is polled, and re-reading the file per
-// request would be a syscall per card. Short enough that a user who edits the
-// file sees the badge follow within one refresh.
+// TTL cache: `GET /api/providers` is polled; short enough that file edits show within one refresh.
 const SNAPSHOT_TTL_MS = 10_000;
 let cached = null;
 let cachedAt = 0;
@@ -118,7 +104,6 @@ let cachedAt = 0;
  * @param {string} [options.codexHome] — override the config directory (tests)
  * @param {boolean} [options.force] — bypass the TTL cache
  * @returns {{overridden: boolean, keys: string[], baseUrl: string|null}|null}
-  * PortOS never writes this file. `null` means it could not be read, which is not the same as an absent file (a definite `overridden: false`).
  */
 export function readCodexRoutingOverride({ codexHome = null, force = false } = {}) {
   const home = codexHome || codexHomeDir();
@@ -128,8 +113,7 @@ export function readCodexRoutingOverride({ codexHome = null, force = false } = {
   try {
     snapshot = parseCodexRoutingOverride(readFileSync(join(home, 'config.toml'), 'utf8'));
   } catch (err) {
-    // ENOENT is an answer ("no user config, so no override"); anything else is
-    // "could not tell", which the sentinel above keeps distinct.
+    // ENOENT is a definite "no override"; anything else is "could not tell" (null).
     snapshot = err?.code === 'ENOENT' ? { overridden: false, keys: [], baseUrl: null } : null;
   }
   if (!codexHome) {

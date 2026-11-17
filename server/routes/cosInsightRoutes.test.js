@@ -37,7 +37,6 @@ vi.mock('../services/goalProgress.js', () => ({
 vi.mock('../services/decisionLog.js', () => ({
   getRecentDecisions: vi.fn(),
   getDecisionSummary: vi.fn(),
-  getDecisionPatterns: vi.fn()
 }));
 
 const detectIdleLeftoverBranches = vi.hoisted(() => vi.fn(async () => []));
@@ -450,13 +449,4 @@ describe('CoS Insight Routes', () => {
     });
   });
 
-  describe('GET /api/cos/decisions/patterns', () => {
-    it('should return decision patterns', async () => {
-      decisionLog.getDecisionPatterns.mockResolvedValue({ patterns: [] });
-
-      const response = await request(app).get('/api/cos/decisions/patterns');
-
-      expect(response.status).toBe(200);
-    });
-  });
 });

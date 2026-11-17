@@ -68,13 +68,18 @@ export const documentPreviewLook = (project, lookOn) => (lookOn ? (project.filmL
 // Why the server plays this document by exact per-frame seeks instead of smooth native playback.
 const FALLBACK_REASONS = {
   'unrecognized-engine': 'its engine was customized',
+  'custom-helper': 'a helper file differs from the shipped one',
+  'custom-font': 'a font file differs from the shipped one',
+  'missing-helper': 'a helper file is missing',
   'unsupported-video-fps': 'a clip has an unknown or very low frame rate',
   'unsupported-capture-protocol': 'the preview browser is too old',
   'unsupported-frame-callbacks': 'the preview browser is too old',
 };
-export const playbackFallbackSummary = (fallback) => fallback
-  ? `Playing frame by frame, so motion is choppy: ${fallback.upgradable ? 'this document uses an older layered engine' : FALLBACK_REASONS[fallback.reason] || 'the document was customized'}.`
-  : '';
+export const playbackFallbackSummary = (fallback) => {
+  if (!fallback) return '';
+  const why = fallback.upgradable ? (fallback.file ? 'this document carries an older shipped file' : 'this document uses an older layered engine') : FALLBACK_REASONS[fallback.reason] || 'the document was customized';
+  return `Playing frame by frame, so motion is choppy: ${why}${fallback.file ? ` (${fallback.file})` : ''}.`;
+};
 
 const EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
 const SHOTS_SHOWN = 6;
@@ -381,7 +386,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     if (mounted.current) setUpgrading(false);
     if (!result) return;
     if (result.project) onProject(result.project);
-    toast.success(result.changed ? 'Layered engine updated' : 'Layered engine is already current');
+    const custom = result.customHelpers?.length ? ` — kept customized ${result.customHelpers.join(', ')}` : '';
+    toast.success(`${result.changed ? 'Layered engine updated' : 'Layered engine is already current'}${custom}`);
   };
 
   if (!doc) return null;
@@ -424,7 +430,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           )}
         </div>
       )}
-      <div title={title} className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
+      <div title={title} data-preview-picture className={`overflow-hidden rounded border border-port-border bg-black mx-auto ${collapsed ? 'max-xl:hidden' : ''}`}
         style={{ aspectRatio: aspect, maxHeight: '70vh', maxWidth: '100%' }}>
         {preview.frameUrl ? (
           <img ref={preview.imageRef} onLoad={preview.onFrameLoad} alt="" src={preview.frameUrl} className="h-full w-full object-contain" />
@@ -432,7 +438,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
           <p className="p-3 text-xs text-port-text-muted">{failed ? '' : wanted ? 'Building the preview…' : ''}</p>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2">
+      <div data-preview-scrub className="flex flex-wrap items-center gap-2">
         {request && (preview.status === 'idle' || failed) && <button type="button" className={buttonCls} onClick={retryPreview}>{failed ? 'Retry preview' : 'Resume preview'}</button>}
         <button type="button" className={buttonCls} onClick={togglePlay} disabled={!preview.ready || !audioUrl || (failed && !playing)}>
           {playing || preparing ? <Pause size={14} /> : <Play size={14} />} {playing || preparing ? 'Pause' : 'Play'}
@@ -444,21 +450,23 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
         {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
       </div>
-      {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
-      {shotNav && (
-        <FrameStepper
-          time={t}
-          fps={fps}
-          maxSec={duration || null}
-          onSeek={stopPlayback}
-          disabled={!preview.ready || failed}
-          capture={preview.captureFrame}
-          label={[project.name, activeShot ? sceneShotName(activeShot, { number: shotIndex }) : null].filter(Boolean).join(' · ')}
-          keys
-        />
-      )}
-      {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
-      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
+      <div data-preview-controls className="space-y-2 empty:hidden">
+        {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
+        {shotNav && (
+          <FrameStepper
+            time={t}
+            fps={fps}
+            maxSec={duration || null}
+            onSeek={stopPlayback}
+            disabled={!preview.ready || failed}
+            capture={preview.captureFrame}
+            label={[project.name, activeShot ? sceneShotName(activeShot, { number: shotIndex }) : null].filter(Boolean).join(' · ')}
+            keys
+          />
+        )}
+        {lyric && !lyrics && <p className="text-xs italic break-words" aria-live="off" data-testid="preview-lyric">♪ {lyric}</p>}
+      </div>
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="none" data-song-clock="0" className="hidden" onError={handleAudioError} onEnded={() => stopPlayback()} />}
     </div>
   );
 }

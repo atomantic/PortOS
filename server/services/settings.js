@@ -2,7 +2,7 @@ import { hydratePrivateKeys, persistPrivateKeys } from './privateKeyStore.js';
 import { join } from 'path';
 import { stat } from 'node:fs/promises';
 import { EventEmitter } from 'events';
-import { safeJSONParse, PATHS, atomicWrite, tryReadFile, tryReadFileStrict } from '../lib/fileUtils.js';
+import { safeJSONParse, PATHS, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { createFileWriteQueue, drainDetachedWrites, trackDetachedWrite } from '../lib/fileWriteQueue.js';
 import { canonicalStringify, isPlainObject, POLLUTING_KEYS } from '../lib/objects.js';
 // `./userActions.js` is imported lazily at its single call site: it reaches the DB
@@ -50,15 +50,11 @@ settingsEvents.setMaxListeners(50);
 // HANDED: `updateSettings(patch)` exposes disk and patch pollution for one consolidated
 // warning; a manual getSettings() -> saveSettings() hands save() stripped data (no
 // warning, and it can't reintroduce pollution); a direct saveSettings(bad) warns once.
-const loadRaw = async () => {
-  const raw = await tryReadFile(SETTINGS_FILE);
-  return hydratePrivateKeys(safeJSONParse(raw ?? '{}', {}), PATHS.data);
-};
 
 /**
  * Security-sensitive STRICT read of settings.json for the auth gate (#2684).
  *
- * loadRaw()/getSettings() collapse ABSENT, unreadable and unparseable files to `{}`,
+ * getSettings() collapses ABSENT, unreadable and unparseable files to `{}`,
  * which would make a corrupt file fail OPEN (auth disabled). This preserves the
  * distinction so security callers fail CLOSED:
  *   { present: false, corrupt: false } absent (ENOENT): auth legitimately off
@@ -85,7 +81,7 @@ export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
 // Read-side cache: getSettings() is called 100+ times, so memoize.
 // - Populated lazily; refreshed from the `settings:updated` event save() already emits,
 //   so every write path keeps it coherent.
-// - Write paths still read `loadRaw()` from disk inside the write queue, so their
+// - Write paths still read settings.json from disk inside the write queue, so their
 //   read-merge-write base is never the cache.
 // - `null` = not-yet-loaded, distinct from a legitimately empty `{}`.
 // - Callers may mutate nested settings in place, so the cache is never handed out:
@@ -205,7 +201,8 @@ const save = async (settings, { actor = 'system', skipUserAction = false } = {},
   // Stamp `timezoneUpdatedAt` only when the effective `timezone` changes, so schedulers
   // can gate catch-up on it (#2040). Compared against the previous on-disk value inside
   // the same queued write turn, so unrelated saves never touch it.
-  const prev = isPlainObject(cleaned) ? previousSettings ?? stripStoreKeys(await loadRaw()) : null;
+  const prev = isPlainObject(cleaned) ? previousSettings
+    ?? stripStoreKeys(await hydratePrivateKeys((await readSettingsStrict()).settings, PATHS.data)) : null;
   // Diff BEFORE the stamp below so a timezone change reports `keysChanged: ['timezone']`.
   const change = isPlainObject(prev) ? diffSettings(prev, cleaned) : null;
   if (isPlainObject(prev) && cleaned.timezone !== prev.timezone) {
@@ -310,8 +307,7 @@ export const getSettingsWithStatus = async () => {
     settingsSignature = signature;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
-  // can't corrupt the shared cache — matching the prior per-call
-  // `stripStoreKeys(await loadRaw())` deep-copy semantics, minus the I/O.
+  // can't corrupt the shared cache.
   return { corrupt: false, settings: structuredClone(settingsCache) };
 };
 
@@ -319,7 +315,7 @@ export const getSettings = async () => (await getSettingsWithStatus()).settings;
 export const saveSettings = (settings, options) => queueWrite(() => save(settings, options));
 
 // The merge base for every partial write, read strictly inside the queued turn.
-// loadRaw() reads a present-but-unreadable or malformed file as `{}`, and a
+// A tolerant read would turn a present-but-unreadable or malformed file into `{}`, and a
 // partial write merged onto that replaced every setting (auth secret included)
 // with just its patch. A confirmed-absent file (fresh install) is a valid empty
 // base; anything else refuses until the file is repaired or restored.

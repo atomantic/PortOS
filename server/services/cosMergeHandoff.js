@@ -138,7 +138,9 @@ function completedRetryOwner(owners, branch) {
   for (const owner of sorted) {
     const dispatch = owner.metadata?.completionTaskDispatch;
     const expected = dispatch?.expected;
-    const ordinal = Array.isArray(expected) ? expected.find(row => Array.isArray(row) && row[0] === 'totalSpawnCount')?.[1] : null;
+    // Receipts copy the stored count: a number since #16407, its string before.
+    const recorded = Array.isArray(expected) ? expected.find(row => Array.isArray(row) && row[0] === 'totalSpawnCount')?.[1] : null;
+    const ordinal = typeof recorded === 'number' || (typeof recorded === 'string' && /^\d+$/.test(recorded)) ? Number(recorded) : NaN;
     if (owner.status !== 'completed' || owner.taskId !== first.taskId
       || owner.metadata?.instanceId !== instance || dispatch?.taskId !== first.taskId
       || dispatch.spawnBudgetEpoch !== epoch || !Number.isSafeInteger(ordinal) || ordinal < 1

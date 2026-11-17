@@ -53,11 +53,9 @@ const DEFAULT_ON_SET = new Set(DEFAULT_ON_SYNC_CATEGORIES);
 export const isDefaultOnCategory = (key) => DEFAULT_ON_SET.has(key);
 
 // Does this category map enable anything the user actually opted into?
-//
-// `syncEnabled` is derived from this, and it is NOT a cosmetic flag: it also
-// gates per-record OUTBOUND pushes (`peerAllowsOutbound`). A default-ON category
-// must therefore never flip it on by itself, or adding one would silently widen
-// what every existing peer is allowed to receive.
+// `syncEnabled` is derived from this and also gates per-record OUTBOUND pushes
+// (`peerAllowsOutbound`), so a default-ON category must never flip it on by
+// itself or it would silently widen what every existing peer may receive.
 export function hasOptedInCategory(categories) {
   return Object.entries(categories || {}).some(([key, on]) => on === true && !isDefaultOnCategory(key));
 }
@@ -75,30 +73,22 @@ function peerUserEstablished(peer) {
 }
 
 /**
- * The effective sync-category map for a peer — the single resolution of "what
- * syncs with this peer", used by BOTH the sync loop (syncOrchestrator) and the
- * client-facing peer payload (sanitizePeerForClient). Two resolvers would drift,
- * and the UI would then show something the loop doesn't do.
+ * The effective sync-category map for a peer — the single resolution used by
+ * BOTH the sync loop (syncOrchestrator) and the client-facing peer payload
+ * (sanitizePeerForClient), so the UI never shows something the loop doesn't do.
  *
- * The rules, in order:
- *  - A full-sync ("mirror everything") peer implies every current AND future
- *    category on, whatever its stored map says.
- *  - The shipped defaults sit UNDER the stored map, so a category added after
- *    this peer record was written picks up its default instead of reading as
- *    `undefined` (= off) forever. No migration needed; a key the user actually
- *    toggled is present in the stored map and always wins.
+ *  - A full-sync peer implies every current AND future category on.
+ *  - Shipped defaults sit UNDER the stored map, so a category added later picks
+ *    up its default instead of reading as `undefined` (= off); a key the user
+ *    toggled always wins.
  *  - **A default-ON category defaults on only for a peer the user established.**
  *    `handleAnnounce` auto-creates an inbound-only record for any host that can
- *    reach the port, with no approval step — so letting a default reach those
- *    would start pulling an unknown machine's data into this install the moment
- *    it announced itself. An explicit stored `true` still wins there: if the
- *    user ticked the box for an inbound peer, that is a decision, not a default.
- *  - `masterSwitch` (default true) applies `syncEnabled: false` — the user's
- *    "don't replicate my content to this peer" switch — by masking the result
- *    down to the default-ON categories rather than silencing the peer outright.
- *    Pass `false` to read what the user has CONFIGURED, independent of that
- *    switch (what the settings UI renders). Disabling the PEER
- *    (`enabled: false`) always stops everything, in either mode.
+ *    reach the port with no approval step, so a default must not start pulling
+ *    an unknown machine's data. An explicit stored `true` still wins.
+ *  - `masterSwitch` (default true) applies `syncEnabled: false` by masking the
+ *    result down to the default-ON categories. Pass `false` to read what the
+ *    user has CONFIGURED (what the settings UI renders). Disabling the PEER
+ *    (`enabled: false`) always stops everything.
  */
 export function resolveEffectiveCategories(peer, { masterSwitch = true } = {}) {
   if (peer?.fullSync === true) return allSyncCategoriesOn();
@@ -111,21 +101,18 @@ export function resolveEffectiveCategories(peer, { masterSwitch = true } = {}) {
     // Legacy fallback: a peer with no stored map but sync on gets brain+memory,
     // the pre-per-category behavior.
     : { ...defaults, ...(peer?.syncEnabled !== false ? { brain: true, memory: true } : {}) };
-  // Video-history rows are the metadata half of Media Collections: a synced
-  // collection's `{ kind:'video' }` items only render once the matching row
-  // exists. There is no separate user-facing toggle, so `mediaCollections`
-  // implies `videoHistory`; a legacy peer that only had `videoHistory` on keeps
-  // it (OR, never AND), so upgrading stops nothing that was flowing.
+  // Video-history rows are the metadata half of Media Collections (synced
+  // `{ kind:'video' }` items render only once the row exists), so
+  // `mediaCollections` implies `videoHistory`; OR, never AND, so a legacy peer
+  // with only `videoHistory` keeps it.
   const stored = storedRaw.mediaCollections ? { ...storedRaw, videoHistory: true } : storedRaw;
   if (!masterSwitch || peer?.syncEnabled !== false) return stored;
   return Object.fromEntries(DEFAULT_ON_SYNC_CATEGORIES.map((key) => [key, stored[key] === true]));
 }
 
-// A category map with every key forced on — the effective view a full-sync
-// ("mirror everything") peer presents. Derived from DEFAULT_SYNC_CATEGORIES so a
-// newly added category is covered by full-sync peers with no per-peer change.
-// Used by the snapshot orchestrator (what a full-sync peer pulls) and the
-// reciprocation send (the all-on map a full-sync peer asks its mirror to adopt).
+// A category map with every key forced on — the effective view of a full-sync
+// peer. Derived from DEFAULT_SYNC_CATEGORIES so new categories are covered
+// with no per-peer change.
 export function allSyncCategoriesOn() {
   return Object.fromEntries(Object.keys(DEFAULT_SYNC_CATEGORIES).map((k) => [k, true]));
 }

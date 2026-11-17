@@ -1,27 +1,13 @@
 /**
- * Parse an OpenAI-compatible `/models` payload into the two things a provider
- * record stores: the model ids, and each model's REAL context window when the
- * catalog reports one.
- *
- * Why the second half exists: without it, every model a hosted gateway serves
- * fell through to the hardcoded `KNOWN_MODEL_CONTEXT_WINDOWS` regex table and,
- * failing that, to a blanket 128K assumption — so a 1M-context model reached by
- * OpenRouter (`stealth/ox-alpha`) was budgeted and CHUNKED as if it were 128K.
- * The catalog is the serving side's own declaration, so reading it is both more
- * accurate than a regex table and free of the per-model maintenance that table
- * demands.
- *
- * Kept in `internal/` (like `gateways.js` and `ollamaBacked.js`) because
- * `providerCatalogService.js` is the only caller and this directory stays self-contained —
- * no imports out to other PortOS modules (see ../AGENTS.md).
+ * Parse an OpenAI-compatible `/models` payload into the model ids and each
+ * model's REAL context window when the catalog reports one (it beats the
+ * `KNOWN_MODEL_CONTEXT_WINDOWS` regex table and the 128K fallback).
  */
 
 /**
- * Keys under which an OpenAI-compatible catalog declares a context window.
- * Different servers spell it differently and the union is small enough to just
- * read all of them: OpenRouter (`context_length`), vLLM (`max_model_len`),
- * LM Studio (`max_context_length` / `loaded_context_length`), llama.cpp
- * (`n_ctx`), and the OpenAI-style `context_window` / `max_input_tokens`.
+ * Keys under which OpenAI-compatible catalogs declare a context window: OpenRouter
+ * (`context_length`), vLLM (`max_model_len`), LM Studio, llama.cpp (`n_ctx`), and
+ * the OpenAI-style names.
  */
 const CONTEXT_WINDOW_KEYS = Object.freeze([
   'context_length',
@@ -41,17 +27,13 @@ const positiveInt = (value) => {
 
 /**
  * The context window one catalog entry declares, or `null` when it declares
- * none. `null` is the "catalog didn't say" sentinel and must never collapse
- * into a number — the caller falls back to its own heuristics for it, which is
- * a different answer from "this model's window is small".
+ * none. `null` is the "catalog didn't say" sentinel (caller falls back to
+ * heuristics) and must never collapse into a number.
  *
- * When an entry declares SEVERAL windows the SMALLEST wins. OpenRouter is the
- * case that forces this: its top-level `context_length` is the widest window
- * any upstream offers for that model, while `top_provider.context_length` is
- * what the default route actually serves. Budgeting to the wider number would
- * build a prompt the served route rejects, so the conservative bound is the
- * only safe read — and the same rule handles a local server that reports both a
- * model's trained maximum and the smaller window it was loaded at.
+ * When an entry declares SEVERAL windows the SMALLEST wins: OpenRouter's
+ * top-level `context_length` is the widest any upstream offers while
+ * `top_provider.context_length` is what the default route serves, and a local
+ * server may report trained maximum and loaded window.
  *
  * @param {unknown} entry
  * @returns {number|null}
@@ -59,9 +41,8 @@ const positiveInt = (value) => {
 export function catalogContextWindow(entry) {
   if (!entry || typeof entry !== 'object') return null;
   let smallest = null;
-  // One level of nesting, not a recursive walk: `top_provider` is the only
-  // nested shape any supported catalog uses, and a blind deep scan would sweep
-  // up unrelated numeric fields (pricing, quantization) that merely share a key.
+  // One level of nesting (`top_provider`), not a deep scan, which would catch
+  // unrelated numeric fields sharing a key.
   for (const source of [entry, entry.top_provider]) {
     if (!source || typeof source !== 'object') continue;
     for (const key of CONTEXT_WINDOW_KEYS) {
@@ -75,15 +56,13 @@ export function catalogContextWindow(entry) {
 /**
  * Normalize a catalog array into `{ models, contextWindows }`.
  *
- * Entries are usually `{ id }` under `data` and bare strings under `models`,
- * but servers mix all four shapes — hence the id fallbacks. An entry that
- * resolves to no usable id THROWS rather than being dropped: a partially
- * understood catalog persisted as a plausible-looking list is worse than a
- * refresh that fails loudly (same posture as `_execCliModelList`).
+ * Servers mix entry shapes (`{ id }`, bare strings, name/model), hence the id
+ * fallbacks. An entry with no usable id THROWS rather than being dropped: a
+ * partially understood catalog persisted as a plausible list is worse than a
+ * loud failure (same posture as `_execCliModelList`).
  *
- * `contextWindows` carries an entry only for models whose window the catalog
- * actually declared — a bare string list yields `{}`, which the caller must
- * read as "unknown", never as "these models have no window".
+ * `contextWindows` only has models whose window was declared; `{}` means
+ * "unknown", never "no window".
  *
  * @param {unknown[]} entries
  * @param {string} key — the payload key the entries came from, for the error text
@@ -108,11 +87,9 @@ export function parseModelCatalog(entries, key) {
  * Coerce whatever a model fetcher returned into the catalog shape, or `null`
  * when it returned nothing usable.
  *
- * Most fetchers (every CLI probe, the Ollama `/api/tags` short-circuit) answer
- * with a plain `string[]` and have no window information to offer; only the
- * OpenAI-compatible `/models` parser returns the rich shape. Normalizing here
- * keeps `fetchProviderModels`' historical `string[]` contract intact while the
- * refresh path gets the windows.
+ * Most fetchers answer with a plain `string[]`; only the OpenAI-compatible
+ * `/models` parser returns the rich shape. Normalizing here keeps
+ * `fetchProviderModels`' `string[]` contract intact.
  *
  * @param {unknown} result
  * @returns {{ models: string[], contextWindows: Record<string, number> }|null}
@@ -126,18 +103,13 @@ export function toModelCatalog(result) {
 }
 
 /**
- * The one place that decides whether `modelContextWindows` is written at all.
- * Both the refresh path and `createProvider` go through this so the rule can't
- * be relaxed on one side only.
+ * The one place that decides whether `modelContextWindows` is written at all
+ * (refresh and `createProvider` share it).
  *
- * `clearWhenEmpty` is what separates the two callers. `createProvider` builds a
- * NEW record, so an empty map simply means "omit the field". A refresh PATCHES
- * an existing record through `updateProvider`'s shallow merge, where an omitted
- * key leaves the stored value untouched — so clearing a stale map there needs an
- * explicit `undefined`. Without it the prune below would silently no-op in
- * exactly the case it has the most to remove: every previously-known model
- * delisted at once, leaving windows keyed to models the provider no longer
- * serves (and still consulted for a `defaultModel` that dropped out of the list).
+ * `clearWhenEmpty`: `createProvider` builds a NEW record so an empty map means
+ * "omit"; a refresh PATCHES through `updateProvider`'s shallow merge, where an
+ * omitted key keeps the stored value, so clearing a stale map needs an explicit
+ * `undefined`.
  */
 export const modelContextWindowPatch = (windows, { clearWhenEmpty = false } = {}) => {
   if (windows && Object.keys(windows).length > 0) return { modelContextWindows: { ...windows } };
@@ -147,16 +119,10 @@ export const modelContextWindowPatch = (windows, { clearWhenEmpty = false } = {}
 /**
  * The `updateProvider` patch a probed catalog produces.
  *
- * The model list is always written — an empty list is a real answer (the user
- * deleted their last local model). The window map is a MERGE, not a
- * replacement, and that is the whole subtlety: catalogs are inconsistent about
- * declaring `context_length`, so a listing that declares it for 3 of 50 models
- * says nothing about the other 47. Replacing the map would drop them back to
- * the assumed 128K — the exact bug this feature exists to fix, one refresh
- * later. So: carry forward what earlier refreshes learned, let the fresh
- * catalog overwrite it, and prune anything for a model the provider no longer
- * lists (that entry can never be selected again, and keeping it grows the
- * record forever).
+ * The model list is always written (an empty list is a real answer). The window
+ * map is a MERGE: catalogs inconsistently declare `context_length`, so replacing
+ * would drop undeclared models back to the assumed 128K. Carry forward earlier
+ * windows, let the fresh catalog overwrite, and prune models no longer listed.
  *
  * @param {{models: string[], contextWindows: Record<string, number>}} catalog
  * @param {Record<string, number>} [previousWindows] — what the record already knew
@@ -170,8 +136,6 @@ export function modelCatalogUpdate(catalog, previousWindows) {
     if (kept && listed.has(id)) merged[id] = kept;
   }
   Object.assign(merged, catalog.contextWindows || {});
-  // Clear only when the record actually had windows — no need to write an
-  // explicit `undefined` onto a provider that never learned any.
   const hadWindows = Boolean(previousWindows && Object.keys(previousWindows).length > 0);
   return { models: [...catalog.models], ...modelContextWindowPatch(merged, { clearWhenEmpty: hadWindows }) };
 }

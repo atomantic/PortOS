@@ -394,3 +394,39 @@ export const findUnmountedClientPaths = (clientPaths, serverPaths) => {
     (entry) => !exact.has(entry.path) && !wildcards.some((matcher) => matcher.test(entry.path)),
   );
 };
+
+/**
+ * Mounted server routes no client wrapper path can reach — the reverse of
+ * `findUnmountedClientPaths`, returned as one entry per distinct route path with
+ * the methods declared on it.
+ *
+ * A route counts as reached when a client path matches it segment by segment, where
+ * a `:param` (server) or `:p` (client, fully dynamic) segment matches anything and
+ * an Express wildcard swallows one or more segments. This is deliberately
+ * permissive on the client side: a dynamic client segment may be calling a literal
+ * route. Matching is by path, not method, mirroring the forward check.
+ */
+export const findUncalledServerRoutes = (serverRoutes, clientPaths) => {
+  const clientSegments = [...new Set(clientPaths.map((entry) => entry.path))]
+    .map((path) => path.split('/').filter(Boolean));
+  const isParam = (segment) => segment.startsWith(':');
+  const reached = (route) => {
+    const segments = route.split('/').filter(Boolean);
+    const wildcardAt = segments.findIndex(isWildcard);
+    return clientSegments.some((client) => {
+      if (wildcardAt === -1 && client.length !== segments.length) return false;
+      if (wildcardAt !== -1 && client.length < segments.length) return false;
+      const limit = wildcardAt === -1 ? segments.length : wildcardAt;
+      return segments.slice(0, limit).every((segment, index) => isParam(segment) || isParam(client[index]) || segment === client[index]);
+    });
+  };
+  const methodsByPath = new Map();
+  for (const { method, path } of serverRoutes) {
+    if (!methodsByPath.has(path)) methodsByPath.set(path, new Set());
+    methodsByPath.get(path).add(method);
+  }
+  return [...methodsByPath]
+    .filter(([path]) => !reached(path))
+    .map(([path, methods]) => ({ path, methods: [...methods].sort() }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+};

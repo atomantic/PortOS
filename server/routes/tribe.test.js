@@ -19,7 +19,6 @@ vi.mock('../services/tribe.js', () => ({
   deletePerson: vi.fn(),
   listTouchpoints: vi.fn(),
   createTouchpoint: vi.fn(),
-  createCalendarTouchpoint: vi.fn(),
   listMemoryLinks: vi.fn(),
   linkMemory: vi.fn(),
   unlinkMemory: vi.fn(),
@@ -49,6 +48,21 @@ const CONVERSATION_ID = '55555555-5555-4555-8555-555555555555';
 const IDENTITY_ID = '77777777-7777-4777-8777-777777777777';
 
 describe('Tribe Routes', () => {
+  it('rejects a repeated query key with 400 (touchpoints, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/people/00000000-0000-4000-8000-000000000001/touchpoints?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a repeated query key with 400 (outreach, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/outreach?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a repeated query key with 400 (care, #16428)', async () => {
+    const res = await request(app).get('/api/tribe/care?limit=1&limit=2');
+    expect(res.status).toBe(400);
+  });
+
   let app;
   let emit;
 
@@ -162,21 +176,6 @@ describe('Tribe Routes', () => {
 
     expect(response.status).toBe(400);
     expect(tribe.createTouchpoint).not.toHaveBeenCalled();
-  });
-
-  it('creates touchpoints from calendar events', async () => {
-    tribe.createCalendarTouchpoint.mockResolvedValue({
-      id: 'touch-2',
-      personId: PERSON_ID,
-      source: 'calendar',
-    });
-
-    const response = await request(app)
-      .post(`/api/tribe/people/${PERSON_ID}/touchpoints/calendar`)
-      .send({ accountId: ACCOUNT_ID, eventId: 'cal-event-1', summary: 'Synced over lunch' });
-
-    expect(response.status).toBe(201);
-    expect(tribe.createCalendarTouchpoint.mock.calls[0][0]).toBe(PERSON_ID);
   });
 
   it('links and unlinks brain memories for a person', async () => {

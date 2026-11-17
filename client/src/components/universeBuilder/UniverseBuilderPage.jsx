@@ -25,8 +25,8 @@ import {
   WORLD_CATEGORY_KEY_MAX,
 } from '../../services/api';
 import useUniverseBucketActions from '../../hooks/useUniverseBucketActions';
-import useUniverseDraft from '../../hooks/useUniverseDraft';
-import useUniverseExpand from '../../hooks/useUniverseExpand';
+import useUniverseDraft from './useUniverseDraft';
+import useUniverseExpand from './useUniverseExpand';
 import useUniverseGallery from '../../hooks/useUniverseGallery';
 import { useUniverseNav } from '../../hooks/useUniverseNav';
 import useUniverseRender from '../../hooks/useUniverseRender';

@@ -30,7 +30,7 @@ import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createHash } from 'node:crypto';
-import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_STAGE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, resolveClaimReviewerConfig, reviewerConfigMetadata } from '../lib/cosValidation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
 import { currentTaskTypeName } from '../lib/scheduledTaskTypes.js';
@@ -49,7 +49,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { addTask, updateTask, getAllTasks, getCosTasks, getTaskById, reconcileLegacyForgeMaintenanceTasks } from './cosTaskStore.js';
 import { PRIORITY_VALUES } from '../lib/taskParser.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
-import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown, updateAppActivity } from './appActivity.js';
+import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown, updateAppActivity } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides, getAppById } from './apps.js';
 // The single Priority-0 on-demand loop body, shared with the dequeueNextTask
 // engine in cos.js so the two can no longer drift (#6618).
@@ -102,7 +102,7 @@ import {
 } from './cosTaskPreStepBlocks.js';
 import { detectIdleLeftoverBranches, formatUserActionDetectorBlock } from './userActionDetectors.js';
 
-import { isTruthyMeta } from '../lib/metadataFlags.js';
+import { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from './preflightTaskCard.js';
 import { checkGhHealth } from './github.js';
 import { detectActionableWork } from './perpetualWork.js';
@@ -157,12 +157,9 @@ export function exceedsMaxSpawns(task) {
  *     tied to the one block definition in `lib/quotaBurnOrigin.js` — a task
  *     written by any release, in either the flat or the block shape, is exempt.
  *
- * `metadata.perpetual` is a bare boolean set upstream, but it round-trips through
- * COS-TASKS.md as the STRING `"true"` (taskParser serializes non-string/-object
- * metadata via `String(value)`; only arrays/objects like `pipeline` get the JSON
- * sentinel that preserves their type). So accept BOTH the in-memory boolean and
- * the re-parsed string — a `=== true` check alone would silently miss the
- * persisted-then-reloaded task, which is exactly the one the spawn gate sees.
+ * `metadata.perpetual` is a bare boolean set upstream, but rows stored before #16407 and peers on older versions
+ * hold it as the STRING `"true"`. So accept BOTH — a `=== true` check alone would
+ * silently miss those tasks.
  *
  * Shared by both spawn engines (`dequeueNextTask` in cos.js and `evaluateTasks`
  * here) and their dry-run planners so the cooldown-exempt set can't drift.
@@ -922,7 +919,6 @@ export async function evaluateTasks(options) {
       `All ${state.config.maxConcurrentAgents} agent slots occupied`,
       { running: runningAgents, max: state.config.maxConcurrentAgents }
     );
-    cosEvents.emit('evaluation', { message: 'Max concurrent agents reached', running: runningAgents });
     return;
   }
 
@@ -1051,10 +1047,6 @@ export async function evaluateTasks(options) {
       availableSlots
     });
 
-    // Note: Performance summaries, learning insights, and rehabilitation checks
-    // are now handled by dedicated maintenance intervals (cos-performance-summary,
-    // cos-learning-insights, cos-rehabilitation-check) instead of evalCount gating.
-
     // Spawn all ready tasks (up to available slots)
     for (const task of tasksToSpawn) {
       emitLog('success', `Spawning task: ${task.id} (${task.priority || 'MEDIUM'})`, {
@@ -1075,10 +1067,6 @@ export async function evaluateTasks(options) {
   // Emit awaiting approval count if any
   if (cosTaskData.awaitingApproval?.length > 0) {
     emitLog('info', `${cosTaskData.awaitingApproval.length} tasks awaiting approval`);
-    cosEvents.emit('evaluation', {
-      message: 'Tasks awaiting approval',
-      awaitingApproval: cosTaskData.awaitingApproval.length
-    });
   }
 
   if (tasksToSpawn.length === 0) {
@@ -1094,7 +1082,6 @@ export async function evaluateTasks(options) {
       idleReason,
       { pendingUser: pendingUserCount, pendingSystem: pendingSystemCount, awaitingApproval: awaitingCount, runningAgents }
     );
-    cosEvents.emit('evaluation', { message: 'No pending tasks to process' });
   }
 }
 
@@ -1128,15 +1115,7 @@ export async function generateIdleReviewTask(state, { ignoreTaskId = null, isApp
       // (no claimable PLAN item, watcher no-op, precondition skip), in which
       // case binding here would strand `activeAgentId` and leave the app stuck
       // reading "in review" until stale-agent cleanup (issue #978).
-      await markIdleReviewStarted();
       await markAppReviewCooldown(nextApp.id);
-
-      // Update lastIdleReview timestamp
-      await withStateLock(async () => {
-        const s = await loadState();
-        s.stats.lastIdleReview = new Date().toISOString();
-        await saveState(s);
-      });
 
       const { task: idleTask, pendingPerpetualDispatch, preflightCardId } = await generateManagedAppImprovementTask(nextApp, state, { ignoreTaskId, onPreflightStart });
       // Only bind the active marker once a real task exists.
@@ -1443,10 +1422,8 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
         : `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
       if (continuationSourceAgentId) task.metadata = { ...task.metadata, cleanupRefillSource: continuationSourceAgentId };
 
-      // Queue path: addTask's raw branch persists the task through COS-TASKS.md,
-      // which folds multi-line descriptions to first line + full body in
-      // metadata.prompt (#4153). On-demand path: emits unpersisted task on
-      // task:ready, renders full description via getTaskPrompt.
+      // Queue path: addTask's raw branch stores the multi-line description as
+      // written. On-demand path: emits an unpersisted task on task:ready.
       const newTask = await persistTask(task, 'internal', { raw: true, ignoreTaskId, suppressDequeue: true,
         ...(nextType === 'do-release' && deliveredReleaseIds.size > 0 && { deliveredReleaseTaskIds: [...deliveredReleaseIds] }),
         ...(continuationSourceAgentId && { idempotencyKey: `swarm-cleanup-refill:${continuationSourceAgentId}` }) });
@@ -1457,9 +1434,9 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, {
       if (newTask?.error) throw new Error(newTask.error);
       if (continuationSourceAgentId) continuationSatisfied = true;
       // Recorded from `pendingPerpetualDispatch` — the RECORD prepare returned —
-      // never from `task` or `newTask`: addTask hands back a different object
-      // whenever the description is multi-line, so recording must not depend on
-      // which one the caller is holding (#6871).
+      // never from `task` or `newTask`: addTask hands back a stored copy,
+      // not the caller's object, so recording must not depend on which one the
+      // caller is holding (#6871).
       await recordDeferredPerpetualDispatch(pendingPerpetualDispatch, taskSchedule);
       if (wakeAfterRecord) cosEvents.emit('cos:dequeue-requested');
 
@@ -1810,7 +1787,7 @@ function initializePipelineMetadata(metadata) {
 // openPR is applied first since it implies useWorktree — this prevents defaultUseWorktree: false
 // from blocking defaultOpenPR: true when both are app-level defaults.
 export function applyAppWorktreeDefault(metadata, app) {
-  const taskTypeDisabledWorktree = metadata.useWorktree === false || metadata.useWorktree === 'false';
+  const taskTypeDisabledWorktree = isFalsyMeta(metadata.useWorktree);
 
   // Apply defaultOpenPR first (since openPR implies useWorktree)
   if (metadata.openPR === undefined) {
@@ -1840,7 +1817,7 @@ export function applyAppWorktreeDefault(metadata, app) {
 
   // Final invariant: openPR implies useWorktree (normalize in both directions)
   const finalOpenPR = isTruthyMeta(metadata.openPR);
-  const finalWorktreeOff = metadata.useWorktree === false || metadata.useWorktree === 'false';
+  const finalWorktreeOff = isFalsyMeta(metadata.useWorktree);
   if (finalOpenPR && finalWorktreeOff) {
     // openPR wins — force useWorktree on
     metadata.useWorktree = true;
@@ -2485,7 +2462,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
  */
 export function resolveUserActionDeliveryBlock(taskType, metadata) {
   if (taskType !== 'user-action-review') return '';
-  return metadata?.fileIssues === false || metadata?.fileIssues === 'false'
+  return isFalsyMeta(metadata?.fileIssues)
     ? 'Deliver each accepted proposal as a QUEUED CoS TASK (`POST /api/cos/tasks`, one bounded task per proposal, priority LOW unless the evidence is severe) — the operator turned off file-issues mode for this schedule. Do not file tracker issues.'
     : 'Deliver each accepted proposal as a FILED TRACKER ISSUE in the PortOS repository (`gh issue create` with the `plan` label; create the label first if missing). This is file-issues mode, the default. Do not queue CoS tasks.';
 }

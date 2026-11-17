@@ -18,7 +18,6 @@
  * Values mirror `server/services/imageTo3d/targets.js`; `installed: false` is the
  * default because "available but not installed" is the state most cases vary
  * from.
- *
  * @param {object} [over] fields to override.
  */
 export const imageTo3dTarget = (over = {}) => ({

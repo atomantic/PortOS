@@ -1,8 +1,17 @@
 /**
- * The pgvector image the CI DB service and the live restore test run. A digest
- * change is an explicit dependency update: scripts/dbImageDigestPin.test.js
- * holds this, docker-compose.yml and .github/workflows/ci.yml to one digest.
+ * The pgvector image the CI DB service and the live restore test run, read from
+ * docker-compose.yml (the one file Dependabot's docker-compose ecosystem bumps)
+ * so a digest refresh is a one-file change. CI obtains it by running this module
+ * (`node scripts/lib/dbImage.js`); scripts/dbImageDigestPin.test.js fails if the
+ * digest is ever copied into a second tracked file.
  */
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { isDirectlyInvoked } from './directInvocation.js';
+
+const COMPOSE_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docker-compose.yml');
+
 /**
  * The PostgreSQL major every existing Docker volume was initialized with. A new
  * major cannot open an older data directory, so changing it is not a digest
@@ -10,4 +19,15 @@
  * (docs/STORAGE.md, "PostgreSQL version updates").
  */
 export const PINNED_DB_MAJOR = 17;
-export const PINNED_DB_IMAGE = 'pgvector/pgvector:pg17@sha256:b513c48566e4777cd3370451400000c78eda6a08131d68f4c31d4a76f27bd8fd';
+
+const DB_IMAGE_LINE = /^\s*image:\s*(pgvector\/pgvector:\S+)\s*$/m;
+
+export const readPinnedDbImage = (composeText) => {
+  const ref = composeText.match(DB_IMAGE_LINE)?.[1];
+  if (!ref) throw new Error('docker-compose.yml has no pgvector/pgvector image line');
+  return ref;
+};
+
+export const PINNED_DB_IMAGE = readPinnedDbImage(readFileSync(COMPOSE_PATH, 'utf8'));
+
+if (isDirectlyInvoked(import.meta.url)) console.log(PINNED_DB_IMAGE);

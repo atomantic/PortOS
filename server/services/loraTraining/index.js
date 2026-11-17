@@ -9,7 +9,7 @@ import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { platform } from 'os';
-import { PATHS, ensureDir, shortId, copyFileGuarded, writeFileGuarded, rmGuarded } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, copyFileGuarded, writeFileGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
@@ -19,7 +19,7 @@ import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
 
 import { getSettings } from '../settings.js';
-import { deleteLora, writeLoraSidecar } from '../loras.js';
+import { writeLoraSidecar } from '../loras.js';
 import { getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
 import { trainingEvents } from './events.js';
@@ -32,11 +32,11 @@ import { beginHeavyJobRecovery, claimHeavyLocalJob, adoptHeavyLocalJob } from '.
 import { classifyTrainingFailure } from './failure.js';
 import { buildTrainedSidecar, trainedLoraFilename } from './sidecar.js';
 
-import { listRunCheckpoints, listRunSamples, resolveCheckpointAdapterBuffer, selectDeployableCheckpoint } from './checkpoints.js';
+import { listRunCheckpoints, resolveCheckpointAdapterBuffer, selectDeployableCheckpoint } from './checkpoints.js';
 import * as runsDb from './db.js';
 import { generateImage } from '../imageGen/local.js';
 
-export { listRuns, getRun, getRunRequired, deleteRun } from './db.js';
+export { listRuns, getRun, getRunRequired } from './db.js';
 export { trainingEvents } from './events.js';
 
 export const runDir = (runId) => join(PATHS.trainingRuns, runId);
@@ -61,10 +61,6 @@ export const cancel = (jobId) => {
   return true;
 };
 
-export async function startTrainingRun() { refuseRetiredTraining(); }
-
-export async function resumeTrainingRun() { refuseRetiredTraining(); }
-
 const emitFailed = (jobId, error) => trainingEvents.emit('failed', { generationId: jobId, error });
 
 // Collapse checkpoint records to one per `step`, preserving first-seen order
@@ -81,7 +77,7 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
   if (!datasetId) return Promise.resolve();
   // A run owns the dataset's training state only while the dataset still
   // points at the run's character. The dataset can be reassigned to a
-  // different character mid-run (patchDataset resets it to draft); flipping
+  // different character mid-run (reassignment reset it to draft); flipping
   // it here would otherwise mark the NEW character trained with the OLD
   // character's adapter, or clobber a fresh run's 'training' status. Skip the
   // flip when the dataset has moved on. Match on the full (universeId,
@@ -109,59 +105,6 @@ const flipDatasetAfterRun = (run, { trained, loraFilename = null }) => {
     };
   });
 };
-
-// When a trained LoRA artifact is deleted (DELETE /runs/:id?deleteLora=true),
-// reset the owning dataset back to the untrained baseline so the training list
-// stops advertising the subject as trained against a now-deleted file. Reset
-// ONLY when the dataset still points at THIS run's adapter: same character
-// (reuses flipDatasetAfterRun's ownership guard) AND the dataset's current
-// `training.loraFilename` is exactly the file being deleted. A dataset that was
-// retrained (different loraFilename) or reassigned to another character must
-// keep its current state.
-export const clearDatasetForDeletedLora = (run, deletedFilename) => {
-  const datasetId = run?.datasetId;
-  if (!datasetId || !deletedFilename) return Promise.resolve();
-  const runEntryId = run?.character?.entryId || null;
-  const runUniverseId = run?.character?.universeId || null;
-  const runEntryKind = run?.character?.entryKind || 'characters';
-  return updateDataset(datasetId, (current) => {
-    const mismatch = runEntryId && (
-      current.character?.entryId !== runEntryId
-      || (runUniverseId && current.character?.universeId !== runUniverseId)
-      || ((current.character?.entryKind || 'characters') !== runEntryKind)
-    );
-    if (mismatch || current.training?.loraFilename !== deletedFilename) return null;
-    return { ...current, status: 'draft', training: {} };
-  }).catch((err) => console.error(`❌ dataset reset after LoRA delete failed: ${err?.message}`));
-};
-
-/**
- * Delete a terminal run: its artifact dir, optionally its trained LoRA (and the
- * dataset's trained flag naming it), then the row. One backup admission spans
- * every step, so a snapshot never dumps a row naming samples or an adapter its
- * own file pass skipped (#9982).
- */
-export async function deleteTrainingRun(runId, { withLora = false } = {}) {
-  return withBackupAssetPublication(async () => {
-    const run = await runsDb.getRunRequired(runId);
-    if (['queued', 'running'].includes(run.status)) {
-      throw new ServerError('Cancel the run before deleting it', { status: 409, code: 'RUN_ACTIVE' });
-    }
-    // Artifact dir is server-derived from the run id (uuid) — confined under
-    // PATHS.trainingRuns by construction.
-    await rmGuarded(runDir(run.id), { recursive: true, force: true });
-    const loraFilename = run.output?.loraFilename;
-    if (withLora && loraFilename) {
-      await deleteLora(loraFilename).catch((err) => {
-        console.warn(`⚠️ trained LoRA delete skipped: ${err?.message}`);
-      });
-      // Reset the owning dataset off 'trained' so it can't keep advertising the
-      // subject as trained against the file just deleted.
-      await clearDatasetForDeletedLora(run, loraFilename);
-    }
-    return runsDb.deleteRun(run.id);
-  });
-}
 
 /**
  * Queue-worker entry — `mediaJobQueue.runJob` calls this for kind
@@ -646,12 +589,6 @@ async function registerTrainedLora({
 export async function listCheckpoints(runId) {
   const run = await runsDb.getRunRequired(runId);
   return { runId, runtime: run.runtime, checkpoints: listRunCheckpoints(run) };
-}
-
-/** Mid-training sample previews (step + url) for the live progress gallery. */
-export async function listSamples(runId) {
-  const run = await runsDb.getRunRequired(runId);
-  return { runId, samples: listRunSamples(run) };
 }
 
 /**

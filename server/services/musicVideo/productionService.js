@@ -204,10 +204,10 @@ function publish(projectId, project, run, action) {
     project: { ...project, productionRuns: project.productionRuns.map((r) => r.id === run.id ? shown : r) } });
 }
 
-async function halt(projectId, runId, { status, reason, error = null }) {
+async function halt(projectId, runId, { status, reason, error = null, code = null }) {
   const out = await mutateProjectRecord(projectId, (current) => {
     const run = findProductionRun(current, runId);
-    return run.status === 'running' ? haltProduction(current, runId, { status, reason, error }) : { project: current, run };
+    return run.status === 'running' ? haltProduction(current, runId, { status, reason, error, code }) : { project: current, run };
   });
   const log = status === 'failed' ? console.error : status === 'completed' ? console.log : console.warn;
   log(`${status === 'completed' ? '✅' : status === 'failed' ? '❌' : '⏸️'} Music Video production ${short(runId)} ${status}${reason ? `: ${reason}` : ''}`);
@@ -536,7 +536,7 @@ async function takeSteps(projectId, runId) {
     const readiness = productionReadiness(project);
     if (!readiness.storyboard.approved) {
       await prepareProductionReview(projectId);
-      return halt(projectId, runId, { status: 'blocked', reason: 'Production review needs human approval of the current visual guide and lyric-timed storyboard.' });
+      return halt(projectId, runId, { status: 'blocked', reason: 'Production review needs human approval of the current visual guide and lyric-timed storyboard.', code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     }
     const step = nextProductionStep(project, run, { jobs: await liveJobs(), processId: PROCESS_ID });
     if (!readiness.proof.approved && run.pilot?.scenes?.length

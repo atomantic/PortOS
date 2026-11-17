@@ -36,8 +36,8 @@ describe.skipIf(!chrome)('Shell header reachability (#9710)', () => {
         enforce: 'pre',
         resolveId(id) {
           if (id === '/shell-fixture.jsx') return '\0shell-fixture.jsx';
-          if (/\/hooks\/useShellSession(?:\.js)?$/.test(id)) return '\0shell-session';
-          if (/\/hooks\/useItermSession(?:\.js)?$/.test(id)) return '\0iterm-session';
+          if (/\/components\/shell\/useShellSession(?:\.js)?$/.test(id)) return '\0shell-session';
+          if (/\/components\/shell\/useItermSession(?:\.js)?$/.test(id)) return '\0iterm-session';
           if (/\/hooks\/useInstanceFeatures(?:\.js)?$/.test(id)) return '\0shell-features';
           if (/\/services\/api(?:\.js)?$/.test(id)) return '\0shell-api';
         },

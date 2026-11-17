@@ -7,14 +7,7 @@
  * (every effect option's use per slot, zeros included). Used by the Shots board's card badges and its
  * Effects card.
  *
- * Music Video shot effects at a glance: what each shot plays at its start, in
- * its middle and at its end, and how often the video uses each effect, so the
- * Shots board can badge every card and count every option.
- *
- * Read through the same helpers the render uses: a shot's cut transitions and
- * in-shot glitches (musicVideoTransitions.js), a still's image effect
- * (musicVideoImageEffects.js) and its switched-on cut effect, or the one its
- * storyboard row plans (musicVideoCutEffects.js).
+ * What each shot plays at its start, middle and end and how often the video uses each effect, so the Shots board can badge every card and count every option, read through the same helpers the render uses: cut transitions and in-shot glitches (musicVideoTransitions.js), a still's image effect (musicVideoImageEffects.js) and its switched-on cut effect, or the one its storyboard row plans (musicVideoCutEffects.js).
  */
 import { MUSIC_VIDEO_CUT_EFFECTS, MUSIC_VIDEO_CUT_EFFECT_LABELS, sceneCutEffect } from './musicVideoCutEffects.js';
 import { MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS, sceneImageEffect } from './musicVideoImageEffects.js';

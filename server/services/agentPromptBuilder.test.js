@@ -3,6 +3,7 @@
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { buildMergeAdmissionSection } from './promptSections/completion.js';
+import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from './promptSections/reviewerOutcome.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { join } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
@@ -1147,7 +1148,7 @@ describe('buildLightContextPrompt', () => {
 
     it('disables external review when a TUI task opens a PR without a Review Loop', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { simplify: true, openPR: true } }),
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3, simplify: true, openPR: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: true });
@@ -2054,7 +2055,7 @@ describe('buildLightContextPrompt', () => {
 
     it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3, openPR: true, reviewLoop: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         { isTui: false, providerId: 'claude-code' });
@@ -2189,7 +2190,7 @@ describe('buildLightContextPrompt', () => {
 
     it('renders the review-loop follow-up block when reviewLoopFollowUp is set', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: {
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
           reviewLoopFollowUp: true,
           reviewLoopReviewers: ['copilot'],
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
@@ -2231,7 +2232,7 @@ describe('buildLightContextPrompt', () => {
       // Review Loop off: PortOS opened the PR and spawned this follow-up purely to
       // land it. The block must gate on CI, never invoke or wait for a reviewer.
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: {
+        makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
           reviewLoopFollowUp: true,
           reviewLoopMergeOnly: true,
           reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
@@ -3071,7 +3072,7 @@ describe('buildAgentPrompt — provider type routing', () => {
     // built-in fallback template (review-loop follow-up agents intentionally
     // skip the user-side prompt template — see buildAgentPrompt).
     const prompt = await buildAgentPrompt(
-      makeTask({ metadata: {
+      makeTask({ metadata: { mergeHandoffMinQueuedRuns: 3,
         reviewLoopFollowUp: true,
         reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
         reviewLoopPRBranch: 'b',
@@ -3864,6 +3865,78 @@ describe('buildAgentPrompt — slashdo-backed tasks', () => {
       slashdoTask(), {}, '/r', null,
       { providerType: 'cli', providerId: 'claude-code' });
     expect(prompt).toContain('/do:plan-task');
+  });
+
+  it('sends no pending-merge handoff text to an app without mergeHandoffMinQueuedRuns', async () => {
+    const forbidden = ['mergeHandoffMinQueuedRuns', '/api/cos/merge-handoff', 'pending-merge receipt', 'PortOS pending-merge handoff'];
+    const followUp = await buildAgentPrompt(
+      makeTask({ metadata: {
+        reviewLoopFollowUp: true, reviewLoopReviewers: ['copilot'],
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9', reviewLoopPRBranch: 'b', reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o', reviewLoopPRRepo: 'r', sourceTaskId: 'task-src-1',
+      } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
+    const tui = await buildAgentPrompt(
+      makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { isTui: false, providerId: 'claude-code', agentId: 'registered-coordinator' });
+    expect(followUp).toContain('## Hosting-provider merge authority');
+    for (const prompt of [followUp, tui]) {
+      for (const needle of forbidden) expect(prompt).not.toContain(needle);
+    }
+    // The same follow-up with a positive threshold carries the full handoff text.
+    const enabled = await buildAgentPrompt(
+      makeTask({ metadata: {
+        mergeHandoffMinQueuedRuns: 3,
+        reviewLoopFollowUp: true, reviewLoopReviewers: ['copilot'],
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9', reviewLoopPRBranch: 'b', reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o', reviewLoopPRRepo: 'r', sourceTaskId: 'task-src-1',
+      } }),
+      {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' },
+      { defaultReviewers: ['copilot'], agentId: 'registered-coordinator' });
+    expect(enabled).toContain('/api/cos/merge-handoff');
+    expect(enabled).toContain('mergeHandoffMinQueuedRuns');
+  });
+
+  it('renders a release task body once when its description already carries the prompt', async () => {
+    vi.mocked(loadSlashdoFile).mockResolvedValueOnce('# Release\n\nCanonical release procedure.');
+    const body = '# Release candidate check\n\n## Step 0\n\nVerify the candidate.';
+    const prompt = await buildAgentPrompt(
+      makeTask({ description: body, metadata: { prompt: body, slashdoCommand: 'release' } }),
+      {}, '/r', null,
+      { providerType: 'cli', providerId: 'codex' });
+
+    expect(prompt).toContain('Canonical release procedure.');
+    expect(prompt.match(/## Step 0/g)).toHaveLength(1);
+    expect(prompt.match(/# Release candidate check/g)).toHaveLength(1);
+  });
+
+  // #16466: storage keeps a multi-line description, so a task carries its body in
+  // `description` alone, while a row stored before that (or synced from an older
+  // peer) holds the first line plus the full body in `metadata.prompt`/`context`.
+  // Every shape must render its body exactly once on both prompt paths.
+  describe.each([
+    ['description only (stored as written)', { description: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login', metadata: {} }],
+    ['description + slashdo invocation', { description: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login', metadata: { slashdoCommand: 'release' } }],
+    ['collapsed description + metadata.prompt (older row)', { description: 'Fix the login flow', metadata: { prompt: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+    ['collapsed description + metadata.context (older row)', { description: 'Fix the login flow', metadata: { context: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+    ['collapsed description + slashdo + prompt (older row)', { description: 'Fix the login flow', metadata: { slashdoCommand: 'release', prompt: 'Fix the login flow\n\nSteps:\n1. UNIQ-OPEN-PAGE\n2. click login' } }],
+  ])('task body is rendered once: %s', (_label, shape) => {
+    it('on the light-context path', () => {
+      const light = buildLightContextPrompt(makeTask(shape), '/r', null, {});
+      const text = typeof light === 'string' ? light : JSON.stringify(light);
+      expect(text.match(/UNIQ-OPEN-PAGE/g)).toHaveLength(1);
+    });
+
+    it.each([['cli', 'light'], ['api', 'full']])('on the %s provider path (%s prompt)', async (providerType) => {
+      vi.mocked(loadSlashdoFile).mockResolvedValue('# Release\n\nCanonical release procedure.');
+      const prompt = await buildAgentPrompt(
+        makeTask(shape), {}, '/r', null, { providerType, providerId: providerType === 'cli' ? 'codex' : undefined });
+      vi.mocked(loadSlashdoFile).mockResolvedValue(null);
+      expect(prompt.match(/UNIQ-OPEN-PAGE/g)).toHaveLength(1);
+      expect(prompt.match(/2\. click login/g)).toHaveLength(1);
+    });
   });
 
   it('pins the bundled release workflow to PortOS Code Review Defaults', async () => {
@@ -4789,10 +4862,11 @@ describe('PR model attribution', () => {
     expect(prompt).toContain(`--label ${label}`);
     expect(prompt).toContain(forgeCli === 'glab' ? `glab label create --name ${label}` : `gh label create ${label}`);
     expect(prompt).toContain(forgeCli === 'glab' ? 'glab mr create' : 'gh pr create');
-    expect(prompt).toContain(forgeCli === 'glab' ? `glab mr update <mr> --label ${label}` : `gh pr edit <pr> --add-label ${label}`);
-    expect(prompt).toContain('read the PR/MR labels back');
-    expect(prompt).toContain('opening agent must use its own trusted runtime model');
-    expect(prompt).toContain('preserve its original opener attribution');
+    // One best-effort call: the repair and read-back procedure is gone because no code reads the label (#16571).
+    expect(prompt).toContain('Best-effort: no read-back or repair');
+    const section = prompt.slice(prompt.indexOf('## PR Model Attribution')).split('\n\n')[0];
+    expect(section).not.toMatch(/labels back|pr edit <pr>|mr update <mr>|completion summary/);
+    expect(section.split('\n').length).toBeLessThanOrEqual(3);
     expect(prompt).not.toContain('implementer:example-runner');
   });
 
@@ -4801,8 +4875,8 @@ describe('PR model attribution', () => {
       makeTask({ metadata: { claimFlow: true, openPR: false } }), '/repo', null,
       { providerId: 'example-runner' },
     );
-    expect(prompt).toContain('PortOS did not resolve a model for this run');
-    expect(prompt).toContain('report the missing attribution');
+    expect(prompt).toContain('No opener model was resolved for this run');
+    expect(prompt).toContain('never a guess');
     expect(prompt).not.toContain('implementer:example-runner');
   });
 });
@@ -5013,5 +5087,25 @@ describe('{portosApiUrl} spawn-time expansion (#12405)', () => {
       {}, '/repo', null, { providerType: 'api' },
     );
     expect(prompt).toContain('PATCH http://127.0.0.1:5553/api/creative-director/cd-1/treatment');
+  });
+});
+
+describe('CLI review-outcome run id (#16572)', () => {
+  // The claim block is generated into the task before the run exists, so the
+  // verdict report's agentId is a slot the builder fills at spawn time.
+  const task = makeTask({ description: `Claim work\n\n${buildCliReviewerOutcomeInstructions(['codex'])}` });
+
+  it.each(['api', 'tui'])('fills the run id on the %s path', async (providerType) => {
+    const prompt = await buildAgentPrompt(task, {}, '/repo', null, { providerType, providerCommand: 'claude', agentId: 'agent-example' });
+    expect(prompt).toContain('"agentId":"agent-example"');
+    expect(prompt).toContain('`changedLines`');
+    expect(prompt).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
+  });
+
+  it('drops the run-id sentence rather than sending a placeholder when the run has no usable id', async () => {
+    const prompt = await buildAgentPrompt(task, {}, '/repo', null, { providerType: 'api', agentId: 'bad id/../x' });
+    expect(prompt).toContain('/api/code-review/cli-outcome');
+    expect(prompt).not.toContain('"agentId"');
+    expect(prompt).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
   });
 });

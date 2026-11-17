@@ -20,9 +20,14 @@ const isAsyncInit = (node) => (
   (node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression') && node.async === true
 );
 
+// Without the TypeScript or Flow plugins these never hold a child node; they are about half of all nodes.
+const LEAF_TYPES = new Set(['Identifier', 'StringLiteral', 'NumericLiteral', 'BooleanLiteral', 'NullLiteral',
+  'BigIntLiteral', 'RegExpLiteral', 'TemplateElement', 'ThisExpression', 'Super']);
+
 function walk(node, visit) {
   if (!node || typeof node.type !== 'string') return;
   visit(node);
+  if (LEAF_TYPES.has(node.type)) return;
   for (const key in node) {
     if (key === 'loc' || key === 'extra' || key === 'comments' || key === 'errors') continue;
     const child = node[key];
@@ -86,12 +91,44 @@ function summarizeSource(src) {
   return { local, exported, imports, calls };
 }
 
+/**
+ * The `async` keyword as a token. Babel reads an escaped spelling as an identifier,
+ * and a neighbouring [\w$] character makes it part of one, so a source with no match
+ * declares (and exports) no async function and Babel need not parse it (#16607).
+ */
+const ASYNC_KEYWORD = /(?<![\w$])async(?![\w$])/;
+/** An escape straight after a quote can spell a leading `.` or continue the line. */
+const ESCAPED_LITERAL_START = /['"]\\[.xu0-9\s]/;
+
+/**
+ * Every value a quoted literal starting with `.` has, a superset of the relative
+ * import sources, or null when an escape makes one unknowable. Without a backslash a
+ * literal's value is its raw text, and it closes at the next same quote on its line.
+ */
+function relativeLiteralValues(src) {
+  if (ESCAPED_LITERAL_START.test(src)) return null;
+  const values = [];
+  for (const { index, 0: opening } of src.matchAll(/['"]\./g)) {
+    const end = src.indexOf(opening[0], index + 1);
+    const lineEnd = src.indexOf('\n', index + 1);
+    const closesOnLine = end !== -1 && (lineEnd === -1 || end < lineEnd);
+    const raw = src.slice(index + 1, closesOnLine ? end : (lineEnd === -1 ? src.length : lineEnd));
+    if (raw.includes('\\')) return null;
+    if (closesOnLine) values.push(raw);
+  }
+  return values;
+}
+
 /** One scan owns its cache; import spellings share the resolved file's summary. */
 function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'utf8')) {
   const summaries = new Map();
   const resolutions = new Map();
   const summaryOf = (file) => {
-    if (!summaries.has(file)) summaries.set(file, summarizeSource(readSource(file)));
+    if (!summaries.has(file)) {
+      const src = readSource(file);
+      // Nothing here is async; a visit still needs the text to check what it imports.
+      summaries.set(file, ASYNC_KEYWORD.test(src) ? summarizeSource(src) : { exported: new Set(), src });
+    }
     return summaries.get(file);
   };
   const asyncExportsOf = (absPath) => {
@@ -102,6 +139,11 @@ function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'u
     }
     const file = resolutions.get(absPath);
     return file ? summaryOf(file).exported : new Set();
+  };
+  // A source with no local async function can only float a call it imports.
+  const mayImportAsync = (src, dir) => {
+    const values = relativeLiteralValues(src);
+    return values === null || values.some((value) => asyncExportsOf(resolve(dir, value)).size > 0);
   };
   const findCalls = ({ local, imports, calls }, dir) => {
     const asyncNames = new Set(local);
@@ -119,8 +161,15 @@ function createFloatingAsyncScanner(readSource = (file) => readFileSync(file, 'u
   return {
     findInSource: (src, dir = null) => findCalls(summarizeSource(src), dir),
     findInFile: (file) => {
-      const summary = summaryOf(file);
+      let summary = summaryOf(file);
       if (summary.hits) return summary.hits;
+      if (summary.src !== undefined) {
+        if (!mayImportAsync(summary.src, dirname(file))) {
+          summaries.set(file, { exported: summary.exported, hits: [] });
+          return [];
+        }
+        summary = summarizeSource(summary.src);
+      }
       const hits = findCalls(summary, dirname(file));
       // After visiting a file, only its exports and verdict can be needed again.
       summaries.set(file, { exported: summary.exported, hits });
@@ -206,7 +255,25 @@ describe('the floating-async recognizer', () => {
       .findInSource(source, SERVER_ROOT)).toEqual([]);
     expect(() => createFloatingAsyncScanner(() => { throw new Error('unreadable import'); })
       .findInSource(source, SERVER_ROOT)).toThrow('unreadable import');
-    expect(() => createFloatingAsyncScanner(() => 'export function {')
+    expect(() => createFloatingAsyncScanner(() => 'export async function {')
       .findInSource(source, SERVER_ROOT)).toThrow();
+    // Without the keyword nothing can be async, so the text is never parsed.
+    expect(createFloatingAsyncScanner(() => 'export function {')
+      .findInSource(source, SERVER_ROOT)).toEqual([]);
+  });
+
+  it('still flags a caller with no `async` of its own, and skips one that imports nothing async', () => {
+    const scanFile = (callerSource) => {
+      const caller = join(SERVER_ROOT, 'floating-async-caller.js');
+      return createFloatingAsyncScanner((file) => (file === caller ? callerSource : readFileSync(file, 'utf8')))
+        .findInFile(caller);
+    };
+    expect(scanFile("import { logAction as log } from './services/history.js';\nlog();")).toEqual(['line 2: log()']);
+    expect(scanFile('import { "logAction" as log } from "./services/history";\nlog();')).toEqual(['line 2: log()']);
+    // An escape could spell the specifier, so the caller is parsed rather than judged by its text.
+    expect(scanFile(String.raw`import { logAction as log } from '\x2e/services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
+    expect(scanFile(String.raw`import { logAction as log } from '.\/services/history.js';` + '\nlog();')).toEqual(['line 2: log()']);
+    // Unparsable on purpose: a skipped caller is never handed to Babel.
+    expect(scanFile("import { getAllowedCommands } from './services/commands.js';\nfunction (")).toEqual([]);
   });
 });

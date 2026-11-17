@@ -18,6 +18,20 @@ import { z } from 'zod';
 import { partialWithoutDefaults } from './zodCompat.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 
+// Query schemas for the agent routes. Unknown keys are stripped (older clients keep working).
+export const agentPersonalitiesListQuerySchema = z.object({ userId: z.string().optional() });
+export const agentToolsAccountQuerySchema = z.object({ accountId: z.string().min(1) });
+export const agentToolsPublishedQuerySchema = z.object({
+  agentId: z.string().min(1),
+  accountId: z.string().min(1),
+  days: z.string().default('7'),
+});
+export const agentToolsDraftQuerySchema = z.object({ agentId: z.string().min(1) });
+export const automationSchedulesListQuerySchema = z.object({
+  agentId: z.string().optional(),
+  accountId: z.string().optional(),
+});
+
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
 // =============================================================================
@@ -260,16 +274,6 @@ export const updateDraftSchema = z.object({
 // MOLTWORLD TOOL SCHEMAS
 // =============================================================================
 
-export const moltworldJoinSchema = z.object({
-  accountId: z.string().min(1),
-  agentId: z.string().min(1).optional(),
-  x: z.number().int().min(-240).max(240).optional(),
-  y: z.number().int().min(-240).max(240).optional(),
-  thinking: z.string().max(500).optional(),
-  say: z.string().max(500).optional(),
-  sayTo: z.string().optional()
-});
-
 export const moltworldBuildSchema = z.object({
   accountId: z.string().min(1),
   agentId: z.string().min(1).optional(),
@@ -317,10 +321,6 @@ export const moltworldWsMoveSchema = z.object({
 
 export const moltworldWsThinkSchema = z.object({
   thought: z.string().min(1).max(500)
-});
-
-export const moltworldWsNearbySchema = z.object({
-  radius: z.number().int().min(1).max(500).optional()
 });
 
 export const moltworldWsInteractSchema = z.object({

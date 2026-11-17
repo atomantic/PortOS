@@ -1,36 +1,18 @@
 /**
- * Pick the representative produced asset for a Creative Director project (#2702)
- * so the list cards and the Overview tab can show *what the director made*
- * rather than a wall of text.
+ * Pick the representative produced asset for a Creative Director project (#2702) so list cards and the Overview tab show *what the director made*.
  *
- * Pure + side-effect-free: everything it needs is already on the project payload
- * returned by `GET /api/creative-director` (the list route does not slim), so a
- * card renders a preview with no extra fetch.
+ * Pure: everything it needs is already on the project payload from `GET /api/creative-director`, so a card renders a preview with no extra fetch.
  *
  * Selection priority (first match wins):
- *   1. `finalVideoId`                      — the stitched final cut, or a directive
- *                                            plan's promoted last render.
- *   2. last `treatment.scenes[]` render    — a mid-production scene (last-wins, so a
- *                                            part-rendered treatment shows its latest).
- *   3. last done video-render plan step    — a directive plan's video BEFORE the
- *                                            advance loop promotes it to finalVideoId
- *                                            on completion (mid-flight commissions).
- *   4. last done image-render plan step    — a plan that emits images (e.g. a comic)
- *                                            rather than video.
- *   5. `musicBed`                          — a `music` commission's produced audio
- *                                            (or a first-pass bed), filed onto the
- *                                            project by the durable music-bed hook.
- *   6. `startingImageFile`                 — no render yet, but the project has a
- *                                            reference image. Labeled distinctly so
- *                                            the UI never passes an INPUT off as output.
- *   7. `{ kind: 'none' }`                  — nothing to show.
+ *   1. `finalVideoId`: the stitched final cut, or a directive plan's promoted last render.
+ *   2. last `treatment.scenes[]` render (last-wins, so a part-rendered treatment shows its latest).
+ *   3. last done video-render plan step: a directive plan's video BEFORE the advance loop promotes it to finalVideoId.
+ *   4. last done image-render plan step: a plan that emits images (e.g. a comic).
+ *   5. `musicBed`: a `music` commission's produced audio (or a first-pass bed).
+ *   6. `startingImageFile`: no render yet; labeled distinctly so the UI never passes an INPUT off as output.
+ *   7. `{ kind: 'none' }`.
  *
- * NOTE ON CAST PORTRAITS: #2702 also floated "first cast portrait" as a fallback.
- * A project's `cast[]` member is `{ ingredientId, name, type, role, summary }` —
- * it carries no image ref (portraits live on the catalog ingredient, attached via
- * `catalogAttach`). Resolving one would need a per-card catalog fetch, which the
- * issue puts out of scope ("compute previews from the already-returned project
- * payload"), so that branch is intentionally absent.
+ * No cast-portrait fallback: `cast[]` members carry no image ref (portraits live on the catalog ingredient), and resolving one would need a per-card catalog fetch.
  */
 
 // A media history entry's id IS its jobId, and both workers name their output

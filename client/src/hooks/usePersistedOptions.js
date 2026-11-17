@@ -2,24 +2,16 @@
  * Registry hook for saved-default plus per-run override form options, owning state, dirty flags and
  * hydrate-if-untouched from a spec row per option.
  *
- * Registry for "saved default + per-run override" form options: one spec row per option (`{
- * defaultValue, read, clamp, persistOnEdit }`) owns the state, per-field dirty flag,
- * hydrate-if-untouched pass and edited-only override collection. Returns `{ values, edit, hydrate,
- * collectOverrides, inputProps }`, all identity-stable and ref-backed so a caller's `useCallback`
- * needs one dep instead of one per option. Use when: Any panel where each option must load a saved
- * default, persist edits, and send ONLY edited fields as per-run overrides (AutopilotPanel) — use this
- * instead of hand-copying the state/editedRef/hydrate/collect scaffold per option.
+ * Registry for "saved default + per-run override" form options: one spec row per option (`{ defaultValue, read, clamp, persistOnEdit }`) owns the state, per-field dirty flag, hydrate-if-untouched pass and edited-only
+ * override collection. Returns `{ values, edit, hydrate, collectOverrides, inputProps }`, all identity-stable and ref-backed so a caller's `useCallback` needs one dep. Use for any panel (AutopilotPanel) that loads saved defaults,
+ * persists edits and sends ONLY edited fields as overrides.
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
 
 /**
- * Registry for "saved default + per-run override" options — the scaffold every
- * autopilot-style option used to hand-copy seven times (a default const, a
- * `useState`, an `editedRef`, an `edit*` callback, a hydrate-if-untouched line,
- * an override-collect line, and a `start()` dep-array entry). Missing any one of
- * those is a silent bug: an untouched field clobbers a higher saved setting, or
- * an edited one never reaches the run. Here a whole option is ONE spec entry.
+ * Registry for "saved default + per-run override" options, replacing the scaffold each option used to hand-copy (default const, `useState`, `editedRef`, `edit*`, hydrate line, override line, `start()` dep):
+ * missing any one is a silent bug (an untouched field clobbers a saved setting, or an edit never reaches the run). Here an option is ONE spec entry.
  *
  * The contract each spec buys you:
  * - **Untouched fields never persist.** `hydrate()` only writes fields the user
@@ -28,9 +20,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
  * - **Only edited fields become overrides.** `collectOverrides()` emits exactly
  *   the edited keys, clamped through the SAME `clamp` the input uses on blur —
  *   so the value sent can't drift from the value shown.
- * - **No stale closures.** `edit` / `hydrate` / `collectOverrides` / `inputProps`
- *   are identity-stable and read live state through refs, so a caller's
- *   `useCallback` needs one dep (the registry) instead of one per option.
+ * - **No stale closures.** `edit` / `hydrate` / `collectOverrides` / `inputProps` are identity-stable and read live state through refs.
  *
  * @param {Record<string, {
  *   defaultValue: any,
@@ -53,13 +43,8 @@ export default function usePersistedOptions(specs, persist) {
   const [values, setValues] = useState(() => Object.fromEntries(
     Object.entries(specsRef.current).map(([key, spec]) => [key, spec.defaultValue]),
   ));
-  // Live mirror so `collectOverrides` / `inputProps` (called from an async start
-  // handler, or in the same event frame as an edit) never read a stale value.
-  // `edit` and `hydrate` are its ONLY writers and they write it SYNCHRONOUSLY —
-  // waiting for the re-render would let a blur-then-click send the pre-edit value
-  // as the run's override. Deliberately NOT re-assigned from `values` during
-  // render: an unrelated re-render queued between an edit and its flush would
-  // carry the pre-edit `values` and undo the synchronous write.
+  // Live mirror so `collectOverrides` / `inputProps` never read a stale value. `edit` and `hydrate` are its ONLY writers and write SYNCHRONOUSLY (waiting for the re-render would let a blur-then-click send the pre-edit
+  // value). NOT re-assigned from `values` during render: a re-render queued between an edit and its flush would carry the pre-edit `values` and undo the write.
   const valuesRef = useRef(values);
   // Per-field dirty flags. Until a field is edited its input shows a display
   // default we must NOT persist or send.

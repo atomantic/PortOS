@@ -193,16 +193,10 @@ describe('appActivity strict reads (#4115)', () => {
     await expect(appActivity.isAppOnCooldown('app-1', 60_000)).rejects.toThrow(/Unreadable JSON file/);
   });
 
-  it('markIdleReviewStarted does not reset the lifetime totalReviews counter', async () => {
-    await expect(appActivity.markIdleReviewStarted()).rejects.toThrow(/Unreadable JSON file/);
-    expect(readFileSync(ACTIVITY_FILE, 'utf8')).toBe(CORRUPT);
-  });
-
   it('still treats a genuinely absent file as a real empty fleet', async () => {
     rmSync(ACTIVITY_FILE, { force: true });
     const activity = await appActivity.loadAppActivity();
     expect(activity.apps, 'ENOENT is the one errno that proves absence').toEqual({});
-    expect(activity.global.totalReviews).toBe(0);
   });
 });
 
@@ -225,6 +219,6 @@ describe('appActivity default isolation (#4115)', () => {
     rmSync(join(TEST_DATA_ROOT, 'cos', 'app-activity.json'), { force: true });
     const fresh = await appActivity.loadAppActivity();
     expect(fresh.apps, 'the default app map must be a fresh object each load').toEqual({});
-    expect(fresh.global.totalReviews).toBe(0);
+    expect(fresh.global).toEqual({});
   });
 });

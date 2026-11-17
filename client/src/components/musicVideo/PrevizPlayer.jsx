@@ -55,6 +55,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
     if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
+    else if (seekRequest.pause) audioRef.current.pause?.();
   }, [seekRequest]);
   const seekTo = useCallback((t) => {
     if (!audioRef.current) return;
@@ -83,6 +84,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
       <div
         ref={labelPortal}
         data-testid="previz-player"
+        data-preview-picture
         className="relative mx-auto w-full max-w-[calc(50vh*16/9)] overflow-hidden rounded border border-port-border bg-black"
         style={{ aspectRatio: ratio }}
       >
@@ -93,13 +95,17 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
           {[frame.world ? worldClockText(frame.clockMinutes) : null, placeName, frame.storyCamera?.name, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
         </p>}
       </div>
-      <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />
-      <FrameStepper time={time} fps={PREVIZ_FPS} maxSec={Number(project.audioAnalysis?.durationSec) || null} onSeek={stepFrame} label={label} keys />
+      <div data-preview-controls className="space-y-2">
+        <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />
+        <FrameStepper time={time} fps={PREVIZ_FPS} maxSec={Number(project.audioAnalysis?.durationSec) || null} onSeek={stepFrame} label={label} keys />
+      </div>
       <audio
+        data-preview-scrub
         ref={audioRef}
         src={audioUrl}
         controls
         preload="metadata"
+        data-song-clock="0"
         aria-label="Song for the greybox previz"
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}

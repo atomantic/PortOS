@@ -4,8 +4,12 @@
  * Versioned take/evidence provenance, dependency comparisons and bounded selective-repair previews.
  */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
+import { isFilmLookNeutral } from './filmLook.js';
+import { musicVideoOverscan } from './musicVideoFilmLook.js';
+import { activeShotColorMatch } from './shotColorMatch.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
+import { presentCharacterReferenceStates } from './musicVideoCharacterReferenceAge.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -45,6 +49,9 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.endFrameOff === true ? [['endFrameOff', true]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
+    // Per-shot lyric treatment and camera assignment (documentRender, applyCameraCutDefaults) change the render; unset keeps evidence.
+    .concat(['lyricSize', 'textZone', 'lyricText'].filter((key) => scene[key]).map((key) => [key, scene[key]]))
+    .concat(scene.shotSheet?.cameraId ? [['shotSheetCameraId', scene.shotSheet.cameraId]] : [])
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
     .concat(scene.preMusic ? [['preMusic', scene.preMusic]] : []))) });
 const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, references });
@@ -106,6 +113,41 @@ function isLegacyFrameCastRevision(project, scene, revision) {
   if (!stage?.catalogCheckin) return false;
   const { catalogCheckin: _presented, ...stored } = stage;
   return legacy({ ...project, castAndSets: stored }) === revision;
+}
+/**
+ * Write-time re-stamp (#16375): a legacy `frameCast` stamp that currently reads as accepted is
+ * rewritten to the canonical value, so a later unrelated subject change (a place or prop added to
+ * the concept) cannot invalidate it. The legacy unnarrowed form hashed every linked subject id of
+ * any kind (musicVideoLinkedCastIds covers characters, sets and props), so it cannot be recognised
+ * from characters alone; every form ever written stays recognised. A stamp that already matches the
+ * canonical value, or no longer reads current, is left alone. Returns the same project when nothing
+ * changes so the stores' no-op detection by identity holds.
+ */
+export function restampLegacyFrameCasts(project) {
+  if (!Array.isArray(project?.scenes)) return project;
+  let changed = false;
+  const scenes = project.scenes.map((scene) => {
+    if (!Array.isArray(scene?.takes)) return scene;
+    let sceneChanged = false;
+    const takes = scene.takes.map((take) => {
+      const references = take?.frameDependencies?.references;
+      if (!Array.isArray(references)) return take;
+      const canonical = checksum(frameCastValue(project, scene));
+      let takeChanged = false;
+      const next = references.map((ref) => {
+        if (ref?.role !== 'frameCast' || ref.revision === canonical || !isLegacyFrameCastRevision(project, scene, ref.revision)) return ref;
+        takeChanged = true;
+        return { ...ref, revision: canonical };
+      });
+      if (!takeChanged) return take;
+      sceneChanged = true;
+      return { ...take, frameDependencies: { ...take.frameDependencies, references: next } };
+    });
+    if (!sceneChanged) return scene;
+    changed = true;
+    return { ...scene, takes };
+  });
+  return changed ? { ...project, scenes } : project;
 }
 const frameReferenceValue = (scene) => (Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null);
 const frameRef = (scene, slot, role, value) => ({
@@ -218,14 +260,40 @@ export function captureTakeDependencies(scene, sourceImageId = scene?.referenceI
 
 const intersects = (scene, startSec, endSec) => !(typeof scene.startSec === 'number' && typeof scene.endSec === 'number')
   || (scene.startSec < endSec && scene.endSec > startSec);
+// A chosen production medium changes the render; a project without one keeps its evidence.
+const compositionRevision = (project, composition) => checksum({ mediaMode: project.mediaMode || null, composition,
+  ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}),
+  ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) });
+// Only the text cues inside the window join the revision. `legacyRevision` is what evidence captured before
+// #16397 stored (the whole cue list under a phantom empty `cues` key); it is compared, never stored.
 const compositionRef = (project, startSec, endSec) => {
   const composition = project.composition || null;
-  const value = composition ? { ...composition,
-    cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
-  } : null;
-  return { role: 'composition', assetId: 'composition', // A chosen production medium changes the render; a project without one keeps its evidence.
-  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}), ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
+  const value = composition && Array.isArray(composition.textCues)
+    ? { ...composition, textCues: composition.textCues.filter((cue) => intersects(cue, startSec, endSec)) } : composition;
+  return { role: 'composition', assetId: 'composition', revision: compositionRevision(project, value),
+    legacyRevision: compositionRevision(project, composition ? { ...composition, cues: [] } : null), startSec, endSec };
 };
+
+// Video-level inputs the final render reads (filmLookFinish, shotSegments title card, ending parts, cameras,
+// overscan, sound bed, lyric overlay). Each joins only when set so a project without them keeps its evidence.
+// Left out on purpose: `videoSettings` (read only when generating takes, not by the render) and a shot's
+// `colorMatch` field (the render reads the selected take's correction, tracked by `colorMatchRef`).
+const finishInputs = (project) => Object.fromEntries([
+  ['filmLook', project.filmLook && !isFilmLookNeutral(project.filmLook) ? project.filmLook : null],
+  ['titleCard', project.titleCard || null],
+  ['creditsOutro', project.creditsOutro || null],
+  ['statsOutro', project.statsOutro || null],
+  ['cameras', project.cameras?.length ? project.cameras : null],
+  ['overscan', musicVideoOverscan(project) || null],
+  ['lyricOverlayEnabled', project.lyricOverlayEnabled === false ? false : null],
+  ['soundBed', project.soundBed || null],
+].filter(([, value]) => value !== null));
+// The correction the render applies to a shot (selected take's match, camera doNotMatch, flash stills) is its own
+// reference, not part of `layerRef`: it is recorded on every shot, so a later match or a disable flips the render,
+// and evidence captured before this reference existed simply has none and is not compared, staying current.
+const colorMatchRef = (project, scene) => ({ role: 'colorMatch', sceneId: scene.sceneId, assetId: scene.sceneId,
+  revision: checksum(activeShotColorMatch(project, scene)) });
+const finishRef = (project) => ({ role: 'finish', assetId: 'project', revision: checksum(finishInputs(project)) });
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({
   trackId: project.trackId ?? null, uploadedAudioFilename: project.uploadedAudioFilename ?? null,
@@ -238,7 +306,7 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   const references = [songRef(project)];
   for (const scene of project.scenes || []) {
     if (sceneIds ? !sceneIds.includes(scene.sceneId) : !intersects(scene, startSec, endSec)) continue;
-    references.push(layerRef(scene));
+    references.push(layerRef(scene), colorMatchRef(project, scene));
     const role = scene.visualLayer === 'still' ? 'plate' : ['card', 'code'].includes(scene.visualLayer) ? null : 'clip';
     if (!role) continue;
     references.push(assetRef(scene, role));
@@ -252,7 +320,8 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
   if (composition) {
     const sceneSet = (project.scenes || []).filter((scene) => intersects(scene, startSec, endSec)).map((scene) => scene.sceneId).sort();
     references.push({ role: 'window', assetId: 'scene-set', startSec, endSec, sceneIds: sceneSet, revision: checksum(sceneSet) });
-    references.push(compositionRef(project, startSec, endSec));
+    const { legacyRevision, ...composed } = compositionRef(project, startSec, endSec);
+    references.push(composed, finishRef(project));
   }
   return snapshot(references);
 }
@@ -262,11 +331,13 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
 // objects can be mutated in place between reads, including before a save.
 function createDependencyReader(project) {
   let song;
+  let finish;
   let scenesById;
   const sceneReferences = new Map();
   const windows = new Map();
   return (ref) => {
     if (ref.role === 'song') return song ??= songRef(project);
+    if (ref.role === 'finish') return finish ??= finishRef(project);
     if (ref.role === 'window' || ref.role === 'composition') {
       let byEnd = windows.get(ref.startSec);
       if (!byEnd) windows.set(ref.startSec, byEnd = new Map());
@@ -289,6 +360,7 @@ function createDependencyReader(project) {
     if (!references) sceneReferences.set(scene, references = new Map());
     if (!references.has(ref.role)) references.set(ref.role, slots[ref.role] ? assetRef(scene, ref.role)
       : ref.role === 'layer' ? layerRef(scene)
+        : ref.role === 'colorMatch' ? colorMatchRef(project, scene)
         : ref.role === 'clipReferences' ? captureClipReferenceDependency(project, scene) : null);
     return references.get(ref.role);
   };
@@ -302,8 +374,8 @@ function dependencyChanges(dependencies, readCurrent) {
     ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
-    if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
-      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : 'Composition'} changed` });
+    if (!current || current.assetId !== ref.assetId || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
+      changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
   }
   return changes;
@@ -395,7 +467,11 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
     current: captureMusicVideoEvidence(project) }), shots, evidence, estimate };
 }
 
-/** Bounded projection for readers: retain verdicts/assets, expose their validity separately. */
+/**
+ * Bounded projection for readers: retain verdicts/assets, expose their validity separately.
+ * A selected take's `characterReferenceState` (#16473) is advice beside `dependencyState`, never part of it,
+ * so an older character reference never refuses a render, an approval or a selection.
+ */
 export function presentMusicVideoDependencies(project) {
   if (!project) return project;
   const readCurrent = createDependencyReader(project);
@@ -404,7 +480,7 @@ export function presentMusicVideoDependencies(project) {
     return { status: changes.length ? (changes[0].role === 'unknown' ? 'unknown' : 'stale') : 'current',
       reasons: [...new Set(changes.map((change) => change.reason))] };
   };
-  return { ...project,
+  return presentCharacterReferenceStates({ ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
     ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
     scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => {
@@ -422,7 +498,7 @@ export function presentMusicVideoDependencies(project) {
     ...(project.autoReviews ? { autoReviews: project.autoReviews.map((run) => ({ ...run, attempts: (run.attempts || []).map((attempt) => ({ ...attempt,
       ...(attempt.review ? { review: { ...attempt.review, dependencyState: state(attempt.review.dependencies) } } : {}),
     })) })) } : {}),
-  };
+  });
 }
 
 

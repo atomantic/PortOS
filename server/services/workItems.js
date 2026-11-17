@@ -1,22 +1,20 @@
 /**
  * Claimable work-item listing for a managed app.
  *
- * `/do:next` normally lets the agent pick its own item. The app-overview
- * "Run /do:next" drawer also offers picking ONE specific item, which needs the
- * same candidate list the agent would walk. Rather than re-implementing the
- * forge queries, this dispatches on the app's resolved Work Tracker to the
- * detector that ALREADY produces that list:
+ * `/do:next` normally lets the agent pick its own item; the app-overview "Run
+ * /do:next" drawer also offers picking ONE, which needs the same candidate list.
+ * This dispatches on the app's resolved Work Tracker to the detector that
+ * ALREADY produces that list:
  *
  *   plan   → detectPlanTask        (PLAN.md unchecked/unclaimed items)
  *   github → detectGithubIssues    (`gh issue list` minus the claim skip-list)
  *   gitlab → detectGitlabIssues    (`glab issue list`, same skip-list)
- *   jira   → the app's current-sprint tickets (no detector exists for JIRA —
- *            perpetual mode parks on 'no-detector' — so it reads the same sprint
- *            query the app's Kanban board uses, minus already-started tickets)
+ *   jira   → the app's current-sprint tickets (no detector exists), the same
+ *            query the Kanban board uses, minus already-started tickets
  *
  * Sentinel discipline (AGENTS.md): a failed probe returns `items: []` WITH the
  * detector's `reason` + `transient: true`, so the caller can say "couldn't
- * reach the tracker" instead of the lie "no work available".
+ * reach the tracker" instead of "no work available".
  */
 
 import { resolveAppWorkTracker, trackerToClaimTaskType } from '../lib/workTracker.js';
@@ -77,13 +75,9 @@ export async function listWorkItems(app, { issueAuthorFilter, issueExcludeLabels
     count: Number.isFinite(result.count) ? result.count : 0,
     reason: result.reason || null,
     transient: result.transient === true,
-    // Present only when the detector named a fault that won't self-clear (a
-    // permission the token lacks), so the picker can print the way out instead of
-    // the generic "retry" copy every other transient gets.
+    // Set only for a fault that won't self-clear (e.g. a missing token permission), so the picker can show the way out.
     remedy: result.remedy || null,
-    // Per-cause skip attribution for an empty list (the detector computes it
-    // exactly when items run out), so the picker can say WHY each issue was
-    // skipped instead of a hand-maintained cause list that goes stale.
+    // Per-cause skip attribution for an empty list, so the picker can say WHY each issue was skipped.
     skipCauses: result.skipCauses && Object.keys(result.skipCauses).length > 0 ? result.skipCauses : null
   };
 }

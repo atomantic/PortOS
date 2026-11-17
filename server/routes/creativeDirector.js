@@ -22,9 +22,9 @@ import {
   creativeDirectorPlanStepActionSchema,
   creativeDirectorDirectiveSchema,
   creativeDirectorSceneUpdateSchema,
-  creativeDirectorAutoCastSuggestSchema,
   creativeDirectorAutoCastApplySchema,
   creativeDirectorProjectQuerySchema,
+  creativeDirectorProjectSlimQuerySchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -40,7 +40,7 @@ import {
   updatePlanStep,
   updateScene,
 } from '../services/creativeDirector/local.js';
-import { suggestCastForBrief, applyAutoCastToProject, toSuggestionView } from '../services/creativeDirector/autoCast.js';
+import { applyAutoCastToProject } from '../services/creativeDirector/autoCast.js';
 import { enqueueFirstPassPortraits } from '../services/creativeDirector/firstPassGen.js';
 import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPassMusicGen.js';
 import { startCreativeDirectorProject, advanceAfterSceneSettled } from '../services/creativeDirector/completionHook.js';
@@ -74,12 +74,13 @@ function assertVideoDispatchAvailable(project) {
 // placeholders the client would have to filter. Mirrors the catalog's
 // `GET /catalog/ingredients?ids=` batch filter.
 router.get('/', asyncHandler(async (req, res) => {
-  const { ids } = validateRequest(creativeDirectorProjectQuerySchema, req.query);
+  const query = validateRequest(creativeDirectorProjectQuerySchema, req.query);
+  const { ids } = query;
   const projects = ids ? await getProjectsByIds(ids) : await listProjects();
-  if (!isPaginationRequested(req.query)) {
+  if (!isPaginationRequested(query)) {
     return res.json(projects);
   }
-  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  res.json(paginateArray(projects, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Creative tool catalog (CDO Phase 4, #2186) — the studio Plan board + directive
@@ -124,9 +125,10 @@ function slimProject(p) {
 }
 
 router.get('/:id', asyncHandler(async (req, res) => {
+  const { slim } = validateRequest(creativeDirectorProjectSlimQuerySchema, req.query);
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(req.query.slim === '1' ? slimProject(p) : p);
+  res.json(slim === '1' ? slimProject(p) : p);
 }));
 
 router.get('/:id/sources', asyncHandler(async (req, res) => {
@@ -152,16 +154,6 @@ router.post('/', asyncHandler(async (req, res) => {
   const data = validateRequest(creativeDirectorProjectCreateSchema, req.body);
   const project = await createProject(data);
   res.status(201).json(project);
-}));
-
-// Autonomous auto-cast (#1810) — preview only: given a free-text brief, return the
-// catalog ingredients the director would propose (hybrid FTS + pgvector search),
-// without mutating anything. Registered before `/:id/auto-cast` so the literal
-// path can't be shadowed by the param route.
-router.post('/auto-cast/suggest', asyncHandler(async (req, res) => {
-  const { brief, types, limit } = validateRequest(creativeDirectorAutoCastSuggestSchema, req.body);
-  const hits = await suggestCastForBrief({ brief, types, limit });
-  res.json({ suggestions: hits.map(toSuggestionView).filter(Boolean) });
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

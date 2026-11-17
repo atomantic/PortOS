@@ -43,8 +43,7 @@ Supported paths are `localLlm.ollama`, `localLlm.lmstudio`, `localLlm.llama`,
 `imageGen.local`, `imageGen.codex`, `imageGen.grok`, `imageGen.agy`,
 `imageGen.fal`, `imageGen.expose`, `renderDefaults`, `videoGen`, `pipeline`,
 `writersRoom`, `seriesAutopilot`, `pipelineEditorialChecks`, `autoUpdate`,
-`music.chiptune`, `music.designer`, and `loraTraining` (its caption-model keys
-only). The Media settings drawer, Chiptune panel, Music Designer and LoRA caption-model picker each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value or the hand-set LoRA training knobs. A `renderDefaults` target sent
+`music.chiptune` and `music.designer`. The Media settings drawer, Chiptune panel and Music Designer each save only the fields the user changed, one slice per request, so a stale snapshot never overwrites a sibling panel's value. A `loraTraining` slice stored by an older install is retired: it is not validated or patchable, but it is read and preserved. A `renderDefaults` target sent
 as `null` clears that surface's pin.
 Only the current controls' fields are accepted; credential/auth paths and
 prototype-related keys are rejected. Execution-policy and changed executable
@@ -170,7 +169,7 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/character` | Character management |
 | `/api/tools` | Agent tool registry |
 | `/api/image-gen`, `/api/video-gen`, `/api/image-video/models` | Image/video generation |
-| `/api/image-verifier` | Image quality verification: `GET /settings`, `PUT /settings` (generation/import opt-ins, default profile, reviewer and reroll budget), `GET /models`, `GET /profiles`, `GET /profiles/:id`, `POST /profiles`, `DELETE /profiles/:id`, `POST /verify` (`{ filename, profileId?, prompt?, reviewerModel?, reviewer? }`), and `POST /override` (`{ filename, verdict, notes? }`). Verification and overrides persist in the image sidecar. Writes require host control. |
+| `/api/image-verifier` | Image quality verification: `POST /verify` (`{ filename, profileId?, prompt?, reviewerModel?, reviewer? }`), and `POST /override` (`{ filename, verdict, notes? }`). Verification and overrides persist in the image sidecar. Writes require host control. |
 | `POST /api/video-gen` (Grok reference images) | With `backend=grok` and a `sourceImage` (or `sourceImageFile`), a multipart request may add up to 3 reference images: files `referenceImage1`..`referenceImage3` (`image/*` only), each with an optional text `referenceLabel1`..`referenceLabel3` (what the image shows, max 120 chars, default empty). They are staged in slot order as the job's `castReferences` (`[{ path, label }]`), so Grok runs `reference_to_video` with the source image as `first_frame` instead of `image_to_video`; any Music Video sheets come first and uploads follow. Another backend, no source image, a 4th image (`referenceImage4`) or a label without its image is a `400` (`VIDEO_REFERENCE_IMAGES_GROK_ONLY`, `_NEED_SOURCE`, `_TOO_MANY`, `VIDEO_REFERENCE_LABEL_ORPHANED`) and every upload is removed. Staged files are deleted by the Grok worker when the job completes, fails or is canceled, and by the queue if the job never starts. `POST /api/video-gen/prompt-preview` previews them via `previewUploads: ['sourceImage', 'referenceImage1', …]` |
 | `/api/devtools/video-download` | Video download |
 | `/api/video-timeline` | Video timeline editor |
@@ -195,8 +194,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/importer` | Story importer |
 | `/api/story-builder` | Story Builder |
 | `/api/loras` | Supported inference adapter management |
-| `/api/lora-datasets`, `/api/lora-training` | Retained read/cancel/checkpoint operations; training launch/resume and dataset mutation return 410 |
-| `/api/data-maintenance` | Operator-authorized retired-data inventory, fresh preview and confirmed allowlisted removal; see [Data Maintenance](DATA_MAINTENANCE.md) |
+| `/api/lora-training` | Retained run history: list/read runs, checkpoints and sample images, `POST /runs/:id/cancel` and `POST /runs/:id/promote-checkpoint`; launch and every other write return 410 `LORA_TRAINING_RETIRED`. `/api/lora-datasets` is removed |
+| `/api/data-maintenance` | Operator-authorized retired-data inventory and `DELETE /:operationId` removal of an allowlisted directory; see [Data Maintenance](DATA_MAINTENANCE.md) |
 | `/sdapi/v1` | AUTOMATIC1111-compatible image generation surface (gated by `settings.imageGen.expose.a1111`) |
 | `/api/openclaw` | OpenClaw operator chat |
 | `/api/rounds` | Rounds (music + Morse training) |
@@ -216,7 +215,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/iterm` | iTerm2 view capability status (`GET /status` → `{ state, detail }`); sessions themselves travel over the `iterm:*` socket events ([ITERM.md](./ITERM.md)) |
 | `/api/ports` | Port scan / allocation |
 | `/api/logs` | PM2 process logs |
-| `/api/detect` | App-repo detection |
 | `/api/scaffold` | App scaffolding |
 | `/api/usage` | Provider usage / quota |
 | `/api/daily-driver` | Daily-driver snapshot |
@@ -232,7 +230,6 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Eac
 | `/api/media` | Media library |
 | `/api/imessage`, `/api/contacts`, `/api/signal`, `/api/beeper`, `/api/spotify`, `/api/youtube` | Personal-data ingest |
 | `/api/notifications` | Notification stream |
-| `/api/standardize` | App PM2 standardizer |
 | `/api/stacker-news`, `/api/x` | Social integrations |
 | `/api/model-personality` | LLM personality tests |
 | `/api/provider-fallbacks` | GET/PUT the single ordered provider fallback list `{ entries: [{ providerId, model?, effort? }] }` (Models > Fallbacks); the step after the failed one runs next, wrapping to the first |

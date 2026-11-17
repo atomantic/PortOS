@@ -1,24 +1,8 @@
 /**
- * Map tested control belief through cost to behavioral proof in the FableLoom
- * series-plan review (#6443, epic #6418).
+ * Map tested control belief through cost to behavioral proof in the FableLoom series-plan review (#6443, epic #6418).
  *
- * The shipped template evaluated arc, escalation, pacing, side-quest lifecycle,
- * continuity, thematic coherence and per-episode dramatic job — and said
- * nothing about character transformation being EARNED BY BEHAVIOR. Two
- * consequences at plan time: a climax that wins the external fight read as a
- * clean payoff even with no behavioral proof anywhere in the plan, and a
- * deliberately flat or tragic ending read as an arc gap.
- *
- * The new `{{characterEvolutions}}` section carries the staged causal chain
- * plus the declared outcome, makes the outcome change the verdict rather than
- * suppress the pass, and splits "no authored intent" from "authored intent not
- * delivered" so the two get different repairs. It also states explicitly that a
- * satisfied lens contributes NOTHING — a plan review that always emitted an
- * evolution risk would spin `editorialAutopilot.runPlanning()` to `maxRounds`.
- *
- * The section is mustache-gated and the variable renders '' when no lens is
- * authored, so an install with no lens sends a byte-identical prompt to the
- * pre-migration one. Hash replacement preserves customized prompts.
+ * The shipped template evaluated arc, escalation, pacing, side-quest lifecycle, continuity, thematic coherence and per-episode dramatic job but not character transformation EARNED BY BEHAVIOR: a climax that wins the external fight read as a clean payoff with no behavioral proof in the plan, and a deliberately flat or tragic ending read as an arc gap.
+ * The new `{{characterEvolutions}}` section carries the staged causal chain plus the declared outcome, makes the outcome change the verdict rather than suppress the pass, and splits "no authored intent" from "authored intent not delivered". A satisfied lens contributes NOTHING (an always-emitted evolution risk would spin `editorialAutopilot.runPlanning()` to `maxRounds`). The section is mustache-gated and renders '' with no lens, so such an install sends a byte-identical prompt; hash replacement preserves customized prompts.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

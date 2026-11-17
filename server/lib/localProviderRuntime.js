@@ -1,34 +1,11 @@
 /**
- * Which local runtime a provider talks to, and at which endpoint.
+ * Which local runtime a provider talks to (`llama` / `ollama` / `lmstudio` / `mtplx` / `vllm` / `sglang` /
+ * `slotstream`) and which base URL to probe.
  *
- * A provider like `opencode-llama-tui` is only half a configuration: PortOS can
- * spawn the OpenCode CLI perfectly and the run still dies with "Cannot connect
- * to API: Unable to connect" because the daemon it points at — `llama-server`,
- * the Ollama daemon, LM Studio's server, an MTPLX process, a vLLM container —
- * was never installed
- * or never started. The binary check in `providerRuntimeInstaller.js` answers
- * "can PortOS run `opencode`?", which is a different question and stays green in
- * exactly that failure.
- *
- * This module is the pure half of the answer: given a provider record, which
- * local runtime backs it (`llama` / `ollama` / `lmstudio` / `mtplx` / `vllm` /
- * `sglang` / `slotstream`) and what
- * base URL should be probed. `services/providerReadiness.js` does the probing.
- * Kept side-effect-free so both the readiness service and its tests can reason
- * about the mapping without a daemon on the host.
- *
- * The CLASSIFICATION half (`localBackendForProvider`, `localRuntimeKind`, and
- * the `modelPinIsOffered` rule built on it) has since moved on to
- * `modelPinMembership.js`, which this module re-exports so every existing
- * importer is untouched: a browser picker needs that rule and must not pull the
- * endpoint graph below (`opencodeConfig.js` → `zod`) to get it. Before that it
- * lived in `services/localModelHealing.js`, which still re-exports
- * `localBackendForProvider` for its own callers.
- *
- * Endpoint resolution deliberately prefers the provider's OWN configuration
- * over any default: a user who moved llama-server to another port edited
- * `OPENCODE_CONFIG_CONTENT` (or `endpoint`), and probing the old default anyway would
- * report their working setup as broken.
+ * A provider like `opencode-llama-tui` can spawn its CLI fine while the daemon it points at was never installed or
+ * started, which the binary check in `providerRuntimeInstaller.js` cannot see; `services/providerReadiness.js`
+ * does the probing. Pure and side-effect-free. Endpoint resolution prefers the provider's OWN configuration over
+ * any default, or a relocated llama-server would be reported broken.
  */
 
 import { isOpencodeCommand, parseOpencodeConfigContent } from './providerModels.js';
@@ -38,68 +15,31 @@ import { PORTS } from './ports.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 
 export { isLocalInstanceHost, isLocalInstanceEndpoint, localEndpointPort } from './localEndpoint.js';
-// The local-backend classifier and the model-pin membership rule moved to the
-// browser-safe leaf `modelPinMembership.js` so a picker can share them without
-// pulling this module's endpoint graph (`opencodeConfig.js` → `zod`, not a
-// client dependency). Re-exported so every existing importer is untouched.
+// Classification and the model-pin membership rule live in the browser-safe leaf `modelPinMembership.js` (a picker must not pull this module's `opencodeConfig.js` → `zod` graph); re-exported for existing importers.
 export { localBackendForProvider, localRuntimeKind, modelPinIsOffered, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 
 /**
- * One row per local runtime PortOS knows how to check for.
- *
- * `defaultBaseUrl` is read from `opencodeConfig.js`'s provider table rather than
- * re-typed: that table is what a spawned OpenCode actually talks to when the
- * provider stores no config of its own, so a second copy here would eventually
- * probe a port nothing is on and call a working setup broken.
- *
- * `manageUrl` is the client route that installs/starts it, so an unmet
- * requirement links there rather than duplicating the install UI on the
- * Providers page. It is NOT one page: since #7414, server lifecycle lives on
- * Models → Runtimes and the weights catalog on Models → LLMs, and a runtime
- * points at whichever of the two actually manages it. Read from
- * `LOCAL_RUNTIME_MANAGE_URLS` (`modelPinMembership.js`) rather than typed here,
- * because the client needs the same answer and must not import this module's
- * endpoint graph to get it. `null` means PortOS has no page for that runtime.
- *
- * `modelsHint` and `standbyDetail` are read by a user, so they name that page —
- * but they write it as the `{page}` token, which `providerReadiness.js` expands
- * through `navManifest.getNavPageForPath`. A literal breadcrumb here is what
- * #7414 had to hand-edit across a dozen files; a token re-words itself on the
- * next move. Runtimes whose `manageUrl` is `null` must not use the token —
- * there is no page to name.
+ * One row per local runtime PortOS can check. `defaultBaseUrl` comes from `opencodeConfig.js`'s provider table (what a spawned OpenCode actually uses), never re-typed.
+ * `manageUrl` is the client route that installs/starts it, read from `LOCAL_RUNTIME_MANAGE_URLS` because the client needs the same answer; `null` means no page.
+ * `modelsHint` and `standbyDetail` name that page via the `{page}` token, expanded by `providerReadiness.js` through `navManifest.getNavPageForPath` so a page move
+ * needs no edits; runtimes with a null `manageUrl` must not use the token.
  */
 export const LOCAL_RUNTIMES = Object.freeze({
   llama: Object.freeze({
     id: 'llama',
     label: 'llama.cpp',
-    // The server binary, not the `llama` convenience wrapper: this is what
-    // `llamaServerManager` resolves and starts.
+    // The server binary, not the `llama` wrapper: what `llamaServerManager` resolves and starts.
     command: 'llama-server',
     defaultBaseUrl: opencodeLocalBaseUrl('llama'),
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.llama,
     docsUrl: 'https://github.com/ggml-org/llama.cpp',
-    // Named so an unmet check can say what the user still has to fetch. GGUF
-    // weights are a separate download from the binary — the single most common
-    // reason a freshly-installed llama.cpp still cannot serve a request.
+    // Names what the user still has to fetch: GGUF weights are a separate download from the binary.
     modelsHint: 'Pick a GGUF preset on that tab — PortOS downloads the weights and starts the server there.',
-    // One process, one model. Without this the readiness checklist read as
-    // "llama.cpp does not have the model you asked for" — which sent users off
-    // to download weights they already had.
+    // One process, one model; the checklist must not read as "missing the model you asked for". The served id is a LABEL on the launch line (`--alias`), so a mismatch
+    // is a rename, which lets `providerReadiness.js` offer to relaunch the same weights under the id the provider asks for.
     servesOneModel: true,
-    // ...and the id it answers under is a LABEL on the launch line, not the
-    // GGUF's filename. That is the whole reason a provider can list three model
-    // names while the server accepts exactly one: the other two were never
-    // separate downloads, they were names nothing was ever started under. It
-    // also makes the mismatch a rename rather than a fetch, which is what lets
-    // `providerReadiness.js` offer to relaunch the same weights under the id the
-    // provider asks for.
     aliasFlag: '--alias',
-    // A stopped llama-server is not an incomplete installation. Unlike an
-    // always-on API daemon, llama.cpp needs a concrete GGUF launch choice; once
-    // started with idle release enabled it unloads that checkpoint in place
-    // and reloads it on the next request. Keep the stopped state visible as
-    // standby without turning every enabled llama-backed provider into a setup
-    // failure on the capability map.
+    // A stopped llama-server is a valid idle state, not an incomplete install: it needs a concrete GGUF launch choice and, with idle release, unloads and reloads in place.
     standbyWhenStopped: true,
     standbyDetail: 'No model server is running, which is a valid idle state. Choose a GGUF preset on {page} when you want to start one; with idle release configured, llama.cpp unloads it in place and reloads it on the next request.',
   }),
@@ -120,58 +60,38 @@ export const LOCAL_RUNTIMES = Object.freeze({
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.lmstudio,
     docsUrl: 'https://lmstudio.ai/download',
     modelsHint: 'Download a model in LM Studio and start its local server.',
-    // No pre-spawn context preparation, unlike Ollama's
-    // `ensureOllamaAgentContext`: LM Studio fixes a model's context length when
-    // the instance is LOADED, and the only lever PortOS holds is
-    // `lmStudioManager.loadModelWithArgs`, which UNLOADS whatever the user has
-    // resident and cold-loads the weights again. Paying that on every agent
-    // spawn — and evicting a model the operator loaded in the app — is worse
-    // than honouring the window they chose, so an `lmstudioBacked` provider's
-    // `numCtx` is set where the model is loaded, not here.
+    // No pre-spawn context preparation (unlike Ollama): LM Studio fixes context length at LOAD time and `loadModelWithArgs` would evict the operator's resident model,
+    // so an `lmstudioBacked` provider's `numCtx` is set where the model is loaded.
   }),
   vllm: Object.freeze({
     id: 'vllm',
     label: 'vLLM (Qwen3.8-27B)',
-    // Docker is the harness: the stack ships as an upstream compose project
-    // (syv-ai/qwen38-27b-rtx3090), and PortOS never vendors the engine or the
-    // ~9.5 GB image. "Is docker here?" is the only install question PortOS can
-    // answer about it.
+    // The stack ships as an upstream compose project and PortOS never vendors the engine or image; "is docker here?" is the only install question it can answer.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('vllm'),
-    // No Models page at all — the weights and the compose project are an
-    // operator-owned ~20 GB prepare step, not something PortOS downloads, so
-    // the readiness checklist is the whole surface.
+    // No Models page: weights and the compose project are an operator-owned prepare step.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.vllm,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/qwen38-rtx3090.md',
     modelsHint: 'Clone syv-ai/qwen38-27b-rtx3090 and run its prepare step once — or let the checklist do it, which is the only path that spends the ~30 GB.',
-    // What each local-setup state MEANS for this runtime, overriding
-    // `providerReadiness`'s model-cache prose. The thing that is missing here is
-    // a whole compose project, not a checkpoint, and "no weights cached" would
-    // send the operator looking for a download that was never the first step.
+    // Overrides `providerReadiness`'s model-cache prose: what is missing is a whole compose project, not a checkpoint.
     setupStateDetail: Object.freeze({
       empty: 'No prepared compose project was found — its image and the ~20 GB of weights are not on disk yet.',
       ready: 'The compose project is built and its weights are on disk; this can be confirmed once the container is running.',
     }),
-    // One container, one checkpoint — but its served id is baked into the
-    // compose project, so PortOS has no launch line of its own to rename.
+    // One container, one checkpoint; the served id is baked into the compose project, so nothing to rename.
     servesOneModel: true,
   }),
   sglang: Object.freeze({
     id: 'sglang',
     label: 'SGLang (Qwen3.8-27B)',
-    // Docker again, for the same reason as vLLM: the engine ships as an official
-    // image (`lmsysorg/sglang:qwen38-27b`) PortOS never builds. Unlike vLLM,
-    // though, the LAUNCH LINE is ours — `lib/sglangQwenRecipe.js` owns it,
-    // because SGLang publishes no compose project to inherit one from.
+    // Docker for the same reason as vLLM, but the LAUNCH LINE is ours (`lib/sglangQwenRecipe.js`) since SGLang publishes no compose project.
     command: 'docker',
     defaultBaseUrl: opencodeLocalBaseUrl('sglang'),
-    // No Models page at all — the weights are an operator-owned ~20 GB
-    // download, not something PortOS fetches.
+    // No Models page: weights are an operator-owned download.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.sglang,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/sglang-qwen38.md',
     modelsHint: 'Save the compose file from docs/features/sglang-qwen38.md and download the weights once — PortOS never pulls the image or the ~20 GB of weights.',
-    // One container, one checkpoint; the recipe picks the quantized repo from
-    // the card class, so there is no per-model rename for PortOS to offer.
+    // One container, one checkpoint; the recipe picks the repo from the card class.
     servesOneModel: true,
   }),
   slotstream: Object.freeze({
@@ -192,37 +112,19 @@ export const LOCAL_RUNTIMES = Object.freeze({
     label: 'MTPLX',
     command: 'mtplx',
     defaultBaseUrl: opencodeLocalBaseUrl('mtplx'),
-    // MTPLX has no model CATALOG inside PortOS — it never had a Models → LLMs
-    // entry for that reason — but Models → Runtimes does own its server:
-    // install, checkpoint download, start and stop all live on that page, so
-    // that is where a readiness card should send someone (#7414). The one-click
-    // setup on the checklist itself (`services/localRuntimeSetup.js`) remains
-    // the shortest path and still runs in place.
+    // No model CATALOG in PortOS, but Models → Runtimes owns its server (install, checkpoint, start/stop); the checklist's one-click setup (`services/localRuntimeSetup.js`) still runs in place.
     manageUrl: LOCAL_RUNTIME_MANAGE_URLS.mtplx,
     docsUrl: 'https://github.com/atomantic/PortOS/blob/main/docs/features/mtplx.md',
     modelsHint: 'Point the server at the Qwen MTP checkpoint you want, or let the checklist fetch MTPLX\'s default one when nothing is cached.',
-    // One process, one checkpoint — MTPLX names it after the checkpoint it
-    // loaded, so there is no label for PortOS to change.
+    // MTPLX names the served model after the loaded checkpoint, so nothing to rename.
     servesOneModel: true,
   }),
 });
 
 /**
- * Local runtimes the measured-assessment feature can benchmark.
- *
- * Deliberately the same key space as `LOCAL_RUNTIMES` above, minus nothing:
- * every local daemon PortOS knows how to *reach* is one it can also *measure*,
- * because a measurement is just one bounded generation over the shared
- * OpenAI-compatible wire protocol.
- *
- * The split below is about how PortOS gets to the model, not about how good the
- * measurement is:
- *   - MANAGED — PortOS keeps a provider record and an installed-model catalog
- *     for it, so a run goes through the playground's provider path and lands in
- *     `/runs`.
- *   - ENDPOINT — a bare loopback daemon the user (or PortOS's llama-server
- *     launcher) started. Its "installed models" are whatever `GET /v1/models`
- *     reports right now, and a measurement talks to the endpoint directly.
+ * Local runtimes the measured-assessment feature can benchmark: the same key space as `LOCAL_RUNTIMES`, since a measurement is one bounded generation over the
+ * OpenAI-compatible protocol. MANAGED runtimes have a provider record and installed-model catalog (run lands in `/runs`); ENDPOINT runtimes are bare loopback
+ * daemons whose models are whatever `GET /v1/models` reports and are measured directly.
  */
 export const ASSESSABLE_RUNTIMES = Object.freeze(['ollama', 'lmstudio', 'llama', 'mtplx', 'vllm', 'sglang', 'slotstream']);
 
@@ -233,11 +135,7 @@ export const MANAGED_ASSESSMENT_BACKENDS = Object.freeze(['ollama', 'lmstudio'])
 export const isEndpointRuntime = (id) =>
   ASSESSABLE_RUNTIMES.includes(id) && !MANAGED_ASSESSMENT_BACKENDS.includes(id);
 
-/**
- * Normalize a base URL to the `/v1` root an OpenAI-compatible probe needs.
- * A scheme is added when missing, because `OLLAMA_HOST` is conventionally a
- * bare `host:port` (mirroring `ollamaManager`'s own normalization).
- */
+/** Normalize a base URL to the `/v1` root a probe needs; adds a missing scheme because `OLLAMA_HOST` is conventionally a bare `host:port`. */
 export function normalizeOpenAiBaseUrl(url) {
   if (typeof url !== 'string') return null;
   let trimmed = url.trim().replace(/\/+$/, '');
@@ -246,13 +144,7 @@ export function normalizeOpenAiBaseUrl(url) {
   return /\/v\d+$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
 }
 
-/**
- * The base URL the rest of PortOS talks to this backend on, when the provider
- * itself names none. The backend managers resolve their own base URL from these
- * env vars (`ollamaManager.js`, `lmStudioManager.js`); reading them here keeps a
- * relocated daemon from showing up as "not responding — install it" on the card
- * while every other PortOS feature reaches it fine.
- */
+// The backend managers resolve their base URL from these env vars; reading them keeps a relocated daemon from showing as "not responding" on the card.
 function envBaseUrl(kind) {
   if (kind === 'ollama') return process.env.OLLAMA_URL || process.env.OLLAMA_HOST || null;
   if (kind === 'lmstudio') return process.env.LM_STUDIO_URL || null;
@@ -261,17 +153,14 @@ function envBaseUrl(kind) {
 
 /** The `baseURL` an OpenCode provider config declares for `namespace`, if any. */
 function opencodeConfiguredBaseUrl(provider, namespace) {
-  // A hand-edited config that no longer parses tells us nothing about the
-  // endpoint; `parseOpencodeConfigContent` answers null and we fall through to
-  // the provider's own fields.
+  // An unparseable hand-edited config says nothing about the endpoint; fall through to the provider's own fields.
   const parsed = parseOpencodeConfigContent(provider?.envVars?.OPENCODE_CONFIG_CONTENT);
   const baseUrl = parsed?.provider?.[namespace]?.options?.baseURL;
   return typeof baseUrl === 'string' && baseUrl.trim() !== '' ? baseUrl : null;
 }
 
 /**
- * The local runtime a provider needs, with the endpoint PortOS should probe.
- *
+ * The local runtime a provider needs, with the endpoint to probe.
  * @param {object|null|undefined} provider
  * @returns {{kind:string,label:string,command:string|null,endpoint:string|null,manageUrl:string|null,docsUrl:string,modelsHint:string,standbyWhenStopped?:boolean,standbyDetail?:string}|null}
  */
@@ -290,13 +179,8 @@ export function localRuntimeForProvider(provider) {
     || normalizeOpenAiBaseUrl(envBaseUrl(kind))
     || runtime.defaultBaseUrl;
 
-  // A provider whose endpoint lives on ANOTHER machine has no local runtime,
-  // however local its name/id looks. An `LM Studio <box>` provider pointed
-  // at a LAN host still matched `lmstudio` by NAME, and the card answered
-  // "LM Studio installed — `lms` is on PortOS's PATH" and "start it from
-  // Models → LLMs" about a server PortOS neither runs nor can start.
-  // An external API endpoint is assumed to be set up by whoever runs it; the
-  // only honest report here is none.
+  // A provider whose endpoint is on ANOTHER machine has no local runtime however local its name looks (`LM Studio <box>` matched by name);
+  // an external endpoint is its operator's to set up.
   if (!isLocalInstanceEndpoint(endpoint)) return null;
 
   const { id, ...row } = runtime;

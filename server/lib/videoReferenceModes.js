@@ -1,42 +1,15 @@
 /**
- * i2v reference-mode contract (#4874) — what a supplied conditioning image
- * PROMISES about the render.
+ * i2v reference-mode contract (#4874): what a supplied conditioning image PROMISES about the render.
  *
- * PortOS already had an "image strength" slider, but a bare scalar says nothing
- * about the *semantic* the user is buying. Two very different promises hid
- * behind the same dial:
- *
- *   - `anchor`  — the reference IS frame one. The clip animates outward from
- *                 those exact pixels. This is the historical behavior and stays
- *                 the default, so a render that predates this field is
- *                 byte-identical to one that omits it.
- *   - `inspire` — the reference steers subject and style, and frame one is
- *                 GENERATED. It will resemble the image without reproducing it.
- *
- * Only a runtime that can carry a per-image conditioning strength can honor
- * `inspire`; on everything else the pipeline pins frame 0 unconditionally, so
- * accepting the request would silently deliver `anchor` while the UI promised
- * otherwise. That is the whole failure this table exists to prevent — every
- * boundary rejects instead (`i2vReferenceModeViolation` below), and the LTX
- * helper fails loudly rather than downgrading mid-render.
- *
- * A pure leaf re-exported by `client/src/lib/videoReferenceModes.js` — so it
- * must not import `ServerError`, any Node built-in, or anything outside
- * `server/lib`. Callers translate the returned
- * `{ code, message }` into whatever their layer throws:
- * `videoReferenceModeError()` in services/videoGen/modeContract.js does that
- * for the route + render boundaries.
+ * A bare "image strength" scalar hid two promises: `anchor` (the reference IS frame one; the historical default, so a render predating this field is byte-identical to one omitting it) and `inspire` (the reference steers subject and style, and frame one is GENERATED). Only a runtime carrying a per-image conditioning strength can honor `inspire`; elsewhere the pipeline pins frame 0, so accepting it would silently deliver `anchor` while the UI promised otherwise. Every boundary therefore rejects (`i2vReferenceModeViolation`) and the LTX helper fails loudly rather than downgrading mid-render. A pure leaf re-exported by `client/src/lib/videoReferenceModes.js`: no `ServerError`, Node built-in or anything outside `server/lib`; callers translate the returned `{ code, message }` (`videoReferenceModeError()` in services/videoGen/modeContract.js does it for the route + render boundaries).
  */
 
-// Ordered — the UI renders the picker in this order and `anchor` is first
-// because it is the default.
+// Ordered: the UI renders the picker in this order and `anchor` is first as the default.
 export const I2V_REFERENCE_MODES = Object.freeze(['anchor', 'inspire']);
 
 export const DEFAULT_I2V_REFERENCE_MODE = 'anchor';
 
-// The promise each mode makes, in the words the UI shows the user. Kept beside
-// the rule table rather than in the component so the server's rejection message
-// and the panel's helper text can't describe two different contracts.
+// The promise each mode makes, in the UI's words, beside the rule table so the server's rejection and the panel's helper text can't describe two contracts.
 export const I2V_REFERENCE_MODE_OPTIONS = Object.freeze([
   Object.freeze({
     value: 'anchor',
@@ -50,29 +23,16 @@ export const I2V_REFERENCE_MODE_OPTIONS = Object.freeze([
   }),
 ]);
 
-// Runtimes that can honor each mode. `null` means "every runtime" — `anchor` is
-// what an i2v pipeline does by construction. `inspire` needs per-image
-// conditioning strength, which today only the LTX-2.5 pin exposes
-// (ImageConditioningInput on generate_and_save); the 2.3 pin shares the family
-// predicate but not that API, so it is NOT listed.
+// Runtimes that can honor each mode; `null` means every runtime (`anchor` is what an i2v pipeline does by construction). `inspire` needs per-image conditioning strength, which only the LTX-2.5 pin exposes (ImageConditioningInput on generate_and_save); the 2.3 pin shares the family predicate but not that API, so it is NOT listed.
 export const I2V_REFERENCE_MODE_RUNTIMES = Object.freeze({
   anchor: null,
   inspire: Object.freeze(['ltx25']),
 });
 
-// Conditioning strength applied to a loose reference when the user leaves the
-// Image Strength slider untouched. Low enough that the first frame is visibly
-// re-generated rather than reproduced — which is exactly the promise `inspire`
-// makes. An explicit slider value always wins.
+// Conditioning strength for a loose reference when the Image Strength slider is untouched: low enough that frame one is visibly re-generated (the `inspire` promise). An explicit slider value wins.
 export const INSPIRE_DEFAULT_IMAGE_STRENGTH = 0.35;
 
-/**
- * `''` / `null` / `undefined` all mean "not set" and resolve to the default.
- * Anything else is returned VERBATIM so an unknown value reaches the gate below
- * and is rejected there — collapsing garbage into `anchor` would turn a typo
- * into a silently different render (AGENTS: sentinel + validate, never let
- * invalid share a value with valid).
- */
+/** `''` / `null` / `undefined` mean "not set" and resolve to the default; anything else is returned VERBATIM so an unknown value is rejected by the gate below (collapsing garbage into `anchor` would turn a typo into a silently different render: sentinel + validate). */
 export const normalizeI2vReferenceMode = (value) => (
   value == null || value === '' ? DEFAULT_I2V_REFERENCE_MODE : value
 );
@@ -98,16 +58,7 @@ export const i2vReferenceModeLabel = (value) => (
     || normalizeI2vReferenceMode(value)
 );
 
-/**
- * The effective first-frame conditioning strength for a render, or `null` for
- * "let the pipeline apply its own default".
- *
- * An explicit slider value is honored on BOTH modes — a user who wants a firmer
- * loose reference (or a softer anchor) gets it. Only the *unset* case differs:
- * `inspire` substitutes its own low default, because "no value" there still has
- * to mean "don't reproduce frame one", while `anchor` keeps deferring to the
- * pipeline exactly as it did before this field existed.
- */
+/** The effective first-frame conditioning strength, or `null` to let the pipeline apply its default. An explicit slider value is honored on BOTH modes; only the unset case differs (`inspire` substitutes its low default, `anchor` defers to the pipeline as before). */
 export const resolveI2vReferenceStrength = (referenceMode, imageStrength) => {
   if (imageStrength != null && imageStrength !== '') {
     const explicit = Number(imageStrength);

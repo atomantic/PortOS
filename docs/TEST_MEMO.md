@@ -1,0 +1,307 @@
+# Test memo
+
+How CI and `npm run pregate` skip test files a trusted green run already
+verified, and how `related` selection uses the same records. Moved out of
+[GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md), which covers the workflows that run it.
+
+`scripts/run-ci-tests.js` skips a selected test file whose every input is
+byte-identical to one a trusted green run already verified, locally under
+`npm run pregate` and in CI through the same code path. Each selected file
+gets two content-addressed keys (`scripts/lib/testMemo.js`):
+
+- the **floor** key hashes the working-tree bytes of the file's static +
+  dynamic module closure (`import`/`export … from`, `require()`, `import()`,
+  `vi.mock`/`vi.doMock`/`vi.importActual`/`vi.importMock`/`vi.unmock`, all
+  with literal specifiers);
+- the **recorded** key hashes the modules the file actually loaded in the
+  green run that produced its entry (Vitest's
+  `experimental.recordDependencies` depfile, cleared before each run so only
+  this run's records count). A module the test mocks away or never reaches
+  cannot change its outcome, so a change to the lazily imported server
+  cluster invalidates only the suites that loaded it; a new edge still
+  invalidates because the importer's own bytes changed. Only plain import
+  edges are narrowed this way: JS a member reads as text, spawns, loads
+  with `require()`/`createRequire` or runs as a worker, and JS named through
+  `readServerSource`/`readClientSource`, is a side module that stays in
+  every key together with its own closure.
+
+Both keys also cover: every non-JS file a member names through a literal path
+anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
+bound to one of those (a literal directory contributes its whole tree, up to
+400 files, and past that through the repository listing when it is only read
+as data: [Directory trees](#directory-trees); snapshot files and each `FIXTURE_OWNERS` directory — or only
+its direct children when the owner sets `fileRe` — are added for the test
+itself); the installed version of every package the
+members reach (so a lockfile bump invalidates exactly the suites that reach
+the bumped packages); a Python sidecar's resolvable sibling imports; the
+version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
+python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
+interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
+the browser suites, found with the suites' own candidate list,
+`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
+handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
+`scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
+below); the full Node
+version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
+`NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
+`PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
+`PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
+`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …); and the arguments that select
+which cases of a file run (a browser profile's `--testNamePattern`), because
+a green verdict covers only the cases that ran. An unfiltered run adds
+nothing, so its keys are unchanged.
+
+The workspace base leaves out two things that cannot change what a
+collected file proves. The test-selection modules the configs import only
+for `include`/`exclude` (`WORKSPACE_SELECTION_MODULES`:
+`scripts/lib/workspaceTests.js`, `scripts/lib/dbTestFiles.js`,
+`scripts/lib/browserSuites.js`) decide which files run, so adding a suite to
+`DB_TEST_INCLUDE` no longer moves every key; a test that imports one keys it
+through its own closure. And the walk does not follow a bare
+`vi.mock`/`vi.doMock`/`vi.unmock` registration: setup's global
+`vi.mock('./services/instances.js', …)` loads nothing until a test imports
+`instances.js`, and then that module and its closure are in the test's own
+closure (a non-literal edge fails the floor key closed) or record. What the
+setup files really import (`mockPathsDataRoot.js`, `fileWriteQueue.js`,
+`test/admissionSetup.js`, …) stays in every key. Before this, the floor
+base pulled in instances.js's ~100-file product closure, so an edit to
+`catalogValidation.js` changed every floor key and pull requests never hit
+the nightly memo.
+
+The recorded key takes the setup phase from the record too. Vitest's depfile
+lists, in every test file's record, the modules its custom environment and
+`setupFiles` loaded, so for the setup entries the config reaches
+(`WORKSPACE_SETUP_ENTRIES`: `server/vitest.setup.js` and
+`server/test/mediaRegistryEnvironment.js`, `client/src/test/setup.js`) the
+recorded key's workspace base stops the static walk at them: a module the
+setup files only mock or never load (`services/instances.js` and its
+closure) no longer invalidates every recorded key. A record that does not
+name every setup entry (a per-file environment pragma) keeps the full static
+base, and a setup-phase problem the static walk finds still fails both keys
+closed. The floor key always walks the setup closure (less bare mock
+registrations).
+
+## Directory trees
+
+A directory a test reads as a whole is an input as a whole.
+
+- **Up to 400 files** the tree is walked on disk. JS found there is a side
+  module: it stays in the key with its own closure and its own reads.
+- **Past 400 files**, a tree that is only read as data (listed, read as text,
+  served) is taken from one `git ls-files` instead: every tracked file plus
+  every untracked file a commit would pick up, so a new source file moves
+  the key before it is staged. Each file counts by its bytes, and the walk
+  follows the literal imports of the tree's JS out of the tree, since
+  whatever serves or bundles it follows the same specifiers
+  (`client/src/App.jsx` imports `server/lib/navManifest.js`). A served file's
+  own filesystem reads, git use and `// test-memo: never` marker say nothing
+  about the test process and are left out. Git-ignored files are outside the
+  key, as `.env` files and installs are outside every key. Suites that key
+  the same tree from inside it would hash the same file set, so such a key
+  also names its test.
+- **A real-browser test** renders what a dev server, bundler or static
+  server reads on its behalf, and the module runner records none of it. A
+  test is one when it, a module it imports or a script it runs names the
+  browser (`CHROME_PATH`, `playwright-core`); browser tests that a member
+  merely lists in a directory do not make their lister's importers one. Every directory the test file hands to such a tool is
+  therefore a tree input under the two rules above: the value of a `root:`,
+  `dir:` or `base:` option, any other object-literal value
+  (`publicDir: join(client, 'public')`), and a function argument
+  (`express.static(dir)`). An install directory stands for the
+  `package.json` and lockfile beside it; `resolveClientBundler(repoRoot)` is
+  read as the client workspace's install directory. Before #16545 such a
+  directory was "a value", so a suite that wrote `root: clientDir` and loaded
+  its component from a fixture string was skipped after the component
+  changed. A Node test that passes a directory along keeps the older reading.
+
+The key still fails closed for the repository root; for a tree the test
+spawns, imports or requires through a variable path; for a directory that is
+only the known prefix of a path with a variable segment (`join(HERE, p)`:
+the read may land outside it); for a test with a
+non-literal `require()`, which could load the tree natively where no
+recording shows it (a browser suite therefore loads its driver with
+`import { chromium } from 'playwright-core'`, never through
+`require(require.resolve(…))`, #16586); for a tree holding a submodule or
+nested repository (one listed entry, whatever it contains); and outside a git checkout. A product
+module's own oversized read is still ignored, as before: only a tree-scanning
+guard calls those walkers, and the planner keeps those always-run.
+
+## Never memoized (fails closed)
+
+A file in the planner's always-run set
+or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
+file whose closure contains the `// test-memo: never` marker; a test file or
+`scripts/` module that spawns `git` (repository state is not in the key —
+product modules that run git on their own targets are under the test's
+control); a test file or `scripts/` member that reads machine-local state
+(`data/`, the home directory); a member that reads a path the analyzer
+cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
+`readServerSource`/`readClientSource`, a directory with more than 400
+files that the listing cannot stand in for, see
+[Directory trees](#directory-trees)); a bare specifier that resolves to no installed package; and, for
+the floor key only, a non-literal `import()`/`require()` or an unparseable
+member. Two non-literal `require()` shapes are keyed instead: `require(CONST)`
+with a module-level string is that bare specifier (package version), and
+`require(join(<unknown dir>, 'name.cjs'))` keys every tracked file of that
+basename. A Python `importlib.import_module('x')` follows like `import x`; a
+computed name is not memoizable. `import(variable)` stays outside the
+recorded key by design: only what the green run loaded is keyed. A recorded set that reaches outside the repository is not memoizable
+either. Every unknown construct lands in one of those buckets rather than
+silently narrowing the key.
+
+## Store
+
+`~/.portos/test-memo/` (override with `PORTOS_TEST_MEMO_DIR`):
+`entries/<key[0..2]>/<key>.json` holds `{ test, workspace, verifiedAt,
+source: 'local'|'ci', commit }`, `records/<workspace>/<sha256(test)>.json`
+the loaded-module list (version 2 also holds a 16-hex sha256 digest per module,
+aligned with the list; a record without them still feeds the recorded key but
+never narrows selection). The list comes from Vitest's depfile, which Vitest
+5.1 writes as version 2 (`files[test] = { at, deps }`); the reader accepted only
+version 1 until #16424, so from the 5.1 bump until then no record or
+recorded-key entry was written anywhere. Writes are temp-file-plus-rename so concurrent
+worktree pregates never tear a file; any read error is a miss, and so is an
+entry older than 14 days, so the nightly re-verifies what it keeps skipping.
+Entries are written only from a Vitest process that exited 0 whose run-level
+report (`scripts/vitestRunDiagnostics.js`) ended `passed` with no unhandled
+error — a rejection after the last test still marks every file `passed` in
+the JSON report — and only for files that report shows passed with no failed
+and no skipped case (a browser profile's name pattern is the one accepted
+skip reason). Every key is recomputed after the run and written only when it
+still matches, so a file edited while Vitest ran is never attributed to the
+verdict. The runner prints one line —
+`🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
+(plus `U never-memoized guards not analyzed.` when U > 0: those are decided before
+any closure walk; and `Related selection used R digest records.` in a related
+plan) — and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`.
+When every selected file is memoized nothing is launched and the job exits 0.
+
+After a run that may record (every run but a pull request's), the runner
+also names each passed file it stored under neither key, with why each key
+was refused:
+
+```
+🧠 Test memo: recorded 12 green entries for 14 passed files.
+🧠   not recorded: client/src/components/Example.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
+🧠   not recorded: 3 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).
+```
+
+At most 40 files are listed, then the rest are counted. Files that are never
+memoized on purpose are only counted: a full run passes dozens of them every
+time. A suite that appears here on every run is re-executing identical
+inputs forever, which is how #16545 was found.
+
+### Runs under a name pattern
+
+A browser profile selects cases with `--testNamePattern`. Vitest calls such a
+run partial and writes a file's dependency record only by merging into one it
+already has: cases the pattern skipped may import modules the record would
+lack, and Vitest reuses the record for unfiltered runs. The runner clears the
+depfile before every run, so a profile run recorded nothing, and the 15
+registered browser suites whose closures have non-literal imports (no floor
+key) never got an entry. The runner now writes an empty record for each file
+about to run (`seedVitestDependencies`), under every project name, into the
+path Vitest reads (`<cacheDir>/vitest/<sha1 of the root project name>/dependencies.json`).
+Vitest's concern does not apply to the memo: the pattern is in the key, so an
+entry only vouches for a run that skips the same cases, and a record from a
+filtered run is stored without digests, so it never narrows related
+selection for another profile. A seed the run does not fill in stays empty
+and is ignored. `scripts/lib/testMemoRunner.test.js` pins the whole exchange
+against the installed Vitest.
+
+### Smoke reuses a full verdict
+
+Pull requests run the browser suites on the `smoke` profile, and only trusted
+runs save the memo, on `full`. Their keys differ in the profile's env value and
+case filter, so before #16546 a pull request never skipped a browser suite. A
+`smoke` run now also looks up, under both the recorded and the floor key, the
+key the same inputs would get with `PORTOS_BROWSER_TEST_PROFILE=full` and
+`full`'s `--testNamePattern` (`browserProfileAcceptedVerdicts` in
+`scripts/lib/browserTestProfiles.js`, `acceptVerdictsFrom` on `planTestMemo`).
+Every other key line (file bytes, records, packages, tools, Node, platform,
+arch and other env values) stays this run's own, and entries are still written
+under the run's own key only.
+
+`smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
+Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
+are a subset of its full cases, and a full verdict covers them.
+`scripts/browser-suite-registry.test.js` reads every registered suite and fails
+on a line that mentions `local-performance` without `[fidelity]`. The reverse
+never holds: a `smoke` entry skipped the fidelity cases, so `full` and
+`fidelity` accept only their own entries. The verbose listing marks such a
+skip `(recorded key, full profile verdict)`.
+
+## Shards
+
+A matrix shard takes its slice of the FULL selected list with
+Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
+against a real `vitest run --shard`) before the memo subtracts anything, so
+every file lands in exactly one shard whatever each shard's store holds;
+Vitest itself is never given `--shard`.
+
+## Related selection
+
+A `related` plan selects, besides the planner's explicit files, every test a
+changed source can affect. Lazy `import()` edges made that the whole lazily
+imported server cluster: across the server's sources the median selected 1,392
+suites, nearly all of them because some module in their closure has a
+non-literal edge (#16424). A test with a version 2 record whose recorded key is
+memoizable (the gate the record was written under) is now selected through
+`recordedReach` (`scripts/lib/testMemo.js`):
+
+- the test, every module its green run loaded, and those modules' non-JS
+  inputs;
+- the names those modules import but the run never loaded (mocked away or on
+  an untaken path), without walking below them;
+- a literal `import()` from the test file itself;
+- the whole closure (static and lazy) below any recorded module whose current
+  digest differs from the record's: a lazy edge gained since the run lives in
+  such a module, so its closure counts as it does for an unrecorded test;
+- the whole closure of a side module that executes (spawned, `require()`d,
+  run as a worker), which the module runner never records. An unresolved edge
+  there, or in a changed recorded module, fails closed (always selected);
+- JS that is only read as data (as text, or listed by a directory read, such
+  as a template tree that is copied) by its own bytes, and by its closure only
+  when the reader has a non-literal import that could evaluate it.
+
+A test with no record, a version 1 record, a record naming a deleted module,
+or a record the recorded key rejects is selected exactly as before, through
+its full static and dynamic closure. Selection never trusts a record further
+than the memo already does to skip the test outright, and it is stricter about
+staleness. The full suite on every push to `main` still runs everything, so a
+miss is caught by the next completed run.
+
+## CI seeding
+
+The server, client, browser and Windows jobs restore
+`${{ runner.temp }}/portos-test-memo` through the `test-memo` action
+(`actions/cache/restore`) under a per-job, per-shard key prefix
+(`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
+Server, client and Windows restores prefer that partition, then fall back to
+the newest memo from any shard of the same OS, architecture and job. Trusted
+full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
+would leave those jobs permanently cold. A fallback contains only one shard's
+entries: matching content keys may skip those tests; all other selected tests
+still run. Partitioning happens before memo lookup, so changing the memo's
+source shard cannot omit or duplicate a selected test. The server and client jobs also
+restore every full-run shard lineage (`merge-shards`, equal to
+`FULL_SUITE_SHARDS` for the family and pinned by `scripts/ci-test-memo-cache.test.js`)
+and fold them in with `scripts/merge-test-memo.js`, keeping the newer record
+per test and every live entry: a shard records only its slice, and related
+selection narrows a test only through its own record. Each lineage restores to the path it was saved from (a cache version hashes the path; restoring elsewhere finds nothing) and is then moved aside before the next. Each shard saves as soon
+as its own tests pass.
+Pull requests only read. Pushes to `main`, the scheduled nightly, `workflow_dispatch` and
+`workflow_call` runs on the default/release branches save a new entry keyed
+by run id, and only when the test step itself succeeded, so the cache holds
+nothing a pull-request branch or a red run wrote and every PR restores the
+newest trusted lineage. The DB job runs the `db` scope
+(`node scripts/run-ci-tests.js db`, the serial `portos_test` suite) and keeps
+its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
+`server/scripts/setup-db-test.mjs` are base inputs (a schema change
+invalidates every key) and `PGDATABASE` is a keyed env var.
+
+## Disable
+
+`PORTOS_TEST_MEMO=off` turns reads and writes off together and
+restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
+never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.

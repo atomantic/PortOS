@@ -3,8 +3,8 @@
  *
  * Owns the destructive per-task-type reset path (`resetTaskTypeLearning` plus
  * the pure unwind helpers it composes). Split out of `metrics.js` (issue
- * #5916) so `routing.js` — which calls the reset from its rehabilitation path —
- * can import it without closing a metrics⇄routing static import cycle. This
+ * #5916) so it can be imported without closing a metrics⇄routing static
+ * import cycle. Only the manual reset route (a user action) invokes it. This
  * module imports only from the shared persistence leaf (`store.js`), so it
  * sits at the bottom of the taskLearning dependency graph alongside it.
  */
@@ -189,7 +189,7 @@ export function removeTaskTypeFromLearningData(data, taskType) {
   }
 
   // Drop the task type's rows from the cross-type correlation window (#2619) so a
-  // rehabilitated type contributes no stale prediction/outcome pairs to the gauge.
+  // reset type contributes no stale prediction/outcome pairs to the gauge.
   if (Array.isArray(data.correlationWindow)) {
     data.correlationWindow = data.correlationWindow.filter((row) => row?.taskType !== taskType);
   }

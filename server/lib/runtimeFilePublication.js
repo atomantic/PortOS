@@ -1,5 +1,6 @@
 /**
- * Admitted runtime recording updates with rollback of the prior file pair on failure.
+ * Admitted runtime recording updates with rollback of the prior file pair on failure, plus the
+ * per-file turn a remover shares with them.
  */
 
 import { readFile } from 'fs/promises';
@@ -8,6 +9,15 @@ import { withBackupAssetPublication } from './backupSnapshotBoundary.js';
 import { createKeyCachedQueue } from './createKeyCachedQueue.js';
 
 const queues = createKeyCachedQueue();
+
+/**
+ * Run `work` in the same per-file turn `publishRuntimeFiles` takes for a pair
+ * keyed by `path`, so a remover cannot land between a publication's read of
+ * the record and its rewrite.
+ */
+export function withRuntimeFileTurn(path, work) {
+  return withBackupAssetPublication(() => queues(path, work));
+}
 
 /** Publish a bounded runtime recording pair; failure restores its prior bytes. */
 export function publishRuntimeFiles(paths, work) {

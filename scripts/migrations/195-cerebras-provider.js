@@ -1,32 +1,11 @@
 /**
- * Ship the Cerebras API provider to existing installs.
+ * Ship the Cerebras API provider to existing installs (issue-2701).
  *
- * Background: issue-2701. Cerebras exposes an OpenAI-compatible chat API
- * (https://api.cerebras.ai/v1) authenticated with a plain API key, so the
- * toolkit's generic `executeApiRun` drives it with no runner changes — the
- * provider is pure configuration. `api.cerebras.ai` is allowlisted in
- * aiToolkit/endpointGuard.js so the key may be attached outbound.
- *
- * `setup-data.js` merges *missing* provider entries from data.reference, but
- * only when an install re-runs setup. This migration delivers the provider on a
- * plain server restart too, and is the canonical path for deployed installs to
- * pick it up. Purely additive: a brand-new id, so there's no rename or
- * pinned-id rewrite — an existing `cerebras` key is left untouched (idempotent),
- * which also preserves a user's stored apiKey and refreshed model list.
- *
- * Seeded with only `gpt-oss-120b`: as of 2026-07-16 it is Cerebras's sole
- * *production* model — the rest of the catalog (`zai-glm-4.7`, `gemma-4-31b`)
- * is flagged preview and documented as removable "on short notice", so pinning
- * a preview id into a shipped seed would strand installs on a dead model. All
- * four tiers therefore point at the one production model (same shape as the
- * grok-cli/grok-tui single-model entries); "Refresh models" repopulates the
- * live list from GET /v1/models once the user adds a key. `enabled: false`
- * keeps the provider inert until then (no cold-bootstrap LLM calls).
- *
- * Kept in lockstep with data.reference/providers.json and
- * server/lib/aiToolkit/defaults/providers.sample.json. Frozen here as the
- * historical record this migration installs; later default changes ride their
- * own migrations rather than mutating this one.
+ * Cerebras exposes an OpenAI-compatible chat API (https://api.cerebras.ai/v1) with a plain API key, so the toolkit's generic `executeApiRun` drives it with no runner changes (pure configuration); `api.cerebras.ai` is allowlisted in aiToolkit/endpointGuard.js so the key may be attached outbound.
+ * `setup-data.js` merges missing providers only when an install re-runs setup; this delivers the provider on a plain server restart too. Purely additive (a brand-new id): an existing `cerebras` key is left untouched, preserving a user's stored apiKey and refreshed model list.
+ * Seeded with only `gpt-oss-120b`: as of 2026-07-16 it is Cerebras's sole *production* model (the rest, `zai-glm-4.7` and `gemma-4-31b`, are preview and removable "on short notice", so pinning one would strand installs on a dead model). All four tiers point at it (as the grok-cli/grok-tui single-model entries do);
+ * "Refresh models" repopulates the live list from GET /v1/models once the user adds a key, and `enabled: false` keeps the provider inert until then (no cold-bootstrap LLM calls).
+ * Kept in lockstep with data.reference/providers.json and server/lib/aiToolkit/defaults/providers.sample.json; frozen here as the historical record, later default changes ride their own migrations.
  */
 
 import { makeProviderSeedMigration } from './_lib.js';

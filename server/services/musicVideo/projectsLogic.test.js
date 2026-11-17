@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
+import { buildProjectRecord, cloneProjectRecord, applyProjectPatch, setAudioAnalysis, setMidiTranscription, addScene, addScenes, applySceneUpdate, removeScene, reorderScenes, afterLoad, beforeSave, mergeNextScene, mergePreviousScene, splitScene, replaceScenes, mirrorStatus, mergeProjectRecord } from './projectsLogic.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 
 import { productionReviewBasis } from './productionReview.js';
@@ -1123,6 +1123,20 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(kept.next.scenes[0].takes[0].castInputs).toEqual(newer);
   });
 
+  // Uniquely catches a "Still matches" for an older character reference (#16473) lost when an older peer's take wins,
+  // or the new recorded inputs and acceptance not surviving a round trip from a peer that keeps them.
+  it('keeps a character reference acceptance an older peer omitted, and carries the new take fields from a current peer', () => {
+    const castInputs = { ingredientId: null, guides: [], sheets: [], characters: [{ id: 'mvr-cs-character', imageId: 'ada-v1.png' }] };
+    const characterReferenceAcceptance = { revision: 'rev-1', reviewer: { kind: 'local', label: 'Local operator' }, at: '2026-01-02T00:00:00Z' };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', castInputs, characterReferenceAcceptance }] }] };
+    const older = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z',
+      scenes: [{ sceneId: 's1', takes: [{ takeId: 'mvt-1', kind: 'image', assetId: 'frame.png', prompt: 'newer' }] }] });
+    expect(older.next.scenes[0].takes[0]).toMatchObject({ prompt: 'newer', castInputs, characterReferenceAcceptance });
+    const current = mergeProjectRecord({ id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', scenes: [] }, { ...local, updatedAt: '2026-01-05T00:00:00Z' });
+    expect(current.next.scenes[0].takes[0]).toMatchObject({ castInputs, characterReferenceAcceptance });
+  });
+
   it('a same-updatedAt re-push is a no-op (changed=false, no churn)', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same', deleted: false, deletedAt: null };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'same' };
@@ -1465,5 +1479,22 @@ describe('board time order', () => {
     const project = { ...built, scenes: [...built.scenes].reverse(),
       productionReview: { approvals: { storyboard: { stage: 'storyboard', basis: 'old', shotsBasis: 'old' } } } };
     expect(afterLoad(project).productionReview.approvals.storyboard).toEqual({ stage: 'storyboard', basis: 'old', shotsBasis: 'old' });
+  });
+});
+
+describe('beforeSave frame cast re-stamp (#16375)', () => {
+  it('rewrites an accepted legacy frameCast stamp to the canonical value on write', () => {
+    const subjects = [{ id: 'subj-a', kind: 'character', name: 'Ada', ingredientId: 'cat-chr-a' },
+      { id: 'subj-p', kind: 'place', name: 'Harbor', ingredientId: 'cat-plc' }];
+    const scene = { sceneId: 's1', shotSheet: { characters: ['Ada'] }, frameReferenceIds: ['mvr-linked-0000000000000001'], takes: [] };
+    const project = { id: 'mv-synthetic', concept: { subjects }, scenes: [scene] };
+    const legacy = canonicalSnapshotChecksum({ names: ['Ada'], ids: ['cat-chr-a', 'cat-plc'] });
+    const take = { kind: 'image', assetId: 'a.png', frameDependencies: { version: 1, references: [
+      { role: 'frameCast', sceneId: 's1', assetId: 'start', revision: legacy }] } };
+    const saved = beforeSave({ ...project, scenes: [{ ...scene, takes: [take] }] });
+    const revision = saved.scenes[0].takes[0].frameDependencies.references[0].revision;
+    expect(revision).not.toBe(legacy);
+    expect(revision).toBe(canonicalSnapshotChecksum({ names: ['Ada'], ids: ['cat-chr-a'] }));
+    expect(beforeSave(saved)).toBe(saved);
   });
 });

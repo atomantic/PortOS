@@ -220,7 +220,11 @@ export default function AlcoholTab() {
     if (!result) { toast.error('Failed to add drink button'); return; }
     setButtonForm({ name: '', oz: '', abv: '' });
     setButtonVolumeUnit('oz');
-    fetchDrinkButtons();
+    // Drop any in-flight list read: it predates this mutation. An unloaded list
+    // (failed read) can't take a positional patch, so it re-reads instead.
+    buttonsReadSeq.current += 1;
+    if (Array.isArray(drinkButtons)) setDrinkButtons(prev => [...prev, result]);
+    else fetchDrinkButtons();
   };
 
   const startEditButton = (idx) => {
@@ -241,7 +245,9 @@ export default function AlcoholTab() {
     setEditingButtonIdx(null);
     setButtonForm({ name: '', oz: '', abv: '' });
     setButtonVolumeUnit('oz');
-    fetchDrinkButtons();
+    buttonsReadSeq.current += 1;
+    const editedIdx = editingButtonIdx;
+    setDrinkButtons(prev => prev && prev.map((btn, idx) => (idx === editedIdx ? result : btn)));
   };
 
   const cancelEditButton = () => {
@@ -251,8 +257,19 @@ export default function AlcoholTab() {
   };
 
   const handleRemoveButton = async (idx) => {
-    await api.removeCustomDrink(idx).catch(() => null);
-    fetchDrinkButtons();
+    const removed = await api.removeCustomDrink(idx).catch(() => null);
+    if (!removed) return;
+    buttonsReadSeq.current += 1;
+    setDrinkButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));
+    // Positions shift under the draft: keep editing the same button, or drop
+    // the draft when that button is the one removed.
+    if (editingButtonIdx === idx) {
+      setEditingButtonIdx(null);
+      setButtonForm({ name: '', oz: '', abv: '' });
+      setButtonVolumeUnit('oz');
+    } else if (editingButtonIdx !== null && editingButtonIdx > idx) {
+      setEditingButtonIdx(editingButtonIdx - 1);
+    }
   };
 
   if (loading) {

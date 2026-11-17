@@ -10,7 +10,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { loadState, ensureDirectories, REPORTS_DIR, isDaemonRunning } from './cosState.js';
 import { getAgentIdsForDates, getAgentsByDate } from './cosAgentIndex.js';
-import { formatDuration, safeJSONParse, atomicWrite } from '../lib/fileUtils.js';
+import { formatDuration } from '../lib/fileUtils.js';
 import { isAgentHandoff } from '../lib/agentOutcome.js';
 
 // Completed-agent records for a set of UTC date buckets (YYYY-MM-DD), merged
@@ -64,67 +64,6 @@ function agentDurationMs(a) {
       ? new Date(a.completedAt).getTime() - new Date(a.startedAt).getTime()
       : 0);
   return d > 0 ? d : 0;
-}
-
-export async function generateReport(date = null) {
-  const reportDate = date || new Date().toISOString().split('T')[0];
-  const state = await loadState();
-
-  // Agents completed on this date, from the date bucket (index-gated) + live state
-  const completedAgents = await collectCompletedAgents(
-    [reportDate],
-    state,
-    a => a.completedAt.startsWith(reportDate)
-  );
-
-  const report = {
-    date: reportDate,
-    generated: new Date().toISOString(),
-    summary: {
-      tasksCompleted: completedAgents.filter(a => a.result?.success).length,
-      tasksFailed: completedAgents.filter(a => !a.result?.success).length,
-      totalAgents: completedAgents.length
-    },
-    agents: completedAgents.map(a => ({
-      id: a.id,
-      taskId: a.taskId,
-      success: a.result?.success || false,
-      duration: agentDurationMs(a)
-    }))
-  };
-
-  // Save report
-  const reportFile = join(REPORTS_DIR, `${reportDate}.json`);
-  await atomicWrite(reportFile, report);
-
-  return report;
-}
-
-export async function getReport(date) {
-  const reportFile = join(REPORTS_DIR, `${date}.json`);
-
-  if (!existsSync(reportFile)) {
-    return null;
-  }
-
-  const content = await readFile(reportFile, 'utf-8');
-  return safeJSONParse(content, null, { logError: true, context: `report ${date}` });
-}
-
-export async function getTodayReport() {
-  const today = new Date().toISOString().split('T')[0];
-  return (await getReport(today)) ?? generateReport(today);
-}
-
-export async function listReports() {
-  await ensureDirectories();
-
-  const files = await readdir(REPORTS_DIR);
-  return files
-    .filter(f => f.endsWith('.json'))
-    .map(f => f.replace('.json', ''))
-    .sort()
-    .reverse();
 }
 
 export async function listBriefings() {

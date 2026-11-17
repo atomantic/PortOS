@@ -14,17 +14,9 @@ import {
 } from '../components/cos/constants';
 
 /**
- * Adapters between the two shapes a per-reviewer pin takes — model ids and
- * reasoning-effort tiers alike.
- *
- * The Code Review Defaults settings slice persists ONE SCALAR PER REVIEWER
- * (`codexModel`, `claudeModel`, `lmstudioModel`, `ollamaModel`, and the matching
- * `<reviewer>Effort` scalars) and stays that way — the encoding crosses installs,
- * so legacy scalars remain readable. Configured-provider pins are additive in
- * `providerModels` / `providerEfforts`, keyed by `provider:<id>`. Everything else (the
- * ReviewerPicker table, per-task metadata, the slashdo token builders) speaks the
- * token-keyed MAP shape the `~opt` / `~max` controls already use, so the two need
- * one documented conversion point rather than a hand-rolled loop in each consumer.
+ * Adapters between the two shapes a per-reviewer pin takes (model ids and reasoning-effort tiers). The Code Review Defaults settings slice persists ONE SCALAR PER REVIEWER (`codexModel`, `claudeModel`, ..., `<reviewer>Effort`)
+ * and stays that way (the encoding crosses installs); configured-provider pins are additive in `providerModels` / `providerEfforts`, keyed by `provider:<id>`. Everything else (ReviewerPicker, per-task metadata, slashdo token
+ * builders) speaks the token-keyed MAP shape, so the two need one documented conversion point.
  *
  * Server mirror: `reviewerModelsFromDefaults` / `reviewerEffortsFromDefaults` in
  * `server/lib/reviewerConfig.js`.
@@ -46,7 +38,6 @@ import {
  * sends `undefined` and the schema's `emptyToUndefined` preprocess CLEARS the
  * stored scalar. Omitting absent keys instead would leave a stale value
  * persisted after the user cleared the field.
- *
  * @param {readonly string[]} roster - reviewers that can carry this pin.
  * @param {string} suffix - scalar key suffix (`'Model'` → `codexModel`).
  * @param {(raw: string, reviewer: string) => string|undefined} validateOne

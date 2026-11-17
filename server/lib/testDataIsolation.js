@@ -1,59 +1,18 @@
 /**
  * Runtime backstop: no test may WRITE into the checkout's real `data/` tree.
  *
- * ## Why a runtime guard, not another static rule
+ * `testDataIsolation.guards.test.js` is the static half (text-scans tests for a spelling naming `data/`), but a suite that imports the real `PATHS` and reads a data-rooted member with no redirect is invisible
+ * to a text scan (~50 of ~1300 suites do, so a static allowlist would rot). The two-run read probe (#3687) catches READ leaks as failing assertions; a WRITE leak changes no assertion (#6171:
+ * `providerUsage.test.js` persisted fixture quota cards over the real `data/provider-quotas.json` and federated them to peers). So writes are closed at RUNTIME in the shared write primitives, the
+ * filesystem analogue of `lib/db.js`'s `isTestRunner()` + `query()` backstop. It fires only on a write that reaches the real root.
  *
- * `testDataIsolation.guards.test.js` is the always-on *static* half of this
- * defense: it text-scans every test file for a path spelling that names the
- * install's `data/` directory. Its own header explains the hole it leaves — a
- * suite that imports the real `PATHS` and reads a data-rooted member
- * (`PATHS.brain`, `PATHS.digitalTwin`, …) with no redirect is invisible to a text
- * scan, and ~50 of ~1300 scoped test files legitimately use that spelling, so
- * closing it statically would need a 50-entry allowlist that rots.
+ * Inert outside a Vitest worker: `isVitestRunner()` (narrower than `isTestRunner()`: only `process.env.VITEST`) comes first everywhere so a non-Vitest call costs one env read. `NODE_ENV=test` alone is not
+ * enough: `scripts/smoke-boot.js` sets it on the real server boot, whose writes to the real `data/` are correct.
  *
- * That spelling was covered *empirically* by the two-run read probe (#3687):
- * plant records in the real tree, re-run, and a test that now fails is leaking.
- * A read leak announces itself as a failing assertion. A WRITE leak does not —
- * persisting fixture bytes over the user's records changes nothing about
- * whether assertions pass, so the more damaging half went undetected. PR #6171
- * is the proof it is not hypothetical: `providerUsage.test.js` persisted its
- * fixture quota cards over the machine's real `data/provider-quotas.json` and
- * then invalidated the `usage` sync checksum, federating the fabricated values
- * to subscribed peers.
- *
- * So the write half is closed at RUNTIME instead, in the shared write
- * primitives. This is the filesystem analogue of the database protection in
- * `lib/db.js` — `isTestRunner()` plus the `query()` backstop that refuses row
- * writes to a non-test database — which exists because a suite once wiped real
- * records. A runtime backstop needs no allowlist: it fires on the write that
- * actually reaches the real root, and stays silent for the ~50 suites that
- * name `PATHS.*` but never get there.
- *
- * ## Scope
- *
- * Inert outside an actual Vitest worker — production writes are never
- * touched, and the `isVitestRunner()` check (narrower than `isTestRunner()`:
- * only `process.env.VITEST`, not `NODE_ENV=test` alone — see its doc comment)
- * comes first everywhere so a non-Vitest call costs one `process.env` read and
- * no syscall. `NODE_ENV=test` alone is not enough here: `scripts/smoke-boot.js`
- * sets it on the real server boot to select the file-backend escape hatch, and
- * that boot's writes into the real `data/` tree are correct, not a leak.
- *
- * Under the runner it fires from the shared primitives in `fileCore.js` /
- * `jsonIo.js` (`atomicWrite`, `ensureDir`'s create path, `writeFileGuarded`,
- * `appendFileGuarded`, `copyFileGuarded`, `rmGuarded`, `unlinkGuarded`,
- * `createWriteStreamGuarded`, `appendJSONLine`) and from
- * `collectionStore`'s record delete. All services mutating files under `data/`
- * route through these guarded wrappers (#6203).
- *
- * A suite that genuinely needs a data root redirects it with
- * `createTempDataRoot()` + `makePathsProxy()` from `lib/mockPathsDataRoot.js`;
- * those roots live under `os.tmpdir()`, so they resolve outside the real root
- * and pass untouched.
- *
- * `server/lib/aiToolkit/` deliberately has NO such guard: that tree is vendored
- * and self-contained and must not import out to other PortOS modules (see
- * `aiToolkit/AGENTS.md`).
+ * Under the runner it fires from `fileCore.js` / `jsonIo.js` (`atomicWrite`, `ensureDir`'s create path, `writeFileGuarded`, `appendFileGuarded`, `copyFileGuarded`, `rmGuarded`, `unlinkGuarded`,
+ * `createWriteStreamGuarded`, `appendJSONLine`) and `collectionStore`'s record delete; all services mutating `data/` route through them (#6203). A suite needing a data root redirects it with
+ * `createTempDataRoot()` + `makePathsProxy()` from `lib/mockPathsDataRoot.js` (roots under `os.tmpdir()` pass untouched).
+ * `server/lib/aiToolkit/` has NO such guard: it is vendored, self-contained, and must not import out (see `aiToolkit/AGENTS.md`).
  */
 
 import { existsSync, lstatSync, readlinkSync } from 'fs';
@@ -62,26 +21,14 @@ import { isWorktreeRoot, resolveCodeRootForModule, resolveInstallRoot } from './
 import { canonicalizePath, isPathAtOrInsideDir } from './pathContainment.js';
 import { isVitestRunner } from './runtimeEnv.js';
 
-// Resolved lazily, not at module load, so the realpath below sees a tree that
-// exists. Derived through `resolveCodeRootForModule`/`resolveInstallRoot` — the
-// same helpers `lib/paths.js` itself uses, so the two can't silently drift —
-// rather than by importing `PATHS`. That is deliberate: a suite that redirects
-// `PATHS.data` to a temp root (which is exactly what a well-behaved suite does)
-// must not also be able to redirect the guard's idea of what the real root is,
-// or the guard would approve every write it is supposed to refuse.
+// Resolved lazily so the realpath below sees an existing tree, via `resolveCodeRootForModule`/`resolveInstallRoot` (as `lib/paths.js` does) rather than importing `PATHS`:
+// a suite that redirects `PATHS.data` to a temp root must not also redirect the guard's idea of the real root, or it would approve every write it should refuse.
 let cachedRoots = null;
 const WORKTREE_SEGMENT = join('data', 'cos', 'worktrees');
 
 /**
- * The protected data root plus the checkout exempted from it.
- *
- * A CoS worktree lives at `<install>/data/cos/worktrees/<name>`, so its own
- * (empty, git-tracked-only) `data/` is nested beneath the install's live data
- * tree and holds no user records. Run from there the guard must protect the
- * real `<install>/data` while letting the suite use the worktree's own scratch
- * tree; otherwise suites that persist through the default `PATHS` fail on an
- * unmodified base (#14074). Outside a worktree there is no exemption.
- *
+ * The protected data root plus the checkout exempted from it. A CoS worktree lives at `<install>/data/cos/worktrees/<name>`, so its own (empty, git-tracked-only) `data/` is nested under the install's live
+ * data tree; from there the guard must protect the real `<install>/data` while letting the suite use the worktree's scratch tree (#14074). Outside a worktree there is no exemption.
  * Exported for tests: the live module location cannot be varied in-process.
  *
  * @param {string} codeRoot - the executing checkout's root
@@ -104,12 +51,8 @@ export function _resolveGuardRoots(codeRoot) {
 const guardRoots = () => (cachedRoots ??= _resolveGuardRoots(resolveCodeRootForModule(import.meta.url)));
 const realDataRoot = () => guardRoots().root;
 
-// Memo of already-canonicalized DIRECTORIES. Without it every guarded write
-// re-walks its whole path with `realpathSync`, and the misses go through a
-// thrown-and-caught ENOENT — ~0.9ms for a six-deep target, paid by every write
-// in a ~1300-file suite. Only successful resolutions are cached: an existing
-// directory's realpath is stable, while a not-yet-created one could still be
-// created as a symlink, and caching that guess would go stale.
+// Memo of canonicalized DIRECTORIES: each guarded write would otherwise re-walk its path with `realpathSync` (misses go through a thrown ENOENT, ~0.9ms for a six-deep target).
+// Only successes are cached: a not-yet-created directory could still be created as a symlink.
 const resolvedDirs = new Map();
 
 function canonicalDir(dir) {
@@ -130,16 +73,12 @@ function readLinkTarget(path) {
   }
 }
 
-// Bound on how many symlink hops to follow. Deep chains do not occur in a test
-// fixture; the cap just keeps a cyclic link from spinning.
+// Bound on symlink hops; the cap just keeps a cyclic link from spinning.
 const MAX_LINK_HOPS = 8;
 
 /**
- * Where a follow-the-link write would actually land, or null when `abs` is not
- * a symlink. Resolved through `canonicalizePath` rather than `realpathSync` so
- * a DANGLING link still reports its target — a fixture link pointing at a file
- * the real tree has not created yet is exactly the case that would otherwise
- * slip through, because `realpathSync` throws ENOENT on it.
+ * Where a follow-the-link write would land, or null when `abs` is not a symlink. Goes through `canonicalizePath` rather than `realpathSync` so a DANGLING link still reports its target
+ * (a fixture link to a file the real tree hasn't created yet would otherwise slip through on ENOENT).
  */
 function followLinks(abs) {
   let current = abs;
@@ -152,38 +91,22 @@ function followLinks(abs) {
 }
 
 /**
- * A write target has TWO possible landing sites, and the guard must refuse if
- * either is in the real tree, because the primitives disagree about symlinks:
- *
- *  - `atomicWrite` REPLACES a symlinked destination with a regular file rather
- *    than following it (see its header), so the bytes land at the link's own
- *    location — ancestors resolved, final component not.
- *  - `writeFile` / `appendFile` / `copyFile` FOLLOW a symlinked destination, so
- *    the bytes land wherever the link points.
- *
- * Checking only the first spelling would let a fixture symlink inside a temp
- * root point at `data/provider-quotas.json` and write straight through — the
- * exact #6171 leak this guard exists to stop.
+ * A write target has TWO possible landing sites and the guard refuses if either is in the real tree, because primitives disagree about symlinks: `atomicWrite` REPLACES a symlinked destination
+ * (bytes land at the link's own location: ancestors resolved, final component not), while `writeFile`/`appendFile`/`copyFile` FOLLOW it. Checking only the first would let a fixture symlink
+ * to `data/provider-quotas.json` write straight through (the #6171 leak).
  */
 const canonicalTargets = (target) => {
   const abs = resolve(target);
   const parent = dirname(abs);
   const viaAncestors = parent === abs ? abs : join(canonicalDir(parent), basename(abs));
-  // Only does work when the destination IS a symlink; an ordinary first write
-  // costs one lstat and nothing more.
+  // Only does work when the destination IS a symlink; an ordinary first write costs one lstat.
   const followed = followLinks(abs);
   return followed && followed !== viaAncestors ? [viaAncestors, followed] : [viaAncestors];
 };
 
 /**
- * Does `target` resolve to the real `data/` root or anything beneath it?
- *
- * Containment goes through `isPathAtOrInsideDir`, so it picks up that helper's
- * case-folding on case-insensitive filesystems — a hand-rolled `relative()`
- * test would read `…/Data/x.json` on macOS as outside the root it is in fact
- * inside. Relative paths and `..` climbs are resolved first, so neither can
- * walk in sideways, and a symlinked destination is judged at BOTH the locations
- * a write could land on (see `canonicalTargets`).
+ * Does `target` resolve to the real `data/` root or anything beneath it? Containment uses `isPathAtOrInsideDir` (case-folding on case-insensitive filesystems, which a hand-rolled `relative()`
+ * would get wrong); relative paths and `..` climbs resolve first, and a symlinked destination is judged at BOTH landing sites (see `canonicalTargets`).
  *
  * @param {string} target - path to test
  * @returns {boolean}
@@ -197,9 +120,7 @@ export function isInsideRealDataRoot(target) {
 }
 
 /**
- * Throw when a test is about to write into the real `data/` tree.
- *
- * No-op outside the test runner, so production writes are unaffected.
+ * Throw when a test is about to write into the real `data/` tree; no-op outside the test runner.
  *
  * @param {string} target - the path about to be written, created, or removed
  * @param {string} operation - what the caller was about to do, named in the
@@ -219,18 +140,8 @@ export function assertNotRealDataWrite(target, operation) {
 }
 
 /**
- * `assertNotRealDataWrite` for `ensureDir`, which is a no-op on a directory
- * that already exists.
- *
- * Only the CREATE path is refused. Plenty of read-only suites `ensureDir` a
- * real data subdirectory on their way to reading it, and `mkdir -p` mutates
- * nothing there — faulting that would be noise, not a leak. Materializing a NEW
- * directory in the developer's tree IS a write, and it is the step every raw-fs
- * writer takes before its own `writeFile`.
- *
- * Lives here rather than as an `isTestRunner() && !existsSync(dir)` condition
- * spelled out at the call site, so `fileCore.js` imports one symbol and the
- * reasoning stays beside the logic.
+ * `assertNotRealDataWrite` for `ensureDir`, a no-op on an existing directory. Only the CREATE path is refused: read-only suites `ensureDir` a real subdirectory on the way to reading it (`mkdir -p`
+ * mutates nothing there), while materializing a NEW directory in the developer's tree IS a write, the step every raw-fs writer takes first. Lives here so `fileCore.js` imports one symbol.
  *
  * @param {string} dir - the directory `ensureDir` is about to create
  */

@@ -57,7 +57,6 @@ vi.mock('./appActivity.js', async (importActual) => ({
   loadAppActivity: async () => ({ apps: mocks.activity }),
   isAppOnCooldown: async (appId) => !!mocks.activity[appId]?.cooldown,
   getNextAppForReview: async (apps) => apps.find((app) => !mocks.activity[app.id]?.cooldown && !mocks.activity[app.id]?.activeAgentId) || null,
-  markIdleReviewStarted: async () => {},
   markAppReviewCooldown: async (appId) => { mocks.activity[appId] = { ...mocks.activity[appId], cooldown: true }; },
   bindAppReviewAgent: async (appId, id) => { mocks.activity[appId] = { ...mocks.activity[appId], activeAgentId: id }; },
   updateAppActivity: async () => {},

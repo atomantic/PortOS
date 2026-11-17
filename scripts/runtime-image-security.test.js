@@ -8,9 +8,9 @@ import {
   UNAVAILABLE_TARGETS,
   deriveTargets,
   loadTargets,
-  reconcileFindings,
+  markActionable,
+  renderSummary,
   runCli,
-  validateReviews,
   validateSbom,
   validateScan,
   verifyRun,
@@ -27,8 +27,8 @@ const sbomFor = (types, extra = {}) => ({
   artifacts: types.map((type, i) => ({ name: `pkg${i}`, version: '1.0', type })),
   ...extra,
 });
-const matchFor = (id, severity, name = 'libexample', version = '1.0') => ({
-  vulnerability: { id, severity, fix: { state: 'fixed', versions: ['1.1'] } },
+const matchFor = (id, severity, name = 'libexample', version = '1.0', fix = { state: 'fixed', versions: ['1.1'] }) => ({
+  vulnerability: { id, severity, fix },
   artifact: { name, version, type: 'deb' },
 });
 const scanFor = (matches) => ({
@@ -84,33 +84,37 @@ describe('fail-closed evidence validation', () => {
     expect(findings.map((f) => f.id)).toEqual(['CVE-2026-0001', 'CVE-2026-0002', 'CVE-2026-0003']);
   });
 
-  it('requires rationale and a tracker reference for every reviewed disposition', () => {
-    expect(validateReviews({ schema: 1, reviews: [] })).toEqual([]);
-    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'blocked', rationale: 'x' }] })).toThrow('needs rationale and tracking');
-    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'fixed', rationale: 'x', tracking: '#1' }] })).toThrow('disposition must be one of');
-    expect(() => validateReviews({ reviews: [] })).toThrow('expected');
-    expect(() => validateReviews(JSON.parse(read('docker/runtime-image-security.reviews.json')))).not.toThrow();
+  it('names a pgvector newest-digest reference derived from the pin, and no other target has one', () => {
+    expect(targets.pgvector.latestImageRef).toBe('pgvector/pgvector:pg17');
+    expect(targets.supercollider.latestImageRef).toBeUndefined();
+    expect(targets['eidoverse-rapier'].latestImageRef).toBeUndefined();
+  });
+});
+
+describe('markActionable', () => {
+  const findings = (...matches) => validateScan(scanFor(matches)).findings;
+  const unfixed = { state: 'wont-fix', versions: [] };
+
+  it('flags only High/Critical findings with a fix that the newest digest no longer carries', () => {
+    const scanned = findings(
+      matchFor('CVE-1', 'Critical', 'libfoo'),
+      matchFor('CVE-2', 'High', 'libfoo'),
+      matchFor('CVE-3', 'Medium', 'libfoo'),
+      matchFor('CVE-4', 'High', 'libfoo', '1.0', unfixed),
+      matchFor('CVE-5', 'High', 'libfoo'),
+    );
+    const latest = findings(matchFor('CVE-5', 'High', 'libfoo'), matchFor('CVE-4', 'High', 'libfoo', '1.0', unfixed));
+    const marked = markActionable(scanned, latest);
+    expect(marked.filter((f) => f.actionable).map((f) => f.id)).toEqual(['CVE-1', 'CVE-2']);
   });
 
-  it('keeps the shipped ledger unambiguous: a derived target, a pinned package version and a tracker reference per entry', () => {
-    const reviews = validateReviews(JSON.parse(read('docker/runtime-image-security.reviews.json')));
-    const keys = reviews.map((r) => `${r.target}|${r.id}|${r.package}|${r.version}`);
-    expect(new Set(keys).size).toBe(keys.length);
-    for (const review of reviews) {
-      expect(Object.keys(targets)).toContain(review.target);
-      expect(review.package && review.version).toBeTruthy();
-      expect(review.tracking).toMatch(/^#\d+$/);
-    }
+  it('never flags anything without a newest-digest scan, because a fix alone does not prove the newest image has it', () => {
+    expect(markActionable(findings(matchFor('CVE-1', 'Critical')), null).some((f) => f.actionable)).toBe(false);
   });
 
-  it('scopes a review to its target and, when named, its package, installed version and architecture', () => {
-    const findings = validateScan(scanFor([matchFor('CVE-1', 'High', 'libfoo', '1.0'), matchFor('CVE-1', 'High', 'libbar'), matchFor('CVE-1', 'High', 'libfoo', '2.0')])).findings;
-    const reviews = [{ target: 'pgvector', id: 'CVE-1', package: 'libfoo', version: '1.0', arch: 'amd64', disposition: 'blocked', rationale: 'no upstream fix', tracking: '#9' }];
-    const split = reconcileFindings(findings, reviews, 'pgvector', 'amd64');
-    expect(split.reviewed.map((f) => `${f.package}@${f.version}`)).toEqual(['libfoo@1.0']);
-    expect(split.unreviewed.map((f) => `${f.package}@${f.version}`).sort()).toEqual(['libbar@1.0', 'libfoo@2.0']);
-    expect(reconcileFindings(findings, reviews, 'pgvector', 'arm64').reviewed).toEqual([]);
-    expect(reconcileFindings(findings, reviews, 'supercollider', 'amd64').reviewed).toEqual([]);
+  it('matches the newest digest by advisory and package, so another package carrying the advisory stays actionable', () => {
+    const marked = markActionable(findings(matchFor('CVE-1', 'High', 'libfoo')), findings(matchFor('CVE-1', 'High', 'libbar')));
+    expect(marked[0].actionable).toBe(true);
   });
 });
 
@@ -123,22 +127,53 @@ describe('verifyRun', () => {
     const out = [];
     const code = verifyRun({
       target: 'pgvector', arch: 'arm64', sbomPath: write('sbom.json', sbomFor(['deb'])), scanPath: write('scan.json', scanFor(matches)),
-      outDir: join(dir, 'out'), env: { GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '7' }, imageId: 'sha256:abc', repoDigests: 'x@sha256:def', summarize: (t) => out.push(t), ...extra,
+      outDir: join(dir, 'out'), env: { GITHUB_SHA: 'a'.repeat(40), GITHUB_RUN_ID: '7' }, imageId: 'sha256:abc', repoDigests: 'x@sha256:def', latest: { repoDigests: `pgvector/pgvector@${PINNED_DB_IMAGE.split('@')[1]}` }, summarize: (t) => out.push(t), annotate: () => {}, ...extra,
     });
     return { code, text: out.join('\n'), provenance: JSON.parse(readFileSync(join(dir, 'out/provenance.json'), 'utf8')) };
   };
 
-  it('records provenance (image, digest, recipe, commit, architecture) and tolerates findings outside strict mode', () => {
-    const { code, text, provenance } = run([matchFor('CVE-2026-1', 'High')]);
+  // pgvector must be given newest-digest evidence; the same-digest case needs no scan.
+  const SAME = { repoDigests: `pgvector/pgvector@${PINNED_DB_IMAGE.split('@')[1]}` };
+  const NEWER = { repoDigests: `pgvector/pgvector@sha256:${'9'.repeat(64)}` };
+  const newerScan = (matches) => ({ ...NEWER, sbomPath: write('latest-sbom.json', sbomFor(['deb'])), scanPath: write('latest-scan.json', scanFor(matches)) });
+
+  it('records provenance (image, digest, recipe, commit, architecture) and lists every finding without failing on it', () => {
+    const { code, text, provenance } = run([matchFor('CVE-2026-1', 'High', 'libexample', '1.0', { state: 'wont-fix', versions: [] }), matchFor('CVE-2026-2', 'Negligible')], { strict: true, latest: SAME });
     expect(code).toBe(0);
-    expect(provenance).toMatchObject({ target: 'pgvector', arch: 'arm64', gitSha: 'a'.repeat(40), recipe: { path: 'docker-compose.yml' }, ref: { image: PINNED_DB_IMAGE, imageId: 'sha256:abc', repoDigests: ['x@sha256:def'] }, scan: { counts: { High: 1 } } });
+    expect(provenance).toMatchObject({ target: 'pgvector', arch: 'arm64', gitSha: 'a'.repeat(40), recipe: { path: 'docker-compose.yml' }, ref: { image: PINNED_DB_IMAGE, imageId: 'sha256:abc', repoDigests: ['x@sha256:def'] }, scan: { counts: { High: 1, Negligible: 1 } }, latest: { newer: false } });
     expect(text).toContain('CVE-2026-1');
+    expect(text).toContain('CVE-2026-2');
+    expect(text).toContain('a pin bump cannot remove any finding');
+    expect(JSON.parse(readFileSync(join(dir, 'out/findings.json'), 'utf8')).findings.every((f) => !f.actionable)).toBe(true);
   });
 
-  it('fails strict runs on unreviewed findings and passes once each is reviewed with a tracker reference', () => {
-    expect(run([matchFor('CVE-2026-1', 'Low')], { strict: true }).code).toBe(3);
-    const reviewLedger = { schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-2026-1', disposition: 'blocked', rationale: 'No patched Debian build yet', tracking: '#1' }] };
-    expect(run([matchFor('CVE-2026-1', 'Low')], { strict: true, reviewLedger }).code).toBe(0);
+  it('passes when a fixed High finding is still present in the newest digest', () => {
+    const matches = [matchFor('CVE-2026-1', 'High')];
+    expect(run(matches, { strict: true, latest: newerScan(matches) }).code).toBe(0);
+  });
+
+  it('fails a strict run on a High/Critical finding the newest digest fixes, naming the image and the digest', () => {
+    const errors = [];
+    const { code, text } = run([matchFor('CVE-2026-1', 'Critical')], { strict: true, latest: newerScan([]), annotate: (t) => errors.push(t) });
+    expect(code).toBe(3);
+    expect(errors.join('\n')).toContain(PINNED_DB_IMAGE);
+    expect(text).toContain(`sha256:${'9'.repeat(64)}`);
+    expect(text).toContain('bump the pin');
+  });
+
+  it('only reports the same actionable finding outside strict mode (pull requests)', () => {
+    expect(run([matchFor('CVE-2026-1', 'High')], { latest: newerScan([]), annotate: () => {} }).code).toBe(0);
+  });
+
+  it('fails closed when the newest digest differs but was not scanned, or when pgvector gets no newest-digest evidence', () => {
+    expect(() => run([], { latest: NEWER })).toThrow('was not scanned');
+    expect(() => run([], { latest: null })).toThrow('needs the newest-digest evidence');
+    expect(() => run([], { latest: newerScan([]), scanPath: write('s2.json', scanFor([])) , target: 'supercollider', arch: 'amd64' })).toThrow('no newest-digest reference');
+  });
+
+  it('rejects an empty SBOM for the newest digest', () => {
+    const latest = { ...NEWER, sbomPath: write('empty.json', sbomFor([])), scanPath: write('empty-scan.json', scanFor([])) };
+    expect(() => run([], { latest })).toThrow('zero packages');
   });
 
   it('rejects an unsupported architecture and invalid scanner output', () => {
@@ -216,13 +251,32 @@ describe('workflow contract', () => {
     for (const row of included.filter((r) => r.arch === 'arm64')) expect(row.runner).toBe('ubuntu-24.04-arm');
   });
 
-  it('fails on scanner errors, validates before upload, and keeps findings strict only off pull requests', () => {
+  it('fails on scanner errors, validates before upload, and keeps the actionable-finding gate strict only off pull requests', () => {
     expect(workflow).toContain('node scripts/ci-dependabot-admission.js');
     expect(jobs.scan).not.toContain('continue-on-error');
     expect(jobs.scan).not.toContain('|| true');
     expect(jobs.scan).toContain('[ "$GITHUB_EVENT_NAME" != pull_request ] && args+=(--strict)');
+    expect(jobs.scan).toContain('--latest-digests');
+    expect(workflow).not.toContain('reviews.json');
     expect(jobs.scan.indexOf('Validate evidence and record provenance')).toBeLessThan(jobs.scan.indexOf('Save SBOM, scan and provenance'));
     expect(jobs.scan).toContain('if: always()');
     expect(jobs.unavailable).toContain('runtime-image-security.js unavailable');
+  });
+});
+
+describe('Dependabot digest updates', () => {
+  const dependabot = read('.github/dependabot.yml');
+  const entry = (ecosystem) => dependabot.split(/^ {2}- package-ecosystem: /m).find((block) => block.startsWith(`${ecosystem}\n`));
+
+  it('updates the compose pin at the repository root and every docker/ recipe weekly', () => {
+    expect(entry('docker-compose')).toMatch(/directory: \/\n/);
+    expect(entry('docker-compose')).toMatch(/interval: weekly/);
+    expect(entry('docker')).toMatch(/directories:\n\s+- \/docker\/\*\n/);
+    expect(entry('docker')).toMatch(/interval: weekly/);
+  });
+
+  it('points at directories that exist and hold the pinned recipes', () => {
+    expect(read('docker-compose.yml')).toContain('pgvector/pgvector:');
+    for (const dir of ['supercollider', 'eidoverse-video']) expect(read(`docker/${dir}/Dockerfile`)).toContain('FROM ');
   });
 });

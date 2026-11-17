@@ -19,33 +19,23 @@
  *  2. **One call per run, budget-gated.** The diagnosis is a single staged LLM
  *     call at the run's terminal, billed as one cos action and skipped when the
  *     daily budget is spent.
- *  3. **Deduped, approval-gated and worktree-isolated.** The filed task's first
- *     line is stable per (area, defect), so cosTaskStore's dedup collapses the
- *     same diagnosis across runs and series onto one open task. The task always
- *     awaits human approval, runs in a worktree, and opens a PR — an LLM's
- *     unverified read of one run's telemetry never dispatches a coding agent at
- *     PortOS's own source unattended. That matches every other autonomously
- *     generated code-editing task in PortOS (layeredIntelligence's
- *     `buildHandoffTask`, `autoFixer`, `agentErrorAnalysis` all hard-code
- *     `approvalRequired: true`); the autonomy dial for this class of work is the
- *     CoS approval queue, not a per-series checkbox. (The observing orchestrator
- *     — `observer.js` — is the ONE deliberate exception: the user opts into its
- *     unattended dispatch explicitly, and it supersedes this pass at the
- *     terminal when both are enabled.)
+ *  3. **Deduped, approval-gated and worktree-isolated.** The task's first line is
+ *     stable per (area, defect), so cosTaskStore's dedup collapses repeats onto one
+ *     open task. It always awaits human approval, runs in a worktree and opens a PR:
+ *     an LLM's unverified read of one run's telemetry never dispatches a coding agent
+ *     at PortOS's source unattended (like `buildHandoffTask`, `autoFixer`,
+ *     `agentErrorAnalysis`). The one deliberate exception is the observing
+ *     orchestrator (`observer.js`), which the user opts into and which supersedes
+ *     this pass at the terminal when both are on.
  *
- * The signal log is captured passively: `state.js#noteSignal`, called from
- * `session.js#broadcast`, retains the same SSE frames the run already emits — so
- * a telemetry frame a future step adds becomes diagnosable evidence with no
- * extra instrumentation. It lives in `state.js` (the run-registry owner) rather
- * than here so this module can import the registry instead of the registry
- * importing the diagnosis. The vocabulary, shape, and task/prompt frames shared
- * with the observer live in `diagnosisCore.js` (a deliberate leaf — see its
- * header) and are re-exported here for the existing import surface.
+ * The signal log is captured passively (`state.js#noteSignal`, called from
+ * `session.js#broadcast`), so a new telemetry frame becomes evidence with no extra
+ * instrumentation. It lives in `state.js` so this module imports the registry, not
+ * the reverse. Shared vocabulary, shape and task frames live in `diagnosisCore.js`.
  *
- * PRIVACY: the diagnosis prompt asks for a defect report about PortOS's code and
- * prompts, explicitly NOT about the story — and `shapeDiagnosis` bounds every
- * field — because the filed task is read by a coding agent that opens a public
- * PR. Manuscript text must not travel into that task.
+ * PRIVACY: the prompt asks for a defect report about PortOS's code and prompts, NOT
+ * the story, and `shapeDiagnosis` bounds every field: a coding agent reads the task
+ * and opens a public PR, so manuscript text must not travel into it.
  */
 
 import * as cosTaskStore from '../../cosTaskStore.js';
@@ -62,8 +52,7 @@ import {
 } from './diagnosisCore.js';
 import { trimToClause } from '../../../lib/textUtils.js';
 
-// Re-export the shared diagnosis vocabulary under this module's established
-// import surface (tests and the barrel reach it here).
+// Re-exported under this module's established import surface (tests, the barrel).
 export { SELF_IMPROVE_AREAS, hasAutomationSignals, shapeDiagnosis };
 
 const SELF_IMPROVE_STAGE = 'pipeline-self-improve';
@@ -76,8 +65,7 @@ export function shouldDiagnose(record, outcome) {
   return diagnosisEnabled(record, 'selfImprove') && terminalWarrantsDiagnosis(record, outcome);
 }
 
-// A diagnosis below this confidence is dropped rather than filed — a speculative
-// "maybe the pipeline?" is not worth a coding agent's time.
+// Below this confidence a diagnosis is dropped rather than filed.
 export const SELF_IMPROVE_MIN_CONFIDENCE = 0.6;
 
 /**
@@ -89,10 +77,9 @@ export function isFilable(diagnosis) {
 }
 
 /**
- * Shape the approval-gated CoS task for a filable diagnosis. Pure. The dedup
- * key/one-line-description contract and the brief layout live in
- * `diagnosisCore.js#buildDiagnosisTask`; this supplies the post-mortem's
- * wording and its `approvalRequired: true` policy (see the module header).
+ * Shape the approval-gated CoS task for a filable diagnosis. Pure. Dedup key and
+ * brief layout live in `diagnosisCore.js#buildDiagnosisTask`; this supplies the
+ * wording and `approvalRequired: true` (see the module header).
  */
 export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome, outcomeReason, counts }) {
   return buildDiagnosisTask({
@@ -110,18 +97,13 @@ export function buildSelfImproveTask({ diagnosis, seriesId, seriesName, outcome,
 
 /**
  * Run the meta-diagnosis at a run's terminal and file a PortOS task when the
- * verdict says the automation is at fault.
+ * automation is at fault.
  *
- * Runs BEFORE the terminal frame is broadcast, and its summary rides that frame
- * (and the persisted marker) rather than arriving after it: a client tears its
- * stream down on the terminal frame and SSE replays only the LAST payload, so a
- * post-terminal frame would be both unseen live and destructive to the replayed
- * terminal. The `selfimprove:start` frame is the live signal that the run is
- * spending one more beat on its post-mortem.
- *
- * Best-effort by contract: callers `.catch()` it, and a skip is silent — the
- * point is that a successful run must never be turned into a failure by its own
- * post-mortem. Returns null when nothing was diagnosed, else a compact summary.
+ * Runs BEFORE the terminal frame and its summary rides that frame: a client tears
+ * its stream down on the terminal frame and SSE replays only the LAST payload, so a
+ * later frame would be unseen live and would clobber the replayed terminal.
+ * Best-effort: callers `.catch()` it and a skip is silent, so a successful run is
+ * never failed by its own post-mortem. Returns null when nothing was diagnosed.
  */
 export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = null } = {}) {
   if (!shouldDiagnose(record, outcome)) return null;
@@ -146,11 +128,8 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
   await recordDomainUsage('cos', { actions: 1 });
 
   const diagnosis = shapeDiagnosis(content);
-  // Nothing filable → nothing to report. A `content` / `none` verdict means the
-  // pipeline behaved, and a low-confidence guess is not worth a line of UI, so
-  // the terminal frame and the marker stay clean rather than carrying a
-  // "diagnosed nothing" payload no reader consumes. The log line is where an
-  // operator can still see the pass ran.
+  // A `content`/`none` verdict or low-confidence guess leaves the terminal frame and
+  // marker clean; the log line shows the pass ran.
   if (!isFilable(diagnosis)) {
     console.log(`🔧 autopilot self-improve — series=${sId.slice(0, 12)} nothing filed (verdict=${diagnosis?.verdict || 'unreadable'} confidence=${diagnosis?.confidence ?? '—'})`);
     return null;
@@ -172,8 +151,7 @@ export async function runSelfImproveDiagnosis(sId, record, { outcome, reason = n
     verdict: diagnosis.verdict,
     area: diagnosis.area,
     title: diagnosis.title,
-    // The durable pointer from "this run" to "that task" — the console line above
-    // is not something a user can go read later.
+    // Durable pointer from this run to the filed task.
     taskId: result?.id || null,
     filed,
     duplicate: !!result?.duplicate,

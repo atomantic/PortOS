@@ -2,6 +2,7 @@ import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MEETING_URL_MAX } from '../lib/meetingUrl.js';
 import * as calendarAccounts from '../services/calendarAccounts.js';
@@ -16,14 +17,6 @@ import { getUserTimezone } from '../services/userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
 
 const router = express.Router();
-
-/** A string bounded by its TRIMMED length, so padding can't fail an otherwise fine value. */
-const trimmedString = (max) =>
-  z.preprocess((v) => (typeof v === 'string' ? v.trim() : v), z.string().max(max));
-
-/** An array CAPPED at `max` rather than rejected past it, so a valid leading item survives. */
-const cappedArray = (max, element) =>
-  z.preprocess((v) => (Array.isArray(v) ? v.slice(0, max) : v), z.array(element));
 
 // === Validation Schemas ===
 const createAccountSchema = z.object({
@@ -61,84 +54,6 @@ const subcalendarSchema = z.object({
 
 const updateSubcalendarsSchema = z.object({
   subcalendars: z.array(subcalendarSchema)
-});
-
-const pushSyncSchema = z.object({
-  calendarId: z.string().min(1),
-  calendarName: z.string().min(1),
-  events: z.array(z.object({
-    id: z.string().optional(),
-    summary: z.string().optional().default(''),
-    start: z.object({
-      dateTime: z.string().optional(),
-      date: z.string().optional()
-    }).optional(),
-    end: z.object({
-      dateTime: z.string().optional(),
-      date: z.string().optional()
-    }).optional(),
-    location: z.string().optional().default(''),
-    description: z.string().optional().default(''),
-    status: z.string().optional().default('confirmed'),
-    htmlLink: z.string().optional(),
-    // No defaults: legacy push clients omit identity; explicit null/[] clears it.
-    organizer: z.object({
-      displayName: z.string().optional(),
-      email: z.string().optional(),
-      self: z.boolean().optional()
-    }).nullable().optional(),
-    attendees: z.array(z.object({
-      displayName: z.string().optional(),
-      email: z.string().optional(),
-      self: z.boolean().optional(),
-      responseStatus: z.string().optional()
-    })).nullable().optional(),
-    // Conference metadata feeds the cached `meetingUrl` join link (#6289).
-    // OPTIONAL with no default, and nullable: `selectMeetingUrl` distinguishes
-    // a producer that omitted them (preserve the cached link) from one that
-    // explicitly sent none (clear it), so a default here would make every
-    // legacy push wipe a working Join action. Non-video entry types are
-    // accepted and ignored downstream, so ordinary phone/SIP metadata can't
-    // reject an otherwise valid event; Zod strips the conference passwords and
-    // dial-in codes Google ships alongside them, and the length bound comes
-    // from the selector's own module so the two can't drift.
-    //
-    // The bounds FAIL SOFT via `.catch`, at THREE granularities, because what
-    // a malformed value should cost depends on how much of the payload it
-    // implicates. Throwing costs the most: `validateRequest` 400s the WHOLE
-    // batch, so one 1301-character `uri` — even on a `phone` entry the
-    // selector ignores — silently stops the user's entire calendar from
-    // syncing, while an unbounded `description` sails through.
-    //
-    //   per ENTRY  → a bad entry becomes `{}`, which the selector skips. This
-    //                is the granularity that matters: a malformed phone entry
-    //                must not erase the usable video link sitting beside it.
-    //   per FIELD  → a bad `hangoutLink` / `conferenceData` becomes null, i.e.
-    //                "described, nothing usable came of it" — exactly true.
-    //   per EVENT  → nothing. Every other event in the batch still syncs.
-    //
-    // Omission short-circuits ahead of every catch, so an older client that
-    // sends neither field still reads as "not described" and keeps its link.
-    // The bounds also NORMALIZE before measuring, so this ingress is not
-    // needlessly stricter than the selector it feeds — anything it rejects
-    // reads downstream as "this meeting has no conference" and CLEARS a link
-    // the API and MCP paths keep for the same input. Untrimmed padding counted
-    // toward the length cap (1300 leading spaces sank a URL the selector trims
-    // and accepts), and an over-long array was rejected outright rather than
-    // capped, losing a valid leading video entry to its junk siblings.
-    //
-    // Truncation past 100 entries is the one place a bound can still drop a
-    // usable candidate, and it is the deliberate residue of having any bound at
-    // all: Google emits a handful of entry points, so 100 is ~20x headroom, and
-    // capping strictly beats rejecting the whole array as it used to.
-    hangoutLink: trimmedString(MEETING_URL_MAX).nullable().optional().catch(null),
-    conferenceData: z.object({
-      entryPoints: cappedArray(100, z.object({
-        entryPointType: trimmedString(32).nullable().optional(),
-        uri: trimmedString(MEETING_URL_MAX).nullable().optional()
-      }).catch(() => ({}))).nullable().optional().catch(null)
-    }).nullable().optional().catch(null)
-  }))
 });
 
 const confirmEventSchema = z.object({
@@ -200,22 +115,13 @@ router.post('/sync/:accountId', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-router.get('/sync/:accountId/status', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const status = await calendarSync.getSyncStatus(req.params.accountId);
-  if (!status) throw new ServerError('Account not found', { status: 404 });
-  res.json(status);
-}));
-
 // === Event Routes ===
 
 // Today's agenda in the user's timezone — the dashboard widget's read. The
 // day window comes from localDayWindowUtc (shared with the voice
 // calendar_today tool) so DST-transition days keep the right bounds.
 router.get('/agenda', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 8, maxLimit: 20 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 8, maxLimit: 20 });
   const accounts = await calendarAccounts.listAccounts();
   const accountCount = accounts.filter((a) => a.enabled !== false).length;
   if (accountCount === 0) {
@@ -241,12 +147,22 @@ router.get('/agenda', asyncHandler(async (req, res) => {
   });
 }));
 
+const eventsQuerySchema = z.object({
+  accountId: z.string().optional(),
+  search: z.string().optional(),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+});
+
 router.get('/events', asyncHandler(async (req, res) => {
-  const { accountId, search, startDate, endDate } = req.query;
+  const query = validateRequest(eventsQuerySchema, req.query);
+  const { accountId, search, startDate, endDate } = query;
   if (accountId && !UUID_RE.test(accountId)) {
     throw new ServerError('Invalid accountId format', { status: 400 });
   }
-  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { limit: parsedLimit, offset: parsedOffset } = parsePagination(query, { defaultLimit: 50, maxLimit: 200 });
   const result = await calendarSync.getEvents({
     accountId,
     search,
@@ -288,17 +204,6 @@ router.put('/accounts/:id/subcalendars', asyncHandler(async (req, res) => {
   await calendarSync.purgeDisabledSubcalendars(req.params.id);
   req.app.get('io')?.emit('calendar:changed', {});
   res.json(account);
-}));
-
-// === Push Sync Route ===
-router.post('/sync/:accountId/push', asyncHandler(async (req, res) => {
-  if (!UUID_RE.test(req.params.accountId)) {
-    throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const data = validateRequest(pushSyncSchema, req.body);
-  const io = req.app.get('io');
-  const result = await calendarGoogleSync.pushSyncEvents(req.params.accountId, data.calendarId, data.calendarName, data.events, io);
-  res.json(result);
 }));
 
 // === MCP Discover Calendars Route ===
@@ -347,15 +252,19 @@ router.get('/google/auth/url', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+const oauthCallbackQuerySchema = z.object({ state: z.string().optional(), code: z.string().optional() });
+
 router.get('/google/oauth/callback', asyncHandler(async (req, res) => {
   // This endpoint is hit by a BROWSER redirect from Google, not by the SPA —
   // render every outcome as a redirect to the config page (which toasts the
   // oauthError param) instead of the JSON envelope the middleware would send.
-  const configPath = req.query.state === 'messages' ? '/messages/config' : '/calendar/config';
+  // A malformed query (repeated keys) is treated as absent: every outcome here must stay a redirect.
+  const parsed = oauthCallbackQuerySchema.safeParse(req.query);
+  const { state, code } = parsed.success ? parsed.data : {};
+  const configPath = state === 'messages' ? '/messages/config' : '/calendar/config';
   const configUrl = (error) => error
     ? `${configPath}?oauthError=${encodeURIComponent(error)}`
     : configPath;
-  const code = req.query.code;
   if (!code) return res.redirect(configUrl('Missing authorization code'));
   const error = await googleAuth.handleCallback(code).then(() => null)
     .catch((err) => {
@@ -376,12 +285,6 @@ router.post('/google/auth/clear', asyncHandler(async (req, res) => {
 router.post('/google/auto-configure/start', asyncHandler(async (req, res) => {
   const io = req.app.get('io');
   const result = await googleOAuthAutoConfig.startAutoConfig(io);
-  res.json(result);
-}));
-
-router.post('/google/auto-configure/capture', asyncHandler(async (req, res) => {
-  const io = req.app.get('io');
-  const result = await googleOAuthAutoConfig.captureCredentials(io);
   res.json(result);
 }));
 
@@ -413,8 +316,10 @@ router.post('/sync/:accountId/discover-api', asyncHandler(async (req, res) => {
 
 // === Daily Review Routes ===
 // NOTE: /review/history must come before /review/:date so Express doesn't match "history" as a date param
+const reviewHistoryQuerySchema = z.object({ startDate: z.string().optional(), endDate: z.string().optional() });
+
 router.get('/review/history', asyncHandler(async (req, res) => {
-  const { startDate, endDate } = req.query;
+  const { startDate, endDate } = validateRequest(reviewHistoryQuerySchema, req.query);
   const history = await dailyReview.getDailyReviewHistory(startDate, endDate);
   res.json(history);
 }));

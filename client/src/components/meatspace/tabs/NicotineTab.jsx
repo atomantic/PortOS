@@ -181,7 +181,11 @@ export default function NicotineTab() {
     const result = await api.addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to add product button'); return; }
     setButtonForm({ name: '', mgPerUnit: '' });
-    fetchProductButtons();
+    // Drop any in-flight list read: it predates this mutation. An unloaded list
+    // (failed read) can't take a positional patch, so it re-reads instead.
+    buttonsReadSeq.current += 1;
+    if (Array.isArray(productButtons)) setProductButtons(prev => [...prev, result]);
+    else fetchProductButtons();
   };
 
   const startEditButton = (idx) => {
@@ -198,7 +202,9 @@ export default function NicotineTab() {
     if (!result) { toast.error('Failed to update product button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', mgPerUnit: '' });
-    fetchProductButtons();
+    buttonsReadSeq.current += 1;
+    const editedIdx = editingButtonIdx;
+    setProductButtons(prev => prev && prev.map((btn, idx) => (idx === editedIdx ? result : btn)));
   };
 
   const cancelEditButton = () => {
@@ -207,8 +213,18 @@ export default function NicotineTab() {
   };
 
   const handleRemoveButton = async (idx) => {
-    await api.removeCustomNicotineProduct(idx).catch(() => null);
-    fetchProductButtons();
+    const removed = await api.removeCustomNicotineProduct(idx).catch(() => null);
+    if (!removed) return;
+    buttonsReadSeq.current += 1;
+    setProductButtons(prev => prev && prev.filter((_, buttonIdx) => buttonIdx !== idx));
+    // Positions shift under the draft: keep editing the same button, or drop
+    // the draft when that button is the one removed.
+    if (editingButtonIdx === idx) {
+      setEditingButtonIdx(null);
+      setButtonForm({ name: '', mgPerUnit: '' });
+    } else if (editingButtonIdx !== null && editingButtonIdx > idx) {
+      setEditingButtonIdx(editingButtonIdx - 1);
+    }
   };
 
   if (loading) {

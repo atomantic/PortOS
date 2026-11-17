@@ -96,7 +96,6 @@ describe('system activity invalidation', () => {
     cosEvents.emit('agent:spawned', { id: 'agent-1' });
     cosEvents.emit('agent:completed', { id: 'agent-1', result: { success: true } });
     cosEvents.emit('agent:completed', { id: 'agent-2', result: { success: false, error: 'spawn failed' } });
-    cosEvents.emit('agent:terminate', 'agent-3');
     cosEvents.emit('agent:completed', { id: 'agent-3', result: { success: false, error: 'Agent killed by user' } });
     cosEvents.emit('tasks:changed', { action: 'added', task: { status: 'pending' } });
     cosEvents.emit('tasks:changed', { action: 'updated', previousStatus: 'pending', task: { status: 'in_progress' } });
@@ -110,11 +109,13 @@ describe('system activity invalidation', () => {
 
     const hooks = attachLlmActivityHooks({
       onRunCompleted: () => 'kept',
+      onRunUnreported: () => 'unreported kept',
     });
     expect(hooks.onRunStarted({})).toBeUndefined();
     expect(hooks.onRunCompleted({}, '')).toBe('kept');
     hooks.onRunFailed({}, new Error('no'));
     hooks.onRunCanceled({ runId: 'run-1' });
+    expect(hooks.onRunUnreported({ runId: 'run-2' })).toBe('unreported kept');
 
     const io = { emit: vi.fn() };
     const app = { id: 'app-1', name: 'Example', repoPath: 'app-1' };
@@ -131,10 +132,10 @@ describe('system activity invalidation', () => {
       'queued', 'start', 'completion', 'drained', 'failure', 'drained', 'cancellation', 'drained',
     ]);
     expect(of('agents')).toEqual([
-      'start', 'completion', 'failure', 'cancellation', 'cancellation', 'queued', 'drained',
+      'start', 'completion', 'failure', 'cancellation', 'queued', 'drained',
     ]);
     expect(of('mind')).toEqual(['start', 'queued', 'completion', 'drained', 'start', 'cancellation', 'start', 'failure']);
-    expect(of('llm')).toEqual(['start', 'completion', 'failure', 'cancellation']);
+    expect(of('llm')).toEqual(['start', 'completion', 'failure', 'cancellation', 'failure']);
     expect(of('appOperations')).toEqual([
       'start', 'failure', 'drained', 'start', 'completion', 'drained', 'start', 'cancellation', 'drained',
     ]);

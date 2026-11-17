@@ -12,7 +12,17 @@ const api = vi.hoisted(() => ({
   getProcessLogs: vi.fn(),
 }));
 
+const socket = vi.hoisted(() => {
+  const handlers = new Map();
+  return {
+    on: vi.fn((event, handler) => handlers.set(event, handler)),
+    off: vi.fn((event) => handlers.delete(event)),
+    fire: (event, payload) => handlers.get(event)?.(payload),
+  };
+});
+
 vi.mock('../../../services/api', () => api);
+vi.mock('../../../services/socket', () => ({ default: socket }));
 vi.mock('../../ui/ProcessLogModal', () => ({
   default: () => null,
 }));
@@ -44,6 +54,70 @@ describe('RunsTab ?run= deep link', () => {
     expect(await screen.findByText('full output for run-b')).toBeInTheDocument();
     expect(api.getRunPrompt).toHaveBeenCalledWith('run-b');
     expect(api.getRunOutput).toHaveBeenCalledWith('run-b');
+  });
+
+  it('moves a Running row to its end state on any activity invalidation (#16557)', async () => {
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] });
+    renderTab('/cos/runs');
+    expect(await within(await screen.findByTestId('run-row-recovering')).findByText('Running')).toBeVisible();
+
+    // A coalesced frame names only the burst's last source, so even a media
+    // frame may carry a run transition.
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: false, canceled: true }] });
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'media', phase: 'completion' }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByTestId('run-row-recovering')).queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('re-reads once the first load lands when an invalidation arrived during it', async () => {
+    let finishLoad;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishLoad = resolve; }));
+    renderTab('/cos/runs');
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'llm', phase: 'cancellation' }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(1);
+
+    api.getRuns.mockResolvedValue({ runs: [{ ...RUNS[0], id: 'recovering', success: false }] });
+    await act(async () => { finishLoad({ runs: [{ ...RUNS[0], id: 'recovering', success: null }] }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(within(screen.getByTestId('run-row-recovering')).queryByText('Running')).not.toBeInTheDocument();
+  });
+
+  it('does not restore a deleted run from a re-read that started before the delete', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    let finishStale;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishStale = resolve; }));
+    await act(async () => { socket.fire('system:activity', { seq: 1, source: 'llm', phase: 'start' }); });
+    api.deleteRun.mockResolvedValue({ ok: true });
+    api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
+    await act(async () => { fireEvent.click(within(screen.getByTestId('run-row-run-a')).getByRole('button', { name: 'Delete run' })); });
+    await act(async () => { finishStale({ runs: RUNS }); });
+    expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
+    expect(screen.getByText('second prompt')).toBeInTheDocument();
+  });
+
+  it('folds a burst of invalidations during a re-read into one follow-up read', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    let finishFirst;
+    api.getRuns.mockReturnValueOnce(new Promise((resolve) => { finishFirst = resolve; }));
+    await act(async () => {
+      for (let seq = 1; seq <= 4; seq++) socket.fire('system:activity', { seq, source: 'llm', phase: 'start' });
+    });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    api.getRuns.mockResolvedValue({ runs: [RUNS[1]] });
+    await act(async () => { finishFirst({ runs: RUNS }); });
+    expect(api.getRuns).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText('first prompt')).not.toBeInTheDocument();
+  });
+
+  it('keeps the loaded rows when an invalidation re-read fails', async () => {
+    renderTab('/cos/runs');
+    expect(await screen.findByText('first prompt')).toBeInTheDocument();
+    api.getRuns.mockRejectedValue(new Error('offline'));
+    await act(async () => { socket.fire('connect'); });
+    expect(api.getRuns).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('first prompt')).toBeInTheDocument();
   });
 
   it('expands nothing when no ?run= param is present', async () => {

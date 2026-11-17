@@ -123,7 +123,8 @@ import {
   __resetTaskCache
 } from './cosTaskStore.js';
 import { aggregateAutoFixDiagnostics, getAutoFixMetrics } from './autoFixMetrics.js';
-import { PRIORITY_VALUES, generateTasksMarkdown, parseTasksMarkdown } from '../lib/taskParser.js';
+import { PRIORITY_VALUES } from '../lib/taskParser.js';
+import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { getTaskPrompt, getTaskContextNote } from '../lib/cosTaskPrompt.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, registerPauseReleaseAdapter, __resetPauseReleaseAdapter } from '../lib/taskPauseHold.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
@@ -217,7 +218,7 @@ it('reconciles a stopped stale completion only against its latest episode dispat
   expect(await retryTasksResolvedByInvestigation({ id: 'sys-investigation', status: 'completed',
     metadata: { isInvestigation: true, affectedTasks: [fresh.id] } })).toEqual({ retried: [],
     skipped: [{ taskId: fresh.id, reason: 'spawn-budget-reconciled-held' }] });
-  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: '2', failureCount: '3' } });
+  expect(await getTaskById(fresh.id)).toMatchObject({ status: 'blocked', metadata: { totalSpawnCount: 2, failureCount: 3 } });
   expect(await reconcileSpawnBudget(fresh.id)).toEqual({ reconciled: false, reason: 'already-reconciled' });
   expect(mock.events.filter(event => event.payload?.action === 'unblocked')).toHaveLength(0);
   const corrected = await getTaskById(fresh.id);
@@ -319,9 +320,9 @@ it('holds a reconciled spawn budget until an explicit reset, even against stale 
   const task = await addTask({ id: 'sys-reconcile-hold', description: 'Reconcile fixture' }, 'internal');
   const reconciled = await updateTask(task.id, { metadata: { totalSpawnCount: 2 } }, 'internal',
     { spawnBudgetOperation: { kind: 'reconcile' } });
-  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe('true');
+  expect(reconciled.metadata.spawnBudgetReconciledHold).toBe(true);
   const stale = await updateTask(task.id, { metadata: { ...task.metadata, spawnBudgetReconciledHold: undefined } }, 'internal');
-  expect(stale.metadata.spawnBudgetReconciledHold).toBe('true');
+  expect(stale.metadata.spawnBudgetReconciledHold).toBe(true);
   const reset = await updateTask(task.id, { metadata: { totalSpawnCount: undefined } }, 'internal',
     { spawnBudgetOperation: { kind: 'reset' } });
   expect(reset.metadata.spawnBudgetReconciledHold).toBeUndefined();
@@ -411,7 +412,7 @@ describe('forge maintenance queue recovery', () => {
     const result = await reconcileLegacyForgeMaintenanceTasks({ instanceId: 'local' });
     expect(result).toEqual({ recovered: 1, retired: 2 });
     const tasks = (await getCosTasks()).tasks;
-    expect(tasks.find(t => t.id === 'sys-screened')).toMatchObject({ status: 'pending', metadata: { forgeMaintenanceVersion: '1' } });
+    expect(tasks.find(t => t.id === 'sys-screened')).toMatchObject({ status: 'pending', metadata: { forgeMaintenanceVersion: 1 } });
     expect(tasks.find(t => t.id === 'sys-screened').metadata.blockedReason).toBeUndefined();
     for (const id of ['sys-old-pr', 'sys-old-issue']) {
       expect(tasks.find(t => t.id === id)).toMatchObject({ status: 'completed', metadata: { resolution: 'superseded' } });
@@ -1138,7 +1139,7 @@ describe('cosTaskStore.addTask', () => {
       expect(reloaded.metadata.context).toBeUndefined();
     });
 
-    it('moves a raw multiline description into metadata.prompt before markdown persistence', async () => {
+    it('stores a raw multiline description as written, without synthesizing metadata.prompt', async () => {
       const fullPrompt = 'Scheduled review\n\n## Preloaded task data\nCurrent snapshot.';
       const created = await addTask({
         id: 'sys-scheduled-prompt',
@@ -1149,14 +1150,15 @@ describe('cosTaskStore.addTask', () => {
         metadata: { autonomousJob: true, jobId: 'job-example' },
         section: 'pending',
       }, 'internal', { raw: true });
-      expect(created.description).toBe('Scheduled review');
-      expect(created.metadata.prompt).toBe(fullPrompt);
+      expect(created.description).toBe(fullPrompt);
+      expect(created.metadata.prompt).toBeUndefined();
       const reloaded = await getTaskById('sys-scheduled-prompt');
-      expect(reloaded.description).toBe('Scheduled review');
-      expect(reloaded.metadata.prompt).toBe(fullPrompt);
+      expect(reloaded.description).toBe(fullPrompt);
+      expect(reloaded.metadata.prompt).toBeUndefined();
+      expect(getTaskPrompt(reloaded)).toBeNull();
     });
 
-    it('keeps a multiline raw description as the prompt when a multiline context note rides along', async () => {
+    it('keeps a multiline raw description as the prompt and the context as a note when both are multi-line', async () => {
       // The pr-reviewer generator hands over the stage instructions as the
       // description and the security-scan summary as a multi-line context note.
       // Reclassifying the note first made it the "explicit" prompt and dropped
@@ -1172,15 +1174,16 @@ describe('cosTaskStore.addTask', () => {
         metadata: { context: scanNote },
         section: 'pending',
       }, 'internal', { raw: true });
-      expect(created.description).toBe('[Improvement: Example] PR Eligibility Gate (Stage 2)');
-      expect(created.metadata.prompt).toBe(stagePrompt);
+      expect(created.description).toBe(stagePrompt);
+      expect(created.metadata.prompt).toBeUndefined();
       expect(created.metadata.context).toBe(scanNote);
       const reloaded = await getTaskById('sys-stage-with-note');
-      expect(reloaded.metadata.prompt).toBe(stagePrompt);
+      expect(reloaded.description).toBe(stagePrompt);
+      expect(reloaded.metadata.prompt).toBeUndefined();
       expect(reloaded.metadata.context).toBe(scanNote);
     });
 
-    it('preserves an explicitly empty prompt while normalizing a multiline raw description', async () => {
+    it('preserves an explicitly empty prompt alongside a multiline raw description', async () => {
       const created = await addTask({
         id: 'sys-cleared-scheduled-prompt',
         status: 'pending',
@@ -1190,15 +1193,11 @@ describe('cosTaskStore.addTask', () => {
         metadata: { prompt: '' },
         section: 'pending',
       }, 'internal', { raw: true });
-      expect(created.description).toBe('Scheduled review');
+      expect(created.description).toBe('Scheduled review\n\nFallback body');
       expect(created.metadata).toHaveProperty('prompt', '');
     });
 
-    it('preserves a producer-written prompt over the description when both are present', async () => {
-      // When a task carries both a multi-line description AND an explicit
-      // metadata.prompt, the producer's prompt wins — the description is still
-      // collapsed to first line for COS-TASKS.md serialization, but the prompt
-      // field is not overwritten.
+    it('keeps both a multi-line description and a producer-written prompt as given', async () => {
       const producerPrompt = 'Custom agent instructions for Example App';
       const fullDescription = 'Audit task\n\nThis is the task body\nthat should be ignored.';
       const created = await addTask({
@@ -1210,10 +1209,10 @@ describe('cosTaskStore.addTask', () => {
         metadata: { prompt: producerPrompt },
         section: 'pending',
       }, 'internal', { raw: true });
-      expect(created.description).toBe('Audit task');
+      expect(created.description).toBe(fullDescription);
       expect(created.metadata.prompt).toBe(producerPrompt);
       const reloaded = await getTaskById('task-producer-prompt-wins');
-      expect(reloaded.description).toBe('Audit task');
+      expect(reloaded.description).toBe(fullDescription);
       expect(reloaded.metadata.prompt).toBe(producerPrompt);
     });
 
@@ -1243,7 +1242,7 @@ describe('cosTaskStore.addTask', () => {
       }, 'user');
       expect(created.metadata).toMatchObject({ effort: 'high', temperature: 0.25, thinking: false });
       const reloaded = await getTaskById('task-opencode');
-      expect(reloaded.metadata).toMatchObject({ effort: 'high', temperature: '0.25', thinking: 'false' });
+      expect(reloaded.metadata).toMatchObject({ effort: 'high', temperature: 0.25, thinking: false });
     });
 
     it('accepts an explicit prompt alongside a note and never re-classifies it', async () => {
@@ -1298,12 +1297,10 @@ describe('cosTaskStore.addTask', () => {
     });
 
     // The task editor renders the description as an AutoSizeTextarea, so Enter
-    // and paste put newlines into the ORDINARY edit path. Before #7240 the
-    // update path wrote them straight into the one-line markdown row: the
-    // description silently truncated, the body's `  - key: value` lines were
-    // scraped into the task's OWN metadata, and a pasted `- [ ] #id | …` row
-    // minted a phantom auto-approved task the spawner would run.
-    const CORRUPTING_DESCRIPTION = [
+    // and paste put newlines into the ordinary edit path. The stored form keeps
+    // them (#16407), so an edit reads back exactly as saved and the prompt and
+    // note are not touched.
+    const MULTILINE_DESCRIPTION = [
       'Fix the login flow',
       'Also update:',
       '  - app: other-app',
@@ -1311,47 +1308,43 @@ describe('cosTaskStore.addTask', () => {
       '- [ ] #task-999 | HIGH | phantom task',
     ].join('\n');
 
-    it('normalizes a multi-line description on update without corrupting the task file', async () => {
+    it('stores a multi-line description edit as written without touching prompt, note or execution metadata', async () => {
       await addTask(
         { description: 'Fix the login flow', id: 'task-multiline-desc', app: 'my-app', provider: 'claude', context: 'note' },
         'user'
       );
-      const updated = await updateTask('task-multiline-desc', { description: CORRUPTING_DESCRIPTION }, 'user');
+      const updated = await updateTask('task-multiline-desc', { description: MULTILINE_DESCRIPTION }, 'user');
+      expect(updated.description).toBe(MULTILINE_DESCRIPTION);
 
-      // The row stays a one-line record, so the file reparses to exactly one task.
-      expect(updated.description).toBe('Fix the login flow');
       const { tasks } = await getUserTasks();
       expect(tasks).toHaveLength(1);
-      expect(tasks[0].id).toBe('task-multiline-desc');
-
-      // The description body no longer re-targets the task's own execution metadata.
+      expect(tasks[0].description).toBe(MULTILINE_DESCRIPTION);
       expect(tasks[0].metadata.app).toBe('my-app');
       expect(tasks[0].metadata.provider).toBe('claude');
-
-      // And the submitted text is fully recoverable — nothing silently truncated.
-      expect(getTaskPrompt(tasks[0])).toBe(CORRUPTING_DESCRIPTION);
+      expect(tasks[0].metadata.context).toBe('note');
+      expect(tasks[0].metadata.prompt).toBeUndefined();
     });
 
-    it('appends a multi-line description edit to the note when the task already has a prompt', async () => {
+    it('leaves an existing prompt and note unchanged when a multi-line description is saved, however often', async () => {
       await addTask(
         { description: 'claim', id: 'task-desc-with-prompt', prompt: AGENT_BODY, context: 'note' },
         'user'
       );
-      const updated = await updateTask('task-desc-with-prompt', { description: CORRUPTING_DESCRIPTION }, 'user');
+      await updateTask('task-desc-with-prompt', { description: MULTILINE_DESCRIPTION }, 'user');
+      const again = await updateTask('task-desc-with-prompt', { description: MULTILINE_DESCRIPTION }, 'user');
 
-      // `updateTask` must never overwrite a real prompt (cosTaskPrompt.js contract).
-      expect(updated.metadata.prompt).toBe(AGENT_BODY);
-      expect(updated.description).toBe('Fix the login flow');
-      const reloaded = await getTaskById('task-desc-with-prompt');
-      expect(getTaskContextNote(reloaded)).toBe(`note\n\n(from description)\n${CORRUPTING_DESCRIPTION}`);
+      expect(again.description).toBe(MULTILINE_DESCRIPTION);
+      expect(again.metadata.prompt).toBe(AGENT_BODY);
+      expect(again.metadata.context).toBe('note');
       expect((await getUserTasks()).tasks).toHaveLength(1);
     });
 
-    it('does not re-append the same description overflow on a repeated save', async () => {
-      await addTask({ description: 'claim', id: 'task-desc-resave', prompt: AGENT_BODY }, 'user');
-      await updateTask('task-desc-resave', { description: CORRUPTING_DESCRIPTION }, 'user');
-      const again = await updateTask('task-desc-resave', { description: CORRUPTING_DESCRIPTION }, 'user');
-      expect(again.metadata.context).toBe(`(from description)\n${CORRUPTING_DESCRIPTION}`);
+    it('stores a multi-line description from addTask as written and dedups on its first line', async () => {
+      const created = await addTask({ description: 'Fix login\nsecond line', id: 'task-ml-add' }, 'user');
+      expect(created.description).toBe('Fix login\nsecond line');
+      expect(created.metadata.prompt).toBeUndefined();
+      const dup = await addTask({ description: 'fix login\na different body' }, 'user');
+      expect(dup.duplicate).toBe(true);
     });
 
     it('leaves a single-line description edit untouched', async () => {
@@ -2649,6 +2642,56 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(mock.events.some(e => e.name === 'tasks:changed' && e.payload.action === 'peer-merged')).toBe(true);
   });
 
+  // #16407: rows and peers from before it hold every scalar as a string with nulls
+  // dropped; this version stores JSON types and nulls. A merge across the two forms
+  // must read the same flags either way and settle after one pass.
+  it.each([
+    ['local typed, remote strings', { openPR: true, retryCount: 2, note: null }, { openPR: 'true', retryCount: '2' }],
+    ['local strings, remote typed', { openPR: 'true', retryCount: '2' }, { openPR: true, retryCount: 2, note: null }],
+  ])('merges a task whose metadata types differ by side (%s)', async (_label, localMeta, remoteMeta) => {
+    const stamp = '2026-06-25T10:00:00.000Z';
+    await addTask({ id: 'task-mixed', description: 'Line one\nLine two', priority: 'MEDIUM', status: 'pending',
+      metadata: { ...localMeta, updatedAt: stamp } }, 'internal', { raw: true });
+    const local = await getTaskById('task-mixed');
+    const remote = [{ ...local, taskType: 'internal', metadata: { ...remoteMeta, updatedAt: stamp } }];
+    await mergePeerTasks('internal', remote, { now: NOW });
+    const merged = await getTaskById('task-mixed');
+    expect(isTruthyMeta(merged.metadata.openPR)).toBe(true);
+    expect(Number(merged.metadata.retryCount)).toBe(2);
+    expect(merged.metadata.note ?? null).toBeNull();
+    expect(merged.description).toBe(local.description);
+    vi.mocked(repository.applyTaskListSave).mockClear();
+    expect(await mergePeerTasks('internal', remote, { now: NOW })).toEqual({ changed: false });
+    expect(repository.applyTaskListSave).not.toHaveBeenCalled();
+  });
+
+  // #16466: a description is stored as written, but a peer that has not synced since
+  // (or one that stored the task before) still holds the collapsed first line plus the
+  // body in metadata.prompt. Both sides must settle on the same winner at equal edit
+  // stamps, whichever is local, and a second pass must change nothing.
+  it('converges old-shape and new-shape copies of one task without flapping', async () => {
+    const stamp = '2026-06-25T10:00:00.000Z';
+    const body = 'Fix the login flow\n\nSteps:\n1. open page';
+    const newShape = { id: 'task-shapes', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: body, metadata: { updatedAt: stamp } };
+    const oldShape = { ...newShape, description: 'Fix the login flow', metadata: { updatedAt: stamp, prompt: body } };
+    const settle = async (local, remote) => {
+      __resetTaskCache();
+      actualRepository.__resetCosTaskRepository();
+      await addTask({ ...local, status: 'pending' }, 'internal', { raw: true });
+      await mergePeerTasks('internal', [{ ...remote, taskType: 'internal' }], { now: NOW });
+      const first = await getTaskById('task-shapes');
+      vi.mocked(repository.applyTaskListSave).mockClear();
+      expect(await mergePeerTasks('internal', [{ ...remote, taskType: 'internal' }], { now: NOW })).toEqual({ changed: false });
+      expect(repository.applyTaskListSave).not.toHaveBeenCalled();
+      return first;
+    };
+    const aWins = await settle(newShape, oldShape);
+    const bWins = await settle(oldShape, newShape);
+    expect({ description: aWins.description, prompt: aWins.metadata.prompt, stamp: aWins.metadata.updatedAt })
+      .toEqual({ description: bWins.description, prompt: bWins.metadata.prompt, stamp: bWins.metadata.updatedAt });
+    expect(aWins.metadata.updatedAt).toBe(stamp);
+  });
+
   it('is a no-op (no write, no event) when the peer payload changes nothing', async () => {
     await addTask({ description: 'same', priority: 'MEDIUM', id: 'task-same' }, 'user');
     mock.events = [];
@@ -2713,9 +2756,9 @@ describe('cosTaskStore.mergePeerTasks', () => {
     expect(after.tasks.map(t => t.id)).toContain('sys-x');
   });
 
-  it('adopts a metadata-less remote task through the real markdown generator without throwing', async () => {
+  it('adopts a metadata-less remote task through the real stored form without throwing', async () => {
     // A cross-version/forked peer may advertise a task with no `metadata` (the
-    // wire schema marks it optional). generateTasksMarkdown does
+    // wire schema marks it optional). storedForm does
     // Object.entries(metadata) — undefined would throw and fail the whole merge.
     const remote = [{ id: 'task-nometa', taskType: 'user', status: 'pending', priority: 'HIGH', description: 'no metadata here' }];
     const res = await mergePeerTasks('user', remote, { now: NOW });
@@ -3082,7 +3125,6 @@ describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
     expect(String(result.metadata.challengeCount)).toBe('1');
     expect(result.metadata.challenge.reason).toBe('reviewer misread the diff');
     expect(result.metadata.challenge.reviewer).toBe('ollama');
-    expect(mock.events.some(e => e.name === 'task:challenged')).toBe(true);
   });
 
   it('refuses a second dispute on the same task (bounded to one)', async () => {
@@ -3227,7 +3269,7 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
 describe('cosTaskStore — a repaired task is returned exactly as it is persisted (#7239)', () => {
   // The markdown store can only represent five statuses and four priorities, and
   // every write rewrites the whole file. Repairing only inside
-  // generateTasksMarkdown would write one thing and hand back another, so every
+  // storedForm would write one thing and hand back another, so every
   // consumer of the return value / `tasks:changed` would read the pre-repair
   // status until something re-read the file.
   it('updateTask returns the parked status, not the unrepresentable one it was given', async () => {
@@ -3362,7 +3404,7 @@ it('preserves custom Deep workflow through projection and non-raw persistence', 
   const fields = generatedJobTaskFields({ description: 'Custom deep audit', metadata: { app: 'example', auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: true, useWorktree: true } });
   const fresh = await addTask(fields, 'internal');
   expect(fresh.duplicate).not.toBe(true);
-  expect((await getTaskById(fresh.id)).metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: 'true', useWorktree: 'true' });
+  expect((await getTaskById(fresh.id)).metadata).toMatchObject({ auditDepth: 'deep', auditWorkflow: 'extended-v1', provider: 'codex', model: 'gpt-6-astra', effort: 'medium', openPR: true, useWorktree: true });
   expect((await getTaskById(legacy.id)).metadata).toMatchObject({ deepAuditId: 'historic', existingBranch: 'cos/preserved' });
   await expect(addTask(generatedJobTaskFields({ metadata: { auditDepth: 'deep', deepAuditId: 'historic' } }), 'internal')).rejects.toThrow('read-only');
 });
@@ -3371,7 +3413,7 @@ it('round-trips the server-owned audit disposition contract through persisted ta
   const created = await addTask({ id: 'sys-audit-disposition-example', description: 'Audit example boundaries',
     metadata: { app: 'example', analysisType: 'security', fileIssues: false, auditDispositionVersion: 1 } }, 'internal', { raw: true });
   const reloaded = await getTaskById(created.id);
-  expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: '1', fileIssues: 'false' });
+  expect(reloaded.metadata).toMatchObject({ analysisType: 'security', auditDispositionVersion: 1, fileIssues: false });
 });
 
 // Completed history older than the working set. The queues are rows in one table:

@@ -1,11 +1,7 @@
 /**
- * Which provider a burn job spends — shared by every job type.
- *
- * Its own module rather than a sibling job's export: the registry lazy-imports
- * job modules specifically so a status read doesn't drag in a job's heavy
- * dependencies (`agentPrompt.js` pulls the CoS task store and the managed-app
- * store), and importing this helper from there would have made every
- * programmatic job's probe load exactly that.
+ * Which provider a burn job spends, shared by every job type. Its own module so the
+ * registry's lazy job imports are not defeated by importing a sibling job's helper
+ * (`agentPrompt.js` pulls the CoS task store and managed-app store).
  */
 
 import { isProcessProvider } from '../../lib/providerTypes.js';
@@ -13,55 +9,24 @@ import { getAllProviders } from '../providers.js';
 import { commandBasename } from '../../lib/providerModels.js';
 
 /**
- * Is this the "no subscription family" identity?
- *
- * A MANUAL maintenance run (`services/maintenanceRun.js`) may be pinned to a
- * provider that belongs to no family at all — an OpenCode TUI, an Ollama- or
- * LM-Studio-backed wrapper — because the run is a ladder of audits the user
- * asked for, not an attempt to drain a window before it expires. That run
- * constructs this identity explicitly; every other caller hands over a family
- * record from a burn plan, which always names a real family. Recognizing the
- * state HERE (rather than inferring it from a falsy `familyId`) is what keeps
- * the automatic burn sweep out of it: a sweep whose family id somehow came
- * through empty still resolves nothing, exactly as before.
+ * Is this the "no subscription family" identity? A MANUAL maintenance run
+ * (`services/maintenanceRun.js`) may pin a provider in no family (OpenCode TUI, local
+ * wrappers) and constructs this identity explicitly; recognizing it HERE, not from a
+ * falsy `familyId`, keeps the automatic burn sweep out of it.
  */
 export const isUnfamiliedBurn = (family) => family?.unfamilied === true && !family.id;
 
 /**
- * An agent-capable provider in the burning family. A job's explicit
- * `providerId` wins; otherwise match the family id against the enabled
- * providers, PREFERRING the type named by `prefer` (default `tui`).
+ * An agent-capable provider in the burning family. A job's explicit `providerId` wins;
+ * otherwise match the family id against enabled providers, preferring type `prefer`
+ * (default `tui`: unattended agent burns should be watchable and steerable; most families
+ * register CLI and TUI and the CLI sorts first). A PROGRAMMATIC job passes `prefer: 'cli'`
+ * (one headless prompt); the other type stays a fallback so a one-type family still burns.
  *
- * Preferring the TUI is the point for an AGENT burn: it runs unattended for
- * minutes on the user's own subscription, and a TUI agent is watchable in Active
- * Agents and can be steered mid-run, where a headless CLI run can only be read
- * after it has finished. Most families have both registered (`claude-code` +
- * `claude-code-tui`, `codex` + `codex-tui`, …) and the CLI sorts first, so a
- * plain `find` silently picked the unobservable one every time.
- * `pickScrapeProvider` applies the same preference when reading `/usage`.
- *
- * A PROGRAMMATIC job passes `prefer: 'cli'` instead: it sends one headless
- * prompt through the stage runner, with no agent session to watch or steer, so
- * the TUI's observability buys nothing and its interactive startup is pure
- * overhead. The other type is still accepted as a fallback — a family with only
- * a TUI registered must not silently stop burning.
- *
- * Two exclusions, both about what a burn is FOR — spending a subscription window
- * that would otherwise expire unused:
- * - API-type providers bill per token rather than drawing down a window.
- * - Local-runtime wrappers run a LOCAL model, so there is no window to spend and
- *   burning through one accomplishes nothing. `resolveEnabledFamilies` drops
- *   them from the quota cards for exactly this reason; a `claude-ollama-tui`
- *   would otherwise be a perfectly good match for the `claude` family.
- *
- * `unfamilied` lifts the SECOND exclusion, and only together with an explicit
- * `providerId`. It says the caller is not burning a window at all — it is a
- * manual maintenance run dispatching the ladder onto the one provider the user
- * named — so "this model is local and free" stops being a disqualification and
- * becomes the whole point. The API-type exclusion stays: `isProcessProvider`
- * still has to hold, because the ladder spawns a CLI/TUI agent. A caller that
- * sets the flag without naming a provider resolves nothing, since there is no
- * family left to match against.
+ * Excluded: API-type providers (bill per token, no window) and local-runtime wrappers (no
+ * window to spend; `resolveEnabledFamilies` drops them from quota cards too).
+ * `unfamilied` lifts the local-runtime exclusion only together with an explicit
+ * `providerId`; `isProcessProvider` must still hold because the ladder spawns a CLI/TUI agent.
  */
 export function providerForFamily(providers, { familyId, providerId, prefer = 'tui', unfamilied = false }) {
   const localRuntimeAllowed = unfamilied === true && !familyId && Boolean(providerId);
@@ -75,23 +40,10 @@ export function providerForFamily(providers, { familyId, providerId, prefer = 't
 }
 
 /**
- * Does this provider belong to `familyId`?
- *
- * The BINARY is what actually identifies the family — the provider id is a
- * user-facing label and does not have to contain the family name. Matching on
- * the id alone silently stranded the whole `agy` family: its providers ship as
- * `antigravity-cli` / `antigravity-tui`, neither of which contains "agy", so a
- * configured Antigravity burn plan reported "no enabled CLI/TUI provider" and
- * could never dispatch — while the quota card sat right above it showing a
- * healthy window, because `providerUsage`'s own matcher checks the command.
- *
- * The id substring stays as a fallback for a provider registered under a wrapper
- * script whose basename isn't the family name.
- *
- * Exported because `providerForFamily` deliberately honors an explicit
- * `providerId` pin without re-checking it — a caller that must refuse an
- * out-of-family pin (`quotaBurnInvoke.js`, where the pin would spend the wrong
- * subscription) asks this directly rather than re-deriving the rule.
+ * Does this provider belong to `familyId`? The BINARY identifies the family, not the id
+ * (`agy` ships as `antigravity-cli`/`antigravity-tui`); the id substring is the fallback
+ * for wrapper scripts. Exported because `providerForFamily` honors an explicit `providerId`
+ * pin without re-checking, and `quotaBurnInvoke.js` must refuse an out-of-family pin.
  */
 export const matchesFamily = (provider, familyId) => {
   const needle = String(familyId || '').toLowerCase();
@@ -100,11 +52,7 @@ export const matchesFamily = (provider, familyId) => {
     || String(provider.id || '').toLowerCase().includes(needle);
 };
 
-/**
- * The reason a job reports when its family has nothing it is allowed to spend.
- * An unfamilied run has no family to name, and reaches here only when it was
- * given no provider to pin — so it says that instead.
- */
+/** Reason reported when the family has nothing spendable; an unfamilied run was given no provider to pin. */
 export const noProviderReason = (family) => (isUnfamiliedBurn(family)
   ? 'a run outside every subscription family must name the provider to use'
   : `no enabled CLI/TUI provider in the ${family?.id} family`);

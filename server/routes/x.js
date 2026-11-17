@@ -23,13 +23,6 @@ const requireId = (value, label = 'ID') => {
 };
 const emitChanged = (req, accountId) => req.app.get('io')?.emit('x:changed', { accountId });
 
-router.get('/capabilities', (_req, res) => res.json({
-  readTransport: 'managed-browser',
-  reads: ['profile', 'latest', 'people'],
-  writes: ['draft', 'manual-compose-handoff'],
-  automaticPublishing: false,
-}));
-
 router.get('/accounts', asyncHandler(async (_req, res) => res.json({ accounts: await x.listAccounts() })));
 
 router.post('/accounts', asyncHandler(async (req, res) => {

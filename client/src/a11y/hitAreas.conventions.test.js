@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: 44px hit areas and key-submit autofocus.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
@@ -42,67 +43,8 @@ describe('a11y conventions: hitAreas', () => {
     expect(offenders, `Close button under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] + flex items-center justify-center (see Drawer.jsx:106):\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it("meets the 44px touch-target minimum on icon-only buttons (#5703, #5904)", () => {
-    // The MeatSpace tabs are the app's most phone-centric surface — a drink or
-    // a nicotine entry is logged one-handed — and their inline row controls
-    // kept shipping as a bare `p-1`/`p-1.5` around a 12-14px icon: a 22-26px
-    // target, half the floor everywhere else. Save and Cancel sit adjacent in
-    // the edit rows, so a mis-tap commits or discards the wrong edit.
-    //
-    // The fix grows the invisible box (`min-h-[44px] min-w-[44px]` +
-    // `inline-flex items-center justify-center`), never the icon: icon size is
-    // what sets the log row's density, and growing it would reflow the tables.
-    //
-    // Scoped to the whole tree since #5904 swept the same shape outside
-    // MeatSpace. Only the `p-0.5`/`p-1`/`p-1.5` shape counts, rather than every
-    // icon button missing an explicit min: one that reaches 44px through
-    // generous padding (`p-3` around a 20px glyph), or that carries no padding
-    // class at all, is a different question, and folding it in would make the
-    // guard report dozens of controls this change never looked at.
-    //
-    // Sibling-owned SongBook surfaces are excluded — a parallel change owns
-    // that tree and sweeps its own buttons.
-    const isSiblingOwned = (file) => file === "src/pages/SongBook.jsx"
-      || file === "src/pages/SongBookViewer.jsx"
-      || file.startsWith("src/components/songbook/");
-    const TIGHT_PADDING = /(?:^|\s)p-(?:0\.5|1|1\.5)(?:\s|$)/;
-    const offendersIn = (file, src) => {
-      const out = [];
-      for (const node of forEachOpeningTag(src, "button")) {
-        if (!isIconOnlyButton(src, node)) continue;
-        const cls = node.tag.match(/className\s*=\s*"([^"]*)"/);
-        if (!cls) continue; // dynamic className — reviewed by hand, not scanned here
-        if (!TIGHT_PADDING.test(cls[1])) continue;
-        if (hasFortyFourMinTouchTarget(cls[1])) continue;
-        out.push(`${file}:${lineOf(src, node.index)}`);
-      }
-      return out;
-    };
-
-    // Probe first: a green run has to mean "no offenders", not "the matcher
-    // stopped recognizing the shape it was written for".
-    const probe = (cls) => offendersIn("probe.jsx", `<button aria-label="Save" className="${cls}"><Check size={14} /></button>`);
-    expect(probe("p-1 text-port-success")).toEqual(["probe.jsx:1"]);
-    expect(probe("min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1")).toEqual([]);
-    // …and that the padding scoping is a scoping, not an accident: a roomier
-    // button is out of this rule's remit even though it declares no min either.
-    expect(probe("p-2 text-port-success")).toEqual([]);
-
-    // The prefix is `trackedJsxFiles()`'s path shape (`git ls-files src` run
-    // from client/), not this file's location — assert the filter really
-    // selected the tree, so a change to the walker's path shape fails loudly
-    // here instead of turning the rule into a vacuous pass over zero files.
-    const scanned = trackedJsxFiles().filter((file) => !isSiblingOwned(file));
-    expect(scanned.length, "no client sources matched — has trackedJsxFiles() changed its path shape?").toBeGreaterThan(500);
-
-    const offenders = [];
-    for (const file of scanned) offenders.push(...offendersIn(file, rawSourceOf(file)));
-    expect(offenders, `Icon-only <button> under the 44px touch-target minimum — add min-h-[44px] min-w-[44px] inline-flex items-center justify-center and leave the icon size alone:\n${offenders.join("\n")}`).toEqual([]);
-  });
-
   it('gives every icon-only button a touch-size hit area (#14416)', () => {
-    // The rule above polices the tight-padding shape; this one covers every
-    // icon-only button, whose tap target is otherwise its 12-20px glyph. A
+    // Covers every icon-only button, whose tap target is otherwise its 12-20px glyph. A
     // dense desktop row stays compact with `pointer-coarse:min-h-11
     // pointer-coarse:min-w-11`; bare <summary> rows get their touch height from
     // the base rule in src/index.css.

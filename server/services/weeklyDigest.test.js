@@ -325,19 +325,13 @@ describe('generateWeeklyDigest — summary assembly', () => {
     expect(digest.accomplishments.map(a => a.id)).toEqual(['w15']);
   });
 
-  it('persists the digest and announces it on the CoS event bus', async () => {
-    const emitted = [];
-    const listener = (d) => emitted.push(d.weekId);
-    cosEvents.on('digest:generated', listener);
+  it('persists the digest', async () => {
     onDates([agent('a1', { day: 16 })]);
 
     await digestService.generateWeeklyDigest();
 
     expect(existsSync(join(DIGESTS_DIR, `${THIS_WEEK}.json`))).toBe(true);
     expect(readDigest(THIS_WEEK).summary.totalTasks).toBe(1);
-    expect(emitted).toEqual([THIS_WEEK]);
-
-    cosEvents.off('digest:generated', listener);
   });
 });
 

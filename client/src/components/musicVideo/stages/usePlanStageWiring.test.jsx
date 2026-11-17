@@ -21,6 +21,7 @@ import {
   LocationProbe,
   installMusicVideoPageHooks,
   savedSceneReplies,
+  savedProjectEdits,
 } from '../../../test/musicVideoPageMocks.jsx';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
@@ -155,14 +156,14 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     const analyzed = { ...project, audioAnalysis: PROJECT_ANALYZED.audioAnalysis, status: 'analyzed' };
     analyzeMusicVideoProject.mockResolvedValue(analyzed);
     // An instrumental track: nothing to import, so nothing to separate or align.
-    importMusicVideoTrackLyrics.mockResolvedValue({ project: analyzed, imported: 0, markers: 0, skipped: 'no-track-lyrics' });
+    importMusicVideoTrackLyrics.mockResolvedValue({ edit: null, imported: 0, markers: 0, skipped: 'no-track-lyrics' });
     planMusicVideoProject.mockResolvedValue({ project: analyzed, scenesAdded: 3, promptsSeeded: true });
     await openProject(project);
     await openSettings('Autopilot');
     fireEvent.click(screen.getByRole('button', { name: /Analyze & plan/ }));
     await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith(project.id, { seedPrompts: true }, { silent: true }));
     expect(analyzeMusicVideoProject).toHaveBeenCalledWith(project.id, { silent: true });
-    expect(importMusicVideoTrackLyrics).toHaveBeenCalledWith(project.id, { mode: 'if-empty' }, { silent: true });
+    expect(importMusicVideoTrackLyrics).toHaveBeenCalledWith(project.id, { mode: 'if-empty' }, { silent: true, edit: true });
     expect(separateMusicVideoVocals).not.toHaveBeenCalled();
     expect(alignMusicVideoLyrics).not.toHaveBeenCalled();
   });
@@ -284,7 +285,7 @@ describe('stage checklist and project options', () => {
   it('shows the project options in Project settings and saves a media mode and an autopilot tool change', async () => {
     const project = { ...PROJECT_ANALYZED, mediaMode: 'code-images-video',
       automation: { tools: ['image:local'], guidance: 'g', budgetUsd: 5, checkins: { castAndSets: 'review' } } };
-    updateMusicVideoProject.mockImplementation((_id, patch) => Promise.resolve({ ...project, ...patch }));
+    updateMusicVideoProject.mockImplementation(savedProjectEdits(project));
     await openProject(project, 'setup');
     // The Song step holds only the song; the project options are one header button away.
     expect(screen.queryByLabelText('Design and composition media')).toBeNull();
@@ -297,7 +298,7 @@ describe('stage checklist and project options', () => {
     fireEvent.click(screen.getByLabelText('Local video gen'));
     await waitFor(() => expect(updateMusicVideoProject).toHaveBeenCalledWith(project.id, expect.objectContaining({
       mode: 'autonomous', automation: expect.objectContaining({ tools: ['image:local', 'video:local'], guidance: 'g', budgetUsd: 5 }),
-    }), { silent: true }));
+    }), { silent: true, edit: true }));
   });
 });
 

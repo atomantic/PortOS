@@ -1,10 +1,7 @@
 /**
- * `scrapeTuiUsage({ command, slashCommand })` drives an agy/grok TUI in a sandbox PTY, sends a slash
- * command and returns the ANSI-stripped quota screen.
+ * `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR`.
  *
- * `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR` — drive an agy/grok TUI in a
- * sandbox PTY, send a slash command, return the ANSI-stripped screen (for quota panels `--print` can't
- * reach).
+ * drive an agy/grok TUI in a sandbox PTY, send a slash command and return the ANSI-stripped screen (for quota panels `--print` can't reach).
  */
 
 import { spawn as ptySpawn } from 'node-pty';
@@ -18,32 +15,13 @@ import { SUBMIT_KEY } from './tuiHandshake.js';
 import { killProcessTree } from './bufferedSpawn.js';
 
 /**
- * Drive an interactive coding-agent TUI (Antigravity `agy`, Grok Build `grok`)
- * in a throwaway PTY, type a slash command, and return the ANSI-stripped screen
- * text so a caller can parse it.
+ * Drive an interactive coding-agent TUI (Antigravity `agy`, Grok Build `grok`) in a throwaway PTY, type a slash command, and return the ANSI-stripped screen text.
  *
- * Why this exists: some CLIs expose subscription-quota usage ONLY through an
- * interactive slash command (`/usage` for agy, `/usage show` for grok) — their
- * non-interactive `--print` mode treats `/usage` as an LLM prompt (wrong data,
- * and it burns tokens). So the only way to read that panel is to spawn the real
- * TUI over a PTY, send the command, and scrape the rendered screen. This is the
- * headless-TUI-scrape analogue of `claudeCodeUsage.js` (which gets to use the
- * cheaper `echo /usage | claude -p` because Claude Code DOES honor `/usage` in
- * print mode).
- *
- * The scrape runs in a dedicated **sandbox cwd** (a fixed dir under the OS temp
- * dir) — never the user's project — so it can't read or mutate real work. The
- * dir is stable (not per-call) on purpose: agy/grok remember "trusted folder"
- * per path, so a stable sandbox is trusted once (via the primer Enter below)
- * and every later scrape skips straight to the prompt.
- *
- * This drives a slash command that renders synchronously — it does NOT run an
- * LLM turn — so it is 0-token and consumes no quota, matching the
- * "user-triggered usage read" carve-out in the AI Provider Usage Policy.
- *
- * Read-only capture: we read the PTY output buffer from a variable and kill the
- * child; the TUI never writes a response file (that pattern is `tuiPromptRunner`
- * for LLM tasks — not applicable to a slash command).
+ * Some CLIs expose subscription quota ONLY through an interactive slash command (`/usage` for agy, `/usage show` for grok); their `--print` mode treats `/usage` as an LLM prompt (wrong data, burns tokens).
+ * This is the headless-TUI analogue of `claudeCodeUsage.js` (Claude Code honors `/usage` in print mode). It runs in a dedicated **sandbox cwd** under the OS temp dir, never the user's project, and the dir is
+ * stable on purpose: agy/grok remember "trusted folder" per path, so it is trusted once (via the primer Enter) and later scrapes skip to the prompt.
+ * A slash command renders synchronously and runs NO LLM turn, so it is 0-token (the "user-triggered usage read" carve-out in the AI Provider Usage Policy). Capture is read-only: the PTY buffer is read from a
+ * variable and the child killed (no response file; that is `tuiPromptRunner` for LLM tasks).
  */
 
 // Fixed, reused sandbox cwd so the "trust this folder?" gate is answered once.
@@ -53,18 +31,14 @@ export const USAGE_SANDBOX_DIR = join(tmpdir(), 'portos-provider-usage-sandbox')
 const PTY_COLS = 200;
 const PTY_ROWS = 50;
 
-// Timing defaults (ms). The TUI needs a moment to sign in and paint its banner
-// before it accepts input; after the command we wait for the rendered panel to
-// stop changing (output-idle) rather than a fixed sleep, bounded by a hard cap.
+// Timing defaults (ms): the TUI needs a moment to sign in and paint before accepting input; after the command we wait for output-idle rather than a fixed sleep, bounded by a hard cap.
 const DEFAULT_READY_CAP_MS = 15000;  // cap on waiting for the banner/gate to paint + go idle
 const DEFAULT_PRIMER_CAP_MS = 3000;  // cap on waiting for the trust/menu dismissal to repaint
 const DEFAULT_IDLE_MS = 2500;        // "screen finished rendering" = no output for this long
 const DEFAULT_RENDER_CAP_MS = 12000; // hard cap on waiting for the panel after the command
 const DEFAULT_HARD_TIMEOUT_MS = 45000; // absolute backstop for the whole scrape
 
-// Bounded tail for the PTY capture: slice back to CAP once it exceeds HEADROOM
-// (slicing on a headroom margin, not every chunk, keeps the common case free of
-// repeated reallocations). 512KB holds many repaints of a quota panel.
+// Bounded tail for the PTY capture: slice back to CAP once it exceeds HEADROOM (not every chunk, avoiding repeated reallocations). 512KB holds many repaints of a quota panel.
 const RAW_BUFFER_CAP = 512 * 1024;
 const RAW_BUFFER_HEADROOM = RAW_BUFFER_CAP * 2;
 
@@ -75,14 +49,8 @@ const RAW_BUFFER_HEADROOM = RAW_BUFFER_CAP * 2;
  * @param {string} opts.command — TUI binary (`agy`, `grok`).
  * @param {string[]} [opts.args] — extra argv (default none).
  * @param {string} opts.slashCommand — e.g. `/usage` or `/usage show`.
- * @param {object} [opts.env] — extra env vars merged over `process.env` (the
- *   matched provider's `envVars`, so a provider that authenticates via env
- *   scrapes with the same config a normal run uses).
- * @param {RegExp} [opts.readyMarker] — when set, the render phase does not
- *   treat output-idle as "done" until this pattern appears in the captured
- *   screen. Guards against a TUI that renders a loading row (which would arm
- *   the plain idle heuristic) before its real panel arrives — completion then
- *   requires the panel itself, not merely "some output then quiet."
+ * @param {object} [opts.env] — extra env merged over `process.env` (the matched provider's `envVars`, so env-authenticated providers scrape with their normal config).
+ * @param {RegExp} [opts.readyMarker] — when set, output-idle isn't "done" until this pattern appears in the screen, guarding a TUI that renders a loading row before its real panel.
  * @param {string} [opts.sandboxDir] — cwd override (default USAGE_SANDBOX_DIR).
  * @param {number} [opts.readyMs] @param {number} [opts.primerCapMs]
  * @param {number} [opts.idleMs] @param {number} [opts.renderCapMs]
@@ -101,12 +69,8 @@ export async function scrapeTuiUsage({
   idleMs = DEFAULT_IDLE_MS,
   renderCapMs = DEFAULT_RENDER_CAP_MS,
   timeoutMs = DEFAULT_HARD_TIMEOUT_MS,
-  // True when `command` is a credential-bootstrap WRAPPER rather than the
-  // harness itself. node-pty's `kill()` signals its direct child's pid alone,
-  // so a wrapper that forks would leave the harness rendering into a PTY nobody
-  // reads any more — and this scrape's every exit runs through killPty (#7496).
-  // forkpty already makes the PTY child a session leader whose descendants share
-  // its group, so the group signal is exact.
+  // True when `command` is a credential-bootstrap WRAPPER, not the harness: node-pty's `kill()` signals its direct child's pid alone, so a forking wrapper would leave the harness rendering into an unread PTY
+  // (every exit runs through killPty, #7496). forkpty makes the child a session leader whose descendants share its group, so the group signal is exact.
   processGroup = false,
 } = {}) {
   if (!command || typeof command !== 'string') throw new Error('scrapeTuiUsage: command is required');
@@ -114,11 +78,7 @@ export async function scrapeTuiUsage({
 
   mkdirSync(sandboxDir, { recursive: true });
 
-  // TERM/COLORTERM go in `extra` so the PTY is always a truecolor xterm
-  // regardless of the provider's own env (mirrors tuiPromptRunner.js). The PWD
-  // pin keeps the scrape in the throwaway sandbox instead of opening the PortOS
-  // checkout as a project. No provider record here — this drives a slash command,
-  // not a model, so there is nothing for the OpenCode layer to declare.
+  // TERM/COLORTERM go in `extra` so the PTY is always a truecolor xterm (mirrors tuiPromptRunner.js); the PWD pin keeps the scrape in the sandbox, not the PortOS checkout. No provider record: this drives a slash command, not a model.
   const env = buildCliChildEnv({
     before: extraEnv,
     cwd: sandboxDir,
@@ -134,11 +94,7 @@ export async function scrapeTuiUsage({
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
   }
 
-  // Keep only a bounded tail of the capture: the quota panel renders near the
-  // end and the parsers take the latest value per key, so the tail is what
-  // matters. Without this, a runaway/noisy TUI that repaints continuously could
-  // grow `raw` to hundreds of MB before the render cap / hard timeout and trip
-  // PM2's memory restart just from loading Usage (mirrors tuiPromptRunner's cap).
+  // Keep a bounded tail: the quota panel renders near the end and parsers take the latest value per key; a noisy TUI repainting continuously could otherwise grow `raw` to hundreds of MB and trip PM2's memory restart (mirrors tuiPromptRunner's cap).
   let raw = '';
   let lastDataAt = Date.now();
   let exited = false;
@@ -149,8 +105,7 @@ export async function scrapeTuiUsage({
   });
   pty.onExit(() => { exited = true; });
 
-  // 'SIGHUP' is node-pty's own POSIX default for `kill()`; naming it keeps the
-  // signal identical while letting killProcessTree take the group path.
+  // 'SIGHUP' is node-pty's POSIX default for `kill()`; naming it keeps the signal identical while letting killProcessTree take the group path.
   const killPty = () => { try { if (!exited) killProcessTree(pty, 'SIGHUP', { processGroup }); } catch { /* already gone */ } };
 
   // Absolute backstop so a wedged TUI can't hang the request forever.
@@ -159,23 +114,10 @@ export async function scrapeTuiUsage({
   let timedOut = false;
   hardStop.then(() => { timedOut = true; });
 
-  // Wait until the screen stops changing — no PTY output for `idleMs` — bounded
-  // by `capMs`. Each await also races the hard timeout, so a TUI that never goes
-  // idle still returns when hardStop resolves. Callers reset `lastDataAt` right
-  // after a keystroke so this measures idle relative to that input, not to stale
-  // banner output from an earlier phase.
-  //
-  // `requireOutput` guards the render phase: after submitting the command, a
-  // slow sign-in / quota lookup can stay silent for >idleMs, and without this
-  // the initial silence would read as "done" and kill the TUI before its panel
-  // ever renders. When set, idle can only mean completion once at least one
-  // chunk has arrived since the wait began (else we wait out `capMs`, then the
-  // hard-timeout backstop). The primer phase leaves it off so an already-trusted
-  // sandbox (which emits nothing) returns promptly.
-  // `ready` (optional) is a final predicate on the captured screen that must
-  // also hold before idle counts as done — used to require the actual quota
-  // panel, not just any post-submit output. Only evaluated when idle is already
-  // reached, so its stripAnsi cost is paid at most once per idle poll.
+  // Wait until the screen stops changing (no PTY output for `idleMs`), bounded by `capMs`; each await also races the hard timeout. Callers reset `lastDataAt` after a keystroke so idle is measured from that input.
+  // `requireOutput` guards the render phase: a slow sign-in/quota lookup can stay silent for >idleMs, and the initial silence would read as "done" and kill the TUI before its panel renders; when set, idle counts
+  // only after at least one chunk arrived since the wait began (else wait out `capMs`, then the hard-timeout backstop). The primer phase leaves it off so an already-trusted sandbox (which emits nothing) returns promptly.
+  // `ready` (optional) is a final predicate on the screen that must also hold (the actual quota panel, not any post-submit output); evaluated only once idle is reached, so its stripAnsi cost is paid at most once per poll.
   const waitForIdle = async (capMs, { requireOutput = false, ready = null } = {}) => {
     const start = Date.now();
     const deadline = start + capMs;
@@ -188,23 +130,14 @@ export async function scrapeTuiUsage({
   };
 
   try {
-    // Wait for the TUI's initial paint (banner, sign-in spinner, and the
-    // trust/menu gate) to finish and go input-idle before touching the keyboard.
-    // A fixed sleep would fire the primer Enter before a slow startup's gate had
-    // rendered — the keystroke would be dropped or land mid-animation. Gating on
-    // output-idle instead means we press Enter exactly when the gate is up and
-    // waiting for input, however long sign-in took.
+    // Wait for the initial paint (banner, sign-in spinner, trust/menu gate) to go input-idle before touching the keyboard: a fixed sleep could fire the primer Enter before a slow startup's gate rendered and drop it.
     await waitForIdle(readyCapMs, { requireOutput: true });
 
-    // Dismiss the first-run gate: agy shows "Do you trust this folder?" (default
-    // "Yes, I trust"), grok shows a start menu (default highlighted item). One
-    // Enter clears either. On an already-trusted sandbox there is no gate and
-    // this is a harmless empty-prompt submit. Wait for the dismissal to repaint.
+    // Dismiss the first-run gate (agy: "Do you trust this folder?", grok: start menu): one Enter clears either, and on a trusted sandbox it is a harmless empty submit. Wait for the repaint.
     if (!exited) { pty.write(SUBMIT_KEY); lastDataAt = Date.now(); }
     await waitForIdle(primerCapMs);
 
-    // Bracketed-paste the command so multi-word input (`/usage show`) lands
-    // atomically, then submit and wait for the panel to render.
+    // Bracketed-paste the command so multi-word input (`/usage show`) lands atomically, then submit and wait for the panel.
     if (!exited) {
       pty.write(`\x1b[200~${slashCommand}\x1b[201~`);
       await Promise.race([sleep(400), hardStop]);

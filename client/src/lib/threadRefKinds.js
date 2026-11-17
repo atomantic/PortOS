@@ -4,9 +4,9 @@
  *
  * Named exports only — `threadRefLabel`/`threadRefUrl` (what the client renders with) and
  * `THREAD_REF_KIND_IDS` / `EXTERNAL_THREAD_REF_KINDS` (what the Threads tab's ref picker enumerates
- * and how `ThreadRefChip` picks `<a>` over `<Link>`). `pages/CatalogIngredient.jsx` renders its
- * inbound-ref chips through `threadRefUrl`/`threadRefLabel` here instead of its own local switch, so
- * the repo has exactly one kind→route table.
+ * and how `ThreadRefChip` picks `<a>` over `<Link>`). `components/catalog/CatalogUniversePanel.jsx`
+ * renders the catalog ingredient's inbound-ref chips through `threadRefUrl` here instead of its own
+ * local switch, so the repo has exactly one kind→route table.
  */
 
 /**

@@ -12,6 +12,8 @@ const LENGTH_LABELS = { 0.125: '⅛ s', 0.25: '¼ s', 0.5: '½ s', 1: '1 s', 2: 
 const REPEAT_COUNTS = [2, 3, 4, 6, 8, 12, 16, 24, 32, 48, MUSIC_VIDEO_GLITCH_REPEAT_LIMIT];
 const REPEAT_EVERY_SEC = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8];
 const EDGE_LABELS = { left: 'Left edge', right: 'Right edge', top: 'Top edge', bottom: 'Bottom edge' };
+/** The style a newly added effect starts as. */
+export const NEW_GLITCH_STYLE = 'color-block';
 const DEFAULT_LEAK_COLOR = '#ff4f8a';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const selectCls = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
@@ -143,7 +145,7 @@ export default function SceneGlitches({ fieldId, scene, onChange, disabled = fal
     ? round3(scene.endSec - scene.startSec) : 10;
   const save = (next) => onChange({ glitches: next.length ? next : null });
   // A new glitch lands halfway through the shot, where it is easy to find and move.
-  const add = () => save([...glitches, { atSec: round3(Math.round(spanSec / 2 / STEP_SEC) * STEP_SEC), style: 'color-block' }]);
+  const add = () => save([...glitches, { atSec: round3(Math.round(spanSec / 2 / STEP_SEC) * STEP_SEC), style: NEW_GLITCH_STYLE }]);
   const recipe = homeMovieGlitches(spanSec);
   const btnCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[28px] disabled:opacity-50';
   return (

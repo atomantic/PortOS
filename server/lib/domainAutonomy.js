@@ -1,38 +1,22 @@
 /**
  * Per-domain autonomy guardrails (pure helpers).
  *
- * Per-domain autonomy guardrails (pure). `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES`
- * (`off`/`dry-run`/`execute`), `getDomainMode(config, id)`, and `normalizeDomainAutonomy(raw)` to
- * coerce a hand-edited/partial map. Default per domain is `execute` (reproduces pre-#711 behavior, so
- * no migration needed). Also `CREATIVE_DOMAIN`/`getCreativeAutonomyMode(config)` (#2183) — the
- * Creative Director orchestrator domain, kept out of `DOMAIN_IDS` and defaulting to mirror the `cos`
- * mode.
+ * `AUTONOMY_DOMAINS`/`DOMAIN_IDS`/`DOMAIN_MODES`, `getDomainMode(config, id)` and
+ * `normalizeDomainAutonomy(raw)` split the global autonomy posture into per-domain modes:
+ * `off` (leave work for explicit user action), `dry-run` (surface what WOULD happen without the
+ * side effect) and `execute` (act automatically). The default is `execute`, reproducing pre-#711
+ * behavior, so an absent stored config needs no migration. Also `CREATIVE_DOMAIN` /
+ * `getCreativeAutonomyMode(config)` (#2183), kept out of `DOMAIN_IDS` and mirroring `cos`.
  *
- * Splits PortOS's single global autonomy posture into independent per-domain
- * knobs. Each domain is one of three modes:
- *
- *   - `off`      — never act automatically; leave the work for explicit user action.
- *   - `dry-run`  — compute what WOULD happen and surface it, but don't commit the
- *                  side effect (don't file, don't store-as-active, don't spawn, don't send).
- *   - `execute`  — act automatically (the historical default behavior).
- *
- * The default for every domain is `execute`, which exactly reproduces pre-#711
- * behavior — so an install with no stored `domainAutonomy` config needs no
- * migration; the absent-key path resolves to `execute`.
- *
- * These helpers are side-effect-free: callers pass in the CoS config (or a raw
- * domainAutonomy map) and read back a normalized mode. The execution-point
- * gating (brain.js, memoryExtractor.js, cos.js, telegram.js) lives at each call
- * site; this module only owns the vocabulary and normalization.
+ * Side-effect-free: execution-point gating lives at each call site.
  */
 
 export const DOMAIN_MODES = ['off', 'dry-run', 'execute'];
 
 export const DEFAULT_DOMAIN_MODE = 'execute';
 
-// The four domains the issue (#711) carves the global posture into. `id` is the
-// stored key; `label`/`description` drive the settings UI. Keep this list as the
-// single source of truth — the client mirrors it for rendering.
+// `id` is the stored key; `label`/`description` drive the settings UI. Single source of truth;
+// the client mirrors it.
 export const AUTONOMY_DOMAINS = [
   {
     id: 'brain',
@@ -61,9 +45,7 @@ export const DOMAIN_IDS = AUTONOMY_DOMAINS.map((d) => d.id);
 const isValidMode = (mode) => DOMAIN_MODES.includes(mode);
 
 /**
- * Coerce a raw (possibly hand-edited / legacy / partial) domainAutonomy map into
- * a complete, valid `{ [domainId]: mode }` object. Unknown keys are dropped;
- * missing or invalid values fall back to `execute`.
+ * Coerce a raw (hand-edited/partial) map to a complete `{ [domainId]: mode }`: unknown keys dropped, missing/invalid become `execute`.
  *
  * @param {unknown} raw
  * @returns {Record<string, string>}
@@ -79,9 +61,7 @@ export function normalizeDomainAutonomy(raw) {
 }
 
 /**
- * Read a single domain's mode from a CoS config object. Tolerates a missing
- * `config`, a missing `domainAutonomy`, and an unknown/invalid stored value —
- * all resolve to `execute` so absent config reproduces historical behavior.
+ * A domain's mode from a CoS config; missing config or an invalid stored value resolves to `execute`.
  *
  * @param {object|null|undefined} config - CoS config (has optional `domainAutonomy`)
  * @param {string} domainId - one of DOMAIN_IDS
@@ -92,16 +72,10 @@ export function getDomainMode(config, domainId) {
   return isValidMode(candidate) ? candidate : DEFAULT_DOMAIN_MODE;
 }
 
-// The `creative` autonomy domain (#2183) governs the Creative Director
-// orchestrator's gated tool dispatch (universe/story/pipeline/media generators an
-// agent may drive autonomously). It is deliberately kept SEPARATE from the four
-// normalized core domains above — it is NOT in DOMAIN_IDS, so it carries no forced
-// `execute` default and no parallel budget/usage ledger, and existing budget/UI
-// tests are untouched. Its default MIRRORS the `cos` domain's mode so installs
-// that already tuned CoS auto-run get consistent orchestrator behavior with no
-// migration; an explicit stored `domainAutonomy.creative` value (settable by a
-// future settings UI) overrides the mirror. Decision recorded for review: keep
-// separate + mirror cos rather than folding into `cos` outright, so the knob can
+// The `creative` domain (#2183) governs the Creative Director orchestrator's gated tool dispatch.
+// Deliberately NOT in DOMAIN_IDS: no forced `execute` default and no budget/usage ledger. Its
+// default MIRRORS `cos` so installs that tuned CoS auto-run behave consistently with no
+// migration; an explicit `domainAutonomy.creative` overrides. Kept separate so the knob can
 // diverge later without another migration.
 export const CREATIVE_DOMAIN_ID = 'creative';
 
@@ -113,9 +87,7 @@ export const CREATIVE_DOMAIN = Object.freeze({
 });
 
 /**
- * Resolve the `creative` domain's mode (off | dry-run | execute). An explicit,
- * valid `domainAutonomy.creative` value wins; otherwise the mode MIRRORS the
- * `cos` domain (which itself defaults to `execute` for an absent config).
+ * The `creative` domain's mode: a valid explicit `domainAutonomy.creative` wins, else mirrors `cos`.
  *
  * @param {object|null|undefined} config - CoS config
  * @returns {'off'|'dry-run'|'execute'}

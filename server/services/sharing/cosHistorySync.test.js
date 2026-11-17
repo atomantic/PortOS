@@ -40,7 +40,7 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
 }));
 // cosAgentIndex is dynamic-imported by the receiver to merge the agentId→date index.
 // Spy it so the merge is observable AND can't write the real data/cos index.
-vi.mock('../cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockResolvedValue(0) }));
+vi.mock('../cosAgentIndex.js', () => ({ addAgentArchivesToIndex: vi.fn().mockResolvedValue(0), invalidateArchivedRecord: vi.fn() }));
 
 import {
   buildCosHistoryManifest,
@@ -48,7 +48,7 @@ import {
 import { diffCosHistoryManifestAgainstLocal, syncCosHistoryFromPeer } from './peerCosSync.js';
 import { getPeers } from '../instances.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
-import { addAgentArchivesToIndex } from '../cosAgentIndex.js';
+import { addAgentArchivesToIndex, invalidateArchivedRecord } from '../cosAgentIndex.js';
 
 // A chunked body with no Content-Length that never ends; only the streaming
 // cap in readPeerBody can stop it.
@@ -83,6 +83,7 @@ beforeEach(async () => {
   vi.mocked(peerFetch).mockReset();
   vi.mocked(getPeers).mockResolvedValue([PEER]);
   vi.mocked(addAgentArchivesToIndex).mockClear();
+  vi.mocked(invalidateArchivedRecord).mockClear();
 });
 
 afterEach(async () => {
@@ -222,6 +223,9 @@ describe('syncCosHistoryFromPeer', () => {
     expect(addAgentArchivesToIndex).toHaveBeenCalledTimes(1);
     const pairs = vi.mocked(addAgentArchivesToIndex).mock.calls[0][0];
     expect(pairs).toContainEqual({ date: '2026-06-20', agentId: 'agent-abc' });
+    // A replaced metadata.json (e.g. a rating added on the peer) drops the cached
+    // archive record so the Learning tab stats re-read it (#16593).
+    expect(vi.mocked(invalidateArchivedRecord).mock.calls).toEqual([['agent-abc']]);
   });
 
   it('reconciles the index from the manifest even when every file is already present (crash-recovery)', async () => {

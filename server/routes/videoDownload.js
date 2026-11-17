@@ -13,6 +13,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest, videoDownloadSchema, isPaginationRequested, paginateArray,
@@ -36,9 +37,10 @@ router.post('/', asyncHandler(async (req, res) => {
 // `downloads` is a distinct first segment from a job's `:jobId` (whose routes
 // are always two-segment — `:jobId/events`, `:jobId/cancel`), so no collision.
 router.get('/downloads', asyncHandler(async (req, res) => {
+  const page = validateRequest(paginationQuerySchema, req.query);
   const downloads = await listDownloads();
-  if (!isPaginationRequested(req.query)) return res.json(downloads);
-  res.json(paginateArray(downloads, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  if (!isPaginationRequested(page)) return res.json(downloads);
+  res.json(paginateArray(downloads, page, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.delete('/downloads/:id', asyncHandler(async (req, res) => {

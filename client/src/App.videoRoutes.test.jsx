@@ -4,7 +4,7 @@ import { MemoryRouter, Outlet, useLocation } from 'react-router';
 vi.mock('./components/Layout', () => ({ default: () => <Outlet /> }));
 vi.mock('./pages/Dashboard', () => ({ default: () => null }));
 vi.mock('./hooks/useCatalogTypes.jsx', () => ({ CatalogTypesProvider: ({ children }) => children }));
-vi.mock('./services/api', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})), PORTOS_APP_ID: 'portos' }));
+vi.mock('./services/apiSystem.js', () => ({ getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })), updateSettings: vi.fn(), getSelfInstance: vi.fn(() => Promise.resolve({})) }));
 vi.mock('./pages/MediaGen', () => ({ default: () => (
   <>
     <div data-testid="media-gen-shell" />

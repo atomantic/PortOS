@@ -37,9 +37,12 @@ const { refreshSlot, refreshOptions } = vi.hoisted(() => ({
 vi.mock('../../../hooks/useForgeScopeRefresh', () => ({
   default: (options) => { refreshOptions.current = options; return refreshSlot; },
 }));
+const { getInstanceFeatures } = vi.hoisted(() => ({
+  getInstanceFeatures: vi.fn().mockResolvedValue({ features: {} }),
+}));
 vi.mock('../../../services/api', () => ({
   getAppPullRequests: vi.fn(),
-  getInstanceFeatures: vi.fn().mockResolvedValue({ features: {} }),
+  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
   resolveAppPullRequest: vi.fn(),
   reviewAppPullRequest: vi.fn(),
   doReviewAppPullRequest: vi.fn(),
@@ -49,6 +52,12 @@ vi.mock('../../../services/api', () => ({
   // Defaults for its seed and the reviewer Model column's options.
   getCodeReviewDefaults: vi.fn(),
   getLocalLlmStatus: vi.fn(),
+}));
+
+// useInstanceFeatures reads apiSystem.js directly (#16562), so wire the same mock there.
+vi.mock('../../../services/apiSystem.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getInstanceFeatures: (...args) => getInstanceFeatures(...args),
 }));
 
 import * as api from '../../../services/api';

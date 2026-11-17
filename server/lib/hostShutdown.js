@@ -2,39 +2,14 @@
  * Host-shutdown signal + durable marker.
  *
  * Tells "PortOS was restarted out from under a running agent" apart from "the agent failed" (#3202).
- * `markHostShuttingDown()` / `isHostShuttingDown()` are the in-process latch the SIGTERM/SIGINT
- * handler sets first thing; `shouldAbandonForHostShutdown({sentinelPresent,terminatedByUser,paused})`
- * keeps every spawn path on the same preserve-vs-finalize policy.
- * `writeHostShutdownMarker({agentIds,signal})` / `readHostShutdownMarker()` /
- * `clearHostShutdownMarker()` persist that verdict to `data/cos/host-shutdown.json` so the NEXT boot's
- * orphan sweep can requeue those agents as *interrupted* — no orphan-retry charge, no 30-minute
- * cooldown. All non-throwing: a missing marker degrades to the ordinary orphan path.
+ * An in-process latch (set first thing by the SIGTERM/SIGINT handler) plus a marker at
+ * `data/cos/host-shutdown.json` let the NEXT boot's orphan sweep requeue live agents as
+ * *interrupted* — no orphan-retry charge, no 30-minute cooldown.
  *
- * `portos-server` is restarted routinely — pm2's memory ceiling, a manual
- * `pm2 restart`, a code deploy. pm2's TreeKill signals every descendant of the
- * server, so a CoS TUI agent whose PTY the server owns dies WITH the server
- * even though the durable `portos-cos` runner never went down (issue #3202).
- *
- * That teardown is an INTERRUPTION, not an outcome, and PortOS has to be able to
- * tell the two apart later — after the process that witnessed it is gone. Two
- * signals do that:
- *
- *   1. **In-process flag** (`markHostShuttingDown` / `isHostShuttingDown`) —
- *      read by the TUI spawner's PTY-exit handler so a PTY that vanishes mid
- *      shutdown is never finalized as a completed run. Sync, allocation-free,
- *      and safe to set first thing inside a signal handler.
- *   2. **Durable marker** (`writeHostShutdownMarker`) — a small JSON file naming
- *      the agents that were live when the signal arrived. The next boot's orphan
- *      sweep reads it to classify those agents as *interrupted by a host
- *      restart* rather than as ordinary orphans, so they don't burn orphan-retry
- *      budget or trip the 30-minute orphan cooldown for a fault they didn't
- *      cause.
- *
- * The marker is deliberately tiny and best-effort: it is written inside the
- * graceful-shutdown window (which has a hard 10s ceiling), so every function
- * here is non-throwing and returns a falsy/empty result rather than propagating
- * an I/O failure into shutdown. A missing marker simply degrades recovery to the
- * pre-existing orphan path — the old, safe behavior.
+ * pm2's TreeKill signals every descendant of the server, so a CoS TUI agent whose PTY the server
+ * owns dies WITH the server while the durable `portos-cos` runner stays up. The marker is written
+ * inside the graceful-shutdown window (hard 10s ceiling), so every function is non-throwing and
+ * degrades to the ordinary orphan path.
  */
 
 import { join } from 'path';
@@ -45,25 +20,13 @@ import { isNonBlankStr } from './textUtils.js';
 /** Completion reason recorded for a run the host restart tore down. */
 export const HOST_SHUTDOWN_REASON = 'host-shutdown';
 
-/**
- * Marker file. Lives beside the other CoS state so a data wipe clears it too.
- *
- * Resolved lazily rather than as a module-level constant: this module is
- * imported by the TUI spawner, whose suites stub `fileUtils` with a partial
- * `PATHS`. A `join(PATHS.cos, …)` evaluated at import time throws there and
- * takes the whole suite down with it — for a path most callers never touch.
- */
+// Resolved lazily: the TUI spawner's suites stub `fileUtils` with a partial `PATHS`, so import-time `join` would throw.
 export const hostShutdownMarkerPath = () => join(PATHS.cos, 'host-shutdown.json');
 
-// Process-local. Never persisted — a fresh process is by definition not the one
-// that was shutting down, so this always starts false.
+// Process-local, never persisted: a fresh process is not the one that was shutting down.
 let shuttingDown = false;
 
-/**
- * Latch the in-process shutdown flag. Idempotent; call it as the FIRST thing in
- * a SIGTERM/SIGINT handler, before any await, so anything that races the
- * teardown (a PTY exiting, a finalize hook firing) already sees it.
- */
+/** Idempotent; call FIRST in a SIGTERM/SIGINT handler, before any await, so racing teardown sees it. */
 export function markHostShuttingDown() {
   shuttingDown = true;
 }
@@ -73,14 +36,7 @@ export function isHostShuttingDown() {
   return shuttingDown;
 }
 
-/**
- * Should an agent exit be preserved for restart recovery instead of finalized?
- *
- * Completion, user termination, and pause are all authoritative outcomes that
- * retain their normal handling even when the host shutdown latch is set. Keep
- * this policy shared by every spawn path so their recovery behavior cannot
- * drift independently.
- */
+/** Preserve for restart recovery instead of finalizing; completion, user termination and pause keep normal handling. */
 export function shouldAbandonForHostShutdown({
   sentinelPresent = false,
   terminatedByUser = false,
@@ -89,15 +45,13 @@ export function shouldAbandonForHostShutdown({
   return shuttingDown && !sentinelPresent && !terminatedByUser && !paused;
 }
 
-/**
- * Reset the flag. Test-only — production never un-shuts-down.
- */
+/** Reset the flag. Test-only. */
 export function resetHostShutdownFlagForTests() {
   shuttingDown = false;
 }
 
 /**
- * Persist the marker naming the agents that were live at shutdown.
+ * Persist the marker naming the agents live at shutdown; resolves true when it landed on disk.
  *
  * @param {object} params
  * @param {string[]} params.agentIds - ids of agents running when the signal landed
@@ -105,16 +59,11 @@ export function resetHostShutdownFlagForTests() {
  * @returns {Promise<boolean>} true when the marker landed on disk
  */
 export async function writeHostShutdownMarker({ agentIds = [], signal = null } = {}) {
-  // UNION with any marker the previous shutdown left unconsumed, rather than
-  // replacing it. A boot that is killed before its orphan sweep runs (the sweep
-  // is a couple of seconds in) leaves the prior marker in place; a plain
-  // overwrite would drop those agents and silently demote them to ordinary
-  // orphans — the exact penalty this marker exists to prevent. Consuming the
-  // marker is the sweep's job, so anything still here has not been recovered yet.
+  // UNION with any unconsumed marker: a boot killed before its orphan sweep leaves the prior marker
+  // in place, and overwriting it would demote those agents to ordinary orphans.
   const prior = await readHostShutdownMarker();
   const ids = [...new Set([...(prior?.agentIds || []), ...agentIds.filter(isNonBlankStr)])];
-  // Nothing was running — don't leave a marker the next boot has to reason
-  // about (and don't overwrite a prior one; a marker with no agents is noise).
+  // Nothing running: leave no marker (and don't overwrite a prior one).
   if (ids.length === 0) return false;
   return atomicWrite(hostShutdownMarkerPath(), { at: new Date().toISOString(), signal, agentIds: ids })
     .then(
@@ -124,15 +73,10 @@ export async function writeHostShutdownMarker({ agentIds = [], signal = null } =
 }
 
 /**
- * Read the marker left by the previous process. Returns null when there is
- * none, otherwise `{ at, signal, agentIds }`.
- *
- * `agentIds` is ALWAYS an array of non-empty strings — that's the one field
- * with a production consumer, and boot recovery runs before everything else, so
- * a truncated/garbled marker has to degrade to "no agents were interrupted"
- * rather than throw. `allowArray: false` only rejects an unparseable file or a
- * root array; a bare JSON scalar (a truncated/garbled marker) still parses, so
- * this also checks `typeof raw === 'object'` before treating it as a marker.
+ * Marker left by the previous process, or null; otherwise `{ at, signal, agentIds }`.
+ * `agentIds` is ALWAYS an array of non-empty strings: boot recovery runs first, so a garbled marker
+ * must degrade to "no agents interrupted" rather than throw. `allowArray: false` does not reject a
+ * bare JSON scalar, hence the `typeof raw === 'object'` check.
  */
 export async function readHostShutdownMarker() {
   const raw = await readJSONFile(hostShutdownMarkerPath(), null, { logError: false, allowArray: false });
@@ -140,12 +84,7 @@ export async function readHostShutdownMarker() {
   return { ...raw, agentIds: Array.isArray(raw.agentIds) ? raw.agentIds.filter(isNonBlankStr) : [] };
 }
 
-/**
- * Remove the marker once boot recovery has consumed it. Non-throwing: a marker
- * that can't be removed would only cause the NEXT boot to re-classify agents
- * that are already settled, which the orphan sweep tolerates (it only ever looks
- * at agents still marked `running`).
- */
+/** Non-throwing: a leftover marker is tolerated, since the orphan sweep only looks at agents still `running`. */
 export async function clearHostShutdownMarker() {
   await rm(hostShutdownMarkerPath(), { force: true }).catch((err) => {
     console.error(`❌ Failed to clear host-shutdown marker: ${err.message}`);

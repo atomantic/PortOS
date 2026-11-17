@@ -1,3 +1,4 @@
+import { RETIRED_CONFIG_KEYS } from '../lib/cosRetiredConfigKeys.js';
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -63,6 +64,17 @@ describe('cosState persistence', () => {
     expect(readJson(CONFIG_PATH).persistentMindPrompt.instructions).toBe('Keep my voice.');
   });
 
+  it('loads and re-saves a stored config that still carries retired keys', async () => {
+    writeConfig({ maxConcurrentAgents: 7, rehabilitationGracePeriodDays: 14, goalsFile: 'GOALS.md', maxProcessMemoryMb: 4096, autoFixThresholds: { maxLinesChanged: 10 } });
+    const store = await freshModule();
+    const config = await store.getConfig();
+    expect(config.maxConcurrentAgents).toBe(7);
+    for (const key of RETIRED_CONFIG_KEYS) expect(config).not.toHaveProperty(key);
+    await store.saveConfig(config);
+    for (const key of RETIRED_CONFIG_KEYS) expect(readJson(CONFIG_PATH)).not.toHaveProperty(key);
+    expect(readJson(CONFIG_PATH).maxConcurrentAgents).toBe(7);
+  });
+
   // The regression: a `}{` heuristic declared VALID state files corrupt as soon
   // as any stored string held that byte pair (a slashdo doc quoting
   // `{value}{ — project|global}`, a diff carrying JSX), and the fallback reset
@@ -114,20 +126,15 @@ describe('cosState persistence', () => {
     });
   });
 
-  it('preserves durable merge leases across reloads and does not default malformed ownership', async () => {
+  it('returns only the agent records and trust for the merge admission safety read', async () => {
     const lease = { kind: 'agent', agentId: 'parent', repository: 'github.com/example/repo', token: 'example-token' };
-    const preparations = { [lease.repository]: [{ owner: 'agent:parent', token: 'turn-token', grantedAt: 123 }] };
-    writeState({ agents: {}, mergeAdmissions: { [lease.repository]: lease }, mergePreparations: preparations });
+    writeState({ agents: {}, mergeAdmissions: { [lease.repository]: lease }, mergePreparations: {} });
     let store = await freshModule();
     await store.saveState(await store.loadState());
     store = await freshModule();
-    expect(await store.readMergeAdmissionStateForSafetyCheck()).toEqual({
-      trusted: true, agents: {}, mergeAdmissions: { [lease.repository]: lease }, mergePreparations: preparations,
-    });
-    writeState({ agents: {}, mergeAdmissions: {}, mergePreparations: null });
-    expect((await store.readMergeAdmissionStateForSafetyCheck()).mergePreparations).toBeNull();
-    writeState({ agents: {}, mergeAdmissions: null });
-    expect((await store.readMergeAdmissionStateForSafetyCheck()).mergeAdmissions).toBeNull();
+    expect(await store.readMergeAdmissionStateForSafetyCheck()).toEqual({ trusted: true, agents: {} });
+    // The durable lease fields still round-trip through the state file.
+    expect(readJson(STATE_PATH).mergeAdmissions).toEqual({ [lease.repository]: lease });
     writeFileSync(STATE_PATH, 'broken');
     expect((await store.readMergeAdmissionStateForSafetyCheck()).trusted).toBe(false);
   });

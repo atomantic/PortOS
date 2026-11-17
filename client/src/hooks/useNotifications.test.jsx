@@ -19,7 +19,8 @@ const socket = vi.hoisted(() => ({
   off: vi.fn()
 }));
 
-vi.mock('../services/api', () => api);
+vi.mock('../services/apiSystem.js', () => api);
+vi.mock('../services/apiReview.js', () => ({ getReviewQueue: api.getReviewQueue }));
 vi.mock('../services/socket', () => ({ default: socket }));
 
 import NotificationDropdown from '../components/NotificationDropdown.jsx';

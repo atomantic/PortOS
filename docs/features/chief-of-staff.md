@@ -420,7 +420,6 @@ Nothing picks a tier automatically — not the description, priority, context si
 | healthCheckIntervalMs | 900000 | Health check interval (15 minutes) |
 | maxConcurrentAgents | 3 | Max parallel agents (global) |
 | maxConcurrentAgentsPerProject | 2 | Max parallel agents per project |
-| maxProcessMemoryMb | 2048 | Memory alert threshold |
 | maxTotalProcesses | 50 | Process-count alert threshold |
 | alwaysOn | false | Start on server boot (`autoStart` is a legacy compatibility alias). Off by default so a never-configured install does not begin autonomous LLM-backed work on its own |
 | improvementEnabled | true | Allow improvement work for PortOS and managed apps |
@@ -482,9 +481,7 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | GET /api/cos/health | Health status |
 | POST /api/cos/health/check | Run health check |
 | GET /api/cos/agents | List agents |
-| POST /api/cos/agents/:id/terminate | Terminate agent |
 | GET /api/cos/feedback/stats | Aggregate live and archived agent ratings |
-| GET /api/cos/reports | List reports |
 | GET /api/cos/learning | Get learning insights |
 | GET /api/cos/digest | Get weekly digest |
 | GET /api/cos/mind/journal | Persistent Mind decision journal, filterable by `kind` and `status` |
@@ -498,13 +495,11 @@ Storage, retention and the privacy posture are in the header of [`persistentMind
 | cos-report-summary | Generate daily summary |
 | cos-self-improvement | Analyze and suggest improvements |
 
-## Hybrid memory search, execution lanes and local models
+## Hybrid memory search and local models
 
-Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/memoryBM25.js`) with vector search by Reciprocal Rank Fusion, weighted 40% BM25 and 60% vector. `server/services/eventScheduler.js` runs cron-expression events with timeout-safe timers (clamped to 2^31-1), and `server/services/toolStateMachine.js` tracks tool execution state.
+Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/memoryBM25.js`) with vector search by Reciprocal Rank Fusion, weighted 40% BM25 and 60% vector. `server/services/eventScheduler.js` runs cron-expression events with timeout-safe timers (clamped to 2^31-1).
 
-`server/services/executionLanes.js` bounds concurrent work: `critical` (1 slot, emergency fixes), `standard` (2, normal development) and `background` (3, self-improvement and documentation).
-
-`server/services/lmStudioManager.js` and `server/services/localThinking.js` provide LM Studio discovery, health and cost-free local completions, exposed as `GET /api/lmstudio/status`, `GET /api/lmstudio/models`, `POST /api/lmstudio/completion`, `POST /api/lmstudio/analyze-task` and `POST /api/lmstudio/classify-memory`.
+`server/services/lmStudioManager.js` provides LM Studio discovery, health and model management; the only REST route is `POST /api/lmstudio/unload`, and the rest goes through `/api/local-llm`.
 
 Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
 

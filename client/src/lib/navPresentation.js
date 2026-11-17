@@ -4,7 +4,6 @@
 
 import { AudioLines,
   Wrench,
-  Trash2,
   Home,
   Package,
   FileText,
@@ -267,7 +266,6 @@ export const NAV_PRESENTATION = {
   '/models/code-reviewers': { icon: ShieldCheck },
   '/settings/database': { icon: Database },
   '/settings/features': { icon: ListChecks },
-  '/settings/data-maintenance': { icon: Trash2 },
   '/settings/general': { icon: Settings },
   '/settings/mortalloom': { icon: Activity },
   '/openclaw': { icon: MessagesSquare },

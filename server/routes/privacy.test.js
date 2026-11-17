@@ -34,7 +34,7 @@ vi.mock('../services/privacyOrgs.js', () => ({
 
 vi.mock('../services/privacyBrokers.js', () => ({
   listBrokers: vi.fn(async () => [{ id: 'spokeo', name: 'Spokeo', enabled: true }]),
-  refreshBrokers: vi.fn(async () => ({ fetched: 3, added: 2, sources: { badbool: 2, caRegistry: 1 } })),
+  refreshBrokers: vi.fn(async () => ({ fetched: 3, added: 2, sources: { badbool: { ok: true, count: 2, error: null }, caRegistry: { ok: true, count: 1, error: null } } })),
   listBrokerCases: vi.fn(async () => [{ id: 'case-1', brokerId: 'spokeo', state: 'found' }]),
   getScanStatus: vi.fn(async () => ({ enabledBrokers: 20, caseCounts: { found: 1 }, dueForRecheck: 3 })),
   setBrokerEnabled: vi.fn(async (id, enabled) => ({ id, name: 'Spokeo', enabled })),
@@ -381,6 +381,28 @@ describe('GET /api/privacy/brokers', () => {
     const res = await request(makeApp()).get('/api/privacy/brokers');
     expect(res.status).toBe(200);
     expect(brokerService.listBrokers).toHaveBeenCalledWith({ enabled: undefined });
+  });
+});
+
+describe('POST /api/privacy/brokers/refresh', () => {
+  it('returns the per-source outcome when both sources answer', async () => {
+    const res = await request(makeApp()).post('/api/privacy/brokers/refresh').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.sources.badbool.ok).toBe(true);
+  });
+
+  it('stays 200 and names the failed source when only one download fails', async () => {
+    brokerService.refreshBrokers.mockResolvedValueOnce({ fetched: 1, added: 1, sources: { badbool: { ok: false, count: 0, error: 'HTTP 503' }, caRegistry: { ok: true, count: 1, error: null } } });
+    const res = await request(makeApp()).post('/api/privacy/brokers/refresh').send({});
+    expect(res.status).toBe(200);
+    expect(res.body.sources.badbool).toEqual({ ok: false, count: 0, error: 'HTTP 503' });
+  });
+
+  it('answers 502 instead of a success when both downloads fail', async () => {
+    brokerService.refreshBrokers.mockResolvedValueOnce({ fetched: 0, added: 0, sources: { badbool: { ok: false, count: 0, error: 'HTTP 503' }, caRegistry: { ok: false, count: 0, error: 'HTTP 503' } } });
+    const res = await request(makeApp()).post('/api/privacy/brokers/refresh').send({});
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('BROKER_SOURCES_UNAVAILABLE');
   });
 });
 

@@ -1,4 +1,3 @@
-import { calendar } from '@googleapis/calendar';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient, needsScopeUpgrade, getTokens, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
@@ -106,6 +105,7 @@ export async function scheduleTimeBlocks(goalId) {
   const milestones = [...(goal.milestones || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   if (!milestones.length) throw new ServerError('No milestones/phases to schedule', { status: 400, code: 'NO_MILESTONES' });
 
+  const { calendar } = await import('@googleapis/calendar');
   const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const { preferredDays, timeSlot, sessionDurationMinutes, subcalendarId } = goal.timeBlockConfig;
   const calendarId = subcalendarId || 'primary';
@@ -214,6 +214,7 @@ export async function removeScheduledEvents(goalId) {
   const goal = goals.goals.find(g => g.id === goalId);
   if (!goal) throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
 
+  const { calendar } = await import('@googleapis/calendar');
   const cal = calendar({ version: 'v3', auth, timeout: GOOGLE_API_TIMEOUT_MS });
   const events = goal.scheduledEvents || [];
 

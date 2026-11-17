@@ -114,7 +114,7 @@ vi.mock('./userTimezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, removeMessageFromCache, syncAccount, deleteCache, getSyncStatus, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
+import { getMessages, getMessage, removeMessageFromCache, syncAccount, deleteCache, refreshMessage, refreshMessages, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus, markSentIngested } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -891,29 +891,6 @@ describe('syncAccount', () => {
 
     const result = await syncAccount(VALID_UUID, null);
     expect(result.newMessages).toBe(0);
-  });
-});
-
-// ─── getSyncStatus ───
-
-describe('getSyncStatus', () => {
-  it('should return sync status for existing account', async () => {
-    getAccount.mockResolvedValue({
-      id: VALID_UUID, lastSyncAt: '2026-01-01T00:00:00Z', lastSyncStatus: 'success'
-    });
-
-    const result = await getSyncStatus(VALID_UUID);
-
-    expect(result).toEqual({
-      accountId: VALID_UUID,
-      lastSyncAt: '2026-01-01T00:00:00Z',
-      lastSyncStatus: 'success'
-    });
-  });
-
-  it('should return null for nonexistent account', async () => {
-    getAccount.mockResolvedValue(null);
-    expect(await getSyncStatus(VALID_UUID)).toBeNull();
   });
 });
 

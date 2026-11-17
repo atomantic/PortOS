@@ -10,16 +10,7 @@ import { useCallback } from 'react';
 import { useSearchParams } from 'react-router';
 
 /**
- * The Round editor's three URL-param-driven views (`/rounds/:id`). Every one of
- * them lives in the URL rather than local state so each surface is linkable —
- * per the project's "selection lives in the URL" convention:
- *
- *  - `?mode=edit`      → the editing workbench (absent/`read` = performance view)
- *  - `?stack=1`        → the round-stack (quodlibet) view of the partner rounds
- *  - `?analyze=<refId>`→ the reference-audio analysis workbench (#2106)
- *
- * All three setters `replace` so flipping views doesn't pile up history entries.
- *
+ * The Round editor's three URL-param-driven views (`/rounds/:id`), in the URL so each surface is linkable ("selection lives in the URL"): `?mode=edit` (the editing workbench; absent/`read` = performance view), `?stack=1` (the round-stack/quodlibet view of the partner rounds), `?analyze=<refId>` (the reference-audio analysis workbench, #2106). All three setters `replace` so flipping views doesn't pile up history entries.
  * @returns {{editing: boolean, setMode: (mode: string) => void,
  *            stackOpen: boolean, setStack: (open: boolean) => void,
  *            analyzeId: string|null, setAnalyze: (refId: string|null) => void}}

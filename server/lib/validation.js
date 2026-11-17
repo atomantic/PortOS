@@ -1,8 +1,8 @@
 /**
- * Catch-all Zod schemas for app, process, provider, social, GitHub and backup routes, plus the
+ * Catch-all Zod schemas for app, process, provider, social and backup routes, plus the
  * `validateRequest` middleware and shared helpers.
  *
- * Catch-all Zod schemas (app/process/provider, social accounts, GitHub, backup/sharing,
+ * Catch-all Zod schemas (app/process/provider, social accounts, backup/sharing,
  * document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`,
  * `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files
  * below so existing deep imports keep working.
@@ -19,7 +19,6 @@ import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
 import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
-import { loraTrainingConfigSchema } from './mediaValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
@@ -45,7 +44,6 @@ import {
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
-import { MODEL_ALIAS_LIMITS } from './providerModelAliases.js';
 import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
 import { parseProviderRef } from './providerRef.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
@@ -446,46 +444,6 @@ export const referenceRepoUpdateSchema = z.object({
 // either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = partialWithoutDefaults(appSchema);
 
-const standardizePlanFileSchema = z.string().trim().min(1).max(500)
-  .refine((file) => {
-    const segments = file.split(/[/\\]/);
-    return !file.startsWith('/')
-      && !file.startsWith('\\')
-      && !/^[A-Za-z]:/.test(file)
-      && !segments.includes('..');
-  }, { message: 'file must be a repo-relative path without parent traversal' });
-
-const standardizePlanProcessSchema = z.object({
-  name: z.string().trim().min(1).max(120)
-}).passthrough();
-
-const standardizePlanStrayPortSchema = z.object({
-  file: standardizePlanFileSchema,
-  variable: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(120),
-  value: z.number().int().min(1).max(65535),
-  line: z.number().int().positive(),
-  action: z.enum(['remove', 'keep'])
-}).passthrough();
-
-export const standardizePlanSchema = z.object({
-  currentState: z.object({
-    hasGit: z.boolean()
-  }).passthrough(),
-  proposedChanges: z.object({
-    createEcosystem: z.boolean(),
-    ecosystemContent: z.string().min(1).max(1_000_000),
-    processes: z.array(standardizePlanProcessSchema).max(100),
-    strayPorts: z.array(standardizePlanStrayPortSchema).max(500)
-  }).passthrough()
-}).passthrough();
-
-export const standardizeApplySchema = z.object({
-  repoPath: z.string().trim().min(1).max(4096).optional(),
-  appId: z.string().trim().min(1).max(200).optional(),
-  plan: standardizePlanSchema,
-  overwriteEcosystem: z.boolean().optional().default(false)
-});
-
 // Game studio (#3177): managed-app binding, reusable asset bindings, bundle
 // compile, and user-triggered AI feedback.
 const gameNameSchema = z.string().trim().min(1).max(120);
@@ -696,31 +654,6 @@ export const modelPinClearSchema = z.object({
   pinId: z.string().trim().min(1).max(300),
 });
 
-// POST /api/providers/bindings/:id/link  (and /link/preview).
-//
-// Every revision the caller reviewed is named explicitly. Omitting one is
-// allowed for a PREVIEW (there is nothing to be stale against yet), but the
-// service refuses to APPLY a link whose named revisions have moved -- a link is
-// a decision about a specific difference, so a changed row invalidates it.
-export const providerBindingLinkSchema = z.object({
-  targetConnectionId: z.string().uuid(),
-  expectedRevisions: z.object({
-    binding: z.number().int().positive().optional(),
-    sourceConnection: z.number().int().positive().optional(),
-    targetConnection: z.number().int().positive().optional(),
-  }).strict().optional().default({}),
-}).strict();
-
-// POST /api/providers/bindings/:id/unlink. No target: unlink clones the
-// connection this binding already uses, so only the binding and its source
-// participate.
-export const providerBindingUnlinkSchema = z.object({
-  expectedRevisions: z.object({
-    binding: z.number().int().positive().optional(),
-    sourceConnection: z.number().int().positive().optional(),
-  }).strict().optional().default({}),
-}).strict();
-
 // POST /api/providers/connections (#6369) — a NEW backend.
 //
 // This schema bounds the SHAPE only. Which backend kinds and transport
@@ -868,29 +801,6 @@ export const providerRouteSettingsUpdateSchema = z.object({
   }),
 }).strict();
 
-// PATCH /api/providers/routes/:providerId/model-aliases (#6369) — ONE route's
-// HAND-AUTHORED canonical→executable model aliases.
-//
-// Three-valued like the connection credentials above, and for the same reason:
-// a panel that read three aliases and changed one must be able to send one. An
-// absent key is preserved, a string sets, and `null` DELETES — the only way an
-// override is ever removed, because a refresh must never delete a correction.
-//
-// The keys are model names, so the record is not enumerable and each key is
-// length-checked. `expectedRevision` is a FINGERPRINT of the current override
-// map (`ai_route_bindings` has no revision column), and an empty patch is
-// refused rather than written: it would rewrite a row to say nothing.
-export const providerRouteModelAliasSchema = z.object({
-  expectedRevision: z.string().trim().min(1).max(64),
-  aliases: z.record(
-    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength),
-    z.string().trim().min(1).max(MODEL_ALIAS_LIMITS.maxLength).nullable(),
-  ).refine((value) => Object.keys(value).length > 0, { message: 'Name at least one alias to change' })
-    .refine((value) => Object.keys(value).length <= MODEL_ALIAS_LIMITS.maxEntries, {
-      message: `At most ${MODEL_ALIAS_LIMITS.maxEntries} aliases at a time`,
-    }),
-}).strict();
-
 // POST /api/providers/:id/vision-suite.
 export const providerVisionSuiteSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().trim().min(1).max(256).optional()),
@@ -957,149 +867,6 @@ export const socialAccountSchema = z.object({
 // Bulk create: each entry is validated per-account (a bad one is reported, not fatal).
 export const socialAccountBulkBodySchema = z.object({ accounts: z.array(z.unknown()).min(1, 'accounts array is required') });
 export const socialAccountUpdateSchema = partialWithoutDefaults(socialAccountSchema);
-
-// =============================================================================
-// GITHUB REPOS SCHEMAS
-// =============================================================================
-
-export const githubRepoUpdateSchema = z.object({
-  flags: z.record(z.boolean()).optional(),
-  managedSecrets: z.array(z.string().min(1)).optional()
-});
-
-export const githubSecretSchema = z.object({
-  value: z.string().min(1)
-});
-
-// GitHub notifications manager accounts (#12869). A bare hostname (optional
-// :port) whose first character also rules out a value `gh` would parse as a flag.
-export const GITHUB_ACCOUNT_HOST_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*(?::\d{1,5})?$/;
-// github.com logins are [A-Za-z0-9-]; Enterprise Managed Users add `_shortcode`.
-export const GITHUB_ACCOUNT_LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-export const GITHUB_ACCOUNT_TRUST_LEVELS = Object.freeze(['public', 'private']);
-export const GITHUB_ACCOUNT_MODES = Object.freeze(['disabled', 'observe', 'assist', 'autopilot']);
-
-// Per-repo automation rules for the GitHub inbox (#13192): what Assist and
-// Autopilot do with a kind of notification, in one repo (`owner/repo`), an
-// account/org (`owner/*`) or every repo (`*`), and on which provider/model/effort
-// when it starts an agent. Repo > owner > all. Mirrors AGENT_RULE_KINDS and
-// AGENT_RULE_ACTIONS in lib/githubNotificationTriage.js.
-export const GITHUB_AGENT_RULE_KINDS = Object.freeze(['review-request', 'security-alert', 'issue-activity', 'ci-activity', 'own-pr', 'dependabot-pr', 'pull-request', 'mention', 'release', 'other']);
-export const GITHUB_AGENT_RULE_ACTIONS = Object.freeze(['agent', 'done', 'mute', 'leave', 'do-review', 'untrusted-review', 'merge']);
-export const GITHUB_AGENT_RULE_REPO_RE = /^(?:\*|[A-Za-z0-9_.-]{1,100}\/(?:\*|[A-Za-z0-9_.-]{1,100}))$/;
-const emptyToNullString = (value) => (value === '' ? null : value);
-// A legacy `agent: true/false` (rules saved before #13192) is accepted and
-// stored as `action: 'agent' / 'leave'`; `action` wins when both are sent.
-export const githubAgentRuleSchema = z.object({
-  id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
-  kind: z.enum(GITHUB_AGENT_RULE_KINDS),
-  repo: z.string().trim().regex(GITHUB_AGENT_RULE_REPO_RE, 'Use owner/repo, owner/* for an account or organization, or * for every repo'),
-  agent: z.boolean().optional(),
-  action: z.enum(GITHUB_AGENT_RULE_ACTIONS).optional(),
-  mergeMethod: z.enum(['merge', 'squash', 'rebase']).optional(),
-  deleteBranch: z.boolean().optional(),
-  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
-  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
-  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
-}).strict().superRefine((rule, ctx) => {
-  const action = rule.action ?? (typeof rule.agent === 'boolean' ? (rule.agent ? 'agent' : 'leave') : null);
-  if (!action) ctx.addIssue({ code: 'custom', path: ['action'], message: 'Choose what to do with these notifications' });
-  else if (rule.kind === 'security-alert' && action !== 'agent' && action !== 'leave') {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Security alerts are never marked done or muted by a rule' });
-  }
-  if (['do-review', 'untrusted-review', 'merge'].includes(action) && !['dependabot-pr', 'pull-request', 'own-pr', 'review-request'].includes(rule.kind)) {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'PR actions require a pull-request notification rule' });
-  }
-  if (action === 'merge' && rule.kind !== 'dependabot-pr') {
-    ctx.addIssue({ code: 'custom', path: ['action'], message: 'Automatic merge is available for verified Dependabot pull requests' });
-  }
-}).transform(({ agent, ...rule }) => ({ ...rule, action: rule.action ?? (agent ? 'agent' : 'leave') }));
-export const githubAgentRulesSchema = z.array(githubAgentRuleSchema).max(200).superRefine((rules, ctx) => {
-  const seen = new Set();
-  rules.forEach((rule, index) => {
-    const key = `${rule.kind}#${rule.repo.toLowerCase()}`;
-    if (seen.has(key)) ctx.addIssue({ code: 'custom', path: [index, 'repo'], message: `There is already a ${rule.kind} rule for ${rule.repo}` });
-    seen.add(key);
-  });
-});
-
-// The provider/model/effort an agent run starts from (#13191): the account's
-// defaults, or the operator's choice for one Resolve with agent run. null or
-// '' = Auto (CoS chooses).
-const githubAgentPinFields = {
-  provider: z.preprocess(emptyToNullString, z.string().trim().min(1).max(128).nullable()).optional(),
-  model: z.preprocess(emptyToNullString, z.string().trim().min(1).max(200).nullable()).optional(),
-  effort: z.preprocess(emptyToNullString, z.enum(EFFORT_LEVELS).nullable()).optional(),
-};
-export const githubAgentDefaultsSchema = z.object(githubAgentPinFields).strict();
-export const githubNotificationAgentRunSchema = z.object(githubAgentPinFields).strict();
-export const githubNotificationPullRequestActionSchema = z.object({
-  action: z.enum(['merge', 'do-review', 'untrusted-review']),
-  method: z.enum(['merge', 'squash', 'rebase']).optional(),
-  deleteBranch: z.boolean().optional(),
-  ...githubAgentPinFields,
-}).strict();
-
-export const githubAccountCreateSchema = z.object({
-  label: z.string().trim().max(80).optional(),
-  host: z.string().trim().toLowerCase()
-    .transform((value) => value.replace(/^https?:\/\//, '').replace(/\/+$/, ''))
-    .pipe(z.string().min(1).max(253).regex(GITHUB_ACCOUNT_HOST_RE, 'Use a bare hostname such as github.example.com')),
-  login: z.string().trim().regex(GITHUB_ACCOUNT_LOGIN_RE, 'Not a valid GitHub login').nullable().optional(),
-  trust: z.enum(GITHUB_ACCOUNT_TRUST_LEVELS).optional(),
-  // null = the trust level's default (Private: local providers only).
-  allowedProviders: z.array(z.string().trim().min(1).max(128)).max(50).nullable().optional(),
-  mode: z.enum(GITHUB_ACCOUNT_MODES).optional(),
-  // Monthly subscription audit delivered as a PortOS notification (#12874).
-  auditReport: z.boolean().optional(),
-  // Private (Enterprise) accounts refuse every agent hand-off unless the operator
-  // opts in: the lanes run on PortOS's own providers, which the allow-list cannot bind.
-  allowAgents: z.boolean().optional(),
-  // Enterprise hosts only: every human on the instance counts as trusted (#13203).
-  trustInstanceUsers: z.boolean().optional(),
-  agentRules: githubAgentRulesSchema.optional(),
-  agentDefaults: githubAgentDefaultsSchema.nullable().optional(),
-  enabled: z.boolean().optional(),
-}).strict();
-
-export const githubAccountUpdateSchema = githubAccountCreateSchema.partial().strict();
-
-// GitHub notifications inbox (#12870).
-export const githubNotificationsQuerySchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-  view: z.enum(['needs-you', 'suspect', 'handled', 'all']).optional(),
-}).strict();
-
-export const githubNotificationsSyncSchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-}).strict();
-
-export const githubNotificationsClearSchema = z.object({
-  accountId: z.string().trim().min(1).max(100).optional(),
-}).strict();
-
-// Deployment approval from the inbox (#13198): operator only.
-export const githubDeploymentReviewSchema = z.object({
-  state: z.enum(['approved', 'rejected']),
-  environmentIds: z.array(z.number().int().positive()).min(1).max(20),
-  comment: z.string().trim().max(1000).optional(),
-}).strict();
-
-export const githubNotificationActionSchema = z.object({
-  action: z.enum(['read', 'done', 'reopen', 'mute', 'unsubscribe', 'resubscribe']),
-}).strict();
-
-export const GITHUB_NOTIFICATION_THREAD_ID_RE = /^\d{1,20}$/;
-
-// Automations tab (#12871): the one cadence it offers, or back to Run now only.
-export const GITHUB_NOTIFICATION_CADENCES = Object.freeze({ 'weekdays-15m': '*/15 * * * 1-5', off: null });
-export const githubAuditApplySchema = z.object({
-  suggestionId: z.string().trim().min(1).max(300),
-}).strict();
-
-export const githubNotificationCadenceSchema = z.object({
-  cadence: z.enum(Object.keys(GITHUB_NOTIFICATION_CADENCES)),
-}).strict();
 
 // =============================================================================
 // INSIGHTS SCHEMAS
@@ -1748,19 +1515,6 @@ export const usageMessagesSchema = z.object({
   inputTokenCount: z.number().int().nonnegative().optional().default(0)
 });
 
-/** Body for POST /api/usage/tokens — same guard as messages: no string or negative totals. */
-export const usageTokensSchema = z.object({
-  inputTokens: z.number().int().nonnegative().optional().default(0),
-  outputTokens: z.number().int().nonnegative().optional().default(0)
-});
-
-/** Body for POST /api/usage/session — model/providerName become persisted keys/values. */
-export const usageSessionSchema = z.object({
-  providerId: z.string().min(1),
-  providerName: z.string().max(200).optional(),
-  model: z.string().max(200).nullish()
-});
-
 /**
  * What the user pays monthly for each provider family's quota plan, keyed by
  * family id. Used by BOTH write paths — `PUT /api/usage/subscriptions` (wrapped
@@ -1836,15 +1590,9 @@ export const usageFleetBillingSchema = z.object({
   usesSubscriptions: z.boolean(),
 });
 
-
 // =============================================================================
 // PORTS
 // =============================================================================
-
-// POST /api/ports/check — probe a set of ports for availability.
-export const portsCheckSchema = z.object({
-  ports: z.array(z.number().int().min(1).max(65535)).min(1)
-});
 
 // POST /api/ports/allocate — reserve N free ports. `count` accepts a number or
 // a numeric string (the UI may send either) and defaults to 1 when absent,
@@ -2068,15 +1816,6 @@ export const agentActivityAgentQuerySchema = z.object({
 // window is capped at a year rather than left open.
 export const agentActivityStatsQuerySchema = z.object({
   days: z.coerce.number().int().min(1).max(365).default(7),
-}).strict();
-
-// POST /api/agents/activity/cleanup — unlinks every activity file older than the
-// window. The floor is 1 day, NOT 0: `daysToKeep: 0` puts the cutoff at now and
-// deletes the whole archive, and a negative value reaches into future-dated
-// files. "Delete everything" is not a retention window; if it is ever wanted it
-// gets its own explicitly-named endpoint rather than riding this number.
-export const agentActivityCleanupSchema = z.object({
-  daysToKeep: z.coerce.number().int().min(1).max(3650).default(30),
 }).strict();
 
 // GET /api/review/queue — pagination is opt-in so existing Review Hub clients
@@ -2572,9 +2311,6 @@ export const settingsSlicePartialSchemas = Object.freeze({
   // from either cannot drop the other's prefs or a template saved elsewhere.
   'music.chiptune': musicSettingsSchema.shape.chiptune.unwrap().strict(),
   'music.designer': musicSettingsSchema.shape.designer.unwrap().strict(),
-  // The caption-model picker owns only these two keys; the rest of the slice
-  // (training defaults, segmentation, watchdog, display sleep) is hand-set.
-  loraTraining: loraTrainingConfigSchema.pick({ captionProviderId: true, captionModel: true }).strict(),
 });
 
 // Check raw JSON before Zod can strip a dangerous key. Arrays can contain
@@ -2603,46 +2339,9 @@ export const settingsSlicePatchSchema = z.preprocess((value, ctx) => {
 // LM STUDIO (server/routes/lmstudio.js)
 // =============================================================================
 
-// PUT /api/lmstudio/config — persisted straight into module-level state
-// (lmStudioManager's `config`) that every other LM Studio call site reads via
-// getBaseUrl(). A malformed baseUrl must be rejected up front rather than
-// degrading local-LLM connectivity until the process restarts.
-export const lmStudioConfigSchema = z.object({
-  baseUrl: z.string().trim().url().optional(),
-  timeout: z.number().int().positive().optional(),
-  defaultThinkingModel: z.string().trim().min(1).optional(),
-});
-
-// Shared by /download, /load, /unload — each acts on a single model id.
+// POST /api/lmstudio/unload body — the single model to unload.
 export const lmStudioModelIdSchema = z.object({
   modelId: z.string().trim().min(1),
-});
-
-// POST /api/lmstudio/completion
-export const lmStudioCompletionSchema = z.object({
-  prompt: z.string().min(1),
-  model: z.string().trim().min(1).optional(),
-  maxTokens: z.number().int().positive().optional(),
-  temperature: z.number().min(0).max(2).optional(),
-  systemPrompt: z.string().optional(),
-});
-
-// POST /api/lmstudio/analyze-task
-export const lmStudioAnalyzeTaskSchema = z.object({
-  description: z.string().min(1),
-  id: z.string().optional(),
-  metadata: z.record(z.any()).optional(),
-});
-
-// POST /api/lmstudio/classify-memory
-export const lmStudioClassifyMemorySchema = z.object({
-  content: z.string().min(1),
-});
-
-// POST /api/lmstudio/embeddings
-export const lmStudioEmbeddingsSchema = z.object({
-  text: z.string().min(1),
-  model: z.string().trim().min(1).optional(),
 });
 
 // Subscription creation: persistent (bucket, record) tuple. Series + universe
@@ -3058,12 +2757,6 @@ export const htmlCompositionRenderSchema = z.object({
   .refine(value => !(value.proof && (value.synthesizeMusic || value.musicTrack || value.audioUpload)), 'A proof is silent; omit synthesizeMusic, musicTrack and audioUpload')
   .refine(value => !(value.proof && value.formats), 'A proof checks one framing; use proof.format instead of formats');
 
-// GET /api/html-composition/beats — a Music-library filename, same shape as
-// htmlCompositionRenderSchema's musicTrack but required (this endpoint exists
-// only to measure one).
-export const htmlCompositionBeatsQuerySchema = z.object({
-  musicTrack: z.string().min(1).max(255).regex(/^[^/\\]+$/, 'musicTrack must be a Music-library filename'),
-}).strict();
 
 // Public renders stay capped at 120s. A music-video owner passes a higher
 // ceiling (the song length, hard-capped by the caller at 900s) and gets the
@@ -3122,12 +2815,6 @@ const nonEmptyString = z.string().min(1);
 const optionalString = z.string().optional();
 const nullishString = z.string().nullish();
 
-// Project detection (routes/detect.js)
-export const detectRepoBodySchema = z.object({ path: nonEmptyString });
-export const detectPortBodySchema = z.object({ port: z.coerce.number().int().min(1).max(65535) });
-export const detectPm2BodySchema = z.object({ name: nonEmptyString });
-export const detectAiBodySchema = z.object({ path: nonEmptyString, providerId: nullishString });
-
 // Messages (routes/messages.js)
 export const MESSAGE_TOKEN_PROVIDERS = ['outlook', 'teams'];
 export const messageSyncBodySchema = z.object({ mode: z.enum(['unread', 'full']).optional() });
@@ -3143,7 +2830,6 @@ export const cosAgentFeedbackBodySchema = z.object({
 export const cosAgentBtwBodySchema = z.object({ message: z.string().trim().min(1).max(5000) });
 export const cosTaskReorderBodySchema = z.object({ taskIds: z.array(nonEmptyString) });
 export const cosTaskSpawnBodySchema = z.object({ resetSpawnBudget: z.boolean().default(false) }).strict();
-export const cosScheduleTargetBodySchema = z.object({ taskType: nonEmptyString, appId: nullishString });
 export const cosScheduleTriggerBodySchema = z.object({
   taskType: nonEmptyString,
   appId: nullishString,
@@ -3236,7 +2922,6 @@ export const moltworldQueueFailBodySchema = z.object({ error: nullishString });
 export const referenceRepoReviewedBodySchema = z.object({ sha: z.string().trim().default('') });
 export const scaffoldTemplateCreateBodySchema = z.object({ templateId: nonEmptyString, name: nonEmptyString, targetPath: nonEmptyString });
 export const screenshotUploadBodySchema = z.object({ data: nonEmptyString, filename: nullishString });
-export const standardizeTargetBodySchema = z.object({ repoPath: nullishString, appId: nullishString, providerId: nullishString });
 export const systemHealthThresholdsBodySchema = z.object({
   memoryWarn: z.coerce.number().finite(),
   memoryCritical: z.coerce.number().finite(),

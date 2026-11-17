@@ -206,9 +206,9 @@ const NARROWED = [
   ['lib/musicVideoValidation.js', 'lib/musicVideoConditioning.js',
     'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
   ['routes/signal.js', 'lib/validation.js',
-    'loads the shared validator inside the conversation handlers'],
+    'validates through the validateRequest leaf'],
   ['routes/signal.js', 'lib/musicVideoValidation.js',
-    'loads the shared validator inside the conversation handlers'],
+    'validates through the validateRequest leaf'],
   ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
     'loads vocal-stem storage only when checking a stem against the master'],
   ['services/musicVideo/lyricAlignCore.js', 'services/musicVideo/vocalStem.js',
@@ -645,5 +645,21 @@ describe('shared provider type leaf', () => {
     const closure = staticImportClosure(abs('lib/providerTypes.js'));
     expect(closure.packages.size).toBe(0);
     expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
+  });
+});
+
+// #16558: each heavy single-feature package is loaded where its feature runs, so
+// none of them is paid for by every boot. Control: the walk still sees a package
+// that is imported statically, so a resolver gap cannot make this look clean.
+describe('heavy single-feature packages stay out of the boot closure', () => {
+  const closure = staticImportClosure(abs('index.js'));
+  it.each(['playwright-core', '@cantoo/pdf-lib', '@googleapis/calendar', 'three'])(
+    'does not reach %s through static imports from index.js',
+    (pkg) => {
+      expect([...closure.packages].filter((spec) => spec === pkg || spec.startsWith(`${pkg}/`))).toEqual([]);
+    },
+  );
+  it('still sees a package that index.js reaches statically', () => {
+    expect(closure.packages.has('express')).toBe(true);
   });
 });

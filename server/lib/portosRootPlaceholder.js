@@ -1,27 +1,16 @@
 /**
- * Expand leftover `__PORTOS_ROOT__` tokens in apps registry fields (`repoPath`, `appIconPath`, etc.)
- * so a partial/restored `data/` tree cannot leave Apps → Git looking for a non-existent checkout.
+ * Expand leftover `__PORTOS_ROOT__` tokens in apps registry fields (`repoPath`, `appIconPath`, …): `PORTOS_ROOT_TOKEN`, `expandPortosRootToken`, `expandPortosRootInApp`, `containsPortosRootToken`.
  *
- * `PORTOS_ROOT_TOKEN`, `expandPortosRootToken`, `expandPortosRootInApp`, `containsPortosRootToken`.
- * Used by `services/apps.js` on load and by `scripts/setup-data.js` /
- * `scripts/lib/rewriteAppsPortosRoot.js` when seeding or rewriting `data/apps.json`.
- *
- * `data.reference/apps.json` ships `__PORTOS_ROOT__` in fields like `repoPath`
- * and `appIconPath` so the seed is install-agnostic. `scripts/setup-data.js`
- * expands the token when seeding `data/`, and `server/services/apps.js`
- * re-expands on load so a partial/restored `data/` that still carries the
- * literal token cannot leave Apps → Git stuck on "Checkout not found".
+ * `data.reference/apps.json` ships the token so the seed is install-agnostic; `scripts/setup-data.js` (via `scripts/lib/rewriteAppsPortosRoot.js`) expands it when seeding `data/` and `services/apps.js` re-expands on load, so a partial/restored `data/` carrying the literal token can't leave Apps → Git stuck on "Checkout not found".
  */
 
 export const PORTOS_ROOT_TOKEN = '__PORTOS_ROOT__';
 
 /**
- * Replace every `__PORTOS_ROOT__` occurrence in a string with `root`.
- * Non-strings and strings without the token are returned unchanged.
+ * Replace every `__PORTOS_ROOT__` in a string with `root` (absolute install/checkout path); non-strings and token-free strings are returned unchanged.
  *
  * @param {unknown} value
  * @param {string} root Absolute install/checkout path
- * @returns {unknown}
  */
 export function expandPortosRootToken(value, root) {
   if (typeof value !== 'string' || !value.includes(PORTOS_ROOT_TOKEN)) return value;
@@ -29,7 +18,7 @@ export function expandPortosRootToken(value, root) {
 }
 
 /**
- * Expand `__PORTOS_ROOT__` in every top-level string field of an app record.
+ * Expand `__PORTOS_ROOT__` in every top-level string field of an app record → `{ app, changed }` (`root`: absolute install/checkout path).
  *
  * @param {Record<string, unknown>|null|undefined} app
  * @param {string} root Absolute install/checkout path
@@ -55,7 +44,6 @@ export function expandPortosRootInApp(app, root) {
  * True when `text` still carries the unresolved install-root token.
  *
  * @param {unknown} text
- * @returns {boolean}
  */
 export function containsPortosRootToken(text) {
   return typeof text === 'string' && text.includes(PORTOS_ROOT_TOKEN);

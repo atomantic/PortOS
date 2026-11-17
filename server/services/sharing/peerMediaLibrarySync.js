@@ -28,7 +28,7 @@ import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeAssetFilename } from './buckets.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { getPeers } from '../instances.js';
-import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/validation.js';
+import { peerLibraryManifestSchema, PEER_LIBRARY_TOMBSTONES_HEADER, PEER_LIBRARY_TOMBSTONES_SINCE_HEADER } from '../../lib/peerSyncValidation.js';
 import { listExportableMediaTombstones } from '../mediaTombstones.js';
 import {
   hashSimpleAsset,

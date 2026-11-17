@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router';
 import Banner from './ui/Banner';
 import { useSystemActivity } from '../hooks/useSystemActivity';
 import { useUpdateChecker } from '../hooks/useUpdateChecker';
-import * as api from '../services/api';
+import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 
 // A non-transient advisory must never occlude the current screen's primary
 // action (#3786), so these render in normal document flow above <main> and
@@ -23,7 +23,7 @@ export default function UpdateBanners() {
   const idle = status === 'ready' && snapshot?.activity?.idle === true;
   if (!hasAdvisory || !idle) return null;
 
-  const goToUpdate = () => navigate(`/apps/${api.PORTOS_APP_ID}/update`);
+  const goToUpdate = () => navigate(`/apps/${PORTOS_APP_ID}/update`);
 
   return (
     <div className="shrink-0 px-3 pt-2 flex flex-col gap-2 print:hidden">

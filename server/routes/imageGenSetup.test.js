@@ -91,6 +91,15 @@ const expectForbidden = (response) => {
   expect(response.body.code).toBe('HOST_CONTROL_FORBIDDEN');
 };
 
+describe('POST /api/image-gen/setup/install query validation', () => {
+  it('400s on a repeated packages key and never installs', async () => {
+    pySetup.installPackages.mockClear();
+    const res = await request(local()).post('/api/image-gen/setup/install?pythonPath=%2Fv%2Fpython3&packages=mflux&packages=torch');
+    expect(res.status).toBe(400);
+    expect(pySetup.installPackages).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/image-gen/setup/* interpreter admission (#9015)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

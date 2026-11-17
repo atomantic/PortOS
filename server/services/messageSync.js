@@ -587,16 +587,6 @@ export async function updateMessageEvaluations(evaluations) {
   }
 }
 
-export async function getSyncStatus(accountId) {
-  const account = await getAccount(accountId);
-  if (!account) return null;
-  return {
-    accountId,
-    lastSyncAt: account.lastSyncAt,
-    lastSyncStatus: account.lastSyncStatus
-  };
-}
-
 // Normalize a message participant (from is `{ name, email }`, to/cc are bare
 // email strings) to the `{ email, name }` shape the Tribe matcher expects.
 function toIdentity(participant) {

@@ -66,35 +66,6 @@ describe('log routes PM2_HOME resolution', () => {
     expect(pm2Service.getLogs).toHaveBeenCalledWith(name, 100, undefined);
   });
 
-  it('uses the app custom home for every process in the app log response', async () => {
-    appsService.getAppById.mockResolvedValue({
-      id: 'app-1',
-      name: 'Example App',
-      pm2Home: '/tmp/example-pm2',
-      pm2ProcessNames: ['example-api', 'example-ui'],
-    });
-
-    const response = await request(createApp()).get('/api/logs/app/app-1?lines=250');
-
-    expect(response.status).toBe(200);
-    expect(response.body.processes).toEqual({ 'example-api': 'line', 'example-ui': 'line' });
-    expect(pm2Service.getLogs).toHaveBeenNthCalledWith(1, 'example-api', 250, '/tmp/example-pm2');
-    expect(pm2Service.getLogs).toHaveBeenNthCalledWith(2, 'example-ui', 250, '/tmp/example-pm2');
-  });
-
-  it('keeps app log responses on the default home when no custom home is configured', async () => {
-    appsService.getAppById.mockResolvedValue({
-      id: 'app-1',
-      name: 'Example App',
-      pm2ProcessNames: ['example-api'],
-    });
-
-    const response = await request(createApp()).get('/api/logs/app/app-1');
-
-    expect(response.status).toBe(200);
-    expect(pm2Service.getLogs).toHaveBeenCalledWith('example-api', 100, undefined);
-  });
-
   it('fetches static logs for a process from its resolved custom PM2 home', async () => {
     appProcessStatus.resolvePm2HomeForProcess.mockResolvedValue('/tmp/example-pm2');
 
@@ -117,26 +88,6 @@ describe('log routes PM2_HOME resolution', () => {
       timestamp: expect.any(Number),
     });
     expect(response.body).not.toHaveProperty('logs');
-  });
-
-  it('returns one error envelope instead of partial app logs when a process fails', async () => {
-    appsService.getAppById.mockResolvedValue({
-      name: 'Example App',
-      pm2ProcessNames: ['example-api', 'example-ui'],
-    });
-    pm2Service.getLogs
-      .mockResolvedValueOnce('API log line')
-      .mockRejectedValueOnce(new Error('PM2 log read failed'));
-
-    const response = await request(createApp()).get('/api/logs/app/app-1');
-
-    expect(response.status).toBe(500);
-    expect(response.body).toMatchObject({
-      error: 'PM2 log read failed',
-      code: 'INTERNAL_ERROR',
-      timestamp: expect.any(Number),
-    });
-    expect(response.body).not.toHaveProperty('processes');
   });
 
   it('follows a process from its resolved custom PM2 home', async () => {
@@ -213,15 +164,4 @@ describe('log routes PM2_HOME resolution', () => {
     expect(response.body.code).toBe('VALIDATION_ERROR');
   });
 
-  it('rejects out-of-range lines on app logs route with 400', async () => {
-    appsService.getAppById.mockResolvedValue({
-      id: 'app-1',
-      name: 'Example App',
-      pm2ProcessNames: ['example-api'],
-    });
-
-    const response = await request(createApp()).get('/api/logs/app/app-1?lines=100000000');
-    expect(response.status).toBe(400);
-    expect(response.body.code).toBe('VALIDATION_ERROR');
-  });
 });

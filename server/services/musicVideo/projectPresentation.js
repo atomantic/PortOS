@@ -13,8 +13,9 @@ import { presentProjectAutonomousRun } from './autonomousService.js';
 
 import { withCatalogCheckin } from './catalogCheckin.js';
 /**
- * What presentation reads off this machine for a record: a Blender film's shot renders on disk and
- * whether the track's audio was replaced under the timing (#14793). Neither depends on the shots.
+ * What presentation reads off this machine for a record: a Blender film's shot renders on disk,
+ * whether the track's audio was replaced under the timing (#14793), and this install's render
+ * spend ledger for the project (#16506). None depends on the shots' presentation.
  */
 export async function readPresentationInputs(project) {
   let film = null;
@@ -22,12 +23,13 @@ export async function readPresentationInputs(project) {
     const { blenderFilmReadState } = await import('./blender/renderIndex.js');
     film = await blenderFilmReadState(project);
   }
-  const { projectSongAudioChange } = await import('./songAudio.js');
-  return { film, songAudioChange: await projectSongAudioChange(project) };
+  const [{ projectSongAudioChange }, { readProjectRenderSpend }] = await Promise.all([import('./songAudio.js'), import('./renderSpend.js')]);
+  const [songAudioChange, renderSpend] = await Promise.all([projectSongAudioChange(project), readProjectRenderSpend(project)]);
+  return { film, songAudioChange, renderSpend };
 }
 
 /** The presented record from a stored one (with its catalog check-in resolved) and its read inputs. */
-export function presentProjectRecord(project, { film = null, songAudioChange = null } = {}) {
+export function presentProjectRecord(project, { film = null, songAudioChange = null, renderSpend = null } = {}) {
   const current = film ? { ...project, blenderShots: film.shots } : project;
   const dependencies = presentMusicVideoDependencies(current);
   // The final video is joined from shot renders the record does not hold, so its evidence cannot
@@ -35,7 +37,8 @@ export function presentProjectRecord(project, { film = null, songAudioChange = n
   const presented = presentProjectAutonomousRun(presentProjectCastAndSets(film?.finalStale === true ? { ...dependencies, renderDependencyState: {
     status: 'stale', reasons: [...new Set([...(dependencies.renderDependencyState?.reasons || []), 'Blender shots changed or were rendered again after this final was joined'])],
   } } : dependencies));
-  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange };
+  // `renderSpend` is read-time like `blenderShots`: machine-local, never stored or synced.
+  return { ...presented, productionReadiness: productionReadiness(presented), songAudioChange, ...(renderSpend ? { renderSpend } : {}) };
 }
 
 // Approvals decide stage completion and only the server computes them (#10136), so the read

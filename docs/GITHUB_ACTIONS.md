@@ -38,17 +38,17 @@ See [GitHub's rerun permissions and revision semantics](https://docs.github.com/
 
 ## Where the suite actually runs
 
-Every change reaches `main` through a pull request, and `main` reaches
-`release` through a pull request, so the suite runs once per gate rather than
-once per event:
+Every change reaches `main` through a pull request and `main` reaches
+`release` through a pull request, but two green PRs can still merge into a red
+tree, so `main` is also tested after the merge:
 
 | Event | What runs |
 |-------|-----------|
 | PR into `main` | Impact-scoped plan (only the surfaces the diff touches) |
-| Push/merge to `main` | **Nothing** — no push trigger; the PR gate already passed |
+| Push/merge to `main` | **Full suite**, native jobs path-gated (see "Native jobs on a push to `main`"); the run in flight finishes, and only the newest waiting push runs next |
 | PR candidate → `release` | **Full suite**, forced regardless of the diff |
 | Push/merge to `release` | Reuses the release PR's green gate; full suite only if it cannot be verified |
-| Scheduled 09:17 and 21:17 UTC | Full suite — the `main`-branch health signal; a red run names the merges since the last green one |
+| Scheduled 09:17 and 21:17 UTC | Full suite — catches what no commit caused (dependency or runner changes) |
 | `workflow_dispatch` | Full suite |
 
 A release therefore pays for one full run (on its PR), not three.
@@ -196,6 +196,15 @@ to every plan (client scanners ride any `client/src` js/jsx change).
 `TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
 reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
 
+Because they run on every PR, each always-run guard has a per-file time budget
+(`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
+runner, where guards take ~1.5x their local time against the 3s local target). The Linux server job sets
+`CI_GUARD_BUDGET=enforce`, so `scripts/run-ci-tests.js` runs the always-run
+guards of its slice as their own Vitest pass, prints the slowest
+(`⏱️ Always-run guards, slowest of …`) and fails the job naming any file over the
+budget. This is the only place the budget fails a run: Windows, browser and DB
+jobs leave it unset, and local pregate only reports it (`docs/PREGATE.md`).
+
 ### The bundled `lib/slashdo` submodule
 
 `server/lib/slashdoLoader.test.js` and `server/lib/slashdoInvocation.test.js`
@@ -215,54 +224,10 @@ CI run that never needed it — they keep the documented skip.
 
 ### Local equivalent: `npm run pregate`
 
-`scripts/pregate.js` runs the same planner over the committed and uncommitted
-diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content scan, early server and client structural
-guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
-including untracked tests, without expanding through transitive imports.
-
-`npm run pregate -- --full` opts into the CI-selected broad suites locally:
-server and client tests, the client build, the
-boot smoke, browser suites (smoke profile, prerequisites required rather than
-skipped), and the serial `portos_test` DB suite last and alone. Each stage
-receives the environment the matching job sets. A suite the machine cannot run
-(no reachable test Postgres; no Chrome, ffmpeg or client bundler), or one left to CI with
-`--skip-db`, `--skip-browser`, `--skip-build` or `--skip-smoke`, is reported
-as not run — in the summary and in the receipt `.cache/pregate/report.json`,
-which records the plan, stage outcomes and durations, the skipped suites, the
-base and HEAD SHAs, and the hash of the exact working tree validated. The
-shipped prompt-history guard runs locally when selected; the Windows job and
-the Linux worker-containment job are the two suites only CI can prove. Details and the receipt
-contract: `docs/CONTRIBUTING.md`.
-
-The early guards use the same always-run and diff-selected structural selection
-as CI and `--guards-only`. They run before broad tests and resource probes.
-Successful guards are reused within this invocation only when the working tree,
-index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. The receipt records guard outcomes, reuse proofs and per-file guard
-durations (`fileDurations`). A guard file over 3s fails the stage by name
-(`scripts/lib/guardBudget.js`; there are no per-file exceptions, and enforcement
-is skipped while host load exceeds the core count, since Vitest wall time is
-then meaningless). `scripts/ensure-deps.test.js`
-is not always-run: it is selected by changes to `ensure-deps.js`, `update.sh`,
-`update.ps1` and the lockfiles. Persistent test
-memo rules, required stages and worker caps remain the same. Downgraded full
-plans and `--guards-only` run the guard selection once; `--full` runs it before
-the full suites.
-
-`npm run pregate:merged -- --merged-with <base-ref>` (the same as
-`node scripts/pregate.js --guards-only --merged-with <base-ref>`) runs the
-structural guards on HEAD merged with a fetched base in an isolated temporary
-repository. It is an opt-in diagnostic for investigating an integration break,
-not a merge precondition: no PortOS merge path runs it. The pending-merge sweep
-and the quality-snapshot publisher merge when the forge reports the PR mergeable
-with its required checks green, pinned to the recorded or published head. CI
-already tests each pull request on its merge ref, skips every runner for a
-`.quality.json`-only change because no guard reads that file, and scheduled CI
-on `main` publishes `Full CI Gate` as the post-merge backstop. Snapshot
-checkouts a guarded merge retained before this change are retired once their PR
-is merged or closed.
-
+`scripts/pregate.js` runs the same planner as CI over the committed, uncommitted
+and untracked diff and hands its plan to the same runners. What it selects, its
+`--full` plan and receipt, interrupt and Windows behavior, and test process
+containment: [PREGATE.md](PREGATE.md).
 
 ### Browser workload partition
 
@@ -310,20 +275,13 @@ against the pre-change full-suite job wall on `main` (2026-08-16, run
 ### Test environment cost (happy-dom, and skipping the DOM entirely)
 
 `environment` — the per-file cost of constructing the DOM the test runs in — was
-the single largest phase of the client suite. On the 2026-08-16 full run it was
-`environment 489s` against `tests 384s`: building jsdom cost more than running
-the assertions. Two levers cut it, and both are now applied.
+the largest phase of the client suite. Two levers cut it, both applied.
 
 **Lever 1 — don't build a DOM you don't need.** A test file that never touches
 the DOM opts out with a `// @vitest-environment node` pragma on line 1, and pays
 ~0ms instead of ~0.35s (local) / ~0.7s (CI runner) for its environment. Every
 file under `client/src/{lib,utils,services}` that passes in `node` carries the
-pragma. Measured on the 36 files converted in that sweep (#6008):
-
-| environment | wall |
-| --- | --- |
-| jsdom: 12.69s | 1.76s |
-| node: 0.002s | 0.74s |
+pragma.
 
 When adding a test under `client/src/{lib,utils,services}`, default to the
 pragma and only drop it if the file (or the module it imports) genuinely needs
@@ -333,17 +291,9 @@ so because the *module under test* reaches for a browser global — e.g.
 `document.createElement('canvas')`.
 
 **Lever 2 — a cheaper DOM.** `client/vitest.config.js` runs on happy-dom
-(#6144). Full-suite figures for the 834 files, Node 24, same machine, same
-assertions:
-
-| environment | wall |
-| --- | --- |
-| jsdom 30.0.1: 236.86s | 55.68s |
-| happy-dom 20.14.0: 83.65s | 34.83s |
-
-A 65% cut to the environment phase and a 37% cut to wall. jsdom is no longer a
+(#6144), which cut the environment phase 65% and wall time 37%. jsdom is no longer a
 dependency, so `// @vitest-environment jsdom` is not available as a per-file
-escape hatch — a divergence gets fixed in the test, the way the six below were.
+escape hatch — a divergence gets fixed in the test.
 
 **What differs, when a test breaks after touching the DOM.** happy-dom is not
 bug-compatible with jsdom, and the gaps all showed up as tests rather than as
@@ -398,10 +348,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. That has shipped twice —
-`WordplayTrainer`'s 5 s drill bound against Vitest's 5 s default, and a
-`{ timeout: 15000 }` in `BeeperTab.test.jsx` that could never wait past 5 s and
-so never helped. `client/src/test/timeouts.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
@@ -409,11 +356,9 @@ values rather than the module constants, so a `configure()` that stopped being
 applied is caught too. A file that raises its own budget with
 `vi.setConfig({ testTimeout })` is exempt.
 
-5000 ms because Testing Library's 1000 ms default, and the 3000 ms this suite
-ran at before #7448, both sat under what a 2-vCPU public runner needs: shard 1
-failed a different `await`-a-mock-call assertion on most runs while passing
-locally every time. A loaded runner should make a test slower, not red. The cost
-is that a genuinely hung assertion reports in 5 s instead of 3.
+5000 ms because Testing Library's 1000 ms default sat under what a 2-vCPU public
+runner needs. A loaded runner should make a test slower, not red; the cost is that
+a genuinely hung assertion reports in 5 s instead of 3.
 
 **A budget is not a race fix.** It buys a slow runner room; it cannot rescue an
 assertion waiting on a call that already happened with the wrong argument. Those
@@ -525,10 +470,11 @@ contract; the parts that are not obvious:
   `server/package.json` is in the hash alongside the lockfile so that skipping
   `npm ci` does not also skip its manifest-vs-lockfile agreement check.
 
-Hit rate comes from the nightly full run. There is no push trigger on `main`, and
-a cache written by a pull request is visible only to that branch — so the 09:17
-UTC schedule is what seeds the entries on the default branch, the one scope every
-PR branch can read. A PR that changes the lockfile misses by design.
+Hit rate comes from the full runs on `main` (every push, which seeds Windows
+and macOS only when it runs them, and both schedule runs). A cache written by a
+pull request is visible only to that branch, so those runs seed the entries on
+the default branch, the one scope every PR branch can read. A PR that changes
+the lockfile misses by design.
 
 Three entries exist per key state (Linux, shared by `server`, `database` and `browser`,
 plus Windows and macOS) at roughly 570 MB each, against GitHub's 10 GB per-repo cache budget.
@@ -551,24 +497,19 @@ first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
 deeper history. The planner passes the resulting source paths to the runner,
-which resolves them through its own module graph; Vitest no longer performs
-its own Git diff.
+which resolves them through its own module graph.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
 so the payload value can name a commit the tested tree was never merged with.
 
-Non-pull-request runs (nightly, dispatch, release fallback) force the complete
-suite, need no diff at all, and get no base.
+Non-pull-request runs (push, nightly, dispatch, release fallback) force the
+complete suite and get no base; a push gets `CI_GATED_BASE_SHA` (below).
 
 ### Required checks
 
 The `main` ruleset — which also covers `release` — requires exactly one
-context: **`CI Gate`**. The workflow used to carry two extra jobs solely to
-publish historical required-check names (a `lint` job that only echoed the
-client job's result, and `test (24.x)` on the server job); both are retired. A
-`lint` job exists again since #7448, but it is the real linter doing real work,
-not a name-publishing shim. If a required check is ever added, require
+context: **`CI Gate`**. If a required check is ever added, require
 `CI Gate`, never a job name.
 
 The selected work is split across parallel jobs:
@@ -634,8 +575,8 @@ The selected work is split across parallel jobs:
 - **Node minimum compatibility** — installs every workspace and runs the
   runtime gate on the oldest supported Node. On a pull request it runs only
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
-  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer; non-PR runs
-  always run it.
+  its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer
+  (`NODE_MINIMUM_PATH_RE`). Non-push full runs always run it; a push gates it.
 - **Shipped prompt history** — the one job with a full-history clone; it checks
   that every prompt body ever shipped is current or retired in
   `data.reference/prompts/shipped-hashes.json`.
@@ -653,7 +594,8 @@ The selected work is split across parallel jobs:
   closure of those tests and the server Vitest harness, `server/package.json`,
   `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
   head tree on every run, so a new dependency is gated without a list edit.
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only.
 - **Docker containment live** — runs the opt-in live suite of the Docker
   containment profile (`server/services/dockerContainment.live.test.js`,
@@ -666,7 +608,8 @@ The selected work is split across parallel jobs:
   closure of the live suite and the server Vitest harness,
   `server/package.json`, `server/package-lock.json` or `ci.yml`
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
-  Non-PR runs and pull requests into `release` always run it. Pregate reports
+  Non-push full runs and pull requests into `release` always run it; a push
+  gates it. Pregate reports
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
@@ -685,8 +628,8 @@ The selected work is split across parallel jobs:
   `package-lock.json`, or `ci.yml` (`SUPERCOLLIDER_LIVE_ENTRIES`,
   `SUPERCOLLIDER_LIVE_PATH_RE` and `collectSuperColliderLiveInputs()` in
   `scripts/ci-test-plan.js`). The closure is recomputed from the head tree on
-  every run, so a new import is covered without a list edit. Non-PR runs
-  (nightly) and pull requests into `release` always run it; `workflow_dispatch`
+  every run, so a new import is covered without a list edit. Non-push full runs
+  and pull requests into `release` always run it, a push gates it; `workflow_dispatch`
   of `CI` is the manual evidence run. Pregate reports it as CI-only.
 - **CI Gate** — always reports one stable required-check result and fails if any
   selected job failed or was cancelled. Both block, but the message distinguishes
@@ -732,18 +675,18 @@ Primary server/client test jobs use matrices. The impact job emits
 Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
 turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
-native selectors and never repeats a related-graph traversal. Scoped Linux plans fan out the same way
-(`fansOut()` in the planner): a server `related` plan always does, because its
-import-graph reach is unbounded by the explicit selector count (scoped server
-runs took 6.1 min median, 9.4 p90, on one runner), and either runner does when
-its explicit selection exceeds `MAX_TARGETED_TEST_FILES` (125). That cap used to
-force a full plan for the whole repository; it now keeps the scoped selection
-and only partitions it, so a server-only overflow no longer starts three client
-shards, the DB/browser suites, and a Windows run (#11871). Exact-file plans
-under the cap and client `related` plans stay on one runner. Vitest refuses a
-shard count above the number of files it resolved, so a runner fans out only
-when at least that many explicit selectors are files the Linux job actually
-runs (DB and browser suites have their own jobs); each primary shard repeats Vitest's related-graph pass. Once-only steps — smoke boot and the client build —
+native selectors and never repeats a related-graph traversal. A scoped Linux plan fans out the same way
+(`fansOut()` in the planner) only when its explicit selection exceeds
+`MAX_TARGETED_TEST_FILES` (125). That cap keeps the scoped selection and only partitions it, so a server-only
+overflow does not start three client shards, the DB/browser
+suites, and a Windows run (#11871). A server `related` plan also fans out
+when its measured import reach (`serverReach.selected`, the suites the related
+walk will select) exceeds the same cap, even with few explicit selectors: one
+runner executing ~1,000 related suites set an 11-minute critical path (#16547).
+The summary names that reach-based fan-out. Every other scoped plan stays on one
+runner; record-aware selection ([TEST_MEMO.md](./TEST_MEMO.md#related-selection), #16424) still narrows what
+each selected suite runs. The runner slices the selection itself and never hands Vitest
+`--shard`, so a shard whose slice is empty exits green. Once-only steps — smoke boot and the client build —
 pin themselves to shard 1; lint is not among them,
 because it has its own job (see above). `CI Gate` sees a matrix job as one
 `needs` result, so nothing downstream changes; public-repo runner minutes are
@@ -839,8 +782,8 @@ the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
 `scripts/vitestTempRootSetup.js`), the install inputs
 (`server/package.json`, `server/package-lock.json`, `server/.npmrc`,
-`scripts/trusted-rebuilds.js`) or `ci.yml`. Non-PR runs and pull requests into
-`release` always run it. It is part of `CI Gate`; a skipped run passes.
+`scripts/trusted-rebuilds.js`) or `ci.yml`. A push gates it the same way; non-push
+full runs and pull requests into `release` always run it. It is part of `CI Gate`; a skipped run passes.
 
 Before the suites, the job runs the supervisor's own `--probe`: a real
 single-use launchd job round trip. A runner whose user domain refuses
@@ -856,39 +799,27 @@ The representative `windowsGitProcess.protocol.test.js` plus `zodCompat.js` diff
 therefore retains the schema's primary-platform coverage while selecting the
 native Windows set on one runner.
 
-Before this support-boundary change, pipeline/full plans selected four Windows
-jobs over the server inventory. At that change, they selected one job over 23
-native suites; the curated set can grow as native contracts are added.
-This is a measured selection/setup reduction, not an execution-time or
-runner-minute speedup claim. The obsolete Scalar package/chunk absence suite and
-its extra post-build invocation are retired; the actual rendered API Explorer
+Pipeline/full plans select one Windows job over the native suites (the curated set
+can grow as native contracts are added). This is a selection/setup reduction, not
+an execution-time or runner-minute speedup claim. The actual rendered API Explorer
 contracts and production client build remain.
 
 ### Windows full-suite capacity
 
-Historical full-run evidence is retained for comparison. On run
-[40420582344](https://github.com/atomantic/PortOS/actions/runs/40420582344), the
-workflow took 25m37s; Windows shard 1 took 24m46s, including 23m20s in its test
-step. Windows shard 2 failed native Git startup and cleanup; the other Windows
-shards passed. This was not a controlled before/after experiment and does not
-establish the startup cause or a runtime improvement from the new selection.
-
-Run [40425197057](https://github.com/atomantic/PortOS/actions/runs/40425197057)
-also exposed a 30-second Windows timeout in the Metal profile cache persistence
-test. Its source requests 130 concurrent learn updates against a temporary JSON
-cache to verify the 128-entry bound, reload and expiry. Those assertions retain
-value on the primary platform; they do not justify a native Windows media suite.
-The new native TUI fixture writes only a small script and synthetic reply per
-shell, with no repository/dependency copy, media payload or model data. Cleanup
-waits for actual ConPTY exit before removing its fixture.
+Windows full-run timing is not a controlled before/after measurement and does not
+establish a startup cause or a runtime improvement from selection changes. The
+Metal profile cache persistence test (130 concurrent learn updates against a
+temporary JSON cache) keeps its value on the primary platform and does not justify
+a native Windows media suite. The native TUI fixture writes only a small script
+and synthetic reply per shell, with no repository/dependency copy, media payload
+or model data; cleanup waits for actual ConPTY exit before removing it.
 
 ### Python sidecar scripts
 
-`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) used to
-be "unclassified changed files" and forced the complete matrix on every edit.
-Vitest's import graph cannot reach into them, but ~45 suites pin their
+`scripts/*.py` (the LTX-2, MiniMax, FastVideo, and download sidecars) are
+not reachable through Vitest's import graph, but ~45 suites pin their
 contracts by reading the `.py` source as text (argparse flags, MLX pins, model
-paths). The planner now resolves the suites naming each changed script with
+paths). The planner resolves the suites naming each changed script with
 `git grep` (`sourceReferencePattern`) and runs exactly them in `files` mode,
 failing closed to the full suite for a script nothing names. A `.py` outside
 `scripts/` is still unclassified.
@@ -910,147 +841,8 @@ result, and rerun the same graph.
 
 ### Test memo
 
-`scripts/run-ci-tests.js` skips a selected test file whose every input is
-byte-identical to one a trusted green run already verified, locally under
-`npm run pregate` and in CI through the same code path. Each selected file
-gets two content-addressed keys (`scripts/lib/testMemo.js`):
-
-- the **floor** key hashes the working-tree bytes of the file's static +
-  dynamic module closure (`import`/`export … from`, `require()`, `import()`,
-  `vi.mock`/`vi.doMock`/`vi.importActual`/`vi.importMock`/`vi.unmock`, all
-  with literal specifiers);
-- the **recorded** key hashes the modules the file actually loaded in the
-  green run that produced its entry (Vitest's
-  `experimental.recordDependencies` depfile, cleared before each run so only
-  this run's records count). A module the test mocks away or never reaches
-  cannot change its outcome, so a change to the lazily imported server
-  cluster invalidates only the suites that loaded it; a new edge still
-  invalidates because the importer's own bytes changed. Only plain import
-  edges are narrowed this way: JS a member reads as text, spawns, loads
-  with `require()`/`createRequire` or runs as a worker, and JS named through
-  `readServerSource`/`readClientSource`, is a side module that stays in
-  every key together with its own closure.
-
-Both keys also cover: every non-JS file a member names through a literal path
-anchored at `import.meta.url`, `__dirname`, `process.cwd()` or an identifier
-bound to one of those (a literal directory contributes its whole tree, up to
-400 files; snapshot files and each `FIXTURE_OWNERS` directory — or only
-its direct children when the owner sets `fileRe` — are added for the test
-itself); the installed version of every package the
-members reach (so a lockfile bump invalidates exactly the suites that reach
-the bumped packages); a Python sidecar's resolvable sibling imports; the
-version of an external program a member reaches (`TEST_MEMO_TOOLS`: the
-python the sidecar tests spawn — a literal, `PORTOS_TEST_PYTHON`, or an
-interpreter bound from `resolveTestPython()`; ffmpeg/ffprobe; and Chrome for
-the browser suites, found with the suites' own candidate list,
-`resolveTestChrome` in `scripts/lib/testChrome.js`); an unknown program
-handed a `.py` file fails closed; the workspace Vitest config closure, setup files,
-`scripts/vitestCiPool.js`, `package.json` and lockfile (the workspace base,
-below); the full Node
-version, `process.platform`, `process.arch`; and `TEST_MEMO_ENV` (`CI`,
-`NODE_ENV`, `PORTOS_BROWSER_TEST_PROFILE`, `PORTOS_CI_BROWSER_OWNER`,
-`PORTOS_REQUIRE_BROWSER_SUITES`, `PORTOS_REQUIRE_LINUX_CONTAINMENT`,
-`PORTOS_TEST_QUIET`, `PORTOS_TEST_PYTHON`, `CHROME_PATH`, `TZ`, `LANG`,
-`LC_ALL`, `CI_EXPECT_SLASHDO_SUBMODULE`, …).
-
-The workspace base leaves out two things that cannot change what a
-collected file proves. The test-selection modules the configs import only
-for `include`/`exclude` (`WORKSPACE_SELECTION_MODULES`:
-`scripts/lib/workspaceTests.js`, `scripts/lib/dbTestFiles.js`,
-`scripts/lib/browserSuites.js`) decide which files run, so adding a suite to
-`DB_TEST_INCLUDE` no longer moves every key; a test that imports one keys it
-through its own closure. And the walk does not follow a bare
-`vi.mock`/`vi.doMock`/`vi.unmock` registration: setup's global
-`vi.mock('./services/instances.js', …)` loads nothing until a test imports
-`instances.js`, and then that module and its closure are in the test's own
-closure (a non-literal edge fails the floor key closed) or record. What the
-setup files really import (`mockPathsDataRoot.js`, `fileWriteQueue.js`,
-`test/admissionSetup.js`, …) stays in every key. Before this, the floor
-base pulled in instances.js's ~100-file product closure, so an edit to
-`catalogValidation.js` changed every floor key and pull requests never hit
-the nightly memo.
-
-The recorded key takes the setup phase from the record too. Vitest's depfile
-lists, in every test file's record, the modules its custom environment and
-`setupFiles` loaded, so for the setup entries the config reaches
-(`WORKSPACE_SETUP_ENTRIES`: `server/vitest.setup.js` and
-`server/test/mediaRegistryEnvironment.js`, `client/src/test/setup.js`) the
-recorded key's workspace base stops the static walk at them: a module the
-setup files only mock or never load (`services/instances.js` and its
-closure) no longer invalidates every recorded key. A record that does not
-name every setup entry (a per-file environment pragma) keeps the full static
-base, and a setup-phase problem the static walk finds still fails both keys
-closed. The floor key always walks the setup closure (less bare mock
-registrations).
-
-**Never memoized (fails closed).** A file in the planner's always-run set
-or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
-file whose closure contains the `// test-memo: never` marker; a test file or
-`scripts/` module that spawns `git` (repository state is not in the key —
-product modules that run git on their own targets are under the test's
-control); a test file or `scripts/` member that reads machine-local state
-(`data/`, the home directory); a member that reads a path the analyzer
-cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
-`readServerSource`/`readClientSource`, a literal directory with more than
-400 files); a bare specifier that resolves to no installed package; and, for
-the floor key only, a non-literal `import()`/`require()` or an unparseable
-member. Two non-literal `require()` shapes are keyed instead: `require(CONST)`
-with a module-level string is that bare specifier (package version), and
-`require(join(<unknown dir>, 'name.cjs'))` keys every tracked file of that
-basename. A Python `importlib.import_module('x')` follows like `import x`; a
-computed name is not memoizable. `import(variable)` stays outside the
-recorded key by design: only what the green run loaded is keyed. A recorded set that reaches outside the repository is not memoizable
-either. Every unknown construct lands in one of those buckets rather than
-silently narrowing the key.
-
-**Store.** `~/.portos/test-memo/` (override with `PORTOS_TEST_MEMO_DIR`):
-`entries/<key[0..2]>/<key>.json` holds `{ test, workspace, verifiedAt,
-source: 'local'|'ci', commit }`, `records/<workspace>/<sha256(test)>.json`
-the loaded-module list. Writes are temp-file-plus-rename so concurrent
-worktree pregates never tear a file; any read error is a miss, and so is an
-entry older than 14 days, so the nightly re-verifies what it keeps skipping.
-Entries are written only from a Vitest process that exited 0 whose run-level
-report (`scripts/vitestRunDiagnostics.js`) ended `passed` with no unhandled
-error — a rejection after the last test still marks every file `passed` in
-the JSON report — and only for files that report shows passed with no failed
-and no skipped case (a browser profile's name pattern is the one accepted
-skip reason). Every key is recomputed after the run and written only when it
-still matches, so a file edited while Vitest ran is never attributed to the
-verdict. The runner prints one line —
-`🧠 Test memo: skipped N of M selected files (closure unchanged); running K.`
-— and lists the skipped files under `PORTOS_TEST_MEMO_VERBOSE=1`. When every
-selected file is memoized nothing is launched and the job exits 0.
-
-**Shards.** A matrix shard takes its slice of the FULL selected list with
-Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
-against a real `vitest run --shard`) before the memo subtracts anything, so
-every file lands in exactly one shard whatever each shard's store holds;
-Vitest itself is never given `--shard`.
-
-**CI seeding.** The server, client, browser and Windows jobs restore
-`${{ runner.temp }}/portos-test-memo` through the `test-memo` action
-(`actions/cache/restore`) under a per-job, per-shard key prefix
-(`test-memo-<os>-<arch>-<job>-<shard>of<n>-`).
-Server, client and Windows restores prefer that partition, then fall back to
-the newest memo from any shard of the same OS, architecture and job. Trusted
-full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
-would leave those jobs permanently cold. A fallback contains only one shard's
-entries: matching content keys may skip those tests; all other selected tests
-still run. Partitioning happens before memo lookup, so changing the memo's
-source shard cannot omit or duplicate a selected test.
-Pull requests only read. The scheduled nightly, `workflow_dispatch` and
-`workflow_call` runs on the default/release branches save a new entry keyed
-by run id, and only when the test step itself succeeded, so the cache holds
-nothing a pull-request branch or a red run wrote and every PR restores the
-newest trusted lineage. The DB job runs the `db` scope
-(`node scripts/run-ci-tests.js db`, the serial `portos_test` suite) and keeps
-its own `-db-` lineage. The DB config, `server/scripts/init-db.sql` and
-`server/scripts/setup-db-test.mjs` are base inputs (a schema change
-invalidates every key) and `PGDATABASE` is a keyed env var.
-
-**Disable.** `PORTOS_TEST_MEMO=off` turns reads and writes off together and
-restores the pre-memo behavior. A test spawned under Vitest (`VITEST` set)
-never touches the developer's store unless it sets `PORTOS_TEST_MEMO_DIR`.
+The content-addressed test memo, its CI seeding and record-aware `related`
+selection are documented in [TEST_MEMO.md](./TEST_MEMO.md).
 
 No third-party change-filter action is used. The planner passes test paths as a
 JSON argument array to `spawnSync`, never through shell interpolation.
@@ -1060,21 +852,56 @@ JSON argument array to `spawnSync`, never through shell interpolation.
 The complete server, client, DB, lint, build, and smoke suite runs:
 
 - on every pull request whose base branch is `release` (the release gate);
+- on every push to `main`: the run in flight always finishes, and a newer push
+  replaces any run still waiting behind it (GitHub cancels a pending run when a
+  newer one joins the concurrency group). With merges minutes apart, cancelling
+  the run in flight meant almost no push run finished, so `main` went untested
+  and the memo records that related selection narrows with were never saved
+  (#16424). A miss is caught by the next run that completes, which covers every
+  merge since the previous one started;
 - on the schedule, 09:17 and 21:17 UTC;
 - from manual workflow dispatch;
 - as a reusable workflow called by a release whose tree has no verifiable gate.
 
-There is **no push trigger on `main`**. A merge commit on `main` re-tests a
-tree whose PR gate is already green, so the run was pure duplication; the
-nightly full run is what catches a semantic conflict between two independently
-green PRs, and the candidate → `release` PR catches it before a release ships.
+### Native jobs on a push to `main`
 
-A red scheduled run cannot point at a PR, so the gate's last step
-(`scripts/ci-nightly-report.js`, scheduled runs only) writes the suspect list to the run
-summary: the failing jobs and steps, plus every pull request merged since the last
-**green** scheduled run (the Compare API against that run's head). An unreadable range or
-a missing earlier green run is reported as such, never as "no suspects". To bisect, run the
-failing suite at a merge in the middle of the list and halve it.
+A push to `main` runs the primary suites and prompt history complete (its
+guard reads every committed body, which a tree diff cannot see), but the six
+native job families (SuperCollider, Windows, macOS, Linux and Docker
+containment, Node minimum) follow the tree diff since the last green `main`
+run, decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
+(opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes
+one Actions API call for the newest successful `push` or `schedule` run of
+`ci.yml` on `main`, fetches its head at depth 1 and exports
+`CI_GATED_BASE_SHA`; the planner diffs it against `HEAD` (two-dot,
+`--no-renames`). Any lookup, fetch or diff failure runs every native job.
+Scheduled, dispatched and release runs are unchanged, so every native job still
+runs twice a day and on the release candidate. A gated push publishes no `Full CI Gate`
+(`native_gated`): it is not complete-run evidence for release reuse.
+
+A merge commit on `main` is tested because a PR gate only proves the PR
+against the base it was built on: two PRs that were each green can merge into a
+red result, and a direct push skips the gate. There is no merge coordinator (#12247
+and #14185 built and removed one).
+
+`.github/workflows/main-health.yml` consumes every finished push or scheduled run
+on `main` (`workflow_run`) and runs `scripts/ci-nightly-report.js`:
+
+- **red**: the run summary lists the failing jobs and steps plus every pull request
+  merged since the last **green** run on `main` (the Compare API against the head of
+  that run), and one open issue titled "main is red" (labels `bug`, `area:ci`,
+  `model:medium`, `effort:medium`) is created, or updated with a comment when one
+  is already open. The issue carries only job names, the commit range and the run
+  URL. An unreadable range or a missing earlier green run is reported as such, never
+  as "no suspects".
+- **green**: the open issue is closed with a comment.
+- **cancelled** (superseded by a newer push): nothing changes.
+
+A failure to read or write the issue fails the `main-health` job so a stale or
+duplicate issue is visible. The reporter is a separate workflow, not a job in
+`ci.yml`, because release.yml calls `ci.yml` and a called workflow cannot hold
+`issues: write` that its caller lacks. To bisect, run the failing suite at a merge in
+the middle of the list and halve it.
 
 Changes to CI/test configuration also force the full suite on their own PR.
 `[skip ci]` remains honored for push events only; PR CI always runs.
@@ -1267,9 +1094,7 @@ successor run".
 - A changed source's basename lookup (`git grep` of test files, #6363) keeps
   every hit for a unique basename. For a basename several tracked sources
   share (`index.js`, `providers.js`), it keeps only tests inside the source's
-  directory subtree or whose text also names its parent directory, so a
-  `server/cos-runner/index.js` edit no longer selects every test naming any
-  `index.js` (#11870). Import-graph selection still reaches real importers.
+  directory subtree or whose text also names its parent directory (#11870). Import-graph selection still reaches real importers.
 - Unmapped executable files use related-test mode. Unclassified artifacts,
   shared roots/config, or more than 30 executable changes fail safe to full
   CI. More than 125 selected tests on one runner keeps the scoped selection
@@ -1280,9 +1105,8 @@ successor run".
 Generates an SBOM (syft) and a vulnerability scan (grype, OS packages and
 language dependencies) for the pinned runtime recipes that the npm/Python
 audits cannot see (#15656). It is separate from `ci.yml`, is **not** part of
-`CI Gate`, and never blocks an unrelated PR on a new upstream advisory. Native
-audio build/boot results (`supercollider-live`) stay functional evidence; this
-workflow is the security inventory.
+`CI Gate`, and never blocks an unrelated PR on a new upstream advisory. It is
+the security inventory; `supercollider-live` stays functional evidence.
 
 | Target | Subject | Architectures |
 | --- | --- | --- |
@@ -1297,53 +1121,31 @@ fails the run. Each run uploads `runtime-image-security-<target>-<arch>`
 `grype-db-status.json`, `findings.json` and `provenance.json` (image ref, image
 ID and repo digests, recipe path and hash, commit, run, architecture, syft/grype
 versions, vulnerability DB identity). Scanner binaries are pinned by version and
-archive SHA-256 and actions by commit SHA. The vulnerability DB is the one
-moving input, so it is recorded rather than pinned.
+archive SHA-256, actions by commit SHA; the vulnerability DB is recorded, not pinned.
 
 Triggers: weekly, `workflow_dispatch`, and pull requests touching
 `docker-compose.yml`, `docker/`, the helper script or the supercollider runtime
-constants. Scheduled and dispatched runs fail on any finding without a reviewed
-disposition; pull request runs report findings in the job summary without
-failing on them. Scanner errors, an empty or malformed SBOM, a missing OS or npm
-package ecosystem, or an unparseable scan always fail the run: a scanner that
-did not run is never zero findings.
+constants. The job summary lists **every** finding by severity with its fix
+state; findings are reported, not gated. The run fails on exactly three things:
 
-Findings are reconciled in `docker/runtime-image-security.reviews.json`
-(`target`, advisory `id`, optional `package`, `version` and `arch` scopes,
-`disposition` of `not-reachable` or `blocked`, `rationale`, `tracking` issue/PR).
-Every severity needs an entry that cites verified unreachability or a tracked
-blocker; a fix removes the finding from the scan, so it needs no entry and a
-finding still detected is never suppressed as "fixed"; do not move the
-Debian snapshot or an image digest merely to silence a scanner.
+- a scanner error or an unparseable scan;
+- an empty or malformed SBOM, or a missing OS or npm package ecosystem (a scanner
+  that did not run is never zero findings);
+- an **actionable** finding: High or Critical severity, a fix available, and absent
+  from the scan of the newest digest of the pinned tag, so bumping the pin removes
+  it. The failure names the image and the digest to adopt.
 
-### Ledger triage
+Pull request runs report an actionable finding without failing. Only `pgvector`,
+pinned as `repo:tag@digest`, has a newest digest to compare against;
+`supercollider` and `eidoverse-rapier` findings are always reported only. A finding that is unfixed upstream, or
+fixed but not yet in the newest digest, is a report line, never a failure: no PortOS
+action clears it (the review ledger that recorded this was retired in #16425).
 
-The initial entries (#15662) were triaged at package level from the scanned
-image, not advisory by advisory; re-triage an entry when its package version
-changes. The [November 11 review](RUNTIME_ADVISORY_TRIAGE.md) records individual
-Kerberos/OpenSSL paths, source-range mismatches and upstream blockers for #15768;
-the [November 14 review](RUNTIME_ADVISORY_TRIAGE.md#runtime-advisory-review-2026-11-14)
-covers #16049.
-Two dispositions are used:
-
-- `not-reachable`: upstream explicitly excludes the installed version from the
-  advisory (record the source-range evidence), or the package is not loaded by
-  the long-running process (the
-  postgres server, or `sclang`/`scsynth`) and is not run by the entrypoint,
-  health probe or PortOS. For `pgvector` the container publishes only the
-  loopback PostgreSQL port, so there is no shell, login or package-manager entry
-  point. For `supercollider` untrusted `.scd` can run arbitrary commands, so
-  the argument is the sandbox (`--network none`, `--cap-drop ALL`,
-  `no-new-privileges`, read-only root, unprivileged user, disposable per
-  render): the tool grants nothing the render sandbox does not already allow.
-- `blocked`: the package is loaded (found by `ldd` over `bin/postgres`,
-  `lib/*.so` and libpq for pgvector; over the runtime packages for SuperCollider)
-  and Debian ships no fix (`wont-fix` or `not-fixed`), tracked at #15662, or a
-  fix exists upstream but the newest image digest does not carry it yet, tracked
-  at #15669. The rationale names the exposure that bounds the risk.
-
-Delete the `#15669` entries when a rebuilt upstream digest is adopted; a fixed
-finding disappears from the scan, so it never needs a disposition.
+The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
+(`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
+in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
+`scripts/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
+snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
 `deno.json`/`deno.lock` build context are built from the independent
@@ -1354,8 +1156,8 @@ never counts as a pass. Closing it needs the pinned parent digest and lock from
 that project's build.
 
 The scheduled `dependency-updates` task reads the latest default-branch run of
-this workflow and its artifacts, and reports a missing, scanner-failed, older-than-14-days,
-stale-recipe or `unavailable` target as a coverage gap instead of a clean result.
+this workflow and its artifacts, and reports a missing, scanner-failed, over-14-days-old,
+stale-recipe or `unavailable` target as a coverage gap, not a clean result.
 
 ## Release Workflow (`release.yml`)
 
@@ -1455,7 +1257,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or
@@ -1484,38 +1286,15 @@ runner `Complete job` → overall job result. A successful repository checkpoint
 cannot attest the later runner/result-service handoff. Keep the ten-minute impact
 timeout, fail-closed `CI Gate`, and real-job-timeout exclusion in cancel recovery.
 
-#### Retained investigation: #13500
+#### Retained evidence rule
 
-The [original attempt-1 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120936398030)
-ran head `9ce1866c45a5ae517b81a82bdc31e3cf4af395e9` on merge `47b63aa` with
-base `8b8ffd5e847a6dca5e5c10a479338c94d561195a`. Its planner ran
-17:21:02.180–17:21:02.977 UTC on 2026-10-24. Checkout post-cleanup and job output
-publication ended by 17:21:04.175; the final retained log line begins runner orphan
-cleanup. The job was cancelled at 17:34:22 with the ten-minute timeout annotation.
-
-Initial API reads returned no steps and some reads failed with HTTP 502. Fresh
-reads during this investigation returned successful conclusions for every step,
-including `Complete job`, completed at 17:21:04. That later evidence narrows the
-first unconfirmed boundary to completion of the runner/job-result handoff; the
-log line alone had left orphan cleanup unconfirmed. The API's successful timeline
-record does not prove the overall job result was accepted.
-
-The matching [runner v2.338.0 finalizer](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobExtension.cs)
-performs orphan inspection before completing the `Complete job` context. The
-[runner job completion path](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobRunner.cs)
-then drains its reporting queue and submits job completion. These source paths
-identify possible boundaries, not a demonstrated cause in this job. No retained
-runner transport trace or matching public GitHub Status incident establishes
-which operation failed. Neither a repository-created orphan nor a specific
-upstream incident has been proved.
-
-The [existing attempt-2 impact job](https://github.com/atomantic/PortOS/actions/runs/40115698658/job/120941724098)
-passed at the same head from 17:44:31–17:44:48. That is non-reproduction, not a
-cause-specific fix. The request to rerun attempt 1 with debugging was refused
-because it was no longer the current attempt; no further rerun was started.
-Preserve attempt 1. Future recurrence needs the fixed-stage evidence plus the
-runner's completion/queue/transport diagnostics, with sensitive fields redacted,
-before changing lifecycle behavior or attributing a GitHub incident.
+An impact job whose last retained log line is runner orphan cleanup, with every
+step later read back as successful, proves nothing about the runner/job-result
+handoff: that boundary stays unconfirmed. Neither a repository-created orphan nor
+a specific upstream incident has been proved. Preserve the cancelled attempt; a
+recurrence needs the fixed-stage evidence plus the runner's completion, queue and
+transport diagnostics (sensitive fields redacted) before changing lifecycle
+behavior or attributing a GitHub incident.
 
 ### Superseded queued aggregate recovery (#13591)
 

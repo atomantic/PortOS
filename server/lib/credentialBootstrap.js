@@ -6,28 +6,22 @@
  * spawn time (no stored `apiKey`): the bootstrap CLI is spawned in front of the harness, as
  * `<bootstrap> run <harness> <harness args...>`. PortOS never interprets the credential.
  *
- * `provider.command`/`args` keep naming the harness everywhere (vendor detection, prompt
- * delivery, TUI ready-text heuristics key off it). Spawn sites ask this module for the pair to hand
- * to `spawn`/`pty.spawn` right before that call. Anything observing the launching shell (PATH
- * probe, missing-binary detector) reads `spawnCommand`, never `command`.
+ * `provider.command`/`args` keep naming the harness everywhere (vendor detection, prompt delivery,
+ * TUI ready-text heuristics); spawn sites ask this module for the pair to hand to `spawn`/`pty.spawn`.
+ * Anything observing the launching shell (PATH probe, missing-binary detector) reads `spawnCommand`.
+ * EVERY site spawning a provider's `command` must go through here: a bare harness silently falls
+ * back to ambient vendor auth (the wrong backend).
  *
- * EVERY site spawning a provider's `command` must go through here: a bare harness runs with no
- * credential and silently falls back to ambient vendor auth (the wrong backend).
+ * The `sandboxed-actions` posture (`isPublicReviewActionsProfile`) is NEVER wrapped: an intermediary
+ * able to rewrite the recipe's sandbox argv could turn a screened patch loose. The `no-tool`
+ * postures ARE wrapped: the wrap mints the credential into the child's env downstream of the
+ * `buildCliChildEnv` allowlist.
  *
- * The `sandboxed-actions` posture (`isPublicReviewActionsProfile`) is NEVER wrapped: it executes
- * contributor code inside the vendor sandbox spelled in the recipe's argv, and an intermediary able
- * to rewrite that argv could turn a screened patch loose. The `no-tool` postures ARE wrapped: spawned
- * bare they have no credential at all, and the wrap mints it into the child's env downstream of the
- * `buildCliChildEnv` allowlist. `resolveBootstrapEnv` is the alternative for a bootstrap that PRINTS
- * credentials rather than exec'ing the harness.
- *
- * Wrapping also changes teardown: the direct child is the WRAPPER, so a per-pid SIGTERM can leave the
- * harness running. `needsProcessGroup`, `trackDetachedGroup`, `signalDetachedGroups` and
- * `processGroupKillable` are that half of the contract.
- *
- * The argv shape is composed by the dependency-free `aiToolkit/internal/credentialBootstrap.js`
- * leaf. This module imports only that leaf, `bufferedSpawn.js` and `agentExecutionProfiles.js`, so
- * any spawn site (including the standalone autofixer) can import it cheaply.
+ * Wrapping changes teardown: the direct child is the WRAPPER, so a per-pid SIGTERM can leave the
+ * harness running (`needsProcessGroup`, `trackDetachedGroup`, `signalDetachedGroups`,
+ * `processGroupKillable`). Imports stay limited to the dependency-free
+ * `aiToolkit/internal/credentialBootstrap.js` leaf, `bufferedSpawn.js` and
+ * `agentExecutionProfiles.js` so any spawn site (including the autofixer) can import it cheaply.
  */
 
 import { IS_WIN32, resolveWindowsExecutable, prepareWindowsSafeSpawn, prepareCliSpawn, killProcessTree } from './bufferedSpawn.js';
@@ -39,8 +33,7 @@ import { composeBootstrapSpawn, hasCredentialBootstrap } from './aiToolkit/inter
 
 export { hasCredentialBootstrap };
 
-// Credentials are memory-only and expire after one minute. Key by the record
-// and its configuration so editing a command or account cannot reuse old auth.
+// Memory-only, keyed by record + configuration so an edited command or account cannot reuse old auth.
 const bootstrapEnvCache = new Map();
 const BOOTSTRAP_ENV_TTL_MS = 60_000;
 
@@ -91,32 +84,26 @@ export async function resolveBootstrapEnv(provider, { safetyProfile = null, time
 
 /**
  * The command+args to actually spawn: the bootstrap CLI in front of the harness when configured,
- * else the harness unchanged. Pure; Windows shim resolution happens downstream. The shape is
- * documented on `composeBootstrapSpawn`; this adds the `sandboxed-actions` skip (see module doc).
+ * else the harness unchanged. Pure; Windows shim resolution happens downstream. `wrapped` reports
+ * whether the wrap applied (false for the `sandboxed-actions` skip) and drives teardown.
  *
  * @param {{credentialBootstrap?: {command: string, args?: string[], harnessId?: string, argsSeparator?: string}}|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
  * @param {string[]} [args] - the harness's own argv
- * `wrapped` reports whether the wrap applied (false for the actions-posture skip) and drives
- * teardown: see `needsProcessGroup`.
- *
- * @param {{safetyProfile?: string|null}} [options] - the run's execution
- *   profile; the `sandboxed-actions` posture is returned unwrapped (see module doc)
+ * @param {{safetyProfile?: string|null}} [options] - the run's execution profile; the
+ *   `sandboxed-actions` posture is returned unwrapped (see module doc)
  * @returns {{command: string, args: string[], wrapped: boolean}}
  */
 export function applyCredentialBootstrap(provider, command, args, { safetyProfile = null } = {}) {
-  // The skipped posture composes against NO provider so argv normalization and `wrapped` stay in one place.
+  // Composing against NO provider keeps argv normalization and `wrapped` in one place.
   return composeBootstrapSpawn(isPublicReviewActionsProfile(safetyProfile) ? null : provider, command, args);
 }
 
 /**
  * Should this spawn get its own process group, so stop/timeout/cancel reaches the harness BEHIND
- * the bootstrap wrapper? A surviving harness keeps running, possibly with a minted credential,
- * after the run is finalized. On POSIX a per-pid signal misses it when the wrapper doesn't forward
- * SIGTERM; `detached: true` lets `killProcessTree(child, sig, { processGroup: true })` signal both.
- *
- * POSIX-only: Windows `taskkill /T` is already tree-wide and `detached` opens a console window per
- * spawn. False for unwrapped spawns, where the harness is the direct child.
+ * the bootstrap wrapper? A per-pid signal misses it when the wrapper doesn't forward SIGTERM, and a
+ * surviving harness may hold a minted credential. POSIX-only: Windows `taskkill /T` is already
+ * tree-wide and `detached` opens a console window. False for unwrapped spawns.
  *
  * @param {boolean} wrapped - the `wrapped` flag from applyCredentialBootstrap/resolveCliSpawn
  * @param {boolean} [isWin32] - injectable for tests; defaults to the real platform
@@ -128,18 +115,16 @@ export function needsProcessGroup(wrapped, isWin32 = IS_WIN32) {
 
 /**
  * pids of children spawned into their own process group. Detaching moves them out of the server's
- * group, so a group-aimed shutdown signal (Ctrl-C, `kill -<pgid>`) no longer reaches them; the
- * shutdown handler sweeps this set instead of every per-feature registry.
+ * group, so a group-aimed shutdown signal no longer reaches them; shutdown sweeps this set.
  */
 const detachedGroupPids = new Set();
 
 /**
  * Remember a detached child's process group until it closes; returns the child untouched, and does
- * nothing when the spawn was not detached. Keyed by pid so the sweep needs only `process.kill`.
+ * nothing when the spawn was not detached.
  *
  * Cleared on `close`, NOT `exit`: `exit` fires when the wrapper is reaped, while `close` waits for
- * stdio the orphaned harness still holds. A pgid cannot be recycled while its group has a member,
- * so deferring is safe. `error` covers a child that never started.
+ * stdio the orphaned harness still holds. A pgid cannot be recycled while its group has a member.
  *
  * @template T
  * @param {T & {pid?: number, once?: Function}} child
@@ -180,10 +165,9 @@ export function resetDetachedGroupsForTests() {
 
 /**
  * Wrap a child in the `{ pid, killed, kill(signal) }` shape the aiToolkit external-run registry
- * consumes (`registerExternalRun`), so its `stopRun` signals the whole process group. The vendored
- * toolkit `killProcessTree` has no `processGroup` option and imports nothing from PortOS
- * (`server/lib/aiToolkit/AGENTS.md`), but calls a non-ChildProcess handle's `.kill()`. Returns the
- * child UNCHANGED when `processGroup` is false.
+ * consumes (`registerExternalRun`), so its `stopRun` signals the whole process group: the vendored
+ * toolkit `killProcessTree` has no `processGroup` option but calls a non-ChildProcess handle's
+ * `.kill()`. Returns the child UNCHANGED when `processGroup` is false.
  *
  * @param {import('child_process').ChildProcess|{pid?: number, kill: Function}} child
  * @param {boolean} processGroup
@@ -199,17 +183,18 @@ export function processGroupKillable(child, processGroup) {
 
 /**
  * `applyCredentialBootstrap` + Windows shim resolution in one call, for headless spawn sites right
- * before `spawn()`. TUI/PTY sites (`agentTuiSpawning.js`, `tuiPromptRunner.js`) do their own
- * Windows resolution and call `applyCredentialBootstrap` directly.
+ * before `spawn()`. TUI/PTY sites do their own Windows resolution and call
+ * `applyCredentialBootstrap` directly. `childEnv` is what the executable is resolved against, so a
+ * provider-configured PATH override is honored; `wrapped` carries through (see `needsProcessGroup`).
  *
  * @param {object|null|undefined} provider
  * @param {string} command - the harness binary PortOS would otherwise spawn
  * @param {string[]} args - the harness's own argv
- * @param {NodeJS.ProcessEnv} childEnv - resolved against this so a
- *   provider-configured PATH override is honored
+ * @param {NodeJS.ProcessEnv} childEnv - resolved against this so a provider-configured PATH
+ *   override is honored
  * @param {{safetyProfile?: string|null}} [options] - forwarded to `applyCredentialBootstrap`
- * @returns {{command: string, args: string[], wrapped: boolean}} `wrapped` is
- *   carried through from `applyCredentialBootstrap` — see `needsProcessGroup`
+ * @returns {{command: string, args: string[], wrapped: boolean}} `wrapped` is carried through
+ *   from `applyCredentialBootstrap` (see `needsProcessGroup`)
  */
 export function resolveCliSpawn(provider, command, args, childEnv, options = {}) {
   const bootstrapped = applyCredentialBootstrap(provider, command, args, options);

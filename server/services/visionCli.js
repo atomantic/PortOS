@@ -5,7 +5,7 @@
  * `image_url` block. CLI providers read a prompt from stdin and an image from a FILE, so
  * this module decodes the data URL to a temp PNG, attaches it the way each CLI expects,
  * spawns the provider, and returns the same `{ text, finishReason, usage, reasoning }`
- * shape so `loraDatasetCaption.js` consumes either provider type uniformly.
+ * shape so vision callers consume either provider type uniformly.
  *
  * Attachment conventions (mirrors `imageGen/codex.js` for codex):
  *   - codex:  `codex exec -i <file> '<prompt>'`.

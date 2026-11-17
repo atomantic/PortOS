@@ -1,27 +1,7 @@
 /**
- * Spaced repetition (SM-2 inspired) — the shared scheduling core.
+ * Spaced repetition (SM-2 inspired): the shared scheduling core.
  *
- * Every record that wants to resurface on a review cadence carries the same
- * four-field schedule:
- *
- *   { ease, intervalDays, nextReview, lastReviewed }
- *
- * A record is "due" when `nextReview <= now`. Reviewing it advances the
- * schedule: a correct-heavy pass pushes the next review further out, a miss
- * resets the interval to 0 so the record resurfaces immediately.
- *
- * The shape is deliberately additive and migration-safe — a record predating
- * spaced repetition simply has no schedule, and `scheduleOrDefault` derives one
- * anchored to the record's own `updatedAt`/`createdAt` (stable, in the past →
- * due now) so "due" state can't flap between reads.
- *
- * There is NO `repetitions` counter: the 0 → 1 → 6 → round(prev * ease) ladder
- * is derived from the previous interval, so a schedule round-tripping through
- * import/export/federation needs only these four fields.
- *
- * Extracted from `services/meatspacePostMemory.js` (which re-exports these for
- * its existing callers) when SongBook repertoire practice became the second
- * consumer — see #4102.
+ * A record that resurfaces on a review cadence carries `{ ease, intervalDays, nextReview, lastReviewed }` and is "due" when `nextReview <= now`; a correct-heavy review pushes the next one out, a miss resets the interval to 0. Additive and migration-safe: a record predating this has no schedule and `scheduleOrDefault` derives one anchored to its own `updatedAt`/`createdAt` (stable, in the past → due now) so "due" can't flap between reads. No `repetitions` counter: the 0 → 1 → 6 → round(prev * ease) ladder derives from the previous interval, so a schedule round-tripping import/export/federation needs only these four fields. Extracted from `services/meatspacePostMemory.js` (which re-exports it) when SongBook practice became the second consumer (#4102).
  */
 
 import { todayInTimezone } from './timezone.js';
@@ -30,21 +10,9 @@ import { todayInTimezone } from './timezone.js';
 export const DEFAULT_EASE = 2.5;
 /** SM-2's ease floor: below this the interval ladder stops growing usefully. */
 export const MIN_EASE = 1.3;
-/**
- * Ease ceiling. The per-review +0.1 bumps are unbounded otherwise, so ~26
- * perfect reps would push ease past 5, and any Zod schema mirroring this shape
- * (`memoryScheduleSchema.ease.max(5)` in postValidation.js) would then 400 on
- * the server's own value during an import / out-of-band reschedule round-trip.
- * Keep any such schema in sync with this constant.
- */
+/** Ease ceiling: the unbounded +0.1 bumps would pass 5 after ~26 perfect reps and any mirroring Zod schema (`memoryScheduleSchema.ease.max(5)` in postValidation.js) would 400 on the server's own value in an import round-trip. Keep such schemas in sync. */
 export const MAX_EASE = 5;
-/**
- * Cap the interval at a year so a long run of perfect reviews can't grow it
- * without bound — an astronomically large `intervalDays` would overflow
- * `new Date(now + intervalDays * DAY_MS)` into an Invalid Date and throw. A
- * yearly review floor is a conventional SRS ceiling and keeps records
- * resurfacing.
- */
+/** Interval cap of a year (a conventional SRS ceiling): an astronomically large `intervalDays` would overflow `new Date(now + intervalDays * DAY_MS)` into an Invalid Date and throw. */
 export const MAX_INTERVAL_DAYS = 365;
 /** Top of the SM-2 quality scale — a review grades 0..MAX_QUALITY. */
 export const MAX_QUALITY = 5;
@@ -61,66 +29,32 @@ export function isValidSchedule(schedule) {
   return Boolean(schedule) && typeof schedule === 'object' && typeof schedule.nextReview === 'string';
 }
 
-/**
- * The schedule to READ for a record, without persisting anything. Absent or
- * malformed schedules derive a default anchored to the record's own
- * `updatedAt`/`createdAt` — stable and in the past, so the record reads as due
- * now instead of the "due" answer flapping with the clock on every call.
- *
- * `null`/absent is deliberately NOT collapsed into "due at this instant": the
- * anchor is what makes two reads a millisecond apart agree.
- */
+/** The schedule to READ for a record, without persisting. Absent/malformed schedules derive a default anchored to the record's `updatedAt`/`createdAt` (stable and in the past) so two reads a millisecond apart agree, rather than "due at this instant" flapping with the clock. */
 export function scheduleOrDefault(record, schedule = record?.schedule) {
   if (isValidSchedule(schedule)) return schedule;
   return defaultSchedule(record?.updatedAt || record?.createdAt || new Date().toISOString());
 }
 
-/**
- * SM-2 quality (0..5) for a correctness ratio (0..1). Non-finite input scores
- * 0 — an unmeasurable pass must never read as a perfect one.
- *
- * Note the pass threshold this implies: quality >= 3 needs ratio >= 0.5
- * (0.5 * 5 = 2.5 → rounds to 3).
- */
+/** SM-2 quality (0..5) for a correctness ratio (0..1). Non-finite input scores 0 (an unmeasurable pass must never read as perfect). Pass threshold: quality >= 3 needs ratio >= 0.5. */
 export function ratioToQuality(ratio) {
   const clamped = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
   return Math.round(clamped * MAX_QUALITY);
 }
 
-/**
- * The correctness ratio a caller passes to `advanceSchedule` for a review the
- * user graded directly on the 0..MAX_QUALITY scale (rather than one measured as
- * correct/total). Exact inverse of `ratioToQuality` over the integers, so a
- * self-graded review lands on the quality the user actually picked.
- */
+/** The correctness ratio to pass `advanceSchedule` for a review graded directly on the 0..MAX_QUALITY scale; the exact inverse of `ratioToQuality` over the integers, so a self-graded review lands on the picked quality. */
 export function qualityToRatio(quality) {
   const clamped = Math.max(0, Math.min(MAX_QUALITY, Number.isFinite(quality) ? quality : 0));
   return clamped / MAX_QUALITY;
 }
 
-/**
- * Did the previous review land on the same calendar day as `now` in `timezone`
- * (an IANA name; UTC when omitted)? The signal behind
- * once-per-day gating (interval growth in `mergeScheduleAdvance`, and any
- * caller-side progression that should count a day of work once).
- *
- * An absent/unparseable `lastReviewed` is NOT the same day — a record with no
- * review history must never read as "already reviewed today".
- */
+/** Did the previous review land on the same calendar day as `now` in `timezone` (IANA; UTC when omitted)? The signal behind once-per-day gating (`mergeScheduleAdvance` interval growth). An absent/unparseable `lastReviewed` is NOT the same day. */
 export function isSameReviewDay(lastReviewed, now = new Date(), timezone = 'UTC') {
   const lastReviewedMs = Date.parse(lastReviewed ?? '');
   if (!Number.isFinite(lastReviewedMs)) return false;
   return todayInTimezone(timezone, new Date(lastReviewedMs)) === todayInTimezone(timezone, now);
 }
 
-/**
- * Advance a schedule from a review's correctness ratio (0..1).
- * Pure — returns a new schedule object, never mutates the input.
- *   - ratio maps to an SM-2 quality (0..5); ease adjusts per the SM-2 formula.
- *   - quality < 3 (a miss-heavy pass) → intervalDays 0 → due now again, but the
- *     ease penalty still applies.
- *   - otherwise the interval steps 0 → 1 → 6 → round(interval * ease).
- */
+/** Advance a schedule from a review's correctness ratio (0..1); pure, returns a new object. Ratio maps to SM-2 quality (0..5) adjusting ease; quality < 3 → intervalDays 0 (due now again, ease penalty still applies); otherwise the interval steps 0 → 1 → 6 → round(interval * ease). */
 export function advanceSchedule(schedule, ratio, now = new Date()) {
   const prev = schedule && typeof schedule === 'object' ? schedule : {};
   const quality = ratioToQuality(ratio);
@@ -146,34 +80,19 @@ export function advanceSchedule(schedule, ratio, now = new Date()) {
 }
 
 /**
- * Merge a freshly-advanced schedule against the record's prior schedule, gating
- * interval GROWTH to once per review day.
- *
- * Why: a "review" is one pass through the record, but a UI that submits per
- * chunk/section fires several advances in one sitting. Advancing on every
- * submission would compound the interval (0→1→6→16d) and drop the record off
- * the due list far longer than one completed review warrants. So a same-day
- * continuation only refreshes ease and `lastReviewed` — it keeps the
- * interval/nextReview already set earlier today. A miss (interval shrinks to 0)
- * always applies, so a fumbled pass still resurfaces the record immediately
- * regardless of earlier same-day success. The review day is the user's local
- * day in `timezone`, so a sitting that crosses UTC midnight stays one day.
+ * Merge a freshly-advanced schedule against the prior one, gating interval GROWTH to once per review day: a UI submitting per chunk fires several advances in one sitting, which would compound the interval (0→1→6→16d)
+ * and drop the record off the due list. A same-day continuation only refreshes ease and `lastReviewed`; a miss (interval shrinks to 0) always applies. The review day is the user's local day in `timezone`.
  */
 export function mergeScheduleAdvance(prev, advanced, now = new Date(), timezone = 'UTC') {
   const prevInterval = typeof prev?.intervalDays === 'number' ? prev.intervalDays : 0;
-  // Suppress compounding only when this is a same-day continuation AND the
-  // interval would grow. Any shrink (a miss reset) always applies.
+  // Suppress compounding only for a same-day continuation AND a growing interval; a shrink (miss reset) always applies.
   if (isSameReviewDay(prev?.lastReviewed, now, timezone) && advanced.intervalDays > prevInterval) {
     return { ...prev, ease: advanced.ease, lastReviewed: advanced.lastReviewed };
   }
   return advanced;
 }
 
-/**
- * Is this schedule due at `now`? An absent or unparseable `nextReview` reads as
- * due — a record we can't schedule is one we should surface, never one we
- * silently hide forever.
- */
+/** Is this schedule due at `now`? An absent/unparseable `nextReview` reads as due (a record we can't schedule should surface, never hide). */
 export function isScheduleDue(schedule, now = new Date()) {
   const nextReview = schedule?.nextReview;
   if (typeof nextReview !== 'string') return true;

@@ -3,6 +3,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as memory from '../services/memoryBackend.js';
 import { ensureBackend } from '../services/memoryBackend.js';
 import * as embeddings from '../services/memoryEmbeddings.js';
@@ -191,13 +192,6 @@ router.get('/:id/versions', asyncHandler(async (req, res) => {
   const { id } = validateRequest(memoryIdParamSchema, req.params);
   const options = validateRequest(memoryVersionsQuerySchema, req.query);
   res.json({ versions: await memory.getMemoryVersions(id, options) });
-}));
-
-// GET /api/memory/:id/related - Get related memories
-router.get('/:id/related', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
-  const related = await memory.getRelatedMemories(req.params.id, limit);
-  res.json(related);
 }));
 
 // GET /api/memory/:id/runs - Recent agent runs whose prompt included this memory

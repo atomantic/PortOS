@@ -499,8 +499,16 @@ describe('prepareWindowsSafeSpawn — argv cmd.exe cannot carry (#12346)', () =>
       const { command, args } = prepareWindowsSafeSpawn(shim, ['--print', payload]);
       const child = nodeSpawn(command, args, { windowsHide: true });
       let stdout = '';
+      let stderr = '';
       child.stdout.on('data', (chunk) => { stdout += chunk; });
-      await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      const { code, signal } = await new Promise((resolve, reject) => {
+        child.on('error', reject);
+        child.on('close', (c, s) => resolve({ code: c, signal: s }));
+      });
+      // An empty stdout means the shim never ran the script (a launch failure), not that argv was
+      // mangled; name the exit status and stderr instead of surfacing a JSON parse error.
+      expect(stdout, `shim child printed no stdout for ${JSON.stringify(payload)} (exit code ${code}, signal ${signal}, stderr ${JSON.stringify(stderr)})`).not.toBe('');
       expect(JSON.parse(stdout)).toEqual(['--print', payload]);
     }
   });

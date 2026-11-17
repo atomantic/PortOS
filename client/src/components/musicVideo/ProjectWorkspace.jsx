@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import toast from '../ui/Toast';
 import PageSkeleton from '../ui/PageSkeleton';
@@ -29,14 +29,7 @@ import ContactSheetDrawer from './ContactSheetDrawer.jsx';
 import DevArtifactDrawer from './DevArtifactDrawer.jsx';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import GalleryVideoPicker from '../videoGen/GalleryVideoPicker.jsx';
-import SetupStage from './stages/SetupStage.jsx';
-import StoryStage from './stages/StoryStage.jsx';
-import CastSetsStage from './stages/CastSetsStage.jsx';
-import PlanStage from './stages/PlanStage.jsx';
-import ReviewStage from './stages/ReviewStage.jsx';
-import PublishStage from './stages/PublishStage.jsx';
-import CleanupStage from './stages/CleanupStage.jsx';
-import AssetsStage from './stages/AssetsStage.jsx';
+import { lazyWithReload } from '../../utils/lazyWithReload.js';
 import useSetupStageWiring from './stages/useSetupStageWiring.js';
 import useStoryStageWiring from './stages/useStoryStageWiring.js';
 import useCastSetsStageWiring from './stages/useCastSetsStageWiring.js';
@@ -54,6 +47,7 @@ import {
   deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, proofReviewInUse,
 } from '../../lib/musicVideoStages.js';
 import { blenderStillPreviewItems, summarizeBlenderShots } from '../../lib/musicVideoBlender.js';
+import { shotStartFrameSec } from './ShotStepper.jsx';
 
 // The step each production approval closes (#10151); it sits at the bottom of that step.
 // Once the storyboard is approved, a production run parked on its pilot shows
@@ -63,17 +57,39 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
   ? (proofReviewInUse(project, readiness, { proofActive }) ? 'proof' : null)
   : APPROVAL_STAGE_BY_TAB[tab] || null);
 // Steps reviewed by watching: the player leads them, with the approval beside it.
-const PLAYER_FIRST_STAGES = new Set(['produce', 'review']);
+const PLAYER_FIRST_STAGES = new Set(['produce', 'review', 'editor']);
 // Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
 const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
-const ProduceStage = lazy(() => import('./stages/ProduceStage.jsx'));
-// Loaded when the optional Previz step first opens.
-const PrevizStage = lazy(() => import('./stages/PrevizStage.jsx'));
+// Each stage panel is its own chunk, fetched when its step first opens, so the
+// project list and every other step never download it. The wiring hooks above
+// stay static: they run for every step (checklists, notes, attention items).
+const SetupStage = lazyWithReload(() => import('./stages/SetupStage.jsx'));
+const StoryStage = lazyWithReload(() => import('./stages/StoryStage.jsx'));
+const CastSetsStage = lazyWithReload(() => import('./stages/CastSetsStage.jsx'));
+const PlanStage = lazyWithReload(() => import('./stages/PlanStage.jsx'));
+const PrevizStage = lazyWithReload(() => import('./stages/PrevizStage.jsx'));
+const ProduceStage = lazyWithReload(() => import('./stages/ProduceStage.jsx'));
+const ReviewStage = lazyWithReload(() => import('./stages/ReviewStage.jsx'));
+const PublishStage = lazyWithReload(() => import('./stages/PublishStage.jsx'));
+const AssetsStage = lazyWithReload(() => import('./stages/AssetsStage.jsx'));
+const CleanupStage = lazyWithReload(() => import('./stages/CleanupStage.jsx'));
+const EditorStage = lazyWithReload(() => import('./stages/EditorStage.jsx'));
+const stageFallback = <PageSkeleton header="none" label="Loading step" cards={3} sidebar={false} />;
+// The editor lays the player out itself, beside the open shot and over the timeline.
+const OWN_DOCK_STAGES = new Set(['editor']);
 // The panels each stage tab renders (see lib/musicVideoStages.js for the ids).
 const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, previz: PrevizStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
-  assets: AssetsStage, cleanup: CleanupStage,
+  assets: AssetsStage, cleanup: CleanupStage, editor: EditorStage,
 };
+// Rendered inside a stage's Suspense boundary, so its effect fires only once that panel has
+// committed (a lazy panel commits after its chunk loads) and again whenever the kept-alive
+// Story panel is shown again. Anchor links wait for it, or they would look for their target
+// while the fallback is still on screen.
+function StageReady({ stage, active, onReady }) {
+  useEffect(() => { if (active) onReady(stage); }, [stage, active, onReady]);
+  return null;
+}
 
 /**
  * Everything that belongs to ONE open project — its approvals, drafts, the
@@ -134,8 +150,9 @@ export default function ProjectWorkspace({
     openedStageRef.current = latestMusicVideoReviewDraft(selected) && !selected.renderHistoryId ? 'review' : progress.current;
   }
   const pinnedStage = openedStageRef.current;
-  // A shot's card lives on Shots, including links made when it lived on the Storyboard.
-  const activeStage = routeSceneId ? 'produce' : (resolveStageParam(routeStage) || pinnedStage || progress.current);
+  // A shot's card lives on Shots, including links made when it lived on the Storyboard; the editor opens it in place.
+  const sceneStage = resolveStageParam(routeStage) === 'editor' ? 'editor' : 'produce';
+  const activeStage = routeSceneId ? sceneStage : (resolveStageParam(routeStage) || pinnedStage || progress.current);
   const storyVisited = useRef(false);
   if (activeStage === 'story') storyVisited.current = true;
 
@@ -145,10 +162,12 @@ export default function ProjectWorkspace({
   const [seekRequest, setSeekRequest] = useState(null);
   const [dockCollapsed, setDockCollapsed] = useState(null);
   const [dockExpanded, setDockExpanded] = useState(false);
-  // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
-  const seekToScene = (scene, { play = false } = {}) => {
+  // The preview's reading of the song's clock (`PreviewDock` fills it), which the editor's playhead follows.
+  const songClockRef = useRef(null);
+  // `play` starts playback from there (a storyboard row), `pause` stops it there; a scene card only cues the shot.
+  const seekToScene = (scene, { play = false, pause = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play }));
+    setSeekRequest((prev) => ({ t: shotStartFrameSec(scene.startSec), n: (prev?.n || 0) + 1, play, pause: !play && pause }));
   };
 
   // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)
@@ -158,23 +177,27 @@ export default function ProjectWorkspace({
   const [compositionSavePending, setCompositionSavePending] = useState(0);
   const timedTextSaveChain = useRef(Promise.resolve());
   const editProjectLocal = (patch) => patchProject(selected.id, patch);
-  // Sent with its origin and asking for the edit result: a reply with one patches the board and its
-  // own change broadcast is skipped. Any other reply (a cast or reference change), or a take decision
-  // that started meanwhile, reloads instead.
+  // One project save from this tab, sent with its origin and asking for the edit result (`send(options)` gets
+  // both): a reply with one patches the board and its own change broadcast is skipped, so the
+  // save costs one request. A reply with `edit: null` wrote nothing. A take decision that started
+  // meanwhile may be newer than the reply, and a refused (409) save may leave the board behind: both reload.
+  const saveOwnEdit = (projectId, send) => {
+    const mark = takesRef.current?.writeMark();
+    return send(ownWrite({ edit: true })).then((reply) => {
+      if (reply?.edit === null) return reply;
+      if (reply?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, reply.edit);
+      else void reloadOpenProject(projectId);
+      return reply;
+    }, (err) => {
+      if (err?.status === 409) void reloadOpenProject(projectId);
+      throw err;
+    });
+  };
   const saveProjectFields = (patch) => {
     const projectId = selected.id;
     setCompositionSavePending((count) => count + 1);
     timedTextSaveChain.current = timedTextSaveChain.current
-      .then(() => {
-        const mark = takesRef.current?.writeMark();
-        return updateMusicVideoProject(projectId, patch, ownWrite({ edit: true })).then((saved) => {
-          if (saved?.edit && (!takesRef.current || takesRef.current.settledSince(mark))) applyEdit(projectId, saved.edit);
-          else void reloadOpenProject(projectId);
-        }, (err) => {
-          if (err?.status === 409) void reloadOpenProject(projectId);
-          throw err;
-        });
-      })
+      .then(() => saveOwnEdit(projectId, (options) => updateMusicVideoProject(projectId, patch, options)))
       .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
@@ -187,18 +210,18 @@ export default function ProjectWorkspace({
 
   const review = useReviewStageWiring({ selected, replaceProject, activeStage });
   const setup = useSetupStageWiring({
-    selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, patchProject, openProject, prepareSong, navigate, onClone,
+    selected, tracks, midi, lyricAlign, renderTargetsSelected, replaceProject, openProject, prepareSong, navigate, onClone, saveOwnEdit,
   });
   const produce = useProduceStageWiring({
     selected, videoSettings, renderJob, productionReview, excerpts: review.excerpts, unsavedSceneFields, takesRef, mergeFetchedProject, applyEdit, reloadOpenProject,
-    replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate,
+    replaceProject, patchProject, patchScene, editProjectLocal, saveProjectFields, seekToScene, routeSceneId, navigate, sceneStage,
   });
-  const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview });
+  const castSetsStage = useCastSetsStageWiring({ selected, replaceProject, patchProject, productionReview, saveOwnEdit });
   const { castSets, devArtifacts, creativeSetupPending, styleReferencesPending } = castSetsStage;
   const story = useStoryStageWiring({ selected, patchProject, replaceProject });
   const plan = usePlanStageWiring({
-    selected, replaceProject, patchProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
-    applyEdit, reloadOpenProject,
+    selected, replaceProject, analyzing, onAnalyze, separation, lyricAlign, castSets, creativeSetupPending, styleReferencesPending,
+    applyEdit, reloadOpenProject, saveOwnEdit,
   });
   const { kickoff, autonomous, planning, planningDraft, autopilotBlockedReason } = plan;
   const { sceneMedia, takes, revisions, production } = produce;
@@ -321,9 +344,12 @@ export default function ProjectWorkspace({
   // A header action that lands on a control (Attach a track, Set up production)
   // scrolls to and focuses it once its stage has rendered.
   const location = useLocation();
+  // The stage whose panel has committed. Landing waits for it so it runs exactly once per link:
+  // a second pass would press a React-state fold toggle again and close what the first opened.
+  const [readyStage, setReadyStage] = useState(null);
   useEffect(() => {
     const anchor = location.hash.slice(1);
-    if (!anchor || !selected) return;
+    if (!anchor || !selected || readyStage !== activeStage) return;
     const el = document.getElementById(anchor);
     if (!el) return;
     // An anchor inside a folded section (Production review, a Publish card or
@@ -335,12 +361,12 @@ export default function ProjectWorkspace({
     };
     if (unfoldToAnchor(el)) requestAnimationFrame(land);
     else land();
-  }, [activeStage, location.key, selectedId, !!selected]);
-  // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel.
+  }, [activeStage, readyStage, location.key, selectedId, !!selected]);
+  // Edit shot (from the preview player) opens that shot's card on Shots, in the side panel; in the editor, in its inspector.
   const editShot = (sceneId) => {
     if (!selected) return;
     const search = searchParams.toString();
-    navigate(`/music-video/${encodeURIComponent(selected.id)}/produce/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === 'produce' });
+    navigate(`/music-video/${encodeURIComponent(selected.id)}/${sceneStage}/scene/${encodeURIComponent(sceneId)}${search ? `?${search}` : ''}`, { replace: activeStage === sceneStage });
   };
   const goToStage = (stage, anchor = null, params = null) => {
     // Preserve search params (e.g. ?play=, ?new=, ?sheet=) across tabs; `params` sets more (e.g. ?scenes=missing).
@@ -533,7 +559,27 @@ export default function ProjectWorkspace({
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
   // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
-  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : ['produce', 'editor'].includes(activeStage) ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+
+  const dock = !selected || NO_DOCK_STAGES.has(activeStage) ? null : (
+    <PreviewDock
+      project={selected}
+      sources={previewSources}
+      audioUrl={setup.audioUrl}
+      seekRequest={seekRequest}
+      collapsed={dockCollapsed ?? !playerFirst}
+      onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
+      expanded={dockExpanded}
+      onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
+      onEditShot={editShot}
+      onProject={replaceProject}
+      blender={blenderMode ? blender : null}
+      clockRef={songClockRef}
+      compact={OWN_DOCK_STAGES.has(activeStage)}
+      controlsBeside={OWN_DOCK_STAGES.has(activeStage)}
+    />
+  );
+  const ownDock = OWN_DOCK_STAGES.has(activeStage);
 
   return (
     <>
@@ -662,26 +708,13 @@ export default function ProjectWorkspace({
               />
               </>
             )}
-            dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
-              <PreviewDock
-                project={selected}
-                sources={previewSources}
-                audioUrl={setup.audioUrl}
-                seekRequest={seekRequest}
-                collapsed={dockCollapsed ?? !playerFirst}
-                onToggleCollapsed={() => setDockCollapsed(!(dockCollapsed ?? !playerFirst))}
-                expanded={dockExpanded}
-                onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
-                onEditShot={editShot}
-                onProject={replaceProject}
-                blender={blenderMode ? blender : null}
-              />,
-            )}
+            dock={dock && !ownDock ? withTitleCard(dock) : null}
           >
-            {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
+            {storyVisited.current && <div hidden={activeStage !== 'story'}><Suspense fallback={stageFallback}><StoryStage board={board} active={activeStage === 'story'} /><StageReady stage="story" active={activeStage === 'story'} onReady={setReadyStage} /></Suspense></div>}
             {activeStage !== 'story' && (
-              <Suspense fallback={<PageSkeleton header="none" label="Loading shots" cards={3} sidebar={false} />}>
-                <StageView board={board} />
+              <Suspense fallback={stageFallback}>
+                <StageView board={ownDock ? { ...board, previewDock: dock, songClock: () => songClockRef.current?.() ?? null } : board} />
+                <StageReady key={activeStage} stage={activeStage} active onReady={setReadyStage} />
               </Suspense>
             )}
           </MusicVideoLayout>

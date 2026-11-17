@@ -8,7 +8,7 @@ import { blenderFinishFilter } from './finishFilter.js';
 import { blenderLeadAudio } from './leadAudio.js';
 import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
-import { requireFfmpeg } from './encode.js';
+import { requireFfmpeg } from '../../film/encode.js';
 import { updateBlenderJob } from './jobs.js';
 import { startBlenderCut as startCut } from '../../film/cuts.js';
 import { musicVideoFilmOwner } from './owner.js';

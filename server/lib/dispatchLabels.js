@@ -738,6 +738,16 @@ const HELP_WANTED_GUIDANCE = `Apply \`help wanted\` (color 008672) ${HELP_WANTED
  */
 const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, not amount of work: \`${p}medium\` is normal, \`${p}low\` for mechanical steps, \`${p}high\` when a step hinges on a hard argument, \`${p}xhigh\`/\`${p}max\` rarely. Breadth is not effort: list a wide sweep's call sites in the body.`;
 
+/**
+ * The batching exception for producers whose own steps say "one item per
+ * finding" (the file-issues audit mode, the UX audit). Tracker-neutral wording,
+ * because a Jira run spells the labels `model-light` / `effort-low` (#16569).
+ */
+export const LIGHT_FINDINGS_BATCH_EXCEPTION = 'findings dispatched light and low-effort (`model:light` + `effort:low`, or that tracker\'s spelling) that share an area go into ONE checklist item of up to 10 entries instead; a bug, security or data-safety finding always stays its own item';
+
+/** `source:<lane>`: which scheduled lane filed an issue; deliberately not a dispatch axis and absent from interactive filings. */
+export const SOURCE_LABEL_GUIDANCE = 'Scheduled lanes/tasks also add `source:<lane>` (lower-case lane or task type id); create it with `gh label create source:<lane> --color 0E8A16 2>/dev/null || true`. Interactive and ad-hoc filings omit it.';
+
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
@@ -745,14 +755,19 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   '- `model:light|medium|heavy|ultra` — capability: light is mechanical (rename, config, a well-specified single-file edit); medium is routine multi-file work; heavy is genuinely hard reasoning (concurrency, schema/compatibility design, redesign); ultra is exceptional frontier reasoning, explicitly requested.',
   `- ${effortAxisGuidance('effort:', `effort:${DISPATCH_EFFORT_LEVELS.join('|')}`)}`,
   'Never derive one axis from the other, and choose `model:` from the evidence rather than defaulting to `medium`. Do NOT put `[model:…]` / `[effort:…]` / `[category]` / `[SEVERITY]` in the title; those belong in labels.',
-  'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`): GitLab renders `key::value` as a native scoped label, so only one value per key can sit on an issue at a time. GitHub has no equivalent and keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
+  'On GitLab, write every prefixed label with a DOUBLE colon (`model::heavy`, `effort::max`, `planner::opus-5`), its native scoped-label form; GitHub keeps the single colon (`model:heavy`). Use the separator the repo\'s own tracker uses, and match an existing `area` label\'s spelling rather than re-separating it — a mismatched separator is a different, unfilterable label.',
   // Whole commands, not a `name color` list: an agent copying `model:light D4C5F9`
   // out of a list minted that string as a label name (#9056).
   `Create each label immediately before applying it, passing the name and \`--color\` as separate arguments: ${Object.entries(DISPATCH_LABEL_COLORS).map(([name, color]) => `\`gh label create ${name} --color ${color} 2>/dev/null || true\``).join(', ')}. glab needs \`--name <name>\` and \`--color "#<hex>"\`.`,
   'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
   HELP_WANTED_GUIDANCE,
   HARDWARE_REQUIREMENT_GUIDANCE,
-  'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It is a third independent axis: it records the AUTHOR, while `model:`/`effort:` recommend how a future agent should RUN the work.',
+  'Planner attribution: also apply the `planner:<model>` label your run\'s "Planner attribution" instruction gives, never a self-guess (omit it if none). It records the AUTHOR.',
+  // Lets each audit lane's value be measured; an interactive filing has no lane (#16571).
+  SOURCE_LABEL_GUIDANCE,
+  // A separate issue per light finding cost each one a full claim/review/CI/merge
+  // cycle for a ~30-line PR (#16569); batching changes the shipping unit only.
+  'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue (up to 10 `- [ ]` items, one PR), since every issue costs a full claim-to-merge cycle. `bug`, security and data-safety findings stay standalone; every finding is still fixed.',
   'Use repeated `--label` flags (one per label). Preserve existing category/scope labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …). After creating each issue, read its labels back (`gh issue view <number> --json labels`) and apply any that did not stick and read back again. Do not report filing complete until both axes are present; report a labeling failure explicitly if repair fails. Never relabel a deduplicated existing issue.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');
@@ -774,6 +789,7 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
   HARDWARE_REQUIREMENT_GUIDANCE,
   'Planner attribution: also apply the `planner-<model>` label naming the model that WROTE the plan, taken verbatim from your run\'s "Planner attribution" instruction (omit the axis when your run was given none). It records the AUTHOR, independently of the dispatch axes.',
+  'Source: a scheduled audit lane or task also adds `source-<lane>` (its lower-case lane or task type id); interactive and ad-hoc filings omit it.',
   'Preserve existing category/scope labels. Never relabel a ticket you skipped as a duplicate.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');

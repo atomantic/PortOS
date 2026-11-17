@@ -1,12 +1,12 @@
 import { Router } from 'express';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
   importerAnalyzeSchema,
   importerCommitSchema,
   importerClassifySchema,
   importerRetryIssuesSchema,
-} from '../lib/validation.js';
+} from '../lib/creativeDirectorValidation.js';
 import {
   analyzeImport,
   classifyImportContent,

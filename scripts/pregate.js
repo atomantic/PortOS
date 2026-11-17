@@ -24,8 +24,8 @@ import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
-import { GUARD_BUDGET_MS, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
-import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { CI_GUARD_BUDGET_MS, GUARD_BUDGET_MS, describeGuardDurations, overBudgetGuards, readGuardDurations } from './lib/guardBudget.js';
+import { buildPregateReport, guardInputSnapshot, guardReuseInputs, guardReuseStageKey, PREGATE_REPORT_PATH, readReusableStagePasses, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
@@ -831,58 +831,15 @@ function stageOutcomeVerdict(result, outcome) {
 }
 
 /**
- * Re-run only the over-budget guard files once, serially, and return their
- * isolated wall times. Sibling agents' Vitest runs can stretch a guard past
- * budget while the load average still fits the core count (#16279). The memo
- * is bypassed so the files really execute.
+ * Name the guard files of a passed stage that ran over the per-file target.
+ * Report only: local wall time measures this host's contention as much as the
+ * guard, so hosted CI enforces the budget on its uniform runner (#16551).
  */
-async function isolatedGuardDurations(result, files, owner) {
-  const dir = mkdtempSync(join(tmpdir(), 'portos-pregate-durations-'));
-  const path = join(dir, 'durations.json');
-  try {
-    await runStage({
-      ...result,
-      env: { ...result.env, CI_TEST_FILES: JSON.stringify(files), PORTOS_TEST_MEMO: 'off', PORTOS_PREGATE_DURATIONS_PATH: path },
-    }, owner);
-    return readGuardDurations(path);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+function reportSlowGuards(result) {
+  const over = overBudgetGuards(result.fileDurations);
+  if (over.length > 0) {
+    console.log(`🐢 ${result.name} over the ${formatDuration(GUARD_BUDGET_MS)} per-guard target: ${describeGuardDurations(over)} (hosted CI fails a guard over ${formatDuration(CI_GUARD_BUDGET_MS)}).`);
   }
-}
-
-/**
- * Fail a passed guard stage whose files overran their budget, naming each one.
- * A file over budget in the stage is re-timed alone before failing; only files
- * still over in that isolated run fail. Marks `result` failed like
- * stageOutcomeVerdict so the receipt agrees.
- */
-async function guardBudgetVerdict(result, owner) {
-  // Calibrate only once a guard looks slow, so the common case pays nothing.
-  const raw = overBudgetGuards(result.fileDurations);
-  if (raw.length === 0) return null;
-  const scale = calibrateBudgetScale();
-  const budgetMs = GUARD_BUDGET_MS * scale;
-  const over = overBudgetGuards(result.fileDurations, budgetMs);
-  if (over.length === 0) {
-    console.log(`🐢 ${result.name} guards over ${formatDuration(GUARD_BUDGET_MS)} but within the ${formatDuration(budgetMs)} budget scaled ${scale.toFixed(1)}x for this machine's speed: ${raw.map(({ file, durationMs }) => `${file} ${formatDuration(durationMs)}`).join('; ')}.`);
-    return null;
-  }
-  const describe = ({ file, durationMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} (budget ${formatDuration(budgetMs)})`;
-  if (hostTooBusyForBudget()) {
-    console.log(`⏭️ ${result.name} budget not enforced, host load exceeds its core count: ${over.map(describe).join('; ')}.`);
-    return null;
-  }
-  const { cleared, stillOver } = settleOverBudget(over, await isolatedGuardDurations(result, over.map(({ file }) => file), owner));
-  if (cleared.length > 0) {
-    console.log(`🐢 ${result.name} guards over budget under load, within it in isolation: ${cleared.map(({ file, durationMs, isolatedMs }) => `${file} ${formatDuration(durationMs)} → ${formatDuration(isolatedMs)}`).join('; ')}.`);
-  }
-  if (stillOver.length === 0) return null;
-  const lines = stillOver.map(({ file, durationMs, isolatedMs, budgetMs }) => `${file} took ${formatDuration(durationMs)} in the stage and ${isolatedMs === null ? 'no reading' : formatDuration(isolatedMs)} in isolation (budget ${formatDuration(budgetMs)})`);
-  result.status = 'failed';
-  return {
-    failure: `❌ ${result.name} over the ${formatDuration(budgetMs)} per-guard budget (${formatDuration(GUARD_BUDGET_MS)} scaled ${scale.toFixed(1)}x for this machine): ${lines.join('; ')}. Speed the guard up (share one tracked-file listing and one read per source file) rather than raising the budget.`,
-    exitCode: 1,
-  };
 }
 
 /** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
@@ -1089,6 +1046,24 @@ async function main() {
   let failure = null;
   const owner = installOwnerCancellation();
   const passedGuards = new Map();
+  // Guard and lint passes carry across invocations under a key over every
+  // input those stages read (guardReuseInputs). --full and --guards-only always
+  // rerun them (--full still records its passes); PORTOS_TEST_MEMO=off forces a
+  // fresh run.
+  const reuseEnabled = !options.full && !options.guardsOnly && process.env.PORTOS_TEST_MEMO !== 'off';
+  const priorPasses = reuseEnabled ? readReusableStagePasses(REPO_ROOT) : new Map();
+  let reuseInputs;
+  let reuseUnavailableReported = false;
+  const currentReuseInputs = () => {
+    if (reuseInputs !== undefined) return reuseInputs;
+    const { inputs, reason } = guardReuseInputs(REPO_ROOT);
+    reuseInputs = inputs;
+    if (!inputs && !reuseUnavailableReported) {
+      reuseUnavailableReported = true;
+      console.log(`ℹ️ Guard reuse unavailable for this run: ${reason}.`);
+    }
+    return reuseInputs;
+  };
   let probed = false;
   for (let index = 0; index < results.length; index += 1) {
     if (failure || owner.signal) break;
@@ -1113,6 +1088,15 @@ async function main() {
         break;
       }
     }
+    const reusable = !options.guardsOnly && (result.guard || result.suite === 'lint');
+    const inputsBefore = reusable ? currentReuseInputs() : null;
+    const reuseKey = inputsBefore ? guardReuseStageKey(inputsBefore, result, { baseSha, baseRef }) : null;
+    const reusedFrom = reuseEnabled && reuseKey ? priorPasses.get(reuseKey) : undefined;
+    if (reusedFrom) {
+      Object.assign(result, { status: 'passed', exitCode: 0, reuseKey, reusedFrom });
+      console.log(`⏭️ ${result.name} reused from ${reusedFrom} (inputs unchanged).`);
+      continue;
+    }
     const beforeGuards = result.guard ? guardInputSnapshot(REPO_ROOT) : null;
     const passed = passedGuards.get(result.suite);
     if (!result.guard && passed && guardInputSnapshot(REPO_ROOT) === passed.snapshot) {
@@ -1126,18 +1110,25 @@ async function main() {
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
+    // Any stage may write into the checkout; the next reuse decision rereads it.
+    reuseInputs = undefined;
     if (durationsDir) {
       result.fileDurations = readGuardDurations(durationsPath);
       rmSync(durationsDir, { recursive: true, force: true });
     }
-    const verdict = stageOutcomeVerdict(result, outcome) ?? await guardBudgetVerdict(result, owner);
+    const verdict = stageOutcomeVerdict(result, outcome);
     if (verdict) {
       ({ failure, exitCode } = verdict);
     } else {
+      if (result.guard) reportSlowGuards(result);
       result.status = 'passed';
       result.exitCode = 0;
       if (beforeGuards && guardInputSnapshot(REPO_ROOT) === beforeGuards) {
         passedGuards.set(result.suite, { snapshot: beforeGuards, files: result.files });
+      }
+      if (reuseKey) {
+        // A stage that changed its own inputs proves nothing about the new state.
+        if (currentReuseInputs() === inputsBefore) Object.assign(result, { reuseKey, passedAt: new Date().toISOString() });
       }
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
     }

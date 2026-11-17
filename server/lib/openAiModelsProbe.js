@@ -1,54 +1,21 @@
 /**
- * One `GET {base}/models` reachability+listing probe for the local
- * OpenAI-compatible daemons (llama.cpp, Ollama, LM Studio, MTPLX).
+ * One `GET {base}/models` reachability and listing probe for the local OpenAI-compatible daemons (llama.cpp, Ollama, LM Studio, MTPLX).
  *
- * This existed three times in `server/` before it existed once here, and the
- * copies had already drifted: `llamaServerManager`'s passed its timeout as a
- * `timeout` key INSIDE the fetch init object, where it is not an option, so
- * that probe silently ran on the 15s default inside a 500ms startup poll loop.
- * A single implementation makes the timeout, the URL normalization, and the
- * "reachable but unlistable" distinction one decision instead of N.
- *
- * Answers three states a caller must be able to tell apart:
- *   - `reachable: false`             — nothing is serving here (with `error` naming why)
- *   - `reachable: true, models: null`— it answered, but the listing was unreadable
- *   - `reachable: true, models: []`  — it is up and genuinely serving nothing
- *
- * The listing also carries each model's SERVED context window (vLLM spells it
- * `max_model_len`, llama-server `n_ctx`, LM Studio `loaded_context_length`), and
- * `contextWindows` keeps it. Dropping it was how a prompt that provably could
- * not fit still got dispatched: nothing upstream could tell a 50K-char prompt
- * from a 15K one against a 32K endpoint, so the only backstop was the
- * provider's wall-clock timeout (#7441).
- *
- * A daemon started behind an API key (vLLM's compose stack sets `VLLM_API_KEY`)
- * answers 401/403 to an unauthenticated probe. That is a REACHABLE server whose
- * listing we cannot read — reporting it as unreachable would tell the user to
- * start a container that is already running. Pass `apiKey` to read the listing
- * too.
+ * One `GET {base}/models` reachability+listing probe for the local OpenAI-compatible daemons (llama.cpp, Ollama, LM Studio, MTPLX), replacing three drifted copies (`llamaServerManager`'s passed `timeout` INSIDE the fetch init, where it isn't an option, so it ran on the 15s default in a 500ms poll loop).
+ * Three states a caller must tell apart: `reachable: false` (nothing serving, `error` says why); `reachable: true, models: null` (answered, listing unreadable); `reachable: true, models: []` (up and serving nothing).
+ * `contextWindows` keeps each model's SERVED window (vLLM `max_model_len`, llama-server `n_ctx`, LM Studio `loaded_context_length`): dropping it let a provably oversized prompt be dispatched with only the provider's timeout as backstop (#7441).
+ * A daemon behind an API key (vLLM's compose stack sets `VLLM_API_KEY`) answers 401/403 unauthenticated: a REACHABLE server with an unreadable listing (reporting it unreachable would tell the user to start a running container); pass `apiKey` to read it.
  */
 
-// The toolkit's model refresh already reads a window off a listing row, and a
-// second table here would let refresh-time and probe-time disagree about the
-// same daemon. Reaching INTO `aiToolkit/internal/` is the established direction
-// (`openAiChatStream.js`, `harnessOutput.js`, `providerGraphPreview.js` all do
-// it) — the self-containment rule in its AGENTS.md forbids the toolkit
-// importing OUT, not the host importing in.
+// The toolkit's model refresh already reads a window off a listing row; a second table here would let refresh-time and probe-time disagree. Importing INTO `aiToolkit/internal/` is the established direction (openAiChatStream.js, harnessOutput.js, providerGraphPreview.js); its AGENTS.md forbids the toolkit importing OUT.
 import { catalogContextWindow } from './aiToolkit/internal/modelCatalog.js';
 import { fetchWithTimeout } from './fetchWithTimeout.js';
 import { describeFetchError } from './fetchErrorChain.js';
 import { readResponseJson } from './readResponseJson.js';
 
-/**
- * The one-token reason a probe failed, for a UI that has a line to spend on it.
- * `describeFetchError` returns the whole cause chain (`fetch failed: ECONNREFUSED:
- * connect ECONNREFUSED <host>:<port>`); the code alone is what tells the user
- * "nothing is listening" from "the host is wedged", and the two timeout
- * spellings mean the same thing to them.
- */
+/** The one-token reason a probe failed for a UI with one line to spend: `describeFetchError` returns the whole cause chain, but the code alone tells "nothing is listening" from "the host is wedged", and the two timeout spellings mean the same to the user. */
 function shortFailureReason(err) {
-  // `describeFetchError` walks `.code`/`.message` only, and an abort carries its
-  // identity in `.name` (`AbortError`) — which is exactly the timeout case.
+  // `describeFetchError` walks `.code`/`.message` only; an abort carries its identity in `.name` (`AbortError`), the timeout case.
   const chain = `${err?.name || ''}: ${describeFetchError(err)}`;
   if (/AbortError|TimeoutError|ETIMEDOUT|UND_ERR_(?:CONNECT_)?TIMEOUT/.test(chain)) return 'timed out';
   const code = chain.match(/\b(E[A-Z]{3,}|UND_ERR_[A-Z_]+)\b/);
@@ -56,6 +23,7 @@ function shortFailureReason(err) {
 }
 
 /**
+ *
  * @param {string} baseUrl - an OpenAI-compatible base (…/v1); trailing slashes tolerated
  * @param {{timeoutMs?: number, apiKey?: string, headers?: Record<string,string>}} [opts] —
  *   `headers` is for a listing that authenticates some other way than a bearer
@@ -71,8 +39,7 @@ function shortFailureReason(err) {
 export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '', headers = {} } = {}) {
   const url = `${String(baseUrl || '').replace(/\/+$/, '')}/models`;
   const merged = { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), ...headers };
-  // A redirect would forward custom credential headers (undici only strips
-  // `Authorization` cross-origin), so a keyed probe fails instead of following one.
+  // A redirect would forward custom credential headers (undici strips only `Authorization` cross-origin), so a keyed probe fails instead of following one.
   const carriesKey = Object.keys(merged).some((name) => /^(authorization|x-api-key)$/i.test(name));
   const init = {
     method: 'GET',
@@ -80,32 +47,21 @@ export async function probeOpenAiModels(baseUrl, { timeoutMs = 2_000, apiKey = '
     ...(carriesKey ? { redirect: 'error' } : {}),
   };
   const res = await fetchWithTimeout(url, init, timeoutMs)
-    // undici reports every network failure as a bare `TypeError: fetch failed`;
-    // the real reason (ECONNREFUSED vs. ETIMEDOUT — "nothing is listening" vs.
-    // "the host is wedged", two different fixes for the user) lives in the
-    // cause chain.
+    // undici reports every network failure as a bare `TypeError: fetch failed`; the real reason (ECONNREFUSED vs ETIMEDOUT) lives in the cause chain.
     .catch((err) => ({ transportError: shortFailureReason(err) }));
 
   if (res.transportError) return { reachable: false, models: null, contextWindows: null, error: res.transportError };
   if (!res.ok) {
-    // Undici holds the socket until an unread body is consumed; an endpoint
-    // answering 404 on every poll would otherwise leak one each time.
+    // Undici holds the socket until an unread body is consumed; a 404 on every poll would leak one each time.
     await res.body?.cancel().catch(() => {});
-    // 401/403 is the ONE failure status that proves a daemon is up: something
-    // read the request and refused it. Collapsing that into "nothing answered"
-    // sends the user off to start a server that is already serving.
+    // 401/403 is the ONE failure status proving a daemon is up (something read the request and refused it); collapsing it into "nothing answered" sends the user to start a running server.
     if (res.status === 401 || res.status === 403) {
       return { reachable: true, models: null, contextWindows: null, error: 'authentication required' };
     }
     return { reachable: false, models: null, contextWindows: null, error: `HTTP ${res.status}` };
   }
 
-  // The body read is its own failure path: a daemon that accepts the connection
-  // and then drops it (or sends a truncated body) rejects inside `res.text()`,
-  // NOT at the fetch above. Unhandled, that rejection escapes the probe and
-  // fails the entire readiness request — one flaky daemon would blank the
-  // checklist for every provider — so it lands on the same
-  // reachable-but-unreadable sentinel as a non-JSON body.
+  // The body read is its own failure path: a daemon that accepts then drops the connection (or truncates) rejects inside `res.text()`, NOT at the fetch, and unhandled it would fail the whole readiness request (one flaky daemon blanking every provider's checklist), so it lands on the reachable-but-unreadable sentinel.
   const body = await readResponseJson(res, { fallback: null, emptyValue: null }).catch(() => null);
   const rows = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : null;
   if (!rows) return { reachable: true, models: null, contextWindows: null, error: 'model listing was not readable' };

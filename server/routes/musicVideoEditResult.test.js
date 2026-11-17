@@ -124,11 +124,10 @@ describe('board edit replies carry what a reload would show', () => {
     expect(plain.body).not.toHaveProperty('edit');
   });
 
-  it('a project save that changes the cast answers the project even when the edit result was asked for', async () => {
-    const reply = await request(app).patch(`${base()}?edit=1`).send({ concept: { subjects: [{ id: 'subject-a', kind: 'character', name: 'Alice', description: 'Example' }] } });
-    expect(reply.status).toBe(200);
-    expect(reply.body).toMatchObject({ id: project.id });
-    expect(reply.body).not.toHaveProperty('edit');
+  // A cast change is a project save like any other: it answers the edit result too, folded in like a reload.
+  it('a project save that changes the cast answers the edit result when it was asked for', async () => {
+    const { after } = await expectReloadParity(() => request(app).patch(`${base()}?edit=1`).send({ concept: { subjects: [{ id: 'subject-a', kind: 'character', name: 'Alice', description: 'Example' }] } }));
+    expect(after.concept.subjects).toHaveLength(1);
   });
 
   it('split, merge, delete and reorder each fold into the reloaded board', async () => {

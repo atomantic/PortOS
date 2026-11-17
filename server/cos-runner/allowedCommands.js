@@ -9,23 +9,11 @@ import { basename } from 'path';
 import { PROVIDER_VENDORS, EXTRA_ALLOWED_COMMANDS } from '../lib/providerVendors.js';
 
 /**
- * Commands permitted to be spawned by the runner.
- *
- * Every `command` of a shipped provider in `data.reference/providers.json` (and
- * the toolkit's `providers.sample.json`) MUST appear here — a provider whose
- * command is missing 400s at `/spawn-tui` and the agent dies before it ever gets
- * a shell. `allowedCommands.test.js` enforces that parity.
- *
- * Derived from PROVIDER_VENDORS (#3618) so a new vendor row automatically
- * becomes spawnable here without a second hand-maintained list, plus
- * EXTRA_ALLOWED_COMMANDS for legacy/custom commands with no vendor row
- * (aider, copilot).
- *
- * `commandAliases` matters as much as `inferredCommand`: a vendor whose
- * `matchCommand` accepts a second spelling (`kilocode` for `kilo`,
- * `antigravity` for `agy`) classifies such a record everywhere else in PortOS,
- * so omitting it here made the record spawnable nowhere — a 400 at /spawn-tui
- * with the agent dead before it got a shell.
+ * Every `command` of a shipped provider (`data.reference/providers.json`, the toolkit's
+ * `providers.sample.json`) MUST appear here or `/spawn-tui` 400s; `allowedCommands.test.js`
+ * enforces parity. Derived from PROVIDER_VENDORS including `commandAliases` (a vendor's
+ * second spelling must also be spawnable), plus EXTRA_ALLOWED_COMMANDS for vendor-less
+ * commands (aider, copilot).
  */
 export const ALLOWED_COMMANDS = new Set([
   ...PROVIDER_VENDORS.flatMap((vendor) => [vendor.inferredCommand, ...(vendor.commandAliases || [])]),
@@ -33,23 +21,14 @@ export const ALLOWED_COMMANDS = new Set([
 ]);
 
 /**
- * Validate that a command is in the allowlist.
- * Extracts the base command name from the full path using path.basename for
- * cross-platform support. Handles Windows .exe extensions by stripping them
- * before checking.
- *
+ * Whether the base name of `command` (path and Windows .exe stripped) is allowlisted.
  * @param {string} command - The command string to validate (may be a full path).
  * @returns {boolean} true if the base name is in the allowlist, false otherwise.
  */
 export function isAllowedCommand(command) {
   if (!command || typeof command !== 'string') return false;
-  // Extract base command name from full path (e.g., /usr/bin/claude -> claude)
-  // Uses path.basename for correct handling on both Unix and Windows
   let baseName = basename(command);
-  // Normalize for Windows: strip trailing .exe (case-insensitive). Only .exe —
-  // .cmd/.bat npm shims are deliberately NOT accepted because the spawn path runs
-  // `spawn(cmd, args, { shell: false })`, which cannot execute a shim batch file;
-  // accepting them here would only move the failure to spawn time.
+  // Only .exe is accepted: .cmd/.bat npm shims can't run under `shell: false`.
   if (baseName.toLowerCase().endsWith('.exe')) {
     baseName = baseName.slice(0, -4);
   }

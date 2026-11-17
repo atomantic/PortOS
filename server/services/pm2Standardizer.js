@@ -16,8 +16,8 @@ import { isBrowserUnsafePort } from '../lib/browserUnsafePorts.js';
 import { DEFAULT_PORT_RANGE_START } from './ports.js';
 import { isPathInsideDir } from '../lib/pathSafety.js';
 
-// Mirrors standardizePlanStrayPortSchema (lib/validation.js): the sink re-checks
-// because the socket flow applies the model's plan without the HTTP route's schema.
+// The sink re-checks stray-port entries because the socket flow applies the
+// model's plan without any schema validation.
 const STRAY_VARIABLE_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const execAsync = promisify(exec);
@@ -49,8 +49,7 @@ const isOffLimitsPort = (port, taken) => taken.has(port) || isBrowserUnsafePort(
  * `ecosystem.config.cjs` and comments the ports out of `.env`/vite config — so
  * the "is this even a PM2 app?" question has to be answered before the flow
  * starts, not by whichever button happened to be rendered. Every entry point
- * that resolves an app record (the `app:standardize` socket handler and the
- * `/api/standardize/*` routes) runs this check; the Add App wizard has only a
+ * that resolves an app record (the `app:standardize` socket handler) runs this check; the Add App wizard has only a
  * repoPath, so it gates in the UI instead.
  *
  * @param {object} app The app record.
@@ -831,51 +830,6 @@ export async function runStandardizeFlow(
       processes: analysis.proposedChanges.processes
     }
   };
-}
-
-/**
- * Get the standard PM2 template for reference
- */
-export function getStandardTemplate() {
-  return `// PM2 Ecosystem Configuration Template
-// All ports should be defined here, not in .env or vite.config
-
-// Port definitions as single source of truth
-const PORTS = {
-  API: 3001,       // Express API server (also serves prod UI build)
-  UI: 3000         // Vite dev server (development only)
-};
-
-module.exports = {
-  PORTS,
-  apps: [
-    {
-      name: 'myapp-server',
-      cwd: './server',
-      script: 'dist/index.js',
-      watch: ['dist'],
-      watch_delay: 1000,
-      ignore_watch: ['node_modules', 'data', '*.log'],
-      env: {
-        NODE_ENV: 'development',
-        PORT: PORTS.API
-      }
-    },
-    {
-      name: 'myapp-client',
-      cwd: './client',
-      script: 'npx',
-      args: 'vite --host --port ' + PORTS.UI,
-      watch: false,
-      env: {
-        NODE_ENV: 'development',
-        // VITE_PORT is a PortOS convention for port discovery (read by streamingDetect/detect), not consumed by Vite itself
-        VITE_PORT: PORTS.UI
-      }
-    }
-  ]
-};
-`;
 }
 
 export const __testing = { generateEcosystemContent };

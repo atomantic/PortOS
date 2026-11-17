@@ -1,4 +1,5 @@
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
+import { RETIRED_CONFIG_KEYS } from '../lib/cosRetiredConfigKeys.js';
 /**
  * CoS State Module
  *
@@ -93,11 +94,9 @@ export function withStateLock(fn) {
 export const withConfigLock = createFileWriteQueue();
 
 export const DEFAULT_CONFIG = {
-  goalsFile: 'GOALS.md',
   healthCheckIntervalMs: 900000,
   maxConcurrentAgents: 3,
   maxConcurrentAgentsPerProject: 2,
-  maxProcessMemoryMb: 2048,
   maxTotalProcesses: 50,
   mcpServers: [
     { name: 'filesystem', command: 'npx', args: ['-y', '@anthropic/mcp-server-filesystem'] },
@@ -142,20 +141,9 @@ export const DEFAULT_CONFIG = {
   // and maxMinutesPerDay; `null` = unlimited, which is the default for every
   // domain — so an install with no stored value enforces nothing (no migration).
   domainBudgets: normalizeDomainBudgets({}),
-  rehabilitationGracePeriodDays: 7,
   completedAgentRetentionMs: 86400000,
   embeddingProviderId: 'lmstudio',
   embeddingModel: '',
-  autoFixThresholds: {
-    maxLinesChanged: 50,
-    allowedCategories: [
-      'formatting',
-      'dry-violations',
-      'dead-code',
-      'typo-fix',
-      'import-cleanup'
-    ]
-  },
   confidenceAutoApproval: {
     enabled: true,
     highThreshold: 80,
@@ -179,11 +167,9 @@ export const DEFAULT_STATE = {
   pauseReason: null,
   stats: {
     tasksCompleted: 0,
-    totalRuntime: 0,
     agentsSpawned: 0,
     errors: 0,
-    lastEvaluation: null,
-    lastIdleReview: null
+    lastEvaluation: null
   },
   persistentMind: createDefaultPersistentMindState(),
   agents: {}
@@ -244,6 +230,7 @@ function mergeStoredConfig(storedConfig) {
   delete persistedConfig.comprehensiveAppImprovement;
   delete persistedConfig.immediateExecution;
   delete persistedConfig.proactiveMode;
+  for (const key of RETIRED_CONFIG_KEYS) delete persistedConfig[key];
 
   return {
     ...DEFAULT_CONFIG,
@@ -635,17 +622,15 @@ async function readStoredAgentsForSafetyCheck({ onStage } = {}) {
   }
 }
 
-// Merge admission shares the runtime ownership store and its write queue.
-// Missing leases are legacy empty state; malformed leases are never defaulted.
+// Merge admission shares the runtime ownership store and its write queue; callers
+// need only the agent records and whether state.json was readable.
 // `onStage('read'|'parse'|'agents')` marks each stage for slow-admission diagnostics.
 export async function readMergeAdmissionStateForSafetyCheck({ onStage } = {}) {
-  const { trusted, state } = await readStateForSafetyCheck({ onStage });
+  const { trusted } = await readStateForSafetyCheck({ onStage });
   const stored = await readStoredAgentsForSafetyCheck({ onStage });
   return {
     trusted: trusted && stored.trusted,
     agents: stored.agents,
-    mergeAdmissions: state && Object.hasOwn(state, 'mergeAdmissions') ? state.mergeAdmissions : {},
-    mergePreparations: state && Object.hasOwn(state, 'mergePreparations') ? state.mergePreparations : {},
   };
 }
 

@@ -13,13 +13,13 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  *
  * The shared end-of-run path for ALL three spawn modes (runner-mode
  * `handleAgentCompletion`, the TUI `finish()` handler, and the direct-CLI
- * `close` handler): lane release + execution tracking, success-criteria
+ * `close` handler): success-criteria
  * evaluation, the programmatic-I/O output hook, and the centralized state
  * writes (`completeAgent` / `updateTask` / run tracking).
  *
  * Extracted from `agentLifecycle.js` (issue #2837) to break the static import
  * cycle it sat in the middle of: `agentCliSpawning.js` and
- * `agentTuiSpawning.js` both need `finalizeAgent` / `releaseAgentLane`, while
+ * `agentTuiSpawning.js` both need `finalizeAgent`, while
  * `agentLifecycle.js` imports BOTH spawners. This module is a leaf with
  * respect to that cluster — it must NOT import `agentLifecycle.js`,
  * `agentCliSpawning.js`, `agentTuiSpawning.js`, or `agentManagement.js`, or the
@@ -44,8 +44,6 @@ import { isExpectedUnpersistedMiss } from '../lib/autonomousJobTask.js';
 import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderUnavailable } from './providerStatus.js';
 import { resolveProviderBench } from '../lib/providerCooldown.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { resolveFailedTaskDecision, resolveFailedTaskUpdate, resolveTypeFailureSignal, resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
 import { resolveAgentFinalVerdict } from '../lib/agentFinalVerdict.js';
 import { completeAgentRun } from './agentRunTracking.js';
@@ -79,27 +77,6 @@ import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 import { getMergeRequestState, execGlab, findMergeRequestForBranch } from './gitlab.js';
 import { getPullRequestState, execGh, findPullRequestForBranch } from './github.js';
 import { resolveRepoForgeTarget } from '../lib/workTracker.js';
-/**
- * Release the execution lane and complete tool-execution tracking for a
- * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
- * EARLY (before reading output.txt, running error analysis, or writing
- * state) — neither call blocks on I/O, but lanes serialize related work
- * and we don't want them held longer than necessary.
- *
- * Idempotent enough to be a no-op when laneName / executionId are absent
- * (recovered agents post-restart, error paths that already released).
- */
-export function releaseAgentLane({ agentId, success, duration, exitCode, executionId, laneName, errorExecutionMessage }) {
-  if (laneName) release(agentId);
-  if (!executionId) return;
-  if (success) {
-    completeExecution(executionId, { success: true, duration });
-  } else {
-    errorExecution(executionId, { message: errorExecutionMessage || `Agent exited with code ${exitCode}`, code: exitCode });
-    completeExecution(executionId, { success: false });
-  }
-}
-
 /**
  * Evaluate a completed autonomous run against its DECLARED success criteria
  * (issue #2344). Distinct from the runner's exit-code `success`: it answers
@@ -1887,9 +1864,8 @@ function completionRunOutput(task, success, outputBuffer) {
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
  * Path-specific cleanup (worktree, sentinel removal, pty kill, in-memory
- * map deletes) stays at the calling site; lane release + execution
- * tracking should fire EARLIER via `releaseAgentLane()` — this helper
- * owns the centralized state writes only.
+ * map deletes) stays at the calling site; this helper owns the
+ * centralized state writes only.
  */
 export async function finalizeAgent(input) {
   return outsideGitMutationLifetime(() => finalizeAgentInCompletionContext(input));
@@ -2064,9 +2040,8 @@ async function finalizeAgentInCompletionContext({
   // evaluateSuccessCriteria), and completeAgent is what writes the learning
   // verdict — so the judgement has to exist first. Safe for every other task
   // shape: dispatchTaskOutputHook is a no-op unless the type registers a hook
-  // (isProgrammaticIoTaskType), so nothing else is reordered. The lane is already
-  // released by this point (releaseAgentLane fires earlier, in the spawn paths),
-  // and `agent:completed` — which schedules the next dequeue — still fires from
+  // (isProgrammaticIoTaskType), so nothing else is reordered. And
+  // `agent:completed` — which schedules the next dequeue — still fires from
   // completeAgent below, i.e. AFTER any handoff task the hook enqueues. The cost
   // of awaiting here is that the agent still counts against the CoS concurrency
   // gate for the hook's duration, so the dispatch is hard-bounded — see

@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import * as checksums from './snapshotChecksum.js';
-import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies } from './musicVideoDependencies.js';
+import { captureImageFrameDependencies, captureMusicVideoEvidence, captureTakeDependencies, musicVideoTakeChanges, presentMusicVideoDependencies, restampLegacyFrameCasts } from './musicVideoDependencies.js';
+import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
 afterEach(() => vi.restoreAllMocks());
@@ -8,7 +9,7 @@ afterEach(() => vi.restoreAllMocks());
 const projectFixture = () => ({
   id: 'mv-synthetic',
   lyricCues: [{ id: 'cue', text: 'Synthetic lyric', startSec: 0, endSec: 10 }],
-  composition: { cues: [{ startSec: 0, endSec: 5, text: 'First' }, { startSec: 5, endSec: 10, text: 'Second' }] },
+  composition: { mode: 'composed', textCues: [{ startSec: 0, endSec: 5, text: 'First' }, { startSec: 5, endSec: 10, text: 'Second' }] },
   scenes: [0, 1].map(i => ({ sceneId: `scene-${i}`, startSec: i * 5, endSec: i * 5 + 5,
     visualLayer: 'still', referenceImageId: `image-${i}.png`, takes: [] })),
 });
@@ -160,7 +161,7 @@ it('lists thirty rewritten shots as stale frames from one read', () => {
 it('keeps distinct rendered windows independent when caching composition and scene-set references', () => {
   const project = projectFixture();
   project.excerpts = [0, 5].map(startSec => ({ dependencies: captureMusicVideoEvidence(project, { startSec, endSec: startSec + 5 }) }));
-  project.composition.cues[0].text = 'Revised first window';
+  project.composition.textCues[0].text = 'Revised first window';
 
   const changed = presentMusicVideoDependencies(project);
   expect(changed.excerpts.map(excerpt => excerpt.dependencyState.status)).toEqual(['stale', 'current']);
@@ -168,6 +169,108 @@ it('keeps distinct rendered windows independent when caching composition and sce
 
   project.scenes[0].endSec = 6;
   expect(presentMusicVideoDependencies(project).excerpts.map(excerpt => excerpt.dependencyState.status)).toEqual(['stale', 'stale']);
+});
+
+// #16397: video-level and per-shot render inputs flip a recorded render, and evidence captured before stays current.
+const renderState = (mutate, project = projectFixture()) => {
+  const evidence = captureMusicVideoEvidence(project, { clipFrames: false });
+  const changed = structuredClone(project);
+  mutate(changed);
+  return presentMusicVideoDependencies({ ...changed, renderHistoryId: 'final', renderDependencies: evidence }).renderDependencyState;
+};
+
+it('keeps a recorded render current when nothing changed', () => {
+  expect(renderState(() => {}).status).toBe('current');
+});
+
+it.each([
+  ['filmLook', (p) => { p.filmLook = { defocus: 0.5 }; }],
+  ['titleCard', (p) => { p.titleCard = { enabled: true, title: 'X' }; }],
+  ['creditsOutro', (p) => { p.creditsOutro = { enabled: true }; }],
+  ['statsOutro', (p) => { p.statsOutro = { enabled: true }; }],
+  ['cameras', (p) => { p.cameras = [{ id: 'A' }]; }],
+  ['overscan', (p) => { p.overscan = 0.1; }],
+  ['lyricOverlayEnabled', (p) => { p.lyricOverlayEnabled = false; }],
+  ['soundBed', (p) => { p.soundBed = { filename: 'bed.wav' }; }],
+])('marks a recorded render stale when project %s changes', (_name, mutate) => {
+  const state = renderState(mutate);
+  expect(state.status).toBe('stale');
+  expect(state.reasons.join(' ')).toMatch(/Video finish settings/);
+});
+
+it.each([
+  ['lyricSize', (p) => { p.scenes[0].lyricSize = 'large'; }],
+  ['textZone', (p) => { p.scenes[0].textZone = 'top'; }],
+  ['lyricText', (p) => { p.scenes[0].lyricText = 'other words'; }],
+  ['shotSheet.cameraId', (p) => { p.scenes[0].shotSheet = { cameraId: 'A' }; }],
+])('marks a recorded render stale when shot %s changes', (_name, mutate) => {
+  const state = renderState(mutate);
+  expect(state.status).toBe('stale');
+  expect(state.reasons).toContain('Shot timing or composition layer changed');
+});
+
+it('does not read fields no render consumer reads (videoSettings, shot colorMatch)', () => {
+  expect(renderState((p) => { p.videoSettings = { aspect: '9:16' }; }).status).toBe('current');
+  expect(renderState((p) => { p.scenes[0].colorMatch = { enabled: true }; }).status).toBe('current');
+});
+
+it('keeps evidence captured before the change current on an untouched project', () => {
+  const project = projectFixture();
+  const fresh = captureMusicVideoEvidence(project, { clipFrames: false });
+  // Pre-change evidence: no finish reference and the whole cue list under a phantom empty `cues` key.
+  const legacyRevision = canonicalSnapshotChecksum({ mediaMode: null, composition: { ...project.composition, cues: [] } });
+  const legacy = { ...fresh, references: fresh.references.filter((ref) => ref.role !== 'finish')
+    .map((ref) => (ref.role === 'composition' ? { ...ref, revision: legacyRevision } : ref)) };
+  expect(presentMusicVideoDependencies({ ...project, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState.status).toBe('current');
+  project.composition.textCues[0].text = 'Edited';
+  expect(presentMusicVideoDependencies({ ...project, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState.reasons).toContain('Composition changed');
+});
+
+// #16443: the render applies the selected take's color correction, so it is evidence of its own.
+const matched = (overrides = {}) => {
+  const project = projectFixture();
+  project.scenes[0].takes = [{ kind: 'image', assetId: 'image-0.png', colorMatch: {
+    enabled: true, strength: 1, correction: { black: 0.02, white: 1.1, gamma: 1, balanceR: 1, balanceB: 1, saturation: 1 }, ...overrides } }];
+  return project;
+};
+
+it.each([
+  ['re-solved correction', (p) => { p.scenes[0].takes[0].colorMatch.correction.white = 1.2; }],
+  ['disabled match', (p) => { p.scenes[0].takes[0].colorMatch.enabled = false; }],
+  ['zero strength', (p) => { p.scenes[0].takes[0].colorMatch.strength = 0; }],
+  ['camera doNotMatch', (p) => { p.cameras = [{ id: 'A', doNotMatch: true }]; p.scenes[0].shotSheet = { cameraId: 'A' }; }],
+])('marks a recorded render stale when a shot color match has a %s', (_name, mutate) => {
+  const state = renderState(mutate, matched());
+  expect(state.status).toBe('stale');
+  expect(state.reasons).toContain('Shot color match changed');
+});
+
+it('marks a render stale when a shot gains a color match, and keeps it current when the match is untouched', () => {
+  const gained = renderState((p) => { Object.assign(p.scenes[0], matched().scenes[0]); });
+  expect(gained.status).toBe('stale');
+  expect(gained.reasons).toContain('Shot color match changed');
+  expect(renderState(() => {}, matched()).status).toBe('current');
+});
+
+it('keeps a shot with no active color match current when only an inactive match is edited', () => {
+  const state = renderState((p) => { p.scenes[0].takes[0].colorMatch.correction.white = 1.3; }, matched({ enabled: false }));
+  expect(state.status).toBe('current');
+});
+
+it('keeps evidence captured before the color-match reference current, even with an active match', () => {
+  const project = matched();
+  const fresh = captureMusicVideoEvidence(project, { clipFrames: false });
+  const legacy = { ...fresh, references: fresh.references.filter((ref) => ref.role !== 'colorMatch') };
+  expect(legacy.references.length).toBeLessThan(fresh.references.length);
+  const stateOf = (p) => presentMusicVideoDependencies({ ...p, renderHistoryId: 'final', renderDependencies: legacy }).renderDependencyState;
+  expect(stateOf(project).status).toBe('current');
+  project.scenes[0].startSec = 1;
+  expect(stateOf(project).reasons).toContain('Shot timing or composition layer changed');
+});
+
+it('never stores the legacy comparison revision on captured evidence', () => {
+  const composition = captureMusicVideoEvidence(projectFixture()).references.find((ref) => ref.role === 'composition');
+  expect(composition).not.toHaveProperty('legacyRevision');
 });
 
 // #16274: a catalog project's check-in is resolved on read and never stored, so the cast fingerprint
@@ -225,4 +328,45 @@ it('accepts a frame stamped with either pre-#16274 cast form while nothing chang
     expect(frameState(presented, recast, frame)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
   }
   expect(frameState(presented, scene, stampedWith(['cat-chr-b']))).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+});
+
+// #16375: a legacy unnarrowed stamp hashed every linked subject id (characters, places and props), so
+// adding a place used to turn an accepted frame stale again. The write re-stamps it to the canonical value.
+const legacyStamped = (project, scene) => {
+  const frame = confirmedFrame(project, scene);
+  const revision = checksums.canonicalSnapshotChecksum({ names: ['Ada'], ids: musicVideoSceneCastIds(project, scene).slice().sort() });
+  return { ...frame, frameDependencies: { ...frame.frameDependencies, references: frame.frameDependencies.references
+    .map((ref) => (ref.role === 'frameCast' ? { ...ref, revision } : ref)) } };
+};
+const castRevision = (take) => take.frameDependencies.references.find((ref) => ref.role === 'frameCast').revision;
+const withSubject = (project, subject) => ({ ...project, concept: { subjects: [...project.concept.subjects, subject] } });
+
+it('re-stamps an accepted legacy cast stamp so adding or removing a place or prop no longer stales it', () => {
+  const { stored, scene } = castProject();
+  const legacy = legacyStamped(stored, scene);
+  const written = restampLegacyFrameCasts({ ...stored, scenes: [{ ...scene, takes: [legacy] }] });
+  const [take] = written.scenes[0].takes;
+  expect(castRevision(take)).toBe(castRevision(confirmedFrame(stored, scene)));
+  expect(castRevision(take)).not.toBe(castRevision(legacy));
+  // Idempotent and identity-preserving once canonical.
+  expect(restampLegacyFrameCasts(written)).toBe(written);
+
+  const prop = { id: 'subj-q', kind: 'object', name: 'Lantern', ingredientId: 'cat-prp' };
+  const grown = withSubject(stored, prop);
+  const shrunk = { ...stored, concept: { subjects: stored.concept.subjects.filter((entry) => entry.kind !== 'place') } };
+  for (const project of [grown, shrunk]) {
+    expect(frameState(project, scene, take)).toEqual({ status: 'current', reasons: [] });
+  }
+  // Without the write the legacy stamp is lost to the same change, which is what this guards against.
+  expect(frameState(grown, scene, legacy)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+  const recast = { ...scene, shotSheet: { ...scene.shotSheet, characters: ['Ada', 'Ben'] } };
+  expect(frameState(grown, recast, take)).toEqual({ status: 'stale', reasons: ['Cast changed'] });
+});
+
+it('leaves a stamp that does not read current as it was when re-stamping', () => {
+  const { stored, scene } = castProject();
+  const legacy = legacyStamped(stored, scene);
+  const recast = { ...scene, shotSheet: { ...scene.shotSheet, characters: ['Ada', 'Ben'] } };
+  const project = { ...stored, scenes: [{ ...recast, takes: [legacy] }] };
+  expect(restampLegacyFrameCasts(project)).toBe(project);
 });

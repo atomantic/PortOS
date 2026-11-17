@@ -1,47 +1,28 @@
 /**
- * Named agent execution postures shared by lifecycle dispatch, CLI/TUI spawners, and child-environment
- * filtering.
+ * Named agent execution postures shared by lifecycle dispatch, CLI/TUI spawners, and child-environment filtering.
  *
- * A stage declares a PROFILE (`PUBLIC_REVIEW_EXECUTION_PROFILE`,
- * `PUBLIC_REVIEW_GATE_EXECUTION_PROFILE`, `PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE`);
- * `publicReviewPostureForProfile` maps it to the enforceable POSTURE a provider must carry a
- * maintained recipe for (`no-tool` or `sandboxed-actions`), which is how a pipeline stage stays
- * vendor-agnostic. `isPublicReviewRestrictedProfile` covers both postures;
- * `isPublicReviewNoToolProfile` / `isPublicReviewActionsProfile` separate them for the callers whose
- * rule differs by posture (credential-bootstrap wrapping, child-env allowlist).
+ * A stage declares a PROFILE; `publicReviewPostureForProfile` maps it to the enforceable POSTURE a provider must carry a
+ * maintained recipe for (`no-tool` or `sandboxed-actions`), which keeps pipeline stages vendor-agnostic.
+ * `isPublicReviewRestrictedProfile` covers both postures; the NoTool/Actions predicates separate them for callers whose
+ * rule differs by posture (credential-bootstrap wrapping, child-env allowlist). Keep this leaf free of provider/runtime
+ * imports so a new restricted profile cannot pull the provider graph into schedule reads.
  */
 
 import { PRIVATE_SECURITY_EXECUTION_PROFILE } from './privateSecurityPolicy.js';
-/**
- * Named execution postures shared by the agent spawners and their environment
- * builders. Keep this leaf free of provider/runtime imports so adding a
- * restricted profile cannot pull the full provider graph into schedule reads.
- */
 
 export const PUBLIC_REVIEW_EXECUTION_PROFILE = 'public-review';
 
-// The public-review pipeline has three deliberately different trust postures:
-// the security scan is a server-side classifier, the eligibility gate is a
-// tool-free reasoner, and the final review is a configured direct CLI inside a
-// provider-specific maintained sandbox. Keep the profile names here so every
-// spawn path agrees on which posture is enforced instead of comparing stage
-// names or task types.
+// Three deliberately different trust postures: security scan (server-side classifier), eligibility gate (tool-free
+// reasoner), final review (direct CLI in a provider-specific sandbox). Spawn paths compare these names, not stage names.
 export const PUBLIC_REVIEW_GATE_EXECUTION_PROFILE = 'public-review-gate';
 export const PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE = 'public-review-actions';
 
 /**
- * The two enforceable postures behind those profiles. A posture is what a
- * VENDOR declares a maintained recipe for; a profile is what a STAGE declares
- * it needs. Keeping them separate is what lets a stage be configured onto any
- * enabled provider whose vendor row declares the posture, instead of the
- * pipeline naming specific vendors.
- *
- * - `no-tool`           — reasoning only. No filesystem writes, no command
- *                         execution, no network/MCP tools, no forge credentials.
- * - `sandboxed-actions` — may apply the already-screened patch and run local
- *                         tests inside the vendor's own maintained sandbox.
- *                         Still no forge credentials: the deterministic
- *                         coordinator owns every GitHub mutation.
+ * A posture is what a VENDOR declares a maintained recipe for; a profile is what a STAGE declares it needs, so a stage
+ * can run on any enabled provider whose vendor row declares the posture.
+ * - `no-tool`: reasoning only; no writes, command execution, network/MCP tools or forge credentials.
+ * - `sandboxed-actions`: may apply the screened patch and run local tests inside the vendor's sandbox; still no forge
+ *   credentials (the coordinator owns every GitHub mutation).
  */
 export const PUBLIC_REVIEW_NO_TOOL_POSTURE = 'no-tool';
 export const PUBLIC_REVIEW_ACTIONS_POSTURE = 'sandboxed-actions';
@@ -72,12 +53,7 @@ export function isPublicReviewRestrictedProfile(profile) {
   return publicReviewPostureForProfile(profile) !== null;
 }
 
-/**
- * True only for the posture that may EXECUTE contributor-supplied code — the
- * actions stage. A caller whose rule differs between the two postures keys on
- * this rather than on `isPublicReviewRestrictedProfile`; see
- * `applyCredentialBootstrap`.
- */
+/** True only for the posture that may EXECUTE contributor-supplied code (see `applyCredentialBootstrap`). */
 export function isPublicReviewActionsProfile(profile) {
   return publicReviewPostureForProfile(profile) === PUBLIC_REVIEW_ACTIONS_POSTURE;
 }

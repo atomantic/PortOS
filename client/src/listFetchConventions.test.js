@@ -1,8 +1,9 @@
 // @vitest-environment node
+// test-memo: never (tree-wide scanner)
 
 /**
- * Rule: A page or component list fetch must not collapse a failed read into an empty list (client half of root `AGENTS.md` sentinel rule); `KNOWN` is a shrink-only ratchet.
- * Fix: Use `hooks/useListResource` with `components/ui/ListLoadError` (or surface the error), and lower/remove the file's `KNOWN` count.
+ * Rule: A page or component list fetch must not collapse a failed read into an empty list (client half of root `AGENTS.md` sentinel rule).
+ * Fix: Use `hooks/useListResource` with `components/ui/ListLoadError` (or surface the error).
  * What this guard cannot see:
  *   - Multi-statement `.catch` bodies (`{ setX([]); setLoading(false); }`), named `.catch` handlers, or collapses moved into a hook/lib module.
  *   - Matches inside comments or strings still count.
@@ -42,12 +43,6 @@ export const LIST_COLLAPSE = new RegExp(
 );
 
 /**
- * Files still carrying a collapse, with how many. Lower or remove a row when a
- * site is migrated to `useListResource`; never raise one.
- */
-const KNOWN = Object.freeze({});
-
-/**
  * Sites that match on purpose, each with the reason it is not a list collapse.
  * They are not ratcheted down: the count is the number of intentional matches.
  */
@@ -58,7 +53,7 @@ const EXEMPT = Object.freeze({
   // `canDelete: true` on a failed usage read lets the server's own
   // SYSTEM_STAGE_PROTECTED guard answer. The empty `usedBy`/`referencedBy` feed
   // a delete-confirm prompt, not a library listing, so no "you have none" copy.
-  'src/pages/PromptManager.jsx': 1,
+  'src/components/prompts/StagesEditor.jsx': 1,
   // Canon-entity linkify lookup: a failed universe read just shows no entity chips
   // on findings (the findings themselves render, and nothing says "no canon exists");
   // nothing writes from it.
@@ -69,7 +64,7 @@ const EXEMPT = Object.freeze({
   'src/components/TagPicker.jsx': 1,
 });
 
-const allowedIn = (file) => (KNOWN[file] || 0) + (EXEMPT[file] || 0);
+const allowedIn = (file) => EXEMPT[file] || 0;
 
 const NULL_CATCH_READ = /const\s+(\w+)\s*=\s*await\s+[^;]*?\.catch\(\s*\(\s*\)\s*=>\s*null\s*\)\s*;/g;
 const TWO_STEP_WINDOW_LINES = 6;
@@ -125,12 +120,6 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
     ]) expect(countIn(sample), sample).toBe(0);
   });
 
-  it('keeps the app detail tabs off the baseline', () => {
-    for (const tab of ['TasksTab', 'AutomationTab', 'GitTab', 'GsdTab', 'SubmodulesTab', 'CustomTasksSection']) {
-      expect(KNOWN, tab).not.toHaveProperty(['src/components/apps/tabs/' + tab + '.jsx']);
-    }
-  });
-
   it('has no new page or component list fetch that collapses failure into an empty list', () => {
     const found = {};
     for (const file of trackedSourceFiles(CLIENT_ROOT)) {
@@ -146,9 +135,9 @@ describe('page list fetches keep a failed read distinct from an empty list', () 
       '`useListResource(fetcher)` and render `<ListLoadError onRetry={retry}>` on `state === "error"`,',
       'keeping the empty copy for `state === "ready"`; never `.catch(() => [])` / `setX([])`.',
     ].join('\n')).toEqual([]);
-    const stale = Object.keys({ ...KNOWN, ...EXEMPT })
+    const stale = Object.keys(EXEMPT)
       .filter((file) => (found[file] || 0) < allowedIn(file))
       .map((file) => `${file}: now ${found[file] || 0} (known ${allowedIn(file)})`);
-    expect(stale, 'A migrated site: lower or remove its KNOWN row so the ratchet holds.').toEqual([]);
+    expect(stale, 'An EXEMPT site was migrated or removed: lower or delete its row.').toEqual([]);
   });
 });

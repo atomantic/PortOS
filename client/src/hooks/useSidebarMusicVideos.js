@@ -5,7 +5,7 @@
  * Use when: The sidebar music-video projects section.
  */
 
-import * as api from '../services/api';
+import { listMusicVideoProjectNames } from '../services/apiNavNames.js';
 import { useFocusRefreshedList } from './useFocusRefreshedList.js';
 
 const MUSIC_VIDEO_EVENTS = ['music-video:project:changed'];
@@ -14,5 +14,5 @@ const MUSIC_VIDEO_EVENTS = ['music-video:project:changed'];
 // mount, reloads when a project is created, renamed or deleted, and refreshes
 // on window focus (debounced 30s).
 export function useSidebarMusicVideos() {
-  return useFocusRefreshedList(api.listMusicVideoProjectNames, 'music-videos', MUSIC_VIDEO_EVENTS);
+  return useFocusRefreshedList(listMusicVideoProjectNames, 'music-videos', MUSIC_VIDEO_EVENTS);
 }

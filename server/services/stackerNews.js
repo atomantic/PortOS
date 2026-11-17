@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { query, withTransaction } from '../lib/db.js';
 import { decryptValue, encryptValue, ensureVaultKey } from '../lib/vaultCrypto.js';
-import { executeStackerNewsBrowserRead, executeStackerNewsOperation, stackerNewsCapabilities } from '../integrations/stackerNews/index.js';
+import { executeStackerNewsBrowserRead, executeStackerNewsOperation } from '../integrations/stackerNews/index.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { managedOllamaBaseUrl, normalizeOllamaBaseUrl } from '../lib/ollamaContext.js';
 import { UNTRUSTED_CONTENT_INSTRUCTIONS, formatUntrustedContent } from '../lib/untrustedContent.js';
@@ -558,15 +558,6 @@ export async function analyzeItem(itemId) {
   return { item: itemView(item), analysisId, stale: false, deterministic, text: textResult, vision: visionResult, combinedModel, policy, errors };
 }
 
-export async function listAnalyses(itemId) {
-  const result = await query('SELECT * FROM stacker_news_analyses WHERE item_id=$1 ORDER BY created_at DESC', [itemId]);
-  return result.rows.map((row) => ({
-    id: row.id, itemId: row.item_id, stage: row.stage, provider: row.provider, model: row.model,
-    status: row.status, sourceContentHash: row.source_content_hash, rulesHash: row.rules_hash,
-    policyVersion: row.policy_version, result: row.result, moderatorFeedback: row.moderator_feedback, createdAt: row.created_at,
-  }));
-}
-
 export async function setAnalysisFeedback(analysisId, feedback) {
   const result = await query('UPDATE stacker_news_analyses SET moderator_feedback=$2 WHERE id=$1 RETURNING *', [analysisId, feedback]);
   const row = result.rows[0];
@@ -773,11 +764,6 @@ export async function listPendingReviewActions({ limit = 50 } = {}) {
   return result.rows.map((row) => ({ ...actionView(row), accountLabel: row.account_label, itemTitle: row.item_title || '' }));
 }
 
-export async function listActionEvents(actionId) {
-  const result = await query('SELECT * FROM stacker_news_action_events WHERE action_id=$1 ORDER BY created_at ASC', [actionId]);
-  return result.rows.map((row) => ({ id: row.id, actionId: row.action_id, fromState: row.from_state, toState: row.to_state, note: row.note, metadata: row.metadata, createdAt: row.created_at }));
-}
-
 export async function updateActionState(id, state, reviewNote = '') {
   if (!ACTION_STATES.has(state) || !['approved', 'rejected'].includes(state)) throw new Error('Only approval or rejection is allowed from review');
   const row = await withTransaction(async (client) => {
@@ -895,4 +881,3 @@ export async function executeApprovedAction(id) {
 }
 
 export const stackerNewsActionKinds = [...ACTION_KINDS];
-export { stackerNewsCapabilities };

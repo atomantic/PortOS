@@ -63,7 +63,7 @@ import { ensureDir, sleep } from './fileUtils.js';
 import { safeChildProcessOptions } from './processEnv.js';
 import { quoteForShell } from './shellCd.js';
 import { withSpawnCwdEnv } from './spawnCwd.js';
-import { classifyWriterQuiescence, reserveDatabaseWriter } from './databaseWriterRegistry.js';
+import { classifyWriterQuiescence, reserveDatabaseWriter, retireQuiescentWriters } from './databaseWriterRegistry.js';
 import { createDatabaseMaintenanceJournal } from './databaseMaintenanceJournal.js';
 import { PATHS } from './paths.js';
 
@@ -651,6 +651,9 @@ async function retireQuiescentWriter(writer) {
   }
   if (consecutive >= 2) writer.retire();
 }
+
+/** Boot sweep: retire every record the launching process never got to (see `retireQuiescentWriters`). */
+export const sweepQuiescentWriters = (options = {}) => retireQuiescentWriters({ snapshot: snapshotProcesses, ...options });
 
 /**
  * Spawn a detached, pm2-restart-surviving child process.

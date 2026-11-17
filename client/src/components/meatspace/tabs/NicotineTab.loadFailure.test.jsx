@@ -8,6 +8,8 @@ vi.mock('../../../services/api', () => ({
   getAppleHealthCorrelation: vi.fn(),
   updateNicotineEntry: vi.fn().mockResolvedValue({}),
   removeNicotineEntry: vi.fn().mockResolvedValue({}),
+  addCustomNicotineProduct: vi.fn(),
+  removeCustomNicotineProduct: vi.fn(),
 }));
 vi.mock('../NicotineChart', () => ({ default: () => null }));
 vi.mock('../NicotineHealthCorrelation', () => ({ default: () => null }));
@@ -61,4 +63,26 @@ it('hides Manage when the product button read fails and recovers on retry', asyn
   expect(await screen.findByRole('button', { name: /Example Pouch/ })).toBeTruthy();
   expect(screen.getByRole('button', { name: /Manage/ })).toBeTruthy();
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('applies an added and a removed product button in place without re-reading the list', async () => {
+  api.getDailyNicotine.mockResolvedValue([]);
+  api.getCustomNicotineProducts.mockResolvedValue([{ name: 'Example Pouch', mgPerUnit: 6 }]);
+  api.addCustomNicotineProduct.mockResolvedValue({ name: 'Sample Gum', mgPerUnit: 2 });
+  api.removeCustomNicotineProduct.mockResolvedValue({ name: 'Example Pouch', mgPerUnit: 6 });
+  render(<NicotineTab />);
+  fireEvent.click(await screen.findByRole('button', { name: /Manage/ }));
+
+  fireEvent.change(screen.getByLabelText('New product button name'), { target: { value: 'Sample Gum' } });
+  fireEvent.change(screen.getByLabelText('New product button milligrams per unit'), { target: { value: '2' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add product' }));
+  await waitFor(() => expect(api.addCustomNicotineProduct).toHaveBeenCalled());
+  expect(await screen.findByText('Sample Gum')).toBeTruthy();
+
+  fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+  fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
+  await waitFor(() => expect(api.removeCustomNicotineProduct).toHaveBeenCalledWith(0));
+  await waitFor(() => expect(screen.queryByText('Example Pouch')).toBeNull());
+  expect(screen.getByText('Sample Gum')).toBeTruthy();
+  expect(api.getCustomNicotineProducts).toHaveBeenCalledTimes(1);
 });

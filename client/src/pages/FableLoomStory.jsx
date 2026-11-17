@@ -490,14 +490,17 @@ export default function FableLoomStory({ view = 'graph' }) {
     // Optimistic: fold the new position into local state, persist silently.
     // The echo is NOT folded back in — pos is already exact client-side, and
     // replacing the loom would re-layout the whole canvas a second time.
-    setLoom((prev) => ({
+    const savedPos = episode.nodes.find((n) => n.id === movedNodeId)?.pos;
+    const placeNode = (nextPos) => setLoom((prev) => ({
       ...prev,
       episodes: prev.episodes.map((e) => (e.id !== episode.id ? e : {
         ...e,
-        nodes: e.nodes.map((n) => (n.id === movedNodeId ? { ...n, pos } : n)),
+        nodes: e.nodes.map((n) => (n.id === movedNodeId ? { ...n, pos: nextPos } : n)),
       })),
     }));
-    updateLoomNode(loomId, episode.id, movedNodeId, { pos }, { silent: true }).catch(() => {});
+    placeNode(pos);
+    // A failed save toasts (request default) and the node returns to the server-held position.
+    updateLoomNode(loomId, episode.id, movedNodeId, { pos }).catch(() => placeNode(savedPos));
   };
 
   if (notFound) {

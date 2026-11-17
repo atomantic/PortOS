@@ -1,25 +1,13 @@
 /**
- * Cron syntax + field-range validation (pure, dependency-free).
+ * Cron syntax + field-range validation (pure, dependency-free, import-free so the browser can use it).
  *
- * ONE implementation of "is this a valid 5-field cron expression", shared by
- * the runtime walker (`services/eventScheduler.js`), every save boundary that
- * persists a cron string (CoS global schedule routes, per-app task-type
- * overrides, the generic app-update schema), and the browser cron editor.
+ * ONE implementation of "is this a valid 5-field cron expression", shared by the scheduler walker
+ * (`services/eventScheduler.js`), every save boundary that persists a cron string, and the
+ * browser cron editor, so a save can never accept an expression the walker rejects (#6634).
  *
- * Before this module those four surfaces disagreed: the walker rejected
- * out-of-range fields by returning `null`, while the save routes only counted
- * five whitespace-separated tokens — so `99 9 * * *` could be saved on an
- * ENABLED schedule that then never fired (#6634).
- *
- * SYNTAX VALIDITY IS NOT "HAS A NEXT OCCURRENCE". `0 0 29 2 *` (leap day) is
- * syntactically valid even though the scheduler's bounded two-year search
- * window may find no match; a save boundary must never use a null next-run
- * result as its invalidity signal. Next-occurrence search stays in the
- * scheduler; this module answers syntax and range only.
- *
- * Kept free of imports (Zod included) so the browser can import it directly,
- * the way `client/src/utils/cronHelpers.js` already imports pure scheduling
- * vocabulary out of `server/lib/`.
+ * SYNTAX VALIDITY IS NOT "HAS A NEXT OCCURRENCE": `0 0 29 2 *` (leap day) is valid even if the
+ * scheduler's bounded search window finds no match, so a save boundary must never treat a null
+ * next-run as invalid. Next-occurrence search stays in the scheduler.
  */
 
 /** Field order of a 5-field cron expression. */
@@ -34,9 +22,9 @@ export const CRON_FIELD_BOUNDS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
 export const CRON_FIELD_COUNT = 5;
 
 /**
- * Whether a value has the 5-token SHAPE of a cron expression — the detector
- * that distinguishes a cron string from a named cadence like `on-demand`. It
- * says nothing about syntax validity; use `isValidCronExpression` for that.
+ * Whether a value has the 5-token SHAPE of a cron expression (vs a named cadence like
+ * `on-demand`); says nothing about validity — use `isValidCronExpression`.
+ *
  * @param {unknown} value
  * @returns {boolean}
  */
@@ -44,10 +32,7 @@ export function isCronShaped(value) {
   return typeof value === 'string' && value.trim().split(/\s+/).length === CRON_FIELD_COUNT;
 }
 
-/**
- * Validate one comma-separated part of a field (`5`, `1-5`, `*`, `*\/15`,
- * `1-5/2`, `0/10`).
- */
+/** Validate one comma-separated part of a field (`5`, `1-5`, `*`, `*\/15`, `1-5/2`, `0/10`). */
 function isCronPartValid(part, min, max) {
   const [range, step] = part.split('/');
   // Only ONE `/` is legal — `1/2/3` splits into 3 and must not pass.
@@ -69,8 +54,9 @@ function isCronPartValid(part, min, max) {
 }
 
 /**
- * Validate a single cron field against its bounds.
- * @param {string} expr - One field of a cron expression (e.g. `*\/15`, `1-5`)
+ * Validate a single cron field (e.g. `*\/15`, `1-5`) against inclusive bounds.
+ *
+ * @param {string} expr - One field of a cron expression
  * @param {number} min - Minimum allowed value
  * @param {number} max - Maximum allowed value
  * @returns {boolean}
@@ -81,9 +67,8 @@ export function isValidCronField(expr, min, max) {
 }
 
 /**
- * Describe why an expression is not a valid cron, or `null` when it is valid.
- * Returned as a user-facing string so the editor can explain the rejection
- * rather than only disabling Save.
+ * User-facing reason an expression is not a valid cron, or `null` when valid.
+ *
  * @param {unknown} expr
  * @returns {string|null}
  */
@@ -105,9 +90,8 @@ export function findCronExpressionError(expr) {
 }
 
 /**
- * Whether a value is a syntactically valid 5-field cron expression with every
- * field inside its range. Does NOT consider whether an occurrence exists in any
- * particular search window.
+ * Syntactically valid 5-field cron with every field in range; ignores whether an occurrence exists.
+ *
  * @param {unknown} expr
  * @returns {boolean}
  */

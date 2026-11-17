@@ -13,7 +13,10 @@ import {
   restoreRecommendationSchema,
   generateWeeklyDigestSchema,
   parsePagination,
+  validateRequest,
 } from '../lib/validation.js';
+import { limitQuerySchema } from '../lib/queryValidation.js';
+import { cosDigestCompareQuerySchema } from '../lib/cosValidation.js';
 
 const router = Router();
 
@@ -63,16 +66,6 @@ router.post('/learning/reset/:taskType', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// GET /api/cos/learning/cooldown/:taskType - Get adaptive cooldown for specific task type
-router.get('/learning/cooldown/:taskType', asyncHandler(async (req, res) => {
-  const { taskType } = req.params;
-  const cooldownInfo = await taskLearning.getAdaptiveCooldownMultiplier(taskType);
-  res.json({
-    taskType,
-    ...cooldownInfo
-  });
-}));
-
 // GET /api/cos/learning/routing - Get routing accuracy metrics (task type × model tier)
 router.get('/learning/routing', asyncHandler(async (req, res) => {
   const routing = await taskLearning.getRoutingAccuracy();
@@ -93,7 +86,7 @@ router.get('/learning/summary', asyncHandler(async (req, res) => {
 
 // GET /api/cos/learning/insights - Get recent learning insights
 router.get('/learning/insights', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { limit } = parsePagination(validateRequest(limitQuerySchema, req.query), { defaultLimit: 10, maxLimit: 500 });
   const insights = await taskLearning.getRecentInsights(limit);
   res.json({
     count: insights.length,
@@ -170,25 +163,11 @@ router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) 
   res.json(recommendations);
 }));
 
-// POST /api/cos/learning/recalculate-durations - Rebuild success-only duration stats from agent archive
-router.post('/learning/recalculate-durations', asyncHandler(async (req, res) => {
-  const result = await taskLearning.recalculateDurationStats();
-  res.json({ success: true, ...result });
-}));
-
 // GET /api/cos/learning/confidence - Get confidence levels for all task types
 router.get('/learning/confidence', asyncHandler(async (req, res) => {
   const state = await loadState();
   const thresholds = state.config?.confidenceAutoApproval ?? {};
   const confidence = await taskLearning.getConfidenceLevels(thresholds);
-  res.json(confidence);
-}));
-
-// GET /api/cos/learning/confidence/:taskType - Get confidence for specific task type
-router.get('/learning/confidence/:taskType', asyncHandler(async (req, res) => {
-  const state = await loadState();
-  const thresholds = state.config?.confidenceAutoApproval ?? {};
-  const confidence = await taskLearning.getTaskTypeConfidence(req.params.taskType, thresholds);
   res.json(confidence);
 }));
 
@@ -222,7 +201,7 @@ router.get('/digest/text', asyncHandler(async (req, res) => {
 
 // GET /api/cos/digest/compare - Compare two weeks (must be before :weekId)
 router.get('/digest/compare', asyncHandler(async (req, res) => {
-  const { week1, week2 } = req.query;
+  const { week1, week2 } = validateRequest(cosDigestCompareQuerySchema, req.query);
 
   if (!week1 || !week2) {
     throw new ServerError('Both week1 and week2 query parameters are required', { status: 400, code: 'VALIDATION_ERROR' });

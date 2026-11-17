@@ -8,25 +8,14 @@ import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.j
 /**
  * The agent record a spawn registers, projected from the task it is running.
  *
- * `agent.metadata` is a HAND-PICKED projection of `task.metadata`, never a
- * spread — every consumer downstream (the run cards, `perpetualRefillPlan`,
- * `declaresNoCommitCriterion`, the quota-burn continuation, `featureAgents`)
- * reads the agent record alone, so a field that is not listed here simply does
- * not survive the spawn. That is the whole reason this is one explicit literal
- * and not a merge: adding a task field is supposed to be a deliberate decision
- * about whether the agent needs it, and `quotaBurnStepId` shipped persisted but
- * unprojected (#6406) precisely because the list was being maintained inline in
- * the middle of a 900-line orchestrator.
- *
- * Pure and synchronous: everything it needs is already resolved by the caller.
- * `primaryCheckoutBaseline` and `providerEndpoint` arrive as VALUES rather than
- * being read here (both were `await`/service calls inline), which keeps this
- * leaf out of the agent-state and local-endpoint graphs.
+ * `agent.metadata` is a HAND-PICKED projection of `task.metadata`, never a spread: every downstream consumer (run cards,
+ * `perpetualRefillPlan`, `declaresNoCommitCriterion`, quota-burn continuation, `featureAgents`) reads the agent record
+ * alone, so adding a task field is a deliberate decision about whether the agent needs it. Pure and synchronous;
+ * `primaryCheckoutBaseline` and `providerEndpoint` arrive as VALUES to keep this leaf out of the agent-state and
+ * local-endpoint graphs.
  */
 
-// From the module that DECLARES it, not the `validation.js` catch-all barrel:
-// that barrel drags 123 modules into every suite this leaf reaches, for one
-// pure helper (server/AGENTS.md, "Import scoping").
+// Import from the declaring module, not the `validation.js` barrel (server/AGENTS.md, "Import scoping").
 import { normalizeReviewers } from './reviewerConfig.js';
 import { quotaBurnAgentMetadata } from './quotaBurnOrigin.js';
 import { claimOwnershipBinding, reconcileAssignmentForTask } from './claimContinuation.js';
@@ -34,10 +23,8 @@ import { explicitPrCompletion, prHeldForOperator } from './prDisposition.js';
 import { repositoryCleanupMergeTarget } from './recoveryMergeTarget.js';
 
 /**
- * How this run is dispatched, as one closed vocabulary rather than the nested
- * ternary chain it replaced: a headless run is `direct` or `runner`, and an
- * interactive PTY session is `tui` or `runner-tui`, with the `runner-` prefix
- * meaning the durable CoS runner owns the child instead of this process.
+ * How this run is dispatched: a headless run is `direct` or `runner`, an interactive PTY session is `tui` or
+ * `runner-tui`; the `runner-` prefix means the durable CoS runner owns the child instead of this process.
  */
 export function resolveExecutionMode({ spawnHeadless, useRunner }) {
   if (spawnHeadless) return useRunner ? 'runner' : 'direct';
@@ -77,29 +64,15 @@ export function buildAgentRegistration({
     instanceId,
     workspacePath,
     sourceWorkspace,
-    // Branch-jack baseline (#3680): the primary checkout's branch + HEAD at the
-    // instant this worktree agent started. finalizeAgent re-reads it at the end
-    // of the run — every spawn mode funnels through that one chokepoint — and
-    // fails the run when the primary moved, instead of recording a silent
-    // "completed" for an agent that wrote unreviewed commits outside its
-    // worktree. Non-throwing: an unreadable checkout yields null, which the
-    // detector reads as "nothing to check".
+    // Branch-jack baseline: the primary checkout's branch + HEAD when this worktree agent started. finalizeAgent re-reads
+    // it and fails the run if the primary moved. Non-throwing: an unreadable checkout yields null ("nothing to check").
     primaryCheckoutBaseline,
     // Trusted launch capture only; never project a task/model-supplied claim.
     auditSourceEvidence,
     ...(Number(task.metadata?.auditDispositionVersion) === 1 ? { auditDispositionVersion: 1 } : {}),
-    // The issue-tracker base URL of the repository this run worked in, already
-    // shaped for its forge (`repoIssueUrlBase`) so the browser appends a number
-    // and knows nothing about forges. It is what a bare `#7640` in the agent's
-    // own completion summary refers to, so the run card renders that reference
-    // as a link without the agent having to build a URL it has no reliable way
-    // to know.
-    //
-    // Stamped rather than resolved at render time for the two reasons the
-    // baseline above is: it is immutable run provenance (re-pointing an app at
-    // a different origin later must not silently relabel finished runs), and
-    // the alternative is a `git` shell-out per card render. A record written
-    // before this shipped carries null, which the card reads as plain text.
+    // Issue-tracker base URL of the run's repository (shaped by `repoIssueUrlBase`) so the card can link a bare `#7640` in
+    // the completion summary. Stamped, not resolved at render: it is immutable run provenance (re-pointing an app later
+    // must not relabel finished runs). Older records carry null, rendered as plain text.
     repoIssueUrl,
     worktreeBranch: worktreeInfo?.branchName || null,
     // Keep explicit handoffs after task archival; omitted policy is not a grant.
@@ -112,10 +85,8 @@ export function buildAgentRegistration({
     taskType: task.taskType,
     priority: task.priority,
     providerId: provider.id,
-    // Immutable, non-secret route provenance for the active/completed cards.
-    // Keep this as individual fields rather than copying the provider record:
-    // envVars, endpoints, args and credentials are execution details, not run
-    // metadata that should be persisted or rendered in the card.
+    // Immutable, non-secret route provenance. Individual fields, never the provider record (envVars, endpoints, args and
+    // credentials are execution details that must not be persisted or rendered).
     providerName: provider.name || null,
     providerType: provider.type || null,
     providerMethod: provider.method || provider.type || null,
@@ -124,72 +95,33 @@ export function buildAgentRegistration({
     servicePlan: provider.servicePlan || null,
     providerCredentialBootstrapId: provider.credentialBootstrapId || null,
     providerHasCredentialBootstrap: Boolean(provider.credentialBootstrap),
-    // Persisted alongside the id because the cleanup path's `agentOpensOwnPr`
-    // gate must derive from the SAME `canTypeSlashCommands` predicate the prompt
-    // used to decide whether the agent opens its own PR (#3114). An id alone
-    // can't answer that — a path-configured `claude` under a custom id is
-    // slashdo-capable, and a lean `--bare` session is not.
+    // Persisted with the id because the cleanup path's `agentOpensOwnPr` gate must derive from the SAME
+    // `canTypeSlashCommands` predicate the prompt used; an id alone can't say (custom-id `claude` is slashdo-capable, lean `--bare` is not).
     providerCommand: provider.command || null,
-    // The endpoint this agent's inference actually lands on, stamped for the
-    // same reason as the command above: the per-local-endpoint spawn cap
-    // (#4834) must know which GPU a RUNNING agent is occupying, and an id
-    // alone can't answer that once the provider record is edited or deleted
-    // mid-run. Pre-#4834 agent records have no value here, so the counter
-    // falls back to resolving the id against the live provider list.
-    //
-    // Resolved through the SAME helper the counter reads with, so writer and
-    // reader can't drift — a CLI provider records its daemon in envVars or an
-    // OpenCode config, not in `endpoint`. Stamped as the RAW url, never the
-    // slot key: a slot key is null for a cloud provider, and stamping null
-    // would re-open the mid-run-edit hole this exists to close.
+    // The endpoint this agent's inference lands on, stamped so the per-local-endpoint spawn cap knows which GPU a RUNNING
+    // agent occupies even if the provider record is edited or deleted mid-run (older records fall back to resolving the
+    // id). Resolved through the SAME helper the counter reads with; stamped as the RAW url, never the slot key (null for a
+    // cloud provider, which would re-open that hole).
     providerEndpoint,
-    // What this run's prompt costs to prefill on a LOCAL endpoint, and the
-    // duration estimate raised by it (#6117). `null` for a cloud provider and
-    // for a run with nothing assembled to measure — the card must read that as
-    // "no estimate", never as a small one, so it stays absent rather than 0.
+    // Prefill cost/duration estimate for a LOCAL endpoint. Absent/null means "no estimate", never a small one.
     localPromptBudget,
     leanMode,
-    // WHO opens this run's PR (`agent-slashdo` / `agent-inline` / `portos`),
-    // per the prompt this run was actually given. Persisted rather than
-    // re-derived at cleanup time: the two must agree exactly or PortOS
-    // double-fires `gh pr create`. A pre-upgrade record has no value here, so
-    // `resolvePrOpenedBy` maps whatever it does carry.
-    //
-    // Stamped from `promptOpensOwnPr`, the SAME predicate that decided what the
-    // completion section above says — NOT from `provider.type` alone. It
-    // depends on the task shape (read-only, no-code-output, discard-worktree,
-    // JIRA/leave-open and no-worktree runs are all told PortOS owns the PR),
-    // and a provider-only stamp claimed ownership for every one of them —
-    // routing a Creative Director reasoning run into the did-you-open-it net,
-    // which then opened a PR for it and filed a HIGH notification blaming the
-    // agent for skipping a step it was never given.
-    //
-    // It ALSO depends on whether the host can type a slash command, and that is
-    // the half the predecessor got backwards (#6869). The stamp used to be
-    // `inlinePrLifecycleSection(…) !== null`, which is FALSE for a slashdo-
-    // capable Claude TUI/CLI — the host that most often opens its own PR, via
-    // `/do:pr`. Those runs read as PortOS-owned, so cleanup pushed the branch
-    // again and re-created a PR that already existed. `agent-slashdo` is that
-    // case; `agent-inline` is the codex/grok/agy harness handed the plain
-    // `git`/`gh` steps, and it is the only value that owes the #5876 merge-gate
-    // check, because it is the only prompt carrying a Merge Gate section.
-    //
-    // Three values rather than the boolean because that is what separates them:
-    // the retired `false` conflated "a `/do:pr` run" with "a run PortOS owns",
-    // which is why `resolvePrOpenedBy` can only pass a legacy record's boolean
-    // straight through instead of correcting it.
+    // WHO opens this run's PR (`agent-slashdo` / `agent-inline` / `portos`), per the prompt this run was actually given.
+    // Persisted rather than re-derived at cleanup: the two must agree or PortOS double-fires `gh pr create`. Stamped from
+    // `promptOpensOwnPr`, the SAME predicate that decided the completion section, NOT from `provider.type`: it depends on
+    // task shape (read-only, no-code-output, discard-worktree, JIRA/leave-open and no-worktree runs are told PortOS owns the
+    // PR) and on whether the host can type a slash command (a slashdo-capable Claude TUI/CLI opens its own PR via `/do:pr`).
+    // `agent-inline` (codex/grok/agy given plain `git`/`gh` steps) is the only value that owes the merge-gate check.
+    // Three values rather than a boolean because a legacy `false` conflated "a `/do:pr` run" with "a run PortOS owns".
     prOpenedBy,
     model: selectedModel,
-    // The resolved run effort, including an inherited provider default and any
-    // capability suppression. Resume and the run card must describe the same
-    // setting handed to the launch builders.
+    // Resolved run effort (inherited provider default and capability suppression applied); Resume and the card must show
+    // the same setting the launch builders got.
     effort,
     modelTier: modelSelection.tier,
     modelReason: modelSelection.reason,
-    // Set only when the learning system substituted a weaker model than the
-    // provider's configured default for a task that never pinned one — the
-    // run card needs to distinguish "ran on the configured default" from a
-    // silent downgrade (#8148).
+    // Set only when the learning system substituted a weaker model than the configured default for a task that never
+    // pinned one, so the card can tell that from a run on the default.
     ...(modelSelection.downgradedFromDefault && {
       modelDowngradedFromDefault: true,
       modelConfiguredDefault: modelSelection.configuredDefault
@@ -198,68 +130,37 @@ export function buildAgentRegistration({
     phase: 'initializing',
     useRunner: dispatchUseRunner,
     executionMode,
-    // The public-review posture this run executes under (null for an ordinary
-    // task). Projected beside `executionMode` because the UI cannot otherwise
-    // explain why the card has no "Open Shell" link: a public-review stage is
-    // forced headless (`spawnHeadless` above) unless it is the sandboxed-
-    // actions stage on a TUI provider whose vendor declares an attachable
-    // recipe, so without this the card is indistinguishable from an agent
-    // whose PTY failed to attach.
+    // The public-review posture this run executes under (null for an ordinary task). Projected beside `executionMode` so
+    // the card can explain why it has no "Open Shell" link (a public-review stage is forced headless unless it is the
+    // sandboxed-actions stage on a TUI provider with an attachable recipe).
     publicReviewPosture,
-    // The run this one TOOK OVER, stamped on the task by `resolveTaskResumePatch`
-    // when a Resume or a provider Relaunch requeues a paused task in place. Same
-    // hand-picked-projection reason as the keys around it: the predecessor is
-    // retired as a HANDOFF rather than a failure (`lib/agentOutcome.js`), and
-    // without this the card that took over its worktree has no way to say what it
-    // is continuing — leaving the pair looking like two unrelated runs, one of
-    // which mysteriously stopped.
+    // The run this one TOOK OVER (stamped by `resolveTaskResumePatch` on Resume/Relaunch). The predecessor is retired as a
+    // HANDOFF (`lib/agentOutcome.js`); this lets the card say what it is continuing.
     resumedFromAgentId: task.metadata?.resumedFromAgentId || null,
     // Preserve privacy after the task becomes an archived agent.
     machineLocal: isTruthyMeta(task.metadata?.machineLocal),
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
-    // Marks a run dispatched by an explicit "Run Now" (on-demand) trigger, so
-    // the perpetual drain-on-completion refill (perpetualRefillPlan in cos.js)
-    // continues a MANUAL drain in the user-initiated on-demand lane rather than
-    // the auto-run-gated queue lane. `isTruthyMeta` accepts the boolean set at
-    // spawn AND the string `"true"` a COS-TASKS.md round-trip yields.
+    // Marks an explicit "Run Now" trigger so the perpetual drain-on-completion refill (`perpetualRefillPlan`) continues a
+    // MANUAL drain in the on-demand lane. `isTruthyMeta` accepts the boolean and the string `"true"` that
+    // rows stored before #16407 and peers on older versions hold.
     taskOnDemand: isTruthyMeta(task.metadata?.onDemand),
-    // WHO asked for that on-demand run. `perpetualRefillPlan` needs it to tell
-    // a human Run (which keeps draining) from an automated origin such as a
-    // quota burn (which is one unit and stops).
+    // WHO asked: a human Run keeps draining, an automated origin such as a quota burn is one unit and stops.
     taskOnDemandOrigin: task.metadata?.onDemandOrigin || null,
-    // The single PR a pr-reviewer run was narrowed to. Same hand-picked-projection
-    // reason as the keys around it: perpetualRefillPlan must see from the AGENT
-    // record that this run was scoped, or its untargeted re-issue silently widens
-    // a per-row click back into a sweep of every open PR.
+    // The single PR a pr-reviewer run was narrowed to; without it `perpetualRefillPlan`'s untargeted re-issue would widen a
+    // per-row click into a sweep of every open PR.
     taskTargetPullRequest: task.metadata?.targetPullRequest || null,
-    // LI hand-off provenance (#2765): projected onto the agent so the completion
-    // hook (recordTaskCompletion) can attribute the run's success/failure back to
-    // the proposal's domain. agent.metadata is a hand-picked projection of
-    // task.metadata (not a full spread), so this must be listed explicitly.
+    // LI hand-off provenance: lets `recordTaskCompletion` attribute the run's outcome back to the proposal's domain.
     taskLiProposal: task.metadata?.liProposal || null,
-    // Quota-burn provenance. Same hand-picked-projection reason as
-    // `taskLiProposal`: the runner listens for `agent:completed` and dispatches
-    // the NEXT job in this family's burn plan when the previous one finishes,
-    // so it must be able to tell a burn run from any other agent from the
-    // agent record alone. Spread from the ONE block definition
-    // (`lib/quotaBurnOrigin.js`) so every field that reaches disk reaches the
-    // runner's continuation and the denial ledger — naming them here one at a
-    // time is how `quotaBurnStepId` ended up persisted but unprojected (#6406).
-    // Values are coerced on the way through: a COS-TASKS.md round-trip hands
-    // every scalar back as a string.
+    // Quota-burn provenance: the runner dispatches the NEXT job in the burn plan on `agent:completed` and must tell a burn
+    // run from the agent record alone. Spread from the ONE block definition (`lib/quotaBurnOrigin.js`) so no field is
+    // persisted but unprojected. Values are coerced: rows stored before #16407 and peers on older versions hold every scalar as a string.
     ...quotaBurnAgentMetadata(task.metadata),
     ...(task.metadata?.auditDepth === 'deep' ? { taskAuditDepth: 'deep', ...(task.metadata.auditWorkflow ? { auditWorkflow: task.metadata.auditWorkflow } : {}) } : {}),
-    // Same reason as taskLiProposal — a hand-picked projection, so this must be
-    // listed explicitly. `declaresNoCommitCriterion` (taskTypeHooks.js) reads it
-    // to decide whether a run declared a commit criterion at all,
-    // and taskLearning's history backfill re-processes the ARCHIVED agent shape
-    // through that same predicate. Without the projection an archived
-    // tracker-filing run (reference-watch/ux on a github/gitlab/jira app) looks
-    // like a committing task during backfill, so its stale `validationPassed:
-    // false` fossil survives the sanitizer (#3273). `?? null` — not `|| null` —
-    // because `false` is the load-bearing value here.
+    // `declaresNoCommitCriterion` reads this, and taskLearning's backfill re-processes the ARCHIVED agent shape through the
+    // same predicate; without it an archived tracker-filing run looks like a committing task and its stale
+    // `validationPassed: false` survives the sanitizer. `?? null`, not `|| null`: `false` is the load-bearing value.
     worktreeChangesExpected: task.metadata?.worktreeChangesExpected ?? null,
     taskAppName: resolvedAppName,
     selfImprovementType: task.metadata?.selfImprovementType || null,
@@ -270,19 +171,13 @@ export function buildAgentRegistration({
     jiraInstanceId: task.metadata?.jiraInstanceId || null,
     jiraCreatePR: task.metadata?.jiraCreatePR ?? null,
     configOpenPR: isTruthyMeta(task.metadata?.openPR),
-    // Claim prompts own their external claim/<item> worktree and forge
-    // lifecycle even though CoS must keep configOpenPR/configUseWorktree off
-    // to avoid provisioning a nested worktree. Preserve that distinction in
-    // the run record so completion diagnostics cannot mistake the claim path
-    // for the generic commit-only handoff.
-    // Which memories steered this run's prompt ([{ id, version, relevance }]).
-    // Empty for a run whose prompt carried none; absent only on a pre-#10495 record.
+    // Which memories steered this run's prompt ([{ id, version, relevance }]); empty when none, absent on older records.
     injectedMemories,
+    // Claim prompts own their external claim/<item> worktree and forge lifecycle even though CoS keeps configOpenPR/
+    // configUseWorktree off (no nested worktree); kept distinct so diagnostics don't mistake it for a commit-only handoff.
     configClaimFlow: claimFlowTask,
-    // The claim branch this run owns (or `claimPicksOwnBranch` when it picks one
-    // itself, as a swarm orchestrator does). The `claim-*` tree is cut by the
-    // agent, so `workspacePath` never names it; a later relaunch of that claim
-    // reads these at launch to see that a live owner holds the checkout.
+    // The claim branch this run owns (or `claimPicksOwnBranch` for a swarm orchestrator). The agent cuts the `claim-*`
+    // tree, so `workspacePath` never names it; a later relaunch reads these to see a live owner holds the checkout.
     ...claimOwnershipBinding(task),
     // Snapshot the assigned follow-up target at registration. Admission also
     // checks the persisted internal task and checkout; a prompt is never a grant.
@@ -299,10 +194,8 @@ export function buildAgentRegistration({
           fork: task.metadata.reviewLoopForkTarget ? structuredClone(task.metadata.reviewLoopForkTarget) : null,
         } : {}) }
       : null,
-    // Generic PR delivery (#11435): the worktree PortOS just provisioned and its
-    // head branch, stamped only when this run's prompt carries the merge
-    // admission section for its own PR. Admission re-verifies the live task and
-    // checkout against it; neither the request nor PR prose can supply it.
+    // Generic PR delivery: the worktree PortOS provisioned and its head branch, stamped only when the prompt carries the
+    // merge admission section for its own PR. Admission re-verifies the live task and checkout; neither request nor PR prose can supply it.
     prDeliveryTarget: mergesOwnPr && worktreeInfo?.branchName && workspacePath
       ? { branch: worktreeInfo.branchName, workspacePath }
       : null,
@@ -315,21 +208,14 @@ export function buildAgentRegistration({
     configReviewers: normalizeReviewers(task.metadata),
     configUseWorktree: !!worktreeInfo,
     configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
-    // A read-only run is given no worktree on purpose (agentWorkspacePrep) and
-    // commits nothing, so it is not "coding on main" either. Projected as its own
-    // key because the card has no other way to tell it from a commit-only handoff.
+    // A read-only run gets no worktree on purpose and commits nothing; its own key because the card can't otherwise tell it
+    // from a commit-only handoff.
     configReadOnly: isTruthyMeta(task.metadata?.readOnly),
-    // Coding on the default branch is the LEFTOVER posture: no CoS worktree, no
-    // JIRA feature branch, no claim worktree of its own, and not read-only. Each
-    // new branch-owning or non-committing flow has to be excluded here, or its
-    // card wears a warning badge that is simply false — which is how every issue
-    // claimed from the Issues page came to be badged "main" while the claim
-    // command was working in its own `claim/<item>` worktree.
+    // Coding on the default branch is the LEFTOVER posture: each branch-owning or non-committing flow (CoS worktree, JIRA
+    // branch, claim worktree, read-only) must be excluded here or its card wears a false "main" badge.
     configCodingOnMain: !worktreeInfo && !jiraBranchName && !claimFlowTask
       && !isTruthyMeta(task.metadata?.readOnly),
-    // Feature-agent provenance must survive the in-memory runner handoff and
-    // server restarts so featureAgents can clear currentAgentId and record the
-    // run when the shared CoS lifecycle emits agent:completed.
+    // Feature-agent provenance survives the runner handoff and restarts so featureAgents can clear currentAgentId on completion.
     featureAgentId: task.metadata?.featureAgentId || null,
     featureAgentRun: isTruthyMeta(task.metadata?.featureAgentRun)
   };

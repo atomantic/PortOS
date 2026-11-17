@@ -2,10 +2,7 @@
  * Fetches the original-vs-cleaned variant set for the one open image (`GET
  * /api/image-gen/:filename/variants`), normalized.
  *
- * Reuses the held group across toggle clicks and aborts a superseded lookup. `null` while unfetched
- * or failed, `[]` when the image is not indexed. Use when: `MediaPreview` calls it for every image
- * preview; neither a page-owned ref list nor a 60-row gallery window is a complete source of variant
- * lineage.
+ * Reuses the held group across toggle clicks and aborts a superseded lookup. `null` while unfetched or failed, `[]` when the image is not indexed. Used by `MediaPreview` for every image preview.
  */
 
 import { useEffect, useState } from 'react';
@@ -13,41 +10,21 @@ import { fetchImageVariantGroup } from '../components/media/mediaDetail';
 import { normalizeImage } from '../components/media/normalize';
 
 /**
- * Fetch the original-vs-cleaned variant set for the ONE image the lightbox has
- * open, so the toggle is built from real lineage rather than from whatever list
- * the host page happens to hold.
- *
- * A host list can't answer this, for two separate reasons. A page whose list is
- * a projection of its own refs (a deck's card `imageRefs`, a pipeline or
- * music-video scene) never contains the copy at all: cleaning auto-files it
- * into the source's media COLLECTIONS, not onto the card. And a gallery page
- * only holds a window — 60 rows, newest first — while a clean stamps the copy
- * with a fresh `createdAt`, so cleaning anything older than that window
- * separates the pair there too. Hydrating the whole list to find out would be
- * the whole-list POST #7343 removed.
- *
- * Returns `null` while unfetched or after a failed lookup, so the caller keeps
- * its own list as the answer. `[]` means the image is not indexed.
- *
+ * Fetch the original-vs-cleaned variant set for the ONE image the lightbox has open, so the toggle is built from real lineage, not whatever list the host page holds: a projection of refs (a deck's `imageRefs`, a pipeline or music-video scene)
+ * never contains the copy (cleaning auto-files it into the source's media COLLECTIONS), and a gallery only holds a 60-row window while a clean stamps a fresh `createdAt`. Hydrating the whole list would be the whole-list POST #7343 removed.
+ * Returns `null` while unfetched or after a failed lookup (the caller keeps its own list); `[]` means the image is not indexed.
  * @param {object|null} item - the open preview item; non-image items fetch nothing
  * @returns {object[]|null} normalized image records, or null when not fetched
  */
 export default function useImageVariants(item) {
   const filename = item?.kind === 'image' && item.filename ? item.filename : null;
   const [fetched, setFetched] = useState(null);
-  // A group is closed under the toggle, so switching to a variant we already
-  // hold would re-request an identical set and blank the toggle for the round
-  // trip. Also true for a filename a lookup already failed on, so one failure
-  // doesn't retry forever.
+  // A group is closed under the toggle, so switching to a variant we already hold would re-request an identical set and blank the toggle; also true for a filename that already failed, so one failure doesn't retry forever.
   const holds = !!filename
     && (fetched?.filename === filename || !!fetched?.items?.some((variant) => variant.filename === filename));
   useEffect(() => {
     if (!filename || holds) return undefined;
-    // `fetchImageVariantGroup` (mediaDetail.js) de-dupes this read against
-    // `useHydratedPreviewRoute` hydrating the SAME filename at the same
-    // moment (#8341) — no AbortController here, because aborting would also
-    // cancel the other caller's share of the in-flight request. `cancelled`
-    // alone guards the state write against a stale response.
+    // `fetchImageVariantGroup` (mediaDetail.js) de-dupes this read against `useHydratedPreviewRoute` hydrating the SAME filename (#8341), so no AbortController (it would cancel the other caller's share); `cancelled` guards the state write.
     let cancelled = false;
     fetchImageVariantGroup(filename)
       .then((items) => {

@@ -28,18 +28,10 @@ const SHADOW_SCHEMA_VERSION = 1;
 const emptyShadow = () => ({ schemaVersion: SHADOW_SCHEMA_VERSION, decisions: {}, updatedAt: null });
 
 /**
- * Serialized read-modify-write over the counters file.
- *
- * `mutate` rather than load+save, and a store rather than a bare
- * `readJSONFile` + `atomicWrite` pair: the email-triage schedule and the
- * issue-watcher schedule both fold observations into THIS file, and two
- * interleaved runs would otherwise each read the same counts and write back
- * their own increments — silently discarding one side. These counters are the
- * only evidence an operator has before flipping a source to `prefer`, so
- * losing increments would quietly argue against a feature that was working.
- *
- * Built on first use, not at module load: `PATHS.data` is re-rooted by suites,
- * and a module-scope `join()` would capture whatever it was at first import.
+ * Serialized read-modify-write over the counters file: the email-triage and issue-watcher
+ * schedules both fold into it, and interleaved load+save would discard increments, the
+ * operator's only evidence before flipping a source to `prefer`. Built on first use
+ * because `PATHS.data` is re-rooted by suites.
  */
 let store = null;
 const shadowStore = () => (store ??= createCachedStore(
@@ -56,15 +48,9 @@ const emptyCounters = () => ({
 });
 
 /**
- * Whether this install runs the scorer at all.
- *
- * Checked BEFORE any settings read on the batch path: the feature ships off, so
- * the overwhelmingly common answer costs one cached feature lookup rather than
- * a policy resolution the caller would then throw away.
- *
- * Deferred import: `instanceFeatures.js` reaches the Eidoverse, settings and
- * user-action graph, and this module sits on the request path of three services
- * (`server/lib/importScoping.test.js`).
+ * Whether this install runs the scorer at all. Checked before any settings read (the
+ * feature ships off). Deferred import: `instanceFeatures.js` reaches the Eidoverse, settings
+ * and user-action graph (`server/lib/importScoping.test.js`).
  */
 export async function isJevFeatureEnabled() {
   const { isInstanceFeatureEnabled } = await import('./instanceFeatures.js');
@@ -72,14 +58,9 @@ export async function isJevFeatureEnabled() {
 }
 
 /**
- * Whether jev may answer for this policy, and how an abstention is handled.
- *
- * Two independent gates, both of which must be open: the per-install feature
- * toggle (an operator saying this machine runs the scorer at all) and the
- * per-source `jevMode` (an operator saying this CHANNEL may be answered
- * locally). `disabled` suppresses even shadow scoring. `shadow` is the
- * UI label for the legacy stored `off` value on
- * a machine where the feature is on, and it changes no behavior at all.
+ * Whether jev may answer for this policy: both the per-install feature toggle and the
+ * per-source `jevMode` must be open. `disabled` suppresses even shadow scoring; `shadow`
+ * is the UI label for the legacy stored `off` and changes no behavior.
  */
 export async function resolveJevMode(policy) {
   if (policy?.jevMode === 'disabled') return 'disabled';
@@ -89,17 +70,12 @@ export async function resolveJevMode(policy) {
 }
 
 /**
- * Ask the scorer to resolve one closed-set decision.
- *
- * Returns exactly one of:
+ * Ask the scorer to resolve one closed-set decision. Returns one of:
  *   { ok: true,  kind: 'decided',     value, margin, confidence }
  *   { ok: true,  kind: 'abstained',   abstained: true, margin }
  *   { ok: false, kind: 'unavailable', code }
- *
- * A caller MUST NOT treat `abstained` or `ok: false` as permission to take the
- * leading option. Both mean "ask the chat model, or do nothing". `kind` is the
- * counter bucket the observation belongs in, carried here so no caller has to
- * re-derive it from the other two fields.
+ * A caller MUST NOT treat `abstained` or `ok: false` as permission to take the leading
+ * option: both mean "ask the chat model, or do nothing". `kind` is the counter bucket.
  */
 export async function runJevDecision({ decisionId, premise, policyMinMargin = null } = {}) {
   const decision = getJevDecision(decisionId);
@@ -108,30 +84,23 @@ export async function runJevDecision({ decisionId, premise, policyMinMargin = nu
   // Deferred so an install that never opts in keeps the sidecar lifecycle, the
   // `PORTS` table, and the model contract out of its static import closure.
   const { decide } = await import('./jev.js');
-  // An adopted project-specific head's slug, or null on every install that has
-  // not trained one — which is every install by default. Null means the stock
-  // zero-shot classifier answers, exactly as it did before heads existed. The
-  // slug is resolved inside the heads directory by the sidecar, never treated
-  // as a path.
+  // An adopted project-specific head's slug, or null (stock zero-shot classifier). The
+  // sidecar resolves it inside the heads directory; never treated as a path.
   const { getAdoptedJevHeadSlug } = await import('./jevHeads.js');
   const scored = await decide({
     premise,
     options: jevHypotheses(decisionId),
     head: await getAdoptedJevHeadSlug(decisionId),
-    // The base floor gates the forward pass; a per-option floor is applied
-    // below, once there is a winner to look up.
+    // The base floor gates the forward pass; the per-option floor applies below.
     minMargin: jevMinMarginFor(decisionId, { policyMinMargin }),
   });
   if (!scored.ok) return unavailable(scored.code);
   if (scored.abstained) return { ok: true, kind: 'abstained', abstained: true, margin: scored.margin };
   const value = jevValueForHypothesis(decisionId, scored.choice);
-  // A winning hypothesis that is not one of ours means the reply described a
-  // different option list than the one we asked about. `normalizeJevScores`
-  // already rejects that, so reaching here is a contract break, not a verdict.
+  // A winner outside our option list is a contract break (`normalizeJevScores` rejects it), not a verdict.
   if (value === null) return unavailable('jev-response-invalid');
-  // The asymmetric floor: `delete` and `inspect-trusted-change` have to clear a
-  // far wider separation than the options they sit beside, because they are the
-  // ones that throw something away or release a task.
+  // Asymmetric floor: `delete` and `inspect-trusted-change` need a far wider separation
+  // since they discard something or release a task.
   if (scored.margin < jevMinMarginFor(decisionId, { optionValue: value, policyMinMargin })) {
     return { ok: true, kind: 'abstained', abstained: true, margin: scored.margin };
   }
@@ -141,34 +110,23 @@ export async function runJevDecision({ decisionId, premise, policyMinMargin = nu
 const unavailable = (code) => ({ ok: false, kind: 'unavailable', code });
 
 /**
- * Fold observations into the install's per-decision counters.
- *
- * COUNTS ONLY. A record carries the decision id, which bucket it landed in, and
- * whether it matched the chat model — never the premise, a message body, a
- * comment, a diff, or a margin tied to any of them. That is the whole reason
- * shadow mode is safe to leave on: the file it writes could be published
- * without disclosing anything about what was analyzed.
- *
- * Never rejects. Measurement must not be able to fail an analysis that already
- * succeeded, so every caller can fire this without a guard of its own.
+ * Fold observations into the per-decision counters. COUNTS ONLY: decision id, bucket and
+ * whether it matched the chat model, never a premise, body, comment, diff or margin, so the
+ * file is safe to publish. Never rejects: measurement must not fail a succeeded analysis.
  */
 export async function recordJevObservations(observations) {
   const rows = (Array.isArray(observations) ? observations : [observations])
     .filter((row) => row && getJevDecision(row.decisionId));
   if (!rows.length) return null;
   return shadowStore().mutate((current) => {
-    // A file from a newer or unreadable schema restarts the counters rather
-    // than folding counts into a shape this build cannot read. They are
-    // regenerable telemetry; the next decision re-measures.
+    // An unreadable or newer-schema file restarts the counters (regenerable telemetry).
     const base = current?.schemaVersion === SHADOW_SCHEMA_VERSION && current.decisions ? current : emptyShadow();
     const decisions = { ...base.decisions };
     for (const row of rows) {
       const counters = { ...emptyCounters(), ...decisions[row.decisionId] };
       counters.observed += 1;
       if (row.kind === 'decided' || row.kind === 'abstained' || row.kind === 'unavailable') counters[row.kind] += 1;
-      // `agreed` is only meaningful when BOTH answered the same question. A
-      // `prefer`-mode run that jev resolved never woke the chat model, so it
-      // has a choice but nothing to compare it against.
+      // `agreed` needs BOTH to have answered; a jev-resolved `prefer` run never woke the chat model.
       if (typeof row.agreed === 'boolean') {
         counters.compared += 1;
         if (row.agreed) counters.agreed += 1;
@@ -185,13 +143,7 @@ export async function recordJevObservations(observations) {
   });
 }
 
-/**
- * Per-decision agreement and abstention rates for the jev panel.
- *
- * `null` for a rate the install has no evidence for — an install that has never
- * run a decision must read as "no data", not as "0% agreement", which would
- * argue against a feature nobody has measured yet.
- */
+/** Per-decision agreement and abstention rates; `null` for a rate with no evidence (no data, not "0% agreement"). */
 export async function readJevDecisionStats() {
   const stored = await shadowStore().load().catch(() => null);
   const decisions = stored?.schemaVersion === SHADOW_SCHEMA_VERSION ? stored.decisions || {} : {};

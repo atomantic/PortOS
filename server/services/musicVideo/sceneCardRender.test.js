@@ -197,7 +197,9 @@ describe('shot-card frame references (#15583)', () => {
     const project = cardProject();
     const body = await buildSceneFrameGenerateBody(project, project.scenes[0], { slot: 'start' });
     expect(body.referenceImageFiles).toEqual(['layout.png', 'portrait.png', 'plate.png']);
-    expect(body.musicVideo.castInputs).toEqual({ ingredientId: null, guides: ['portrait.png'], sheets: [] });
+    // The linked portrait is a character reference too, so the take can tell when it changes (#16473).
+    expect(body.musicVideo.castInputs).toEqual({ ingredientId: null, guides: ['portrait.png'], sheets: [],
+      characters: [{ id: expect.stringMatching(/^mvr-linked-/), imageId: 'portrait.png' }] });
     const { referenceImageFiles, castInputs, ...withoutFiles } = body;
     const viaCard = await prepared(project, body);
     const viaSlot = await prepared(project, withoutFiles);
@@ -314,7 +316,7 @@ describe('shot-card frame references (#15583)', () => {
     };
     const body = await buildSceneFrameGenerateBody(project, project.scenes[0], { slot: 'start' });
     expect(body.referenceImageFiles).toEqual(['child.png']);
-    expect(body.musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+    expect(body.musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [], characters: [{ id: 'mvr-guide-child.png', imageId: 'child.png' }] });
     const { referenceImageFiles, ...withoutFiles } = body;
     expect(names(await prepared(project, withoutFiles))).toEqual(['child.png']);
     expect(referenceImageFiles).toEqual(['child.png']);

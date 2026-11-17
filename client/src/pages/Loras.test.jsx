@@ -33,6 +33,8 @@ vi.mock('../services/api', () => ({
   searchCivitaiLoras: vi.fn(),
   searchVideoLoras: vi.fn(),
   probeLoraEffect: vi.fn(),
+  getRetiredDataInventory: vi.fn(async () => []),
+  deleteRetiredData: vi.fn(),
 }));
 
 vi.mock('../components/ui/Toast', () => ({
@@ -177,6 +179,24 @@ describe('Loras Installed / Discover views', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Discover LoRAs to install' }));
 
     expect(await screen.findByLabelText('Civitai model URL')).toBeInTheDocument();
+  });
+
+  it('re-reads the library in the background after an install without swapping in the loading skeleton', async () => {
+    let release;
+    listLorasFull.mockResolvedValueOnce([LORA]).mockReturnValueOnce(new Promise((resolve) => { release = resolve; }));
+    installLoraFromCivitai.mockResolvedValue({ name: 'second-lora.safetensors' });
+    await renderDiscover();
+
+    const input = await screen.findByLabelText('Civitai model URL');
+    fireEvent.change(input, { target: { value: 'https://civitai.com/models/123/example' } });
+    fireEvent.submit(input.closest('form'));
+    await clickStartDownload();
+    await waitFor(() => expect(listLorasFull).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'View installed' }));
+    expect(screen.getByText('Example LoRA')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Loading installed LoRAs')).not.toBeInTheDocument();
+    await act(async () => release([LORA]));
   });
 
   it('hands the user to Installed after a successful install instead of leaving them in the catalog', async () => {

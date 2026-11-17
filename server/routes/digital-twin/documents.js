@@ -9,6 +9,7 @@
  */
 
 import { Router } from 'express';
+import { paginationQuerySchema } from '../../lib/queryValidation.js';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest, isPaginationRequested, paginateArray } from '../../lib/validation.js';
@@ -26,9 +27,10 @@ const router = Router();
  * `?limit=`/`?offset=`.
  */
 router.get('/documents', asyncHandler(async (req, res) => {
+  const query = validateRequest(paginationQuerySchema, req.query);
   const documents = await digitalTwinService.getDocuments();
-  if (!isPaginationRequested(req.query)) return res.json(documents);
-  res.json(paginateArray(documents, req.query, { defaultLimit: 50, maxLimit: 500 }));
+  if (!isPaginationRequested(query)) return res.json(documents);
+  res.json(paginateArray(documents, query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 /**

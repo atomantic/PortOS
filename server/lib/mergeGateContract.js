@@ -1,37 +1,17 @@
 /**
- * Merge Gate contract check (#5876)
+ * Merge Gate contract check (#5876): pure decision logic for a worktree agent's sentinel and PR.
  *
- * A worktree agent handed the INLINE PR lifecycle — the plain `git`/`gh` steps,
- * because its host cannot type `/do:pr` — gets a "Merge Gate" section that ends
- * with "Confirm the merge before exiting: … must return MERGED". Nothing
- * verified that it actually did —
- * the completion sentinel was accepted on its face, and only the post-
- * teardown `agentRepoStateVerification.js` audit ever caught a run that quit
- * with the PR still open, at the cost of a whole cold recovery agent to
- * finish a 30-second merge.
- *
- * This module is the pure decision logic for a cheaper first line of
- * defense: while the agent's session is still attached, check whether its
- * own sentinel and the PR it opened agree that the Merge Gate is done, and
- * — for exactly one nudge — re-prompt instead of tearing the session down.
- * The PR lookup itself lives in `../services/prProbe.js`, and the re-prompt
- * delivery (pasting into the live PTY) lives in `agentTuiSpawning.js` — kept
- * out of here so this stays testable without either.
+ * It checks, while the session is still attached, whether its own sentinel and the PR it opened agree the Merge Gate is
+ * done, and for exactly one nudge re-prompting instead of tearing the session down. The PR lookup
+ * lives in `../services/prProbe.js` and the PTY re-prompt delivery in `agentTuiSpawning.js`.
  */
 
 /**
- * Did this run's own prompt ask it to work a Merge Gate?
- *
- * Only the AND of all three counts, and `rendersInlinePrLifecycle` is the
- * narrow one: there is a gate to hold the agent to only when the prompt
- * actually rendered that section. A run PortOS opens or merges the PR for
- * (`taskOpenPR` false, or a lean `--bare` session / read-only / no-code-output
- * run / HTTP `api` provider) never owed one; nor does a run whose prompt hands
- * the PR to a human (`leaveOpen` true — JIRA hand-off, claim flow, or an exempt
- * task type; see `leavesPrForHuman` in `prDisposition.js`); nor does a
- * slashdo-capable run, whose `/do:pr` merges inside that one command and whose
- * prompt therefore carries no Merge Gate steps for the re-prompt to point back
- * at. Callers pass `prOpenedBy === 'agent-inline'` (#6869).
+ * Did this run's own prompt ask it to work a Merge Gate? Only the AND of all three counts: a run
+ * PortOS opens/merges the PR for never owed one, nor does one whose prompt hands the PR to a human
+ * (`leaveOpen`, see `leavesPrForHuman` in `prDisposition.js`), nor a slashdo-capable run whose
+ * `/do:pr` merges in one command and whose prompt has no Merge Gate steps to re-prompt toward.
+ * Callers pass `prOpenedBy === 'agent-inline'`.
  *
  * @param {{taskOpenPR: boolean, rendersInlinePrLifecycle: boolean, leaveOpen: boolean}} params
  * @returns {boolean}
@@ -40,11 +20,8 @@ export function mergeGateOwed({ taskOpenPR, rendersInlinePrLifecycle, leaveOpen 
   return !!taskOpenPR && !!rendersInlinePrLifecycle && !leaveOpen;
 }
 
-// What the Merge Gate's own step 4 asks the agent to say when it deliberately
-// doesn't merge ("Do NOT exit until state is MERGED (or you have explicitly
-// decided not to merge per the rule above)") — a STATED decision, not
-// something inferred from the PR being open. Matches the shapes an agent's
-// own prose actually uses for that decision, not every possible phrasing.
+// Shapes an agent's own prose uses to STATE a decision not to merge (Merge Gate step 4), not an
+// inference from the PR being open; not every possible phrasing.
 const LEAVE_OPEN_PATTERNS = [
   /\bleav(?:e|ing)\b[^.\n]{0,40}\bopen\b/i,
   /\bleft\b[^.\n]{0,40}\b(?:pr|pull request|merge request|mr)\b[^.\n]{0,20}\bopen\b/i,
@@ -64,26 +41,16 @@ export function summaryStatesLeaveOpen(summary) {
 }
 
 /**
- * Resolve what a completing run that owed a merge should do next.
+ * Resolve what a completing run that owed a merge should do next. The "at most one nudge" decision
+ * belongs solely to the caller (`checkMergeGateCompliance` in `agentTuiSpawning.js`).
  *
- * The "send at most one nudge" decision is NOT this function's job — it lives
- * entirely in the caller (`agentTuiSpawning.js`'s `checkMergeGateCompliance`,
- * which short-circuits before ever calling this a second time this run), so
- * there is exactly one place that answer can drift out of sync with itself.
- *
- * - `merged` — the PR landed; finalize normally.
- * - `no-pr-action` — the forge lookup itself failed (`readable: false`), or it
- *   succeeded but found nothing actionable for this branch (no PR at all, or
- *   one that's CLOSED rather than merged). Either way there is nothing here
- *   to act on: finalize normally and let the post-teardown audit
- *   (`agentRepoStateVerification.js`) be the backstop, as today.
- * - `merge-handoff-queued` — the server's pending-merge coordinator holds a
- *   verified receipt for the published head (#12247); finalize without claiming
- *   it has merged. The branch is the coordinator's until it merges or recovers.
- * - `leave-open-stated` — the agent said, in its own words, that it is
- *   deliberately leaving the PR open; that is a correct terminal state.
- * - `needs-reprompt` — the PR is open and the summary names no blocker: send
- *   one corrective re-prompt.
+ * - `merged` — finalize normally.
+ * - `no-pr-action` — forge lookup failed, or no PR / a CLOSED one; finalize and let the
+ *   post-teardown audit (`agentRepoStateVerification.js`) be the backstop.
+ * - `merge-handoff-queued` — the pending-merge coordinator holds a verified receipt for the
+ *   published head (#12247); finalize without claiming it merged.
+ * - `leave-open-stated` — the agent said it is deliberately leaving the PR open.
+ * - `needs-reprompt` — PR open and no blocker named: one corrective re-prompt.
  *
  * @param {object} params
  * @param {{prState: string|null, readable: boolean, autoMergeEnabled?: boolean, mergeHandoffQueued?: boolean}|null} params.prProbe
@@ -100,10 +67,7 @@ export function resolveMergeGateVerdict({ prProbe, summary }) {
 }
 
 /**
- * The corrective prompt re-pasted into the still-attached session. Names the
- * PR and points back at the Merge Gate's own numbered steps rather than
- * re-explaining the procedure — the agent already has it in context.
- *
+ * Corrective prompt for the still-attached session; points back at the Merge Gate's numbered steps.
  * @param {string} prUrl
  * @returns {string}
  */
@@ -131,9 +95,20 @@ export function hasHealthyAutoMergeRequest(pr, now = Date.now()) {
   });
 }
 
-/** Shared GitHub handoff contract for inline, review-follow-up and recovery prompts. */
-export function buildAutoMergeHandoffInstructions(prRef, { review = true } = {}) {
-  return `**Own delivery through completion:** By default stay responsible for ${prRef} through all required CI${review ? ', review' : ''}, confirmed MERGED and safe cleanup. GitHub auto-merge enabled is not completion and does not transfer failure recovery or cleanup. Early finish is allowed only with an explicit persisted PortOS pending-merge receipt for the exact published${review ? '/reviewed' : ''} head, accepted after the server observes the configured CI backlog threshold. The app setting \`mergeHandoffMinQueuedRuns\` is opt-in: absent/null means keep ownership; no threshold is inferred from elapsed time. Unknown backlog, refused handoff or failed receipt persistence means continue in-session. The receipt owns CI failure recovery, changed heads, merge confirmation and preserved cleanup across restarts. Report its receipt ID and PR/head as pending, never merged; preserve the checkout and issue until the successor confirms completion. Intentional leave-open policies remain unchanged. Native GitHub auto-merge is allowed when the provider accepts it; continue observing the exact PR until MERGED. A refused optional PortOS handoff does not add a merge-certification requirement.`;
+/**
+ * The pending-merge handoff is opt-in per app: the server refuses it unless the
+ * app sets a positive integer `mergeHandoffMinQueuedRuns` (cosMergeHandoff.js),
+ * so prompts mention it only when that threshold is set.
+ */
+export const isMergeHandoffEnabled = (threshold) => Number.isSafeInteger(threshold) && threshold > 0;
+
+/** Shared GitHub delivery contract for inline, review-follow-up and recovery prompts. */
+export function buildAutoMergeHandoffInstructions(prRef, { review = true, mergeHandoff = false } = {}) {
+  const handoff = mergeHandoff
+    ? ` Early finish is allowed only with an explicit persisted PortOS pending-merge receipt for the exact published${review ? '/reviewed' : ''} head, accepted after the server observes the configured CI backlog threshold. The app setting \`mergeHandoffMinQueuedRuns\` is opt-in: absent/null means keep ownership; no threshold is inferred from elapsed time. Unknown backlog, refused handoff or failed receipt persistence means continue in-session. The receipt owns CI failure recovery, changed heads, merge confirmation and preserved cleanup across restarts. Report its receipt ID and PR/head as pending, never merged; preserve the checkout and issue until the successor confirms completion. Intentional leave-open policies remain unchanged.`
+    : '';
+  const tail = mergeHandoff ? ' A refused optional PortOS handoff does not add a merge-certification requirement.' : '';
+  return `**Own delivery through completion:** By default stay responsible for ${prRef} through all required CI${review ? ', review' : ''}, confirmed MERGED and safe cleanup. GitHub auto-merge enabled is not completion and does not transfer failure recovery or cleanup.${handoff} Native GitHub auto-merge is allowed when the provider accepts it; continue observing the exact PR until MERGED.${tail}`;
 }
 
 /** Shared delivery and cleanup contract for every managed checkout delivery prompt. */

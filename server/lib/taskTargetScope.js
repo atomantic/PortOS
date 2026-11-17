@@ -1,39 +1,16 @@
 /**
- * Target-scope vocabulary for scheduled task types: does a type act on ONE
- * managed app, on the whole install, or on either?
+ * Target-scope vocabulary for scheduled task types: does a type act on ONE managed app, the whole install, or either?
  *
- * Target scope for a scheduled task type: `INSTALL_WIDE_TASK_TYPES`, `MANAGED_APP_TARGET_TASK_TYPES`,
- * `PROGRAMMATIC_SCHEDULED_TASK_TYPES`, `isProgrammaticScheduledTaskType`, `requiresManagedAppTarget`,
- * `requiresInstallWideTarget`. Declared here (not in `services/taskScheduleRegistry.js`, which
- * re-exports it) so `quotaBurnValidation.js` can reject a burn reference with the wrong target scope
- * without importing upward into services.
+ * (`INSTALL_WIDE_TASK_TYPES`, `MANAGED_APP_TARGET_TASK_TYPES`, `PROGRAMMATIC_SCHEDULED_TASK_TYPES`, `isProgrammaticScheduledTaskType`, `requiresManagedAppTarget`, `requiresInstallWideTarget`.)
  *
- * Lives in `lib/` (pure data + two predicates, no imports) because three tiers
- * need the same answer and only one of them is a service:
- *   - `services/taskScheduleRegistry.js` re-exports these, so the on-demand
- *     request gate and the global generator keep one target-scope contract;
- *   - `lib/quotaBurnTaskRef.js` resolves a burn step's reference against it;
- *   - `lib/quotaBurnValidation.js` rejects a reference whose scope is wrong
- *     BEFORE it reaches disk.
- *
- * The last two are `server/lib` modules, which may not import upward into
- * `server/services` (see `lib/layering.test.js`), so the vocabulary belongs
- * here and the registry keeps re-exporting it for its existing callers.
+ * Pure data + two predicates in `lib/` because three tiers need one answer and only one is a service: `services/taskScheduleRegistry.js` re-exports it (the on-demand request gate and global generator keep one contract), `lib/quotaBurnTaskRef.js` resolves a burn step's reference against it, and `lib/quotaBurnValidation.js` rejects a wrong-scope reference BEFORE it reaches disk;
+ * `server/lib` can't import upward into `server/services` (`lib/layering.test.js`).
  */
 
-/**
- * Task types whose "Run Now" with NO app is the REAL run — they sweep every
- * managed app in one dispatch rather than acting on one. Surfaced per task on
- * `getScheduleStatus()` so the schedule UI can offer an "All apps" entry
- * instead of forcing every run through the app picker (which would make the
- * install-wide lane unreachable on any install that has apps).
- */
+/** Task types whose "Run Now" with NO app is the REAL run (they sweep every managed app in one dispatch). Surfaced per task on `getScheduleStatus()` so the schedule UI can offer an "All apps" entry instead of forcing the app picker (which would make the install-wide lane unreachable on any install with apps). */
 export const INSTALL_WIDE_TASK_TYPES = new Set(['repo-sync', 'user-action-review', 'model-comparison-refresh', 'error-log-triage']);
 
-// Task types that only make sense when pointed at a managed app. Keeping this
-// alongside the install-wide registry gives both the on-demand request gate
-// and the global generator one target-scope contract; neither has to infer
-// scope from a task name or from which generator happened to receive a call.
+// Task types that only make sense pointed at a managed app; beside the install-wide registry so the on-demand request gate and global generator share one target-scope contract rather than inferring from a task name or generator.
 export const MANAGED_APP_TARGET_TASK_TYPES = new Set(['private-security-assessment', 'pr-reviewer', 'issue-watcher', 'pr-watcher', 'issue-reconcile', 'branch-reconcile']);
 
 export function requiresManagedAppTarget(taskType) {
@@ -41,16 +18,8 @@ export function requiresManagedAppTarget(taskType) {
 }
 
 /**
- * Task types PortOS executes ITSELF through a programmatic handler
- * (`services/scheduledHandlers/`) — no agent, no CoS task, no spawn slot.
- *
- * Written out rather than derived from `SCHEDULED_HANDLER_MODULES` on purpose:
- * the registry that re-exports this is reached by a large share of the server
- * suite, so it must not pay an import to learn two strings (server/AGENTS.md,
- * "Import scoping"). `taskScheduleRegistry.programmatic.test.js` asserts this
- * list matches the handler registry exactly, so the two cannot drift. It lives
- * here rather than in the registry because `requiresInstallWideTarget` below
- * needs it, and `lib` may not import upward into `services`.
+ * Task types PortOS executes ITSELF through a programmatic handler (`services/scheduledHandlers/`): no agent, CoS task or spawn slot. Written out, not derived from `SCHEDULED_HANDLER_MODULES`: the re-exporting registry is reached by much of the server suite and must not pay an import for two strings (server/AGENTS.md "Import scoping");
+ * `taskScheduleRegistry.programmatic.test.js` asserts it matches the handler registry. Here, not in the registry, because `requiresInstallWideTarget` needs it and `lib` can't import upward.
  */
 export const PROGRAMMATIC_SCHEDULED_TASK_TYPES = Object.freeze([
   'development-watchdog',
@@ -63,11 +32,7 @@ const PROGRAMMATIC_SCHEDULED_TASK_TYPE_SET = new Set(PROGRAMMATIC_SCHEDULED_TASK
 export const isProgrammaticScheduledTaskType = (taskType) =>
   PROGRAMMATIC_SCHEDULED_TASK_TYPE_SET.has(taskType);
 
-// Task types that must NOT be pointed at a managed app. Unlike repo-sync, model
-// research has no meaningful per-app variant: its catalog and API live in the
-// PortOS install, never another app's checkout. The programmatic bible handlers
-// are the same shape for a different reason — a universe is PortOS's own record,
-// not any repo's — so an appId on their request is a caller bug, not a scope.
+// Task types that must NOT be pointed at a managed app: model research has no per-app variant (its catalog and API live in the PortOS install), and the programmatic bible handlers act on a universe (PortOS's own record, not a repo's), so an appId on their request is a caller bug.
 const INSTALL_WIDE_ONLY_TASK_TYPES = new Set([
   'model-comparison-refresh',
   // Triage reads PortOS's own PM2 logs, which belong to no managed app.

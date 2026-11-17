@@ -1,46 +1,7 @@
 /**
- * Storyboard scene/shot durable ids + id-first target resolution (#3413).
+ * Storyboard scene/shot durable ids + id-first target resolution (#3413) for `stages.storyboards.scenes[]`.
  *
- * Durable ids + id-first addressing for `stages.storyboards.scenes[]` (#3413).
- * `ensureStoryboardIds(scenes)` stamps a deterministic `scene-NN` / `shot-NN` id on any entry lacking
- * one — and re-stamps later copies of a DUPLICATE id (collision-escaped with a `-2` suffix, so peers
- * and concurrent readers derive identical ids); `resolveStoryboardTarget(list, { id, index })` → `{
- * index, record, matchedBy, stale }` resolves a captured id against a fresh array, falling back to the
- * index only when no id was captured, and reporting `stale: true` (409, never an index retarget) when
- * a captured id is gone.
- *
- * Storyboard scenes used to be addressed purely by ARRAY INDEX end to end —
- * the route took `sceneIndex`, the media-job owner encoded `scene<idx>`, and
- * the stage write patched `scenes[index]`. A reorder or delete landing between
- * a caller's read and its (serialized) write therefore retargeted the write
- * onto whatever scene now occupied that slot, and the completion hook routed
- * the finished render by the same stale index, so the mis-targeting was
- * consistent rather than self-correcting.
- *
- * Both halves of the fix live here:
- *
- *   - `ensureStoryboardIds` stamps a durable `id` on any scene (and shot) that
- *     lacks one. It is called from `sanitizeVisualStage`'s storyboards branch,
- *     so every persisted record grows ids on its next write, and from the
- *     backfill migrations for records already on disk / in Postgres.
- *   - `resolveStoryboardTarget` resolves a captured id against a FRESH array,
- *     falling back to the index only for pre-migration records that carry no
- *     id at all.
- *
- * Ids are DETERMINISTIC (`scene-01`, `shot-02`, …) rather than random on
- * purpose:
- *   - Two concurrent readers of the same un-migrated record must derive the
- *     same id, otherwise their writes would disagree about what they targeted.
- *   - Federated peers each run the backfill over their own copy of a shared
- *     record; a random id would make every peer stamp something different and
- *     churn conflicts forever. Deterministic ids converge.
- *
- * A deterministic base that is already taken gets a `-2`, `-3`, … suffix, so
- * an array that already holds `scene-01` never gets a duplicate stamped onto
- * it — and an array that ALREADY carries duplicate ids (a duplicated scene, or
- * the scene extractor's tolerated duplicate shot ids) has the later copies
- * re-stamped. Duplicate ids would make id resolution ambiguous, which is the
- * mis-target this module exists to prevent.
+ * `ensureStoryboardIds(scenes)` stamps a deterministic `scene-NN` / `shot-NN` id on any entry lacking one and re-stamps later copies of a DUPLICATE id (collision-escaped with a `-2` suffix, so peers and concurrent readers derive identical ids); `resolveStoryboardTarget(list, { id, index })` → `{ index, record, matchedBy, stale }` resolves a captured id against a fresh array, falling back to the index only when no id was captured and reporting `stale: true` (409, never an index retarget) when a captured id is gone. Scenes were once addressed purely by ARRAY INDEX (route `sceneIndex`, media-job owner `scene<idx>`, stage write `scenes[index]`), so a reorder or delete between a caller's read and its serialized write retargeted the write (and the completion hook's routing of the finished render) onto whatever scene now held that slot. `ensureStoryboardIds` runs from `sanitizeVisualStage`'s storyboards branch (records grow ids on next write) and the backfill migrations; `resolveStoryboardTarget` falls back to the index only for pre-migration records with no id. Ids are DETERMINISTIC, not random: concurrent readers of one un-migrated record must derive the same id, and federated peers backfilling their own copy would otherwise each stamp something different and churn conflicts forever. A taken base gets a `-2`, `-3`, … suffix (an array holding `scene-01` never gets a duplicate), and an array ALREADY carrying duplicate ids (a duplicated scene, or the extractor's tolerated duplicate shot ids) has later copies re-stamped, since duplicates make id resolution ambiguous (the mis-target this prevents).
  */
 
 import { isNonBlankStr } from './textUtils.js';
@@ -57,20 +18,11 @@ const uniqueId = (base, taken) => {
   return `${base}-${n}`;
 };
 
-// Stamp `id` on every entry that lacks one, and re-stamp any entry whose id
-// DUPLICATES an earlier entry's. A duplicate id is as bad as no id: the
-// resolver tie-breaks on the captured index, so once two same-id entries are
-// reordered the write lands on the wrong one — exactly the mis-target this
-// module exists to prevent. First occurrence keeps the id (matching
-// `sanitizeShots`' first-wins resolution of `continuityFromShotId`), later
-// ones are re-stamped.
-//
-// Returns the ORIGINAL array reference when nothing changed so callers can
-// cheaply detect a no-op.
+// Stamp `id` on every entry lacking one and re-stamp any whose id DUPLICATES an earlier entry's (as bad as none: the resolver tie-breaks on the captured index, so reordering same-id entries mis-targets). First occurrence keeps the id
+// (matching `sanitizeShots`' first-wins `continuityFromShotId`). Returns the ORIGINAL array reference when nothing changed so callers can detect a no-op.
 const stampIds = (list, idFor) => {
   if (!Array.isArray(list) || list.length === 0) return list;
-  // Only ids that survive as-is (the FIRST occurrence of each) count as taken;
-  // a duplicate is about to be replaced, so it must not reserve its own id.
+  // Only ids that survive as-is (first occurrences) count as taken; a duplicate is about to be replaced and must not reserve its id.
   const taken = new Set();
   for (const rec of list) {
     if (rec && typeof rec === 'object' && isNonBlankStr(rec.id)) taken.add(rec.id);
@@ -92,12 +44,7 @@ const stampIds = (list, idFor) => {
   return changed ? out : list;
 };
 
-/**
- * Stamp durable ids onto a storyboard `scenes[]` array (and each scene's
- * `shots[]`). Pure: returns a new array only when something was stamped,
- * otherwise the input reference. Non-object entries pass through untouched —
- * the sanitizer above this is the one that decides what a scene may be.
- */
+/** Stamp durable ids onto a storyboard `scenes[]` array (and each scene's `shots[]`). Pure: a new array only when something was stamped, else the input reference; non-object entries pass through (the sanitizer above decides what a scene may be). */
 export function ensureStoryboardIds(scenes) {
   if (!Array.isArray(scenes) || scenes.length === 0) return scenes;
   let shotsChanged = false;
@@ -114,26 +61,15 @@ export function ensureStoryboardIds(scenes) {
 }
 
 /**
- * Resolve a render target (a scene inside `scenes[]`, or a shot inside
- * `scene.shots[]`) against the FRESHEST array, given the id + index captured
- * when the caller read the record.
- *
- * Returns `{ index, record, matchedBy, stale }`:
- *   - `matchedBy: 'id'`    — the captured id is still present (authoritative,
- *     survives a reorder). When the id appears more than once (a duplicated
- *     record), the captured index wins the tiebreak, else the first match.
- *   - `matchedBy: 'index'` — no id was captured (pre-migration record), so the
- *     index is the only addressing available.
- *   - `matchedBy: null, stale: true`  — an id WAS captured and is gone: the
- *     target was removed between read and write. Callers surface this as a 409
- *     (distinct from a never-existed index, which is a 404) and must NOT fall
- *     back to the index, since that is exactly the mis-target this prevents.
- *   - `matchedBy: null, stale: false` — no id, and the index is out of range.
+ * Resolve a render target (a scene in `scenes[]`, or a shot in `scene.shots[]`) against the FRESHEST array, given the id + index captured at read. Returns `{ index, record, matchedBy, stale }`:
+ *   - `matchedBy: 'id'`: the captured id is present (authoritative, survives a reorder); if it appears more than once the captured index wins the tiebreak, else the first match.
+ *   - `matchedBy: 'index'`: no id was captured (pre-migration), so the index is the only addressing.
+ *   - `matchedBy: null, stale: true`: an id WAS captured and is gone (removed between read and write); callers surface a 409 (a never-existed index is a 404) and must NOT fall back to the index (the mis-target this prevents).
+ *   - `matchedBy: null, stale: false`: no id, and the index is out of range.
  */
 export function resolveStoryboardTarget(list, { id = null, index = null } = {}) {
   const arr = Array.isArray(list) ? list : [];
-  // `Number(null)` / `Number('')` are 0 — an absent index must NOT read as
-  // "index 0" (AGENTS.md sentinel discipline), so coerce only real numerics.
+  // `Number(null)` / `Number('')` are 0: an absent index must NOT read as index 0 (AGENTS.md sentinel discipline), so coerce only real numerics.
   const idx = index === null || index === undefined || index === '' ? NaN : Number(index);
   const hasIndex = Number.isInteger(idx) && idx >= 0;
   if (isNonBlankStr(id)) {

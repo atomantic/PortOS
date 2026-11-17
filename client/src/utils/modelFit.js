@@ -5,37 +5,14 @@
 
 import * as THREE from 'three';
 
-// Normalize a loaded model to a fixed on-screen height so different source GLBs
-// (authored at wildly different scales) frame identically.
+// Normalize a loaded model to a fixed on-screen height so GLBs authored at different scales frame identically.
+// `feetOnGround: false` puts the bounding-box CENTER at `yOffset` (bust/portrait framing, the Cyber Muse avatar); `true` puts the LOWEST point there (a standing figure on a ground plane). `x`/`z` are always recentered.
 //
-// The two vertical anchorings the avatars need are made explicit rather than
-// left implicit per consumer:
-//   feetOnGround: false → the model's bounding-box CENTER lands at `yOffset`
-//                         (a bust/portrait framing — the Cyber Muse avatar).
-//   feetOnGround: true  → the model's LOWEST point lands at `yOffset`
-//                         (a standing figure on a ground plane / shadow disc).
-// `x`/`z` are always recentered on the bounding-box center.
-//
-// Call this from an effect, never during render: the bounding box is only
-// correct after `useAnimations` has bound the skeleton/mixer — measuring a
-// skinned mesh during render sees an unposed rig and yields a wildly wrong size.
-//
-// The transform is absolute, and the object is reset to identity before
-// measuring, so repeat calls on the same object converge on the same result
-// (StrictMode runs mount effects twice; without the reset the second pass would
-// measure an already-fitted model, compute scale ≈ 1, and blow it back up to
-// source size). GLTFLoader's scene root is a plain identity-transform Group, so
-// resetting it discards nothing the model authored.
-//
-// `Box3.setFromObject` measures in WORLD space while `scale`/`position` are
-// written in the object's own local space, so the fit folds in whatever the
-// parent chain contributes at the moment it runs. That has always been true of
-// the avatars' hand-rolled fits, each of which parents its scene under a group
-// it drives per frame — call this on a scene whose parent is at (or near)
-// identity, or accept that the parent's transform is baked into the result.
+// Call from an effect, never during render: the bounding box is only correct after `useAnimations` has bound the skeleton/mixer (an unposed rig measures wildly wrong).
+// The transform is absolute and the object is reset to identity before measuring, so repeat calls converge (StrictMode runs mount effects twice; without the reset the second pass would measure an already-fitted model and blow it back up). GLTFLoader's scene root is a plain identity Group, so the reset discards nothing authored.
+// `Box3.setFromObject` measures in WORLD space while `scale`/`position` are local, so the parent chain's transform is baked into the result: call this on a scene whose parent is at (or near) identity.
 export function fitModelToHeight(object, { targetHeight, feetOnGround = false, yOffset = 0 }) {
-  // A missing or garbage height would silently write NaN through the transform
-  // and drop the object out of the scene with no clue why. Say so and bail.
+  // A missing or garbage height would silently write NaN through the transform; say so and bail.
   if (!Number.isFinite(targetHeight)) {
     console.error(`❌ fitModelToHeight needs a finite targetHeight, got ${targetHeight}`);
     return;
@@ -46,9 +23,7 @@ export function fitModelToHeight(object, { targetHeight, feetOnGround = false, y
   object.updateMatrixWorld(true);
 
   const box = new THREE.Box3().setFromObject(object);
-  // An object carrying no renderable geometry measures as an EMPTY box, whose
-  // `min` is +Infinity — fitting it would fling the object to -Infinity and
-  // take any sibling content in the group with it. Leave it at identity.
+  // A geometry-less object measures as an EMPTY box (`min` is +Infinity), and fitting it would fling it, and its siblings, to -Infinity. Leave it at identity.
   if (box.isEmpty()) return;
 
   const size = box.getSize(new THREE.Vector3());

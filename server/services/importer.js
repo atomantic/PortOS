@@ -34,7 +34,7 @@ import { deleteIssue, ensureIssueWithId, listIssues, listIssuesForSeries } from 
 import { reformatManuscriptText } from './pipeline/manuscriptFix.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { COMIC_NUM, COMIC_HEADER_TAIL } from '../lib/comicScriptParser.js';
-import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/validation.js';
+import { IMPORTER_CONTENT_TYPES, IMPORTER_PROSE_EXCERPT_MAX } from '../lib/creativeDirectorValidation.js';
 // Re-export the per-issue excerpt ceiling so callers/tests can reference the
 // same value the mechanical comic split validates against.
 export { IMPORTER_PROSE_EXCERPT_MAX };

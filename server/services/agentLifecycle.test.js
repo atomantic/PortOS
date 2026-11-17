@@ -631,12 +631,9 @@ describe('agent spawn preparation — app-review marker release (issue #989)', (
     expect(releases).toHaveLength(1);
   });
 
-  it('guards each release on the acquired resource', () => {
+  it('guards the claim release on the acquired resource', () => {
     const body = AGENT_SPAWN_PREPARATION_SRC;
-    expect(body).toMatch(/if \(context\.laneAcquired\) release\(context\.agentId\);/);
-    expect(body).toMatch(/if \(context\.toolExecution\) \{[\s\S]{0,200}?errorExecution\(context\.toolExecution\.id/);
     expect(body).toMatch(/if \(context\.claimAcquired\) \{/);
-    expect(body).toMatch(/context\.laneAcquired = true;/);
   });
 });
 

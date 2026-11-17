@@ -30,20 +30,25 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
   peerSubscribeSchema,
   peerSyncPushSchema,
   peerSyncRecordSchema,
   peerSyncNowSchema,
   peerPullMetadataSchema,
   peerLibraryManifestQuerySchema,
+  peerSubscriptionsQuerySchema,
+  peerManifestQuerySchema,
+  peerCosAgentArchiveQuerySchema,
+  peerRecordQuerySchema,
+  peerIntegrityQuerySchema,
   PEER_LIBRARY_TOMBSTONES_HEADER,
   PEER_LIBRARY_TOMBSTONES_SINCE_HEADER,
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
-} from '../lib/validation.js';
+} from '../lib/peerSyncValidation.js';
 import {
   listPeerSubscriptions,
   subscribePeer,
@@ -114,8 +119,9 @@ router.post('/push', asyncHandler(async (req, res) => {
 // to show "what am I syncing with peer X" + by the Universe / Series pages
 // to render the SyncToPeerButton's current state.
 router.get('/subscriptions', asyncHandler(async (req, res) => {
+  const query = validateRequest(peerSubscriptionsQuerySchema, req.query);
   const filter = {};
-  if (typeof req.query.peerId === 'string') filter.peerId = req.query.peerId;
+  if (query.peerId !== undefined) filter.peerId = query.peerId;
   // A peer credential only sees subscriptions that target itself (the records
   // we push to it), never this install's subscriptions to other peers.
   if (req.portosAuthContext?.method === 'peer') {
@@ -123,8 +129,8 @@ router.get('/subscriptions', asyncHandler(async (req, res) => {
     if (!callerId) return res.json({ subscriptions: [] });
     filter.peerId = callerId;
   }
-  if (typeof req.query.recordKind === 'string') filter.recordKind = req.query.recordKind;
-  if (typeof req.query.recordId === 'string') filter.recordId = req.query.recordId;
+  if (query.recordKind !== undefined) filter.recordKind = query.recordKind;
+  if (query.recordId !== undefined) filter.recordId = query.recordId;
   const subscriptions = await listPeerSubscriptions(filter);
   res.json({ subscriptions });
 }));
@@ -164,7 +170,7 @@ const validKind = (k) => typeof k === 'string' && PEER_SUBSCRIBABLE_KINDS.includ
 router.get('/manifest', asyncHandler(async (req, res) => {
   // Trim once and validate/use the trimmed value — a padded `?kind= universe `
   // should resolve like `universe`, not 400 on whitespace.
-  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
+  const kind = (validateRequest(peerManifestQuerySchema, req.query).kind ?? '').trim();
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -258,9 +264,7 @@ router.get('/eidoverse-foundations', asyncHandler(async (req, res) => {
 // PATHS.cos/agents and streaming with res.sendFile (which sets Content-Length,
 // required by the receiver's fetchCappedAssetBuffer). 404 on any invalid/missing.
 router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
-  const date = typeof req.query.date === 'string' ? req.query.date : '';
-  const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : '';
-  const file = typeof req.query.file === 'string' ? req.query.file : '';
+  const { date = '', agentId = '', file = '' } = validateRequest(peerCosAgentArchiveQuerySchema, req.query);
   if (!COS_ARCHIVE_DATE_RE.test(date) || !COS_AGENT_ID_RE.test(agentId) || !COS_ARCHIVE_FILES.includes(file)) {
     throw new ServerError('invalid archive path', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -282,8 +286,9 @@ router.get('/cos-agent-archive', asyncHandler(async (req, res) => {
 // the payload here and applies it locally (POST /pull-record below). Same shape
 // buildPushPayload produces, so the puller reuses applyIncomingPush.
 router.get('/record', asyncHandler(async (req, res) => {
-  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
-  const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+  const recordQuery = validateRequest(peerRecordQuerySchema, req.query);
+  const kind = (recordQuery.kind ?? '').trim();
+  const id = (recordQuery.id ?? '').trim();
   if (!validKind(kind)) {
     throw new ServerError('invalid kind', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -316,8 +321,9 @@ router.get('/integrity', asyncHandler(async (req, res) => {
   // call. Validating the trimmed value but passing the raw one let
   // `?peerId=%20peer-a%20` pass the emptiness check yet fail to match the peer
   // registry, returning a confusing `peer-not-found`.
-  const peerId = typeof req.query.peerId === 'string' ? req.query.peerId.trim() : '';
-  const kind = typeof req.query.kind === 'string' ? req.query.kind.trim() : '';
+  const integrityQuery = validateRequest(peerIntegrityQuerySchema, req.query);
+  const peerId = (integrityQuery.peerId ?? '').trim();
+  const kind = (integrityQuery.kind ?? '').trim();
   if (!peerId) {
     throw new ServerError('peerId required', { status: 400, code: 'VALIDATION_ERROR' });
   }

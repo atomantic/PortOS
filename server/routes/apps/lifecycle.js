@@ -3,7 +3,6 @@
  * and ecosystem-config refresh.
  *
  *   POST /:id/native-launch  → { success, processName, result }
- *   GET  /:id/native-launch/status → { processName, status }
  *   POST /:id/start          → { success, results }
  *   POST /:id/stop           → { success, results }
  *   POST /:id/restart        → { success, results }  (self-restart for PortOS)
@@ -91,21 +90,6 @@ router.post('/:id/native-launch', loadApp, asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, processName: target.processName, result });
-}));
-
-// GET /api/apps/:id/native-launch/status - Read the optional target's PM2 state
-router.get('/:id/native-launch/status', loadApp, asyncHandler(async (req, res) => {
-  const app = req.loadedApp;
-  const target = app.nativeLaunch;
-  if (!target) {
-    throw new ServerError('No native launch target is configured', { status: 400, code: 'NATIVE_LAUNCH_NOT_CONFIGURED' });
-  }
-
-  const current = await pm2Service.getAppStatus(target.processName, app.pm2Home).catch(() => null);
-  res.json({
-    processName: target.processName,
-    status: current?.status || 'not_started'
-  });
 }));
 
 // POST /api/apps/:id/start - Start app via PM2

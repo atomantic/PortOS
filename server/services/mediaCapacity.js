@@ -1,20 +1,11 @@
 /**
- * Local media-lane capacity — "what is this machine rendering, and can it take
- * another job?" (#4348).
+ * Local media-lane capacity: what this machine is rendering and whether it can
+ * take another job (#4348). Kept apart from `activeProcessing.js` so the slow-cadence
+ * System Health poll avoids its GPU-utilization probes and CoS task read.
  *
- * Split out of `activeProcessing.js` rather than folded into it: that service
- * answers a live-activity question for the dashboard (it lists every in-flight
- * job, probes GPU *utilization* on a 4s TTL, and reads CoS/Ollama state), while
- * System Health needs only the cheap capacity shape and is polled on a much
- * slower cadence. Sharing the heavier projection would drag nvidia-smi
- * utilization probes and a CoS task read onto every health poll.
- *
- * FEDERATION NOTE: this shape is returned by `GET /api/system/health/details`,
- * which registered peers fetch on every probe. It therefore describes ONLY this
- * machine's own runtime — never our peer list, our routing policy, or the
- * models we have allowlisted on someone else's instance. Consumer-side
- * capacity stays local (see `redactPeerForWire` in services/instances.js), and
- * the provider-side allowlist has its own authenticated endpoint.
+ * FEDERATION: returned by `GET /api/system/health/details`, which peers fetch on
+ * every probe, so it describes ONLY this machine's runtime, never peers, routing
+ * policy or allowlists (see `redactPeerForWire` in services/instances.js).
  */
 
 import { getCudaCapability } from '../lib/cudaCapability.js';
@@ -25,10 +16,7 @@ import { getQueueCapacity } from './mediaJobQueue/index.js';
  *   lanes: object, byKind: object, totals: {running: number, queued: number}}>}
  */
 export async function getMediaCapacity() {
-  // Three-state, never a boolean: `unknown` (the probe itself failed) must stay
-  // distinct from `absent` (no CUDA device here). A caller that collapses them
-  // reports a failed probe as "this machine has no GPU", which is the exact
-  // conflation the issue's capacity contract forbids.
+  // Three-state, never a boolean: `unknown` (probe failed) must not read as `absent` (no CUDA).
   const capability = await getCudaCapability().catch(() => ({ status: 'unknown' }));
   const capacity = getQueueCapacity();
   return {

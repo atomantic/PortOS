@@ -15,14 +15,13 @@
  * so the route surfaces a 409 with ERR_NO_VOLUME_COVER instead.
  */
 
-import { PDFDocument, rgb, StandardFonts } from '@cantoo/pdf-lib';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { pickRenderedFilename } from '../../lib/renderSlot.js';
 import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
 import { getSeries } from './series.js';
 import { getSeason } from './seasons.js';
 import { listIssues } from './issues.js';
-import { PAGE_SIZES, DEFAULT_PAGE_SIZE } from './comicPdf.js';
+import { PAGE_SIZES, resolvePageSize } from '../../lib/pdfPageSizes.js';
 import { codedError } from '../../lib/codedError.js';
 
 export const ERR_NO_VOLUME_COVER = 'PIPELINE_VOLUME_PDF_NO_COVER';
@@ -38,7 +37,7 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
   const season = await getSeason(seriesId, seasonId);
   const series = await getSeries(seriesId);
 
-  const sizeKey = PAGE_SIZES[opts.size] ? opts.size : DEFAULT_PAGE_SIZE;
+  const sizeKey = resolvePageSize(opts.size);
   const { width: pageW, height: pageH } = PAGE_SIZES[sizeKey];
   const includeColophon = opts.includeColophon !== false;
 
@@ -113,6 +112,8 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
       .catch((err) => ({ filename, kind, err })),
   ));
 
+  // Loaded here, not at module top: only an export pays for the PDF library (#16558).
+  const { PDFDocument, rgb, StandardFonts } = await import('@cantoo/pdf-lib');
   const pdf = await PDFDocument.create();
   const volTitle = season.title || `Volume ${season.number || 1}`;
   pdf.setTitle(`${series.name || 'Untitled'} — ${volTitle}`.trim());

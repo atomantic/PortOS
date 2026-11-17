@@ -1,27 +1,9 @@
 /**
- * CWQE Phase 14 — Writers Room voice exemplars (#2179 parity slice).
+ * CWQE Phase 14: Writers Room voice exemplars (#2179 parity slice).
  *
- * `writers-room-continue.md` gained a conditional "Voice (the tuning fork)"
- * block (`{{#voiceGuide}} … {{voiceGuide}} … {{/voiceGuide}}`) that injects a
- * work's voice exemplar / anti-exemplar passages into the live-continuation
- * prompt — the same "the tuning fork" anchoring the series style guide already
- * ships to prose/revision prompts. Absent exemplars render nothing (the section
- * is gated), so works without a configured voice carry no per-call overhead.
- *
- * `scripts/setup-data.js` only copies *missing* prompt files, so existing
- * installs keep their old `writers-room-continue.md` until this migration
- * rewrites it. The template already has a migration lineage (065 seed / 166
- * craft-anti-patterns) — per the drift-cross-sync convention, migration 166 is
- * resynced in this same change: its previous current hash
- * (`67663696…`) moved into its `ACCEPTED_OLD_MD5` and its `NEW_SHIPPED_MD5`
- * bumped to the post-181 hash, so 166's "NEW matches live data.reference"
- * drift-catch test stays green. The drift baseline in `setup-data-drift.test.js`
- * was updated to match the merged sweep.
- *
- * Customization-safe: only installs whose copy still hashes to the prior shipped
- * version are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * `writers-room-continue.md` gained a conditional "Voice (the tuning fork)" block (`{{#voiceGuide}} … {{voiceGuide}} … {{/voiceGuide}}`) injecting a work's voice exemplar / anti-exemplar passages into the live-continuation prompt, as the series style guide already does for prose/revision prompts; absent exemplars render nothing, so works without a configured voice carry no per-call overhead.
+ * `scripts/setup-data.js` only copies *missing* prompt files, so existing installs keep the old template until this rewrites it. Per the drift-cross-sync convention migration 166 (the template's earlier lineage, 065 seed) is resynced in this change: its previous current hash (`67663696…`) moved into its `ACCEPTED_OLD_MD5` and its `NEW_SHIPPED_MD5` bumped to the post-181 hash, and the drift baseline in `setup-data-drift.test.js` was updated to match.
+ * Customization-safe: only copies hashing to the prior shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

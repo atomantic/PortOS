@@ -1,3 +1,6 @@
+// @vitest-environment node
+// test-memo: never (tree-wide scanner)
+
 /**
  * Rule: A `className` with bare `grid-cols-N` (N >= 4) must also include a prefixed `…:grid-cols-*` variant in the same string (see `client/src/AGENTS.md`).
  * Fix: Add a responsive/container column breakpoint (e.g. `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4`).

@@ -9,17 +9,7 @@
  * disclosure and the create-panel kind selector. Pure — no React, no I/O; the page owns the per-group
  * icons.
  *
- * Sprite record grouping + search (#2932) — pure helpers that map a sprite
- * record's `kind` to one of the three noun groups the Sprite Manager sidebar
- * renders, and filter a record list for the autocomplete picker.
- *
- * The `props` kind is a legacy import-only value: it is folded into the
- * **Objects** group alongside `object` so imported prop atlas families need no
- * data migration and stay user-visibly identical to a UI-created object.
- *
- * Pure — no React, no I/O. The sidebar owns the per-group icons (a lib module
- * can't import lucide components without pulling React into pure code), so the
- * groups carry a stable `key` the page maps to an icon.
+ * The `props` kind is a legacy import-only value, folded into **Objects** alongside `object` so imported prop atlas families need no data migration. The sidebar owns the per-group icons (a lib module can't import lucide components without pulling React into pure code), so groups carry a stable `key` the page maps to an icon.
  */
 
 // Render order of the three noun groups. Each maps one or more record `kind`

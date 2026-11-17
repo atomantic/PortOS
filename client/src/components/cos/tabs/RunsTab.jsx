@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Trash2, RotateCcw, ScrollText, Square } from 'lucide-react';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../../../utils/formatters';
 import BrailleSpinner from '../../BrailleSpinner';
 import Banner from '../../ui/Banner';
@@ -38,6 +39,60 @@ export default function RunsTab() {
   const { items: runs, state: runsState, error: runsError, retry: loadRuns, setItems: setRuns } = useListResource(fetchRuns);
   const loading = runsState === 'loading';
 
+  // Run lifecycle transitions (an AI run starting or ending, a CoS agent
+  // finishing, the post-listen boot close of runs a previous process left
+  // open, #16557) arrive as `system:activity` invalidations. The server
+  // coalesces a burst into one frame naming only its last source, so every
+  // frame re-reads the page in place; a reconnect re-reads frames missed while
+  // offline. A frame that lands while the list is loading, or while a re-read
+  // is running, is held and read once that settles (that read may have seen
+  // the record before the change), so a burst costs at most one follow-up read.
+  // A failed re-read keeps the last successful rows on screen.
+  const runsReady = useRef(false);
+  runsReady.current = runsState === 'ready';
+  const refreshGeneration = useRef(0);
+  const refreshInFlight = useRef(false);
+  const refreshPending = useRef(false);
+  const refreshRuns = useCallback(() => {
+    if (!runsReady.current || refreshInFlight.current) {
+      refreshPending.current = true;
+      return;
+    }
+    refreshPending.current = false;
+    const current = ++refreshGeneration.current;
+    refreshInFlight.current = true;
+    const settle = (list) => {
+      if (current !== refreshGeneration.current) return;
+      refreshInFlight.current = false;
+      if (list && runsReady.current) setRuns(list);
+      if (refreshPending.current) refreshRuns();
+    };
+    fetchRuns().then(settle, () => settle(null));
+  }, [fetchRuns, setRuns]);
+  // A confirmed delete must not be undone by a re-read that started before it:
+  // drop that read and, if one was running, start a fresh one after the delete.
+  const supersedeRefresh = () => {
+    const wasInFlight = refreshInFlight.current;
+    refreshGeneration.current += 1;
+    refreshInFlight.current = false;
+    if (wasInFlight) refreshRuns();
+  };
+  useEffect(() => {
+    if (runsState !== 'ready' || !refreshPending.current) return;
+    refreshPending.current = false;
+    refreshRuns();
+  }, [runsState, refreshRuns]);
+  useEffect(() => {
+    socket.on('system:activity', refreshRuns);
+    socket.on('connect', refreshRuns);
+    return () => {
+      refreshGeneration.current += 1;
+      refreshInFlight.current = false;
+      socket.off('system:activity', refreshRuns);
+      socket.off('connect', refreshRuns);
+    };
+  }, [refreshRuns]);
+
   // Filter runs by source and status
   const filteredRuns = runs.filter(run => {
     // Source filter (already applied via API, but kept for client-side consistency)
@@ -56,6 +111,7 @@ export default function RunsTab() {
     e.stopPropagation();
     const deleted = await api.deleteRun(id).catch(() => null);
     if (!deleted && deleted !== undefined) return;
+    supersedeRefresh();
     setRuns(prev => prev.filter(run => run.id !== id));
     if (expandedId === id) setExpandedId(null);
   };
@@ -176,6 +232,7 @@ export default function RunsTab() {
   const handleClearFailed = async () => {
     const ok = await api.deleteFailedRuns().then(() => true).catch(() => false);
     if (ok) {
+      supersedeRefresh();
       setRuns(prev => prev.filter(r => r.success !== false));
     }
   };

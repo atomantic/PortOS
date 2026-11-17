@@ -37,8 +37,6 @@ const getApi = () => {
   return legacy ? { kind: 'legacy', api: legacy } : null;
 };
 
-export const isBrowserLlmApiPresent = () => !!getApi();
-
 // Declared once so availability() and create() advertise the SAME I/O languages
 // — Chrome warns (and newer builds refuse) when the output language is left
 // unspecified.
@@ -75,8 +73,6 @@ export const nanoAvailability = async () => {
   }
 };
 
-export const isNanoReady = async () => (await nanoAvailability()) === NANO_AVAILABILITY.AVAILABLE;
-
 // ─── Session cache ─────────────────────────────────────────────────────────
 // One warm session reused across turns (create() has real latency). Keyed by
 // system prompt + generation params; when any change, the stale session is
@@ -111,7 +107,7 @@ export const destroyNanoSession = () => {
   sessionKey = null;
 };
 
-export const ensureNanoSession = async ({ systemPrompt = '', temperature = 0.7, topK = 3 } = {}) => {
+const ensureNanoSession = async ({ systemPrompt = '', temperature = 0.7, topK = 3 } = {}) => {
   const key = keyOf({ systemPrompt, temperature, topK });
   if (session && sessionKey === key) return session;
   // Params/prompt changed — tear down the stale session before building a new

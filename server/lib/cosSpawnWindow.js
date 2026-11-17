@@ -1,41 +1,26 @@
 /**
  * The window in which one CoS task is BOTH pending and active, and the single
- * settlement every reader that pairs the task list with the agent list makes.
+ * settlement every reader pairing the task list with the agent list makes.
  *
  * `spawnAgentForTask` (services/agentLifecycle.js) registers an agent as
- * `running` BEFORE it flips that agent's task off `pending`. Between those two
- * writes the task reads `pending` on the task list and `running` on the agent
- * list, so a surface that counts each list on its own reports "1 pending" AND
- * "1 active" for what is one task — and the phantom only clears on a later
- * poll, which is why it reads as a counter stuck rather than as a race.
- * Reversing the two writes would not close it: they land in two different
- * stores, and the UI joins the lists from two separate HTTP reads anyway.
+ * `running` BEFORE flipping its task off `pending`, so between those writes a
+ * surface counting each list separately reports "1 pending" AND "1 active" for
+ * one task. Reordering would not close it: the writes hit two stores and the UI
+ * joins two separate HTTP reads.
  *
- * A task a live agent already holds is ACTIVE, never queued. Counting it as
- * queued is the direction that misleads: it invites the user (and the dequeue
- * surfaces) to believe there is backlog waiting on a free slot when there is
- * none.
+ * A task a live agent holds is ACTIVE, never queued (counting it queued implies
+ * backlog that does not exist).
  *
- * BOUNDED BY `SPAWN_CLAIM_GRACE_MS`, for the reason `forceSpawnTask` is. Past
- * that window a `pending` task carrying a `running` agent is not mid-spawn, it
- * is a BROKEN state — usually a zombie record whose process died before the
- * sweep caught it. Settling it as active indefinitely would hide the stuck task
- * from every pending count AND drop it out of the lists that render its "Run
- * now" recovery, so the bound hands it back as queued work the user can
- * restart; "Run now" then settles the holder through the zombie sweep and
- * reports a named hold if it survives.
+ * BOUNDED BY `SPAWN_CLAIM_GRACE_MS`, as `forceSpawnTask` is: past it, a
+ * `pending` task with a `running` agent is a BROKEN state (usually a zombie
+ * record). Settling it as active would hide it from pending counts and from the
+ * lists rendering its "Run now" recovery, so the bound hands it back as queued.
  *
- * Pure leaf with no imports, so `client/src/lib/cosSpawnWindow.js` re-exports
- * it and the UI shares this settlement rather than keeping a copy that can
- * drift.
+ * Pure leaf with no imports; `client/src/lib/cosSpawnWindow.js` re-exports it so
+ * the UI shares this settlement.
  */
 
-/**
- * How long a `running` agent on a still-`pending` task is read as mid-spawn
- * rather than as a zombie. `services/cos.js#forceSpawnTask` bounds its
- * live-agent refusal on the same constant, so the count, the list, and the
- * button agree about which tasks are still yours to start.
- */
+/** How long a `running` agent on a `pending` task reads as mid-spawn rather than zombie; `forceSpawnTask` shares it. */
 export const SPAWN_CLAIM_GRACE_MS = 60_000;
 
 /** How long ago this agent started, or `Infinity` when it never said. */
@@ -45,16 +30,11 @@ export function spawnClaimAgeMs(agent, now = Date.now()) {
 }
 
 /**
- * Map a task id → the live agent holding it.
+ * Map a task id → the live agent holding it (a Map because the age bound and the
+ * relaunch control need the agent record).
  *
- * A Map rather than a Set of ids because the CoS Tasks tab renders an Active
- * row's relaunch control off the agent record, and the age bound above needs
- * the agent's `startedAt`.
- *
- * `taskId` falls back to `metadata.taskId` — `registerAgent` stamps the
- * top-level field, but the resume/relaunch paths in `agentManagement.js` read
- * both, and a settlement that recognized fewer holders than they do would
- * disagree with them about which task is running.
+ * `taskId` falls back to `metadata.taskId` because `agentManagement.js` resume/relaunch
+ * paths read both; recognizing fewer holders would disagree with them.
  */
 export function runningAgentsByTaskId(agents) {
   const held = new Map();
@@ -93,19 +73,12 @@ export function unclaimedTaskIds(taskIds, runningAgents, options) {
 }
 
 /**
- * Settle one `{ tasks, grouped }` task source for a RESPONSE.
+ * Settle one `{ tasks, grouped }` task source for a RESPONSE: stamps `spawning: true`
+ * on mid-spawn tasks and moves them from `grouped.pending` to `grouped.in_progress`
+ * so consumers get the honest queue depth without fetching the agent list.
  *
- * Stamps `spawning: true` on each mid-spawn task and moves it from
- * `grouped.pending` to `grouped.in_progress`, so a consumer counting
- * `grouped.pending.length` gets the honest queue depth without knowing this
- * module exists — the failure mode being that every new reader of the payload
- * has to remember to fetch the agent list and subtract.
- *
- * `status` is deliberately left at its persisted `pending`: it is what the
- * record says, a client may PATCH against it, and `spawning` is the flag a row
- * renders its mid-spawn state from. Only the API layer settles — the dispatch
- * readers of `getAllTasks()` (task generation, retry revival, dedup) must keep
- * seeing the raw truth.
+ * `status` stays at its persisted `pending` (clients may PATCH against it). Only the
+ * API layer settles; dispatch readers of `getAllTasks()` must see the raw truth.
  */
 export function settleTaskSourceSpawnWindow(source, runningAgents, options) {
   if (!source || typeof source !== 'object' || !Array.isArray(source.tasks)) return source;

@@ -29,7 +29,6 @@ const DIRECTION_LABEL = { left: 'screen-left', right: 'screen-right', neutral: '
  * config and returns concise, scene-scoped warnings — the same hazards the server
  * `visual.shot-continuity` check surfaces in the manuscript review, shown here so
  * the user sees them before spending render time.
- *
  * @param {object} scene a storyboard scene with `shots[]`
  * @param {{ minClassified?: number, flagAxisReversal?: boolean }} [opts]
  * @returns {Array<{ kind: 'axis-reversal'|'monotony', severity: 'medium', message: string }>}

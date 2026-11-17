@@ -46,10 +46,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Derived projection: an absent or corrupt file reads as empty and is backfilled from the archive metadata."
   },
   {
-    "key": "cosReports.js :: reportFile",
-    "reason": "No write-back cycle: reports are generated from agent records and written whole; getReport only projects a stored report."
-  },
-  {
     "key": "errorLogTriage.js :: stateFile",
     "reason": "No failed-read write-back: readState reads strictly (strict:true), so a corrupt store throws instead of resetting the cursors; only an absent file seeds the empty state."
   },
@@ -105,11 +101,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "runtimeUpdateReview.js :: CACHE_FILE",
     "reason": "Regenerable machine-local status cache: an unreadable file leaves update checks unverified until fresh observations rebuild it; it contains no user-authored records."
-  },
-  {
-    "key": "settings.js :: SETTINGS_FILE",
-    "reason": "Tolerant loadRaw serves display reads; partial writers must read strictly and refuse (fix in #12451, which also covers .env). Remove this entry if the scan stops reporting the pair.",
-    "issue": "#12451"
   },
   {
     "key": "sharing/buckets.js :: bucketJsonPath",

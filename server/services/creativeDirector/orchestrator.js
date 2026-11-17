@@ -7,15 +7,8 @@
  */
 
 /**
- * Pick the next non-terminal scene by `order`. Returns the lowest-order
- * scene that's `pending`, `rendering`, or `evaluating` (i.e. not yet in a
- * terminal `accepted`/`failed` state). Returns null when every scene is
- * terminal.
- *
- * The caller treats `rendering`/`evaluating` as "currently in flight" —
- * surfacing them here lets a re-enqueue pick up where work left off
- * rather than skip ahead. `advanceAfterSceneSettled` separately filters
- * to status === 'pending' before kicking off a fresh render.
+ * Pick the lowest-order scene that is `pending`, `rendering` or `evaluating`
+ * (in-flight scenes included so a re-enqueue resumes them); null when all are terminal.
  */
 export function nextPendingScene(project) {
   if (!project?.treatment?.scenes?.length) return null;
@@ -38,18 +31,14 @@ export function nextTaskKind(project) {
   if (!scenes.length) return null;
   const remaining = scenes.find((s) => s.status === 'pending' || s.status === 'rendering' || s.status === 'evaluating');
   if (remaining) return 'scene';
-  // All scenes terminal — if at least one accepted and no final video yet,
-  // stitch. If none accepted, the project failed.
+  // All scenes terminal: stitch if any accepted, else the project failed.
   const acceptedCount = scenes.filter((s) => s.status === 'accepted').length;
   if (!acceptedCount) return null;
   if (project.finalVideoId) return null;
   return 'stitch';
 }
 
-/**
- * Build the timeline-project clip list from accepted scenes. Used by the
- * stitch task prompt and could be used by a server-side auto-stitch path.
- */
+/** Build the timeline-project clip list from accepted scenes. */
 export function buildTimelineClips(project) {
   return (project?.treatment?.scenes || [])
     .filter((s) => s.status === 'accepted' && s.renderedJobId)

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { refreshQuerySchema } from '../lib/queryValidation.js';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
@@ -7,7 +8,7 @@ import { dismissUsageRetentionTip, getUsageRetentionTips } from '../services/usa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -20,12 +21,6 @@ import {
 } from '../services/usageBackfill.js';
 
 const router = Router();
-
-// GET /api/usage/hourly - Fixed-size local counters, without building cost reports.
-router.get('/hourly', (req, res) => {
-  const { hourlyActivity } = usage.getUsage();
-  res.json({ hourlyActivity: Array.from({ length: 24 }, (_, hour) => hourlyActivity?.[hour] || 0) });
-});
 
 // GET /api/usage - Usage summary + cost report. Accepts ?period=7d|30d|90d|all
 // or an explicit ?from/?to (YYYY-MM-DD, inclusive) for the report window.
@@ -185,7 +180,8 @@ router.get('/providers', asyncHandler(async (req, res) => {
 // with no card shape to carry a `pending` flag, so a caller has nothing to
 // render or poll on. The wait is bounded by the CLI's own spawn timeout.
 router.get('/claude-code', asyncHandler(async (req, res) => {
-  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const { refresh: refreshParam } = validateRequest(refreshQuerySchema, req.query);
+  const refresh = refreshParam === '1' || refreshParam === 'true';
   const data = await getClaudeCodeUsage({ wait: refresh ? WAIT.FRESH : WAIT.CACHED });
   res.json(data);
 }));
@@ -201,12 +197,6 @@ router.get('/claude-code/models', asyncHandler(async (req, res) => {
   res.json({ from, to, transcriptRefreshed: refreshed, transcriptUpdatedAt: updatedAt, ...(await getFleetClaudeCodeModels({ from, to, apiBilledInstanceIds })) });
 }));
 
-// GET /api/usage/raw - Get raw usage data
-router.get('/raw', asyncHandler(async (req, res) => {
-  const data = usage.getUsage();
-  res.json(data);
-}));
-
 // Historical transcript correction is deliberately user-triggered. Starting it
 // returns immediately; the worker-thread job reports progress through GET.
 router.get('/backfill', asyncHandler(async (req, res) => {
@@ -217,24 +207,10 @@ router.post('/backfill', asyncHandler(async (req, res) => {
   res.status(202).json(await startHistoricalUsageBackfill());
 }));
 
-// POST /api/usage/session - Record a session
-router.post('/session', asyncHandler(async (req, res) => {
-  const { providerId, providerName, model } = validateRequest(usageSessionSchema, req.body);
-  const recorded = await usage.recordSession(providerId, providerName, model);
-  res.json({ sessionNumber: recorded });
-}));
-
 // POST /api/usage/messages - Record messages
 router.post('/messages', asyncHandler(async (req, res) => {
   const { providerId, model, messageCount, tokenCount, inputTokenCount } = validateRequest(usageMessagesSchema, req.body);
   await usage.recordMessages(providerId, model, messageCount, tokenCount, inputTokenCount);
-  res.json({ success: true });
-}));
-
-// POST /api/usage/tokens - Record token usage
-router.post('/tokens', asyncHandler(async (req, res) => {
-  const { inputTokens, outputTokens } = validateRequest(usageTokensSchema, req.body);
-  await usage.recordTokens(inputTokens, outputTokens);
   res.json({ success: true });
 }));
 

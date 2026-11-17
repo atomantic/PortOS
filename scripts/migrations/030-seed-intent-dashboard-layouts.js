@@ -1,23 +1,7 @@
 /**
- * Seed the three new intent-named built-in dashboard layouts into installs
- * that already have a persisted `data/dashboard-layouts.json`.
+ * Seed the three new intent-named built-in dashboard layouts (`deep-work`, `health`, `agent-watch`) into installs that already have a persisted `data/dashboard-layouts.json`.
  *
- * Background:
- *   `server/services/dashboardLayouts.js#DEFAULT_LAYOUTS` ships
- *   `deep-work`, `health`, and `agent-watch` alongside the original four
- *   built-ins. `getState()` returns the sanitized persisted layouts whenever
- *   the file exists, so adding new built-ins in code only affects fresh
- *   installs — existing users never see them.
- *
- *   This migration walks `data/dashboard-layouts.json` and inserts any of
- *   the three new built-ins that aren't already present, with their
- *   server-side default grid. Re-runs detect each layout already exists by
- *   id and skip, so the migration is idempotent.
- *
- *   If the user previously deleted one of the new built-in ids (the
- *   `health` widget doesn't survive deletion of a built-in today because
- *   built-ins are guarded — but a hand-edit could remove it), we will
- *   re-seed it. This matches the behavior of the fresh-install path.
+ * `server/services/dashboardLayouts.js#DEFAULT_LAYOUTS` ships them alongside the original four, but `getState()` returns the sanitized persisted layouts whenever the file exists, so new built-ins in code only reach fresh installs. This inserts any that aren't present (by id, so re-runs skip: idempotent) with their server-side default grid. A user-deleted one is re-seeded, matching the fresh-install path (a hand-edit could remove it; built-ins are guarded against deletion today).
  */
 
 import { INTENT_LAYOUTS } from '../../server/services/dashboardLayouts.js';

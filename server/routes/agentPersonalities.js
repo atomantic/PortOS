@@ -6,13 +6,14 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
-  validateRequest,
+  agentPersonalitiesListQuerySchema,
   agentSchema,
   agentUpdateSchema,
   agentGenerateSchema,
   agentToggleSchema,
-} from '../lib/validation.js';
+} from '../lib/agentValidation.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';
 import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
 import { logAction } from '../services/history.js';
@@ -21,7 +22,7 @@ const router = Router();
 
 // GET / - Get all agent personalities
 router.get('/', asyncHandler(async (req, res) => {
-  const { userId } = req.query;
+  const { userId } = validateRequest(agentPersonalitiesListQuerySchema, req.query);
 
   const agents = userId
     ? await agentPersonalities.getAgentsByUser(userId)

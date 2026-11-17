@@ -1,56 +1,33 @@
 /**
  * Goal-fidelity CALIBRATION contract — pure.
  *
- * `goalFidelity.js` owns the verdict, `goalFidelityFollowUp.js` owns what
- * happens when the verdict found a problem. This module owns the third case,
- * which until now had nowhere to go: the follow-up investigator looked at the
- * finding, checked it against what actually shipped, and concluded **the goal
+ * `goalFidelity.js` owns the verdict, `goalFidelityFollowUp.js` owns what happens when the verdict
+ * found a problem. This module owns the case where the follow-up investigator concluded **the goal
  * WAS met — the detector was wrong**.
  *
- * That outcome is not a no-op. A false `rethink` held a successful run, raised
- * a Review Hub alert, possibly filed an issue on the project's tracker, and
- * spent an agent to discover it was nothing. It will keep doing that on every
- * future run with the same shape, because the reason it misjudged is structural
- * — the reviewer sees ONLY the objective and the diff (see
- * `services/codeReview.js#GOAL_FIDELITY_SYSTEM_PROMPT`), so anything the
- * delivery depended on that isn't in those two blocks is invisible to it. The
- * overturned finding is the only evidence that ever names which piece was
- * missing, and discarding it means re-discovering the same blind spot forever.
+ * The misjudgement is structural (the reviewer sees ONLY the objective and the diff, see
+ * `services/codeReview.js#GOAL_FIDELITY_SYSTEM_PROMPT`), so it recurs on every run of the same
+ * shape, and the overturned finding is the only evidence naming the missing piece. It therefore
+ * queues a task against PortOS's OWN repo to close the gap.
  *
- * So an overturned finding queues a task against PortOS's OWN repo to close the
- * gap. The existing prompt already carries one such patch, added by hand after
- * exactly this failure ("Claiming/selecting that issue, creating a worktree,
- * and shipping a PR are execution steps; do not require those steps to appear
- * as code in the diff") — this module is that loop, automated.
+ * Design points:
  *
- * TWO design points carry the feature:
+ *  1. The fingerprint is keyed on the GAP, not the run: ten false positives from one missing piece
+ *     of context are ONE fix, and each further run is unioned into that task
+ *     (see `goalFidelityCalibrationFingerprint`).
+ *  2. The calibration lands on PORTOS, never on the app the finding was about; the judge is PortOS
+ *     code, and a prompt change in a managed app's backlog could not be acted on.
  *
- *  1. The fingerprint is keyed on the GAP, not on the run. Ten false positives
- *     from one missing piece of context are ONE fix, and keying on the run
- *     would mint ten agents to make it. Keying on the gap folds them into one
- *     task, which the service then unions each further run into (see
- *     `goalFidelityCalibrationFingerprint`).
- *  2. The calibration lands on PORTOS, never on the app the finding was about.
- *     The finding belonged to the app; the judge that produced it is PortOS
- *     code. Filing the fix where the finding was would put a PortOS prompt
- *     change in a managed app's backlog, where nothing can act on it.
+ * NEARLY CLOSURE-FREE by design: both imports are zero-import leaves (`textUtils.js`,
+ * `agentApiToken.js`). The `curl` block takes its API base as an ARGUMENT rather than importing
+ * `networkExposure.js`, which would drag seven modules (TLS cert metadata, Tailscale state) behind
+ * a constant.
  *
- * NEARLY CLOSURE-FREE by design, like its sibling: both imports are zero-import
- * leaves (`textUtils.js`, `agentApiToken.js`). The `curl` block takes its API
- * base as an ARGUMENT rather than importing `networkExposure.js` — resolving a
- * loopback port is I/O, it would drag seven modules (TLS cert metadata,
- * Tailscale state) behind a constant, and it belongs to the service anyway.
- *
- * The vocabulary is enforced HERE and only here: `normalizeGoalFidelityContextGap`
- * is the single gate, and the report route takes a bounded string rather than
- * this enum. Two reasons, and the second is the one that keeps it that way.
- * Behaviour: a report is expensive — an agent investigated a finished run to
- * produce it — so a near-miss gap name folds to `other` with the diagnosis
- * intact instead of 400'ing the whole report away. Cost: `cosValidation.js` is
- * statically reached by 283 of the ~1,920 server suites, so importing this
- * module there to type one field would have added 283 module instantiations to
- * a tree-wide budget (`lib/importScoping.test.js`) for a check the normalizer
- * already performs. See server/AGENTS.md "Import scoping".
+ * The vocabulary is enforced HERE only: `normalizeGoalFidelityContextGap` is the single gate, and
+ * the report route takes a bounded string rather than this enum. A near-miss gap name folds to
+ * `other` with the diagnosis intact instead of 400'ing an expensive report away, and importing this
+ * module from `cosValidation.js` (statically reached by most server suites) would blow the
+ * tree-wide import budget (`lib/importScoping.test.js`; server/AGENTS.md "Import scoping").
  */
 
 import { agentApiAuthNote, agentApiCurl } from './agentApiToken.js';
@@ -59,32 +36,20 @@ import { trimTo } from './textUtils.js';
 /**
  * What the reviewer was missing, as a closed vocabulary.
  *
- * Closed rather than free text because the vocabulary IS the dedup key: two
- * investigators describing the same blind spot in different prose would file
- * two tasks to make one fix. Each value names a distinct place the context
- * assembly can fail, and every value maps to a different file to edit — which
- * is what makes `GOAL_FIDELITY_CONTEXT_GAP_FIXES` below a usable starting point
- * rather than a restatement of the problem.
+ * Closed rather than free text because the vocabulary IS the dedup key: the same blind spot in
+ * different prose would file two tasks for one fix. Each value names a distinct place the context
+ * assembly can fail.
  *
- * - `truncated-diff`          — the change was larger than `MAX_FIDELITY_DIFF_CHARS`,
- *                               so the reviewer judged a fragment. The gate already
- *                               KNOWS this (`review.diffTruncated`); the bug is that
- *                               it judged anyway instead of declining.
- * - `truncated-objective`     — the objective was over `MAX_OBJECTIVE_CHARS` and the
- *                               requirement the diff delivered fell off the end.
- * - `objective-omits-context` — the objective pointed OUT of itself (an issue body, a
- *                               linked plan, a prior run's decision) and the reviewer
- *                               never received the thing it pointed at.
- * - `work-outside-diff`       — the delivery was real but invisible in the run-window
- *                               diff: already on the base branch, in a sibling branch,
- *                               a generated or git-ignored artifact, or a pure deletion.
- * - `execution-step-misread`  — the reviewer demanded process (claim the issue, open a
- *                               PR, merge) as code in the diff.
- * - `rubric-gap`              — the prompt's own rubric misjudged a legitimate shape: a
- *                               supporting change read as `unrequested`, real verification
- *                               read as absent, a refactor read as "something else".
- * - `other`                   — a gap none of the above describes. Files the same task;
- *                               the investigator's prose carries the diagnosis.
+ * - `truncated-diff`          — change larger than `MAX_FIDELITY_DIFF_CHARS`; the reviewer judged a fragment.
+ * - `truncated-objective`     — objective over `MAX_OBJECTIVE_CHARS`; a delivered requirement fell off the end.
+ * - `objective-omits-context` — objective pointed OUT of itself (issue body, linked plan, prior decision)
+ *                               and the reviewer never received it.
+ * - `work-outside-diff`       — delivery real but invisible in the run-window diff (already on base,
+ *                               sibling branch, generated or git-ignored artifact, pure deletion).
+ * - `execution-step-misread`  — reviewer demanded process (claim, PR, merge) as code in the diff.
+ * - `rubric-gap`              — the rubric misjudged a legitimate shape (supporting change read as
+ *                               `unrequested`, real verification read as absent).
+ * - `other`                   — none of the above; the investigator's prose carries the diagnosis.
  */
 export const GOAL_FIDELITY_CONTEXT_GAPS = Object.freeze([
   'truncated-diff',
@@ -102,12 +67,9 @@ export const DEFAULT_GOAL_FIDELITY_CONTEXT_GAP = 'other';
 /**
  * The reviewer's ENTIRE context, as three surfaces — and where each one lives.
  *
- * Addressed once, here, rather than re-spelled in every gap's advice. These are
- * prose pointers into code, so nothing compiles against them; describing one
- * surface seven times means a rename can leave four copies quietly lying to an
- * unattended agent, in a task whose whole value is "here is the shortest path to
- * the code". `goalFidelityCalibration.pointers.test.js` walks this table and
- * fails when a named file or exported symbol no longer exists.
+ * Addressed once here rather than re-spelled per gap: these are prose pointers nothing compiles
+ * against, so `goalFidelityCalibration.pointers.test.js` walks this table and fails when a named
+ * file or exported symbol no longer exists.
  */
 export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
   objective: Object.freeze({
@@ -128,11 +90,7 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
 });
 
 /**
- * Which surface each gap sits on, and the one thing worth knowing about that
- * gap beyond the address.
- *
- * `surface: null` means all three — the `other` case, where the report's prose
- * is the only thing that narrows it.
+ * Which surface each gap sits on, plus one note about it. `surface: null` means all three (`other`).
  */
 export const GOAL_FIDELITY_CONTEXT_GAP_FIXES = Object.freeze({
   'truncated-diff': Object.freeze({
@@ -184,36 +142,22 @@ const CALIBRATION_CATEGORY = 'goal-fidelity-calibration';
 const CALIBRATION_KIND = 'context-gap';
 
 /**
- * Bound on the investigator's free text, which rides into a queued task body.
- *
- * This is the EFFECTIVE limit, and deliberately below the report schema's own
- * caps: a report is expensive to produce (an agent investigated a finished run),
- * so an over-long field is trimmed here rather than 400'd away with the
- * diagnosis still inside it.
+ * Bound on the investigator's free text, which rides into a queued task body. This is the EFFECTIVE
+ * limit, deliberately below the report schema's caps so an over-long field is trimmed, not 400'd.
  */
 export const GOAL_FIDELITY_CALIBRATION_FREE_TEXT_CHARS = 4_000;
 
 /**
  * The dedup key for one calibration, keyed on the GAP ALONE.
  *
- * This is the design decision that makes the loop affordable. A false positive
- * is not an incident, it is a symptom of one structural blind spot, and that
- * blind spot fires on every run with the same shape — a scheduled task drifting
- * the same way produces one overturned finding per cadence. Keyed on the run
- * (or on the overturned finding's own fingerprint, which is keyed on the task)
- * every one of those would mint its own agent to make the SAME edit to the same
- * prompt, and the second one would land on a tree the first already changed.
+ * A blind spot fires on every run of the same shape; keyed on the run or the task, each would mint
+ * an agent making the SAME prompt edit. Keyed on the gap they fold into one task, and the producer
+ * unions each later report's run into it (`unionAffectedRun` in the service, since `addTask`'s own
+ * dedup returns the survivor untouched) so the agent sees every run the gap cost.
  *
- * Keyed on the gap they all fold into one task, and the producer unions each
- * later report's run into it (`unionAffectedRun` in the service — `addTask`'s
- * own dedup returns the survivor untouched) — so the agent that picks it up
- * sees every run the gap cost, which is the evidence that tells it how far to go.
- *
- * Nothing about the app is in the key on purpose: the judge is one piece of
- * PortOS code shared by every app, so two apps hitting the same blind spot are
- * one fix, not two. The three-segment `category:kind:scope` shape matches every
- * other investigation key so the queued task participates in the shared loop
- * policy and circuit breaker for free.
+ * No app in the key on purpose: the judge is shared PortOS code. The three-segment
+ * `category:kind:scope` shape matches other investigation keys so the task joins the shared loop
+ * policy and circuit breaker.
  */
 export function goalFidelityCalibrationFingerprint(gap) {
   return `${CALIBRATION_CATEGORY}:${CALIBRATION_KIND}:${normalizeGoalFidelityContextGap(gap)}`;
@@ -222,12 +166,9 @@ export function goalFidelityCalibrationFingerprint(gap) {
 /**
  * Is this value still the `<…>` placeholder the report block handed the agent?
  *
- * The block gives the investigator a ready-to-run `curl` with every field
- * spelled as `<what the reviewer could not see, …>`. An agent that runs it
- * unchanged sends those literals, and without this they land in the calibration
- * body as if they were a diagnosis — a task that reads like a real report and
- * says nothing. Shape-matched rather than compared against the exact template
- * strings, so rewording the block cannot quietly stop detecting it.
+ * An agent that runs the block's `curl` unchanged sends the template literals, which would read as
+ * a real diagnosis. Shape-matched rather than compared to the template strings so rewording the
+ * block cannot silently stop detecting it.
  */
 const isPlaceholder = (text) => /^<[^>]*>$/.test(String(text ?? '').trim());
 
@@ -238,12 +179,8 @@ export const reportedField = (text) => {
 };
 
 /**
- * Did this report carry anything real at all?
- *
- * False only for the wholly-unfilled template: no recognized gap (so it
- * normalized to `other`) AND no usable detail or evidence. A partially-filled
- * report still queues — a named gap alone points at a file, which is more than
- * nothing — so this refuses the one case that is pure noise.
+ * False only for the wholly-unfilled template (no recognized gap AND no usable detail or evidence);
+ * a named gap alone still points at a file, so partial reports queue.
  */
 export function goalFidelityReportIsSubstantive({ gap, detail, evidence } = {}) {
   return GOAL_FIDELITY_CONTEXT_GAPS.includes(gap)
@@ -257,20 +194,12 @@ const reported = (text, empty) => reportedField(text) || empty;
 /**
  * The CoS task body for one calibration.
  *
- * Written for an agent that has never seen the overturned finding, because it
- * has not: this task is queued from a REPORT, runs later, and may fold in
- * reports from runs that finished days apart. So it restates the diagnosis, and
- * it names the reviewer's whole context surface rather than assuming the agent
- * will find it.
+ * Written for an agent that has never seen the overturned finding (queued from a REPORT, run
+ * later), so it restates the diagnosis and names the reviewer's whole context surface.
  *
- * The scope contract is the load-bearing paragraph. The cheapest way to make a
- * false positive stop is to make the detector never say `rethink` again, and an
- * unattended agent optimizing for "this finding must not recur" will find that
- * path. The next cheapest is a matcher that recognizes this one diff, which is
- * how the reviewer once accumulated single-incident recognizers (#16103). So
- * the task confines the fix to the general prompt or its evidence, states the
- * failure modes it must not produce, and asks for the regression test that
- * proves it did not.
+ * The scope contract is load-bearing: an unattended agent optimizing for "this finding must not
+ * recur" will disarm the detector or add a single-diff matcher (#16103), so the task confines the
+ * fix to the general prompt or its evidence and demands a regression test.
  */
 export function buildGoalFidelityCalibrationTask({ gap, detail, evidence, findingFingerprint, taskId, verdict } = {}) {
   const resolved = normalizeGoalFidelityContextGap(gap);
@@ -289,10 +218,7 @@ export function buildGoalFidelityCalibrationTask({ gap, detail, evidence, findin
       '## The reviewer\'s entire context',
       'The goal-fidelity reviewer is a tool-free local model handed exactly two blocks and nothing else — no repository, no file list, no PR, no history. Anything a delivery depended on that is not in those two blocks is invisible to it:',
       '',
-      // Rendered from the surface table rather than restated, so the addresses
-      // here and the one the gap above points at cannot disagree — and so the
-      // pointers test, which walks that table against the real files, covers
-      // this list too.
+      // Rendered from the surface table so the pointers test covers this list too.
       ...Object.values(GOAL_FIDELITY_REVIEW_SURFACES).map(surface => `- ${surface.describe};`),
     ].join('\n'),
     [
@@ -312,10 +238,8 @@ export function buildGoalFidelityCalibrationTask({ gap, detail, evidence, findin
  * The path the prompt tells an agent to POST to — absolute, since the agent
  * types it into a `curl`.
  *
- * The route declares its own path relative to the `/api/cos` mount, so the two
- * cannot be one literal. They are pinned from both ends instead: the block test
- * asserts this string appears in the rendered `curl`, and the route test POSTs
- * to it — a rename that moves one without the other fails the second.
+ * The route declares its path relative to the `/api/cos` mount, so they cannot be one literal;
+ * the block test and the route test both pin this string.
  */
 export const GOAL_FIDELITY_FALSE_POSITIVE_PATH = '/api/cos/goal-fidelity/false-positive';
 
@@ -323,13 +247,9 @@ export const GOAL_FIDELITY_FALSE_POSITIVE_PATH = '/api/cos/goal-fidelity/false-p
  * The block appended to a follow-up task telling the investigator how to report
  * an overturned finding.
  *
- * Lives here, beside the vocabulary it names, so the enum an agent is told to
- * pick from and the enum the server normalizes against cannot drift apart.
- *
- * `apiBase` is an ARGUMENT because resolving the loopback base is I/O
- * (`localApiBaseUrl`), which belongs to the caller; the `curl` line and the
- * auth paragraph come from `agentApiToken.js`, which owns that shape for every
- * agent-facing API call in the tree.
+ * Lives beside the vocabulary it names so the enum agents pick from and the one the server
+ * normalizes against cannot drift. `apiBase` is an ARGUMENT because resolving it is I/O
+ * (`localApiBaseUrl`) owned by the caller.
  */
 export function buildGoalFidelityFalsePositiveReportBlock({ apiBase, findingFingerprint, taskId } = {}) {
   const payload = JSON.stringify({

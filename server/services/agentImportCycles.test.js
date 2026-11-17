@@ -88,7 +88,7 @@ function importsDynamically(file, mod) {
 }
 
 // What the facade re-exports out of `source`, as `{ declared, exposedAs }` —
-// the two sides of `terminateAgent as requestAgentTermination`. `declared` is
+// the two sides of an `a as b` re-export. `declared` is
 // what the defining module calls it; `exposedAs` is the name callers above the
 // closure use, which for a renamed export exists ONLY on the facade and so has
 // exactly one legitimate source. Both quote styles throughout — `from "./x.js"`
@@ -214,12 +214,9 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     // from the facade itself — everything it takes from the process layer —
     // rather than listing them, so the rule tracks the facade as it grows.
     //
-    // Minus the names the facade ALSO serves from the state layer. That set is
-    // `terminateAgent`, the one genuine collision in this cluster: `cos.js`
-    // legitimately re-exports the state-layer function of that name, and it is
-    // only unambiguous inside the facade because the facade renames it to
-    // `requestAgentTermination`. Subtracting is what keeps this derivation from
-    // failing on a name `cos.js` is right to export.
+    // Minus the names the facade ALSO serves from the state layer: `cos.js`
+    // legitimately re-exports those state-layer functions, so subtracting them
+    // keeps this derivation from failing on a name `cos.js` is right to export.
     // Both quote styles throughout — `from "./x.js"` is valid ESM, and a matcher
     // that only knows `'` reads as green over the exact statement it forbids.
     const stateLayer = new Set(reexportedFrom('cosAgentLifecycle.js'));
@@ -298,20 +295,14 @@ describe('agent lifecycle cluster — no static import cycles (#2837)', () => {
     for (const source of declaringModules) {
       for (const { declared, exposedAs } of reexportedPairs(source)) {
         allow(declared, source);
-        // A RENAMED export (`terminateAgent as requestAgentTermination`) has a
+        // A RENAMED export (`a as b`) has a
         // public name that exists nowhere but the facade, so the facade is its
         // only legitimate source. Registering it is what stops a barrel from
-        // re-exporting the alias and slipping past a map keyed on `terminateAgent`.
+        // re-exporting the alias and slipping past a map keyed on `killAgent`.
         if (exposedAs !== declared) allow(exposedAs, FACADE);
       }
     }
-    // `terminateAgent` lands in two declaring modules: the process-side one and
-    // the state-side one the facade renames. Both are real definitions, so both
-    // stay allowed — the rule here is "not a barrel", and that collision is a
-    // naming question the facade already answered.
     expect(declaredBy.size, 'derived no transitions — check the facade export blocks').toBeGreaterThan(3);
-    expect([...declaredBy.keys()], 'the facade rename is no longer covered — check reexportedPairs')
-      .toContain('requestAgentTermination');
 
     // A FORWARDER is any module that re-exports its way to a declaring module, at
     // any depth. None remain: `cosAgents.js` was retired in #3450 and `cos.js`'s

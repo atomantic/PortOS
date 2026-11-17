@@ -1,29 +1,13 @@
 /**
- * Orchestration profiles for CoS agent runs (issue #5992).
+ * Orchestration profiles for CoS agent runs (#5992): architect/implementer/reviewer roles, modes, spec directives and per-step reasoning effort.
  *
- * Orchestrated CoS execution (#5992) — `ORCHESTRATION_MODES` / `ORCHESTRATION_ROLES` (architect,
- * implementer, reviewer), `normalizeOrchestrationProfile` / `normalizeOrchestrationMode`,
- * `isOrchestratedTask` / `roleAssignment` (both inert on a `direct` task, so a stored profile stays
- * opt-in), the six-part `SPEC_PARTS` contract a delegated context-free lane needs, plus
- * `parseReasoningDirective` / `resolveStepEffort` (spec rung → role default → run effort; an
- * unsupported rung is an error, never a silent downgrade).
+ * Orchestrated CoS execution (#5992): `ORCHESTRATION_MODES` / `ORCHESTRATION_ROLES` (architect, implementer, reviewer), `normalizeOrchestrationProfile` / `normalizeOrchestrationMode`,
+ * `isOrchestratedTask` / `roleAssignment` (both inert on a `direct` task, so a stored profile stays opt-in), the six-part `SPEC_PARTS` contract a delegated context-free lane needs, plus
+ * `parseReasoningDirective` / `resolveStepEffort` (spec rung → role default → run effort; an unsupported rung is an error, never a silent downgrade).
  *
- * A CoS task normally resolves ONE provider and ONE model for its whole run, so
- * a user who wants strong reasoning for the planning also pays that model's rate
- * for the mechanical editing. An orchestration profile splits the run into three
- * ROLES — architect (plans and writes specs), implementer (executes one spec at
- * a time), reviewer (checks the result) — each with its own provider/model, plus
- * a per-step reasoning rung the architect names in the spec it hands down.
- *
- * This module is the pure vocabulary + normalizer + spec-directive grammar. The
- * Zod surface lives in `cosValidation.js`, model selection in
- * `services/agentModelSelection.js`, and the prompt doctrine in
- * `services/promptSections/orchestrationDoctrine.js` — all of them read the
- * definitions HERE so the four cannot drift.
- *
- * Opt-in by construction: `direct` is the default mode and every accessor
- * returns null for a task that carries no profile, so an install that never
- * configures one behaves exactly as it did before.
+ * A task normally resolves ONE provider and model for the whole run, so strong planning reasoning also pays that rate for mechanical editing. A profile splits the run into three ROLES (architect plans and writes specs,
+ * implementer executes one spec at a time, reviewer checks), each with its own provider/model, plus a per-step reasoning rung the architect names in the spec. Pure vocabulary + normalizer + directive grammar; the Zod surface is
+ * `cosValidation.js`, model selection `services/agentModelSelection.js`, doctrine `services/promptSections/orchestrationDoctrine.js`, all reading the definitions HERE. Opt-in: `direct` is the default and every accessor returns null for a profile-less task.
  */
 
 import { EFFORT_LEVELS } from './providerModels.js';
@@ -33,24 +17,13 @@ import { isPlainObject } from './objects.js';
 export const ORCHESTRATION_MODES = Object.freeze(['direct', 'orchestrated']);
 export const DEFAULT_ORCHESTRATION_MODE = 'direct';
 
-/**
- * The roles a run is split into. Ordered plan → build → check, which is also the
- * order the doctrine section renders them in.
- */
+/** The roles a run is split into, ordered plan → build → check (also the doctrine section's render order). */
 export const ORCHESTRATION_ROLES = Object.freeze(['architect', 'implementer', 'reviewer']);
 
-/**
- * The role a `direct`-mode run — and the top-level agent of an orchestrated run
- * — is dispatched as. Naming it keeps `selectModelForTask`'s delegation honest:
- * with no profile the architect assignment is empty and selection is unchanged.
- */
+/** The role a `direct`-mode run (and an orchestrated run's top-level agent) is dispatched as; with no profile the architect assignment is empty and selection is unchanged. */
 export const PRIMARY_ORCHESTRATION_ROLE = 'architect';
 
-/**
- * Starter orchestration profiles shipped by default. Each configures distinct
- * reasoning effort per role while leaving provider and model selection to the
- * install/task defaults. User-defined profiles can override or extend these.
- */
+/** Starter orchestration profiles shipped by default: distinct reasoning effort per role, leaving provider/model to install/task defaults. User-defined profiles can override or extend them. */
 export const BUILT_IN_ORCHESTRATION_PROFILES = Object.freeze([
   Object.freeze({
     id: 'heavy-planner',
@@ -79,12 +52,7 @@ export const BUILT_IN_ORCHESTRATION_PROFILES = Object.freeze([
 const MAX_PROVIDER_ID_LENGTH = 120;
 const MAX_MODEL_ID_LENGTH = 300;
 
-/**
- * The six parts every delegated unit of work must carry. A delegated lane shares
- * NONE of the architect's context — it sees only the spec — so a spec missing
- * any of these is a lane that has to guess. Rendered into the doctrine section
- * so the architect prompt and any later spec check read one definition.
- */
+/** The six parts every delegated unit of work must carry: a delegated lane shares NONE of the architect's context, so a spec missing one makes it guess. Rendered into the doctrine so the architect prompt and spec checks share one definition. */
 export const SPEC_PARTS = Object.freeze([
   Object.freeze({ key: 'objective', label: 'OBJECTIVE', description: 'the single outcome this unit delivers, stated so it can be judged done or not' }),
   Object.freeze({ key: 'files', label: 'FILES', description: 'every path the unit may read or write, absolute or repo-relative' }),
@@ -104,12 +72,7 @@ const trimmedString = (value, maxLength) => {
   return trimmed;
 };
 
-/**
- * Normalize ONE role's assignment. Every field is optional — a role that pins
- * only a model inherits the run's provider, and a role that pins nothing at all
- * normalizes away entirely (null) rather than persisting an empty object that
- * would read as a configured-but-blank override.
- */
+/** Normalize ONE role's assignment. Every field is optional: a role pinning only a model inherits the run's provider, and one pinning nothing normalizes to null (not an empty object that reads as a blank override). */
 function normalizeRoleAssignment(raw) {
   if (!isPlainObject(raw)) return null;
   const provider = trimmedString(raw.provider, MAX_PROVIDER_ID_LENGTH);
@@ -123,12 +86,7 @@ function normalizeRoleAssignment(raw) {
   });
 }
 
-/**
- * Normalize a whole profile to the persisted shape, or null when nothing usable
- * survives. Unknown roles are dropped rather than carried: the role vocabulary
- * is what the prompt doctrine and model selection can actually act on, so a typo
- * must not persist as a silently-inert assignment.
- */
+/** Normalize a whole profile to the persisted shape, or null when nothing usable survives. Unknown roles are dropped: the vocabulary is what doctrine and model selection can act on, so a typo mustn't persist as an inert assignment. */
 export function normalizeOrchestrationProfile(raw) {
   if (!isPlainObject(raw)) return null;
   const profile = {};
@@ -144,22 +102,13 @@ export function normalizeOrchestrationMode(raw) {
   return ORCHESTRATION_MODES.includes(raw) ? raw : DEFAULT_ORCHESTRATION_MODE;
 }
 
-/**
- * Is this task running under the orchestrated contract? Requires BOTH the mode
- * flag and a usable profile — an orchestrated task with no role assignments has
- * nothing to delegate differently, and telling its agent to emit specs for lanes
- * that all resolve to the same model buys context loss for nothing.
- */
+/** Is this task running under the orchestrated contract? Requires BOTH the mode flag and a usable profile: with no role assignments every lane resolves to the same model, and per-lane specs would buy context loss for nothing. */
 export function isOrchestratedTask(task) {
   return normalizeOrchestrationMode(task?.metadata?.orchestrationMode) === 'orchestrated'
     && normalizeOrchestrationProfile(task?.metadata?.orchestrationProfile) !== null;
 }
 
-/**
- * The assignment for one role on a task, or null. Returns null for every role
- * on a `direct`-mode task, so callers do not need to check the mode themselves
- * — this is the single gate that keeps a stored-but-disabled profile inert.
- */
+/** The assignment for one role on a task, or null; null for every role on a `direct` task, the single gate keeping a stored-but-disabled profile inert. */
 export function roleAssignment(task, role) {
   if (!ORCHESTRATION_ROLES.includes(role)) return null;
   if (!isOrchestratedTask(task)) return null;
@@ -167,13 +116,8 @@ export function roleAssignment(task, role) {
 }
 
 /**
- * Parse a `REASONING: <rung>` directive out of spec text.
- *
- * NEVER rounds. An unsupported rung is an error, not a downgrade: the whole
- * point of a per-step rung is that the architect chose it deliberately, and
- * silently substituting the nearest supported level would run the step at an
- * effort nobody asked for while reporting success. Callers decide whether to
- * reject the spec or surface the error; this only refuses to guess.
+ * Parse a `REASONING: <rung>` directive out of spec text. NEVER rounds: an unsupported rung is an error, not a downgrade (the architect chose it deliberately; substituting the nearest level would run the step at
+ * an unrequested effort while reporting success). Callers decide whether to reject the spec or surface the error; this only refuses to guess.
  *
  * @param {string} text - spec text (a full spec or a single directive line)
  * @returns {{ rung: string }|{ error: string }|null} null when no directive is present
@@ -190,17 +134,8 @@ export function parseReasoningDirective(text) {
 }
 
 /**
- * Resolve the reasoning effort for ONE DELEGATED STEP of an orchestrated run
- * (#5992), rather than one effort for the whole run.
- *
- * Precedence: the `REASONING: <rung>` directive the architect wrote into this
- * step's spec → the role's configured default from the orchestration profile →
- * the run-level effort already resolved for the task.
- *
- * NEVER rounds. An unsupported rung returns `{ error }` so the caller can refuse
- * the spec: silently substituting the nearest supported level would run the step
- * at an effort nobody chose while still reporting success — and the architect
- * naming a rung deliberately is the entire point of the per-step contract.
+ * Resolve the reasoning effort for ONE DELEGATED STEP of an orchestrated run (#5992). Precedence: the `REASONING: <rung>` directive in this step's spec → the role's default from the profile → the run-level effort.
+ * NEVER rounds: an unsupported rung returns `{ error }` so the caller can refuse the spec (silent substitution would run at an unchosen effort while reporting success).
  *
  * @param {object} options
  * @param {string} [options.spec] - the delegated step's spec text

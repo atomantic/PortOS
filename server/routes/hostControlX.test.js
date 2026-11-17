@@ -182,7 +182,7 @@ describe('X (Twitter) review, browser handoff and sync authority', () => {
 
   it('keeps remote reads open', async () => {
     const app = await hostControlApp('192.0.2.10', mounts);
-    for (const path of ['/api/x/capabilities', '/api/x/accounts', `/api/x/accounts/${account.id}/drafts`]) {
+    for (const path of ['/api/x/accounts', `/api/x/accounts/${account.id}/drafts`]) {
       expect((await callRoute(app, ['get', path])).status, path).toBe(200);
     }
   });

@@ -4,39 +4,26 @@
  * Use when: The sidebar apps section.
  */
 
-import { useState, useEffect } from 'react';
-import * as api from '../services/api';
-import socket from '../services/socket';
+import { useMemo } from 'react';
+import { getApps } from '../services/apiApps.js';
+import { useSocketResource } from './useSocketResource';
 
-// Sidebar apps list: load on mount and refresh whenever the server emits
-// `apps:changed`. Archived apps are filtered out and the rest sorted by name.
-// The default is the cheap navigation projection. A detail-oriented consumer
-// can opt into the frozen full list with includeDetails without changing the
-// hook's socket refresh behavior.
+const APPS_EVENTS = ['apps:changed'];
+const NO_APPS = [];
+
+// Archived apps are filtered out and the rest sorted by name. The default is
+// the cheap navigation projection; a detail-oriented consumer can opt into the
+// frozen full list with includeDetails. Reconnect, tab-show and burst
+// reconciliation come from useSocketResource.
 export function useSidebarApps({ includeDetails = false } = {}) {
-  const [apps, setApps] = useState([]);
-  useEffect(() => {
-    let cancelled = false;
-    const fetchApps = () => {
-      api.getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) })
-        .then((result) => {
-          if (cancelled) return;
-          setApps((result || [])
-            .filter((a) => !a.archived)
-            .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
-        })
-        .catch((err) => {
-          console.warn(`⚠️ Layout: getApps refresh failed: ${err?.message || err}`);
-        });
-    };
-    fetchApps();
-    socket.on('apps:changed', fetchApps);
-    socket.on('connect', fetchApps);
-    return () => {
-      cancelled = true;
-      socket.off('apps:changed', fetchApps);
-      socket.off('connect', fetchApps);
-    };
-  }, [includeDetails]);
-  return apps;
+  const { data } = useSocketResource(
+    async () => {
+      const result = await getApps({ silent: true, ...(includeDetails ? {} : { view: 'nav' }) });
+      return (result || [])
+        .filter((a) => !a.archived)
+        .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    },
+    { events: APPS_EVENTS, resourceKey: includeDetails },
+  );
+  return useMemo(() => data ?? NO_APPS, [data]);
 }

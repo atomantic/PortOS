@@ -41,14 +41,10 @@ vi.mock('../lib/errorHandler.js', () => ({ errorEvents: { on: vi.fn((...args) =>
 vi.mock('./autoFixer.js', () => ({ handleErrorRecovery: vi.fn() }));
 vi.mock('./pm2Standardizer.js', () => ({ analyzeApp: vi.fn(), createGitBackup: vi.fn(), applyStandardization: vi.fn(), runStandardizeFlow: vi.fn(), standardizeRefusalFor: vi.fn(() => null) }));
 vi.mock('./notifications.js', () => ({ notificationEvents: { on: vi.fn() }, getNotifications: vi.fn(async () => []) }));
-vi.mock('./agentPersonalities.js', () => ({ agentPersonalityEvents: { on: vi.fn() } }));
-vi.mock('./platformAccounts.js', () => ({ platformAccountEvents: { on: vi.fn() } }));
 vi.mock('./updateChecker.js', () => ({ updateEvents: { on: vi.fn() } }));
 // Pin the bundle hash so the assertion does not depend on whether a dist
 // happens to exist in the checkout the suite runs from.
 vi.mock('../lib/buildId.js', () => ({ getBuildId: vi.fn(() => 'test-build-id') }));
-vi.mock('./automationScheduler.js', () => ({ scheduleEvents: { on: vi.fn() } }));
-vi.mock('./agentActivity.js', () => ({ activityEvents: { on: vi.fn() } }));
 vi.mock('./digital-twin-meta.js', () => ({ digitalTwinEvents: { on: vi.fn((...args) => queueListeners.twin.push(args)) } }));
 vi.mock('./brainStorage.js', () => ({ BRAIN_ENTITY_TYPES: ['links', 'inbox', 'memories'], brainEvents: { on: vi.fn((...args) => queueListeners.brain.push(args)) } }));
 vi.mock('./moltworldWs.js', () => ({ moltworldWsEvents: { on: vi.fn() } }));
@@ -780,8 +776,6 @@ describe('socket.js — initSocket', () => {
   });
 
   it('broadcasts bounded queue and checkpoint invalidations', () => {
-    trainingEvents.emit('dataset:changed', { datasetId: 'example-dataset', privateRecord: 'must not be forwarded' });
-    expect(io.emitted).toContainEqual(['training:dataset:changed', { datasetId: 'example-dataset' }]);
     mediaJobEvents.emit('changed', { privateRecord: 'must not be forwarded' });
     trainingEvents.emit('checkpoints:changed', { runId: 'example-run', privateRecord: 'must not be forwarded' });
     expect(io.emitted).toContainEqual(['media-jobs:changed', {}]);

@@ -285,9 +285,12 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       : !project.composition?.document ? 'Start from the template or import a composition document first' : '';
 
   // Determine the blocker reason for display
+  // The director's own render needs only a technically sound storyboard; approvals are advice here.
+  // A server that does not report `renderable` still gates on the approvals.
+  const renderable = readiness?.renderable ?? readiness?.readyForProduction;
   let blockerReason = '';
-  if (!readiness?.readyForProduction) {
-    blockerReason = 'Approve the current visual guide and timed storyboard first';
+  if (!renderable) {
+    blockerReason = readiness?.storyboard?.technicalProblems?.[0] || 'Approve the current visual guide and timed storyboard first';
   } else if (eidoverseMode && eidoverseBlocked) {
     blockerReason = eidoverseBlocked;
   } else if (blenderMode && blenderBlocked) {
@@ -315,7 +318,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
     );
   }
 
-  const isDisabled = !readiness?.readyForProduction || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : blenderMode ? !!blenderBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
+  const isDisabled = !renderable || renderJob.active || (eidoverseMode ? !!eidoverseBlocked : blenderMode ? !!blenderBlocked : documentMode ? !!documentBlocked : codeMode ? !codeReady : (sceneCount === 0 || readySceneCount !== sceneCount));
 
   return (
     <div className="space-y-1">
@@ -325,6 +328,9 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       </button>
       {isDisabled && blockerReason && (
         <p className="text-xs text-port-text-muted">{blockerReason}</p>
+      )}
+      {renderable && readiness?.readyForProduction === false && (
+        <p className="text-xs text-port-text-muted" data-testid="approval-advice">The art or storyboard approval is not current. You can still render; runs that start themselves wait for it.</p>
       )}
       {finalCurrent && (
         <p className="text-xs text-port-text-muted" data-testid="final-render-current">Final render is current.</p>

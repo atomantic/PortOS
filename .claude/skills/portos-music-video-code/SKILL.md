@@ -109,3 +109,7 @@ manual documents can import it. Generated spatial sections receive
 Render a seven-dish parabolic row at dusk from inside, outside and rim-level
 views. Verify visible rim thickness, clear footprints, hidden-edge occlusion,
 and ink with DOF/bloom/grade enabled and disabled before accepting a candidate.
+
+## Review and publication authority
+
+**Creative review and public publication are separate.** Configured, authenticated agents may create music videos, review art/storyboards/proofs, resolve feedback, render final files and prepare drafts without per-approval prompts; review decisions bind to exact revisions and genuine inspection evidence with server-derived audit identity. Only public Suno publication and social-media posting need the human. Provider permissions, quotas, budgets and purchase authorization still apply.

@@ -17,19 +17,9 @@ export function normalizeIdentifier(value) {
 }
 
 /**
- * Normalize a phone handle to a stable E.164-ish key so a person's stored phone
- * matches an iMessage/Signal handle (`chat.db` stores handles as either an email
- * or an E.164 phone like `+15551234567`). Deterministic, no external library:
- *
- *   - strip every character except digits and a leading `+`;
- *   - a value that already carries a `+` country code passes through as `+<digits>`;
- *   - a bare 11-digit US number starting with `1` gets a `+` (`15551234567` → `+15551234567`);
- *   - a bare 10-digit US number is assumed NANP and prefixed `+1` (`5551234567` → `+15551234567`);
- *   - anything else (already-international bare digits, short codes) is returned as
- *     `+<digits>` so two spellings of the same number still collide.
- *
- * Returns `''` when there is no usable digit sequence. An `@`-bearing value is NOT
- * a phone — callers route those through `normalizeIdentifier` (email path) instead.
+ * Normalize a phone handle to a stable E.164-ish key so a stored phone matches an iMessage/Signal handle (`chat.db` stores an email or an E.164 phone). Deterministic, no library: strip all but digits and a leading `+`;
+ * a `+` country code passes through as `+<digits>`; a bare 11-digit US number starting with `1` and a bare 10-digit number (assumed NANP, `+1`) become `+1…`; anything else becomes `+<digits>` so two spellings still collide.
+ * Returns `''` with no usable digits. An `@`-bearing value is NOT a phone; callers route it through `normalizeIdentifier`.
  */
 export function normalizePhone(value) {
   if (value == null) return '';
@@ -44,11 +34,7 @@ export function normalizePhone(value) {
   return `+${digits}`;
 }
 
-/**
- * Classify a raw handle (from an iMessage/Signal `chat.db` `handle.id`, or a
- * calendar/message counterpart) into `{ email, phone }` — exactly one is set.
- * A value containing `@` is an email; otherwise it's treated as a phone.
- */
+/** Classify a raw handle (iMessage/Signal `chat.db` `handle.id`, or a calendar/message counterpart) into `{ email, phone }`, exactly one set: a value containing `@` is an email, otherwise a phone. */
 export function identityFromHandle(handle) {
   const raw = handle == null ? '' : String(handle).trim();
   if (!raw) return {};
@@ -58,10 +44,8 @@ export function identityFromHandle(handle) {
 }
 
 /**
- * Build lookup indexes from a list of tribe people. Returns
- * `{ byIdentifier: Map<email, personId>, byPhone: Map<e164, personId>, byName: Map<name, personId[]> }`.
- * The first person to claim an identifier/phone wins (they're meant to be unique
- * to one person); names collect every owner so ambiguity is detectable.
+ * Build lookup indexes from tribe people: `{ byIdentifier: Map<email, personId>, byPhone: Map<e164, personId>, byName: Map<name, personId[]> }`.
+ * The first person to claim an identifier/phone wins (meant to be unique); names collect every owner so ambiguity is detectable.
  */
 export function buildPersonMatchIndex(people = []) {
   const byIdentifier = new Map();
@@ -87,10 +71,7 @@ export function buildPersonMatchIndex(people = []) {
   return { byIdentifier, byPhone, byName };
 }
 
-/**
- * Resolve a single `{ email, phone, name }` identity to a personId, or `null`.
- * Email/handle wins, then phone (E.164-normalized), then exact unique name.
- */
+/** Resolve one `{ email, phone, name }` identity to a personId or `null`: email/handle, then phone (E.164), then exact unique name. */
 export function matchPerson(identity, index) {
   if (!identity || !index) return null;
   const email = normalizeIdentifier(identity.email);
@@ -105,13 +86,7 @@ export function matchPerson(identity, index) {
   return null;
 }
 
-/**
- * Resolve many identities (mixed `{ email, phone, name }` objects or bare
- * email/handle strings) to a de-duplicated Set of personIds. A single
- * event/message that involves the same tracked person twice (organizer +
- * attendee) yields one id. A bare string is classified as email-or-phone via
- * `identityFromHandle`, so a raw `+15551234567` handle resolves by phone.
- */
+/** Resolve many identities (`{ email, phone, name }` objects or bare handle strings, classified via `identityFromHandle`) to a de-duplicated Set of personIds (organizer + attendee yield one id). */
 export function matchPeople(identities = [], index) {
   const ids = new Set();
   if (!index) return ids;
@@ -125,56 +100,26 @@ export function matchPeople(identities = [], index) {
 }
 
 // ---------------------------------------------------------------------------
-// Network-scoped identity axis (#34, decided on #10) — the `tribe_identities`
-// table's (kind, network, handle) key. This is a THIRD axis, deliberately
-// separate from identityFromHandle above: identityFromHandle classifies a bare
-// string of unknown provenance (an iMessage/Signal `chat.db` handle) by
-// testing for `@`, which is exactly what makes it misclassify a Matrix-style
-// id like `@discord_123:beeper.com` as an email (#15 — closed as
-// "not reachable from any live iMessage/Signal caller", but explicitly
-// deferred to this identity work rather than fixed in place).
-//
-// The functions below never see a raw source_user_id / Matrix id — callers
-// pass an already-scoped Beeper `handle` value (`User.phoneNumber` or
-// `User.username`, never `User.id`), so the `@`-vs-Matrix collision does not
-// apply here. What DOES apply, and what these functions guard against, is
-// #15's other finding: a digit-bearing (but non-phone) handle must never
-// collapse into a fabricated E.164 key. `classifyNetworkHandle` only takes the
-// phone branch when the value contains NO letters at all — a plausible
-// phone-shaped string — never merely "has enough digits".
+// Network-scoped identity axis (#34, decided on #10): the `tribe_identities` (kind, network, handle) key, a THIRD axis separate from identityFromHandle, which classifies a bare string of unknown
+// provenance by testing for `@` and so misclassifies a Matrix-style id like `@discord_123:beeper.com` as an email (#15, deferred to this work). These functions only see an already-scoped Beeper `handle`
+// (`User.phoneNumber` or `User.username`, never `User.id`), so that collision doesn't apply; what does is #15's other finding: a digit-bearing non-phone handle must never collapse into a fabricated
+// E.164 key. `classifyNetworkHandle` takes the phone branch only when the value contains NO letters, never merely "has enough digits".
 // ---------------------------------------------------------------------------
 
-// Lowercase, trim, strip a leading '@' — the normalization #10 specifies for
-// a network handle before it reaches tribe_identities.
+// Lowercase, trim, strip a leading '@' (the normalization #10 specifies before tribe_identities).
 export function normalizeNetworkHandle(value) {
   if (value == null) return '';
   return String(value).trim().toLowerCase().replace(/^@+/, '');
 }
 
-// A string is phone-SHAPED only when, after stripping spaces/hyphens/
-// parens/dots and an optional leading '+', every remaining character is a
-// digit. Any letter (a Discord/Slack/X username, "user5550100199") takes the
-// 'handle' branch instead — the #15 hazard, guarded here rather than reusing
-// normalizePhone's bare "strip everything but digits" behavior blind to
-// letters.
+// Phone-SHAPED only when, after stripping spaces/hyphens/parens/dots and an optional leading '+', every character is a digit; any letter ("user5550100199") takes the 'handle' branch (the #15 hazard).
 const PHONE_SHAPE_RE = /^\+?[0-9]+$/;
-// Real-world E.164 numbers run roughly 7-15 digits (a handful of short-country
-// numbers, e.g. some Pacific island plans, are as short as 7). A shorter
-// all-digit token (a PIN-like username) is refused as a phone rather than
-// fabricating an implausible key — residual ambiguity for a genuinely long
-// all-digit non-phone id (a full Discord snowflake) is an accepted,
-// documented limit: nothing upstream is expected to feed one through `handle`
-// (source_user_id carries those, and is never routed through this function).
+// E.164 numbers run ~7-15 digits (some Pacific island plans are 7). A shorter all-digit token (PIN-like username) is refused as a phone. Residual ambiguity for a long all-digit non-phone id
+// (a Discord snowflake) is an accepted limit: nothing upstream feeds one through `handle` (source_user_id carries those).
 const MIN_PHONE_DIGITS = 7;
 const MAX_PHONE_DIGITS = 15;
 
-/**
- * Classify an already network-scoped Beeper handle (`User.phoneNumber` or
- * `User.username` — never a bare `User.id` / Matrix id) into the
- * `tribe_identities` `{ kind, handle }` shape, or `null` for a blank value.
- * `kind` is `'phone'` (handle normalized E.164 via normalizePhone) or
- * `'handle'` (lowercased/trimmed/`@`-stripped username).
- */
+/** Classify an already network-scoped Beeper handle (never a bare `User.id` / Matrix id) into the `tribe_identities` `{ kind, handle }` shape, or `null` when blank: `'phone'` (E.164 via normalizePhone) or `'handle'` (lowercased, trimmed, `@`-stripped). */
 export function classifyNetworkHandle(value) {
   const raw = value == null ? '' : String(value).trim();
   if (!raw) return null;
@@ -190,35 +135,20 @@ export function classifyNetworkHandle(value) {
   return handle ? { kind: 'handle', handle } : null;
 }
 
-// ---------------------------------------------------------------------------
-// Soft-delete parity — a `tribe_person_id` cache column reads as "linked"
-// consistently everywhere a beeper_participants row is shaped.
-// ---------------------------------------------------------------------------
+// Soft-delete parity: a `tribe_person_id` cache column reads as "linked" consistently wherever a beeper_participants row is shaped.
 
 /**
- * A `beeper_participants.tribe_person_id` cache column, plus the joined
- * `tribe_people.deleted` flag it was read alongside, collapsed to ONE answer.
- * `tribe.deletePerson` is a SOFT delete — it never fires the FK's ON DELETE
- * CASCADE — so the raw column can go on pointing at a person who no longer
- * counts as one. Every reader of a participant row (the conversation/list
- * shaper in `services/beeperConversations.js`, and `services/beeperTribe.js`'s
- * own row shaper) calls this SAME function so a soft-deleted link reads as
- * unlinked everywhere at once: `null`, never a dead id with no re-link
- * affordance in the UI. Extracted here rather than duplicated in both
- * services precisely because two independent copies had already drifted —
- * one nulled the id, the other did not.
+ * A `beeper_participants.tribe_person_id` cache column plus the joined `tribe_people.deleted` flag, collapsed to ONE answer. `tribe.deletePerson` is a SOFT delete (the FK's ON DELETE CASCADE never fires),
+ * so the raw column can point at a person who no longer counts. Both row shapers (`services/beeperConversations.js`, `services/beeperTribe.js`) call this so a soft-deleted link reads as unlinked everywhere (`null`,
+ * never a dead id with no re-link affordance); extracted because two copies had drifted (one nulled the id, the other did not).
  */
 export function resolveLinkedPersonId(tribePersonId, tribePersonDeleted) {
   return tribePersonId && !tribePersonDeleted ? tribePersonId : null;
 }
 
 /**
- * The idempotency key a calendar event carries on `tribe_touchpoints.dedupe_key`.
- * ONE builder for both producers — the sync auto-logger (`calendarSync.js`) and
- * the manual "log this event" route (`tribe.createCalendarTouchpoint`) — so a
- * hand-logged event and a synced one collide on the unique index instead of
- * both inserting. Keyed on the provider id when present, matching the cache's
- * `externalId || id` convention. Returns null when the event has no usable id.
+ * The idempotency key a calendar event carries on `tribe_touchpoints.dedupe_key`: ONE builder for the sync auto-logger (`calendarSync.js`) and the manual route (`tribe.createCalendarTouchpoint`) so a hand-logged
+ * and a synced event collide on the unique index. Keyed on the provider id when present (the cache's `externalId || id` convention); null when the event has no usable id.
  */
 export function calendarTouchpointDedupeKey(accountId, event) {
   const eventKey = event?.externalId || event?.id;

@@ -508,7 +508,62 @@ export const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
   // #16084 moved the module's catalog row into its header comment; code unchanged.
   'fdd1e93223f14339dab56e95a79844b5926f799b1070ab8df38419332e447993',
 ]);
+// Earlier shipped copies of the helper files a stock document carries beside its engine.
+// A copy with one of these digests is a stale shipped file, not an authored one, and an
+// engine update replaces it so the document still matches the shipped template.
+const STALE_SHIPPED_LYRIC_TYPE_JS = new Set([
+  'c82298cb8f071974cf417339522748051d034303721ddbe12e5167c93a24df7f',
+  '92b3a82171a90d5bf66842584bdb95e6e24f726b77b04de196c7376123f93822',
+  'c6c45a4919987a7ff90fb22715b16957dc7035f6b445648131200f8ca130e286',
+  '35dfe8c1e5a9be5f240cab306857fa48115dcedcf33b0f81d5e6c726be930cf5',
+  '1aa9ff1d6c02e50d9c7bef1fefb3afb610f7c2018a2e59305c9aadac40862cfa',
+  '837cb2839c93ae8bc5d0372918790b32d3afaae7fbee4cec0a657af1d3e9d49a',
+  'd5689550f2f30acef76c807b6fc04e0cd4000adf93b75ea219a3de922233dc02',
+  'ff366d59be6489808a82ea72bf7a85e02ae7d1865762347ff51c3cc7b85544b8',
+  'ee8e37c9d0c23268949b2c7ff2c0647d20aeeeacc698835ce874440b4a6acb10',
+  'cd77d73d5d6f5a0ac5359014f4cf460b6b81c52a85f033c671de2a44e953ed80',
+  '2cc217941dde3c1013917ba7c8e787d7b89ac1361bc5171df81746960f007524',
+  'f2f2cc5094a6407226b5f5d62c6788ccc7220a8e13ad6b81415422d3efa3f961',
+  '2a9fc1fd8d983a54b50f373d47d6b83fa1b984a189922ba3e5f401f16dd2c9e2',
+  '40c3f48c6eebfc8dff62c48c0a0bf70269efaf81a97e004e79acf72bc96fd414',
+]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
+
+// The helper files documentPreviewPlayback compares byte for byte, with where the shipped copy lives.
+// The still-effect module only ever grew its exports, so every earlier shipped copy is replaceable.
+const STOCK_HELPERS = [
+  { rel: 'cameraRig.js', source: new URL('./documentTemplates/layered/cameraRig.js', import.meta.url), stale: new Set() },
+  { rel: 'lyricType.js', source: new URL('./documentTemplates/shared/lyricType.js', import.meta.url), stale: STALE_SHIPPED_LYRIC_TYPE_JS },
+  { rel: 'lyricType.css', source: new URL('./documentTemplates/shared/lyricType.css', import.meta.url), stale: new Set() },
+  { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideoImageEffects.js', import.meta.url),
+    stale: new Set([...UPGRADABLE_IMAGE_EFFECT_MODULES, ...COMPATIBLE_IMAGE_EFFECT_MODULES]) },
+];
+
+/** Whether `bytes` is an earlier shipped copy of the helper `rel`, which an engine update replaces. */
+export const isStaleShippedHelper = (rel, bytes) => STOCK_HELPERS.find(helper => helper.rel === rel)?.stale.has(engineDigest(bytes)) === true;
+
+/**
+ * Helpers of a stock layered document that differ from the shipped ones:
+ * `refresh` holds the shipped bytes for those that are an earlier shipped copy
+ * (safe to replace), `custom` names those that are neither (authored; kept).
+ * Only a template-shaped entrypoint is judged: an authored page may rely on its helpers' exact bytes.
+ */
+async function staleStockHelpers(files) {
+  const refresh = new Map();
+  const custom = [];
+  const index = files.find(file => file.rel === 'index.html');
+  const template = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
+  if (!index || engineDigest(withLayeredModuleTags(await readFile(index.abs, 'utf8'))) !== engineDigest(withLayeredModuleTags(template))) return { refresh, custom };
+  for (const { rel, source, stale } of STOCK_HELPERS) {
+    const file = files.find(entry => entry.rel === rel);
+    if (!file) continue;
+    const shipped = await readFile(source);
+    const prior = await readFile(file.abs);
+    if (engineDigest(prior) === engineDigest(shipped)) continue;
+    if (stale.has(engineDigest(prior))) refresh.set(rel, shipped); else custom.push(rel);
+  }
+  return { refresh, custom };
+}
 
 /** Whether `engine` (engine.js bytes) is an older shipped layered engine that "Update layered engine" can replace. */
 export const isUpgradableLayeredEngine = engine => UPGRADABLE_LAYERED_ENGINES.has(engineDigest(engine));
@@ -551,13 +606,16 @@ export function upgradeDocumentEngine(projectId, directory) {
     const referenceFile = generated && files.find(file => file.rel === 'engine-reference.js');
     const reference = referenceFile ? await readFile(referenceFile.abs) : null;
     const nextEngine = generated && reference ? generatedCanvasPlaybackEngine(shipped) : shipped;
-    if (engineDigest(prior) === engineDigest(nextEngine)) return { project, document: project.composition.document, changed: false };
-    if (generated && reference ? !generatedLayeredEngineMatches(prior, reference) : !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior))) {
+    const engineCurrent = engineDigest(prior) === engineDigest(nextEngine);
+    // A current engine can still sit beside stale shipped helpers (they are what the preview compares).
+    const { refresh, custom: customHelpers } = generated ? { refresh: new Map(), custom: [] } : await staleStockHelpers(files);
+    if (engineCurrent && refresh.size === 0) return { project, document: project.composition.document, changed: false, customHelpers };
+    if (!engineCurrent && (generated && reference ? !generatedLayeredEngineMatches(prior, reference) : !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(prior)))) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const imageEffects = files.find(file => file.rel === 'musicVideoImageEffects.js');
     const shippedImageEffects = await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
-    if (imageEffects) {
+    if (imageEffects && !engineCurrent) {
       const digest = engineDigest(await readFile(imageEffects.abs));
       if (digest !== engineDigest(shippedImageEffects) && !UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest) && !COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest)) {
         throw refuse('The still-effect module was customized or is not a supported shipped version — preserve it and revise it explicitly before upgrading', 'COMPOSITION_ENGINE_CUSTOM', 409);
@@ -565,6 +623,7 @@ export function upgradeDocumentEngine(projectId, directory) {
     }
     const loaded = await Promise.all(files.map(async file => ({
       rel: file.rel, data: file.rel === 'engine.js' ? nextEngine
+        : refresh.has(file.rel) ? refresh.get(file.rel)
         : generated && file.rel === 'engine-reference.js' ? shipped
         : file.rel === 'musicVideoImageEffects.js' && UPGRADABLE_IMAGE_EFFECT_MODULES.has(engineDigest(await readFile(file.abs)))
           ? shippedImageEffects : await readFile(file.abs),
@@ -575,7 +634,7 @@ export function upgradeDocumentEngine(projectId, directory) {
     const index = loaded.find(file => file.rel === 'index.html');
     if (index) index.data = Buffer.from(withLayeredModuleTags(index.data.toString('utf8')));
     const result = await storeVersionNow(projectId, loaded, project.composition.document.source || { kind: 'directory', name: null }, { verifyCurrent });
-    return { ...result, changed: true };
+    return { ...result, changed: true, customHelpers };
   });
 }
 
@@ -629,7 +688,7 @@ export async function documentNativePlayback(project) {
   if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return { native: false, reason: 'no-document' };
   const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
   const result = await shippedLayeredDocument(resolveDocumentDirectory(project.composition.document));
-  if (!result.shipped) return { native: false, reason: result.reason };
+  if (!result.shipped) return { native: false, reason: result.reason, ...(result.file ? { file: result.file } : {}), ...(result.upgradable ? { upgradable: true } : {}) };
   const { buildDocumentData, documentRenderClock, documentSongDuration, documentAspect, DOCUMENT_FRAME_SIZES } = await import('./documentRender.js');
   const durationSec = documentSongDuration(project);
   const data = buildDocumentData(project, {

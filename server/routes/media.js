@@ -23,14 +23,6 @@ router.get('/devices', asyncHandler(async (req, res) => {
   res.json(devices);
 }));
 
-// Get current streaming status
-router.get('/status', (req, res) => {
-  res.json({
-    video: mediaService.isVideoStreaming(),
-    audio: mediaService.isAudioStreaming()
-  });
-});
-
 // Start media streaming
 router.post('/start', asyncHandler(async (req, res) => {
   const { videoDeviceId = '0', audioDeviceId = '0', video = true, audio = true } = validateRequest(startMediaSchema, req.body);

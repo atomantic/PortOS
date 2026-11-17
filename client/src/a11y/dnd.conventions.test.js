@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * Accessibility conventions: dnd-kit keyboard sensors and native drag-and-drop.
  * Shared scanner: `src/test/a11yScan*.js`; rule overview in `a11yScanCore.js`.
@@ -238,32 +239,4 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, maskedSourceOf(file)));
     expect(offenders, `A JSX draggable attribute other than draggable={false} — native HTML5 drag-and-drop has no keyboard path. Migrate to dnd-kit (useDraggable/useDroppable + a KeyboardSensor); components/brain/links/bucketDnd.js is a worked multi-container example:\n${offenders.join('\n')}`).toEqual([]);
   });
-
-  // --- routed-page top-level heading (#7245) -------------------------------
-  //
-  // A routed page with no <h1> inverts the document outline: heading
-  // navigation opens at <h2>/<h3> — or worse, a nested page mounts a second
-  // <h1> beside the shell's — which fails WCAG 1.3.1/3.2.4 and was the exact
-  // defect #7245 fixed on the five audited routes.
-  //
-  // "Supplies a heading" means the routed element's file renders an <h1> or the
-  // shared <PageHeader> (which owns the h1), or forwards the question through
-  // the idioms this tree writes for routed components: a re-export barrel
-  // (`export { X } from './X'`, `export { default } from './Page'`), or a thin
-  // page that renders an imported component carrying the heading
-  // (Agents -> AgentList, AppDetail -> AppDetailView).
-  //
-  // Two carve-outs keep the question honest rather than broad:
-  //   - a nested <Route> inherits the heading from its ancestor's element —
-  //     the MediaGen shell owns /media/*'s <h1>, so a tab page mounted in its
-  //     outlet must not add a second;
-  //   - the lists below. HEADINGLESS_ROUTE_ELEMENTS is elements that render no
-  //     page body of their own — the app chrome, a redirect-only element, the
-  //     drawer-only deep link. ROUTE_HEADING_GAP_ALLOWLIST is the pre-existing
-  //     debt: pages whose hand-rolled header still stops below <h1>, on routes
-  //     the #7245 sweep never reached. Each row is a real defect — normalize
-  //     the page onto PageHeader (Ambient: an sr-only h1 — it is deliberately
-  //     chromeless) and delete the row; the stale-entry rule keeps the list
-  //     honest.
-
 });

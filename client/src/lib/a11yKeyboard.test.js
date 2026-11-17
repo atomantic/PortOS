@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { onActivateKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, isFocusEscapeKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
+import { onActivateKeyDown, clickableProps, isButtonActivation, isPressKey, isEditableTarget, shouldIgnoreGlobalKey, isPushToTalkKey, isFocusEscapeKey, noPointerFocusSurfaceProps } from './a11yKeyboard.js';
 
 describe('onActivateKeyDown', () => {
   it('returns undefined when handler is not a function', () => {
@@ -203,6 +203,36 @@ describe('shouldIgnoreGlobalKey', () => {
     openDialog();
     expect(shouldIgnoreGlobalKey({ key: 'a', target: plainTarget })).toBe(true);
     expect(shouldIgnoreGlobalKey({ key: 'a', target: plainTarget }, { enabledInDialog: true })).toBe(false);
+  });
+});
+
+// Push-to-talk's own option set, pinned here because two listeners share it:
+// the voice widget, and the gate that answers the hotkey while its chunk loads.
+describe('isPushToTalkKey', () => {
+  const plainTarget = { tagName: 'DIV', closest: () => null };
+  const buttonTarget = { tagName: 'BUTTON', closest: (sel) => (sel.includes('button') ? {} : null) };
+
+  afterEach(() => {
+    document.querySelectorAll('[aria-modal="true"]').forEach((el) => el.remove());
+  });
+
+  it('matches only the configured key code', () => {
+    expect(isPushToTalkKey({ code: 'Space', target: plainTarget }, 'Space')).toBe(true);
+    expect(isPushToTalkKey({ code: 'KeyV', target: plainTarget }, 'Space')).toBe(false);
+    expect(isPushToTalkKey({ code: 'KeyV', target: plainTarget }, 'KeyV')).toBe(true);
+  });
+
+  it('stays reachable in a chord and while a dialog is open', () => {
+    const dialog = document.createElement('div');
+    dialog.setAttribute('aria-modal', 'true');
+    document.body.appendChild(dialog);
+    expect(isPushToTalkKey({ code: 'Space', ctrlKey: true, target: plainTarget }, 'Space')).toBe(true);
+  });
+
+  it('stands down for typing, auto-repeat and Space on a focused button', () => {
+    expect(isPushToTalkKey({ code: 'Space', target: { tagName: 'SELECT' } }, 'Space')).toBe(false);
+    expect(isPushToTalkKey({ code: 'Space', repeat: true, target: plainTarget }, 'Space')).toBe(false);
+    expect(isPushToTalkKey({ code: 'Space', target: buttonTarget }, 'Space')).toBe(false);
   });
 });
 

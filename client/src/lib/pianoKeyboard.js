@@ -30,7 +30,6 @@ export const BLACK_KEY_HEIGHT_RATIO = 0.62;
  * Pad a set of MIDI numbers out to whole C–B octaves, with a minimum span, so
  * the keyboard always starts on a C and ends on a B and never collapses to a
  * sliver for a one-note part.
- *
  * @param {number[]} midis — note numbers in play (rests already filtered out).
  * @param {object} [opts]
  * @param {number} [opts.minSemitones=24] — minimum keyboard span (2 octaves).
@@ -57,7 +56,6 @@ export const keyboardRange = (midis, { minSemitones = 24 } = {}) => {
  * Build the pixel layout for a keyboard spanning [lowMidi, highMidi] across a
  * given width. White keys tile edge-to-edge; black keys are overlaid centered
  * on the boundary between the two white keys they sit between.
- *
  * @param {object} args
  * @param {number} args.lowMidi — first (white) key, a C from keyboardRange.
  * @param {number} args.highMidi — last (white) key, a B from keyboardRange.

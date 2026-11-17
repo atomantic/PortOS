@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
+import { PINNED_DB_IMAGE } from './lib/dbImage.js';
 
 const script = fileURLToPath(new URL('./ci-install-db-tools.sh', import.meta.url));
 const PACKAGE_FILE = 'libcodec2_1_amd64.deb';
@@ -199,8 +200,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   });
 
   it('installs the client major of the DB job\'s PostgreSQL service', () => {
-    const workflow = readFileSync(fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url)), 'utf8');
-    const serviceMajor = workflow.match(/image: pgvector\/pgvector:pg(\d+)@/)?.[1];
+    // The DB service image is the compose pin (ci.yml's impact job prints it).
+    const serviceMajor = PINNED_DB_IMAGE.match(/:pg(\d+)@/)?.[1];
     expect(serviceMajor).toBeTruthy();
     // Both jobs install through the db-tools action; expanded, its steps carry
     // each caller's `pg-major` input.

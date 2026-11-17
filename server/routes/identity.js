@@ -27,12 +27,6 @@ import * as goalCalendarScheduler from '../services/goalCalendarScheduler.js';
 
 const router = Router();
 
-// Passed through to the calendar sync's own date filter.
-const calendarWindowQuerySchema = z.object({
-  startDate: z.string().max(40).optional(),
-  endDate: z.string().max(40).optional(),
-});
-
 // =============================================================================
 // IDENTITY STATUS
 // =============================================================================
@@ -221,13 +215,6 @@ router.delete('/goals/:id/calendars/:subcalendarId', asyncHandler(async (req, re
     throw new ServerError('Goal not found', { status: 404, code: 'NOT_FOUND' });
   }
   res.json(goal);
-}));
-
-// GET /api/digital-twin/identity/goals/:id/calendar-events — Get matching events
-router.get('/goals/:id/calendar-events', asyncHandler(async (req, res) => {
-  const { startDate, endDate } = validateRequest(calendarWindowQuerySchema, req.query);
-  const events = await identityService.getGoalCalendarEvents(req.params.id, startDate, endDate);
-  res.json(events);
 }));
 
 // PUT /api/digital-twin/identity/goals/:id/progress — Update progress percentage

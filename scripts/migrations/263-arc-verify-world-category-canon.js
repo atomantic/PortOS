@@ -1,22 +1,8 @@
 /**
- * Show the arc verifier the world canon it is already judging groundedness
- * against.
+ * Show the arc verifier the world canon it is already judging groundedness against.
  *
- * A Universe Builder world defines its factions, locations, vehicles, artifacts,
- * and interfaces as `categories` variations. The named-canon trunks the verify
- * prompt rendered (`worldCanonText` — characters/places/objects) stay EMPTY until
- * prose mints entities into them, so the verifier was told "here is the world
- * canon" and handed a list that omitted the entire built world. It then flagged
- * locked faction cards as invented, un-canonized, and "absent from the World
- * Canon" — findings no arc edit can close, because the entity was grounded all
- * along.
- *
- * That is a stall, not a nuisance: the foundation gate's structure arm reverts
- * its whole repair whenever `verifyArc` leaves ANY blocker, so one permanent
- * false positive discards every real fix alongside it. The sibling
- * `pipeline-arc-resolve.md` and `pipeline-volume-verify.md` already render this
- * block — only the arc verifier was blind, which is exactly why the verify/
- * resolve pair could never converge.
+ * A Universe Builder world defines its factions, locations, vehicles, artifacts and interfaces as `categories` variations, but the named-canon trunks the verify prompt rendered (`worldCanonText`: characters/places/objects) stay EMPTY until prose mints entities into them, so the verifier was handed a "world canon" omitting the whole built world and flagged locked faction cards as invented/un-canonized, findings no arc edit can close.
+ * That is a stall: the foundation gate's structure arm reverts its whole repair whenever `verifyArc` leaves ANY blocker, so one permanent false positive discards every real fix. The sibling `pipeline-arc-resolve.md` and `pipeline-volume-verify.md` already render this block; only the arc verifier was blind, which is why the verify/resolve pair never converged.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

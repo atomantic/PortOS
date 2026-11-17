@@ -9,19 +9,10 @@ import { PATHS, readJSONFile, expandHome } from '../lib/fileUtils.js';
 const ROOT_DIR = PATHS.root;
 
 /**
- * Get the workspace path for an app, or `null` when it can't be resolved.
- *
- * This used to substitute the PortOS repo root for every failure — registry
- * missing, app not found, app carrying no `repoPath` — which made an
- * unresolvable app indistinguishable from a working one: the agent quietly
- * wrote its files into the PortOS checkout and nothing said otherwise
- * (issue #3180). A downstream existence check can't recover that case either,
- * because the substituted root is a real directory.
- *
- * So this returns an explicit `null` sentinel and lets each caller decide
- * whether "no workspace" is legal for it (per the sentinel-and-validate rule in
- * AGENTS.md — absent must not collapse into a valid-looking value). The reason
- * is logged here, where it's known.
+ * Get the workspace path for an app, or `null` when it can't be resolved (registry missing, app
+ * not found, no `repoPath`). The explicit `null` sentinel (never the PortOS root, which made an
+ * unresolvable app look working, #3180) lets each caller decide whether "no workspace" is legal.
+ * The reason is logged here, where it's known.
  *
  * @returns {Promise<string|null>} the app's repoPath, or null if unresolvable
  */
@@ -42,12 +33,8 @@ export async function getAppWorkspace(appName) {
 
   if (!app) return unresolved(`App '${appName}' not found in apps registry`);
   if (!app.repoPath) return unresolved(`App '${appName}' has no repoPath`);
-  // Expand here, not just at the spawn boundary. Callers do more with this than
-  // spawn into it: agentLifecycle persists it as an agent's `sourceWorkspace`,
-  // and the worktree cleanup/merge paths later hand that value to a child
-  // process as its cwd. Node never shell-expands `~`, so returning the raw
-  // tilde form would let a task start (the spawn path expands) and then strand
-  // its worktree and branch when cleanup runs against a path that doesn't exist.
+  // Expand here, not just at spawn: agentLifecycle persists this as `sourceWorkspace` and worktree
+  // cleanup/merge later uses it as a child's cwd, and Node never shell-expands `~`.
   return expandHome(app.repoPath);
 }
 
@@ -73,16 +60,10 @@ export async function getAppDataForTask(task) {
 }
 
 /**
- * Every managed app that pins an explicit `forgeAccount`, as
- * `[{ repoPath, forgeAccount }]` — empty on the overwhelmingly common install
- * where no app pins one.
- *
- * Forge auth resolves credentials from whatever cwd it was handed (an agent
- * worktree included) and has no app name in scope, so it needs the inverse of
- * `getAppWorkspace`: a path-keyed lookup. Returning only the PINNED apps is what
- * lets that lookup stay free by default — an empty list means forge auth can
- * skip the `git rev-parse` that maps a worktree back to its checkout, so an
- * install that never uses the feature pays one registry read and no subprocess.
+ * Every managed app that pins an explicit `forgeAccount`, as `[{ repoPath, forgeAccount }]`.
+ * Forge auth has only a cwd (an agent worktree included), so it needs this path-keyed inverse of
+ * `getAppWorkspace`; returning only PINNED apps lets forge auth skip the `git rev-parse` worktree
+ * mapping when the list is empty.
  *
  * @returns {Promise<Array<{repoPath: string, forgeAccount: string}>>}
  */
@@ -90,8 +71,7 @@ export async function listForgePinnedApps() {
   const data = await readJSONFile(join(ROOT_DIR, 'data/apps.json'), null);
   if (!data) return [];
   const apps = data.apps || data;
-  // `Object.values` covers both registry shapes — the array format's values are
-  // its elements — so this needs no Array.isArray branch of its own.
+  // `Object.values` covers both registry shapes (array values are its elements).
   return Object.values(apps)
     .filter(app => app?.repoPath && typeof app.forgeAccount === 'string' && app.forgeAccount.trim())
     .map(app => ({ repoPath: expandHome(app.repoPath), forgeAccount: app.forgeAccount.trim() }));

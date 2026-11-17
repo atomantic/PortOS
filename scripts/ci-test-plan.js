@@ -77,26 +77,21 @@ export const shardIndexes = (mode, count) => (
  * Whether a scoped Linux runner fans out across its full-suite shard count.
  *
  * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
- * - Server `related` mode: always. Its import-graph fan-out is unbounded by the
- *   explicit count (#9999: 57 selectors became ~941 files), and scoped server
- *   runs took 6.1 min median / 9.4 p90 on one runner. Each shard repeats
- *   Vitest's related-graph pass on the primary runner.
- *   Client related plans stay on one runner unless over the cap.
- * - Exact-file plans under the cap stay on one runner: they run in seconds.
+ * - A server `related` plan whose measured import reach (`serverReach.selected`,
+ *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
+ *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
+ *   The client has no reach measure, so only the cap applies there.
+ * - Everything else stays on one runner. Record-aware selection
+ *   (`recordedReach` in lib/testMemo.js, #16424) narrows what a selected test
+ *   actually runs; reach is measured, not assumed, so a small graph stays put.
  *
- * Vitest throws when the shard count exceeds the files it resolved
- * (`--shard <count> must be a smaller than count of test files`). Every
- * explicit selector is in the resolved set — `vitest related` selects a test
- * file passed as input — so the floor counts explicit files the Linux runner
- * does not exclude (DB suites run in their own job, browser suites in theirs).
- * Below the floor the runner stays on one shard.
+ * No shard-count floor is needed: the runner slices the selection itself and
+ * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
-const fansOut = (runner, { mode, files }, excludedFiles) => {
-  if (mode === 'skip' || mode === 'full') return false;
-  const runnable = files.filter((path) => !excludedFiles.has(path));
-  if (runnable.length < FULL_SUITE_SHARDS[runner]) return false;
-  return files.length > MAX_TARGETED_TEST_FILES || (runner === 'server' && mode === 'related');
-};
+const fansOut = ({ mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
+  && (files.length > MAX_TARGETED_TEST_FILES || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+
+const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
 
 const DEPENDENCY_MANIFEST_RE = /^(?:package|server\/package|client\/package|autofixer\/package)(?:-lock)?\.json$/;
 
@@ -358,7 +353,7 @@ export const WINDOWS_CONTRACT_TESTS = [
 // where the alternative is reasoning per-scope about what can reach it. The
 // whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
 // a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
-// pregate enforces; a behavioural test that no scan needs does not belong here.
+// hosted CI enforces; a behavioural test that no scan needs does not belong here.
 export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports, so a docs-only PR that documented a removed endpoint
@@ -374,7 +369,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Base-relative: a rename or deletion of a shipped migration touches no file
   // the planner would select for it (#16094).
   'scripts/migrations/migrationFilenames.guard.test.js',
-  'scripts/migrations/shippedPromptHistory.guard.test.js',
   // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
   'scripts/migrations/shippedPromptHashes.guard.test.js',
   // Route policy scans depend on independently changed files (#13224).
@@ -396,6 +390,9 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',
   'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
+  // Size ratchet over rendered claim prompts (#16409): growth comes from edits to any prompt
+  // fragment the claim composers import, which no scope reliably selects it for.
+  'server/services/taskPromptDefaults/claimPromptSize.test.js',
 ];
 
 /**
@@ -433,6 +430,7 @@ const DB_RISK_RULES = [
   /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
   /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
+  /^docker-compose\.yml$/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
   /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,
@@ -565,8 +563,10 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 );
 
 // The narrow CI jobs below observe a small, enumerable input set, so a pull
-// request that touches none of it skips them (non-PR and release-base runs are
-// forced full and always run every one). A gate takes one of two forms:
+// request that touches none of it skips them, and so does a push to `main`
+// whose tree diff against the last green push or schedule run touches none of
+// it (CI_GATED_BASE_SHA), except prompt history (see buildCiTestPlan). Schedule,
+// dispatch, workflow_call and release-base runs always run every one. A gate takes one of two forms:
 // - the head tree's static import closure of the job's entry points, computed
 //   per run so it cannot drift from a hand-kept list, plus the non-module
 //   inputs named by the job's pattern (prompt-history, linux-containment,
@@ -638,6 +638,9 @@ export const MACOS_NATIVE_TESTS = [
 // job installs and loads, and ci.yml plus the setup-server action it installs
 // through, so a workflow edit proves the job runs.
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
+// The `node-minimum` job installs every workspace and runs the runtime gate on
+// the oldest supported Node; only these files can change its answer.
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -889,6 +892,42 @@ const hasWindowsRiskFile = (paths) => paths.some((path) => (
   !isDocumentationOnly(path) && WINDOWS_RISK_RULES.some((rule) => rule.test(path))
 ));
 
+/**
+ * Every FULL_TRIGGER_RULES match in `changed`, each with its Windows relevance
+ * resolved (a manifest through its dependency verdict), plus the verdict notes.
+ */
+function fullTriggersFor(changed, dependencyChanges) {
+  const dependencyVerdicts = [];
+  const fullTriggers = changed
+    .flatMap((path) => FULL_TRIGGER_RULES
+      .filter(({ re }) => re.test(path))
+      .map(({ reason, windowsRelevant }) => {
+        const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
+        if (!scopedToWindows) return { path, reason, windowsRelevant };
+        if (!windowsInstalls(path)) {
+          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
+          return { path, reason, windowsRelevant: false };
+        }
+        if (windowsRelevant === true) return { path, reason, windowsRelevant };
+        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
+        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
+        return { path, reason, windowsRelevant: verdict.escalate };
+      }));
+  return { fullTriggers, windowsNote: dependencyVerdicts.join('; ') };
+}
+
+/**
+ * Whether a diff selects the native Windows contract job: the same answer a
+ * pull request with this diff gets, whatever its primary plan.
+ */
+const windowsSelectionFor = (changed, dependencyChanges) => {
+  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
+  return {
+    windows: fullTriggers.some((trigger) => trigger.windowsRelevant) || hasWindowsRiskFile(changed),
+    windowsNote,
+  };
+};
+
 const skippedRunner = () => ({ mode: 'skip', files: [], sources: [] });
 
 /**
@@ -911,9 +950,10 @@ export const isRouteOnlyAppDiff = (diff) => {
 const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
-  return plan[runner].files.length > MAX_TARGETED_TEST_FILES
-    ? `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`
-    : `; related import graph sharded ${count} ways`;
+  if (plan[runner].files.length <= MAX_TARGETED_TEST_FILES) {
+    return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
+  }
+  return `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
 };
 
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
@@ -952,36 +992,68 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
  * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live, macOS native) runs.
+ * Docker containment live, macOS native, Node minimum) runs.
  *
  * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
  * import closures from collectPlanInputs(); null (the default) runs the job.
+ *
+ * A forced-full plan runs every gated job, except when `gatedChangedFiles` is
+ * an array: a push to `main` whose diff against the last green push or
+ * schedule run is known (`CI_GATED_BASE_SHA`). Then the gated jobs and the
+ * Windows native job are decided from that diff exactly as a pull request
+ * would decide them, while the primary suites stay full. null keeps them all.
+ * Prompt history is the exception: its guard reads every committed prompt
+ * body, so a change reverted between the base and HEAD leaves no trace in a
+ * tree diff yet still needs checking, and the shallow impact clone cannot
+ * walk the intervening commits. It always runs on a forced-full plan.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
     forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null,
-    dockerContainmentLiveInputs = null, serverReach = null,
+    dockerContainmentLiveInputs = null, serverReach = null, trackedFiles = [],
+    gatedChangedFiles = null, gatedDependencyChanges = {},
   } = options;
+  const gatedFull = forceFull && Array.isArray(gatedChangedFiles);
+  const gateFiles = gatedFull ? uniqueSorted(gatedChangedFiles.filter(Boolean)) : plan.changedFiles;
+  // Forced full without a known green base: every gated job runs.
+  const gate = (decide) => (forceFull && !gatedFull) || decide(gateFiles);
   // Informational: names the changed source behind a large related selection
   // (#12285). It never changes what runs.
   const reachNote = !plan.full && plan.server.mode === 'related' ? formatReachSummary(serverReach) : '';
+  let gatedWindows = {};
+  if (gatedFull) {
+    const { windows, windowsNote } = windowsSelectionFor(gateFiles, gatedDependencyChanges);
+    const fields = {
+      windows,
+      windowsMode: windows ? 'files' : 'skip',
+      windowsFiles: windows ? windowsContractTests(new Set(trackedFiles)) : [],
+      windowsNote: [`native jobs gated on ${gateFiles.length} file(s) changed since the last green main run`, windowsNote]
+        .filter(Boolean).join('; '),
+    };
+    gatedWindows = { ...fields, suiteReasons: { ...plan.suiteReasons, windows: suiteReasonsFor({ ...plan, ...fields }).windows } };
+  }
   return {
     ...plan,
+    ...gatedWindows,
     ...(reachNote ? { suiteReasons: { ...plan.suiteReasons, server: `${plan.suiteReasons.server}; ${reachNote}` } } : {}),
+    // A gated push still is not complete-run evidence: ci.yml withholds the
+    // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
+    nativeGated: gatedFull,
     promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
-    linuxContainment: forceFull
-      || touchesJobInputs(plan.changedFiles, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE),
-    supercolliderLive: forceFull
-      || touchesJobInputs(plan.changedFiles, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE),
-    dockerContainmentLive: forceFull
-      || touchesJobInputs(plan.changedFiles, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE),
-    macosNative: forceFull || plan.changedFiles.some((path) => MACOS_NATIVE_PATH_RE.test(path)),
+    linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
+    supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
+    dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
+    macosNative: gate((files) => files.some((path) => MACOS_NATIVE_PATH_RE.test(path))),
+    nodeMinimum: gate((files) => files.some((path) => NODE_MINIMUM_PATH_RE.test(path))),
   };
 }
 
 function buildSuitePlan(changedFiles, {
   trackedFiles = [],
+  // measureRepoImportReach() report; its `selected` count can fan a server
+  // related plan out (see fansOut). null keeps the explicit-selector cap only.
+  serverReach = null,
   forceFull = false,
   forceFullReason = 'full CI requested',
   appRouteOnly = false,
@@ -1020,25 +1092,9 @@ function buildSuitePlan(changedFiles, {
   // (client/vite.config.js) reported ahead of server/index.js, and the App.jsx
   // branch below returning before the triggers are even looked at — which
   // downgraded Windows for an App.jsx PR that also bumped a lockfile.
-  const dependencyVerdicts = [];
-  const fullTriggers = changed
-    .flatMap((path) => FULL_TRIGGER_RULES
-      .filter(({ re }) => re.test(path))
-      .map(({ reason, windowsRelevant }) => {
-        const scopedToWindows = windowsRelevant === 'dependencies' || (windowsRelevant === true && /(?:^|\/)\.npmrc$/.test(path));
-        if (!scopedToWindows) return { path, reason, windowsRelevant };
-        if (!windowsInstalls(path)) {
-          dependencyVerdicts.push(`${path} does not select Windows native contracts: the Windows job does not install that workspace`);
-          return { path, reason, windowsRelevant: false };
-        }
-        if (windowsRelevant === true) return { path, reason, windowsRelevant };
-        const verdict = dependencyChanges[path] ?? escalated('no manifest comparison available');
-        dependencyVerdicts.push(describeDependencyVerdict(path, verdict));
-        return { path, reason, windowsRelevant: verdict.escalate };
-      }));
+  const { fullTriggers, windowsNote } = fullTriggersFor(changed, dependencyChanges);
   const fullTrigger = fullTriggers.at(0);
   const triggersEscalateWindows = fullTriggers.some((trigger) => trigger.windowsRelevant);
-  const windowsNote = dependencyVerdicts.join('; ');
 
   const appCompositionChanged = changed.includes('client/src/App.jsx');
   if (appCompositionChanged && !appRouteOnly) {
@@ -1247,19 +1303,14 @@ function buildSuitePlan(changedFiles, {
     windowsMode,
     windowsFiles: windows ? windowsContractTests(trackedSet) : [],
     windowsSources: [],
-  }, { appRouteOnly, linuxRunnerExcludes: new Set([...dbTests, ...BROWSER_SUITES]) });
+  }, { appRouteOnly, serverReach });
 }
 
-/**
- * The derived fields every plan carries: per-suite reasons and shard matrices.
- *
- * `linuxRunnerExcludes` names selected files the Linux test jobs never run
- * (DB and browser suites have their own jobs); fansOut() keeps them out of the
- * shard-count floor.
- */
-const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) => {
+/** The derived fields every plan carries: per-suite reasons and shard matrices. */
+const finishPlan = (plan, options = {}) => {
+  const reachSelected = serverReachCount(options.serverReach);
   const linuxShards = (runner) => shardIndexes(
-    fansOut(runner, plan[runner], linuxRunnerExcludes) ? 'full' : plan[runner].mode,
+    fansOut(plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {
@@ -1272,7 +1323,7 @@ const finishPlan = (plan, { linuxRunnerExcludes = new Set(), ...options } = {}) 
   return {
     ...plan,
     slashdo: needsSlashdoSubmodule(plan),
-    suiteReasons: suiteReasonsFor({ ...plan, shards }, options),
+    suiteReasons: suiteReasonsFor({ ...plan, shards, reachSelected }, options),
     shards,
   };
 };
@@ -1421,6 +1472,8 @@ export function emitGitHubPlan(plan) {
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
     macos_native: plan.macosNative,
+    node_minimum: plan.nodeMinimum,
+    native_gated: plan.nativeGated,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
     windows_files: JSON.stringify(plan.windowsFiles),
@@ -1555,8 +1608,13 @@ function collectTestDependencies(entries, dependenciesFor) {
  * local caller may supply the complete committed + working-tree path list; in
  * that mode files present but not yet tracked are plan inputs too, while paths
  * deleted from the working tree are deliberately absent from trackedFiles.
+ *
+ * `gatedBaseSha` (forced-full runs only) is a commit whose tree passed a
+ * complete CI run; the path-gated jobs are then decided from the tree diff
+ * against it. A diff that git cannot produce leaves `gatedChangedFiles` null,
+ * which runs every gated job.
  */
-export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cwd = process.cwd() }) {
+export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, gatedBaseSha, cwd = process.cwd() }) {
   const hasChangedFilesOverride = changedFiles !== undefined;
   const collectedChangedFiles = forceFull
     ? []
@@ -1640,13 +1698,14 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
   // tree: HEAD in CI, HEAD plus local edits under pregate). The base commit is
   // inside the depth-2 checkout, so `git show` resolves it; any read failure
   // becomes null, which classifyDependencyChange() treats as escalation.
-  const readAtBase = (path) => {
+  const readAt = (sha, path) => {
     try {
-      return execFileSync('git', ['show', `${baseSha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+      return execFileSync('git', ['show', `${sha}:${path}`], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
     } catch {
       return null;
     }
   };
+  const readAtBase = (path) => readAt(baseSha, path);
   const readInTree = (path) => {
     try {
       return readFileSync(join(cwd, path), 'utf8');
@@ -1676,15 +1735,33 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, cw
     }
   }
 
-  // A forced-full run always runs every gated job, so it skips the walks.
-  const promptHistoryInputs = forceFull ? null : collectPromptHistoryInputs(cwd);
-  const linuxContainmentInputs = forceFull ? null : collectLinuxContainmentInputs(cwd);
-  const supercolliderLiveInputs = forceFull ? null : collectSuperColliderLiveInputs(cwd);
-  const dockerContainmentLiveInputs = forceFull ? null : collectDockerContainmentLiveInputs(cwd);
+  // Two-dot: a tree comparison, so the base need not be an ancestor of HEAD
+  // and needs no merge base in the shallow clone. --no-renames lists a renamed
+  // file under both paths, so a renamed job entry point still selects its job.
+  let gatedChangedFiles = null;
+  let gatedDependencyChanges = {};
+  if (forceFull && gatedBaseSha) {
+    try {
+      gatedChangedFiles = gitPaths(['diff', '-z', '--name-only', '--no-renames', gatedBaseSha, 'HEAD'], cwd);
+      gatedDependencyChanges = Object.fromEntries(gatedChangedFiles
+        .filter((path) => DEPENDENCY_MANIFEST_RE.test(path))
+        .map((path) => [path, classifyDependencyChange(path, readAt(gatedBaseSha, path), readInTree(path))]));
+    } catch (err) {
+      console.warn(`⚠️ No diff against the last green main run (${err.message.split('\n')[0]}); every native job runs`);
+      gatedChangedFiles = null;
+    }
+  }
+
+  // A forced-full run with no gated diff runs every gated job, so it skips the walks.
+  const walkGates = !forceFull || gatedChangedFiles !== null;
+  const promptHistoryInputs = walkGates ? collectPromptHistoryInputs(cwd) : null;
+  const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd) : null;
+  const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd) : null;
+  const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
     clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
-    dockerContainmentLiveInputs, serverReach };
+    dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
 }
 
 function main() {
@@ -1711,10 +1788,14 @@ function main() {
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
+    gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
     forceFull,
     changedFiles: changedFilesOverride,
+    // scripts/ci-base-sha.js exports it on a push to main only; a release
+    // pull request is forced full by CI_BASE_REF and never gets one.
+    gatedBaseSha: process.env.CI_GATED_BASE_SHA || undefined,
   });
   const plan = buildCiTestPlan(changedFiles, {
     trackedFiles,
@@ -1732,6 +1813,8 @@ function main() {
     supercolliderLiveInputs,
     dockerContainmentLiveInputs,
     serverReach,
+    gatedChangedFiles,
+    gatedDependencyChanges,
   });
   emitGitHubPlan(plan);
 }

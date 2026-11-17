@@ -1,25 +1,8 @@
 /**
- * Refine the `chekhov.setups-payoffs` editorial check into a four-way taxonomy
- * (#1595).
+ * Refine the `chekhov.setups-payoffs` editorial check into a four-way taxonomy (#1595).
  *
- * The original Chekhov stage prompt detected only two failure modes — "fired,
- * never planted" and "planted, never fired". This rewrite classifies every
- * setup↔payoff thread as paired / false-setup / orphaned-payoff / **distant**,
- * adding the previously-missing distant-payoff case: an element that IS both
- * planted and paid off, but whose payoff lands so many issues after the setup
- * (the configurable `distantGap`) that the reader may no longer recall the plant.
- * The `{{#distantGap}}` section renders only when the check's distant-payoff gap
- * is enabled (>= 1), so an install that sets it to 0 keeps the false-setup /
- * orphaned-payoff behavior unchanged.
- *
- * `scripts/setup-data.js` only copies *missing* prompts, so existing installs
- * keep their old Chekhov template until this migration rewrites it. Migration 100
- * seeds the file but never tracks its hash, so this is the first hash-driven
- * update for it — no earlier migration's MD5 tables need resyncing.
- * Customization-safe: only installs whose copy still hashes to the prior shipped
- * version are auto-updated; customized prompts are left intact and warned about.
- *
- * Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
+ * The original Chekhov stage prompt detected only "fired, never planted" and "planted, never fired"; this classifies every setup↔payoff thread as paired / false-setup / orphaned-payoff / **distant**, adding the case of an element both planted and paid off whose payoff lands so many issues later (the configurable `distantGap`) that the reader may not recall the plant. The `{{#distantGap}}` section renders only when the gap is enabled (>= 1), so an install setting it to 0 keeps the old behavior.
+ * `scripts/setup-data.js` only copies *missing* prompts, so existing installs keep the old template until this rewrites it. Migration 100 seeds the file but never tracks its hash, so this is the first hash-driven update (no earlier MD5 tables need resyncing). Customization-safe: only copies hashing to the prior shipped version are auto-updated; customized prompts are left intact and warned about. Strategy: hash-driven prompt-replace via `./_lib.js`. Idempotent.
  */
 
 import { makePromptReplaceMigration } from './_lib.js';

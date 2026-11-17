@@ -1,39 +1,24 @@
-// Pure command-argument builders and validators for git operations. No
-// child-process access — these sanitize/shape the inputs that
+// Pure command-argument builders and validators for git operations (no child-process access) that
 // server/services/git.js passes to execGit.
 //
-// `PROTECTED_BRANCHES`, `validateFilePaths(files)`, `isGitStageableFilePath(file)` — pure command-arg
-// builders/validators for `git.js` (reject injection/traversal in staged paths).
-// `isGitStageableFilePath` is `validateFilePaths`' non-throwing twin, for callers that must refuse an
-// unstageable path BEFORE writing the file rather than 500 on the commit.
+// `isGitStageableFilePath` is `validateFilePaths`' non-throwing twin, for callers that must refuse an unstageable
+// path BEFORE writing the file.
 
 import { ServerError } from './errorHandler.js';
 
-// Long-lived shared branches that must never be deleted by the branch-cleanup
-// paths, nor handed to the branch-reconcile coordinator agent — they are not
-// disposable work. `gh-pages` is the GitHub Pages publishing branch: deleting it
-// (or letting reconcile try to "open a PR" merging it into the default branch)
-// would break the published site, so it is protected everywhere the others are.
+// Long-lived shared branches never deleted by branch-cleanup nor handed to the branch-reconcile
+// coordinator. `gh-pages` is included: deleting it or "opening a PR" merging it would break the site.
 export const PROTECTED_BRANCHES = ['main', 'master', 'dev', 'develop', 'release', 'gh-pages'];
 
-// Null bytes and shell command separators. Shared by the predicate and the
-// thrower below so the two can never disagree about what is unsafe.
+// Null bytes and shell command separators; shared so the predicate and thrower can't disagree.
 const GIT_UNSAFE_CHARS = /[\0;|&`$]/;
 
 /**
- * `validateFilePaths`'s non-throwing twin: true when `file` is a repo-relative
- * path git can be asked to stage. For callers that must REPORT an unstageable
- * path as data rather than throw — e.g. a route that would otherwise write the
- * file to disk and only then discover the commit can't reference it, leaving a
- * mutated tree behind a 500. `validateFilePaths` is layered on this, so the
- * gate and the predicate always admit the same set.
- *
- * Note `..` is rejected as a SUBSTRING, not just as a path component, which is
- * stricter than `pathSafety.isTopLevelEntryName` — `notes..md` is a perfectly
- * good filename that git staging still refuses here.
+ * `validateFilePaths`'s non-throwing twin: true when `file` is a repo-relative path git can stage. For
+ * callers that must REPORT an unstageable path rather than write the file and then 500 on the commit.
+ * `..` is rejected as a SUBSTRING (stricter than `pathSafety.isTopLevelEntryName`), so `notes..md` is refused.
  *
  * @param {string} file - Repo-relative file path
- * @returns {boolean}
  */
 export function isGitStageableFilePath(file) {
   if (!file || typeof file !== 'string') return false;
@@ -42,14 +27,11 @@ export function isGitStageableFilePath(file) {
 }
 
 /**
- * Validate file paths to prevent command injection and path traversal.
- * Throws on null bytes / shell metacharacters, absolute paths, or `..` traversal.
- * Accepts a single path or an array; always returns an array of the sanitized paths.
+ * Validate file paths against command injection and traversal (null bytes / shell metacharacters,
+ * absolute paths, `..`); accepts one path or an array, returns an array.
  *
- * Glob characters (* ? [) are deliberately NOT rejected — legitimate filenames
- * contain them (Next.js/SvelteKit `[id].jsx` dynamic routes). Wildcard
- * expansion is neutralized at the call site instead: services/git.js prefixes
- * each path with `toLiteralPathspec` so git never glob-expands them.
+ * Glob characters (* ? [) are deliberately NOT rejected (`[id].jsx` routes are legitimate); the call
+ * site neutralizes them by prefixing `toLiteralPathspec`.
  *
  * @param {string|string[]} files - File path(s)
  * @returns {string[]} - Sanitized file paths
@@ -57,11 +39,9 @@ export function isGitStageableFilePath(file) {
 export function validateFilePaths(files) {
   const fileList = Array.isArray(files) ? files : [files];
   return fileList.map(f => {
-    // Reject paths with null bytes or command separators
     if (GIT_UNSAFE_CHARS.test(f)) {
       throw new ServerError(`Invalid character in file path: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
     }
-    // Reject absolute paths or parent directory traversal
     if (!isGitStageableFilePath(f)) {
       throw new ServerError(`Invalid file path: ${f}`, { status: 400, code: 'VALIDATION_ERROR' });
     }
@@ -70,11 +50,9 @@ export function validateFilePaths(files) {
 }
 
 /**
- * Wrap a validated repo-relative path in git's `:(literal)` pathspec magic so
- * pathspec wildcards (`*`, `?`, `[...]`) are treated as literal filename
- * characters instead of glob patterns. Without this, staging `app/[id].jsx`
- * either errors ("did not match any files") or silently matches the WRONG
- * file (`app/i.jsx`), and a crafted `*` pathspec would stage everything.
+ * Wrap a validated path in git's `:(literal)` pathspec magic so wildcards are literal: otherwise
+ * staging `app/[id].jsx` errors or matches the WRONG file, and a crafted `*` would stage everything.
+ *
  * @param {string} path - Repo-relative file path (already validated)
  * @returns {string} - Pathspec with literal magic applied
  */
@@ -83,12 +61,10 @@ export function toLiteralPathspec(path) {
 }
 
 /**
- * True when `ref` is safe to hand to git as a bare branch/ref argument: not
- * option-shaped (leading "-"), and free of whitespace/control characters and the
- * sequences git-check-ref-format forbids (`..`, `@{`, and `~ ^ : ? * [ \`,
- * a trailing "/", ".", or ".lock").
+ * True when `ref` is safe as a bare branch/ref argument: not option-shaped (leading "-"), no
+ * whitespace/control characters, none of the sequences git-check-ref-format forbids.
+ *
  * @param {unknown} ref
- * @returns {boolean}
  */
 export function isSafeGitRef(ref) {
   if (typeof ref !== 'string' || ref.length < 1 || ref.length > 255) return false;
@@ -99,8 +75,8 @@ export function isSafeGitRef(ref) {
 }
 
 /**
- * Defense in depth for callers that bypass HTTP (CoS services import
- * services/git.js directly): throw a 400 ServerError for an unsafe ref.
+ * Defense in depth for callers that bypass HTTP (CoS services import git.js directly): 400 on an unsafe ref.
+ *
  * @param {unknown} ref
  * @returns {string} the ref, unchanged
  */

@@ -24,18 +24,19 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   const [duration, setDuration] = useState(null);
   const pending = useRef(null);
   const applied = useRef(null);
-  const seekTo = (t, play = false) => {
+  const seekTo = (t, play = false, pause = false) => {
     const video = videoRef.current;
     if (!video) return;
     if (video.readyState >= 1) video.currentTime = Math.min(t, video.duration || t);
     else pending.current = t;
     if (play) video.play?.()?.catch?.(() => {});
+    else if (pause) video.pause?.();
   };
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n) return;
     applied.current = seekRequest.n;
     const t = seekRequest.t - source.startSec;
-    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play);
+    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play, !!seekRequest.pause);
   }, [seekRequest, source.startSec, source.endSec]);
   const startSec = source.startSec || 0;
   const range = { startSec, endSec: source.endSec ?? null };
@@ -53,11 +54,13 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
       {/* The height limit caps the width, not the height alone: a capped height
           over a full-width box made it wider than 16:9 and pillarboxed the video. */}
       <video
+        data-preview-picture
         ref={videoRef}
         src={source.src}
         controls
         playsInline
         preload="metadata"
+        data-song-clock={startSec}
         onLoadedMetadata={() => { if (pending.current != null) { seekTo(pending.current); pending.current = null; } }}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => setTime(e.currentTarget.currentTime)}
@@ -65,22 +68,24 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
         aria-label={source.id === 'final' ? 'Final render preview' : 'Draft excerpt preview'}
         className="mx-auto block aspect-video w-full max-w-[calc(50vh*16/9)] rounded border border-port-border bg-black object-contain"
       />
-      <ShotStepper
-        scenes={scenes}
-        time={songTime}
-        onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
-        onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
-        range={range}
-        keys
-      />
-      <FrameStepper
-        time={songTime}
-        onSeek={stepFrame}
-        maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
-        capture={() => captureMediaFrame(videoRef.current)}
-        label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
-        keys
-      />
+      <div data-preview-controls className="space-y-2">
+        <ShotStepper
+          scenes={scenes}
+          time={songTime}
+          onSeek={(t) => { seekTo(t - startSec); setTime(t - startSec); }}
+          onEditShot={onEditShot ? (sceneId) => { videoRef.current?.pause?.(); onEditShot(sceneId); } : null}
+          range={range}
+          keys
+        />
+        <FrameStepper
+          time={songTime}
+          onSeek={stepFrame}
+          maxSec={source.endSec ?? (Number.isFinite(duration) ? startSec + duration : null)}
+          capture={() => captureMediaFrame(videoRef.current)}
+          label={[projectName, activeShot ? sceneShotName(activeShot, { number: shot }) : null].filter(Boolean).join(' · ')}
+          keys
+        />
+      </div>
     </div>
   );
 }
@@ -98,7 +103,7 @@ function useDocumentPlayback(project) {
     // A drawing edit keeps the audio/player mounted while its new data arrives.
     setPlayback(previous => previous?.target === target ? previous : null);
     getMusicVideoCompositionPlayback(project.id, { silent: true })
-      .then((result) => { if (active) setPlayback({ target, native: result?.native === true, data: result?.data }); })
+      .then((result) => { if (active) setPlayback({ target, native: result?.native === true, data: result?.data, reason: result?.reason, file: result?.file }); })
       .catch(() => { if (active) setPlayback({ target, native: false }); });
     return () => { active = false; };
   }, [project.id, directory, target, revision]);
@@ -130,8 +135,15 @@ function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, 
  * playable. `seekRequest` (`{ t, n }`) is the scene-card seek. `blender` is a
  * Blender film's `useMusicVideoBlender` reading: its live composite plays the
  * shots' renders from that state, so a render that lands shows without a reload.
+ * `clockRef` is filled with `() => ({ t, playing }) | null`, the playing source's time on the song.
+ * `compact` drops the title for a page that frames the player itself (the editor).
+ * `controlsBeside` keeps the play bar under the picture and stacks the other
+ * controls in a column to its right, for a short, wide space (the editor). Each
+ * player marks its picture (`data-preview-picture`), its play bar
+ * (`data-preview-scrub`) and its other controls (`data-preview-controls`);
+ * `.mv-preview-beside` in index.css places them.
  */
-export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null }) {
+export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null, blender = null, clockRef = null, compact = false, controlsBeside = false }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
   const playable = sources.filter((entry) => !entry.disabled);
@@ -158,14 +170,25 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
     for (const media of dockRef.current?.querySelectorAll('audio, video') || []) if (!media.muted) media.pause();
   });
   const sounding = (handler) => (event) => { if (!event.target.muted) handler(); };
+  // Each player marks the media element that keeps the song's time (`data-song-clock`, its offset on
+  // the song), so a reader outside the dock follows whichever source is playing without a re-render.
+  useEffect(() => {
+    if (!clockRef) return undefined;
+    clockRef.current = () => {
+      const media = dockRef.current?.querySelector('[data-song-clock]');
+      return media ? { t: media.currentTime + (Number(media.dataset.songClock) || 0), playing: !media.paused && !media.ended } : null;
+    };
+    return () => { clockRef.current = null; };
+  }, [clockRef]);
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.
-    <aside ref={dockRef} aria-label="Preview" className="@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2"
+    <aside ref={dockRef} aria-label="Preview" className={`@container/mv-preview flex min-w-0 flex-col gap-2 rounded-lg border border-port-border bg-port-card p-2 ${controlsBeside ? 'mv-preview-beside' : ''}`}
       onPlayCapture={sounding(solo.started)} onPauseCapture={sounding(solo.stopped)} onEndedCapture={sounding(solo.stopped)}>
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-port-text-muted">
-        <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />
-        <span className="text-sm font-medium text-port-text">Preview</span>
+        {/* Compact (the editor): no title row of its own, the source picker is the header. */}
+        {!compact && <MonitorPlay size={14} className="shrink-0 text-port-accent" aria-hidden="true" />}
+        {!compact && <span className="text-sm font-medium text-port-text">Preview</span>}
         {sources.length > 1 ? (
           <>
             <label htmlFor={pickerId} className="sr-only">Preview source</label>
@@ -173,7 +196,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
               id={pickerId}
               value={source?.id || ''}
               onChange={(e) => pick(e.target.value)}
-              className="order-last min-h-[44px] min-w-0 basis-full truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px] @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1"
+              className={`${compact ? 'flex-1' : 'order-last basis-full @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1'} min-h-[44px] min-w-0 truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px]`}
             >
               {sources.map((entry) => (
                 <option key={entry.id} value={entry.id} disabled={!!entry.disabled}>

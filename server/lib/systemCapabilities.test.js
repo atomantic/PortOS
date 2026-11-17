@@ -140,6 +140,10 @@ describe('systemCapabilities', () => {
     expect(hardwareRequirementsForLocalLlm({ key: 'qwen3.8-27b' })).toMatchObject({ minMemoryGb: 32 });
     expect(hardwareRequirementsForLocalLlm({ key: 'gpt-oss-120b' })).toMatchObject({ minMemoryGb: 96 });
     expect(hardwareRequirementsForLocalLlm({ key: 'nemotron-3-super-120b' })).toMatchObject({ minMemoryGb: 96 });
+    expect(hardwareRequirementsForLocalLlm({ key: 'nemotron-3.5-super-120b' })).toMatchObject({ minMemoryGb: 128 });
+    expect(hardwareRequirementsForLocalLlm({ key: 'granite4.2-30b' })).toMatchObject({ minMemoryGb: 32 });
+    expect(hardwareRequirementsForLocalLlm({ key: 'ornith-1.5-35b-a3b' })).toMatchObject({ minMemoryGb: 32 });
+    expect(hardwareRequirementsForLocalLlm({ key: 'flint-40b-a2b' })).toMatchObject({ minMemoryGb: 32 });
     expect(hardwareRequirementsForLocalLlm({ key: 'qwen3.5-122b-a10b' })).toMatchObject({ minMemoryGb: 96 });
     expect(hardwareRequirementsForProvider({ id: 'provider', vllmBacked: true })).toMatchObject({
       platforms: ['linux', 'win32'],

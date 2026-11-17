@@ -8,7 +8,7 @@ import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { resolveReviewPolicy } from '../../lib/reviewerConfig.js';
 import { buildTuiCompletionSection, buildClaimFlowCompletionSection } from './completion.js';
 
-const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionSection({
+const render = (forgeCli = 'gh', reviewers = ['copilot'], extra = {}) => buildTuiCompletionSection({
   willOpenPR: true,
   prCompletion: PR_COMPLETIONS.REVIEW_THEN_MERGE,
   simplifyEnabled: false,
@@ -16,6 +16,7 @@ const render = (forgeCli = 'gh', reviewers = ['copilot']) => buildTuiCompletionS
   mode: COMPLETION_MODES.TUI,
   reviewPolicy: resolveReviewPolicy({ reviewers }, null, null),
   forgeCli,
+  ...extra,
 });
 
 describe('review-enabled completion merge gate', () => {
@@ -40,7 +41,7 @@ describe('review-enabled completion merge gate', () => {
   });
 
   it('waits for current-head CI and re-runs review after a changed head', () => {
-    const section = render();
+    const section = render('gh', ['copilot'], { mergeHandoff: true });
 
     expect(section).toContain('4. **Wait for CI to finish**');
     expect(section).not.toContain('portos_check_merge_admission');
@@ -163,17 +164,30 @@ describe('hosting-provider merge instructions', () => {
 
 describe('pending-merge handoff instructions (#12247)', () => {
   it('offers the server handoff before the CI wait and stops on a receipt without merging', () => {
-    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', mergeHandoff: true });
     expect(prompt).toContain('/api/cos/merge-handoff');
     expect(prompt).toContain('"agentId":"parent-example","prUrl":"PR_URL","headSha":"HEAD_SHA","worktreePath":"WORKTREE_PATH"');
     expect(prompt.indexOf('/api/cos/merge-handoff')).toBeLessThan(prompt.indexOf('## Hosting-provider merge authority'));
     expect(prompt).toContain('NOT yet merged');
     expect(prompt).toContain('A refused optional handoff does not create an additional merge requirement');
-    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', prStaysOpen: true })).not.toContain('/merge-handoff');
+    expect(buildClaimFlowCompletionSection({ agentId: 'parent-example', mergeHandoff: true, prStaysOpen: true })).not.toContain('/merge-handoff');
+  });
+
+  it('omits every pending-merge handoff instruction when the app sets no threshold', () => {
+    const forbidden = ['/api/cos/merge-handoff', 'mergeHandoffMinQueuedRuns', 'pending-merge handoff', 'REVIEW_ATTEMPTED_HEAD'];
+    const claim = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const tui = render('gh', ['copilot']);
+    for (const text of [claim, tui]) {
+      for (const needle of forbidden) expect(text).not.toContain(needle);
+    }
+    // Merge authority and the in-session CI gate are unaffected.
+    expect(claim).toContain('## Hosting-provider merge authority');
+    expect(claim).toContain('By default stay responsible');
+    expect(tui).toContain('Wait for CI to finish');
   });
 
   it.skipIf(process.platform === 'win32')('records optional inconclusive evidence only for the attempted head and preserves blocked evidence', () => {
-    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', mergeHandoff: true });
     expect(prompt).toContain('before each local review attempt capture `REVIEW_ATTEMPTED_HEAD=$(git rev-parse HEAD)`');
     expect(prompt).toContain('nonempty all-optional roster');
     expect(prompt).toContain('accepted unresolved findings or rejection');
@@ -204,7 +218,7 @@ describe('pending-merge handoff instructions (#12247)', () => {
   // The recorded line must be the one shape cosMergeHandoff reads: REVIEW_STATUS
   // kept, exactly one REVIEW_HEAD naming the reviewed commit.
   it.skipIf(process.platform === 'win32')('records exactly one REVIEW_HEAD for the reviewed commit beside REVIEW_STATUS', () => {
-    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example' });
+    const prompt = buildClaimFlowCompletionSection({ agentId: 'parent-example', mergeHandoff: true });
     const command = prompt.split('\n').find((line) => line.includes('REVIEW_HEAD=%s'));
     const repo = mkdtempSync(join(tmpdir(), 'review-head-'));
     try {

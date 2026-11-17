@@ -569,38 +569,6 @@ export async function createTouchpoint(personId, data = {}) {
   });
 }
 
-export async function createCalendarTouchpoint(personId, { accountId, eventId, summary }) {
-  const event = await calendarSync.getEvent(accountId, eventId);
-  if (!event) throw new ServerError('Calendar event not found', { status: 404 });
-  const happenedAt = event.startTime || event.endTime || new Date().toISOString();
-  // `last_contact_on` is a user-facing calendar day, not a UTC one — an evening
-  // event must land on the day the user experienced it, not tomorrow's UTC date
-  // (#8451). `createTouchpoint` uses `localDate` (falling back to the raw instant
-  // only when the caller doesn't supply one).
-  const localDate = toUserDayKey(happenedAt, await getUserTimezone());
-  return createTouchpoint(personId, {
-    happenedAt,
-    localDate,
-    channel: event.location || 'Calendar',
-    summary: summary || event.title || 'Calendar touchpoint',
-    source: 'calendar',
-    calendarAccountId: accountId,
-    calendarEventId: eventId,
-    dedupeKey: calendarTouchpointDedupeKey(accountId, event),
-    metadata: {
-      title: event.title,
-      description: event.description,
-      location: event.location,
-      startTime: event.startTime,
-      endTime: event.endTime,
-      organizer: event.organizer,
-      attendees: event.attendees,
-      subcalendarId: event.subcalendarId,
-      subcalendarName: event.subcalendarName,
-    },
-  });
-}
-
 // Insert an auto-logged touchpoint for one person, idempotent on `dedupeKey`
 // (the partial unique index idx_tribe_touchpoints_dedupe). Returns the created
 // touchpoint, or `null` when this person+dedupeKey was already logged (re-sync).

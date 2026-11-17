@@ -59,7 +59,7 @@ import MediaPreview from '../components/media/MediaPreview';
 import VideoUpscaleDrawer from '../components/media/VideoUpscaleDrawer';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import toast from '../components/ui/Toast';
-import { useVideoGenForm } from '../hooks/useVideoGenForm.js';
+import { useVideoGenForm } from '../components/videoGen/useVideoGenForm.js';
 import { useVideoGenServiceStatus } from '../hooks/useVideoGenServiceStatus.js';
 import { useVideoGenEpisodeImport } from '../hooks/useVideoGenEpisodeImport.js';
 import { useVideoGenHistory } from '../hooks/useVideoGenHistory.js';

@@ -1,47 +1,20 @@
 /**
- * CoS task-learning bucket classifier (`extractTaskType`, `classifyUntypedTask`,
- * `isSandboxedTaskType`).
+ * CoS task-learning bucket classifier (`extractTaskType`, `classifyUntypedTask`, `isSandboxedTaskType`).
  *
- * Browser-safe, shared with the client ETA lookup via `client/src/lib/cosTaskType.js`.
- *
- * CoS task-learning bucket classifier. Pure and browser-safe: the server's
- * outcome store and the client's ETA lookup (client/src/lib/cosTaskType.js
- * re-exports this) must resolve a task to the same bucket, so there is one copy.
+ * Pure and browser-safe: the server's outcome store and the client's ETA lookup (`client/src/lib/cosTaskType.js` re-exports this) must resolve a task to the same bucket, so there is one copy.
  */
 import { currentTaskTypeName } from './taskTypeRenames.js';
 
-/**
- * Sandboxed fallback type for executions the classifier can't map to a known
- * domain (issue #2333). Replaces the old blind `'unknown'` sink so untyped work
- * still flows through outcome learning + failure-signature harvesting, while
- * being explicitly walled off from routing influence (see `isSandboxedTaskType`
- * consumers in routing.js) — a heterogeneous grab-bag must never drive a tier
- * suggestion or globally skip all untyped work (which would create a routing
- * blind spot / loop).
- */
+/** Sandboxed fallback type for executions the classifier can't map to a known domain (#2333). Replaces the old blind `'unknown'` sink so untyped work still feeds outcome learning + failure-signature harvesting while walled off from routing influence (`isSandboxedTaskType` consumers in routing.js): a heterogeneous grab-bag must never drive a tier suggestion or globally skip untyped work. */
 export const EXTERNAL_UNTYPED_TASK_TYPE = 'external/untyped';
 
-// The new sandboxed fallback plus the legacy `'unknown'` sink it replaces. Older
-// installs still hold `'unknown'` buckets from before the classifier (and the
-// spawn-time key in agentModelSelection.js) migrated onto the sandboxed bucket, so
-// it keeps the same wall: stale/heterogeneous uncategorized data must never drive a
-// tier suggestion or globally skip work.
+// The sandboxed fallback plus the legacy `'unknown'` sink it replaces: older installs still hold `'unknown'` buckets (and the spawn-time key in agentModelSelection.js), so it keeps the same wall.
 const SANDBOXED_TASK_TYPES = new Set([EXTERNAL_UNTYPED_TASK_TYPE, 'unknown']);
 
-/**
- * True when a task type is a sandboxed fallback bucket (not a real learned
- * domain). Callers in routing.js gate on this to keep the fallback from
- * influencing model-tier suggestions or skip/rehabilitation gating.
- */
+/** True when a task type is a sandboxed fallback bucket (not a real learned domain); routing.js gates on this so it can't influence model-tier suggestions or the low-success list. */
 export const isSandboxedTaskType = (taskType) => SANDBOXED_TASK_TYPES.has(taskType);
 
-/**
- * Ordered description-keyword → concrete-type rules, tried only as a last resort
- * before the sandboxed fallback. First match wins. Patterns are whole-word/stem
- * tests (`\b…`) so a substring can't false-positive (e.g. "testing" ⊄ trigger of
- * an unrelated word). Kept deliberately conservative — a wrong concrete label is
- * worse than an honest `external/untyped`.
- */
+/** Ordered description-keyword → concrete-type rules, a last resort before the sandboxed fallback; first match wins. Whole-word/stem tests (`\b…`) so substrings can't false-positive; deliberately conservative (a wrong concrete label is worse than an honest `external/untyped`). */
 const DESCRIPTION_CLASSIFIERS = [
   { type: 'auto-fix', re: /\b(fix|bug|crash|broken|failing|regression|investigate|stack ?trace)\b/ },
   { type: 'self-improve:general', re: /\b(refactor|clean ?up|simplif\w*|optimi[sz]\w*|improve|enhance)\b/ },
@@ -49,13 +22,7 @@ const DESCRIPTION_CLASSIFIERS = [
   { type: 'test-task', re: /\b(unit test|coverage|test suite|write tests?)\b/ }
 ];
 
-/**
- * Concrete `task.taskType` values (beyond user/internal, resolved upstream) that
- * map to a real learned domain. Allow-listed rather than accepting any string so
- * an unexpected/high-cardinality taskType can't spawn a swarm of non-sandboxed
- * singleton buckets that skew routing — anything not here falls through to the
- * description heuristics and, failing that, the sandboxed fallback.
- */
+/** Concrete `task.taskType` values (beyond user/internal, resolved upstream) that map to a real learned domain. Allow-listed so a high-cardinality taskType can't spawn a swarm of non-sandboxed singleton buckets that skew routing; anything else falls to description heuristics, then the sandboxed fallback. */
 const KNOWN_UNSPECIALIZED_TASK_TYPES = new Set([
   'scheduled', 'test', 'architect', 'layered-intelligence', 'all'
 ]);
@@ -65,22 +32,11 @@ function slugTaskType(raw) {
   return String(raw).trim().toLowerCase().replace(/[^a-z0-9:_-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/**
- * Classify a task that the primary `extractTaskType` heuristics left untyped
- * (issue #2333). Pure, deterministic (idempotent — same input → same output),
- * and side-effect free / O(1) over a few short regexes, so it stays well under
- * the <50ms execution-entry budget. Inspects additional signals in priority
- * order — a self-improvement metadata hint, an explicit `task.taskType` the
- * primary extractor didn't special-case, then broader description keyword
- * signatures — and only falls back to the sandboxed `external/untyped` type
- * (never the old `'unknown'`) when nothing matches.
- */
+/** Classify a task the primary `extractTaskType` heuristics left untyped (#2333). Pure, deterministic, O(1) over a few short regexes (well under the <50ms execution-entry budget). Signals in priority order: a self-improvement metadata hint, an explicit `task.taskType`, then broader description keyword signatures; falls back to the sandboxed `external/untyped` (never `'unknown'`). */
 export function classifyUntypedTask(task) {
   if (!task || typeof task !== 'object') return EXTERNAL_UNTYPED_TASK_TYPE;
 
-  // Round-trip safety: re-classifying an already-classified task by its own
-  // recorded type must be stable and preserve the sandboxed bucket (the fallback
-  // string's `/` would otherwise be slugged to a non-sandboxed `-task` below).
+  // Round-trip safety: re-classifying an already-classified task by its recorded type must be stable and keep the sandboxed bucket (the fallback's `/` would otherwise slug to a non-sandboxed `-task`).
   if (isSandboxedTaskType(task?.taskType)) return task.taskType;
 
   // 1) A self-improvement hint not paired with a taskApp (that pairing is
@@ -90,10 +46,7 @@ export function classifyUntypedTask(task) {
     return `self-improve:${slugTaskType(selfImprovementType)}`;
   }
 
-  // 2) An explicit task.taskType the primary extractor didn't special-case
-  //    (user/internal are resolved upstream). Map an already-namespaced type
-  //    (`a:b`) or an allow-listed known domain to a concrete bucket; anything
-  //    else falls through so an unexpected value can't skew routing.
+  // 2) An explicit task.taskType the primary extractor didn't special-case (user/internal resolve upstream): an already-namespaced type (`a:b`) or an allow-listed domain maps to a concrete bucket; else fall through so an unexpected value can't skew routing.
   const explicit = task?.taskType;
   if (typeof explicit === 'string' && explicit.trim() && explicit !== 'unknown') {
     const slug = slugTaskType(explicit);

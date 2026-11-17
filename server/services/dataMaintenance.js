@@ -1,4 +1,3 @@
-import { getNavPageForPath } from '../lib/navManifest.js';
 import { withRetiredDataRemoval } from '../lib/retiredLoraTraining.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, readdir, realpath } from 'node:fs/promises';
@@ -9,19 +8,15 @@ import { createMutex } from '../lib/asyncMutex.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { listJobs } from './mediaJobQueue/index.js';
 import { trainingRunsBusy } from './dataManagerBusy.js';
-import { getActiveCaptionRun } from './loraDatasetCaption.js';
 
-// Operations own their paths. Neither the client nor a preview can supply one.
+// Operations own their paths. A caller names an operation id and can never supply a path.
 export const MAINTENANCE_OPERATIONS = Object.freeze([
   { id: 'retired-training-runs', directory: 'training-runs', label: 'Retired LoRA training artifacts', category: 'Unique checkpoints and regenerable scratch', warning: 'May contain the only copy of an adapter, optimizer checkpoint, logs or preview. PostgreSQL run history is retained but will point to missing artifacts.', deletable: true },
   { id: 'retired-lora-datasets', directory: 'lora-datasets', label: 'Retired LoRA datasets', category: 'Unique source images and captions', warning: 'Source images, captions and dataset metadata may be irreplaceable. Copy anything you want to retain before deleting.', deletable: true },
-  { id: 'shared-lora-adapters', directory: 'loras', label: 'Installed LoRA adapters', category: 'Shared inference assets', warning: `Adapters still work in image and media generation. Manage individual adapters in ${getNavPageForPath('/models/loras')?.breadcrumb}. Shared Python runtimes and model caches remain supported.`, deletable: false },
 ]);
 const fail = (message, code = 'MAINTENANCE_UNSAFE') => new ServerError(message, { status: 409, code });
 const missing = error => { if (error.code === 'ENOENT') return null; throw error; };
-const previews = new Map();
 const withLock = createMutex();
-const PREVIEW_TTL = 5 * 60_000;
 
 async function dataRootSnapshot() {
   let cursor = resolve(PATHS.data);
@@ -59,13 +54,10 @@ async function inspect(directory, logicalDirectory = directory) {
 }
 
 async function assertIdle() {
-  // Retired producers cannot start. Outstanding generation/caption requests may
-  // still own dataset inputs, including work admitted by the outgoing server.
+  // Retired producers cannot start; queued or running media work may still own dataset inputs.
   if (listJobs().some(job => ['queued', 'running'].includes(job.status))) throw fail('Media work is queued or running. Wait for it to finish or cancel it explicitly.', 'MAINTENANCE_BUSY');
   const busy = await trainingRunsBusy();
   if (busy.busy !== false) throw fail(busy.reason || 'Training ownership could not be determined.', 'MAINTENANCE_BUSY');
-  const datasets = await readdir(join(PATHS.data, 'lora-datasets')).catch(error => missing(error) || []);
-  if (datasets.some(id => getActiveCaptionRun(id))) throw fail('Dataset captioning is still active; finish or cancel it first.', 'MAINTENANCE_BUSY');
 }
 
 export async function getMaintenanceInventory() {
@@ -79,38 +71,23 @@ export async function getMaintenanceInventory() {
   }));
 }
 
-export async function previewMaintenance(id) {
+export async function deleteMaintenance(id) {
   const operation = MAINTENANCE_OPERATIONS.find(item => item.id === id && item.deletable);
   if (!operation) throw new ServerError('Unsupported maintenance operation', { status: 404, code: 'NOT_FOUND' });
-  await assertIdle();
-  const inventory = await inspect(operation.directory);
-  if (!inventory.present) throw fail('Nothing remains to delete. Refresh inventory.', 'MAINTENANCE_STALE');
-  const now = Date.now();
-  for (const [key, value] of previews) if (value.expiresAt < now) previews.delete(key);
-  if (previews.size >= 100) throw fail('Too many outstanding previews. Wait for them to expire.');
-  const preview = { token: randomUUID(), operationId: id, path: `data/${operation.directory}`, warning: operation.warning, bytes: inventory.bytes, files: inventory.files, confirmation: `DELETE ${operation.directory}`, expiresAt: now + PREVIEW_TTL };
-  previews.set(preview.token, { ...preview, inventory, directory: operation.directory });
-  return preview;
-}
-
-export async function executeMaintenance({ token, confirmation }) {
+  const { directory } = operation;
   return withLock(() => withBackupAssetPublication(() => withRetiredDataRemoval(async () => {
-    const preview = previews.get(token);
-    if (!preview || preview.expiresAt < Date.now()) throw fail('Preview expired. Refresh and preview again.', 'MAINTENANCE_STALE');
-    if (confirmation !== preview.confirmation) throw new ServerError('Confirmation must match the preview exactly', { status: 400, code: 'CONFIRMATION_REQUIRED' });
-    if (preview.result) return preview.result;
     await assertIdle();
-    const current = await inspect(preview.directory);
-    if (current.fingerprint !== preview.inventory.fingerprint || JSON.stringify(current.rootIdentity) !== JSON.stringify(preview.inventory.rootIdentity)) throw fail('Files changed since preview. Refresh and preview again.', 'MAINTENANCE_STALE');
-    const source = join(current.canonicalRoot, preview.directory);
-    const stagedName = `.maintenance-${preview.token}`;
+    const current = await inspect(directory);
+    if (!current.present) throw fail('Nothing remains to delete. Refresh inventory.', 'MAINTENANCE_STALE');
+    const source = join(current.canonicalRoot, directory);
+    const stagedName = `.maintenance-${randomUUID()}`;
     const staged = join(current.canonicalRoot, stagedName);
     await renameGuarded(source, staged);
     // Renaming first detaches the exact inspected directory from normal writers.
     // Revalidate identity and contents before removing anything. On uncertainty,
     // preserve the detached tree and report its recovery location.
     try {
-      const detached = await inspect(stagedName, preview.directory);
+      const detached = await inspect(stagedName, directory);
       if (JSON.stringify(detached.rootIdentity) !== JSON.stringify(current.rootIdentity) || JSON.stringify(detached.identity) !== JSON.stringify(current.identity) || detached.fingerprint !== current.fingerprint) throw fail('Files changed while preparing deletion.');
       await assertIdle();
       const finalRoot = await dataRootSnapshot();
@@ -120,10 +97,9 @@ export async function executeMaintenance({ token, confirmation }) {
     } catch (error) {
       const replacement = await lstat(source).catch(missing);
       if (!replacement) await renameGuarded(staged, source).catch(() => {});
-      throw new ServerError(`Removal did not complete. Inspect data/${preview.directory} and data/${stagedName} before trying again.`, { status: 409, code: 'MAINTENANCE_INCOMPLETE', cause: error });
+      throw new ServerError(`Removal did not complete. Inspect data/${directory} and data/${stagedName} before trying again.`, { status: 409, code: 'MAINTENANCE_INCOMPLETE', cause: error });
     }
-    const remaining = await inspect(preview.directory).catch(() => null);
-    preview.result = { ok: true, operationId: preview.operationId, removedBytes: current.bytes, removedFiles: current.files, status: remaining === null ? 'unavailable' : remaining.present ? 'retained' : 'deleted', remainingBytes: remaining?.bytes ?? null, remainingFiles: remaining?.files ?? null };
-    return preview.result;
+    const remaining = await inspect(directory).catch(() => null);
+    return { ok: true, operationId: id, removedBytes: current.bytes, removedFiles: current.files, status: remaining === null ? 'unavailable' : remaining.present ? 'retained' : 'deleted', remainingBytes: remaining?.bytes ?? null, remainingFiles: remaining?.files ?? null };
   })));
 }

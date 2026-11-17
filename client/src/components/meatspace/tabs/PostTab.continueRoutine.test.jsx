@@ -32,7 +32,7 @@ vi.mock('../../../services/api', () => ({
   getPostStats: () => Promise.resolve(null),
 }));
 
-vi.mock('../../../hooks/usePostSession', () => ({
+vi.mock('../post/usePostSession', () => ({
   usePostSession: () => ({
     state: 'idle',
     drills: [],
@@ -57,14 +57,11 @@ function SurfaceStub({ label, onContinue }) {
   );
 }
 
-// Each trainer OWNS its mode list and the Practice Library derives from it, so a
-// mock that stubs a trainer must also supply that list — PostTab pulls in
-// PracticeLibrary → practiceCatalog, which reads these at module load.
+// The lazy trainers' mode lists live in trainerModes.js, so those stubs need only
+// a component. WordplayTrainer still owns GAME_MODES, which the Practice Library
+// reads at module load, so its stub must supply that list.
 vi.mock('../post/MorseTrainer', () => ({
   default: ({ onContinue }) => <SurfaceStub label="Morse" onContinue={onContinue} />,
-  MORSE_MODE_IDS: ['copy', 'head-copy', 'send'],
-  MODES: [{ id: 'copy', label: 'Copy' }, { id: 'head-copy', label: 'Head Copy' }, { id: 'send', label: 'Send' }],
-  REFERENCE_VIEWS: [{ id: 'tree', label: 'Tree' }, { id: 'length', label: 'Length' }, { id: 'list', label: 'List' }],
 }));
 vi.mock('../post/WordplayTrainer', () => ({
   default: ({ onContinue }) => <SurfaceStub label="Wordplay" onContinue={onContinue} />,
@@ -72,17 +69,12 @@ vi.mock('../post/WordplayTrainer', () => ({
 }));
 vi.mock('../post/MemoryPractice', () => ({
   default: ({ onContinue }) => <SurfaceStub label="Memory" onContinue={onContinue} />,
-  MEMORY_PRACTICE_MODE_IDS: ['spaced', 'sequence'],
-  MODES: [{ id: 'spaced', label: 'Spaced Repetition', desc: 'Weakest chunks first' }],
 }));
 vi.mock('../post/ElementsSong', () => ({
   default: ({ onContinue }) => <SurfaceStub label="Elements" onContinue={onContinue} />,
-  ELEMENTS_MODE_IDS: ['learn', 'element-study', 'element-flash', 'fill-blank'],
-  PRACTICE_MODES: [{ id: 'learn', label: 'Learn Lyrics', desc: 'Verse by verse' }],
 }));
 vi.mock('../post/RhetoricTrainer', () => ({
   default: ({ onContinue }) => <SurfaceStub label="Rhetoric" onContinue={onContinue} />,
-  RHETORIC_MODES: [{ id: 'meter', label: 'Iambic Pentameter', description: 'Ten syllables' }],
 }));
 // PostTab's remaining imports are unreachable on the routes exercised here, but
 // they still have to resolve — stub the ones that pull in heavy dependencies.

@@ -7,9 +7,7 @@ vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
   getFirstActivityDay: vi.fn(() => '2026-01-01'),
-  recordSession: vi.fn(),
   recordMessages: vi.fn(),
-  recordTokens: vi.fn(),
   resetUsage: vi.fn()
 }));
 
@@ -88,6 +86,11 @@ const fleetResult = (overrides = {}) => ({
 });
 
 describe('usage routes', () => {
+  it('rejects a repeated query key with 400 (claude-code, #16428)', async () => {
+    const res = await request(buildApp()).get('/api/usage/claude-code?refresh=1&refresh=1');
+    expect(res.status).toBe(400);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     getFleetUsage.mockResolvedValue(fleetResult());
@@ -136,45 +139,8 @@ describe('usage routes', () => {
     expect(getSubscriptionSavings).toHaveBeenCalledWith(expect.objectContaining({ report: covered, from: '2026-02-01', to: '2026-02-07' }));
   });
 
-  it('GET /api/usage/hourly projects only counters and bypasses all reporting work', async () => {
-    const hourlyActivity = Array.from({ length: 24 }, (_, hour) => hour);
-    // Synthetic extra records must never escape in the hourly payload. Reporting
-    // services are stubbed: this measures route calls, not report cost or latency.
-    usage.getUsage.mockReturnValue({
-      hourlyActivity,
-      dailyActivity: Object.fromEntries(Array.from({ length: 400 }, (_, day) => [day, { tokens: 1000 }])),
-      monthlyActivity: { '2025-01': { tokens: 2000 } },
-      byProvider: { example: { tokens: 3000 } }
-    });
-    usage.getUsageSummary.mockReturnValue({ report: { totals: { estimatedCost: 12 } } });
-    getFleetUsage.mockResolvedValueOnce(fleetResult({ instances: [{ id: 'peer-a' }, { id: 'peer-b' }], totals: {} }));
-    const collaborators = [usage.getUsageSummary, getAllProviders, getSubscriptionSavings,
-      getApiBilledInstanceIds, getFleetUsage];
-    const app = buildApp();
-    // Before: each dashboard refresh enters all five reporting/config/peer collaborators.
-    for (let refresh = 0; refresh < 3; refresh++) {
-      expect((await request(app).get('/api/usage')).status).toBe(200);
-    }
-    expect(collaborators.map((fn) => fn.mock.calls.length)).toEqual([3, 3, 3, 3, 3]);
-    vi.clearAllMocks();
-    // After: the same reads only serialize the 24 counters, regardless of history/peers.
-    for (let refresh = 0; refresh < 3; refresh++) {
-      const res = await request(app).get('/api/usage/hourly');
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ hourlyActivity });
-    }
-    expect(usage.getUsage).toHaveBeenCalledTimes(3);
-    expect(collaborators.map((fn) => fn.mock.calls.length)).toEqual([0, 0, 0, 0, 0]);
-    expect(usage.getFirstActivityDay).not.toHaveBeenCalled();
-    expect(getProviderQuotas).not.toHaveBeenCalled();
-  });
-
-  it.each([{}, { hourlyActivity: Array(24).fill(0) }])(
-    'GET /api/usage/hourly returns 24 zero counters for empty usage %j', async (emptyUsage) => {
-    usage.getUsage.mockReturnValue(emptyUsage);
-    const res = await request(buildApp()).get('/api/usage/hourly');
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ hourlyActivity: Array(24).fill(0) });
+  it.each(['/api/usage/hourly', '/api/usage/raw'])('no longer serves %s', async (path) => {
+    expect((await request(buildApp()).get(path)).status).toBe(404);
   });
 
   it('GET /api/usage/rolling-cost passes the chart range through and refuses an unknown one', async () => {
@@ -482,16 +448,6 @@ describe('usage routes', () => {
     expect(startHistoricalUsageBackfill).toHaveBeenCalledTimes(1);
   });
 
-  it('POST /api/usage/session records a session and returns its number', async () => {
-    usage.recordSession.mockResolvedValue(42);
-    const res = await request(buildApp())
-      .post('/api/usage/session')
-      .send({ providerId: 'anthropic', providerName: 'Anthropic', model: 'opus' });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ sessionNumber: 42 });
-    expect(usage.recordSession).toHaveBeenCalledWith('anthropic', 'Anthropic', 'opus');
-  });
-
   it('POST /api/usage/messages records messages and returns success', async () => {
     usage.recordMessages.mockResolvedValue();
     const res = await request(buildApp())
@@ -500,31 +456,6 @@ describe('usage routes', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
     expect(usage.recordMessages).toHaveBeenCalledWith('p1', 'm', 3, 1000, 0);
-  });
-
-  it('POST /api/usage/tokens defaults missing token counts to 0', async () => {
-    usage.recordTokens.mockResolvedValue();
-    const res = await request(buildApp()).post('/api/usage/tokens').send({});
-    expect(res.status).toBe(200);
-    expect(usage.recordTokens).toHaveBeenCalledWith(0, 0);
-  });
-
-  it.each(['5', -1, 1.5, {}, []])('POST /api/usage/tokens rejects %j', async (bad) => {
-    usage.recordTokens.mockClear();
-    const res = await request(buildApp()).post('/api/usage/tokens').send({ inputTokens: bad });
-    expect(res.status).toBe(400);
-    expect(usage.recordTokens).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { providerId: 5 },
-    { providerId: 'p1', providerName: {} },
-    { providerId: 'p1', model: [] }
-  ])('POST /api/usage/session rejects %j', async (body) => {
-    usage.recordSession.mockClear();
-    const res = await request(buildApp()).post('/api/usage/session').send(body);
-    expect(res.status).toBe(400);
-    expect(usage.recordSession).not.toHaveBeenCalled();
   });
 
   it('DELETE /api/usage resets usage data', async () => {

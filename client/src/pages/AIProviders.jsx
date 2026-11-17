@@ -418,9 +418,17 @@ export default function AIProviders() {
     setTestResults(prev => ({ ...prev, [id]: result }));
   };
 
+  // Removed in place. A mode of a grouped card is the exception: the server owns
+  // the grouping (`executionModes`), so removing one re-reads to regroup.
   const handleDelete = async (id) => {
     await api.deleteProvider(id);
-    loadData();
+    const groupedMode = providers.some(p => p.id !== id && (p.executionModes || []).some(mode => mode.id === id));
+    if (groupedMode || providers.find(p => p.id === id)?.executionModes?.length > 1) {
+      loadData();
+      return;
+    }
+    providerListRevision.current.mutation += 1;
+    setProviders(prev => prev.filter(p => p.id !== id));
   };
 
   // Complete a lone CLI provider into a CLI / TUI pair. A full `loadData()`
@@ -440,10 +448,13 @@ export default function AIProviders() {
   };
 
   const handleToggleEnabled = async (provider) => {
-    await api.updateProvider(provider.id, {
+    const updated = await api.updateProvider(provider.id, {
       enabled: !provider.enabled,
     });
-    loadData();
+    // Only `enabled` is patched: the response is a bare record without the
+    // list-only fields (`executionModes`, `prerequisitesMet`, codex account).
+    providerListRevision.current.mutation += 1;
+    setProviders(prev => prev.map(p => (p.id === provider.id ? { ...p, enabled: typeof updated?.enabled === 'boolean' ? updated.enabled : !provider.enabled } : p)));
   };
 
   const handleEnableCodexSubscription = async (provider) => {

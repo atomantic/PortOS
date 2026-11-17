@@ -92,7 +92,6 @@ export const API_OPERATION_CONTRACTS = Object.freeze({
   '/api/git/info': gitWriteOperation('Read full git info for a path', gitPathBodySchema),
   '/api/git/branches': gitWriteOperation('List local branches', gitPathBodySchema),
   '/api/git/checkout': gitWriteOperation('Switch to a branch', gitBranchBodySchema),
-  '/api/git/pull': gitWriteOperation('Pull from the remote', gitPathBodySchema),
   '/api/git/sync': gitWriteOperation('Pull then push a branch', gitOptionalBranchBodySchema),
   '/api/git/remote-branches': gitWriteOperation('List remote branches with merge status', gitRemoteBranchesBodySchema),
   '/api/git/merge': gitWriteOperation('Merge a branch into the current branch', gitBranchBodySchema),

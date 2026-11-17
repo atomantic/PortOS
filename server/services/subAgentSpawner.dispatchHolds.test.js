@@ -77,7 +77,6 @@ vi.mock('./cosForgeSpawnGate.js', () => ({
 vi.mock('./agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
-  terminateAgent: vi.fn(),
 }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 

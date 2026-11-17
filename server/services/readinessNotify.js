@@ -105,7 +105,7 @@ export async function armReadinessWatchers() {
     listen(appsEvents, ['changed'], ['health', 'capabilities']);
     listen(mediaJobEvents, ['enqueued', 'started', 'completed', 'failed', 'canceled'], ['health']);
     listen(providerStatusEvents, ['status:changed'], ['capabilities']);
-    listen(cosEvents, ['health:check', 'health:critical', 'agent:spawned', 'agent:completed', 'agent:terminate', 'tasks:changed', 'status', 'status:paused', 'status:resumed'], ['health']);
+    listen(cosEvents, ['health:check', 'health:critical', 'agent:spawned', 'agent:completed', 'tasks:changed', 'status', 'status:paused', 'status:resumed'], ['health']);
     listen(cosEvents, ['config:changed', 'memory:created', 'memory:updated', 'memory:deleted', 'memory:approved', 'memory:rejected'], ['capabilities']);
   } catch (err) {
     stopWatchers();

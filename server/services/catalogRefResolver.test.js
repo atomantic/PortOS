@@ -1,12 +1,12 @@
 /**
- * Catalog ref resolver + dangling-ref integrity (#1018).
+ * Catalog ref resolver (#1018).
  *
  * Two layers:
  *  1. A pure parity guard (no DB): REF_TARGET_TABLES must cover exactly the
  *     REF_KINDS the validation layer accepts — so a new referenceable record
  *     kind can't be added without a resolver target.
  *  2. A live-PG round-trip (SKIPS when no DB): insert refs + targets across all
- *     kinds, assert resolveRefs / listDanglingRefs distinguish live from
+ *     kinds, assert resolveRefs distinguishes live from
  *     deleted/absent targets. Synthetic rows use a `-rt-` id marker (and the
  *     fixed ING ingredient) so beforeEach/afterAll can DELETE exactly what the
  *     suite created without disturbing other rows.
@@ -82,12 +82,6 @@ describe.skipIf(!runDb)('catalog ref resolver — live resolution + dangling rep
     await close();
   });
 
-  const linkRef = (refKind, refId, role = 'mentioned') => query(
-    `INSERT INTO catalog_ingredient_refs (ingredient_id, ref_kind, ref_id, role)
-     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-    [ING, refKind, refId, role],
-  );
-
   it('resolveRefs marks a tuple resolved only when a live target row exists', async () => {
     await query(`INSERT INTO universes (id, name, data) VALUES ('u-rt-1', 'U', '{}'::jsonb)`);
     // An issue requires a series_id (NOT NULL) — covers the pipeline_issues path.
@@ -126,42 +120,5 @@ describe.skipIf(!runDb)('catalog ref resolver — live resolution + dangling rep
     await query(`UPDATE creative_director_projects SET deleted = TRUE, deleted_at = NOW() WHERE id = 'cd-rt-1'`);
     const [softGone] = await resolver.resolveRefs([{ refKind: 'creative-director', refId: 'cd-rt-1' }]);
     expect(softGone).toMatchObject({ resolved: false, reason: 'missing-target' });
-  });
-
-  it('listDanglingRefs reports only refs whose live target is missing', async () => {
-    // One live target (universe), one missing (series), one soft-deleted (work).
-    await query(`INSERT INTO universes (id, name, data) VALUES ('u-rt-1', 'U', '{}'::jsonb)`);
-    await query(`INSERT INTO writers_room_works (id, title, data, deleted) VALUES ('wr-work-rt2', 'W', '{}'::jsonb, TRUE)`);
-    await linkRef('universe', 'u-rt-1');
-    await linkRef('series', 'ser-rt-missing');
-    await linkRef('work', 'wr-work-rt2');
-
-    const dangling = await resolver.listDanglingRefs();
-    const keys = dangling.map((d) => `${d.refKind}:${d.refId}`);
-    expect(keys).toContain('series:ser-rt-missing');
-    expect(keys).toContain('work:wr-work-rt2');
-    expect(keys).not.toContain('universe:u-rt-1'); // live → not dangling
-    const series = dangling.find((d) => d.refId === 'ser-rt-missing');
-    expect(series).toMatchObject({ reason: 'missing-target', linkCount: 1 });
-  });
-
-  it('a tombstoned (unlinked) ref is excluded from the dangling report', async () => {
-    await linkRef('series', 'ser-rt-missing');
-    await query(
-      `UPDATE catalog_ingredient_refs SET deleted = TRUE, deleted_at = NOW()
-        WHERE ingredient_id = $1 AND ref_id = 'ser-rt-missing'`,
-      [ING],
-    );
-    const dangling = await resolver.listDanglingRefs();
-    expect(dangling.some((d) => d.refId === 'ser-rt-missing')).toBe(false);
-  });
-
-  it('a ref whose INGREDIENT is soft-deleted is excluded (no live consumer)', async () => {
-    // The ref row stays deleted = FALSE when its ingredient is soft-deleted, but
-    // there's no live "Appears in" consumer, so it must not surface as dangling.
-    await linkRef('series', 'ser-rt-missing');
-    await query(`UPDATE catalog_ingredients SET deleted = TRUE, deleted_at = NOW() WHERE id = $1`, [ING]);
-    const dangling = await resolver.listDanglingRefs();
-    expect(dangling.some((d) => d.refId === 'ser-rt-missing')).toBe(false);
   });
 });

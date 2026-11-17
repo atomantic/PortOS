@@ -1,49 +1,17 @@
 /**
- * Keyed stale-while-revalidate cache for readings that are EXPENSIVE to take and
- * SLOW to change — provider quota panels, scraped usage, anything behind a
- * multi-second CLI/PTY spawn.
+ * Keyed stale-while-revalidate cache for readings that are EXPENSIVE to take and SLOW to change (provider quota panels, scraped usage: anything behind a multi-second CLI/PTY spawn).
  *
- * The problem it solves: a plain TTL cache blocks the first caller after the TTL
- * lapses. When producing a value costs 10-20 seconds, that caller is a page load
- * rendering nothing, and the number it waited for had moved by single digits. So
- * a stale reading is served IMMEDIATELY and the refresh lands behind the
- * response. Values carry their own `fetchedAt`, so serving stale never makes the
- * reported age dishonest — it only stops that age being paid for synchronously.
+ * A plain TTL cache blocks the first caller after expiry (a page load rendering nothing for 10-20s while the number moved by single digits), so a stale reading is served IMMEDIATELY and the refresh lands behind the response; values carry their own `fetchedAt`, so the reported age stays honest. Handled once: 1. **A background refresh must not reject unhandled**: the stored promise always resolves to `{ value }` or `{ error }` (a caller served stale never awaits it; an unawaited rejection takes the process down). 2. **A failure keeps the last good value** (one transient hiccup doesn't flip a healthy card to error) and records `failedAt`, so a persistently broken producer is retried on a backoff rather than respawned per caller (else "serve stale and revalidate" degrades to "spawn a subprocess per request"). 3. **Waiting is terminal**: a cold cache can answer `PENDING` for callers that render "still reading" and poll, but a cold cache whose producer already FAILED throws (a `PENDING` there promises a reading that never comes). `wait` is a three-state enum, not two booleans: "give me a live reading but don't wait" is meaningless and two flags force a precedence rule at every layer.
  *
- * Three things a naive serve-stale loop gets wrong, handled here once:
- *
- * 1. **A background refresh must not reject unhandled.** The stored promise
- *    always resolves to `{ value }` or `{ error }`. A caller served stale never
- *    awaits it, and an unawaited rejection takes the process down.
- * 2. **A failure keeps the last good value** rather than flipping a healthy card
- *    to an error state on one transient hiccup — and records `failedAt`, so a
- *    persistently broken producer is retried on a backoff instead of respawned
- *    by every caller. Without that, "serve stale and revalidate" degrades into
- *    "spawn a subprocess per request" exactly when the subprocess is broken.
- * 3. **Waiting is terminal.** A cold cache can answer `PENDING` for callers that
- *    render "still reading" and poll — but a cold cache whose producer has
- *    already FAILED throws instead, because `PENDING` there promises a reading
- *    that is never coming and the poller never stops.
- *
- * `wait` is a three-state enum rather than a pair of booleans on purpose: the
- * combination "give me a live reading, but also don't wait for one" has no
- * meaning, and encoding it as two flags forces a precedence rule at every layer
- * that threads them.
- *
- * @see server/lib/singleFlight.js — the bare in-flight coalescer, with no cache.
+ * @see server/lib/singleFlight.js, the bare in-flight coalescer with no cache.
  */
 
 /** A cold cache whose first reading is still being produced. */
 export const PENDING = Symbol('stale-while-revalidate:pending');
 
 /**
- * What a reader is willing to wait for:
- * - `fresh`  — bypass the cache and block for a live reading (an explicit
- *              Refresh, or work that is about to spend real money on the result).
- * - `cached` — serve whatever is cached, revalidating behind the caller; block
- *              only when nothing is cached at all. The default.
- * - `never`  — as `cached`, but a cold cache returns `PENDING` instead of
- *              blocking.
+ * What a reader is willing to wait for: `fresh` (bypass the cache and block for a live reading: an explicit Refresh, or work about to spend money on it); `cached` (serve what's cached, revalidating behind the caller; block only when nothing is cached; the default);
+ * `never` (as `cached`, but a cold cache returns `PENDING` instead of blocking).
  */
 export const WAIT = Object.freeze({ FRESH: 'fresh', CACHED: 'cached', NEVER: 'never' });
 
@@ -69,11 +37,7 @@ export function createStaleWhileRevalidate({
 } = {}) {
   const entries = new Map(); // key -> { at, value, ttl, failedAt, inflight }
 
-  /**
-   * Start one production and fold concurrent callers into it. The returned
-   * promise NEVER rejects (see the docblock) — callers wanting the error unwrap
-   * `{ error }` themselves.
-   */
+  /** Start one production and fold concurrent callers into it. The returned promise NEVER rejects; callers wanting the error unwrap `{ error }`. */
   function start(key, produce) {
     const inflight = Promise.resolve()
       .then(produce)
@@ -82,16 +46,13 @@ export function createStaleWhileRevalidate({
         return { value };
       })
       .catch((error) => {
-        // Keep the last good reading and record WHEN this failed, so the backoff
-        // can pace the retry. Dropping the entry here is what would let every
-        // subsequent poll start a fresh spawn.
+        // Keep the last good reading and record WHEN this failed so the backoff can pace the retry (dropping the entry would let every poll start a fresh spawn).
         const { at, value, ttl } = entries.get(key) || {};
         entries.set(key, { at, value, ttl, failedAt: Date.now() });
         return { error };
       })
       .then(result => {
-        // A notification failure must not turn a good reading into a failed
-        // production or reject an unobserved background refresh.
+        // A notification failure must not turn a good reading into a failed production or reject an unobserved background refresh.
         try {
           onSettled?.();
         } catch (error) {
@@ -117,13 +78,10 @@ export function createStaleWhileRevalidate({
     const cached = hit?.value !== undefined;
     if (!live && cached && Date.now() - hit.at < (hit.ttl ?? ttlMs)) return hit.value;
 
-    // Don't hammer a producer that just failed — unless the caller explicitly
-    // asked for a live reading, which is a user waiting on a button.
+    // Don't hammer a producer that just failed, unless the caller explicitly asked for a live reading (a user waiting on a button).
     if (!live && hit?.failedAt !== undefined && Date.now() - hit.failedAt < failureBackoffMs) {
       if (cached) return hit.value; // stale, but real
-      // Nothing cached and the producer is failing. `PENDING` here would promise
-      // a reading that is not coming, and the caller would poll forever — so
-      // fail, and let it render an error instead.
+      // Nothing cached and the producer is failing: `PENDING` would promise a reading that isn't coming and the caller would poll forever, so fail and let it render an error.
       throw new Error('the previous attempt failed; backing off before retrying');
     }
 

@@ -436,7 +436,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
         audioStatus: payload.audio || 'none',
         playback: capable,
         playbackFallback: !capable && payload.playbackFallback && typeof payload.playbackFallback.reason === 'string'
-          ? { reason: payload.playbackFallback.reason, upgradable: payload.playbackFallback.upgradable === true } : null,
+          ? { reason: payload.playbackFallback.reason, upgradable: payload.playbackFallback.upgradable === true,
+            ...(typeof payload.playbackFallback.file === 'string' ? { file: payload.playbackFallback.file } : {}) } : null,
         unsupportedEffects: Array.isArray(payload.unsupportedEffects) ? payload.unsupportedEffects : [],
       }));
       // A reconnect opens at time zero; restore the current scrub/playhead

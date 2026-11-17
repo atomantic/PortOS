@@ -12,23 +12,8 @@ import { listCatalogTypes } from '../services/apiCatalogTypes';
 import { CATALOG_TYPES, mergeCatalogTypes } from '../lib/catalogTypes';
 
 /**
- * Catalog type registry hook + context.
- *
- * Fetches `GET /api/catalog/types` once (the FULL active registry — system +
- * user-defined) and merges it with the static `CATALOG_TYPES` fallback so the
- * Catalog list / picker / editor pick up user-defined types. The static
- * registry is the SYNCHRONOUS fallback: first render (before the fetch
- * resolves) returns the built-in six so the UI never blanks.
- *
- * Exposed:
- *   types   — ordered merged list ({ id, label, badgeColor, primaryContentKey,
- *             primaryContentLabel, snippetFallbackKeys, editorFields?, system })
- *   getType — (id) => type | undefined
- *   ids     — ordered id list
- *   loading — true until the first fetch resolves (fallback is live meanwhile)
- *   error   — the last fetch failure (null when the registry is current); `types`
- *             still carries the static fallback so pickers never blank
- *   refresh — re-fetch (call after a Settings → Catalog mutation)
+ * Catalog type registry hook + context. Fetches `GET /api/catalog/types` once (the FULL active registry, system + user-defined) and merges it with the static `CATALOG_TYPES` fallback, which is the SYNCHRONOUS fallback so the first render returns the built-in six and the UI never blanks.
+ * Exposed: `types` (ordered merged list `{ id, label, badgeColor, primaryContentKey, primaryContentLabel, snippetFallbackKeys, editorFields?, system }`), `getType(id)`, `ids`, `loading` (true until the first fetch resolves), `error` (the last fetch failure, null when current; `types` still carries the fallback), `refresh` (re-fetch after a Settings → Catalog mutation).
  */
 
 const CatalogTypesContext = createContext(null);

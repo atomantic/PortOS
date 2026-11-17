@@ -7,16 +7,12 @@ import { useEffect, useState } from 'react';
 import { getToolUseModels } from '../services/apiLocalLlm';
 
 /**
- * Provider ids the server tags local rows with (`PROVIDER_ID[backend]` in
- * server/services/localLlm.js), seeded so "none installed" differs from an absent key.
- * A CUSTOM provider on another Ollama/LM Studio host stays regex-only.
+ * Provider ids the server tags local rows with (`PROVIDER_ID[backend]` in server/services/localLlm.js), seeded so "none installed" differs from an absent key; a CUSTOM provider on another host stays regex-only.
  */
 const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
 
 /**
- * Module-level fetch cache: `null` = never fetched (or failed and cleared for retry),
- * else a Promise. Agent pickers render one per row, so N mounts must join ONE
- * capability scan; hence a promise-of-result, not a result.
+ * Module-level fetch cache: `null` = never fetched (or failed and cleared for retry), else a Promise: agent pickers render one per row, so N mounts must join ONE capability scan.
  */
 let inFlight = null;
 
@@ -47,21 +43,9 @@ export function __resetToolUseModelIdsCache() {
 }
 
 /**
- * Model ids the SERVER reports as TOOL-USE capable, keyed BY PROVIDER ID
- * (`{ ollama: Set, lmstudio: Set }`), fetched once per page load and shared. The
- * client's `isToolUseModel` regex is an allowlist that goes stale (`phi4-mini` read
- * "⚠ no known tool use" while the Local LLMs "Agents" badge disagreed), so agent
- * pickers union this in via `localToolUseHint` / `withToolUseOptionLabel`.
- *
- * Callers UNION `idsByProvider` with the regex, so it only ADDS models; null/empty
- * degrades to regex-only. Never flatten or key by backend: a bare id is not a
- * capability, and a custom provider (or Ollama-backed CLI wrapper) on another host
- * was never enumerated. Those stay regex-only, since a false "🔧 tool use" sends an
- * agent to a model that narrates instead of acting.
- *
- * `loaded` flips true once the fetch SETTLES (success or failure), so a caller can
- * tell "still fetching" from "none capable" and not flash "⚠ no known tool use".
- *
+ * Model ids the SERVER reports as TOOL-USE capable, keyed BY PROVIDER ID (`{ ollama: Set, lmstudio: Set }`), fetched once per page load and shared: the client's `isToolUseModel` regex is a stale-prone allowlist (`phi4-mini` read "⚠ no known tool use" while the Local LLMs "Agents" badge disagreed), so agent pickers union this in via `localToolUseHint` / `withToolUseOptionLabel`.
+ * It only ADDS models (null/empty degrades to regex-only). Never flatten or key by backend: a bare id is not a capability, and a custom provider (or Ollama-backed CLI wrapper) on another host was never enumerated; a false "🔧 tool use" sends an agent to a model that narrates instead of acting.
+ * `loaded` flips true once the fetch SETTLES (success or failure), so a caller can tell "still fetching" from "none capable" and not flash "⚠ no known tool use".
  * @param {boolean} [enabled] gate the fetch (a picker's `highlightToolUse` or a
  *   drawer's `open`); fetches once and keeps the result if `enabled` goes false.
  * @returns {{idsByProvider: Record<string, Set<string>>|null, loaded: boolean}}

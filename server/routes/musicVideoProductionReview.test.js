@@ -45,7 +45,7 @@ const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencie
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');
-const { assertProductionApproval, approveProductionStage, productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
+const { DIRECTOR_STARTED, assertProductionApproval, approveProductionStage, productionReviewBasis } = await import('../services/musicVideo/productionReview.js');
 const app = express();
 app.use(express.json()); app.use('/api/music-video', router); app.use(errorMiddleware);
 let project, base, draft;
@@ -143,7 +143,9 @@ describe('human-reviewed Music Video workflow', () => {
     expect(prepared.body.readiness.storyboard.approved).toBe(false);
     expect(author.calls).toBe(0);
     const generate = () => request(app).post(`${base}/composition/document/generate`).send({ providerId: 'fixture-author', model: 'fixture-model' });
-    expect((await generate()).body.code).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    // The director's own authoring is not gated on the storyboard approval (only unattended callers are).
+    expect((await generate()).body.code).not.toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    author.calls = 0;
     expect((await approve('storyboard')).status).toBe(200);
     const { buildCodeTimeline } = await import('../services/musicVideo/codeTimeline.js');
     author.sections = buildCodeTimeline(await store.getProject(project.id)).sections.map(section => ({ id: section.id,
@@ -178,7 +180,8 @@ describe('human-reviewed Music Video workflow', () => {
     await save({ ...draft, motionLanguage: 'A different motion direction' });
     expect((await request(app).post(`${base}/production-review/approve`).send(body)).status).toBe(409);
     expect((await request(app).patch(base).send({ productionReview: { approvals: { proof: true } } })).status).toBe(400);
-    expect((await request(app).post(`${base}/render`).send({ approved: true })).body.code).toBe('MUSIC_VIDEO_APPROVAL_REQUIRED');
+    // The director's render is past the approval gate: a body claim of approval changes nothing, and the stale approval does not refuse it.
+    expect((await request(app).post(`${base}/render`).send({ approved: true })).body.code).not.toMatch(/^MUSIC_VIDEO_(APPROVAL_REQUIRED|STORYBOARD_INCOMPLETE)$/);
     expect((await request(app).post(`${base}/production-review/proof`).send({ startSec: 0, endSec: 20 })).status).toBe(409);
   });
 
@@ -217,7 +220,10 @@ describe('human-reviewed Music Video workflow', () => {
     expect(() => assertProductionApproval(accepted)).not.toThrow();
     await save({ ...draft, visualLanguage: 'New orange direction' });
     expect((await read()).body.readiness.readyForProduction).toBe(false);
-    expect((await request(app).post(`${base}/render`).send({})).status).toBe(409);
+    // Unattended callers still halt on the revoked approval; the director's own render is not refused for it.
+    const revoked = await store.getProject(project.id);
+    expect(() => assertProductionApproval(revoked, 'storyboard')).toThrow(expect.objectContaining({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' }));
+    expect(() => assertProductionApproval(revoked, 'storyboard', { startedBy: DIRECTOR_STARTED })).not.toThrow();
   });
 
   // Uniquely catches an approval gate returning on the owner's own shot renders.
@@ -375,7 +381,9 @@ describe('human-reviewed Music Video workflow', () => {
       await store.mutateProjectRecord(project.id, () => ({ project: revised }));
       const readiness = (await read()).body.readiness;
       expect(readiness.art.approved, label).toBe(true);
-      expect(readiness.storyboard.problems.join(' '), label).toContain('Lyric alignment is provisional or changed');
+      // Only the applied timing map moves word times; analysis edits restale the storyboard and proof but not the lyric verification.
+      expect(readiness.alignment.status, label).toBe(label === 'timingMap' ? 'stale' : 'verified');
+      expect(readiness.storyboard.problems.join(' ').includes('Lyric alignment is provisional or changed'), label).toBe(label === 'timingMap');
       expect(readiness.basis.storyboard, label).not.toBe(acceptedStatus.basis.storyboard);
       expect(readiness.basis.proof, label).not.toBe(acceptedStatus.basis.proof);
       expect(readiness.readyForProduction, label).toBe(false);

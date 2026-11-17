@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -48,12 +49,6 @@ const touchpointSchema = z.object({
   calendarAccountId: z.string().max(200).nullable().optional(),
   calendarEventId: z.string().max(500).nullable().optional(),
   metadata: z.record(z.unknown()).optional().default({}),
-});
-
-const calendarTouchpointSchema = z.object({
-  accountId: z.string().guid(),
-  eventId: z.string().min(1).max(500),
-  summary: z.string().max(2000).optional(),
 });
 
 const memoryLinkSchema = z.object({
@@ -146,7 +141,7 @@ router.get('/people', asyncHandler(async (req, res) => {
 // Care summary — overdue-contact status computed server-side (single source of
 // truth) for the dashboard widget and proactive-alerts check.
 router.get('/care', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 5, maxLimit: 50 });
+  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 5, maxLimit: 50 });
   const summary = await tribe.getCareSummary(limit);
   res.json(summary);
 }));
@@ -162,7 +157,7 @@ router.get('/duplicate-identifiers', asyncHandler(async (req, res) => {
 // timeline (#2158). Detection only — NO LLM. Feeds the Tribe Outreach panel and
 // mirrors the `tribe_unanswered` proactive alert.
 router.get('/outreach', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 8, maxLimit: 50 });
+  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 8, maxLimit: 50 });
   const threads = await tribeOutreach.findUnansweredTribeThreads({ limit });
   res.json({ threads });
 }));
@@ -212,7 +207,7 @@ router.delete('/people/:id', asyncHandler(async (req, res) => {
 }));
 
 router.get('/people/:id/touchpoints', asyncHandler(async (req, res) => {
-  const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
+  const { limit } = parsePagination(validateRequest(paginationQuerySchema, req.query), { defaultLimit: 50, maxLimit: 200 });
   const touchpoints = await tribe.listTouchpoints(req.params.id, limit);
   res.json({ touchpoints });
 }));
@@ -220,13 +215,6 @@ router.get('/people/:id/touchpoints', asyncHandler(async (req, res) => {
 router.post('/people/:id/touchpoints', asyncHandler(async (req, res) => {
   const data = validateRequest(touchpointSchema, req.body);
   const touchpoint = await tribe.createTouchpoint(req.params.id, data);
-  req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
-  res.status(201).json(touchpoint);
-}));
-
-router.post('/people/:id/touchpoints/calendar', asyncHandler(async (req, res) => {
-  const data = validateRequest(calendarTouchpointSchema, req.body);
-  const touchpoint = await tribe.createCalendarTouchpoint(req.params.id, data);
   req.app.get('io')?.emit('tribe:changed', { personId: req.params.id });
   res.status(201).json(touchpoint);
 }));

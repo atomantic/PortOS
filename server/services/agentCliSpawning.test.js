@@ -44,11 +44,6 @@ vi.mock('./cosAgentLifecycle.js', () => {
     createAgentOutputBatcher,
   };
 });
-vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
-vi.mock('./toolStateMachine.js', () => ({
-  completeExecution: vi.fn(),
-  errorExecution: vi.fn(),
-}));
 vi.mock('./agentErrorAnalysis.js', () => ({ analyzeAgentFailure: vi.fn().mockResolvedValue(null) }));
 // The lifecycle ledger is a real file writer (data/cos/run-events.jsonl) — mocked
 // so first-output telemetry lands in a spy rather than the developing install's
@@ -67,7 +62,6 @@ vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedVal
 vi.mock('./agentApiAuth.js', () => ({ resolveAgentApiEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
-  releaseAgentLane: vi.fn(),
 }));
 // The close handler hands the run to the shared completion dispatch (pipeline
 // progression → worktree cleanup with the PR disposition → retry-hold release).
@@ -532,8 +526,6 @@ describe('stream error containment', () => {
       streamFormat: 'stream-json',
     },
     agentDir: '/tmp',
-    executionId: null,
-    laneName: null,
   };
 
   // Re-import the mocked cosAgentLifecycle module reference once — mocking is module-scoped.
@@ -568,16 +560,14 @@ describe('stream error containment', () => {
   describe('spawn failure containment', () => {
     it('settles private sandbox preparation failure without spawning an uncontained child', async () => {
       const { preparePrivateSecuritySpawn } = await import('../lib/privateSecuritySandbox.js');
-      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+      const { finalizeAgent } = await import('./agentFinalization.js');
       const { spawn } = await import('../lib/childProcess.js');
       spawn.mockClear();
       finalizeAgent.mockClear();
-      releaseAgentLane.mockClear();
       preparePrivateSecuritySpawn.mockRejectedValueOnce(new Error('synthetic sandbox unavailable'));
       const task = { id: 'private-task', taskType: 'internal', metadata: { analysisType: 'private-security-assessment' } };
       await expect(spawnDirectly({ ...minimalArgs, task })).resolves.toBeNull();
       expect(spawn).not.toHaveBeenCalled();
-      expect(releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'agent-test', success: false }));
       expect(finalizeAgent).toHaveBeenCalledWith(expect.objectContaining({
         task, success: false, exitCode: 1, completionReason: 'spawn-error', outputBuffer: '',
       }));
@@ -1586,13 +1576,11 @@ describe('stream error containment', () => {
   // copies of this teardown, kept in sync by prose comments and running their two
   // gates in OPPOSITE order. These three tests are the oracle for the invariants
   // that mirroring protected — the same three, asserted the same way, live in
-  // agentTuiSpawning.test.js. They pin the lane/registry/marker effects that the
+  // agentTuiSpawning.test.js. They pin the registry/marker effects that the
   // other suites' finalizeAgent-argument assertions do not observe.
   describe('shared finalize sequence (#6619)', () => {
     beforeEach(async () => {
-      const { releaseAgentLane } = await import('./agentFinalization.js');
       const { consumePausedAgentExit } = await import('./agentState.js');
-      releaseAgentLane.mockClear();
       consumePausedAgentExit.mockClear();
       agentStateMocks.updateAgent.mockClear();
     });
@@ -1604,11 +1592,9 @@ describe('stream error containment', () => {
       resetHostShutdownFlagForTests();
     });
 
-    // A paused run was already finalized (and lane-released) by markAgentPaused.
-    // Re-releasing the same executionId logs a spurious "Invalid state
-    // transition", so the paused gate must win over the host-shutdown gate.
-    it('paused run exiting during host shutdown takes the paused path, releasing no lane and writing no interrupted marker', async () => {
-      const { releaseAgentLane } = await import('./agentFinalization.js');
+    // A paused run was already settled by markAgentPaused, so the paused gate
+    // must win over the host-shutdown gate.
+    it('paused run exiting during host shutdown takes the paused path, writing no interrupted marker', async () => {
       const { pausedAgents, consumePausedAgentExit, activeAgents } = await import('./agentState.js');
 
       spawnDirectly({ ...minimalArgs });
@@ -1618,7 +1604,6 @@ describe('stream error containment', () => {
       fakeProcess.emit('close', 0);
 
       await vi.waitFor(() => expect(consumePausedAgentExit).toHaveBeenCalledWith(minimalArgs.agentId), { interval: 5 });
-      expect(releaseAgentLane).not.toHaveBeenCalled();
       expect(activeAgents.has(minimalArgs.agentId)).toBe(false);
       expect(agentStateMocks.updateAgent).not.toHaveBeenCalledWith(
         minimalArgs.agentId,
@@ -1629,7 +1614,7 @@ describe('stream error containment', () => {
     // The process can win the race and exit 0 after the user killed it. Recording
     // that as a success leaves the task blocked with a "successful" run attached.
     it('user-terminated run that exits 0 finalizes as failure with the terminated error', async () => {
-      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+      const { finalizeAgent } = await import('./agentFinalization.js');
       const { userTerminatedAgents } = await import('./agentState.js');
       userTerminatedAgents.add(minimalArgs.agentId);
 
@@ -1642,19 +1627,14 @@ describe('stream error containment', () => {
         success: false,
         error: 'Agent terminated by user',
       })), { interval: 5 });
-      expect(releaseAgentLane).toHaveBeenCalledWith(expect.objectContaining({
-        success: false,
-        errorExecutionMessage: 'Agent terminated by user',
-      }));
       // Consumed, so a later resume of the same agent id is not misread as a kill.
       expect(userTerminatedAgents.has(minimalArgs.agentId)).toBe(false);
     });
 
     // pm2's TreeKill took the child down with portos-server. The run has no
-    // outcome: leave the record `running` for the next boot's orphan sweep and
-    // do NOT release the lane through the finalize path.
-    it('run interrupted by host shutdown with no sentinel is abandoned without releasing its lane', async () => {
-      const { finalizeAgent, releaseAgentLane } = await import('./agentFinalization.js');
+    // outcome: leave the record `running` for the next boot's orphan sweep.
+    it('run interrupted by host shutdown with no sentinel is abandoned without finalizing', async () => {
+      const { finalizeAgent } = await import('./agentFinalization.js');
 
       spawnDirectly({ ...minimalArgs });
       await new Promise((r) => setTimeout(r, 10));
@@ -1665,7 +1645,6 @@ describe('stream error containment', () => {
         minimalArgs.agentId,
         { metadata: { phase: 'interrupted', interruptedBy: 'host-shutdown' } },
       ), { interval: 5 });
-      expect(releaseAgentLane).not.toHaveBeenCalled();
       expect(finalizeAgent).not.toHaveBeenCalled();
       // A restart the operator caused, preserved for resume, is the normal path: info, never warn.
       expect(emitLog).toHaveBeenCalledWith('info', expect.stringContaining('interrupted by a PortOS host restart'), expect.any(Object));

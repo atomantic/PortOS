@@ -1,3 +1,4 @@
+import { problem, withProblems } from '../test/musicVideoProblems.js';
 import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
@@ -115,6 +116,8 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(ready).current).toBe('review');
     expect(deriveNextAction(ready)).toMatchObject({ id: 'render-final', kind: 'run', disabled: false });
     expect(deriveNextAction(ready, { renderBlockedByOther: true })).toMatchObject({ id: 'render-final', disabled: true });
+    // A technical problem disables the render even when the approvals read as current.
+    expect(deriveNextAction(ready, { readiness: { ...APPROVED, storyboard: { approved: true, technicalProblems: ['Gap.'] }, renderable: false } })).toMatchObject({ id: 'render-final', disabled: true, reason: 'Gap.' });
     expect(deriveNextAction(ready, { renderActive: true, renderProgress: 41.6 })).toMatchObject({ id: 'render-progress', disabled: true, label: 'Rendering… 42%' });
 
     // A composed render needs its text cues before Make is done.
@@ -158,6 +161,17 @@ describe('deriveStages / deriveNextAction', () => {
     expect(stepNotes(stale).review).toBe('Out of date');
     // The project index agrees: a stale render does not finish Final render.
     expect(summarizeMusicVideoProject(stale, APPROVED).stage).toBe('review');
+  });
+
+  // Uniquely catches the Shots step note missing the older-character-reference count, or counting by anything but its code (#16473).
+  it('counts shots rendered from an older character reference in the Shots note', () => {
+    const ready = { audioAnalysis: ANALYSIS, uploadedAudioFilename: 'a.mp3', scenes: [scene()], productionReadiness: APPROVED, renderHistoryId: 'rh-1' };
+    const readiness = { ...APPROVED, storyboard: { ...APPROVED.storyboard, adviceItems: [
+      { code: 'character-reference-changed', message: 'Shot 1: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+      { code: 'other-advice', message: 'Shot 1: frame rendered from an older character reference (Ada).', sceneId: 's1' },
+    ] } };
+    expect(stepNotes(ready).produce).not.toMatch(/older character reference/);
+    expect(stepNotes(ready, readiness).produce).toMatch(/ · 1 from an older character reference$/);
   });
 
   it('counts Publish per enabled platform, done only when each has a post (#10143)', () => {
@@ -560,7 +574,7 @@ describe('stageChecklist', () => {
   });
 
   const NOT_APPROVED = {
-    art: { approved: false, problems: [] }, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'] },
+    art: { approved: false, problems: [] }, storyboard: withProblems({ approved: false }, [problem('art-unapproved', 'Review and approve the current art direction first.')]),
     proof: { approved: false, problems: [] }, readyForProduction: false,
   };
   const castProject = (over = {}) => ({
@@ -624,7 +638,7 @@ describe('stageChecklist', () => {
       .toEqual([['shots', true]]);
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), NOT_APPROVED).find((i) => i.id === 'approve-storyboard'))
       .toMatchObject({ done: false, detail: 'Approve the Look first.', action: { stage: 'cast-sets', anchor: 'mv-review-art' } });
-    expect(stageChecklist('produce', castProject({ scenes: [scene()] }), { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Storyboard shots must cover the master without unintended gaps or overlaps.'] } })
+    expect(stageChecklist('produce', castProject({ scenes: [scene()] }), { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, [problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.')]) })
       .find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.', action: { stage: 'board' } });
     expect(stageChecklist('produce', castProject({ scenes: [scene(), scene({ sceneId: 's2', videoHistoryId: null })] }), APPROVED)[0])
       .toMatchObject({ id: 'footage', label: 'Footage for every shot (1 of 2)', done: false,
@@ -641,13 +655,13 @@ describe('stageChecklist', () => {
   it('asks for the storyboard review, not a board plan, when a document storyboard brings its own shots', () => {
     const project = { id: 'p', trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS, scenes: [], composition: { mode: 'document', document: { directory: 'd' } },
       productionReview: { draft: { ...LYRICS.productionReview.draft, storyboardSource: 'document', storyboard: [{ id: 'shot-1' }] } } };
-    const readiness = { ...APPROVED, storyboard: { approved: false, problems: ['Import a shot manifest from the current authored document and master audio.'] }, proof: { approved: false, problems: [] }, readyForProduction: false };
+    const readiness = { ...APPROVED, storyboard: withProblems({ approved: false }, [problem('manifest-stale', 'Import a shot manifest from the current authored document and master audio.')]), proof: { approved: false, problems: [] }, readyForProduction: false };
     expect(deriveNextAction(project, { readiness })).toMatchObject({ id: 'review-production', stage: 'produce', anchor: 'mv-review-storyboard' });
     expect(deriveNextAction({ ...project, productionReview: { draft: LYRICS.productionReview.draft } }, { readiness })).toMatchObject({ id: 'plan' });
   });
 
   it('sends a missing document shot manifest to the manifest import, not to lyric timing', () => {
-    const readiness = { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.'] } };
+    const readiness = { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, [problem('manifest-stale', 'Import a shot manifest from the current authored document and master audio. Reauthor or reimport after source, timing or shot changes.')]) };
     const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness);
     expect(items.find((i) => i.id === 'board-manifest')).toMatchObject({ label: 'Document shot manifest', action: { label: 'Import the shot manifest', anchor: 'mv-review-planning' } });
     expect(items.some((i) => i.id === 'board-timing')).toBe(false);
@@ -655,7 +669,7 @@ describe('stageChecklist', () => {
     const shots = stageChecklist('produce', castProject({ scenes: [scene()] }), readiness);
     expect(shots.find((i) => i.id === 'approve-storyboard')).toMatchObject({ detail: 'Finish the storyboard first.' });
     // A stale approval keeps naming what changed, even with an art problem listed on Plan.
-    const stale = { ...readiness, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'], stale: { changedFields: ['art direction', 'cast'] } } };
+    const stale = { ...readiness, storyboard: withProblems({ approved: false, stale: { changedFields: ['art direction', 'cast'] } }, [problem('art-unapproved', 'Review and approve the current art direction first.')]) };
     expect(stageChecklist('produce', castProject({ scenes: [scene()] }), stale).find((i) => i.id === 'approve-storyboard').detail).toMatch(/changed since: art direction, cast/);
   });
   it('offers storyboard review without asking for legacy still locks', () => {
@@ -681,7 +695,7 @@ describe('stageChecklist', () => {
     const stale = { ...NOT_APPROVED, storyboard: { approved: false, problems: [], stale: { changedFields: ['cast'] } } };
     const stills = (r, p = castProject({ scenes: [scene()] })) => stageChecklist('produce', p, r).find((i) => i.id === 'approve-storyboard');
     expect(stills(stale).action).toMatchObject({ label: 'Keep approved', run: 'keep-approval', stage: 'storyboard' });
-    const blocked = { ...NOT_APPROVED, storyboard: { approved: false, problems: ['Resolve storyboard feedback for Chorus: More lyrics on screen'], stale: { changedFields: ['cast'] } } };
+    const blocked = { ...NOT_APPROVED, storyboard: withProblems({ approved: false, stale: { changedFields: ['cast'] } }, [problem('feedback', 'Resolve storyboard feedback for Chorus: More lyrics on screen')]) };
     const project = castProject({ scenes: [scene()], productionReview: { feedback } });
     const items = stageChecklist('board', project, blocked);
     expect(items.map((i) => i.id)).toEqual(['shots', 'feedback-storyboard']);
@@ -705,16 +719,16 @@ describe('stageChecklist', () => {
   });
 
   it('lists every storyboard readiness problem on Board, grouped, each with a jump target', () => {
-    const readiness = { ...NOT_APPROVED, storyboard: { approved: false, problems: [
-      'Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.',
-      'Lyric alignment is provisional or changed. Listen and verify the current word timings.',
-      'Storyboard shots must cover the master without unintended gaps or overlaps.',
-      'Complete timing, action, staging, camera and transition for Shot 1.',
-      'Review lyric anchors for Shot 1.',
-      'Complete timing, action, staging, camera and transition for Shot 2.',
-      'Review lyric anchors for Shot 2.',
-      'Complete timing, action, staging, camera and transition for Shot 3.',
-    ] } };
+    const readiness = { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, [
+      problem('lyrics-missing', 'Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.'),
+      problem('alignment-unverified', 'Lyric alignment is provisional or changed. Listen and verify the current word timings.'),
+      problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 1.', 's1'),
+      problem('lyric-anchors', 'Review lyric anchors for Shot 1.', 's1'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 2.', 's2'),
+      problem('lyric-anchors', 'Review lyric anchors for Shot 2.', 's2'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 3.', 's3'),
+    ]) };
     const items = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).filter((i) => i.details);
     expect(items.map((i) => i.id)).toEqual(['board-lyrics', 'board-timing', 'board-coverage', 'board-shots']);
     expect(items.every((i) => i.action?.anchor)).toBe(true);
@@ -723,6 +737,32 @@ describe('stageChecklist', () => {
       '3 shots missing timing, action, staging, camera or transition.',
       '2 shots need lyric anchors reviewed.',
     ]);
+  });
+
+  it('counts shots missing their timing and shots missing only fields on one line', () => {
+    const readiness = { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, [
+      problem('shot-timing', 'Complete timing, action, staging, camera and transition for Shot 1.', 's1'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 2.', 's2'),
+    ]) };
+    const shots = stageChecklist('board', castProject({ scenes: [scene()] }), readiness).find((i) => i.id === 'board-shots');
+    expect(shots.details).toEqual(['2 shots missing timing, action, staging, camera or transition.']);
+  });
+
+  it('groups and links by problem code, whatever wording the server uses', () => {
+    const items = [
+      problem('lyrics-missing', 'Import lyrics and align them to the current vocal; missing lyrics are not an instrumental.'),
+      problem('alignment-unverified', 'Lyric alignment is provisional or changed. Listen and verify the current word timings.'),
+      problem('manifest-stale', 'Import a shot manifest from the current authored document.'),
+      problem('coverage', 'Storyboard shots must cover the master without unintended gaps or overlaps.'),
+      problem('shot-incomplete', 'Complete timing, action, staging, camera and transition for Shot 1.', 's1'),
+      problem('shot-unbound', 'Bind every draft shot to a real Board scene.'),
+    ];
+    const summary = (list) => stageChecklist('board', castProject({ scenes: [scene()] }), { ...NOT_APPROVED, storyboard: withProblems({ approved: false }, list) })
+      .filter((i) => i.details).map((i) => ({ id: i.id, label: i.label, action: i.action }));
+    const reworded = items.map((p, at) => ({ ...p, message: `Reworded sentence ${at} with no shared vocabulary` }));
+    const before = summary(items);
+    expect(before.map((i) => i.id)).toEqual(['board-manifest', 'board-lyrics', 'board-timing', 'board-coverage', 'board-shots']);
+    expect(summary(reworded)).toEqual(before);
   });
 
   it('gives every open checklist item an action so none is a dead end', () => {
@@ -854,7 +894,7 @@ describe('finished outside PortOS', () => {
     scenes: [scene()], composition: { mode: 'document', document: { directory: 'd' } }, renderHistoryId: 'rh-1',
     publishKit: { posts: { youtube: { url: 'https://example.com/v' } } },
   };
-  const unapproved = { art: { approved: false, problems: ['x'] }, storyboard: { approved: false, problems: ['x'] }, proof: { approved: false, problems: ['x'] }, alignment: { status: 'provisional' } };
+  const unapproved = { art: withProblems({ approved: false }, [problem('art-guide-text', 'x')]), storyboard: withProblems({ approved: false }, [problem('no-shots', 'x')]), proof: withProblems({ approved: false }, [problem('proof-needed', 'x')]), alignment: { status: 'provisional' } };
   const marked = { ...external, finishedOutside: { markedAt: '2026-10-05T00:00:00.000Z', note: 'Made elsewhere' } };
 
   it('without the marker, a published external project reads as stuck on Song', () => {
