@@ -43,7 +43,8 @@
  * that is spawned or may be loaded natively, a nested repository), when a
  * test or `scripts/` member reads machine-local state (`data/`,
  * the home directory), when the `// test-memo: never` marker is present, when
- * the test is in the planner's `ALWAYS_RUN_TESTS` or `TEST_MEMO_NEVER`, or —
+ * the test is a tree guard (`*.guard.test.js`), in the planner's always-run
+ * set or in `TEST_MEMO_NEVER`, or —
  * for the floor key only — when a module edge is non-literal or unresolvable.
  * A recorded set that reaches outside the repository is not memoizable
  * either. Every unknown construct lands in one of those buckets rather than
@@ -63,6 +64,7 @@ import { builtinModules } from 'node:module';
 import { posix } from 'node:path';
 import { tokenize, staticEdges } from './sourceTokens.js';
 import { getAlwaysRunTests, FIXTURE_OWNERS } from '../ci-test-plan.js';
+import { isGuardTest } from './guardScanners.js';
 
 export { tokenize } from './sourceTokens.js';
 
@@ -116,35 +118,15 @@ export const TEST_MEMO_ENV = Object.freeze([
 export const TEST_MEMO_TOOLS = Object.freeze(['chrome', 'ffmpeg', 'python']);
 
 /**
- * Tree-wide guards that read the repository rather than import it. Most are
- * also in `ALWAYS_RUN_TESTS`; the rest spawn git or walk the tree and would
- * fail closed on their own. Naming them keeps the reason explicit.
+ * Tree readers the guard suffix and the always-run set do not already cover:
+ * catalog and enumeration tests another selector reaches. A `*.guard.test.js`
+ * and an always-run test are never memoized without an entry here (`verdict`);
+ * these spawn git or walk the tree and would fail closed on their own, and
+ * naming them keeps the reason explicit.
  */
 export const TEST_MEMO_NEVER = Object.freeze({
-  'scripts/migrations/shippedPromptHashes.guard.test.js': 'compares shipped-hashes.json against the reference prompts and the merge base',
-  'scripts/direct-invocation-drift.guard.test.js': 'scans every tracked .js file',
-  'scripts/repo-scan-guards.guard.test.js': 'scans every tracked test file',
-  'server/lib/importScoping.test.js': 'base-relative import-growth comparison against git history',
-  'server/lib/layering.guard.test.js': 'scans every server/lib source for upward service imports',
-  'server/lib/generatedManifests.guard.test.js': 'scans scripts/generate-*.js and their sibling tests',
   'server/lib/moduleSummaries.test.js': 'reads every server/lib module header',
-  'server/lib/apiAccessPolicy.test.js': 'walks server/lib and server/services source trees',
-  'server/lib/creativeLatitude.sources.guard.test.js': 'walks server sources to collect source literals',
-  'server/lib/dispatchLabels.audit.guard.test.js': 'walks repository instructions and source trees',
-  'server/lib/dynamicImportGlob.guard.test.js': 'walks server sources for dynamic imports',
   'server/lib/promptSystemStages.test.js': 'enumerates shipped prompt templates in data.reference',
-  'server/logLevelConventions.guard.test.js': 'scans the whole server tree',
-  'server/services/agentImportCycles.test.js': 'walks the server/services import graph for static cycles',
-  'server/services/meatspacePostImportCycles.test.js': 'walks the server/services import graph for static cycles',
-  'server/services/serviceImportCycles.test.js': 'walks the server/services import graph for static cycles',
-  'server/services/twinImportCycles.test.js': 'walks the server/services import graph for static cycles',
-  'server/mockContractConventions.guard.test.js': 'scans every tracked test file',
-  'server/negativeProofSleepConventions.guard.test.js': 'scans every tracked test file',
-  'server/childListenerOrderConventions.guard.test.js': 'scans the whole server tree',
-  'server/routeTestCoverageConventions.guard.test.js': 'scans server/index.js mounts against every test',
-  'server/routeValidationConventions.guard.test.js': 'scans every route module',
-  'server/floatingAsyncConventions.guard.test.js': 'scans the whole server tree',
-  'server/timerCallbackConventions.guard.test.js': 'scans the whole server tree',
   'client/src/lib/moduleSummaries.test.js': 'reads every client/src/lib module header',
   'client/src/hooks/moduleSummaries.test.js': 'reads every client/src/hooks module header',
   'client/src/utils/moduleSummaries.test.js': 'reads every client/src/utils module header',
@@ -153,6 +135,9 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'scripts/lib/workspaceTests.test.js': 'enumerates the server workspace against vitest list',
   'client/src/test/workspaceTests.test.js': 'enumerates the client workspace against vitest list',
 });
+
+/** Why a client tree guard, which rides client changes rather than every plan, is never memoized. */
+export const GUARD_SUFFIX_REASON = 'tree guard (*.guard.test.js)';
 
 /**
  * Workspace inputs shared by every key: the Vitest config(s) and setup files
@@ -1254,8 +1239,8 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // far as the key can tell. For the test and for repository tooling that
       // fails closed. A library member (`server/lib/testHelper.js` and its
       // source walkers) reads such a tree only when a test calls it, and every
-      // test that does is a tree scanner the planner already keeps always-run
-      // (`scripts/repo-scan-guards.guard.test.js` enforces the registration).
+      // test that does is a tree scanner, which carries the guard suffix and is
+      // never memoized (`scripts/repo-scan-guards.guard.test.js` enforces the name).
       // A data-read tree the repository listing can enumerate is keyed instead
       // (`dataTree`), under the same membership rule.
       const ownsTrees = testRel === null || gitRuleApplies(rel, testRel);
@@ -1360,6 +1345,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
   const verdict = (testRel, gathered, extra, baseClosure, { requireEdges }) => {
     const reasons = [];
     if (getAlwaysRunTests().includes(testRel)) reasons.push('always-run guard');
+    else if (isGuardTest(testRel)) reasons.push(GUARD_SUFFIX_REASON);
     if (TEST_MEMO_NEVER[testRel]) reasons.push(TEST_MEMO_NEVER[testRel]);
     if (gathered.never) reasons.push('test-memo: never marker');
     // Set before the analyzer's own findings are appended: these three are a decision someone wrote down.

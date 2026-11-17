@@ -288,7 +288,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(unrecorded).toEqual([
       { test: c, declared: false, reason: 'floor key: an input changed while the run was in flight; recorded key: Vitest recorded no modules for this file' },
       { test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: Vitest recorded no modules for this file` },
-      { test: guard, declared: true, reason: 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)' },
+      { test: guard, declared: true, reason: 'never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker)' },
       { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: Vitest recorded no modules for this file' },
     ]);
     // No depfile at all (a Vitest that stopped writing one) is a different cause from a file missing in it.
@@ -302,7 +302,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(memoUnrecordedLines(unrecorded)).toEqual([
       `🧠   not recorded: ${c} (${unrecorded[0].reason})`,
       `🧠   not recorded: ${dynamic} (${unrecorded[1].reason})`,
-      '🧠   not recorded: 2 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).',
+      '🧠   not recorded: 2 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).',
     ]);
     expect(memoUnrecordedLines([])).toEqual([]);
     const many = Array.from({ length: MEMO_UNRECORDED_LINE_LIMIT + 3 }, (_, index) => ({ test: `server/lib/t${index}.test.js`, reason: 'floor key: x; recorded key: y', declared: false }));

@@ -189,12 +189,25 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
-Tree-scanning guards need no registration: the planner derives them from the
-tracked tests with the detectors in `scripts/lib/guardScanners.js` and adds them
-to every plan (client scanners ride any `client/src` js/jsx change).
-`EXPLICIT_ALWAYS_RUN_TESTS` lists only guards the detector cannot see, and
-`TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
-reaches. `scripts/repo-scan-guards.guard.test.js` pins the derivation.
+**A tree guard registers by its filename.** The planner selects every tracked
+`*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
+read): a guard outside `client/src` joins every plan, and a client guard rides
+any `client/src` js/jsx change. The test memo never skips one. So a test that
+scans the tracked tree is named `<name>.guard.test.js`, and a suite that mixes
+one scan with behavioural tests keeps the scan in a sibling guard file, so the
+behavioural tests go back to import-graph selection instead of riding every
+push. `EXPLICIT_ALWAYS_RUN_TESTS` lists only the always-run tests whose file is
+not named as a guard (doc parity, route policy, import cycles, the
+prompt-upgrade contract).
+
+The content detectors in `scripts/lib/guardScanners.js` (git enumeration, the
+shared source walkers, `readdirSync` with `recursive: true`, a hand-rolled
+recursive directory walker, an unnamed cross-root read) select nothing. They
+are a one-way check in `scripts/repo-scan-guards.guard.test.js`: a test they
+recognise as a scanner fails unless it carries the suffix or is listed in that
+file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
+or its walk reads a temporary directory). A scanner the detectors cannot see
+(one that scans through an imported helper) is still selected by its name.
 
 Because they run on every PR, each always-run guard has a per-file time budget
 (`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
@@ -1077,10 +1090,11 @@ successor run".
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
   directories change, and catalog-only barrels are excluded from import-graph
   expansion. JSX changes include the global accessibility convention guard.
-- Any server source change adds the tree-scanning guards
-  (`server/lib/apiRouteGraph.test.js`, `server/lib/apiRouteParity.test.js`,
-  `scripts/generate-prompt-stage-call-sites.test.js`): they read the tree
+- Any server source change adds `server/lib/apiRouteParity.test.js` and
+  `scripts/generate-prompt-stage-call-sites.test.js`: they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
+  The route-graph guard, `server/lib/apiRouteGraph.guard.test.js`, rides every
+  plan by its name.
 - A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
   `server/lib/db.ddlParity.test.js`, which fails when the generated file is
   stale (#16092).

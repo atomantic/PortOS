@@ -1,8 +1,13 @@
 /**
- * Detectors for tests that assert over the tracked tree (#5055, #6363, #8723).
+ * Tree guards: tests that assert over the tracked tree (#5055, #6363, #8723).
  * CI's impact selection follows imports and named basenames; a scanner reads
  * files it never imports, so only an always-run registration can reach it.
- * The planner derives that set from these detectors instead of a hand list.
+ *
+ * The registration is the filename (#16553): the planner selects every
+ * `*.guard.test.js` by suffix and reads no test source. The content detectors
+ * below no longer select anything. They are a one-way check
+ * (scripts/repo-scan-guards.guard.test.js): a test they recognise as a scanner
+ * must carry the suffix, so a new scanner cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
 import { readFileSync } from 'node:fs';
@@ -22,8 +27,8 @@ export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
 /** Tracked guard tests (relative paths), by suffix alone: no source is read. */
 export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();
 
-/** A `git` invocation… */
-const GIT_CALL = /execFileSync\(\s*['"]git['"]/;
+/** A `git` invocation through any child_process spawner that takes the program first… */
+const GIT_CALL = /\b(?:execFileSync|execFile|spawnSync|spawn)\(\s*['"]git['"]/;
 /** …carrying a tree-enumerating subcommand. */
 const GIT_ENUMERATION = /['"](?:ls-files|grep)['"]/;
 /**
@@ -150,11 +155,37 @@ export const hasRecursiveDirectoryWalk = (source) => {
   });
 };
 
+const SHELL_EXEC_CALL = /\bexec(?:Sync)?\s*\(/;
+const SHELL_EXEC_NAMES = new Set(['execSync', 'exec']);
+const SHELL_GIT_ENUMERATION = /^\s*git\s+(?:-C\s+\S+\s+)?(?:ls-files|grep)\b/;
+
+/**
+ * `execSync('git ls-files …')`: the enumeration written as one shell string
+ * (#16553). The regex detectors blank a literal holding whitespace, so this
+ * reads the call's first argument as a token; a command quoted inside a
+ * fixture string is one string token and never reaches here as a call.
+ */
+export const shellsOutToGitEnumeration = (source) => {
+  if (!SHELL_EXEC_CALL.test(source)) return false;
+  let tokens;
+  try {
+    tokens = tokenize(source);
+  } catch {
+    return /\bgit\s+(?:ls-files|grep)\b/.test(source);
+  }
+  const commandText = (token) => (token?.t === 's' ? token.v : token?.t === 'tpl' ? token.quasis[0] : '');
+  const inList = (list) => list.some((token, i) => (token.t === 'tpl' && token.exprs.some(inList))
+    || (token.t === 'id' && SHELL_EXEC_NAMES.has(token.v) && isPunct(list[i + 1], '(')
+      && SHELL_GIT_ENUMERATION.test(commandText(list[i + 2]))));
+  return inList(tokens);
+};
+
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
   const code = blankLiterals(stripLineComments(source));
   return (GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
-    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code);
+    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code)
+    || hasRecursiveDirectoryWalk(source) || shellsOutToGitEnumeration(source);
 };
 
 /** Which runner owns `relPath` (a `git ls-files`-relative path): 'client' or 'server'. */
@@ -183,12 +214,23 @@ export const readsUnnamedCrossRootFile = (source, relPath) => {
 };
 
 
-/** Tracked test files (relative paths) that scan the tree or read an unnamed cross-root file. */
+/** True when the test at `relPath` scans the tree or reads an unnamed cross-root file. */
+export const isTreeScanner = (source, relPath) => scansTrackedTree(source) || readsUnnamedCrossRootFile(source, relPath);
+
+/**
+ * The one-way check: paths in `sources` (`{ path: source }`) the detectors
+ * recognise as scanners that neither carry the guard suffix nor appear in
+ * `exempt`. A scanner named here is selected by nothing.
+ */
+export const findUnsuffixedScanners = (sources, exempt = new Set()) => Object.keys(sources)
+  .filter((path) => !isGuardTest(path) && !exempt.has(path) && isTreeScanner(sources[path], path))
+  .sort();
+
+/** Tracked test files (relative paths) the detectors recognise as scanners, whatever their name. */
 export const detectTreeGuards = (repoRoot) => {
   const found = [];
   for (const rel of trackedFiles(repoRoot, ['*.test.js', '*.test.jsx'])) {
-    const source = readFileSync(join(repoRoot, rel), 'utf8');
-    if (scansTrackedTree(source) || readsUnnamedCrossRootFile(source, rel)) found.push(rel);
+    if (isTreeScanner(readFileSync(join(repoRoot, rel), 'utf8'), rel)) found.push(rel);
   }
   return found.sort();
 };

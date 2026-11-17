@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { scansTrackedTree, readsUnnamedCrossRootFile, hasRecursiveDirectoryWalk } from './guardScanners.js';
+import {
+  scansTrackedTree, readsUnnamedCrossRootFile, hasRecursiveDirectoryWalk, shellsOutToGitEnumeration,
+  findUnsuffixedScanners, isGuardTest,
+} from './guardScanners.js';
 
 describe('guard scanner detectors (#5055, #6363, #8723)', () => {
   it('detects the scan shape it registers, and leaves ordinary tests alone', () => {
@@ -51,6 +54,34 @@ describe('guard scanner detectors (#5055, #6363, #8723)', () => {
     // A walker quoted as a fixture string or described in a comment is data, not a scan.
     expect(hasRecursiveDirectoryWalk("const fixture = 'const walk = (d) => readdirSync(d).flatMap((n) => walk(n));';")).toBe(false);
     expect(hasRecursiveDirectoryWalk("// const walk = (d) => readdirSync(d).flatMap((n) => walk(n));\nexpect(1).toBe(1);")).toBe(false);
+  });
+
+  it('detects git enumeration through every spawner and as one shell string (#16553)', () => {
+    expect(scansTrackedTree("const out = spawnSync('git', ['grep', '-l', 'x'], { encoding: 'utf8' });")).toBe(true);
+    expect(shellsOutToGitEnumeration("const files = execSync('git ls-files \"src/**/*.test.js\"', { cwd });")).toBe(true);
+    expect(shellsOutToGitEnumeration('const files = execSync(`git ls-files ${glob}`, { cwd });')).toBe(true);
+    expect(scansTrackedTree("const files = execSync('git ls-files', { cwd }).toString();")).toBe(true);
+    // Another git subcommand, another program, and the command quoted as fixture data.
+    expect(shellsOutToGitEnumeration("execSync('git status --porcelain', { cwd });")).toBe(false);
+    expect(shellsOutToGitEnumeration("execSync('npm ls', { cwd });")).toBe(false);
+    expect(shellsOutToGitEnumeration("const fixture = \"execSync('git ls-files')\";")).toBe(false);
+    // git run in a temp repository for some other reason is not a tree scan.
+    expect(scansTrackedTree("spawnSync('git', ['init'], { cwd: dir });")).toBe(false);
+  });
+
+  it('names a scanner that lacks the guard suffix, and nothing else (#16553)', () => {
+    const walker = "const walk = (dir) => readdirSync(dir).flatMap((name) => walk(join(dir, name)));\nit('scans', () => expect(walk(ROOT)).toEqual([]));";
+    const plain = "import { thing } from './thing.js';\nit('works', () => expect(thing()).toBe(1));";
+    expect(isGuardTest('server/lib/newWalker.guard.test.js')).toBe(true);
+    expect(isGuardTest('client/src/Widget.guard.test.jsx')).toBe(true);
+    expect(isGuardTest('server/lib/childProcess.guards.test.js')).toBe(false);
+    expect(isGuardTest('server/lib/guard.test.js')).toBe(false);
+    expect(findUnsuffixedScanners({
+      'server/lib/newWalker.test.js': walker,
+      'server/lib/newWalker.guard.test.js': walker,
+      'server/lib/thing.test.js': plain,
+      'scripts/tempDirWalker.test.js': walker,
+    }, new Set(['scripts/tempDirWalker.test.js']))).toEqual(['server/lib/newWalker.test.js']);
   });
 
   it('detects the unnamed-cross-root-read shape it registers, and leaves a named read alone (#6363)', () => {

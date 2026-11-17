@@ -260,7 +260,7 @@ describe('test memo through the real runner', () => {
       expect(trusted.status, trusted.stderr).toBe(0);
       expect(trusted.stdout).toContain('recorded 0 green entries for 2 passed files');
       expect(trusted.stdout).toMatch(new RegExp(`🧠   not recorded: ${stuck.replace(/[./]/g, '\\$&')} \\(floor key: [^;]+; recorded key: [^)]+\\)\n`));
-      expect(trusted.stdout).toContain('🧠   not recorded: 1 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).');
+      expect(trusted.stdout).toContain('🧠   not recorded: 1 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).');
       expect(trusted.stdout.match(/not recorded:/g)).toHaveLength(2);
       const untrusted = run({ ...unrecorded, GITHUB_EVENT_NAME: 'pull_request' });
       expect(untrusted.status, untrusted.stderr).toBe(0);

@@ -12,7 +12,7 @@ import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { detectTreeGuards, guardTestFiles } from './lib/guardScanners.js';
+import { guardTestFiles } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
@@ -344,16 +344,21 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      They sat structurally unselectable — `agent-instructions-files.guard.test.js`
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
-//      The planner derives this half from the tree (getTreeGuards, detected by
-//      scripts/lib/guardScanners.js), so a new scanner needs no registration;
-//      repo-scan-guards.guard.test.js pins the detector and the derived set.
+//      This half is selected by filename (#16553): every tracked
+//      `*.guard.test.js` (getGuardTests), so a new scanner registers by being
+//      named. repo-scan-guards.guard.test.js fails a scanner without the suffix.
 //
 // Everything here is deliberately cheap: it reads only prompt data or `git`
 // output, which is affordable on every PR including documentation-only ones,
 // where the alternative is reasoning per-scope about what can reach it. The
 // whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
 // a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
-// hosted CI enforces; a behavioural test that no scan needs does not belong here.
+// hosted CI enforces. A behavioural test that no scan needs does not belong
+// here: a suite that mixes the two keeps its scan in a sibling
+// `<name>.guard.test.js`.
+//
+// The explicit list holds only what the suffix does not: guards whose file is
+// not named as one.
 export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports, so a docs-only PR that documented a removed endpoint
@@ -385,34 +390,23 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'server/services/taskPromptDefaults/claimPromptSize.test.js',
 ];
 
-/**
- * Tree scanners the detector finds (scripts/lib/guardScanners.js) that another
- * selector already reaches, so they must NOT ride every plan. Each entry names
- * that selector.
- */
-export const TREE_GUARDS_SELECTED_ELSEWHERE = new Map([
-  ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS (behavioural, #16086)'],
-  // `.ps1` is an unclassified changed file and forces the complete suite.
-  ['scripts/ps1-bom.test.js', 'unclassified-file full-suite trigger: *.ps1'],
-]);
-
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Tracked tree-scanning guards, derived rather than registered (#16085). Lazy
- * and memoized: scanning spawns git, and pregate must not start a subprocess
- * before it has validated its arguments.
+ * Tracked tree guards, selected by the `*.guard.test.js` suffix (#16553). One
+ * `git ls-files`, no test source read. Lazy and memoized: listing spawns git,
+ * and pregate must not start a subprocess before it has validated its arguments.
  */
-let treeGuards;
-export const getTreeGuards = () => (treeGuards ??= [...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
+let guardTests;
+export const getGuardTests = () => (guardTests ??= guardTestFiles(REPO_ROOT));
 
-/** Client scanners are reached by structuralTestsFor on any client/src js(x) change. */
+/** Client guards are reached by structuralTestsFor on any client/src js(x) change. */
 const isClientGuard = (path) => path.startsWith('client/src/');
 
 let alwaysRun;
 export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
   ...EXPLICIT_ALWAYS_RUN_TESTS,
-  ...getTreeGuards().filter((path) => !isClientGuard(path) && !TREE_GUARDS_SELECTED_ELSEWHERE.has(path)),
+  ...getGuardTests().filter((path) => !isClientGuard(path)),
 ])].sort());
 
 const DB_RISK_RULES = [
@@ -798,12 +792,12 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     if (changedFiles.some((path) => path.startsWith(`${dir}/`))) add(`${dir}/moduleSummaries.test.js`);
   }
   // These guards read the tree rather than importing it, so no import edge
-  // selects them: the route-graph guard catches a route file nothing mounts,
-  // the parity guard a client wrapper stranded by a renamed mount, and the
-  // prompt-stage drift test a stale manifest — which is what a scoped plan
-  // let merge before this rule existed (#5898).
+  // selects them: the parity guard catches a client wrapper stranded by a
+  // renamed mount, and the prompt-stage drift test a stale manifest — which is
+  // what a scoped plan let merge before this rule existed (#5898). The
+  // route-graph guard (a route file nothing mounts) is
+  // server/lib/apiRouteGraph.guard.test.js and rides every plan by its name.
   if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
-    add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
@@ -838,10 +832,9 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    add('client/src/dashboardWidgetContainerConventions.guard.test.js');
-    // Tree-scanning client guards are derived (scripts/lib/guardScanners.js);
+    // Client tree guards are selected by suffix (getGuardTests);
     // timeouts.guard.test.js scans the TEST files, which this pattern also matches.
-    for (const path of getTreeGuards()) if (path.startsWith('client/src/')) add(path);
+    for (const path of getGuardTests()) if (isClientGuard(path)) add(path);
   }
 
   return selected;

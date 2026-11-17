@@ -113,7 +113,7 @@ describe('floor key', () => {
   it('keeps tree scanners out of the memo', () => {
     const treeScanners = [
       'server/lib/apiRouteParity.test.js',
-      'server/lib/apiAccessPolicy.test.js',
+      'server/lib/apiAccessPolicy.guard.test.js',
       'server/lib/creativeLatitude.sources.guard.test.js',
       'server/lib/dispatchLabels.audit.guard.test.js',
       'server/lib/dynamicImportGlob.guard.test.js',

@@ -955,7 +955,7 @@ describe('CI test impact planner', () => {
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
-    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
@@ -1444,7 +1444,7 @@ describe('CI test impact planner', () => {
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
-      'server/lib/apiRouteGraph.test.js',
+      'server/lib/apiRouteGraph.guard.test.js',
       'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];

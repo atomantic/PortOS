@@ -27,52 +27,111 @@
  * indefinitely while every PR reports green, which is exactly what happened
  * to the agent-instructions guard.
  *
- * The planner therefore derives these guards from the tree (`getTreeGuards`
- * in ci-test-plan.js, detectors in scripts/lib/guardScanners.js) and adds them
- * to every plan — or, for client scanners, to any client/src js(x) change — so
- * a new scanner needs no registry edit. This test pins that derivation.
+ * The planner therefore selects these guards by filename (#16553): every tracked
+ * `*.guard.test.js` rides every plan — or, under client/src, any client js(x)
+ * change — and the test memo never skips one (`getGuardTests` in
+ * ci-test-plan.js). A name is a registration nobody can forget to make only if
+ * something fails when the name is missing, so the content detectors in
+ * scripts/lib/guardScanners.js stay as a one-way check here: a test they
+ * recognise as a scanner must carry the suffix. They select nothing.
  */
+import { readFileSync } from 'fs';
 import { describe, it, expect } from 'vitest';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedFiles } from './lib/trackedFiles.js';
-import { detectTreeGuards, guardTestFiles } from './lib/guardScanners.js';
-import {
-  EXPLICIT_ALWAYS_RUN_TESTS, TREE_GUARDS_SELECTED_ELSEWHERE, getAlwaysRunTests, getTreeGuards,
-  buildCiTestPlan,
-} from './ci-test-plan.js';
+import { findUnsuffixedScanners, guardTestFiles, isGuardTest, isTreeScanner } from './lib/guardScanners.js';
+import { EXPLICIT_ALWAYS_RUN_TESTS, getAlwaysRunTests, getGuardTests, buildCiTestPlan } from './ci-test-plan.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const trackedTests = trackedFiles(REPO_ROOT, ['*.test.js', '*.test.jsx']);
+const sourceOf = (rel) => readFileSync(join(REPO_ROOT, rel), 'utf8');
 
-describe('tree-scanning guards are derived into CI selection (#5055, #16085)', () => {
+/**
+ * Tests the detectors recognise that deliberately carry no suffix. Two kinds:
+ * a real scanner another selector already reaches, which must not ride every
+ * plan, and a suite whose recursive walk reads a temporary directory it built
+ * itself, which is not a tree scan at all. Each entry says which.
+ */
+const SCANNERS_WITHOUT_SUFFIX = new Map([
+  ['scripts/ensure-deps.test.js', 'selected by structuralTestsFor on ENSURE_DEPS_INPUTS; behavioural temp-directory suite (#16086)'],
+  // `.ps1` is an unclassified changed file and forces the complete suite.
+  ['scripts/ps1-bom.test.js', 'selected by the unclassified-file full-suite trigger for *.ps1'],
+  ['server/cos-runner/spawnFailure.test.js', 'walks a temporary runner data root to snapshot it'],
+  ['server/services/musicVideo/compositionDocument.lyricType.test.js', 'walks a staged composition document under a temporary data root'],
+  ['server/services/worktreeReap.test.js', 'walks temporary git repositories to snapshot them'],
+]);
+
+/**
+ * The hand-rolled walkers that scanned the tree unseen before #16553, as
+ * [the name each had, the guard that holds its walker now].
+ */
+const ONCE_MISSED_WALKERS = [
+  ['server/lib/apiAccessPolicy.test.js', 'server/lib/apiAccessPolicy.guard.test.js'],
+  ['server/lib/dynamicImportGlobGuard.test.js', 'server/lib/dynamicImportGlob.guard.test.js'],
+  ['server/lib/creativeLatitude.sources.test.js', 'server/lib/creativeLatitude.sources.guard.test.js'],
+  ['server/lib/dispatchLabels.audit.test.js', 'server/lib/dispatchLabels.audit.guard.test.js'],
+];
+
+describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
   it('finds tracked test files to scan', () => {
     expect(trackedTests.length).toBeGreaterThan(100);
   });
 
-  it('finds the known scanners', () => {
-    expect(getTreeGuards()).toEqual([...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
-    expect(getTreeGuards()).toContain('scripts/agent-instructions-files.guard.test.js');
-    expect(getTreeGuards()).toContain('scripts/tailnet-identity-leak.guard.test.js');
-    expect(getTreeGuards()).toContain('server/lib/textUtils.guard.test.js');
-    expect(getTreeGuards().length).toBeGreaterThanOrEqual(8);
+  it('selects every tracked *.guard.test.js, and only those, as the guard set', () => {
+    expect(getGuardTests()).toEqual(guardTestFiles(REPO_ROOT));
+    expect(getGuardTests()).toEqual(trackedTests.filter(isGuardTest).sort());
+    expect(getGuardTests()).toContain('scripts/agent-instructions-files.guard.test.js');
+    expect(getGuardTests()).toContain('scripts/tailnet-identity-leak.guard.test.js');
+    expect(getGuardTests()).toContain('server/lib/textUtils.guard.test.js');
+    expect(getGuardTests().length).toBeGreaterThanOrEqual(8);
   });
 
-  it('selects every detected scanner without a registry edit', () => {
-    const derived = getTreeGuards().filter((p) => !p.startsWith('client/src/') && !TREE_GUARDS_SELECTED_ELSEWHERE.has(p));
-    expect(derived.filter((p) => !getAlwaysRunTests().includes(p))).toEqual([]);
+  it('runs every server-side guard on every plan without a registry edit', () => {
+    const serverSide = getGuardTests().filter((p) => !p.startsWith('client/src/'));
+    expect(serverSide.filter((p) => !getAlwaysRunTests().includes(p))).toEqual([]);
+    // A documentation-only change is the plan with the least reason to run anything.
+    const plan = buildCiTestPlan(['docs/README.md'], { trackedFiles: [...trackedTests, 'docs/README.md'] });
+    expect(serverSide.filter((p) => !plan.server.files.includes(p))).toEqual([]);
+    for (const [, guard] of ONCE_MISSED_WALKERS) expect(getAlwaysRunTests()).toContain(guard);
   });
 
-  it('selects a client scanner when a client source file changes', () => {
+  it('selects every client guard when a client source file changes', () => {
     const plan = buildCiTestPlan(['client/src/components/Foo.jsx'], { trackedFiles: [...trackedTests, 'client/src/components/Foo.jsx'] });
-    expect(plan.client.files).toContain('client/src/numberFormattingConventions.guard.test.js');
+    const clientGuards = getGuardTests().filter((p) => p.startsWith('client/src/'));
+    expect(clientGuards).toContain('client/src/numberFormattingConventions.guard.test.js');
+    expect(clientGuards.filter((p) => !plan.client.files.includes(p))).toEqual([]);
   });
 
-  it('keeps the explicit list to entries the detector cannot see, all still tracked', () => {
+  it('has no scanner without the suffix', () => {
+    const sources = Object.fromEntries(trackedTests.map((rel) => [rel, sourceOf(rel)]));
+    expect(
+      findUnsuffixedScanners(sources, new Set(SCANNERS_WITHOUT_SUFFIX.keys())),
+      'these tests scan the tracked tree but no plan selects them: rename each to <name>.guard.test.js '
+      + '(moving a scan out of a behavioural suite into a sibling guard file), or list it in SCANNERS_WITHOUT_SUFFIX with the reason',
+    ).toEqual([]);
+  });
+
+  it('would fail each walker the detector once missed, were it un-renamed', () => {
+    for (const [formerName, guard] of ONCE_MISSED_WALKERS) {
+      const source = sourceOf(guard);
+      expect(findUnsuffixedScanners({ [formerName]: source }), formerName).toEqual([formerName]);
+      expect(findUnsuffixedScanners({ [guard]: source }), guard).toEqual([]);
+    }
+  });
+
+  it('keeps the exemptions to tracked, unsuffixed tests the detector still recognises', () => {
     const tracked = new Set(trackedTests);
-    const detected = new Set(getTreeGuards());
+    const entries = [...SCANNERS_WITHOUT_SUFFIX.keys()];
+    expect(entries.filter((p) => !tracked.has(p)), 'dead entries').toEqual([]);
+    expect(entries.filter(isGuardTest), 'a guard needs no exemption').toEqual([]);
+    expect(entries.filter((p) => tracked.has(p) && !isTreeScanner(sourceOf(p), p)), 'stale: no longer detected').toEqual([]);
+    expect(entries.filter((p) => getAlwaysRunTests().includes(p)), 'exempt yet always-run').toEqual([]);
+  });
+
+  it('keeps the explicit list to tracked guards the suffix does not already select', () => {
+    const tracked = new Set(trackedTests);
     expect(EXPLICIT_ALWAYS_RUN_TESTS.filter((p) => !tracked.has(p)), 'dead entries').toEqual([]);
-    expect(EXPLICIT_ALWAYS_RUN_TESTS.filter((p) => detected.has(p)), 'redundant: already detected').toEqual([]);
-    expect([...TREE_GUARDS_SELECTED_ELSEWHERE.keys()].filter((p) => !detected.has(p)), 'stale exemption').toEqual([]);
+    expect(EXPLICIT_ALWAYS_RUN_TESTS.filter(isGuardTest), 'redundant: the suffix already selects it').toEqual([]);
   });
 });
