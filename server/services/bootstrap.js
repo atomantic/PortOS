@@ -424,8 +424,6 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },
 
-    recoverInterruptedRuns: () => import('./interruptedRunRecovery.js').then(({ recoverInterruptedRuns }) => recoverInterruptedRuns()),
-
     // Auto-fixer for error recovery.
     initAutoFixer,
     // Task learning system, tracking agent completions.
@@ -1092,6 +1090,14 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       // failures also surface in the UI.
       setupProcessErrorHandlers: () => setupProcessErrorHandlers(io),
       reconcileMediaAssetIndex: async () => (await import('./mediaAssetIndex/index.js')).reconcileMediaAssetIndexAtBoot(),
+      // The dead-owner sweep in startBackgroundServices ran before this, so a
+      // cli-run reservation whose record recovery just closed is released by a
+      // second sweep; it releases only what the closed record now proves.
+      recoverInterruptedRuns: async () => {
+        const { recoverInterruptedRuns } = await import('./interruptedRunRecovery.js');
+        const { recovered } = await recoverInterruptedRuns();
+        if (recovered > 0) reconcileDeadOwnerReservations();
+      },
       backfillOriginInstanceId,
       // Relay any brain record whose current state never reached the sync log
       // (a crash or failed append on a previous run) — #8351.
