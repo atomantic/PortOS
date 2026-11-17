@@ -36,7 +36,7 @@ import { describe, it, expect } from 'vitest';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { trackedFiles } from './lib/trackedFiles.js';
-import { detectTreeGuards } from './lib/guardScanners.js';
+import { detectTreeGuards, guardTestFiles } from './lib/guardScanners.js';
 import {
   EXPLICIT_ALWAYS_RUN_TESTS, TREE_GUARDS_SELECTED_ELSEWHERE, getAlwaysRunTests, getTreeGuards,
   buildCiTestPlan,
@@ -51,7 +51,7 @@ describe('tree-scanning guards are derived into CI selection (#5055, #16085)', (
   });
 
   it('finds the known scanners', () => {
-    expect(getTreeGuards()).toEqual(detectTreeGuards(REPO_ROOT));
+    expect(getTreeGuards()).toEqual([...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
     expect(getTreeGuards()).toContain('scripts/agent-instructions-files.test.js');
     expect(getTreeGuards()).toContain('scripts/tailnet-identity-leak.test.js');
     expect(getTreeGuards()).toContain('server/lib/textUtils.test.js');

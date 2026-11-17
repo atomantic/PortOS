@@ -12,7 +12,7 @@ import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
 import { writeStepOutput } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { detectTreeGuards } from './lib/guardScanners.js';
+import { detectTreeGuards, guardTestFiles } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
@@ -366,11 +366,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'scripts/doc-code-pointers.test.js',
   // A newly added shared selector has no import edge to its documentation inventory.
   'server/lib/executionOptions.consumers.test.js',
-  // Base-relative: a rename or deletion of a shipped migration touches no file
-  // the planner would select for it (#16094).
-  'scripts/migrations/migrationFilenames.guard.test.js',
-  // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
-  'scripts/migrations/shippedPromptHashes.guard.test.js',
   // Route policy scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
@@ -387,9 +382,8 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'server/services/meatspacePostImportCycles.test.js',
   'server/services/serviceImportCycles.test.js',
   'server/services/twinImportCycles.test.js',
-  // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
+  // Prompt-upgrade contract: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',
-  'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
   // Size ratchet over rendered claim prompts (#16409): growth comes from edits to any prompt
   // fragment the claim composers import, which no scope reliably selects it for.
   'server/services/taskPromptDefaults/claimPromptSize.test.js',
@@ -414,7 +408,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
  * before it has validated its arguments.
  */
 let treeGuards;
-export const getTreeGuards = () => (treeGuards ??= detectTreeGuards(REPO_ROOT));
+export const getTreeGuards = () => (treeGuards ??= [...new Set([...detectTreeGuards(REPO_ROOT), ...guardTestFiles(REPO_ROOT)])].sort());
 
 /** Client scanners are reached by structuralTestsFor on any client/src js(x) change. */
 const isClientGuard = (path) => path.startsWith('client/src/');

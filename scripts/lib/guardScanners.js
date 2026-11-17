@@ -10,6 +10,18 @@ import { join } from 'node:path';
 import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
+/**
+ * The filename suffix that marks a test as a tree guard (#16553). The name is
+ * the registration: the planner runs every server-side `*.guard.test.js` on
+ * every plan and every client one on any client source change, and the test
+ * memo never skips one.
+ */
+export const GUARD_TEST_RE = /\.guard\.test\.jsx?$/;
+export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
+
+/** Tracked guard tests (relative paths), by suffix alone: no source is read. */
+export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();
+
 /** A `git` invocation… */
 const GIT_CALL = /execFileSync\(\s*['"]git['"]/;
 /** …carrying a tree-enumerating subcommand. */
