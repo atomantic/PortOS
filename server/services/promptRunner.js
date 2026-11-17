@@ -14,7 +14,6 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  */
 
 import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
-export { LOCAL_LLM_MAX_CONCURRENCY, withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
