@@ -618,8 +618,8 @@ The selected work is split across parallel jobs:
   `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
   prompt-hash regenerator, `ci.yml`, or any module the guard statically
   imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
-  `scripts/ci-test-plan.js`). Non-push full runs
-  and pull requests into `release` always run it (a push gates it), and `npm run pregate` runs
+  `scripts/ci-test-plan.js`). Non-PR runs
+  and pull requests into `release` always run it, and `npm run pregate` runs
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
@@ -896,18 +896,19 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 
 ### Native jobs on a push to `main`
 
-A push to `main` runs the primary suites complete, but the seven native job
-families (SuperCollider, Windows, macOS, Linux and Docker containment, Node
-minimum, prompt history) follow the tree diff since the last green `main` run,
-decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
+A push to `main` runs the primary suites and prompt history complete (its
+guard reads every committed body, which a tree diff cannot see), but the six
+native job families (SuperCollider, Windows, macOS, Linux and Docker
+containment, Node minimum) follow the tree diff since the last green `main`
+run, decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
 (opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes
 one Actions API call for the newest successful `push` or `schedule` run of
 `ci.yml` on `main`, fetches its head at depth 1 and exports
 `CI_GATED_BASE_SHA`; the planner diffs it against `HEAD` (two-dot,
 `--no-renames`). Any lookup, fetch or diff failure runs every native job.
 Scheduled, dispatched and release runs are unchanged, so every native job still
-runs twice a day and on the release candidate. A gated push that skips Windows
-publishes no `Full CI Gate`, which only the release pull request's run supplies.
+runs twice a day and on the release candidate. A gated push publishes no `Full CI Gate`
+(`native_gated`): it is not complete-run evidence for release reuse.
 
 A merge commit on `main` is tested because a PR gate only proves the PR
 against the base it was built on: two PRs that were each green can merge into a

@@ -71,8 +71,9 @@ jobs:
       # Path-gated single-purpose jobs: true on a forced-full run, else only
       # when the diff reaches the job's import closure or, for macos_native
       # and node_minimum, its explicit path list (scripts/ci-test-plan.js). A
-      # push to main decides them from its diff against the last green push or
-      # schedule run, and runs them all when that cannot be resolved.
+      # push to main decides them, all but prompt_history, from its diff against
+      # the last green push or schedule run, and runs them all when that cannot
+      # be resolved.
       prompt_history: ${{ steps.plan.outputs.prompt_history }}
       linux_containment: ${{ steps.plan.outputs.linux_containment }}
       supercollider_live: ${{ steps.plan.outputs.supercollider_live }}
@@ -91,6 +92,9 @@ jobs:
       windows_shards: ${{ steps.plan.outputs.windows_shards }}
       suite_reasons: ${{ steps.plan.outputs.suite_reasons }}
       node_minimum: ${{ steps.plan.outputs.node_minimum }}
+      # true when a push to main gated the native jobs on its diff; such a run
+      # is not complete-run evidence, so it publishes no Full CI Gate.
+      native_gated: ${{ steps.plan.outputs.native_gated }}
       # The DB job's `services:` image cannot run a script, so it reads the
       # reference docker-compose.yml pins through this job's output.
       db_image: ${{ steps.db-image.outputs.image }}
@@ -1156,8 +1160,9 @@ jobs:
     name: Full CI Gate
     # Full supported coverage means full primary suites plus the native
     # Windows contract set. A primary-only full plan with Windows skipped
-    # cannot supply the release-reuse marker.
-    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'files' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
+    # cannot supply the release-reuse marker, and neither can a push whose
+    # native jobs were gated on its diff (native_gated).
+    if: always() && needs.impact.outputs.full == 'true' && needs.impact.outputs.windows_mode == 'files' && needs.impact.outputs.native_gated != 'true' && (github.event_name != 'pull_request' || github.base_ref == 'release' || inputs.full == true)
     needs: [impact, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 10
