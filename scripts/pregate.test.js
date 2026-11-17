@@ -4,7 +4,7 @@
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync } from 'fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
 import { delimiter, dirname, join } from 'path';
@@ -456,6 +456,121 @@ describe('pregate hidden-content invocation', () => {
     expect(report.treeStable).toBe(!changed);
     expect(report.stages.find(stage => stage.name === 'server tests').guardReuse?.files)
       .toEqual(changed ? undefined : ['server/lib/moduleSummaries.test.js']);
+    // A stage that rewrote its own inputs leaves no cross-run pass behind.
+    expect(typeof report.stages.find(stage => stage.suite === 'lint').reuseKey).toBe(changed ? 'undefined' : 'string');
+  });
+
+  describe('cross-run guard reuse', () => {
+    const events = () => readFileSync(join(root, '.cache/events'), 'utf8').trim().split('\n').filter(Boolean);
+    const receipt = () => JSON.parse(readFileSync(join(root, PREGATE_REPORT_PATH), 'utf8'));
+    // Children start without the runner's PORTOS_TEST_MEMO, which would otherwise disable reuse in every case.
+    const runWith = ({ nodeArgs = [], env = {} }, ...args) => {
+      const childEnv = { ...process.env, PATH: `${join(scratch, 'fake-bin')}${delimiter}${process.env.PATH}` };
+      delete childEnv.PORTOS_TEST_MEMO;
+      return spawnSync(process.execPath, [...nodeArgs, 'scripts/pregate.js', '--base', base, ...args], { cwd: root, encoding: 'utf8', env: { ...childEnv, ...env } });
+    };
+    const runReuse = (...args) => runWith({}, ...args);
+    const prepare = () => {
+      prepareGuardFixture();
+      write('server/lib/helper.js', '// Helper.\nexport const helper = 1;\n');
+    };
+    const firstRun = () => {
+      const result = runReuse();
+      expect(result.status, result.stderr).toBe(0);
+      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
+      write('.cache/events', '');
+    };
+
+    it('reuses guard and lint passes on an unchanged tree, also after committing it', () => {
+      prepare();
+      // Tracked before the run: committing a new path is `git add` of a new file, which must rerun.
+      git('add', 'server/lib/helper.js');
+      git('commit', '-qm', 'helper');
+      write('server/lib/helper.js', '// Helper.\nexport const helper = 2;\n');
+      firstRun();
+      const first = receipt().stages.filter(stage => stage.guard || stage.suite === 'lint');
+      expect(first.map(stage => stage.name)).toEqual(['server structural guards', 'client/server lint']);
+      expect(first.every(stage => typeof stage.reuseKey === 'string' && typeof stage.passedAt === 'string')).toBe(true);
+
+      git('add', '--all');
+      git('commit', '-qm', 'commit the validated tree');
+      const second = runReuse();
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stdout).toContain('⏭️ server structural guards reused from');
+      expect(events()).toEqual([]);
+      const reused = receipt();
+      expect(reused.passed).toBe(true);
+      expect(reused.stages.filter(stage => stage.reusedFrom).map(stage => [stage.name, stage.reusedFrom]))
+        .toEqual(first.map(stage => [stage.name, stage.passedAt]));
+
+      // The original pass time carries forward through a reuse of a reuse.
+      expect(runReuse().status).toBe(0);
+      expect(receipt().stages.filter(stage => stage.reusedFrom).map(stage => stage.reusedFrom))
+        .toEqual(first.map(stage => stage.passedAt));
+    });
+
+    it.each([
+      ['an edited tracked file', () => { write('docs/tracked note.md', '# Edited\n'); }],
+      ['git add of a new file', () => { git('add', 'docs/new.md'); }],
+      ['a changed ignored file outside caches', () => { write('local.secret', 'two\n'); }],
+      // Git normalizes CRLF away, so only the raw bytes a guard reads change.
+      ['a line-ending-only edit', () => { write('docs/tracked note.md', '# Example\r\n'); }],
+    ])('reruns every guard and lint stage after %s', (_label, mutate) => {
+      prepare();
+      write('docs/new.md', 'new\n');
+      writeFileSync(join(root, '.git', 'info', 'exclude'), 'local.secret\n');
+      write('local.secret', 'one\n');
+      writeFileSync(join(root, '.git', 'info', 'attributes'), '* text=auto eol=lf\n');
+      firstRun();
+      mutate();
+      const result = runReuse();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('⏭️');
+      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
+      expect(receipt().stages.some(stage => stage.reusedFrom)).toBe(false);
+    });
+
+    it('reruns them against a moved base', () => {
+      prepare();
+      write('docs/extra.md', 'extra\n');
+      git('add', 'docs/extra.md');
+      git('commit', '-qm', 'docs-only commit');
+      firstRun();
+      base = git('rev-parse', 'HEAD');
+      const result = runReuse();
+      expect(result.status, result.stderr).toBe(0);
+      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
+    });
+
+    it('reruns them under a different Node version', () => {
+      prepare();
+      firstRun();
+      const preload = "Object.defineProperty(process, 'version', { value: 'v99.0.0' });";
+      const result = runWith({ nodeArgs: ['--import', `data:text/javascript,${encodeURIComponent(preload)}`] });
+      expect(result.status, result.stderr).toBe(0);
+      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
+    });
+
+    it('never reuses under --full, while recording its passes for a later focused run', () => {
+      prepare();
+      firstRun();
+      const full = runReuse('--full');
+      expect(full.status, full.stderr).toBe(0);
+      expect(full.stdout).not.toContain('⏭️');
+      expect(events().filter(event => event === 'catalog')).toHaveLength(1);
+      expect(receipt().stages.find(stage => stage.guard).reuseKey).toEqual(expect.any(String));
+    });
+
+    it('never reuses under PORTOS_TEST_MEMO=off, even from a pass recorded with the same setting', () => {
+      prepare();
+      const off = () => runWith({ env: { PORTOS_TEST_MEMO: 'off' } });
+      expect(off().status).toBe(0);
+      write('.cache/events', '');
+      const result = off();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('⏭️');
+      expect(events().filter(event => event === 'catalog' || event === 'lint')).toEqual(['catalog', 'lint']);
+    });
   });
 
   // A branch and base can each be green while their combined route inventory fails.
@@ -1693,7 +1808,7 @@ describe('buildPregateReport', () => {
       startedAt: 's',
       finishedAt: 'f',
     });
-    expect(report.version).toBe(3);
+    expect(report.version).toBe(4);
     expect(report.plan.downgraded).toBe(false);
     expect(report.passed).toBe(false);
     expect(report.treeStable).toBe(false);
@@ -1760,6 +1875,38 @@ describe('validatedTreeHash', () => {
       git('commit', '-qm', 'validated state');
       expect(git('rev-parse', 'HEAD^{tree}')).toBe(hash);
       expect(git('ls-tree', '-r', '--name-only', 'HEAD').split('\n')).toEqual(['.gitignore', 'edited.txt', 'kept.txt', 'nested/added.txt']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // A same-size edit whose stat data matches the index entry is caught only by
+  // Git's racy-clean check against the index file's own mtime, which a plain
+  // copy of the index resets to "now".
+  it('hashes a racily clean same-size edit as its current content', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-pregate-racy-'));
+    const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+    try {
+      git('init', '-q');
+      git('config', 'core.hooksPath', join(root, 'empty-hooks'));
+      git('config', 'user.name', 'Example Contributor');
+      git('config', 'user.email', 'contributor@example.com');
+      git('config', 'commit.gpgsign', 'false');
+      // Compare only size and whole-second mtime, so the edit is stat-identical.
+      git('config', 'core.checkStat', 'minimal');
+      git('config', 'core.trustctime', 'false');
+      const past = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+      writeFileSync(join(root, 'value.js'), 'export const value = 1;\n');
+      utimesSync(join(root, 'value.js'), past, past);
+      git('add', '--all');
+      git('commit', '-qm', 'base');
+      utimesSync(join(root, '.git', 'index'), past, past);
+      writeFileSync(join(root, 'value.js'), 'export const value = 2;\n');
+      utimesSync(join(root, 'value.js'), past, past);
+
+      const tree = validatedTreeHash(root);
+
+      expect(git('rev-parse', `${tree}:value.js`)).toBe(git('hash-object', 'value.js'));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

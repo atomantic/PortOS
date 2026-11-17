@@ -25,7 +25,7 @@ import { resolveSpecifier, testReferenceSpecifiers } from './lib/importReach.js'
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { GUARD_BUDGET_MS, calibrateBudgetScale, hostTooBusyForBudget, overBudgetGuards, readGuardDurations, settleOverBudget } from './lib/guardBudget.js';
-import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
+import { buildPregateReport, guardInputSnapshot, guardReuseInputs, guardReuseStageKey, PREGATE_REPORT_PATH, readReusableStagePasses, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
 
@@ -1089,6 +1089,24 @@ async function main() {
   let failure = null;
   const owner = installOwnerCancellation();
   const passedGuards = new Map();
+  // Guard and lint passes carry across invocations under a key over every
+  // input those stages read (guardReuseInputs). --full and --guards-only always
+  // rerun them (--full still records its passes); PORTOS_TEST_MEMO=off forces a
+  // fresh run.
+  const reuseEnabled = !options.full && !options.guardsOnly && process.env.PORTOS_TEST_MEMO !== 'off';
+  const priorPasses = reuseEnabled ? readReusableStagePasses(REPO_ROOT) : new Map();
+  let reuseInputs;
+  let reuseUnavailableReported = false;
+  const currentReuseInputs = () => {
+    if (reuseInputs !== undefined) return reuseInputs;
+    const { inputs, reason } = guardReuseInputs(REPO_ROOT);
+    reuseInputs = inputs;
+    if (!inputs && !reuseUnavailableReported) {
+      reuseUnavailableReported = true;
+      console.log(`ℹ️ Guard reuse unavailable for this run: ${reason}.`);
+    }
+    return reuseInputs;
+  };
   let probed = false;
   for (let index = 0; index < results.length; index += 1) {
     if (failure || owner.signal) break;
@@ -1113,6 +1131,15 @@ async function main() {
         break;
       }
     }
+    const reusable = !options.guardsOnly && (result.guard || result.suite === 'lint');
+    const inputsBefore = reusable ? currentReuseInputs() : null;
+    const reuseKey = inputsBefore ? guardReuseStageKey(inputsBefore, result, { baseSha, baseRef }) : null;
+    const reusedFrom = reuseEnabled && reuseKey ? priorPasses.get(reuseKey) : undefined;
+    if (reusedFrom) {
+      Object.assign(result, { status: 'passed', exitCode: 0, reuseKey, reusedFrom });
+      console.log(`⏭️ ${result.name} reused from ${reusedFrom} (inputs unchanged).`);
+      continue;
+    }
     const beforeGuards = result.guard ? guardInputSnapshot(REPO_ROOT) : null;
     const passed = passedGuards.get(result.suite);
     if (!result.guard && passed && guardInputSnapshot(REPO_ROOT) === passed.snapshot) {
@@ -1126,6 +1153,8 @@ async function main() {
     const started = Date.now();
     const outcome = await runStage(result, owner);
     result.durationMs = Date.now() - started;
+    // Any stage may write into the checkout; the next reuse decision rereads it.
+    reuseInputs = undefined;
     if (durationsDir) {
       result.fileDurations = readGuardDurations(durationsPath);
       rmSync(durationsDir, { recursive: true, force: true });
@@ -1138,6 +1167,10 @@ async function main() {
       result.exitCode = 0;
       if (beforeGuards && guardInputSnapshot(REPO_ROOT) === beforeGuards) {
         passedGuards.set(result.suite, { snapshot: beforeGuards, files: result.files });
+      }
+      if (reuseKey) {
+        // A stage that changed its own inputs proves nothing about the new state.
+        if (currentReuseInputs() === inputsBefore) Object.assign(result, { reuseKey, passedAt: new Date().toISOString() });
       }
       console.log(`✔️ ${result.name} passed in ${formatDuration(result.durationMs)}.`);
     }

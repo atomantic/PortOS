@@ -42,7 +42,14 @@ The early guards use the same always-run and diff-selected structural selection
 as CI and `--guards-only`. They run before broad tests and resource probes.
 Successful guards are reused within this invocation only when the working tree,
 index, HEAD and refs remain unchanged; otherwise the broad runner executes them
-again. The receipt records guard outcomes, reuse proofs and per-file guard
+again. Across invocations, a structural-guard or lint stage that passed earlier
+is reused (`⏭️ … reused from <time>`, recorded as the stage's `reusedFrom`) only
+when its key matches: the exact working tree (raw bytes where Git normalizes line
+endings), tracked paths and modes, Git config, ignored paths outside caches/build
+output/`data/`, installed dependency manifests, submodules, base SHA, Node/Git
+toolchain, environment and the stage's own command and file list. HEAD is not part
+of it, so committing validated content keeps the pass. `--full`, `--guards-only`
+and `PORTOS_TEST_MEMO=off` always rerun them. The receipt records guard outcomes, reuse proofs and per-file guard
 durations (`fileDurations`). A guard file over 3s fails the stage by name
 (`scripts/lib/guardBudget.js`; there are no per-file exceptions, and enforcement
 is skipped while host load exceeds the core count, since Vitest wall time is
