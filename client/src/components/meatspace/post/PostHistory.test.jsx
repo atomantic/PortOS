@@ -103,12 +103,16 @@ describe('PostHistory analytics dashboard', () => {
   });
 
   it('reports a failed session read with Retry instead of "No sessions found", and recovers', async () => {
-    getPostSessions.mockRejectedValueOnce(new Error('db down'));
+    // Persistent, not Once: when the browser zone differs from the configured one, useUserTimezone
+    // changes `timezone` after mount and loadData fires a second read. A one-shot rejection would let
+    // that reload succeed and clear the alert (passes in UTC CI, fails in any other local zone).
+    getPostSessions.mockRejectedValue(new Error('db down'));
     renderHistory();
     expect(await screen.findByRole('alert')).toHaveTextContent('Could not load POST sessions');
     expect(screen.queryByText('No sessions found for this range.')).toBeNull();
     expect(screen.queryByText('Complete more sessions to chart your trend.')).toBeNull();
 
+    getPostSessions.mockResolvedValue(SESSIONS);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(await screen.findByText('2026-06-01')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
