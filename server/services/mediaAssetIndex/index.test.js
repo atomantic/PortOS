@@ -1,7 +1,7 @@
 /**
  * Boot wiring + live-hook tests for the media asset index. No live DB — the DB
  * layer (db.js) and the disk readers are mocked, so we assert the orchestration:
- * escape-hatch no-op, reconcile-on-init, and the completed-event hooks turning a
+ * escape-hatch no-op, the post-listen boot sweep, and the completed-event hooks turning a
  * generated asset into one upsert with the right key/shape.
  */
 
@@ -57,14 +57,14 @@ describe('initMediaAssetIndex', () => {
     expect(reconcileMediaAssets).not.toHaveBeenCalled();
   });
 
-  it('ensures schema + reconciles, and indexes a completed image/video via the hooks', async () => {
+  it('ensures schema without sweeping the library, and indexes a completed image/video via the hooks', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const { initMediaAssetIndex } = await import('./index.js');
     await initMediaAssetIndex();
     expect(ensureSchema).toHaveBeenCalled();
-    expect(reconcileMediaAssets).toHaveBeenCalled();
-    // Boot is where a Put Back from the OS Trash sheds its delete record.
-    expect(clearRestoredMediaTombstones).toHaveBeenCalled();
+    // The sweep waits for listen() (#16556); init only subscribes the hooks.
+    expect(reconcileMediaAssets).not.toHaveBeenCalled();
+    expect(clearRestoredMediaTombstones).not.toHaveBeenCalled();
 
     // A finished image render → one upsert keyed image:<filename>, sidecar merged.
     imageGenEvents.emit('completed', { generationId: 'g1', filename: 'img-1.png' });
@@ -91,6 +91,44 @@ describe('initMediaAssetIndex', () => {
     videoGenEvents.emit('completed', { generationId: 'job-2', videos: [{ id: 'job-2-landscape' }, { id: 'job-2-vertical' }] });
     await flush();
     expect(upsertAsset.mock.calls.map(([row]) => row.mediaKey)).toEqual(['video:job-2-landscape', 'video:job-2-vertical']);
+  });
+});
+
+describe('reconcileMediaAssetIndexAtBoot (post-listen sweep, #16556)', () => {
+  it('does nothing when init never armed it', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    checkHealth.mockResolvedValue({ connected: false, error: 'down' });
+    const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
+    // Drain any arming left by an earlier test in this file.
+    await reconcileMediaAssetIndexAtBoot();
+    vi.clearAllMocks();
+    await initMediaAssetIndex();
+    await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: false, reason: 'not-armed' });
+    expect(reconcileMediaAssets).not.toHaveBeenCalled();
+    expect(clearRestoredMediaTombstones).not.toHaveBeenCalled();
+  });
+
+  it('reconciles + clears restored tombstones once per armed boot', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
+    await initMediaAssetIndex();
+    await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: true, indexed: 0, pruned: 0 });
+    await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: false, reason: 'not-armed' });
+    expect(reconcileMediaAssets).toHaveBeenCalledTimes(1);
+    // Boot is where a Put Back from the OS Trash sheds its delete record.
+    expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a reconcile failure without rejecting, and still runs the tombstone check', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    reconcileMediaAssets.mockRejectedValueOnce(new Error('disk gone'));
+    const { initMediaAssetIndex, reconcileMediaAssetIndexAtBoot } = await import('./index.js');
+    await initMediaAssetIndex();
+    await expect(reconcileMediaAssetIndexAtBoot()).resolves.toEqual({ ok: false, reason: 'reconcile-failed' });
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('Media asset index boot reconcile failed: disk gone'));
+    expect(clearRestoredMediaTombstones).toHaveBeenCalledTimes(1);
+    errSpy.mockRestore();
   });
 });
 
