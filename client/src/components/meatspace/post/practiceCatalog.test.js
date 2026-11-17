@@ -7,10 +7,13 @@ import {
   filterPracticeGroups,
 } from './practiceCatalog';
 import { POST_TOPICS, DRILL_LABELS, DRILL_DESCRIPTIONS, DRILL_PRACTICE_LINKS } from './constants';
-import { RHETORIC_MODES } from './RhetoricTrainer';
-import { MODES as MEMORY_PRACTICE_MODES } from './MemoryPractice';
-import { PRACTICE_MODES as ELEMENTS_PRACTICE_MODES } from './ElementsSong';
-import { MODES as MORSE_MODES, REFERENCE_VIEWS as MORSE_REFERENCE_VIEWS } from './MorseTrainer';
+import {
+  RHETORIC_MODES,
+  MEMORY_PRACTICE_MODES,
+  ELEMENTS_PRACTICE_MODES,
+  MORSE_MODES,
+  MORSE_REFERENCE_VIEWS,
+} from './trainerModes';
 
 describe('practice catalog coverage', () => {
   // The whole point of the library is that NOTHING is undiscoverable. If a topic

@@ -75,6 +75,7 @@ import {
 } from './promptSections/completion.js';
 import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { buildLocalReviewLoopSection, buildReviewLoopFollowUpSection, isMergeOnlyFollowUp, prepareLocalReviewLoopBody, prepareSandboxedReviewLoopBody } from './promptSections/reviewLifecycle.js';
+import { expandReviewVerdictRunId } from './promptSections/reviewerOutcome.js';
 
 export { promptOpensOwnPr } from './promptSections/completion.js';
 export { getAppWorkspace } from './promptSections/appContext.js';
@@ -94,12 +95,21 @@ function expandPortosApiUrl(prompt) {
   const parts = typeof prompt === 'string' ? [prompt] : [prompt?.userPrompt, prompt?.systemPrompt];
   if (!parts.some(part => typeof part === 'string' && part.includes(PORTOS_API_URL_TOKEN))) return prompt;
   const apiBase = localApiBaseUrl();
-  const expand = text => (typeof text === 'string' ? text.replaceAll(PORTOS_API_URL_TOKEN, () => apiBase) : text);
+  return expandPromptParts(prompt, text => text.replaceAll(PORTOS_API_URL_TOKEN, () => apiBase));
+}
+
+/** Apply a string transform to a finished prompt, a string or the split { userPrompt, systemPrompt } shape. */
+function expandPromptParts(prompt, expandText) {
+  const expand = text => (typeof text === 'string' ? expandText(text) : text);
   if (typeof prompt === 'string') return expand(prompt);
+  if (!prompt || typeof prompt !== 'object') return prompt;
+  const userPrompt = expand(prompt.userPrompt);
+  const systemPrompt = expand(prompt.systemPrompt);
+  if (userPrompt === prompt.userPrompt && systemPrompt === prompt.systemPrompt) return prompt;
   return {
     ...prompt,
-    ...('userPrompt' in prompt && { userPrompt: expand(prompt.userPrompt) }),
-    ...('systemPrompt' in prompt && { systemPrompt: expand(prompt.systemPrompt) }),
+    ...('userPrompt' in prompt && { userPrompt }),
+    ...('systemPrompt' in prompt && { systemPrompt }),
   };
 }
 
@@ -440,7 +450,8 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const withDeepAudit = prompt => !deepAuditContract ? prompt : typeof prompt === 'string'
     ? `${deepAuditContract}\n\n${prompt}`
     : { ...prompt, systemPrompt: `${deepAuditContract}\n\n${prompt.systemPrompt || ''}` };
-  const finalizePrompt = prompt => expandPortosApiUrl(withDeepAudit(prompt));
+  // CLI review-outcome reports name this run so their verdicts land on its record (#16572).
+  const finalizePrompt = prompt => expandPromptParts(expandPortosApiUrl(withDeepAudit(prompt)), text => expandReviewVerdictRunId(text, options.agentId));
 
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;

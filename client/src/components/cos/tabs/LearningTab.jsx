@@ -33,12 +33,15 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
 import useLatestRequest from '../../../hooks/useLatestRequest';
+import { useSocketSubscription } from '../../../hooks/useSocketSubscription';
 import ListLoadError from '../../ui/ListLoadError';
 import LoadFailedState from '../../ui/LoadFailedState';
 import { formatDurationMin, formatDateTime, formatDateNumeric } from '../../../utils/formatters';
 import { pluralize } from '../../../lib/textUtils';
+import ReviewerVerdictSummary from './ReviewerVerdictSummary';
 
 // Evidence pairing (issue #2617): when the server classified a task type on
 // its recency-windowed rate, label the percentage with the WINDOW's sample
@@ -114,6 +117,7 @@ export function FeedbackSummary({ feedback }) {
 }
 
 const LEARNING_LABEL = 'learning summary';
+const VERDICTS_LABEL = 'reviewer verdicts';
 
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
@@ -123,6 +127,7 @@ export default function LearningTab() {
   const [routing, setRouting] = useState(null);
   const [confidence, setConfidence] = useState(null);
   const [feedback, setFeedback] = useState(null);
+  const [reviewerVerdicts, setReviewerVerdicts] = useState(null);
   const [dismissed, setDismissed] = useState([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -145,16 +150,20 @@ export default function LearningTab() {
   // Refresh, Retry and the post-mutation reloads can overlap; only the newest
   // batch may write, or an older failure replaces a newer successful read.
   const beginLoad = useLatestRequest();
+  // The verdict panel also re-reads on its own socket event, so it keeps a
+  // separate latest-wins guard that the full load takes too.
+  const beginVerdictLoad = useLatestRequest();
 
   const loadData = useCallback(async () => {
     const isCurrent = beginLoad();
+    const verdictsCurrent = beginVerdictLoad();
     setLoading(true);
     const failures = [];
     const read = (label, fetcher) => fetcher({ silent: true }).catch(() => {
       failures.push(label);
       return null;
     });
-    const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, feedbackData, dismissedData] = await Promise.all([
+    const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, feedbackData, dismissedData, reviewerVerdictData] = await Promise.all([
       read(LEARNING_LABEL, api.getCosLearning),
       read('performance', api.getCosLearningPerformance),
       read('low-success history', api.getCosLearningSkipped),
@@ -162,10 +171,14 @@ export default function LearningTab() {
       read('model routing', api.getCosLearningRouting),
       read('confidence', api.getCosLearningConfidence),
       read('feedback', api.getCosFeedbackStats),
-      read('dismissed recommendations', api.getDismissedCosRecommendations)
+      read('dismissed recommendations', api.getDismissedCosRecommendations),
+      read(VERDICTS_LABEL, api.getReviewerVerdictStats)
     ]);
     if (!isCurrent()) return;
-    setLoadFailures(failures);
+    // A verdict re-read that started after this load owns that section's status.
+    const verdictsOwned = verdictsCurrent();
+    setLoadFailures(prev => (verdictsOwned ? failures
+      : [...failures.filter(label => label !== VERDICTS_LABEL), ...prev.filter(label => label === VERDICTS_LABEL)]));
     setLearning(learningData);
     setPerformance(performanceData);
     setSkipped(skippedData);
@@ -173,9 +186,43 @@ export default function LearningTab() {
     setRouting(routingData);
     setConfidence(confidenceData);
     setFeedback(feedbackData);
+    if (verdictsOwned) setReviewerVerdicts(reviewerVerdictData);
     setDismissed(dismissedData?.dismissed || []);
     setLoading(false);
-  }, [beginLoad]);
+  }, [beginLoad, beginVerdictLoad]);
+
+  // A run that records a verdict while this tab is open, or a reconnect that may
+  // have missed one, re-reads the panel. A failed re-read keeps the last good
+  // aggregate and shows the section as not loaded, with the page's Retry.
+  const refreshVerdicts = useCallback(() => {
+    const isCurrent = beginVerdictLoad();
+    return api.getReviewerVerdictStats({ silent: true }).then(
+      (stats) => {
+        if (!isCurrent()) return;
+        setReviewerVerdicts(stats);
+        setLoadFailures(prev => prev.filter(label => label !== VERDICTS_LABEL));
+      },
+      () => {
+        if (!isCurrent()) return;
+        setLoadFailures(prev => (prev.includes(VERDICTS_LABEL) ? prev : [...prev, VERDICTS_LABEL]));
+      },
+    );
+  }, [beginVerdictLoad]);
+  useSocketSubscription('cos', { onResubscribe: refreshVerdicts });
+  useEffect(() => {
+    // Deleting or clearing runs removes their verdicts; archiving moves a record
+    // without changing what the aggregate counts, so it needs no re-read.
+    const handleAgentsChanged = (change) => {
+      if (change?.action === 'auto-archive' || change?.action === 'zombie-cleanup') return;
+      refreshVerdicts();
+    };
+    socket.on('cos:reviewer-verdict:recorded', refreshVerdicts);
+    socket.on('cos:agents:changed', handleAgentsChanged);
+    return () => {
+      socket.off('cos:reviewer-verdict:recorded', refreshVerdicts);
+      socket.off('cos:agents:changed', handleAgentsChanged);
+    };
+  }, [refreshVerdicts]);
 
   const handleDismissRec = useCallback(async (rec) => {
     // Optimistic update — remove from active recommendations immediately
@@ -281,6 +328,9 @@ export default function LearningTab() {
   const sectionFailures = loadFailures.filter((label) => label !== LEARNING_LABEL);
   const skippedFailed = sectionFailures.includes('low-success history');
   const performanceFailed = sectionFailures.includes('performance');
+  // Verdicts come from agent records, not task-learning totals, so the panel
+  // also shows when learning has no completed tasks yet.
+  const verdictPanel = <ReviewerVerdictSummary stats={reviewerVerdicts} />;
 
   return (
     <div className="space-y-6">
@@ -323,13 +373,16 @@ export default function LearningTab() {
       ) : learningFailed ? (
         <LoadFailedState title="Could not load learning analytics" hint="Your learning history was not read, so nothing is shown here." onRetry={loadData} />
       ) : !hasData ? (
-        <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
-          <Brain className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-          <p className="text-gray-400">No learning data available yet.</p>
-          <p className="text-gray-500 text-sm mt-1">
-            Complete some tasks to see performance analytics, or click &quot;Backfill History&quot; to import existing data.
-          </p>
-        </div>
+        <>
+          <div className="bg-port-card border border-port-border rounded-lg p-8 text-center">
+            <Brain className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+            <p className="text-gray-400">No learning data available yet.</p>
+            <p className="text-gray-500 text-sm mt-1">
+              Complete some tasks to see performance analytics, or click &quot;Backfill History&quot; to import existing data.
+            </p>
+          </div>
+          {verdictPanel}
+        </>
       ) : (
         <>
           {/* Overview Stats */}
@@ -383,6 +436,8 @@ export default function LearningTab() {
           </div>
 
           <FeedbackSummary feedback={feedback} />
+
+          {verdictPanel}
 
           {/* Recommendations */}
           {(learning.recommendations?.length > 0 || dismissed.length > 0) && (

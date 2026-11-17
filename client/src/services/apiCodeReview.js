@@ -14,3 +14,7 @@ export const getCodeReviewDefaults = (options) => request('/code-review/defaults
 // target forge. Kept off getCodeReviewDefaults so the settings load never waits
 // on forge lookups.
 export const getReviewerIdentities = (options) => request('/code-review/reviewer-identities', options);
+
+// Clean rate per reviewer and per reviewed diff size, from the verdicts agent
+// runs recorded on their own records. Shown on the CoS Learning tab.
+export const getReviewerVerdictStats = (options) => request('/code-review/verdict-stats', options);
