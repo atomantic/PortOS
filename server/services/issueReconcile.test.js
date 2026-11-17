@@ -858,7 +858,7 @@ describe('swarm reservations (in-progress, no assignee)', () => {
     expect(result.reserved).toEqual([]);
   });
 
-  it('releases a stale reservation by comment + unlabel, never a close', async () => {
+  it('releases a stale reservation by unlabel + comment, never a close', async () => {
     mockGh({ issues: [issue({ updatedAt: daysAgo(FOREIGN_CLAIM_STALE_DAYS) })], merged: mention, open: [] });
     const result = await reconcile('/repo', { now: NOW });
     expect(result.zombies).toEqual([]);
@@ -872,11 +872,48 @@ describe('swarm reservations (in-progress, no assignee)', () => {
     expect(released).toBe(1);
     const argvs = execGh.mock.calls.map(([argv]) => argv);
     expect(argvs).toHaveLength(2);
-    expect(argvs[0].slice(0, 3)).toEqual(['issue', 'comment', '2220']);
-    expect(argvs[0].at(-1)).toContain('reservation');
-    expect(argvs[0].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
-    expect(argvs[1]).toEqual(['issue', 'edit', '2220', '--repo', 'github.com/atomantic/PortOS', '--remove-label', 'in-progress']);
+    expect(argvs[0]).toEqual(['issue', 'edit', '2220', '--repo', 'github.com/atomantic/PortOS', '--remove-label', 'in-progress']);
+    expect(argvs[1].slice(0, 3)).toEqual(['issue', 'comment', '2220']);
+    expect(argvs[1].at(-1)).toContain('reservation');
+    expect(argvs[1].at(-1)).toContain(`${FOREIGN_CLAIM_STALE_DAYS} days`);
     expect(argvs.some((argv) => argv.includes('close'))).toBe(false);
+  });
+
+  // #16623 — a failed unlabel must leave the issue as stale as it was, for both release kinds.
+  it.each([
+    ['an expired reservation', { assignees: [] }, 'RESERVED'],
+    ['an abandoned foreign claim', { assignees: [{ login: 'volunteer-a' }] }, 'ABANDONED'],
+  ])('retries %s on the next pass after a failed unlabel', async (_name, overrides, state) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const staleUpdatedAt = daysAgo(FOREIGN_CLAIM_STALE_DAYS + 1);
+      let updatedAt = staleUpdatedAt;
+      let editFails = true;
+      execGh.mockImplementation(async (argv) => {
+        if (argv[0] === 'issue' && argv[1] === 'list') {
+          return JSON.stringify([{ number: 2220, title: 't', url: 'u', labels: [{ name: 'in-progress' }], updatedAt, author: { login: 'trusted-author' }, ...overrides }]);
+        }
+        if (argv[0] === 'pr' && argv.includes('merged')) return '[]';
+        if (argv[0] === 'api' && argv[1] === 'user') return 'owner-login';
+        if (argv[0] === 'api' && argv.at(-1).endsWith('/permission')) return JSON.stringify({ permission: 'write', user: { login: 'trusted-author' } });
+        if (argv[0] === 'issue' && argv[1] === 'comment') { updatedAt = new Date(NOW).toISOString(); return ''; }
+        if (argv[0] === 'issue' && argv[1] === 'edit' && editFails) throw new Error('HTTP 502');
+        return '[]';
+      });
+      const ctxOf = (r) => ({ forge: r.forge, repoSpec: r.repoSpec, fullName: r.fullName });
+
+      const first = await reconcile('/repo', { now: NOW });
+      expect(first.abandoned.map((a) => [a.number, a.state])).toEqual([[2220, state]]);
+      expect(await releaseAbandonedClaims(first.abandoned, ctxOf(first))).toBe(0);
+      expect(updatedAt).toBe(staleUpdatedAt);
+
+      const second = await reconcile('/repo', { now: NOW });
+      expect(second.abandoned.map((a) => [a.number, a.state])).toEqual([[2220, state]]);
+      editFails = false;
+      expect(await releaseAbandonedClaims(second.abandoned, ctxOf(second))).toBe(1);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('never releases a reservation whose activity time is unresolved', async () => {
@@ -1052,11 +1089,12 @@ describe('releaseAbandonedClaims', () => {
   const abandoned = [{ number: 2220, title: 't', url: 'u', assignees: ['volunteer-a'], staleDays: 20 }];
   const ctx = { forge: 'github', repoSpec: 'github.com/o/r', fullName: 'o/r' };
 
-  it('comments, then strips the marker and the stale assignee in one edit', async () => {
+  it('strips the marker and the stale assignee in one edit, then comments', async () => {
     execGh.mockResolvedValue('');
     const released = await releaseAbandonedClaims(abandoned, ctx);
     expect(released).toBe(1);
-    const [commentArgs, editArgs] = execGh.mock.calls.map(([argv]) => argv);
+    const [editArgs, commentArgs] = execGh.mock.calls.map(([argv]) => argv);
+    expect(execGh).toHaveBeenCalledTimes(2);
     expect(commentArgs.slice(0, 4)).toEqual(['issue', 'comment', '2220', '--repo']);
     expect(commentArgs.at(-1)).toContain('20 days');
     expect(editArgs).toEqual([
@@ -1066,21 +1104,37 @@ describe('releaseAbandonedClaims', () => {
   });
 
   // The comment is courtesy; the release is the point. A repo with issue
-  // comments locked must still get its marker back.
-  it('still releases when the courtesy comment fails', async () => {
-    execGh.mockImplementation(async (argv) => {
-      if (argv[1] === 'comment') throw new Error('HTTP 403');
-      return '';
-    });
-    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(1);
+  // comments locked must still get its marker back, and the miss is not an error.
+  it('still releases when the courtesy comment fails, logged on stdout', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      execGh.mockImplementation(async (argv) => {
+        if (argv[1] === 'comment') throw new Error('HTTP 403');
+        return '';
+      });
+      expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(1);
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: released #2220 .* but could not comment/));
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore(); error.mockRestore();
+    }
   });
 
-  it('reports zero when the edit itself fails, so the next pass retries', async () => {
-    execGh.mockImplementation(async (argv) => {
-      if (argv[1] === 'edit') throw new Error('HTTP 500');
-      return '';
-    });
-    expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(0);
+  // A comment refreshes updatedAt, so commenting after a failed edit would hide the
+  // issue from the next scan for a full stale window.
+  it('reports zero and posts no comment when the edit fails, so the next pass retries', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      execGh.mockImplementation(async (argv) => {
+        if (argv[1] === 'edit') throw new Error('HTTP 500');
+        return '';
+      });
+      expect(await releaseAbandonedClaims(abandoned, ctx)).toBe(0);
+      expect(execGh.mock.calls.some(([argv]) => argv[1] === 'comment')).toBe(false);
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('writes nothing for a non-GitHub forge or an empty set', async () => {
