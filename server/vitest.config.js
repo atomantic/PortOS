@@ -17,8 +17,8 @@ const RUN_TEMP_ROOT = bootstrapVitestTempRoot();
 
 // The suite REQUIRES NODE_ENV=test: it selects the file storage backend so no suite
 // touches the real Postgres. Vitest only DEFAULTS NODE_ENV, and PM2 runs PortOS
-// with development, so a commit from a PortOS-spawned shell would fire the
-// pre-commit hook with it inherited and aim suites at the live database (#4554).
+// with development, so a test run from a PortOS-spawned shell would inherit it
+// and aim suites at the live database (#4554).
 // Forcing it here keeps every entry point correct and Windows-safe (cmd.exe parses
 // 'NODE_ENV=test vitest' as an executable name, hence VITEST_FAST is set here too).
 process.env.NODE_ENV = 'test';
