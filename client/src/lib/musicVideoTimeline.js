@@ -149,3 +149,40 @@ export function reorderedSceneIds(scenes, shots, fromIndex, toIndex) {
   places.forEach((place, k) => { ids[place] = order[k]; });
   return ids;
 }
+
+/**
+ * Where a split at song time `t` cuts: `{ sceneId, atSec }` with `atSec` on a
+ * 24 fps frame, or null when no shot runs there or either piece would be
+ * shorter than `TIMELINE_MIN_SHOT_SEC`.
+ */
+export function timelineSplitAt(shots, t) {
+  const shot = timelineShotAt(shots, t);
+  if (!shot || !Number.isFinite(t)) return null;
+  const atSec = Math.round(Math.round(t * 24) / 24 * 1000) / 1000;
+  if (atSec - shot.startSec < TIMELINE_MIN_SHOT_SEC || shot.endSec - atSec < TIMELINE_MIN_SHOT_SEC) return null;
+  return { sceneId: shot.sceneId, atSec };
+}
+
+/**
+ * The song's loudness (`audioAnalysis.features.envelopes`: `{ fps, rms }`) as
+ * an SVG path in song seconds across and 0..1 down, mirrored about the middle
+ * like an editor's waveform; each of at most `maxPoints` columns keeps the
+ * loudest sample in it. Null when the song has no loudness track.
+ */
+export function waveformPath(envelopes, maxPoints = 1500) {
+  const rms = envelopes?.rms;
+  const fps = envelopes?.fps;
+  if (!Array.isArray(rms) || !rms.length || !(fps > 0)) return null;
+  const per = Math.max(1, Math.ceil(rms.length / maxPoints));
+  const columns = [];
+  for (let i = 0; i < rms.length; i += per) {
+    let peak = 0;
+    for (let j = i; j < Math.min(rms.length, i + per); j++) peak = Math.max(peak, rms[j] || 0);
+    columns.push([i / fps, peak]);
+  }
+  columns.push([rms.length / fps, 0]);
+  const n = (v) => Math.round(v * 1000) / 1000;
+  const top = columns.map(([x, v]) => `${n(x)} ${n(0.5 - v / 2)}`);
+  const bottom = columns.slice().reverse().map(([x, v]) => `${n(x)} ${n(0.5 + v / 2)}`);
+  return `M0 0.5L${top.join('L')}L${bottom.join('L')}Z`;
+}

@@ -92,6 +92,7 @@ export default function EditorStage({ board }) {
       onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
       onReorder={board.locked || orderOwned ? null : reorder}
       effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
+      onSplitShot={board.locked || orderOwned || !board.onSplitScene ? null : (sceneId, atSec) => board.onSplitScene(sceneId, null, atSec)}
       onPreview={(t, play) => board.seekToScene?.({ startSec: t }, { play, pause: !play })}
       libraryEl={desktop ? libraryEl : null} inspectorEl={desktop ? inspectorEl : null} />
   );

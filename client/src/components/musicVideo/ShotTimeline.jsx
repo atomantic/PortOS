@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, Maximize2, Pause, Play, Repeat, Zap, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Maximize2, Pause, Play, Repeat, Scissors, Zap, ZoomIn, ZoomOut } from 'lucide-react';
 import useKeyCapture from '../../hooks/useKeyCapture.js';
 import { scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { buildBeatGridPoints } from '../../lib/beatGrid.js';
 import {
   TIMELINE_MAX_PX_PER_SEC, TIMELINE_ZOOM_STEP, clampPxPerSec, fitPxPerSec, lyricSpans, rulerStepSec, rulerTicks, shotsWithCutAt, snapCutTime,
-  timelineCuts, timelineDurationSec, timelineShotAt, timelineShots,
+  timelineCuts, timelineDurationSec, timelineShotAt, timelineShots, timelineSplitAt, waveformPath,
 } from '../../lib/musicVideoTimeline.js';
 import { effectNaturalSec, effectTimeAt } from '../../lib/musicVideoTimelineEffects.js';
 import { MUSIC_VIDEO_SHOT_GLITCH_LIMIT } from '../../lib/musicVideoTransitions.js';
@@ -82,11 +82,15 @@ const cssUrl = (src) => `url("${src.replace(/["\\\n]/g, (ch) => encodeURICompone
  * without starting playback; once playing, with Loop on, playback that passes
  * it jumps back, so a style swap is seen on the next pass.
  *
+ * With `onSplitShot(sceneId, atSec)` the toolbar's scissors cut the shot under
+ * the playhead in two there (on a frame). The song's loudness, when analyzed,
+ * draws as a waveform row at the bottom.
+ *
  * The effect controls show under the timeline, or in `inspectorEl` when the
  * page gives one; with `libraryEl` an effects library fills it, whose styles
  * add at the playhead.
  */
-export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, libraryEl = null, inspectorEl = null }) {
+export default function ShotTimeline({ project, activeSceneId = null, songClock = null, onSeek, onOpenShot, shotName, posters = null, onMoveCut = null, onReorder = null, effectOptions = null, onEditShot = null, onPreview = null, onSplitShot = null, libraryEl = null, inspectorEl = null }) {
   const { shots: savedShots, off } = useMemo(() => timelineShots(project), [project]);
   const durationSec = timelineDurationSec(project, savedShots);
   // A cut being dragged, or one let go and still saving, shows where it will land.
@@ -99,6 +103,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
     ...(project.lyricCues || []).map((cue) => cue?.startSec).filter((t) => typeof t === 'number'),
   ], [project.audioAnalysis, project.lyricCues]);
   const cues = useMemo(() => lyricSpans(project.lyricCues), [project.lyricCues]);
+  const wave = useMemo(() => waveformPath(project.audioAnalysis?.features?.envelopes), [project.audioAnalysis]);
   const sections = project.audioAnalysis?.sections || [];
 
   const scrollerRef = useRef(null);
@@ -399,7 +404,7 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
   ].filter(Boolean) : [];
   const rowLabels = [
     ['Time', 'h-7'], ...(sections.length ? [['Sections', 'h-4']] : []), ['Shots', 'h-14'],
-    ...effectRows.map((row) => [row.label, FX_ROW_H]), ...(cues.length ? [['Lyrics', 'h-5']] : []),
+    ...effectRows.map((row) => [row.label, FX_ROW_H]), ...(cues.length ? [['Lyrics', 'h-5']] : []), ...(wave ? [['Song', 'h-8']] : []),
   ];
 
   const stepSec = rulerStepSec(pxPerSec);
@@ -433,6 +438,12 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
               <ChevronRight size={14} aria-hidden="true" />
             </button>
           </div>
+        )}
+        {onSplitShot && (
+          <button type="button" className={zoomButtonCls} onClick={() => { const at = timelineSplitAt(savedShots, timeRef.current); if (at) onSplitShot(at.sceneId, at.atSec); }}
+            disabled={!playheadShot} aria-label="Split the shot at the playhead" title="Split the shot at the playhead">
+            <Scissors size={14} aria-hidden="true" />
+          </button>
         )}
         {effectOptions && onEditShot && (
           <button type="button" className={zoomButtonCls} onClick={() => addEffect()}
@@ -559,6 +570,12 @@ export default function ShotTimeline({ project, activeSceneId = null, songClock 
                 );
               })}
             </div>
+          )}
+          {wave && (
+            <svg aria-hidden="true" data-testid="shot-timeline-waveform" className={`${ROW_CLS} block h-8 text-port-accent/60`} width={durationSec * pxPerSec}
+              viewBox={`0 0 ${durationSec} 1`} preserveAspectRatio="none">
+              <path d={wave} fill="currentColor" />
+            </svg>
           )}
           <div ref={playheadRef} data-testid="shot-timeline-playhead" aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 z-20 w-px bg-port-error" />
         </div>
