@@ -7,8 +7,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { automationSchedulesListQuerySchema } from '../lib/agentValidation.js';
-import { validateRequest, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/validation.js';
+import { automationSchedulesListQuerySchema, automationScheduleSchema, automationScheduleUpdateSchema } from '../lib/agentValidation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as automationScheduler from '../services/automationScheduler.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agentPersonalities.js';

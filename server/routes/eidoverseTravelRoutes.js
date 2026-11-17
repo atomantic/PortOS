@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, eidoverseTravelVisitSchema, eidoverseGuestAdmissionSchema, eidoverseGuestChatSchema, eidoverseGuestLeaveSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { eidoverseTravelVisitSchema, eidoverseGuestAdmissionSchema, eidoverseGuestChatSchema, eidoverseGuestLeaveSchema } from '../lib/eidoverseValidation.js';
 import { getEidoverseTravelCapabilities, listEidoverseDestinations, visitEidoversePeer, receiveEidoverseVisit, receiveEidoverseChat, receiveEidoverseLeave, getEidoverseGuestDescriptor } from '../services/eidoverseTravel.js';
 
 const router = Router();

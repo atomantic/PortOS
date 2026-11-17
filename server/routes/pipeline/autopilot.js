@@ -19,7 +19,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest, MAX_CONVERGENCE_ROUNDS } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { MAX_CONVERGENCE_ROUNDS } from '../../lib/pipelineValidation.js';
 import { EFFORT_LEVELS } from '../../lib/providerModels.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';

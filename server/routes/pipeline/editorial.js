@@ -7,14 +7,14 @@ import { randomUUID } from 'crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import {
-  validateRequest,
   editorialCheckConfigSchema,
   editorialChecksRunSchema,
   editorialCustomCheckCreateSchema,
   editorialCustomCheckUpdateSchema,
   editorialCustomCheckPreviewSchema,
-} from '../../lib/validation.js';
+} from '../../lib/pipelineValidation.js';
 import {
   resolveCheckState,
   readChecksSlice,

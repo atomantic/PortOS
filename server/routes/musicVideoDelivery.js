@@ -4,12 +4,12 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoDcpRequestSchema, musicVideoExcerptRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, musicVideoExcerptRequestSchema, musicVideoSocialCutsQuerySchema, musicVideoExcerptNoteSchema, musicVideoExcerptNoteUpdateSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { startExcerptRender, attachExcerptRenderSseClient, cancelExcerptRender } from '../services/musicVideo/excerptRender.js';
 import { deleteExcerpt, addReviewNote, editReviewNote, deleteReviewNote } from '../services/musicVideo/excerptService.js';

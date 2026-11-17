@@ -48,7 +48,7 @@ import { listRecords, updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
-import { spriteRuntimeContractSchema } from '../../lib/validation.js';
+import { spriteRuntimeContractSchema } from '../../lib/spriteValidation.js';
 import {
   ATLAS_LAYOUT_KIND, buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch,
 } from './atlasLayout.js';

@@ -9,7 +9,7 @@ const router = Router();
 
 // The shared validation module re-exports every domain's schemas; load it when a
 // conversation handler runs so importing this route does not evaluate them all.
-const validateRequest = async (schema, data) => (await import('../lib/validation.js')).validateRequest(schema, data);
+const validateRequest = async (schema, data) => (await import('../lib/validateRequest.js')).validateRequest(schema, data);
 
 // Setup check — resolve the DB key, decrypt a snapshot, and probe the schema.
 // Reports an actionable error (missing install, key failure, unsupported schema)

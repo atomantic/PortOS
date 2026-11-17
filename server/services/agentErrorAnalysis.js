@@ -12,7 +12,7 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { emitLog } from './cosEvents.js';
 import { addTask, updateTask } from './cosTaskStore.js';
 import { cosEvents } from './cosEvents.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 import { redactOutput } from '../lib/commandSecurity.js';
 import { scrubSecretTokens } from '../lib/secretText.js';
 import { redactPii } from '../lib/piiRedactionPatterns.js';

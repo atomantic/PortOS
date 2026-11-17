@@ -14,8 +14,8 @@ import { jevPolicyPatchSchema, resolveUntrustedContentPolicy } from '../lib/untr
 import { readSettingsStrict, updateSettingsWith } from '../services/settings.js'
 import { Router } from 'express'
 import { asyncHandler, ServerError } from '../lib/errorHandler.js'
+import { validateRequest } from '../lib/validateRequest.js'
 import {
-  validateRequest,
   localLlmInstallSchema,
   localLlmDeleteSchema,
   localLlmSwitchSchema,
@@ -45,7 +45,7 @@ import {
   localLlmSpecModelDownloadSchema,
   localLlmDownloadPreflightSchema,
   localPersistentMindSetupApplySchema,
-} from '../lib/validation.js'
+} from '../lib/mediaValidation.js'
 import {
   getLlamaServerStatus,
   getLlamaServerUpdateStatus,

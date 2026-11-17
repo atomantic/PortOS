@@ -30,7 +30,7 @@ import {
   COS_ARCHIVE_DATE_RE,
   COS_AGENT_ID_RE,
   COS_ARCHIVE_FILES,
-} from '../../lib/validation.js';
+} from '../../lib/peerSyncValidation.js';
 import {
   inflightPulls,
   inflightKey,

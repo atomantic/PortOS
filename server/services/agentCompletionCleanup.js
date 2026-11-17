@@ -39,7 +39,7 @@ import { updateTask, addTask, reviveBlockedTask, getTaskById } from './cosTaskSt
 import { SPAWN_HISTORY_METADATA_KEYS } from './spawnBudgetProof.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { checkStagePrecondition } from './cosTaskGenerator.js';
-import { normalizeReviewers } from '../lib/validation.js';
+import { normalizeReviewers } from '../lib/cosValidation.js';
 import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, doneSentinelName, doneSentinelPath as resolveDoneSentinelPath } from '../lib/agentSentinel.js';
