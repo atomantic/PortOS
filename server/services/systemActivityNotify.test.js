@@ -109,12 +109,13 @@ describe('system activity invalidation', () => {
 
     const hooks = attachLlmActivityHooks({
       onRunCompleted: () => 'kept',
+      onRunUnreported: () => 'unreported kept',
     });
     expect(hooks.onRunStarted({})).toBeUndefined();
     expect(hooks.onRunCompleted({}, '')).toBe('kept');
     hooks.onRunFailed({}, new Error('no'));
     hooks.onRunCanceled({ runId: 'run-1' });
-    hooks.onRunUnreported({ runId: 'run-2' });
+    expect(hooks.onRunUnreported({ runId: 'run-2' })).toBe('unreported kept');
 
     const io = { emit: vi.fn() };
     const app = { id: 'app-1', name: 'Example', repoPath: 'app-1' };

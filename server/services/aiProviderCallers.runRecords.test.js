@@ -1,7 +1,9 @@
 /**
- * Every `callProviderAISimple` caller, driven at its own service boundary with
- * the real adapter, shared runner and run store; only the HTTP transport and
- * each caller's external inputs (Jira, settings, peers) are stubbed (#16560).
+ * Each of the eight services that call `callProviderAISimple`, driven once at
+ * its own service boundary with the real adapter, shared runner and run store;
+ * only the HTTP transport and each caller's external inputs (Jira, settings,
+ * peers) are stubbed (#16560). `lib/creativeLatitude.sources.test.js` covers
+ * every call site's `source` tag, including the ones not driven here.
  *
  * The regression this catches: a caller whose model call leaves no run record,
  * opens no usage session, or opens two of either for one request.

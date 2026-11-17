@@ -105,9 +105,10 @@ export function getRunsPath() {
  * overwrites, so the two are not interchangeable.
  *
  * `reportFailure: false` finalizes the record but skips the `onRunFailed` hook,
- * for a run that is a deliberate PROBE of a provider rather than work the user
- * asked for. Same reasoning as the `canceled` branch below: the failure is the
- * caller's measurement, not evidence that a configured provider is broken. It
+ * for a run whose caller owns the failure: a deliberate PROBE of a provider
+ * (the failure is the caller's measurement, not evidence that a configured
+ * provider is broken), or a bounded completion, which reports its failure
+ * through its own status toast (`services/apiCompletionRun.js`). It
  * fires `onRunUnreported` instead, which carries no failure detail and exists so
  * the activity snapshot learns the run ended.
  *
