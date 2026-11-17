@@ -965,7 +965,7 @@ async function runApiReviewCall({ provider, model, prompt, budgetMs, reviewBudge
   const callMs = takeCodeReviewCallBudget(reviewBudget, budgetMs)
   if (callMs === null) return { outcome: { ok: false, code: 'REVIEW_BUDGET_EXHAUSTED', error: 'The configured review budget is exhausted.' } }
   const result = await withAbortTimeout(callMs, signal => awaitWithAbort(callProviderAISimple({ ...provider, apiKey: provider.apiKey, timeout: callMs, fallbackProvider: null }, model,
-    prompt, { max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
+    prompt, { source: 'code-review', max_tokens: 8192, allowModelRecovery: false, signal, deadlineMs: reviewBudget?.deadline }), signal))
     .catch(error => reviewerCallRejection(error, 'Reviewer preparation or execution failed within its shared budget.', reviewBudget))
   return { result, budgetMs: callMs }
 }

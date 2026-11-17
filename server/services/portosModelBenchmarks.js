@@ -120,6 +120,7 @@ export async function runPortosModelBenchmark({ provider, model, effort = null, 
     if (signal?.aborted) break;
     const prompt = `You are completing one item in ${PORTOS_BENCHMARK_NAME}. Answer with only the requested value. Do not use tools or add an explanation.\n\n${task.prompt}`;
     const result = await callProviderAISimple(runProvider, model, prompt, {
+      source: 'model-benchmark',
       temperature: 0,
       max_tokens: 32,
       signal,

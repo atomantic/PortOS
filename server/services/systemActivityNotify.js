@@ -107,7 +107,7 @@ export function taskQueuePhase(change) {
  * Wrap the host's runner hooks so every LLM lifecycle edge invalidates the
  * snapshot. Notes first: a throwing usage/error hook must not swallow the
  * invalidation. Cancellation is its own hook because a Stop does not fire
- * `onRunFailed`.
+ * `onRunFailed`, and so is a failure finalized with `reportFailure: false`.
  */
 export function attachLlmActivityHooks(hooks = {}) {
   return {
@@ -127,6 +127,10 @@ export function attachLlmActivityHooks(hooks = {}) {
     onRunCanceled: (metadata) => {
       noteSystemActivity('llm', 'cancellation');
       return hooks.onRunCanceled?.(metadata);
+    },
+    onRunUnreported: (metadata) => {
+      noteSystemActivity('llm', 'failure');
+      return hooks.onRunUnreported?.(metadata);
     },
   };
 }

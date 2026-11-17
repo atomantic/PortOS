@@ -1390,6 +1390,8 @@ async function finishBranchRetirement(repoPath, { b, expectedHead, readPolicyHol
     // The branch is still checked out by a surviving worktree: deleting it would
     // fail, and reporting success would mark the branch reconciled while it is held.
     if (!removal.removed) return { ok: false, reason: removal.reason || 'worktree-remove-failed' };
+    // One line per removal so a vanished checkout is attributable to this pass (#16618).
+    console.log(`${label}: removed ${b.worktreePath} at ${expectedHead.slice(0, 12)} (${mergedRetirement ? `head contained in ${mergeTarget}` : 'verified superseded'})`);
   }
   const latestPolicyHold = await readPolicyHold(expectedHead);
   if (latestPolicyHold) return { ok: false, reason: latestPolicyHold };

@@ -77,7 +77,7 @@ export async function runGoalCheckIn({ background = false } = {}) {
   // yields one notification, not one red toast per goal. A manual "Run now" passes
   // false, so its failures report individually, since the user is watching.
   const llmResults = await Promise.all(
-    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt, { background }))
+    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt, { source: 'goal-check-in', background }))
   );
 
   const results = [];

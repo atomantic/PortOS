@@ -16,7 +16,7 @@
  * reads the way a system prompt does. Prepending also survives CLI/TUI
  * providers that expose no separate system-prompt channel.
  *
- * PortOS has three LLM transports, and each stamps without any call site
+ * PortOS has two LLM chokepoints, and each stamps without any call site
  * wrapping the clause by hand:
  *   - `promptService.buildPrompt` stamps every stage template whose stage name
  *     is creative — which covers `runStagedLLM` and every other template caller.
@@ -24,10 +24,13 @@
  *     whose run `source` is creative — the tag it already requires of every
  *     caller, so mood-board synthesis, media-prompt refinement, music design,
  *     and the inline editorial checks are all covered without a call-site edit.
- *   - `aiProvider.callProviderAISimple` posts to /chat/completions itself and
- *     has neither key, so its creative callers pass `creative: true`.
  *
- * The first two keys are matched against ONE table below: stage names and run-source
+ * `aiProvider.callProviderAISimple` is a caller of the second, not a transport
+ * of its own: it takes the same `source` tag and sends a bounded completion
+ * through the runner. Its two legs the runner never sees (the ChatGPT
+ * subscription, and a process with no AI toolkit) stamp from that same tag.
+ *
+ * Both keys are matched against ONE table below: stage names and run-source
  * tags share a vocabulary (`pipeline-…`, `universe-…`, `cd-…`), so classifying
  * them twice would mean deciding twice. `withCreativeLatitude` is idempotent,
  * so a stage prompt that also carries a creative source passes through once.
@@ -37,10 +40,10 @@
  * wrapping call sites. PortOS is an artist's tool: genericizing or disclaiming
  * a deliberate IP reference is defective output, and clearance is the
  * operator's job. `server/lib/creativeLatitude.js` owns the clause and
- * classification table, applied at three transports:
- * `promptService.buildPrompt` (stage name, failing safe),
- * `promptRunner.runPromptThroughProvider` (`source` allowlist),
- * `aiProvider.callProviderAISimple` (`creative: true`). Classify a new
+ * classification table, applied at two chokepoints:
+ * `promptService.buildPrompt` (stage name, failing safe) and
+ * `promptRunner.runPromptThroughProvider` (`source` allowlist, which
+ * `aiProvider.callProviderAISimple` callers pass too). Classify a new
  * creative stage or service there; `creativeLatitude.test.js` and
  * `creativeLatitude.sources.guard.test.js` fail on unclassified entries. Context
  * budgeting before the stamp reserves `CREATIVE_LATITUDE_TOKENS`. The clause
@@ -116,6 +119,7 @@ export const CREATIVE_NAMES = Object.freeze([
   'catalog-design', // Casting face-design spreads from the user's idea
   'creative-refinement', // creative draft conversations (Casting, universe identity)
   'agent-content-post', // original Moltbook posts — no third-party text in the prompt
+  'autobiography-weave', // first-person memoir prose naming real works, people and places
   'sandbox-delegation-creative',
   'catalog-extract',
   'catalog-extract-ideas-scenes-concepts', // pulls scenes/ideas out of a source work
@@ -129,6 +133,8 @@ export const CREATIVE_NAMES = Object.freeze([
   'mood-board-generate-more',
   'mood-board-style-synthesis',
   'series-review-feedback', // routes the user's free-text notes back into the series
+  'taste-deep-question', // follow-up questions that cite the user's named books/music
+  'taste-summary', // taste profiles built from the films/albums/artists the user named
   'threejs-model-generation',
 ]);
 
@@ -168,16 +174,28 @@ export const OPERATIONAL_RUN_SOURCES = Object.freeze([
   'activity-digest',
   'agent-personality-generation',
   'ai-app-detect',
+  'autobiography-evaluate',
+  'autobiography-follow-ups',
+  'code-review',
   'cos-persistent-mind',
   'digital-twin',
+  'goal-check-in',
+  'goal-decomposition',
+  'goal-organization',
+  'goal-phases',
   'goal-scorecard',
+  'insights-narrative',
+  'insights-taste-themes',
+  'jira-status-report',
   'jira-title',
   'loop', // user-authored recurring prompts — one tag for every kind, so it can't be split
   'memory-embedding-summary',
   'meatspace-post-rhetoric-evaluator',
+  'model-benchmark',
   'model-personality-alignment',
   'model-personality-profile',
   'pm2-standardize',
+  'provider-text', // callProviderAISimple's tag for a caller that named none
   'record-merge-ai',
   'system-resource-triage',
   'task-enhancement',
