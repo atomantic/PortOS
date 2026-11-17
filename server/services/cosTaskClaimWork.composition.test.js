@@ -24,6 +24,8 @@ import { buildLightContextPrompt } from './agentPromptBuilder.js';
 import { getTaskPrompt, DEFAULT_TASK_PROMPTS } from './taskPromptService.js';
 import { buildImprovementTaskDescription } from './cosTaskPreStepBlocks.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
+import { buildClaimEpicSection, deferClaimEpicSection } from './promptSections/claimEpic.js';
+import { PATHS } from '../lib/paths.js';
 
 const app = { id: 'fixture', name: 'Fixture', repoPath: '/fixture' };
 const issueContext = { number: 42, title: 'A target issue', body: 'User-visible issue body.\n'.repeat(400) };
@@ -239,5 +241,52 @@ describe('assembled forge claim prompts', () => {
     expect(result.composed).toBe(false);
     expect(result.prompt).toContain('## Phase 1 — Pick the target issue');
     expect(result.prompt).toContain('Run each LOCAL reviewer');
+  });
+});
+
+// A file-tool host reads the epic phase from a staged copy only when Phase 1
+// lands on an epic (#16573). Sizes replace the checkout root with a placeholder,
+// as claimPromptSize.test.js does, so the cap tracks the prompt text alone.
+describe('claim epic phase on demand', () => {
+  // The largest file-capable render of a claim that may not be an epic measured
+  // 65,606 B when the epic phase moved on demand. Shrink-only:
+  // lower it when the prompt shrinks, never raise it to fit new text.
+  const ON_DEMAND_CAP_BYTES = 65_700;
+  const STAGED = '/install/data/cos/slashdo-resolved/claim-epic-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.md';
+  const bytes = (text) => Buffer.byteLength(text.replaceAll(PATHS.root, '<repo-root>'), 'utf8');
+  const renderOnDemand = async (claim) => {
+    const staged = [];
+    const task = await deferClaimEpicSection({ description: 'Claim the selected issue', metadata: { prompt: claim.prompt } },
+      async (name, body) => { staged.push({ name, body }); return STAGED; });
+    return { prompt: renderAgent({ ...claim, prompt: task.metadata.prompt }), staged };
+  };
+
+  it.each(['github', 'gitlab'])('keeps every file-capable %s claim that may not be an epic under the cap, pointing at the epic phase', async (tracker) => {
+    state.tracker = tracker;
+    for (const target of [undefined, '42']) {
+      for (const prCompletion of ['review-then-merge', 'merge-on-green', 'leave-open']) {
+        const { prompt, staged } = await renderOnDemand(await buildClaimWorkTask(app, { target, prCompletion }));
+        expect(bytes(prompt), `${tracker} ${target ?? 'unpinned'} ${prCompletion}`).toBeLessThanOrEqual(ON_DEMAND_CAP_BYTES);
+        expect(prompt).toContain(`READ \`${STAGED}\``);
+        expect(prompt).toContain('When Phase 1 lands on an epic');
+        expect(prompt).not.toContain(staged[0].body);
+      }
+    }
+  });
+
+  it.each(['github', 'gitlab'])('stages the full %s decomposition text for an epic-pinned claim, and inlines it without file tools', async (tracker) => {
+    state.tracker = tracker;
+    const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'review-then-merge' });
+    const { staged } = await renderOnDemand(claim);
+    const epic = buildClaimEpicSection(tracker, false);
+    expect(staged).toEqual([{ name: `claim-epic-${tracker}`, body: epic }]);
+    expect(epic).toContain('## Decomposed into');
+    expect(epic).toContain('Part of #${EPIC}');
+    expect(renderAgent(claim)).toContain(epic);
+  });
+
+  it('stages nothing for a verified non-epic claim, which carries no epic phase', async () => {
+    const { staged } = await renderOnDemand(await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true }));
+    expect(staged).toEqual([]);
   });
 });

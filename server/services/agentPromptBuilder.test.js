@@ -107,6 +107,8 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { loadSlashdoFile, loadSlashdoLib, loadSlashdoBundle, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js'; // mocked above — control the inlined body
 import { SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
+import { composeClaimIssuePrompt } from './taskPromptDefaults/prompts.js';
+import { buildClaimEpicSection } from './promptSections/claimEpic.js';
 import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
 import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 // The heading a task-type hook's prompt points at to locate the sentinel path.
@@ -5107,5 +5109,66 @@ describe('CLI review-outcome run id (#16572)', () => {
     expect(prompt).toContain('/api/code-review/cli-outcome');
     expect(prompt).not.toContain('"agentId"');
     expect(prompt).not.toContain(REVIEW_VERDICT_RUN_ID_TOKEN);
+  });
+});
+
+// #16573 — the claim prompt's epic phase is staged for a host with file tools and
+// read only when Phase 1 lands on an epic; an API provider keeps it inline.
+describe('buildAgentPrompt — claim epic phase on demand', () => {
+  const STAGED = '/install/data/cos/slashdo-resolved/claim-epic-github-0123abcd.md';
+  const claimTask = (prompt, field = 'metadata') => makeTask(field === 'metadata'
+    ? { description: 'Claim the next issue', metadata: { claimFlow: true, prompt } }
+    : { description: prompt, metadata: { claimFlow: true } });
+  const stagedEpics = () => vi.mocked(writeResolvedSlashdoBody).mock.calls.filter(([name]) => name.startsWith('claim-epic-'));
+
+  beforeEach(() => {
+    vi.mocked(writeResolvedSlashdoBody).mockReset();
+    vi.mocked(writeResolvedSlashdoBody).mockResolvedValue(STAGED);
+  });
+
+  it.each(['cli', 'tui'])('points a %s host at a staged copy of the exact epic phase', async (providerType) => {
+    const epic = buildClaimEpicSection('github', false);
+    const prompt = await buildAgentPrompt(claimTask(composeClaimIssuePrompt({ forge: 'github' })), {}, '/r', null,
+      { providerType, providerId: 'codex', providerCommand: 'codex' });
+    expect(stagedEpics()).toEqual([['claim-epic-github', epic]]);
+    expect(prompt).not.toContain(epic);
+    expect(prompt).toContain('## Phase 1b — Decompose an epic (only when Phase 1 landed on one)');
+    expect(prompt).toContain(`When Phase 1 lands on an epic (the second-pass undecomposed epic, or a selected issue that turns out to be one), READ \`${STAGED}\``);
+  });
+
+  it('defers the leave-open GitLab phase of a pinned claim carried in the description', async () => {
+    const epic = buildClaimEpicSection('gitlab', true);
+    const prompt = await buildAgentPrompt(claimTask(composeClaimIssuePrompt({ forge: 'gitlab', target: 42, prCompletion: 'leave-open' }), 'description'),
+      {}, '/r', null, { providerType: 'cli', providerId: 'codex' });
+    expect(stagedEpics()).toEqual([['claim-epic-gitlab', epic]]);
+    expect(prompt).not.toContain(epic);
+    expect(prompt).toContain(STAGED);
+  });
+
+  it('keeps the epic phase inline for an API provider, which cannot read files', async () => {
+    const prompt = await buildAgentPrompt(claimTask(composeClaimIssuePrompt({ forge: 'github' })), {}, '/r', null, { providerType: 'api' });
+    expect(stagedEpics()).toEqual([]);
+    expect(prompt).toContain(buildClaimEpicSection('github', false));
+  });
+
+  it.each([
+    ['rejects', () => vi.mocked(writeResolvedSlashdoBody).mockRejectedValue(new Error('disk full'))],
+    ['returns no path', () => vi.mocked(writeResolvedSlashdoBody).mockResolvedValue(null)],
+  ])('keeps the epic phase inline when staging %s', async (_label, arrange) => {
+    arrange();
+    const prompt = await buildAgentPrompt(claimTask(composeClaimIssuePrompt({ forge: 'github' })), {}, '/r', null,
+      { providerType: 'cli', providerId: 'codex' });
+    expect(prompt).toContain(buildClaimEpicSection('github', false));
+    expect(prompt).not.toContain('When Phase 1 lands on an epic');
+  });
+
+  it('leaves a verified non-epic claim and an edited epic phase untouched', async () => {
+    const edited = composeClaimIssuePrompt({ forge: 'github' }).replace('Produce 2–8 slices', 'Produce 2–6 slices');
+    expect(edited).not.toContain(buildClaimEpicSection('github', false));
+    for (const prompt of [composeClaimIssuePrompt({ forge: 'github', target: 42, preverified: true, nonEpic: true }), edited]) {
+      const rendered = await buildAgentPrompt(claimTask(prompt), {}, '/r', null, { providerType: 'cli', providerId: 'codex' });
+      expect(rendered).not.toContain('When Phase 1 lands on an epic');
+    }
+    expect(stagedEpics()).toEqual([]);
   });
 });
