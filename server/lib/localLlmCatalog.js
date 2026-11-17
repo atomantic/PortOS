@@ -343,6 +343,22 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'gemma4:e4b',
     lmstudio: 'lmstudio-community/gemma-4-E4B-it-GGUF'
   },
+  {
+    key: 'nemotron-3.5-bolt-e4b',
+    name: 'Nemotron 3.5 Bolt E4B',
+    category: 'lightweight',
+    recommendedFor: ['lightweight', 'vision', 'reasoning'],
+    params: '8B / E4B active',
+    size: '7.9 GB',
+    family: 'nemotron',
+    description: "NVIDIA's compact multimodal model built on Gemma 4 E4B (4B effective params) — vision, audio, tools, and reasoning in a 64K context window.",
+    repository: 'nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-BF16',
+    capabilities: ['chat', 'reasoning', 'tools', 'vision'],
+    context: 65536,
+    ollama: 'nemotron-3.5-bolt:e4b',
+    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF',
+    lmstudioAliases: ['unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF']
+  },
   // ── General-purpose laptop tier (16–32GB) ──
   {
     key: 'lfm2.5-8b-a1b',
@@ -384,6 +400,21 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'lfm3-audio',
     lmstudio: 'LiquidAI/LFM3-Audio-2B-GGUF',
     lmstudioAliases: ['lmstudio-community/LFM3-Audio-2B-GGUF']
+  },
+  {
+    key: 'lfm3-omni-2b',
+    name: 'LFM3 Omni 2B',
+    category: 'chat',
+    recommendedFor: ['chat', 'lightweight', 'vision'],
+    params: '2B',
+    size: '2.0 GB',
+    family: 'lfm3',
+    description: "Liquid AI's compact omni-modal edge model (2.2B params) with a 128K context window — end-to-end understanding of text, images, video, and audio, plus streaming speech and tool calling.",
+    capabilities: ['chat', 'tools', 'vision'],
+    context: 128000,
+    ollama: 'lfm3-omni',
+    ollamaAliases: ['lfm3-omni:2b'],
+    lmstudio: 'LiquidAI/LFM3-Omni-2B-GGUF'
   },
   {
     key: 'granite4.2-8b',
@@ -466,7 +497,8 @@ export const LOCAL_LLM_CATALOG = [
     description: 'Mistral AI\'s 24B instruct model with vision support, tools, and a 128K context window — strong for local agents, coding, and multi-file tasks.',
     capabilities: ['chat', 'code', 'tools', 'vision', 'multilingual'],
     context: 131072,
-    ollama: 'mistral-small:24b',
+    ollama: 'mistral-small3.2:24b',
+    ollamaAliases: ['mistral-small:24b'],
     lmstudio: 'lmstudio-community/Mistral-Small-3.2-24B-Instruct-2506-GGUF'
   },
   {
@@ -642,6 +674,21 @@ export const LOCAL_LLM_CATALOG = [
     capabilities: ['chat', 'reasoning', 'tools'],
     ollama: 'glm-4.7-flash',
     lmstudio: 'lmstudio-community/GLM-4.7-Flash-GGUF'
+  },
+  {
+    key: 'granite4.2-30b',
+    name: 'Granite 4.2 30B',
+    category: 'general',
+    recommendedFor: ['general', 'reasoning', 'coding', 'multilingual'],
+    params: '30B',
+    size: '18 GB',
+    family: 'granite',
+    description: 'Apache-licensed IBM Granite 4.2 30B instruct model with a 128K context, thinking mode, RAG, coding, and tool use — clean, constrained output for enterprise and editorial workflows.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'multilingual'],
+    context: 131072,
+    ollama: 'granite4.2:30b',
+    lmstudio: 'lmstudio-community/granite-4.2-30b-GGUF',
+    lmstudioAliases: ['ibm-granite/granite-4.2-30b-GGUF']
   },
   {
     key: 'olmo-3.1-32b',
@@ -843,6 +890,26 @@ export const LOCAL_LLM_CATALOG = [
     lmstudioAliases: ['ggml-org/Nemotron-3-Super-120B-GGUF']
   },
   {
+    key: 'nemotron-3.5-super-120b',
+    name: 'Nemotron 3.5 Super 120B-A12B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning', 'coding', 'vision'],
+    params: '120B / 12B active',
+    size: '90 GB',
+    family: 'nemotron',
+    description: "NVIDIA's multimodal hybrid Mamba-Transformer MoE with a 1M-token context — vision-language document understanding, deep chain-of-thought reasoning, coding, and tools with 12B active parameters.",
+    repository: 'nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16',
+    capabilities: ['chat', 'reasoning', 'code', 'tools', 'vision'],
+    context: 1048576,
+    ollama: 'nemotron-3.5-super',
+    ollamaAliases: ['nemotron-3.5-super:120b', 'nemotron-3.5-super:120b-a12b'],
+    lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF',
+    lmstudioAliases: [
+      'ggml-org/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF',
+      'unsloth/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-GGUF'
+    ]
+  },
+  {
     key: 'qwen3.5-122b-a10b',
     name: 'Qwen3.5 122B-A10B',
     category: 'general',
@@ -936,19 +1003,19 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Codestral-22B-v0.1-GGUF'
   },
   {
-    key: 'ornith-9b',
-    benchmarkModel: 'ornith-1.0-9b',
-    name: 'Ornith 1.0 9B',
+    key: 'ornith-1.5-9b',
+    name: 'Ornith 1.5 9B',
     category: 'coding',
-    recommendedFor: ['coding'],
+    recommendedFor: ['coding', 'reasoning', 'vision'],
     params: '9B',
-    size: '5.6 GB',
+    size: '6.6 GB',
     family: 'ornith',
-    description: 'Self-improving open model family for agentic coding — the 9B fits a laptop while still driving tools over a 256K context.',
-    capabilities: ['chat', 'code', 'tools'],
+    description: 'Self-improving MIT-licensed model for agentic coding — adds vision and thinking over Ornith 1.0 while fitting an 8–16GB laptop with a 256K context.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
     context: 262144,
-    ollama: 'ornith:9b',
-    lmstudio: 'lmstudio-community/Ornith-1.0-9B-GGUF'
+    ollama: 'ornith-1.5:9b',
+    lmstudio: 'bartowski/Ornith-1.5-9B-GGUF',
+    lmstudioAliases: ['ornith-ai/Ornith-1.5-9B-GGUF']
   },
   {
     key: 'devstral-small-2-24b',
@@ -992,6 +1059,37 @@ export const LOCAL_LLM_CATALOG = [
     context: 262144,
     ollama: 'ornith:35b',
     lmstudio: 'lmstudio-community/Ornith-1.0-35B-GGUF'
+  },
+  {
+    key: 'ornith-1.5-35b-a3b',
+    name: 'Ornith 1.5 35B-A3B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning', 'vision'],
+    params: '35B / 3B active',
+    size: '23 GB',
+    family: 'ornith',
+    description: 'Mid-size self-improving MoE (3B active) for agentic coding, terminal tasks, vision, and reasoning over a 256K context — MIT-licensed upgrade over Ornith 1.0 35B.',
+    capabilities: ['chat', 'code', 'reasoning', 'tools', 'vision'],
+    context: 262144,
+    ollama: 'ornith-1.5:35b',
+    lmstudio: 'bartowski/Ornith-1.5-35B-A3B-GGUF',
+    lmstudioAliases: ['ornith-ai/Ornith-1.5-35B-A3B-GGUF']
+  },
+  {
+    key: 'flint-40b-a2b',
+    name: 'Flint 40B-A2B',
+    category: 'coding',
+    recommendedFor: ['coding', 'reasoning'],
+    params: '40B / 2.5B active',
+    size: '23 GB',
+    family: 'flint',
+    description: "Recursive's Apache-2.0 coding-agent MoE (39.8B total, ~2.5B active) with a 256K context — built for repository investigation, multi-turn tool use, and bug fixing on 32GB+ systems.",
+    capabilities: ['chat', 'code', 'reasoning', 'tools'],
+    context: 262144,
+    ollama: 'flint:40b',
+    ollamaAliases: ['flint', 'flint:40b-a2b'],
+    lmstudio: 'lmstudio-community/flint-GGUF',
+    lmstudioAliases: ['unsloth/flint-GGUF', 'ggml-org/Flint-GGUF']
   },
   {
     key: 'qwen3.6-35b-a3b',
@@ -1189,6 +1287,22 @@ export const LOCAL_LLM_CATALOG = [
   // produces them. Larger embedders (e.g. qwen3-embedding at 1024 dims) are
   // deliberately absent: they fail the dimension check on ingest.
   {
+    key: 'embeddinggemma-2-270m',
+    name: 'EmbeddingGemma 2 270M',
+    category: 'embedding',
+    recommendedFor: ['embedding'],
+    params: '270M',
+    size: '304 MB',
+    family: 'embedding',
+    description: "Google's Apache-2.0 Gemma-4-architecture embedding model — 768-dimension vectors across 100+ languages with stronger code retrieval in half the footprint of v1.",
+    repository: 'google/embeddinggemma-2',
+    capabilities: ['embeddings', 'multilingual'],
+    ollama: 'embeddinggemma-2:270m',
+    ollamaAliases: ['embeddinggemma-2', 'embeddinggemma-2:740m'],
+    lmstudio: 'ggml-org/embeddinggemma-2-GGUF',
+    lmstudioAliases: ['unsloth/embeddinggemma-2-GGUF']
+  },
+  {
     key: 'embeddinggemma-300m',
     name: 'EmbeddingGemma 300M',
     category: 'embedding',
@@ -1288,7 +1402,8 @@ const RETIRED_MODEL_MAPPINGS = [
   {
     ollama: 'nemotron-3-nano:30b',
     lmstudio: 'lmstudio-community/NVIDIA-Nemotron-3-Nano-30B-A3B-GGUF'
-  }
+  },
+  { ollama: 'ornith:9b', lmstudio: 'lmstudio-community/Ornith-1.0-9B-GGUF' }
 ];
 
 // Strip only the implicit `:latest` tag (`llama3.2:latest` → `llama3.2`) and
