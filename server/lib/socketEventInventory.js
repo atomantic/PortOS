@@ -19,6 +19,10 @@ const EXCLUDED_SERVER_PREFIXES = Object.freeze(['server/cos-runner/']);
 const SOCKET_CALL_RE = /\bsocket\??\.(on|once|emit)\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
 const SERVER_EMIT_RE = /\b(?:io|ioInstance)\??\.emit\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
 const SERVER_BROADCAST_RE = /\bbroadcastTo(?!Set\b)[A-Za-z]*\(\s*(`(?:[^`\\]|\\.)*`|'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")/g;
+// Quoted colon-namespaced names. Clients often listen through constant arrays
+// (`const EVENTS = ['brain:changed']`) rather than a literal `socket.on(...)`, so
+// "has a client listener" means "the client source names the event".
+const CLIENT_EVENT_LITERAL_RE = /(['"`])([a-z][\w-]*(?::[\w-]+)+)\1/g;
 const REGISTER_SUBSCRIBER_RE = /\bregisterSubscriber\(\s*socket\s*,\s*(['"])([^'"\n]+)\1/g;
 
 const toPosix = (path) => path.split(sep).join('/');
@@ -61,7 +65,10 @@ const directionFor = ({ side, method }) => {
 };
 
 export async function scanSocketEventFile(filePath, repoRoot = DEFAULT_REPO_ROOT) {
-  const source = await readFile(filePath, 'utf8');
+  return scanSocketEventSource(await readFile(filePath, 'utf8'), filePath, repoRoot);
+}
+
+const scanSocketEventSource = (source, filePath, repoRoot) => {
   const path = toPosix(relative(repoRoot, filePath));
   const side = path.startsWith('server/') ? 'server' : 'client';
   const declarations = [];
@@ -84,28 +91,42 @@ export async function scanSocketEventFile(filePath, repoRoot = DEFAULT_REPO_ROOT
     }
   }
   return declarations;
-}
+};
 
 export async function buildSocketEventInventory({ repoRoot = DEFAULT_REPO_ROOT } = {}) {
   const byEvent = new Map();
+  const clientReferenced = new Set();
+  const serverEmitted = new Set();
   let sourceFileCount = 0;
   const files = await sourceFiles(repoRoot);
-  const declarationSets = await mapWithConcurrency(
-    files,
-    FILE_READ_CONCURRENCY,
-    (filePath) => scanSocketEventFile(filePath, repoRoot),
-  );
-  for (const declarations of declarationSets) {
+  const scans = await mapWithConcurrency(files, FILE_READ_CONCURRENCY, async (filePath) => {
+    const source = await readFile(filePath, 'utf8');
+    const isClient = toPosix(relative(repoRoot, filePath)).startsWith(`${CLIENT_ROOT}/`);
+    return {
+      isClient,
+      declarations: scanSocketEventSource(source, filePath, repoRoot),
+      literals: isClient ? [...source.matchAll(CLIENT_EVENT_LITERAL_RE)].map((match) => match[2]) : [],
+    };
+  });
+  for (const { isClient, declarations, literals } of scans) {
     if (declarations.length) sourceFileCount += 1;
+    for (const event of literals) clientReferenced.add(event);
     for (const declaration of declarations) {
       const directions = byEvent.get(declaration.event) || new Set();
       directions.add(declaration.direction);
       byEvent.set(declaration.event, directions);
+      // A server file only declares server-to-client through an emit/broadcast.
+      if (!isClient && declaration.direction === 'server-to-client') serverEmitted.add(declaration.event);
     }
   }
 
   const events = [...byEvent.entries()]
-    .map(([event, directions]) => ({ event, directions: [...directions].sort() }))
+    .map(([event, directions]) => ({
+      event,
+      directions: [...directions].sort(),
+      serverEmitted: serverEmitted.has(event),
+      clientReferenced: clientReferenced.has(event),
+    }))
     .sort((a, b) => a.event.localeCompare(b.event));
   return {
     derivedFrom: ['server/**/*.js', '!server/cos-runner/**', 'client/src/**/*.{js,jsx}'],

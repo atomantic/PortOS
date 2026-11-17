@@ -149,7 +149,6 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
   return prepareAgentWorkspace({ agentId, task, onPrepared: async prep => {
     if (prep.outcome === 'deferred') {
       await context.cleanupOnError(prep.reason);
-      cosEvents.emit('agent:deferred', { taskId: task.id, reason: prep.deferReason, branch: prep.branch });
       return null;
     }
     if (prep.outcome === 'blocked') {

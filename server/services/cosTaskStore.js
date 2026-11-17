@@ -1601,7 +1601,6 @@ export async function challengeTask(taskId, { reason, evidence, reviewer } = {},
     const updated = await writeTaskUpdateLocked(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
     if (updated?.error) return updated;
     console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
-    cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
     return updated;
   });
 }
@@ -1644,7 +1643,7 @@ export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy }
     return { task, updated, nextStatus, resolvedType };
   });
   if (resolution.error) return resolution;
-  const { task, updated, nextStatus, resolvedType } = resolution;
+  const { task, updated, nextStatus } = resolution;
 
   if (outcome === 'escalated') {
     // Surface the dispute to the single PortOS user as an approval-required
@@ -1672,7 +1671,6 @@ export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy }
   }
 
   console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
-  cosEvents.emit('task:challenge-resolved', { taskId, taskType: resolvedType, outcome });
   return updated;
 }
 

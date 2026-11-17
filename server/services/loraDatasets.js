@@ -17,7 +17,6 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { LORA_DATASET_SCHEMA_VERSION, sanitizeLoraDataset } from '../lib/loraDataset.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { trainingEvents } from './loraTraining/events.js';
 
 export const loraDatasetStore = createCollectionStore({
   dir: PATHS.loraDatasets,
@@ -42,7 +41,6 @@ export async function updateDataset(id, mutate) {
     if (!next) return current;
     next.updatedAt = new Date().toISOString();
     await loraDatasetStore.saveOneNow(id, next);
-    trainingEvents.emit('dataset:changed', { datasetId: id });
     return next;
   })));
 }

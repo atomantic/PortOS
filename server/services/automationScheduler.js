@@ -7,7 +7,6 @@
 
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import EventEmitter from 'events';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
 import * as agentActivity from './agentActivity.js';
@@ -18,9 +17,6 @@ import { ServerError } from '../lib/errorHandler.js';
 const SCHEDULES_FILE = join(PATHS.agentPersonalities, 'schedules.json');
 const store = createCachedStore(SCHEDULES_FILE, { schedules: {} }, { context: 'automation schedules' });
 const loadSchedules = store.load;
-
-// Event emitter for schedule changes
-export const scheduleEvents = new EventEmitter();
 
 // Track active scheduled events
 const activeSchedules = new Map();
@@ -33,10 +29,6 @@ export function registerActionExecutor(executor) {
 }
 
 export const invalidateCache = store.invalidateCache;
-
-export function notifyChanged(action = 'update', scheduleId = null) {
-  scheduleEvents.emit('changed', { action, scheduleId, timestamp: Date.now() });
-}
 
 /**
  * Get all schedules
@@ -109,7 +101,6 @@ export async function createSchedule(scheduleData) {
   };
 
   await store.mutate((data) => { data.schedules[id] = schedule; });
-  notifyChanged('create', id);
 
   // If enabled, activate the schedule
   if (schedule.enabled) {
@@ -151,7 +142,6 @@ export async function updateSchedule(id, updates) {
   });
 
   if (!schedule) return null;
-  notifyChanged('update', id);
 
   // Handle enable/disable
   if (wasEnabled && !schedule.enabled) {
@@ -184,7 +174,6 @@ export async function deleteSchedule(id) {
 
   // Deactivate if running
   await deactivateSchedule(id);
-  notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted schedule (${id})`);
   return true;
@@ -341,12 +330,6 @@ async function executeScheduledAction(scheduleId) {
   });
 
   const execution = { scheduleId, schedule, timestamp: now };
-  // Notifications do not own platform work or decide whether it runs.
-  try {
-    scheduleEvents.emit('execute', execution);
-  } catch (err) {
-    console.error(`❌ Schedule execution notification failed: ${err.message}`);
-  }
   try {
     await executor(execution);
   } finally {
