@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
 /** A `git` invocation… */
@@ -39,6 +40,103 @@ const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm
  */
 const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
 const blankLiterals = (source) => source.replace(STRING_LITERAL, (lit) => (/[\s(]/.test(lit.slice(1, -1)) ? '""' : lit));
+
+const OPENERS = new Set(['(', '[', '{']);
+const CLOSERS = new Set([')', ']', '}']);
+const isPunct = (token, value) => token?.t === 'p' && token.v === value;
+/** Template holes hold code too: a walker called from `${…}` is still a call. */
+const flattenTokens = (tokens, out = []) => {
+  for (const token of tokens) {
+    if (token.t === 'tpl') for (const hole of token.exprs) flattenTokens(hole, out);
+    else out.push(token);
+  }
+  return out;
+};
+/** Index of the bracket closing the opener at `open`. */
+const closerOf = (tokens, open) => {
+  let depth = 0;
+  for (let i = open; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'p') continue;
+    if (OPENERS.has(tokens[i].v)) depth += 1;
+    else if (CLOSERS.has(tokens[i].v) && --depth === 0) return i;
+  }
+  return tokens.length - 1;
+};
+/** End of a braceless arrow body: the first `;` or `,` at depth zero, or the enclosing closer. */
+const expressionEnd = (tokens, start) => {
+  let depth = 0;
+  for (let i = start; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'p') continue;
+    if (OPENERS.has(tokens[i].v)) depth += 1;
+    else if (CLOSERS.has(tokens[i].v)) { if (depth === 0) return i; depth -= 1; }
+    else if (depth === 0 && (tokens[i].v === ';' || tokens[i].v === ',')) return i;
+  }
+  return tokens.length;
+};
+/** `{ name, from, to }` body token spans of every function bound to a name: a declaration, or a function/arrow assigned to an identifier. */
+const namedFunctionBodies = (tokens) => {
+  const bodies = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'id') continue;
+    if (tokens[i].v === 'function' && tokens[i + 1]?.t === 'id' && isPunct(tokens[i + 2], '(')) {
+      const params = closerOf(tokens, i + 2);
+      if (isPunct(tokens[params + 1], '{')) bodies.push({ name: tokens[i + 1].v, from: params + 1, to: closerOf(tokens, params + 1) });
+      continue;
+    }
+    if (!isPunct(tokens[i + 1], '=') || isPunct(tokens[i + 2], '=')) continue;
+    let j = i + 2;
+    if (tokens[j]?.t === 'id' && tokens[j].v === 'async') j += 1;
+    if (tokens[j]?.t === 'id' && tokens[j].v === 'function') {
+      while (j < tokens.length && !isPunct(tokens[j], '(')) j += 1;
+      const params = closerOf(tokens, j);
+      if (isPunct(tokens[params + 1], '{')) bodies.push({ name: tokens[i].v, from: params + 1, to: closerOf(tokens, params + 1) });
+      continue;
+    }
+    let arrow = -1;
+    if (isPunct(tokens[j], '(')) {
+      const params = closerOf(tokens, j);
+      if (isPunct(tokens[params + 1], '=>')) arrow = params + 1;
+    } else if (tokens[j]?.t === 'id' && isPunct(tokens[j + 1], '=>')) arrow = j + 1;
+    if (arrow < 0) continue;
+    bodies.push({
+      name: tokens[i].v,
+      from: arrow + 1,
+      to: isPunct(tokens[arrow + 1], '{') ? closerOf(tokens, arrow + 1) : expressionEnd(tokens, arrow + 1),
+    });
+  }
+  return bodies;
+};
+
+const READDIR_CALL = /\breaddir(?:Sync)?\b/;
+const READDIR_NAMES = new Set(['readdirSync', 'readdir']);
+
+/**
+ * A hand-rolled directory walker (#16553): a named function that lists a
+ * directory and calls itself. The regex detectors above see only the shared
+ * walkers and `{ recursive: true }`, so a test that wrote its own `walk(dir)`
+ * scanned the tree unseen. Token-based, so a walker quoted in a string or a
+ * comment does not count. A source the tokenizer rejects counts as a walker
+ * when it lists a directory at all: the check fails closed.
+ */
+export const hasRecursiveDirectoryWalk = (source) => {
+  if (!READDIR_CALL.test(source)) return false;
+  let tokens;
+  try {
+    tokens = flattenTokens(tokenize(source));
+  } catch {
+    return true;
+  }
+  return namedFunctionBodies(tokens).some(({ name, from, to }) => {
+    let lists = false;
+    let recurses = false;
+    for (let i = from; i <= to && i < tokens.length; i += 1) {
+      if (tokens[i].t !== 'id') continue;
+      if (READDIR_NAMES.has(tokens[i].v)) lists = true;
+      else if (tokens[i].v === name && isPunct(tokens[i + 1], '(') && !isPunct(tokens[i - 1], '.')) recurses = true;
+    }
+    return lists && recurses;
+  });
+};
 
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
