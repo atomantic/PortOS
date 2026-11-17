@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { pathWithin } from '../../../scripts/lib/pathWithin.js';
 import {
   TITLE_CARD_DEFAULTS, TITLE_CARD_FONT_FACES, TITLE_CARD_FONTS, _titleCardTestHooks, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill,
   titleCardSteady, titleCardSteadySupported, titleCardVisible, titleCardWindows, titleCardRuntimeSource,
@@ -182,13 +184,16 @@ describe('title card fonts', () => {
     expect(normalizeTitleCard({ font: 'oswald' }).font).toBe('oswald');
     expect(normalizeTitleCard({ font: 'comic' }).font).toBe('display');
     for (const id of Object.keys(TITLE_CARD_FONT_FACES)) expect(TITLE_CARD_FONTS).toContain(id);
-    const copies = [
-      ...Object.values(TITLE_CARD_FONT_FACES).map(({ file }) => [`../../services/musicVideo/titleCardFonts/${file}`, file]),
-      ['../../services/musicVideo/documentTemplates/shared/fonts/archivo-variable.woff2', 'archivo-variable.woff2'],
-      ['../../services/musicVideo/documentTemplates/shared/fonts/ibm-plex-mono-500.woff2', 'ibm-plex-mono-500.woff2'],
-    ];
-    for (const [source, copy] of copies) {
-      expect(readFileSync(new URL(`../../../client/public/fonts/title-card/${copy}`, import.meta.url)).equals(readFileSync(new URL(source, import.meta.url)))).toBe(true);
+    // pathWithin: the face file names come from the title-card module, so the test memo keys these
+    // directories for them (a variable name in a URL could be any file, and the memo then refuses the suite).
+    const publishedDir = fileURLToPath(new URL('../../../client/public/fonts/title-card/', import.meta.url));
+    const faceDir = fileURLToPath(new URL('../../services/musicVideo/titleCardFonts/', import.meta.url));
+    const sharedDir = fileURLToPath(new URL('../../services/musicVideo/documentTemplates/shared/fonts/', import.meta.url));
+    for (const { file } of Object.values(TITLE_CARD_FONT_FACES)) {
+      expect(readFileSync(pathWithin(publishedDir, file)).equals(readFileSync(pathWithin(faceDir, file)))).toBe(true);
+    }
+    for (const file of ['archivo-variable.woff2', 'ibm-plex-mono-500.woff2']) {
+      expect(readFileSync(pathWithin(publishedDir, file)).equals(readFileSync(pathWithin(sharedDir, file)))).toBe(true);
     }
   });
 });
