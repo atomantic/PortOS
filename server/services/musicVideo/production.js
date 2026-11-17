@@ -1,5 +1,5 @@
-import { plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { plateRequirementBasis, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 /**
  * Music Video — server-owned production run (#9066): pure record transforms.
  *
@@ -43,9 +43,9 @@ import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
-import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { isContinuingScene } from '../../lib/musicVideoSourceTake.js';
-import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
+import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { isContinuingScene } from '../../lib/musicVideo/musicVideoSourceTake.js';
+import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';

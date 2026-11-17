@@ -2142,7 +2142,7 @@ describe('cross-workspace browser suites (#10312)', () => {
     const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
     // Server-only media suites do not mount the changed client component.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
+    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideo/musicVideoTitleCard.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
       'server/services/greyboxRender.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',

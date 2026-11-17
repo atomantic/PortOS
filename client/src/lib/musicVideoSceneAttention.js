@@ -6,9 +6,9 @@
  * never disagree about which shots need work. Each code names a condition the
  * expanded card already surfaced; this lifts them to where the director scans.
  */
-import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
-import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideoSourceTake.js';
+import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
+import { currentPlateEvidence } from '../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';

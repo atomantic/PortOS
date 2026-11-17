@@ -1,8 +1,8 @@
 import {
   MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoConditioningReferences, musicVideoFrameReferenceFiles,
   musicVideoLimitReferenceFiles, musicVideoReferenceCapacity, musicVideoStyleImages,
-} from '../../../../server/lib/musicVideoConditioning.js';
-import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideoGreybox.js';
+} from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 
 /** A conditional preview: the server still resolves the actual renderer at submission. */
 export default function SceneFrameReferenceLimitNotice({ project, scene, castMedia, greybox, sourceImageId = null }) {

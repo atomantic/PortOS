@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { blenderShotFrameRange } from '../../lib/musicVideoBlender.js';
+import { blenderShotFrameRange } from '../../lib/musicVideo/musicVideoBlender.js';
 import { readBlenderFilm } from './blender/film.js';
 import { blenderFramesDir, blenderFrameName } from './blender/renderIndex.js';
 import { blenderLeadSec } from '../film/manifest.js';

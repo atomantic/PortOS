@@ -11,7 +11,7 @@ const { resolveDockerEngine } = await import('../dockerEngine.js');
 const { runStreamingCommand } = await import('../../lib/streamingSpawn.js');
 const { runFfmpegProcess, probeVideoDuration } = await import('../../lib/ffmpeg.js');
 const { normalizeComposition } = await import('./composition.js');
-const { musicVideoCompositionSchema } = await import('../../lib/musicVideoValidation.js');
+const { musicVideoCompositionSchema } = await import('../../lib/musicVideo/musicVideoValidation.js');
 const { prepareEidoverseRender, encodeEidoverseComposition } = await import('./eidoverseRender.js');
 const project = { id: 'example', audioAnalysis: { durationSec: 10 }, scenes: [{ startSec: 2, endSec: 6 }],
   composition: { mode: 'eidoverse', eidoverseScene: { inlineScript: 'globalThis.setup = async () => {};', assets: { prop: 'eidoverse/assets/models/example.glb' } } } };

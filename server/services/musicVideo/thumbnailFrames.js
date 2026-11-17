@@ -1,4 +1,4 @@
-import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideo/musicVideoTitleCard.js';
 
 /**
  * Music Video — choosing the video frames worth a YouTube thumbnail.

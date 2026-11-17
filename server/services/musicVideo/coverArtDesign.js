@@ -10,7 +10,7 @@
 import { extractJson } from '../../lib/jsonExtract.js';
 import { fenceBlock } from '../../lib/promptFencing.js';
 import { trimTo } from '../../lib/textUtils.js';
-import { COVER_DESIGN_OPTIONS, coverTypefaceChoices, customTypeface, normalizeCoverDesign } from '../../lib/musicVideoCoverOverlay.js';
+import { COVER_DESIGN_OPTIONS, coverTypefaceChoices, customTypeface, normalizeCoverDesign } from '../../lib/musicVideo/musicVideoCoverOverlay.js';
 
 const lyricsText = (project) => (project?.lyricCues || []).map((c) => (typeof c?.text === 'string' ? c.text.trim() : '')).filter(Boolean).join('\n');
 

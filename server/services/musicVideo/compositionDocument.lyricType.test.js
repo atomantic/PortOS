@@ -44,7 +44,7 @@ describe('shared lyric-type assets in composition documents', () => {
       'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html', 'musicVideoImageEffects.js',
     ]));
     expect(files.filter((file) => file.endsWith('.test.js'))).toEqual([]);
-    expect(await readFile(join(root, 'musicVideoImageEffects.js'), 'utf8')).toBe(await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url), 'utf8'));
+    expect(await readFile(join(root, 'musicVideoImageEffects.js'), 'utf8')).toBe(await readFile(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), 'utf8'));
   });
 
   it('adds the module and faces to an uploaded document that imports it, and keeps a document\'s own copy', async () => {

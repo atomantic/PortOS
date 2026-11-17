@@ -10,7 +10,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
-import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
 
 const ROOT = () => lazyTempDataRoot('mv-project-edit-result-');
 vi.mock('../lib/paths.js', async (original) => makePathsProxy(await original(), { dataRoot: ROOT }));

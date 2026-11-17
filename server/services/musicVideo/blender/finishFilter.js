@@ -6,11 +6,11 @@
  * Dissolves and beat toggles join handles per segment (film.js / assemble.js);
  * wipes need no extra handle here and stay undrawn. Pure.
  */
-import { blenderCutEffects, plannedTransitions, sceneCutEffect } from '../../../lib/musicVideoCutEffects.js';
-import { musicVideoGradeFilter } from '../../../lib/musicVideoGrade.js';
+import { blenderCutEffects, plannedTransitions, sceneCutEffect } from '../../../lib/musicVideo/musicVideoCutEffects.js';
+import { musicVideoGradeFilter } from '../../../lib/musicVideo/musicVideoGrade.js';
 import {
   mergeGlitchFrames, musicVideoTransitionFilter, sceneShotGlitchFrames, sceneTransitionSections, transitionGlitchFrames,
-} from '../../../lib/musicVideoTransitions.js';
+} from '../../../lib/musicVideo/musicVideoTransitions.js';
 
 function fadeBlackFilters(scenes, storyboardRows, { fps, first, last }) {
   const planned = plannedTransitions(storyboardRows);

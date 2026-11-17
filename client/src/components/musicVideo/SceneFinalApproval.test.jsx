@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
-import { finalApprovalPatch } from '../../../../server/lib/musicVideoFinalApproval.js';
+import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import SceneFinalApproval from './SceneFinalApproval.jsx';
 
 const draft = { takeId: 't1', kind: 'video', assetId: 'v1', tier: 'draft', status: 'candidate', createdAt: '2026-11-01T00:00:00Z' };

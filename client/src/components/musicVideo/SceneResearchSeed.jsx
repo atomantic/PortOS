@@ -2,7 +2,7 @@ import { ExternalLink, X } from 'lucide-react';
 import MediaImage from '../MediaImage';
 import ResearchSeedForm from './ResearchSeedForm.jsx';
 import { startMusicVideoSceneResearch } from '../../services/apiMusicVideo.js';
-import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../../../server/lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 
 const hostOf = (url) => {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return null; }

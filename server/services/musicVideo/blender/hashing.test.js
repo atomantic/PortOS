@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MUSIC_VIDEO_BLENDER_DEFAULT_SETTINGS as DEFAULTS } from '../../../lib/musicVideoBlender.js';
+import { MUSIC_VIDEO_BLENDER_DEFAULT_SETTINGS as DEFAULTS } from '../../../lib/musicVideo/musicVideoBlender.js';
 import { blenderSettingsHash, blenderShotHash } from '../../film/hashing.js';
 
 const files = (entries) => new Map(Object.entries(entries));

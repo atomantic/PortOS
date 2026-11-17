@@ -1,5 +1,5 @@
 /**
- * The opening title card's bundled faces (lib/musicVideoTitleCard.js
+ * The opening title card's bundled faces (lib/musicVideo/musicVideoTitleCard.js
  * TITLE_CARD_FONT_FACES, SIL OFL 1.1 — licences beside the files in
  * titleCardFonts/) as data URLs, and the card runtime with them registered.
  * The data URLs ride inside the runtime script, so the card draws its face on
@@ -7,7 +7,7 @@
  * the composed overlay) without each page shipping font files.
  */
 import { readFileSync } from 'fs';
-import { TITLE_CARD_FONT_FACES, titleCardRuntimeSource } from '../../lib/musicVideoTitleCard.js';
+import { TITLE_CARD_FONT_FACES, titleCardRuntimeSource } from '../../lib/musicVideo/musicVideoTitleCard.js';
 
 let cached = null;
 

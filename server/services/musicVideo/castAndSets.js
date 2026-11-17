@@ -40,7 +40,7 @@
  * syncs as usual.
  */
 
-import { castSetsInspectionBlockers } from '../../lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionBlockers } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 

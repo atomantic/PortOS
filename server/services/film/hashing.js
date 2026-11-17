@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
 import { sha256File } from '../../lib/fileCore.js';
-import { blenderRenderFrame } from '../../lib/musicVideoBlender.js';
+import { blenderRenderFrame } from '../../lib/musicVideo/musicVideoBlender.js';
 import { staticImportSpecifiersFromSource } from '../../lib/staticImportGraph.js';
 import { walkBlenderSources } from './sources.js';
 import { blenderSrcDir } from './workspace.js';

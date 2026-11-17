@@ -5,7 +5,7 @@
  * source (a video frame the kit kept, or any gallery image: a shot's still,
  * a cover photo, a Cast & Sets render) cropped 16:9, with the song title set
  * over it by code in the song's cover lettering, laid out for a feed (large,
- * to one side, clear of the duration badge; lib/musicVideoCoverOverlay.js).
+ * to one side, clear of the duration badge; lib/musicVideo/musicVideoCoverOverlay.js).
  * The YouTube post uploads it in place of a bare frame. No AI call: the
  * lettering is the cover's design (the artist's saved style for a song with
  * none of its own), and a new design re-sets this too.

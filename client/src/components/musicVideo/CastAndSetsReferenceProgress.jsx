@@ -1,4 +1,4 @@
-import { castSetsInspectionInputs, currentCastSetsInspection, castSetsImageAccepted } from '../../../../server/lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionInputs, currentCastSetsInspection, castSetsImageAccepted } from '../../../../server/lib/musicVideo/musicVideoCastSetsInspection.js';
 import { Link, useLocation } from 'react-router';
 import { RotateCcw, Wand2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';

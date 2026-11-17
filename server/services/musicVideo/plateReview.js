@@ -13,7 +13,7 @@ import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiTool
 import { effectiveModelAccess, scopeModelsByAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
 import { isSameOllamaDaemon } from '../../lib/ollamaContext.js';
 import { isVisionModel } from '../../lib/localModelHeuristics.js';
-import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence, plateRequirements, plateStripFindings } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 
 // Scored on a hand-labeled 16-image set (#14811): Qwen3.8 27B made no false
 // render-quality fails, Gemma 4 31B three, Gemma 3 27B three. Ollama's tag order

@@ -42,7 +42,7 @@ import { videoPosterForJob } from '../../lib/creativeDirectorPreview.js';
 import { sceneTakeList } from '../../lib/musicVideoTakes.js';
 import { formatCount } from '../../utils/formatters.js';
 import { deriveAttentionItems } from '../../lib/musicVideoAttention.js';
-import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideoReviewDraft.js';
+import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideo/musicVideoReviewDraft.js';
 import {
   deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, proofReviewInUse,
 } from '../../lib/musicVideoStages.js';

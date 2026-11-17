@@ -13,7 +13,7 @@
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
-import { blenderEffectiveOptions, blenderValidOptionValues, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderEffectiveOptions, blenderValidOptionValues, normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderRefusal, blenderSrcDir } from './workspace.js';
 import { blenderManifestHash, hashBlenderSources } from './hashing.js';
 import { readBlenderManifest, validateBlenderManifest, writeBlenderManifest } from './manifest.js';

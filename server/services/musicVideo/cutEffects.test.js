@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { cutEffectCuts, plannedCutEffect, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
+import { cutEffectCuts, plannedCutEffect, plannedTransitions, sceneCutEffect } from '../../lib/musicVideo/musicVideoCutEffects.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate } from './projectsLogic.js';
 

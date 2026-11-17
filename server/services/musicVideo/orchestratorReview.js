@@ -3,7 +3,7 @@ import { RENDER_DEFECTS } from '../../lib/imageRenderQuality.js';
  * Orchestrated autonomous music video — the orchestrator's review prompts, the
  * verdict parser, and the one provider call every checkpoint shares.
  *
- * An orchestrated run (`brief.orchestrator`, lib/musicVideoAutonomous.js) asks
+ * An orchestrated run (`brief.orchestrator`, lib/musicVideo/musicVideoAutonomous.js) asks
  * this reviewer at each point a director would otherwise stop the run: it
  * judges the output against the operator's idea and either approves it or
  * returns a concrete revision (rewritten lyrics, a sharper style line, edited
@@ -23,7 +23,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
-import { SUNO_LIMITS } from '../../lib/musicVideoAutonomous.js';
+import { SUNO_LIMITS } from '../../lib/musicVideo/musicVideoAutonomous.js';
 
 const NOTES_MAX = 1500;
 const CHANGE_MAX = 2000;

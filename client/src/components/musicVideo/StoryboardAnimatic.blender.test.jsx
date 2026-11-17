@@ -12,7 +12,7 @@ import StoryboardAnimatic from './StoryboardAnimatic.jsx';
 import { PREVIEW_FILM_LOOK_KEY } from './PreviewFilmLook.jsx';
 import { getMusicVideoLyricOverlayPreview } from '../../services/apiMusicVideo.js';
 import { getVideoHistoryItem } from '../../services/apiImageVideo.js';
-import { MUSIC_VIDEO_TRANSITION_STYLES } from '../../../../server/lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_TRANSITION_STYLES } from '../../../../server/lib/musicVideo/musicVideoTransitions.js';
 import { blenderFilmProject, blenderFilmState } from '../../test/blenderFilmFixture.js';
 
 const mediaUrl = (file) => `/api/music-video/mv-test/blender/media?path=${encodeURIComponent(file)}`;

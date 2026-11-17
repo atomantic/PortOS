@@ -8,7 +8,7 @@
  * `legacy` take rather than hiding it.
  */
 
-import { sequenceTakeSelectionPatch } from '../../../server/lib/musicVideoSequenceTake.js';
+import { sequenceTakeSelectionPatch } from '../../../server/lib/musicVideo/musicVideoSequenceTake.js';
 
 // `endImage` (#11173): the optional style-break end frame a fal clip ends on.
 export const TAKE_SLOT = Object.freeze({ image: 'referenceImageId', video: 'videoHistoryId', endImage: 'endImageId' });

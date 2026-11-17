@@ -585,7 +585,7 @@ describe.skipIf(!ffmpeg)('accepted-prefix continuation render (#9348)', () => {
         { startSec: 6, endSec: 16, status: 'verified', offsetSec: 0.3, confidence: 0.9 },
       ] }],
     } } } }] }];
-    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
     const dependencies = captureMusicVideoEvidence(original, { startSec: 8, endSec: 24 });
     original.excerpts[0].dependencies = dependencies;
     original.autoReviews[0].attempts[0].review.dependencies = dependencies;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
-import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideo/musicVideoTitleCard.js';
 import useMounted from '../../hooks/useMounted.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { hashString } from '../../utils/hashString.js';

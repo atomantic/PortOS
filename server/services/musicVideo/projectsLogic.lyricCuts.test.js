@@ -187,7 +187,7 @@ describe('word cuts in the render plan', () => {
   const durations = (clips) => clips.map((c) => Math.round(c.duration * 1000) / 1000);
   const render = async (project) => {
     const { beatSnapClips } = await import('./render.js');
-    const { wordTimedScenes } = await import('../../lib/musicVideoLayers.js');
+    const { wordTimedScenes } = await import('../../lib/musicVideo/musicVideoLayers.js');
     const scenes = wordTimedScenes(project, project.scenes.slice().sort((a, b) => a.startSec - b.startSec));
     return durations(beatSnapClips(scenes.map((s) => ({ sceneId: s.sceneId, inSec: 0, outSec: 5, duration: 5 })), [], { scenes }));
   };

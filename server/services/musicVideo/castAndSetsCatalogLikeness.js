@@ -3,7 +3,7 @@
 // only saw a visual-spec reference labeled with the subject's exact name, so
 // a cast member linked from Casting rendered as a stranger.
 
-import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';

@@ -29,7 +29,7 @@ describe('browser test profiles', () => {
 
   it('omits only the explicitly fidelity-only suite from smoke selection', () => {
     const mixed = 'server/services/musicVideo/documentRender.browser.test.js';
-    const smoke = 'server/lib/musicVideoTitleCard.browser.test.js';
+    const smoke = 'server/lib/musicVideo/musicVideoTitleCard.browser.test.js';
     const files = [mixed, smoke, ...BROWSER_FIDELITY_ONLY_FILES];
     expect(browserTestProfileFiles('smoke', files)).toEqual([mixed, smoke]);
     expect(browserTestProfileFiles('fidelity', files)).toEqual([mixed, ...BROWSER_FIDELITY_ONLY_FILES]);

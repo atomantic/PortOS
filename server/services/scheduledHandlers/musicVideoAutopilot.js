@@ -8,7 +8,7 @@
  * "Autonomous" entry point starts: creative brief → lyrics → mood board → Suno
  * song → analysis → production. The task's `taskMetadata.musicVideoAutopilot`
  * carries the run settings (tools, per-tool models, budget, limits, checkpoints,
- * LLM) — see `normalizeAutopilotParams` in `lib/musicVideoAutonomous.js`.
+ * LLM) — see `normalizeAutopilotParams` in `lib/musicVideo/musicVideoAutonomous.js`.
  *
  * It declines (never queues a second one) while a previous autonomous run is
  * still live, so a slow Suno login or a long production cannot pile up videos.
@@ -20,7 +20,7 @@
 
 import { getIdeas } from '../brainStorage.js';
 import { listProjects } from '../musicVideo/projects.js';
-import { AUTONOMOUS_LIVE_STATUSES, autonomousAttentionLink, describeAutonomousWait, ideaToPrompt, normalizeAutopilotParams, pickBrainIdea } from '../../lib/musicVideoAutonomous.js';
+import { AUTONOMOUS_LIVE_STATUSES, autonomousAttentionLink, describeAutonomousWait, ideaToPrompt, normalizeAutopilotParams, pickBrainIdea } from '../../lib/musicVideo/musicVideoAutonomous.js';
 
 const USED_STATUSES = new Set([...AUTONOMOUS_LIVE_STATUSES, 'completed']);
 

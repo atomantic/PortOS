@@ -1,19 +1,19 @@
 /**
  * Cover-art lettering preview (#10345).
  *
- * Cover-art lettering preview (#10345): re-export of `server/lib/musicVideoCoverOverlay.js` (the
+ * Cover-art lettering preview (#10345): re-export of `server/lib/musicVideo/musicVideoCoverOverlay.js` (the
  * design vocabulary, `normalizeCoverDesign`, `coverOverlaySvg`) plus `canvasCoverWidths(design, texts,
  * fonts)`, which measures text with a canvas so the live preview wraps and sizes the title the way the
  * server's measured render does.
  *
- * Re-export of `server/lib/musicVideoCoverOverlay.js` — the one layout the
+ * Re-export of `server/lib/musicVideo/musicVideoCoverOverlay.js` — the one layout the
  * server renders the cover with, imported rather than copied so the live
  * Lettering preview cannot drift from the saved JPEG — plus a canvas width
  * measure standing in for the server's sharp probe.
  */
-import { coverFontSpec, tagTextFor, titleLinesFor } from '../../../server/lib/musicVideoCoverOverlay.js';
+import { coverFontSpec, tagTextFor, titleLinesFor } from '../../../server/lib/musicVideo/musicVideoCoverOverlay.js';
 
-export { COVER_ART_SIZE, COVER_DESIGN_OPTIONS, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, coverTypefaceChoices, normalizeCoverDesign } from '../../../server/lib/musicVideoCoverOverlay.js';
+export { COVER_ART_SIZE, COVER_DESIGN_OPTIONS, YOUTUBE_THUMBNAIL_SIZE, coverOverlaySvg, coverTypefaceChoices, normalizeCoverDesign } from '../../../server/lib/musicVideo/musicVideoCoverOverlay.js';
 
 const PROBE_PX = 100;
 

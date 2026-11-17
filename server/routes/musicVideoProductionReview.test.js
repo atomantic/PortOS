@@ -3,7 +3,7 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
-import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { applyMusicVideoEdit } from '../lib/musicVideo/musicVideoEditResult.js';
 
 const author = vi.hoisted(() => ({ sections: [], calls: 0, prompts: [] }));
 vi.mock('../services/promptRunner.js', () => ({
@@ -41,7 +41,7 @@ vi.mock('../services/musicVideo/excerptRender.js', async original => ({ ...await
   }),
 }));
 
-const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
+const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
 const { default: router } = await import('./musicVideo.js');
 const store = await import('../services/musicVideo/projects.js');
 const { saveGeneratedDevArtifact } = await import('../services/musicVideo/devArtifactService.js');

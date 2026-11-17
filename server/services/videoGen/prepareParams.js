@@ -52,9 +52,9 @@ import {
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { musicVideoFrameGenSize, musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
-import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
-import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
+import { musicVideoFrameGenSize, musicVideoLocalClipSize } from '../../lib/musicVideo/musicVideoAspect.js';
+import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideo/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
 import { CLOUD_VIDEO_GEN_MODES, VIDEO_GEN_MODE, resolveVideoMode } from './modes.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';

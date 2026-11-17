@@ -1,6 +1,6 @@
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
-import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import { formatTimecode } from '../../utils/formatters.js';
 

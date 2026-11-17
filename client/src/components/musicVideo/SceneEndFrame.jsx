@@ -1,4 +1,4 @@
-import { sceneEndFramePlan } from '../../../../server/lib/musicVideoEndFrame.js';
+import { sceneEndFramePlan } from '../../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 
 /**

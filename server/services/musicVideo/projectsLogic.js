@@ -1,6 +1,6 @@
-import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
-import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
-import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { festivalPacketSchema } from '../../lib/musicVideo/musicVideoFestivalPacket.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
+import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 
 /**
  * Music Video — pure record transforms (issue #1760, Phase 1).
@@ -18,10 +18,10 @@ import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/
  * already on the record, so federation was purely additive (no record migration).
  */
 
-import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { remapMusicVideoDependencies, restampLegacyFrameCasts, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'node:crypto';
-import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideoSections.js';
-import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
+import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideo/musicVideoSections.js';
+import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   MUSIC_VIDEO_STATUSES,
@@ -30,36 +30,36 @@ import {
   musicVideoMidiTranscriptionSchema,
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
-} from '../../lib/musicVideoValidation.js';
+} from '../../lib/musicVideo/musicVideoValidation.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
-import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
+import { audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
-import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideoShotTiming.js';
+import { isPerformanceScene, planShotSplit, shotSplitLimit } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { normalizeLyricCues, normalizePhrases, invalidateTimedText } from './timedText.js';
 import { normalizeLyricMarkers, remapLyricMarkers } from '../../lib/lyricMarkers.js';
 import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js';
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
-import { normalizeTemplateEffects } from '../../lib/musicVideoTemplateEffects.js';
-import { normalizeOverscan } from '../../lib/musicVideoFilmLook.js';
-import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
+import { normalizeTemplateEffects } from '../../lib/musicVideo/musicVideoTemplateEffects.js';
+import { normalizeOverscan } from '../../lib/musicVideo/musicVideoFilmLook.js';
+import { normalizeProductionMedium } from '../../lib/musicVideo/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
-import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
-import { normalizeStatsOutro } from '../../lib/musicVideoStatsOutro.js';
-import { normalizeCreditsOutro } from '../../lib/musicVideoCreditsOutro.js';
-import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideoWipes.js';
+import { normalizeTitleCard } from '../../lib/musicVideo/musicVideoTitleCard.js';
+import { normalizeStatsOutro } from '../../lib/musicVideo/musicVideoStatsOutro.js';
+import { normalizeCreditsOutro } from '../../lib/musicVideo/musicVideoCreditsOutro.js';
+import { MUSIC_VIDEO_EDGED_WIPES, sceneWipe, varyWipes } from '../../lib/musicVideo/musicVideoWipes.js';
 import { carryTreatmentThroughSceneOrder, remapTreatmentForClone, scenesFingerprint } from './treatment.js';
 import { packTakePrompts, unpackTakePrompts } from './takePromptPool.js';
 import { anchorShotsToSungLyrics, carryReviewThroughSceneOrder, carryStoryboardApproval, dropStaleStoryboardRows, slimProjectReview } from './productionReview.js';
-import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideoLyricAnchors.js';
-import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js';
-import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
-import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
-import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
+import { cuesSungWithin, lyricAnchorOnset, lyricWordCuts, sungLyricTextWithin } from '../../lib/musicVideo/musicVideoLyricAnchors.js';
+import { normalizeMusicVideoAutomation } from '../../lib/musicVideo/musicVideoAutomation.js';
+import { normalizeShotSheet } from '../../lib/musicVideo/musicVideoShotSheet.js';
+import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideo/musicVideoCameos.js';
 // The frozen v53 -> v54 previz transform; reused so a v2.114 peer's push converts exactly like stored rows did.
 import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-video-previz-timeline.js';
 
@@ -1102,7 +1102,7 @@ const SCENE_LABEL_MAX = 120;
 
 /**
  * Split a shot longer than its backend can render in one take (#8977) into
- * contiguous scenes on musical boundaries (lib/musicVideoShotTiming.js
+ * contiguous scenes on musical boundaries (lib/musicVideo/musicVideoShotTiming.js
  * `planShotSplit`): a performance shot at its lip-sync provider's audio
  * window, a Grok cutaway at the longest Grok clip. `backend` is the lane the
  * director will render with ('' / null = the project's pinned backend).

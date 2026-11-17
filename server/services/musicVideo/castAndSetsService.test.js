@@ -14,8 +14,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
-import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideoConditioning.js';
-import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -26,7 +26,7 @@ const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js')
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
-const { castSetsInspectionInputs } = await import('../../lib/musicVideoCastSetsInspection.js');
+const { castSetsInspectionInputs } = await import('../../lib/musicVideo/musicVideoCastSetsInspection.js');
 const { musicVideoEvents } = await import('./events.js');
 const { hostControlRouteGate } = await import('../authGate.js');
 
@@ -1028,7 +1028,7 @@ describe('Cast & Sets check-in', () => {
       .toMatchObject({ imageId: `${sheet.id}.png`, role: 'character', condition: false });
     expect(done.concept.subjects.find((s) => s.id === 'cs-cast-rico')).toMatchObject({ kind: 'character', name: 'Rico', role: 'supporting' });
     // The planner reads the cast by name and role, so the shots it writes name who they feature.
-    const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+    const { musicVideoDirectionContext } = await import('../../lib/musicVideo/musicVideoCreativeContext.js');
     expect(musicVideoDirectionContext(done.castAndSets.direction)).toContain('Cast Rico (drummer): sweaty, grinning; stubble, brown eyes');
   });
 
@@ -1781,10 +1781,10 @@ it('keeps a catalog-conditioned sheet for every fixed supporting character throu
   expect(done.concept.subjects.filter((s) => !s.id.startsWith('cs-'))).toEqual(project.concept.subjects);
   expect(done.concept.subjects.filter((s) => s.id.startsWith('cs-cast-'))).toEqual([]);
   // The planner is told about all of them, and a shot naming all five stays within the per-shot cap.
-  const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+  const { musicVideoDirectionContext } = await import('../../lib/musicVideo/musicVideoCreativeContext.js');
   const context = musicVideoDirectionContext(done.castAndSets.direction);
   for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
-  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideoConditioning.js');
+  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideo/musicVideoConditioning.js');
   const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: musicVideoReferenceCapacity('codex') });
   expect(shot).toHaveLength(5);
   expect(shot[2].id).toBe('mvr-cs-cast-anika');
@@ -1814,7 +1814,7 @@ it('holds reference room for fixed cast sheets and refuses an approval that cann
   const ours = approved.visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
   expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
   // A full list must not make the face images already rendered at approval unusable on a close-up.
-  const { musicVideoConditioningReferences } = await import('../../lib/musicVideoConditioning.js');
+  const { musicVideoConditioningReferences } = await import('../../lib/musicVideo/musicVideoConditioning.js');
   const scene = { prompt: 'Close up of Anika' };
   expect(musicVideoConditioningReferences(approved, scene).map((ref) => ref.id))
     .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika', 'mvr-pull-Anika']);

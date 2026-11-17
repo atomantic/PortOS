@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildPublishPayload, publishPreviewParts } from './payloads.js';
-import { captureMusicVideoEvidence } from '../../../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence } from '../../../lib/musicVideo/musicVideoDependencies.js';
 
 const kit = (over = {}) => ({
   master: { filename: 'master.mp4' },

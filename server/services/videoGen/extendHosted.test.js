@@ -13,7 +13,7 @@ vi.mock('../musicVideo/requireProject.js', () => ({
 }));
 
 const { extendHistoryClip } = await import('./extendHosted.js');
-const { extendTakeInPointFrames } = await import('../../lib/musicVideoSequenceTake.js');
+const { extendTakeInPointFrames } = await import('../../lib/musicVideo/musicVideoSequenceTake.js');
 const { appendSceneTakes } = await import('../musicVideo/takes.js');
 
 const VEO = 'fal:fal-ai/veo3.1/fast/image-to-video';

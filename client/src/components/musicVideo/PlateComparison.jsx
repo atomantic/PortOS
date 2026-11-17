@@ -1,4 +1,4 @@
-import { currentPlateEvidence } from '../../../../server/lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence } from '../../../../server/lib/musicVideo/musicVideoPlateEvidence.js';
 import { sceneTakeList, takeThumbUrl } from '../../lib/musicVideoTakes.js';
 
 /**

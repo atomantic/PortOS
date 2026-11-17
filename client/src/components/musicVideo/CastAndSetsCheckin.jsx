@@ -1,6 +1,6 @@
-import { castSetsInspectionBlockers, castSetsInspectionInputs, currentCastSetsInspection } from '../../../../server/lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionBlockers, castSetsInspectionInputs, currentCastSetsInspection } from '../../../../server/lib/musicVideo/musicVideoCastSetsInspection.js';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
-import { castAndSetsGreyboxPending, musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import { castAndSetsGreyboxPending, musicVideoGreyboxReference } from '../../../../server/lib/musicVideo/musicVideoGreybox.js';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
 import { useState } from 'react';
 import { CheckCircle2, Eye, Play, RotateCcw, SkipForward, Trash2, Users } from 'lucide-react';

@@ -2,17 +2,17 @@
 // The card, prompt preview and POST /image-gen/generate share this set, so a
 // caller that only has the project JSON cannot drop a picked cast sheet.
 
-import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
-import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideo/musicVideoAspect.js';
+import { castInputsFromReferences } from '../../lib/musicVideo/musicVideoCastLook.js';
 import {
   MUSIC_VIDEO_MAX_REFERENCE_CHOICES,
   musicVideoConditioningReferences,
   musicVideoFrameReferenceFiles,
   musicVideoMissingFrameLinkedPicks,
-} from '../../lib/musicVideoConditioning.js';
+} from '../../lib/musicVideo/musicVideoConditioning.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { authoredFramePromptText, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
+import { authoredFramePromptText, musicVideoFrameModelInput } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
 
 export const FRAME_REFERENCE_UNAVAILABLE = 'A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.';
 

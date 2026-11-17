@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
-import { captureClipReferenceDependency } from '../lib/musicVideoDependencies.js';
+import { captureClipReferenceDependency } from '../lib/musicVideo/musicVideoDependencies.js';
 
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'mv-scene-hooks-test-'));
 

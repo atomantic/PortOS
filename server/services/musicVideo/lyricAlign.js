@@ -9,7 +9,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoAudioAnalysisSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { getProject, updateProject } from './projects.js';
 import {
   alignDirectorWords,

@@ -4,7 +4,7 @@
  * against the remaining routes is unchanged.
  */
 
-import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoShotReferenceRepairSchema, musicVideoCastAndSetsStartSchema, musicVideoCastAndSetsDirectionEditSchema, musicVideoCastAndSetsDirectionTextEditSchema, musicVideoCastAndSetsFeedbackSchema, musicVideoCastAndSetsFeedbackPlanSchema, musicVideoCastAndSetsFeedbackRenderSchema, musicVideoCastAndSetsImageNoteRemovalSchema, musicVideoCastAndSetsRegenerateSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoShotReferenceRepairSchema, musicVideoCastAndSetsStartSchema, musicVideoCastAndSetsDirectionEditSchema, musicVideoCastAndSetsDirectionTextEditSchema, musicVideoCastAndSetsFeedbackSchema, musicVideoCastAndSetsFeedbackPlanSchema, musicVideoCastAndSetsFeedbackRenderSchema, musicVideoCastAndSetsImageNoteRemovalSchema, musicVideoCastAndSetsRegenerateSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { Router } from 'express';
 import { requireProductionReviewer } from '../services/musicVideo/productionReviewService.js';
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -134,7 +134,7 @@ router.post('/:id/cast-and-sets/acknowledge-image', asyncHandler(async (req, res
 }));
 
 router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
-  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideo/musicVideoCatalogCheckinValidation.js');
   const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
   res.json(await approveCastAndSets(req.params.id, input));
 }));
@@ -142,7 +142,7 @@ router.post('/:id/cast-and-sets/approve', asyncHandler(async (req, res) => {
 // "Keep approved": an approved check-in whose concept, style, subjects or song
 // changed since is re-stamped on the current inputs (#10141). No body.
 router.post('/:id/cast-and-sets/reconfirm', asyncHandler(async (req, res) => {
-  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideoCatalogCheckinValidation.js');
+  const { musicVideoCatalogCheckinApprovalSchema } = await import('../lib/musicVideo/musicVideoCatalogCheckinValidation.js');
   const input = validateRequest(musicVideoCatalogCheckinApprovalSchema, req.body || {});
   res.json(await reconfirmCastAndSets(req.params.id, input));
 }));

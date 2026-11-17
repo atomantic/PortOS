@@ -39,14 +39,14 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { isPathInsideDir, isTopLevelEntryName } from '../../lib/pathSafety.js';
 import { readZipArchive, unsafeZipEntryName } from '../../lib/zipArchive.js';
 import { createZip } from '../../lib/zipWriter.js';
-import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideoValidation.js';
+import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideo/musicVideoValidation.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
-import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
-import { wipeCuts } from '../../lib/musicVideoWipes.js';
-import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
+import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
+import { wipeCuts } from '../../lib/musicVideo/musicVideoWipes.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { documentRenderClock, documentSongDuration } from './documentTiming.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
@@ -214,7 +214,7 @@ async function withSharedImageEffects(files) {
     if (!/\.(?:html?|m?js)$/i.test(file.rel) || (file.size ?? file.data?.length ?? 0) > LYRIC_TYPE_SCAN_MAX) continue;
     const text = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
     if (!/\bmusicVideoImageEffects\.js\b/.test(text)) continue;
-    const abs = fileURLToPath(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    const abs = fileURLToPath(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
     return [...files, { rel: 'musicVideoImageEffects.js', abs, size: (await stat(abs)).size }];
   }
   return files;
@@ -535,7 +535,7 @@ const STOCK_HELPERS = [
   { rel: 'cameraRig.js', source: new URL('./documentTemplates/layered/cameraRig.js', import.meta.url), stale: new Set() },
   { rel: 'lyricType.js', source: new URL('./documentTemplates/shared/lyricType.js', import.meta.url), stale: STALE_SHIPPED_LYRIC_TYPE_JS },
   { rel: 'lyricType.css', source: new URL('./documentTemplates/shared/lyricType.css', import.meta.url), stale: new Set() },
-  { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideoImageEffects.js', import.meta.url),
+  { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url),
     stale: new Set([...UPGRADABLE_IMAGE_EFFECT_MODULES, ...COMPATIBLE_IMAGE_EFFECT_MODULES]) },
 ];
 
@@ -614,7 +614,7 @@ export function upgradeDocumentEngine(projectId, directory) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const imageEffects = files.find(file => file.rel === 'musicVideoImageEffects.js');
-    const shippedImageEffects = await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    const shippedImageEffects = await readFile(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
     if (imageEffects && !engineCurrent) {
       const digest = engineDigest(await readFile(imageEffects.abs));
       if (digest !== engineDigest(shippedImageEffects) && !UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest) && !COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest)) {

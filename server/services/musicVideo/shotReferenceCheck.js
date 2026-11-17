@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
-import { activeMusicVideoSubjects, musicVideoReferenceSubjectIds } from '../../lib/musicVideoCastSelection.js';
+import { activeMusicVideoSubjects, musicVideoReferenceSubjectIds } from '../../lib/musicVideo/musicVideoCastSelection.js';
 import { listPickableImages } from '../../lib/catalogMediaLibrary.js';
 import {
   musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoConditioningReferences,
   musicVideoNameInText, musicVideoPanelArtReferences, musicVideoReferenceChoices, sceneCatalogSubjectIds,
-} from '../../lib/musicVideoConditioning.js';
-import { shotNumbers } from '../../lib/musicVideoColdOpen.js';
+} from '../../lib/musicVideo/musicVideoConditioning.js';
+import { shotNumbers } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../../lib/referenceLimits.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { readImageSidecar } from '../imageGen/sidecarStore.js';

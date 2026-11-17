@@ -10,7 +10,7 @@ import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   blenderEffectiveOptions, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles,
-} from '../../lib/musicVideoBlender.js';
+} from '../../lib/musicVideo/musicVideoBlender.js';
 import { blenderMediaPath, blenderShotDir, readBlenderJson } from './workspace.js';
 import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, codeModuleClosures, hashBlenderSources } from './hashing.js';
 import { getBlenderSong } from './song.js';

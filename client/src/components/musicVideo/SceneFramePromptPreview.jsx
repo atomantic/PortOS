@@ -1,5 +1,5 @@
-import { authoredFramePromptText } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { musicVideoFrameGenSize } from '../../../../server/lib/musicVideoAspect.js';
+import { authoredFramePromptText } from '../../../../server/lib/musicVideo/musicVideoShotPrompt.js';
+import { musicVideoFrameGenSize } from '../../../../server/lib/musicVideo/musicVideoAspect.js';
 import useModelInputPreview from '../../hooks/useModelInputPreview.js';
 import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import ModelInputPreview from '../media/ModelInputPreview.jsx';

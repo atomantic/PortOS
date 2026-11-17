@@ -1,7 +1,7 @@
 /** Vision work belongs only to an explicitly initiated, process-owned check-in. */
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { castSetsInspectionInputs, currentCastSetsInspection, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionInputs, currentCastSetsInspection, sameCastSetsInspectionInputs } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { requireProject } from './requireProject.js';
 import { mutateProjectRecord } from './projects.js';
 import { findProductionRun, assertProductionActive, reserveProductionReview } from './production.js';

@@ -16,7 +16,7 @@
  * checks a frame of the WebGL2 port (lib/filmLookGpu.js) against it and uses
  * the GPU only when the two match and the GPU is faster.
  *
- * A steady title card (lib/musicVideoTitleCard.js) must not be in the picture
+ * A steady title card (lib/musicVideo/musicVideoTitleCard.js) must not be in the picture
  * this pass filters: the look would weave, flicker and grain it. A renderer
  * that leaves it out hands it here (`titleCard`), and the card's own runtime
  * draws it over the look for each frame's song time.
@@ -28,8 +28,8 @@ import { PATHS } from '../../lib/paths.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { filmLookGpuRuntimeSource } from '../../lib/filmLookGpu.js';
-import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
-import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { normalizeTitleCard, titleCardVisible, titleCardWindows } from '../../lib/musicVideo/musicVideoTitleCard.js';
+import { shotCamera, shotFilmLook } from '../../lib/musicVideo/musicVideoFilmLook.js';
 import { admitFilmLookWeb, encodeFilmLookWeb } from './filmLookWebEncoder.js';
 
 export const FILM_LOOK_FINISH_SCRATCH_DIR = 'music-video-film-look';

@@ -1,4 +1,4 @@
-import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideoTemplateEffects.js';
+import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';

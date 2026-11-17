@@ -9,7 +9,7 @@
 
 import { parseExpression } from '@babel/parser';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isDeterministicCodeSource } from '../../lib/musicVideoValidation.js';
+import { isDeterministicCodeSource } from '../../lib/musicVideo/musicVideoValidation.js';
 import { codeRuntimeSource } from './codeFrame.js';
 
 const scriptJson = (value) => JSON.stringify(value).replace(/</g, '\\u003c');

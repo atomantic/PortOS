@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { selectMusicVideoPreview, musicVideoImageSrc, musicVideoImageFallback } from './musicVideoPreview.js';
-import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
+import { summarizeMusicVideoProject } from '../../../server/lib/musicVideo/musicVideoSummary.js';
 import { deriveStages, describeProjectStatus } from './musicVideoStages.js';
 
 const animatic = (id, version = 1, over = {}) => ({ id, kind: 'animatic', status: 'pending', version,

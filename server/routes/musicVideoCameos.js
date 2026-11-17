@@ -6,8 +6,8 @@ import {
   musicVideoCameoCreateSchema, musicVideoCameoLinkSchema, musicVideoCameoReferenceRemoveSchema,
   musicVideoCameoReferencesAddSchema, musicVideoCameoStillFromShotSchema, musicVideoCameoUnlinkSchema, musicVideoCameoUpdateSchema,
   musicVideoCameoVariantCreateSchema, musicVideoCameoVariantUpdateSchema,
-} from '../lib/musicVideoValidation.js';
-import { MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN } from '../lib/musicVideoCameos.js';
+} from '../lib/musicVideo/musicVideoValidation.js';
+import { MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN } from '../lib/musicVideo/musicVideoCameos.js';
 import {
   addCameoReferences, addCameoVariant, createCameos, deleteCameo, deleteCameoVariant, linkCameoShots,
   removeCameoReference, unlinkCameoShots, updateCameo, updateCameoVariant, useShotStillForCameo,

@@ -50,7 +50,7 @@ const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
 const { buildDocumentPreview } = await import('../services/musicVideo/documentPreview.js');
-const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
+const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideo/musicVideoDependencies.js');
 
 // The document preview page has no HTTP route; the service is the contract.
 const previewOf = async (id) => {
@@ -274,7 +274,7 @@ describe('music-video composition documents', () => {
     expect(upgraded.status).toBe(200);
     const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
     const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
-    expect(files['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url)));
+    expect(files['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideo/musicVideoImageEffects.js', import.meta.url)));
   });
 
   it('preserves the document when its legacy still-effect module was customized', async () => {
@@ -315,7 +315,7 @@ describe('music-video composition documents', () => {
   it('upgrades an older document carrying the 16f8de61cd still-effect module and engine 106e8a14 to the shipped files', async () => {
     const legacyEngine = await readFile(new URL('./fixtures/musicVideoLayeredEngine14833.txt', import.meta.url));
     const legacyEffects = await readFile(new URL('./fixtures/musicVideoImageEffects16f8de61cd.txt', import.meta.url));
-    const shippedEffects = await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url));
+    const shippedEffects = await readFile(new URL('../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
     const shippedEngine = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
     const imported = await uploadZip(project.id, createZip([
       { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacyEngine },
@@ -384,7 +384,7 @@ describe('music-video composition documents', () => {
       const upgraded = await request(app).post(`${base()}/engine/upgrade`).send({ directory });
       expect([upgraded.status, upgraded.body.changed, upgraded.body.customHelpers]).toEqual([200, true, []]);
       expect((await request(app).get(`${base()}/playback`)).body.native).toBe(true);
-      expect((await exportFiles())['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url)));
+      expect((await exportFiles())['musicVideoImageEffects.js']).toEqual(await readFile(new URL('../lib/musicVideo/musicVideoImageEffects.js', import.meta.url)));
     });
 
     it('names a really customized helper in the update reply and the playback reply, and keeps its bytes', async () => {
@@ -691,7 +691,7 @@ describe('music-video composition documents', () => {
 
   it('registers every historical still-effect module digest in upgradable or compatible sets', async () => {
     const repoRoot = join(fileURLToPath(import.meta.url), '..', '..', '..');
-    const relPath = 'server/lib/musicVideoImageEffects.js';
+    const relPath = 'server/lib/musicVideo/musicVideoImageEffects.js';
     const commits = execFileSync('git', ['log', '--follow', '--format=%H', '--', relPath], {
       cwd: repoRoot,
       encoding: 'utf8',

@@ -1,5 +1,5 @@
 import { ServerError } from '../../lib/errorHandler.js';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideoSubjectLimits.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideo/musicVideoSubjectLimits.js';
 
 const PRIMARY_KEY = { character: 'physicalDescription', place: 'description', object: 'description' };
 const sameText = (a, b) => String(a || '') === String(b || '');

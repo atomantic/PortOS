@@ -23,7 +23,7 @@ export default function useStoryStageWiring({ selected, patchProject, replacePro
   // commit. Sends only the changed sub-field; the server merges it into the
   // existing concept (applyProjectPatch), so a stale local copy can't clobber a
   // sibling sub-field. Consumed by buildScenePlanPrompt (AI Plan) and by the
-  // server's frame and clip composers (lib/musicVideoShotPrompt.js), both already reading concept.
+  // server's frame and clip composers (lib/musicVideo/musicVideoShotPrompt.js), both already reading concept.
   const commitConcept = (patch) => {
     const version = ++conceptSaveSequence.current;
     for (const key of Object.keys(patch)) conceptSaveVersions.current[key] = version;

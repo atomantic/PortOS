@@ -10,8 +10,8 @@
  */
 
 import { videoSrcForJob, videoPosterForJob } from './creativeDirectorPreview.js';
-import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
-import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideo/musicVideoReviewDraft.js';
+import { resolveSourceTake } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 

@@ -5,7 +5,7 @@
  * timeline component only draws and handles pointers. Shots before the song (the cold open) and shots
  * with no time keep no place on the song's clock; `timelineShots` returns them apart, in board order.
  */
-import { isPreMusicShot } from '../../../server/lib/musicVideoColdOpen.js';
+import { isPreMusicShot } from '../../../server/lib/musicVideo/musicVideoColdOpen.js';
 
 /** The closest zoom: at the render's 24 fps a frame is 10 px wide, enough to place a cut on one. */
 export const TIMELINE_MAX_PX_PER_SEC = 240;

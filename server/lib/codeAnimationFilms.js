@@ -4,7 +4,7 @@
  * Standalone Production film creation, timeline and explicit local soundtrack-attachment validation.
  */
 import { z } from 'zod';
-import { musicVideoBlenderSettingsSchema } from './musicVideoBlenderValidation.js';
+import { musicVideoBlenderSettingsSchema } from './musicVideo/musicVideoBlenderValidation.js';
 
 const filmTimelineSchema = z.object({
   durationSec: z.number().min(1).max(3600),

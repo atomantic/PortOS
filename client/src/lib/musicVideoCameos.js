@@ -3,9 +3,9 @@
  *
  * Music Video cameo roster editor helpers (#14821): `mergeCameoScenes(current, answered)` (apply a
  * roster answer's cameo link + start frame to the open board's shots) and `parseCameoLines(text)` (one
- * cameo per line, `Name | label`). Rules live in `server/lib/musicVideoCameos.js`.
+ * cameo per line, `Name | label`). Rules live in `server/lib/musicVideo/musicVideoCameos.js`.
  *
- * The record rules live in server/lib/musicVideoCameos.js; these shape the roster editor's input and
+ * The record rules live in server/lib/musicVideo/musicVideoCameos.js; these shape the roster editor's input and
  * apply the server's answer to the open board.
  */
 

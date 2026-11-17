@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideo/musicVideoSubjectLimits.js';
 import { universeVisualProfileSchema } from './universeVisualProfileValidation.js';
 import { BIBLE_LIMITS, FORM_ID_PATTERN } from './storyBible.js';
 import { REFERENCE_REVIEW_STATUSES, REFERENCE_REVIEW_WRITE_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';

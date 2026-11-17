@@ -16,7 +16,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideoSubjectLimits.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideo/musicVideoSubjectLimits.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
 import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 

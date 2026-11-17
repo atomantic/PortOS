@@ -1,4 +1,4 @@
-import { MUSIC_VIDEO_MEDIUM_LABELS, summarizeMusicVideoMediumPlan } from '../../../../server/lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_MEDIUM_LABELS, summarizeMusicVideoMediumPlan } from '../../../../server/lib/musicVideo/musicVideoMediumPlan.js';
 import { formatCount, formatTimecode } from '../../utils/formatters.js';
 
 /** Same interval accounting as Apply; these are edit seconds, never a spend estimate. */

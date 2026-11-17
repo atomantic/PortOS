@@ -28,7 +28,11 @@ describe('exported validation schemas are wired (#5730)', () => {
   const IDENTIFIER = /[A-Za-z_$][A-Za-z0-9_$]*/g;
   const EXPORTED_SCHEMA = /export\s+const\s+([A-Za-z0-9_$]+(?:Schema|Enum))\b/g;
 
-  const moduleFiles = readdirSync(libDir)
+  // Domain subdirectories that hold validation modules (#16561 moved the music-video ones), so a
+  // move out of the flat directory never silently drops a module from this scan.
+  const VALIDATION_SUBDIRS = ['musicVideo'];
+  const moduleFiles = ['', ...VALIDATION_SUBDIRS.map((dir) => `${dir}/`)]
+    .flatMap((prefix) => readdirSync(path.join(libDir, prefix)).map((f) => `${prefix}${f}`))
     .filter((f) => (f.endsWith('Validation.js') || f === 'validation.js') && !f.endsWith('.test.js'))
     .sort();
 

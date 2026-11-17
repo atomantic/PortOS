@@ -26,7 +26,7 @@ import { collectAssetReferences } from './exporter.js';
 import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { pullSidecarForImage, recordImageSupplier, heldImageAdoptsOrigin } from './sidecarSync.js';
 import { parseKey } from '../../lib/mediaItemKey.js';
-import { musicVideoCameoImageIds } from '../../lib/musicVideoCameos.js';
+import { musicVideoCameoImageIds } from '../../lib/musicVideo/musicVideoCameos.js';
 import { headshotImageFilename } from '../authors/index.js';
 import { portraitImageFilename } from '../artists/index.js';
 import { coverImageFilename } from '../albums/index.js';

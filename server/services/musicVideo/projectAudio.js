@@ -12,7 +12,7 @@ import { setProjectAnalysis, setProjectSections } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { analyzeAudioFile } from './audioAnalysis.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
-import { sectionsFromLyricSpans } from '../../lib/musicVideoSections.js';
+import { sectionsFromLyricSpans } from '../../lib/musicVideo/musicVideoSections.js';
 
 /**
  * Resolve a project's source audio to an absolute path under data/music/. The
