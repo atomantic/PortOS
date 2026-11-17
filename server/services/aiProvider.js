@@ -441,12 +441,7 @@ async function runTrackedCodexTurn({ provider, source, workspacePath, turnOption
   let failure;
   try {
     registerActiveRun(runId, controller);
-    await patchRunMetadata(runId, {
-      ...runOwnership('api'), selfContainedUsage: true,
-      // The transport's ephemeral thread writes no native rollout. Preserve
-      // these counts alongside the native history rather than replacing them.
-      nativeUsageUnpersisted: true,
-    });
+    await patchRunMetadata(runId, runOwnership('api'));
     emitRunStarted({ runId, provider, model: turnOptions.model });
     turn = await runCodexTextTurn({ ...turnOptions, signal });
   } catch (err) {
@@ -460,6 +455,9 @@ async function runTrackedCodexTurn({ provider, source, workspacePath, turnOption
     exitCode: failure ? 1 : 0, success: !failure, error: failure?.message,
     reportFailure: false, onlyIfRecorded: true,
     extras: {
+      // The transport's ephemeral thread writes no native rollout. Preserve
+      // these counts alongside the native history rather than replacing them.
+      selfContainedUsage: true, nativeUsageUnpersisted: true,
       ...(turn ? { model: turn.model ?? turnOptions.model, effort: turn.effort, effortClamped: turn.effortClamped, clampReason: turn.clampReason,
         ...(turn.usage ? { reportedUsage: {
           tokensIn: Math.max(0, turn.usage.inputTokens - (turn.usage.cachedInputTokens || 0)),

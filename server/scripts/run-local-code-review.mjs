@@ -13,8 +13,9 @@ import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromD
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { createRunnerService } from '../lib/aiToolkit/runner.js';
 import { createProviderService } from '../lib/aiToolkit/providers.js';
-import { PATHS } from '../lib/fileUtils.js';
-import { setAIToolkit, patchRunMetadata } from '../services/runner.js';
+import { join } from 'node:path';
+import { atomicWrite, PATHS } from '../lib/fileUtils.js';
+import { setAIToolkit } from '../services/runner.js';
 import { stopCodexAppServer } from '../services/codexAppServer.js';
 import { screenLinkedContribution } from '../services/untrustedContent.js';
 
@@ -30,7 +31,8 @@ setAIToolkit({ services: { providers, runner: {
   ...runStore,
   async createRun(options) {
     const run = await runStore.createRun(options);
-    await patchRunMetadata(run.runId, { usageSessionDeferred: true });
+    run.metadata.usageSessionDeferred = true;
+    await atomicWrite(join(run.runDir, 'metadata.json'), run.metadata);
     return run;
   },
 } } }, { dataDir: PATHS.data });
