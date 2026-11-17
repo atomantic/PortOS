@@ -15,6 +15,17 @@ const presetJob = (preset) => ({
 });
 
 describe('QUOTA_BURN_PROMPT_PRESETS', () => {
+  // "One problem per issue" without the exception kept filing every light finding
+  // as its own claim-to-merge cycle (#16569).
+  it('lets one-problem-per-issue presets batch light same-area findings', () => {
+    const strict = QUOTA_BURN_PROMPT_PRESETS.filter((preset) => preset.params.prompt.includes('One problem per'));
+    expect(strict.length).toBeGreaterThan(0);
+    for (const preset of strict) {
+      expect(preset.params.prompt).toContain('never a bundle, except the light-findings checklist issue above');
+      expect(preset.params.prompt).toContain('Batch light findings:');
+    }
+  });
+
   it('exposes unique ids with a label, a summary, and a real prompt', () => {
     expect(QUOTA_BURN_PROMPT_PRESETS.length).toBeGreaterThan(0);
     const ids = QUOTA_BURN_PROMPT_PRESETS.map((preset) => preset.id);
