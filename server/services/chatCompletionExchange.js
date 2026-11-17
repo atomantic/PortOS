@@ -227,6 +227,10 @@ export async function runChatCompletion({ provider, model, prompt, temperature, 
   if (!first.error || typeof recover !== 'function' || signal?.aborted) return { ...first, model, retried: false };
   const retryModel = await recover(first, { signal });
   if (!retryModel || signal?.aborted) return { ...first, model, retried: false };
+  // The caller judged only the first model's window; a repaired model may
+  // have a smaller one, and its retry is refused rather than cut the same way.
+  const refusal = completionContextRefusal(provider, retryModel, prompt);
+  if (refusal) return { error: refusal, model: retryModel, retried: false };
   const retry = await requestChatCompletion(provider, retryModel, prompt, opts);
   return { ...retry, model: retryModel, retried: true };
 }

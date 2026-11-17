@@ -601,6 +601,19 @@ describe('runPromptThroughProvider completion requests', () => {
     expect(await runIds()).toEqual([]);
   });
 
+  it('refuses a recovery retry whose model has a smaller known window, sending no second request', async () => {
+    const fetch = respondWith(mockTextResponse('model not found', { ok: false, status: 404 }), completion('never'));
+    const target = { ...provider, modelContextWindows: { 'model-1': 100000, 'model-small': 1000 } };
+
+    const failure = await runPromptThroughProvider({
+      provider: target, prompt: 'word '.repeat(2000), source: 'goal-check-in', model: 'model-1',
+      completion: { temperature: 0, maxTokens: 32, recover: async () => 'model-small' },
+    }).catch((err) => err);
+
+    expect(failure.message).toMatch(/^Example API \(model-small\): known 1000-token context is below the \d+-token request budget$/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves with the run id and rejects with the reply detail a caller needs', async () => {
     respondWith(completion('ok'), mockTextResponse('slow down', { ok: false, status: 429 }));
 
