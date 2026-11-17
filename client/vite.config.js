@@ -16,7 +16,13 @@ import {
 
 const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 const CONFIG_DIR = import.meta.dirname;
-const BUILD_OUT_DIR = process.env.PORTOS_CLIENT_BUILD_OUT_DIR || resolve(CONFIG_DIR, 'dist');
+// client/dist is the bundle the running server serves; only publish-client-build.js
+// (which sets PORTOS_CLIENT_BUILD_OUT_DIR to its stage dir) may replace it. A bare
+// `vite build` lands in a git-ignored scratch dir instead of emptying live chunks.
+export function resolveBuildOutDir(env, configDir) {
+  return env.PORTOS_CLIENT_BUILD_OUT_DIR || resolve(configDir, '.dist-adhoc');
+}
+const BUILD_OUT_DIR = resolveBuildOutDir(process.env, CONFIG_DIR);
 
 function primaryCheckoutDir(configDir) {
   try {
@@ -288,6 +294,7 @@ export default defineConfig(({ command, mode }) => {
       }
     },
     build: {
+      outDir: BUILD_OUT_DIR,
       rolldownOptions: {
         output: {
           // Vite 8 ships the rolldown bundler, whose canonical chunking API is
