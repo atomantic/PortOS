@@ -68,7 +68,7 @@ import ThemeSwitcher from './ThemeSwitcher';
 import VoiceToggleButton from './voice/VoiceToggleButton';
 import CmdKSearch from './CmdKSearch';
 import KeyboardHelp from './KeyboardHelp';
-import VoiceWidget from './voice/VoiceWidget';
+import VoiceWidgetGate from './voice/VoiceWidgetGate';
 import { openCmdKSearch } from '../hooks/useCmdKSearch.js';
 import SidebarContext from './SidebarContext.jsx';
 import ActionActivityBar from './ui/ActionActivityBar';
@@ -830,6 +830,10 @@ export default function Layout() {
   return (
     <SidebarContext.Provider value={{ collapsed: sidebarCollapsed, desktop: desktopNav }}>
       <div className="h-dvh-screen print:h-auto print:min-h-screen w-full max-w-full overflow-x-hidden bg-port-bg flex">
+      {/* Owns the voice config for the toggle buttons below and appends the
+          push-to-talk widget after its children, loading that chunk only once
+          voice is enabled. */}
+      <VoiceWidgetGate>
       {/* Skip to main content link for keyboard users */}
       <a
         href="#main-content"
@@ -1168,8 +1172,7 @@ export default function Layout() {
       <KeyboardHelp />
       {/* The one shared "your live views are frozen" signal — see #12027 */}
       <SocketReconnectingPill />
-      {/* Push-to-talk voice widget — self-hides when voice.enabled is false */}
-      <VoiceWidget />
+      </VoiceWidgetGate>
       </div>
     </SidebarContext.Provider>
   );

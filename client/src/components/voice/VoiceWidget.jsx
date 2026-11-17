@@ -13,7 +13,6 @@ import {
 import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
 import { warmNano } from '../../services/browserLlm';
 import { getPaletteManifest } from '../../services/apiPalette';
-import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
 import { useVoiceUiSync, pushUiIndexAfterAction } from '../../hooks/useVoiceUiSync';
 import { doClick, doFill, doSelect, doSetCheckbox } from '../../services/uiInteract';
@@ -26,7 +25,7 @@ import {
   isVoiceHiddenStorageEvent,
 } from '../../services/voiceVisibility';
 import { MicroGlyph } from '../micrographics';
-import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard';
+import { isPushToTalkKey } from '../../lib/a11yKeyboard';
 import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 // Peak below this (0..1) is usually whisper's [BLANK_AUDIO] territory.
@@ -55,12 +54,13 @@ const warnIfQuiet = (peak) => {
   }
 };
 
-export default function VoiceWidget() {
+// Loaded on demand by `VoiceWidgetGate`, which owns the voice config read and
+// its `voice:config:changed` subscription and hands the result down as
+// `config`. `claimPendingStart` returns true once if a start was requested
+// while this chunk was still loading.
+export default function VoiceWidget({ config, claimPendingStart }) {
   const navigate = useNavigate();
-  const [enabled, setEnabled] = useState(false);
-  const [hotkey, setHotkey] = useState('Space');
-  const [sttEngine, setSttEngine] = useState('whisper');
-  const [sttLanguage, setSttLanguage] = useState('en');
+  const { enabled, hotkey, sttEngine, sttLanguage, fastPath, personality, tts } = config;
   const [stage, setStage] = useState('idle');
   const [history, setHistory] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
@@ -76,11 +76,9 @@ export default function VoiceWidget() {
   const handleStopRef = useRef(null);
   const handleCancelRef = useRef(null);
   const disposedRef = useRef(false);
-  // VoiceToggleButton fetches voice config independently, so it can show and
-  // dispatch ENGAGE_EVENT before this widget's own getVoiceConfig() resolves
-  // and `enabled` flips true. handleStart short-circuits while disabled, which
-  // would otherwise make the first sidebar click a no-op. Queue the engage
-  // here and replay it when `enabled` becomes true.
+  // handleStart short-circuits while voice is disabled, so an engage that
+  // lands then (a start claimed from the gate, or one racing a disable/enable
+  // flip) is queued here and replayed when `enabled` becomes true.
   const pendingEngageRef = useRef(false);
   // Tracks the in-flight handleCancel() promise so a rapid disengage→engage
   // can await teardown before starting a new capture. voiceClient holds
@@ -105,14 +103,13 @@ export default function VoiceWidget() {
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
-  // Fast-resolution cascade config (trigger → on-device Nano → server). Kept in
-  // refs alongside state so the routeFinal closure handed to
-  // startWebSpeechCapture always reads the latest values without re-binding the
-  // recognizer on every config change.
-  const [fastPath, setFastPath] = useState(null);
-  const fastPathRef = useRef(null);
-  const personalityRef = useRef(null);
-  const ttsRef = useRef({});
+  // Fast-resolution cascade config (trigger → on-device Nano → server). Mirrored
+  // into refs so the routeFinal closure handed to startWebSpeechCapture always
+  // reads the latest values without re-binding the recognizer on every config
+  // change.
+  const fastPathRef = useRef(fastPath);
+  const personalityRef = useRef(personality);
+  const ttsRef = useRef(tts);
   const navEntriesRef = useRef([]);
   const dictationActiveRef = useRef(false);
   const lastAssistantReplyRef = useRef('');
@@ -134,46 +131,13 @@ export default function VoiceWidget() {
     setStage('idle');
   }, [enabled]);
 
-  useEffect(() => {
-    // Events can overtake the bootstrap read. Only hydrate fields that have
-    // not already received a newer value; bootstrap-only personality still loads.
-    const updatedFields = new Set();
-    let active = true;
-    getVoiceConfig()
-      .then((cfg) => {
-        if (!active || disposedRef.current) return;
-        if (!updatedFields.has('enabled')) setEnabled(!!cfg?.enabled);
-        if (!updatedFields.has('hotkey')) setHotkey(cfg?.hotkey || 'Space');
-        if (!updatedFields.has('sttEngine') && cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
-        if (!updatedFields.has('sttLanguage') && cfg?.stt?.language) setSttLanguage(cfg.stt.language);
-        if (!updatedFields.has('fastPath')) setFastPath(cfg?.llm?.fastPath || null);
-        personalityRef.current = cfg?.llm?.personality || null;
-        const engine = cfg?.tts?.engine;
-        if (!updatedFields.has('tts')) {
-          ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
-        }
-      })
-      .catch(() => {});
-    // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
-    // voice:config:changed — keep the widget's enabled/engine/hotkey/fastPath in
-    // sync so toggling voice mode mid-session takes effect without a reload.
-    const off = onVoiceEvent('voice:config:changed', (cfg) => {
-      if (typeof cfg?.enabled === 'boolean') { updatedFields.add('enabled'); setEnabled(cfg.enabled); }
-      if (cfg?.hotkey) { updatedFields.add('hotkey'); setHotkey(cfg.hotkey); }
-      if (cfg?.sttEngine) { updatedFields.add('sttEngine'); setSttEngine(cfg.sttEngine); }
-      if (cfg?.sttLanguage) { updatedFields.add('sttLanguage'); setSttLanguage(cfg.sttLanguage); }
-      if ('fastPath' in (cfg || {})) { updatedFields.add('fastPath'); setFastPath(cfg.fastPath || null); }
-      if (cfg?.ttsEngine) {
-        updatedFields.add('tts');
-        ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
-      }
-    });
-    return () => { active = false; off(); };
-  }, []);
-
   // Keep the cascade refs pointed at the latest config so the routeFinal closure
   // (bound once at capture start) always triages against current settings.
-  useLayoutEffect(() => { fastPathRef.current = fastPath; }, [fastPath]);
+  useLayoutEffect(() => {
+    fastPathRef.current = fastPath;
+    personalityRef.current = personality;
+    ttsRef.current = tts;
+  }, [fastPath, personality, tts]);
   useLayoutEffect(() => { dictationActiveRef.current = dictationActive; }, [dictationActive]);
 
   // Load the palette nav manifest so tier-1 trigger navigation ("go to tasks")
@@ -652,18 +616,15 @@ export default function VoiceWidget() {
   useEffect(() => {
     if (!enabled) return;
     const onKey = (e) => {
-      if (e.code !== hotkey) return;
-      // The same shared predicate the two keyboard hooks use, not a local copy —
-      // this is the app-global handler they stand down FOR, so it has to agree
-      // with them about what a key is off-limits for. It drops auto-repeat, any
-      // editable target (SELECT included, where the default Space hotkey would
-      // otherwise open the mic instead of the element's own dropdown), and Space
-      // on a focused button, which must ACTIVATE it: preventDefault-ing there
-      // would swallow every keyboard button press in the app and open the mic
-      // instead (e.g. the POST cognitive drills' Start / Match buttons).
-      // Chords and open dialogs are deliberately allowed through — push-to-talk
-      // stays reachable while a modal is up.
-      if (shouldIgnoreGlobalKey(e, { allowChords: true, enabledInDialog: true })) return;
+      // Built on the shared predicate the two keyboard hooks use, not a local
+      // copy — this is the app-global handler they stand down FOR, so it has to
+      // agree with them about what a key is off-limits for. It drops auto-repeat,
+      // any editable target (SELECT included, where the default Space hotkey
+      // would otherwise open the mic instead of the element's own dropdown), and
+      // Space on a focused button, which must ACTIVATE it: preventDefault-ing
+      // there would swallow every keyboard button press in the app and open the
+      // mic instead (e.g. the POST cognitive drills' Start / Match buttons).
+      if (!isPushToTalkKey(e, hotkey)) return;
       e.preventDefault();
       // writeVoiceHidden dispatches VISIBILITY_EVENT, which the listener
       // below syncs into local `hidden` — no explicit setHidden needed.
@@ -693,13 +654,19 @@ export default function VoiceWidget() {
   // Disengage routes through handleCancel (not handleStop) so a PTT user who
   // hides the widget mid-recording doesn't have a partial utterance shipped
   // to the LLM by stopCapture's default `{ submit: true }` behavior.
-  // Engage uses a pending-flag fallback: if the click lands before this
-  // widget's own config fetch resolves (handleStart short-circuits while
-  // !enabled), we replay the engage in the effect below once enabled flips.
+  // Engage uses a pending-flag fallback: if it lands while voice is disabled
+  // (handleStart short-circuits while !enabled), we replay the engage in the
+  // effect below once enabled flips.
   // Engage also awaits any in-flight cancel — voiceClient's module-level
   // stream/recorder means a rapid disengage→engage can otherwise let the
   // pending teardown stop tracks from the new capture.
+  // A start requested while this chunk was still loading is held by the gate
+  // and claimed here, through the same engage path. The claim waits one
+  // microtask: StrictMode's simulated unmount runs between two synchronous
+  // mounts and cancels capture, so a claim made in the first mount would be
+  // consumed and then dropped.
   useEffect(() => {
+    let live = true;
     const onEngage = async () => {
       if (cancelInFlightRef.current) await cancelInFlightRef.current;
       if (!enabled) {
@@ -720,16 +687,19 @@ export default function VoiceWidget() {
     };
     window.addEventListener(ENGAGE_EVENT, onEngage);
     window.addEventListener(DISENGAGE_EVENT, onDisengage);
+    queueMicrotask(() => {
+      if (live && claimPendingStart?.()) onEngage();
+    });
     return () => {
+      live = false;
       window.removeEventListener(ENGAGE_EVENT, onEngage);
       window.removeEventListener(DISENGAGE_EVENT, onDisengage);
     };
-  }, [enabled]);
+  }, [enabled, claimPendingStart]);
 
-  // Drain a queued engage once config has loaded and voice is actually on.
-  // Without this, a click on the sidebar toggle that beats getVoiceConfig()
-  // resolving would show the widget but leave the mic dormant. Await any
-  // in-flight cancel first to keep engage/disengage serialized.
+  // Drain a queued engage once voice is actually on. Without this, an engage
+  // that beat the enable would show the widget but leave the mic dormant.
+  // Await any in-flight cancel first to keep engage/disengage serialized.
   useEffect(() => {
     if (!enabled || !pendingEngageRef.current) return;
     pendingEngageRef.current = false;

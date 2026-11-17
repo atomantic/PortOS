@@ -14,6 +14,11 @@ large page modules `apiMusicVideo.js` and `apiPipeline.js`; the sidebar reads th
 from `apiNavNames.js`. `client/src/entryClosure.test.js` fails on a regression and prints the
 import chain. Lazy pages may keep using the barrel.
 
+**App-shell code never imports the voice stack either.** Voice is off by default, so
+`voiceClient.js`, `voiceFastPath.js`, `domIndex.js` and the audio helpers load with the voice
+widget, on demand. The shell's only voice import is `components/voice/VoiceWidgetGate.jsx`,
+which owns the voice config and exposes `useVoiceEnabled()`; the same test guards it.
+
 When you add a new `apiX.js`, re-export it from `api.js`; `index.test.js` fails if it is missing.
 
 ## Discovery rule

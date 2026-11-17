@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Mic, MicOff } from 'lucide-react';
-import { getVoiceConfig } from '../../services/apiVoice';
-import { onVoiceEvent } from '../../services/voiceClient';
+import { useVoiceEnabled } from './VoiceWidgetGate';
 import {
   VISIBILITY_EVENT,
   ENGAGE_EVENT,
@@ -11,19 +10,13 @@ import {
   isVoiceHiddenStorageEvent,
 } from '../../services/voiceVisibility';
 
+// Rendered inside `VoiceWidgetGate`, which owns the voice config; this button
+// must not import `voiceClient`, or the voice stack is back in the cold-load
+// bundle. Engage/disengage go out as window events that the gate holds until
+// the lazily loaded widget is listening.
 export default function VoiceToggleButton({ className = '' }) {
-  const [enabled, setEnabled] = useState(false);
+  const enabled = useVoiceEnabled();
   const [hidden, setHidden] = useState(readVoiceHidden);
-
-  useEffect(() => {
-    getVoiceConfig()
-      .then((cfg) => setEnabled(!!cfg?.enabled))
-      .catch(() => {});
-    const off = onVoiceEvent('voice:config:changed', (cfg) => {
-      if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
-    });
-    return off;
-  }, []);
 
   useEffect(() => {
     const sync = () => setHidden(readVoiceHidden());

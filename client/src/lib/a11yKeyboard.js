@@ -103,6 +103,17 @@ export function shouldIgnoreGlobalKey(event, { enabledInDialog = false, ignoreRe
 }
 
 /**
+ * True when a window keydown is the voice push-to-talk hotkey and nothing else owns the key. The voice widget and the gate that stands in for it while its chunk loads must agree, so both ask here.
+ * Chords and open dialogs are let through on purpose: push-to-talk stays reachable while a modal is up. Editable targets (SELECT included), auto-repeat and Space on a focused button still stand it down.
+ * @param {KeyboardEvent} event
+ * @param {string} hotkey - the configured `KeyboardEvent.code` (default `Space`)
+ * @returns {boolean}
+ */
+export function isPushToTalkKey(event, hotkey) {
+  return event.code === hotkey && !shouldIgnoreGlobalKey(event, { allowChords: true, enabledInDialog: true });
+}
+
+/**
  * True for a backtab (Shift+Tab), the gesture a key-capturing widget must release to the browser (WCAG 2.1.2): `term.attachCustomKeyEventHandler((e) => !isFocusEscapeKey(e))`
  * for the Shell xterm; plain Tab stays claimed for completion. Chorded variants pass through to browser/OS shortcuts.
  * @param {KeyboardEvent} event
