@@ -155,11 +155,16 @@ export async function reconcileMediaAssetIndexAtBoot() {
     return { ok: false, reason: 'reconcile-failed' };
   });
   // A gallery opened before the sweep finished read the previous boot's rows and
-  // does not poll, so tell open list views to refetch.
+  // does not poll, so tell open list views to refetch. Queued, not emitted
+  // directly: a render that completed mid-sweep has its row write waiting behind
+  // the sweep, and its own completion event already reached the client, so a
+  // notice ahead of that write would be the last refresh and miss it.
   if (result.ok) {
-    await import('../peerSyncEventBus.js')
-      .then(({ emitMediaListChanged }) => { emitMediaListChanged('image'); emitMediaListChanged('video'); })
-      .catch((err) => console.error(`❌ Media index boot refresh notice failed: ${err.message}`));
+    await queueMediaIndexRefresh(async () => {
+      const { emitMediaListChanged } = await import('../peerSyncEventBus.js');
+      emitMediaListChanged('image');
+      emitMediaListChanged('video');
+    }).catch((err) => console.error(`❌ Media index boot refresh notice failed: ${err.message}`));
   }
   // Put Back from the OS Trash restores files with no PortOS event; this boot
   // pass is where a locally owned item that came back sheds its delete record.
