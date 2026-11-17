@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, useState, useEffect, useCallback, useMemo } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router';
 import {
   ArrowLeft, Play, Square, RotateCcw, ExternalLink, Gamepad2, Hammer, RefreshCw,
@@ -19,22 +19,25 @@ import { useProcessSnapshot } from '../../hooks/useProcessSnapshot.js';
 import { useInstanceFeatures } from '../../hooks/useInstanceFeatures.js';
 import DesktopLaunchProgress from './DesktopLaunchProgress';
 import OverviewTab from './tabs/OverviewTab';
-import TasksTab from './tabs/TasksTab';
-import AutomationTab from './tabs/AutomationTab';
-import DocumentsTab from './tabs/DocumentsTab';
-import GitTab from './tabs/GitTab';
-import GsdTab from './tabs/GsdTab';
-import IssuesTab from './tabs/IssuesTab';
-import PullRequestsTab from './tabs/PullRequestsTab';
-import JiraTab from './tabs/JiraTab';
-import ProcessesTab from './tabs/ProcessesTab';
-import QualityTab from './tabs/QualityTab';
-import ReferencesTab from './tabs/ReferencesTab';
-import SubmodulesTab from './tabs/SubmodulesTab';
-import DatadogTab from './tabs/DatadogTab';
-import UpdateTab from './tabs/UpdateTab';
-import LaunchVideoPanel from './LaunchVideoPanel';
 import TabPills from '../ui/TabPills';
+import { lazyWithReload } from '../../utils/lazyWithReload';
+
+// OverviewTab stays static as the default tab; every other tab is fetched on first visit so the route chunk carries only the tab being shown.
+const TasksTab = lazyWithReload(() => import('./tabs/TasksTab'));
+const AutomationTab = lazyWithReload(() => import('./tabs/AutomationTab'));
+const DocumentsTab = lazyWithReload(() => import('./tabs/DocumentsTab'));
+const GitTab = lazyWithReload(() => import('./tabs/GitTab'));
+const GsdTab = lazyWithReload(() => import('./tabs/GsdTab'));
+const IssuesTab = lazyWithReload(() => import('./tabs/IssuesTab'));
+const PullRequestsTab = lazyWithReload(() => import('./tabs/PullRequestsTab'));
+const JiraTab = lazyWithReload(() => import('./tabs/JiraTab'));
+const ProcessesTab = lazyWithReload(() => import('./tabs/ProcessesTab'));
+const QualityTab = lazyWithReload(() => import('./tabs/QualityTab'));
+const ReferencesTab = lazyWithReload(() => import('./tabs/ReferencesTab'));
+const SubmodulesTab = lazyWithReload(() => import('./tabs/SubmodulesTab'));
+const DatadogTab = lazyWithReload(() => import('./tabs/DatadogTab'));
+const UpdateTab = lazyWithReload(() => import('./tabs/UpdateTab'));
+const LaunchVideoPanel = lazyWithReload(() => import('./LaunchVideoPanel'));
 
 // Icons live here rather than on `APP_DETAIL_TABS` so `constants.js` stays
 // importable from node-env server tests (no lucide-react from `server/`).
@@ -593,7 +596,9 @@ function AppDetail() {
             onDismiss={() => setLaunchProcess(null)}
           />
         )}
-        {renderTab()}
+        <Suspense fallback={<BrailleSpinner text="Loading tab" />}>
+          {renderTab()}
+        </Suspense>
       </div>
 
       {editing && app && (

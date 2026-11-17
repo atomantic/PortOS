@@ -1,22 +1,27 @@
+import { Suspense } from 'react';
 import { useParams, Navigate } from 'react-router';
 import { Settings as SettingsIcon } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
-import { ApiAccessTab } from '../components/settings/ApiAccessTab';
-import { AutofixerTab } from '../components/settings/AutofixerTab';
-import AiAssignmentsTab from '../components/settings/AiAssignmentsTab';
-import { BackupTab } from '../components/settings/BackupTab';
-import { DatabaseTab } from '../components/settings/DatabaseTab';
-import InstanceFeaturesTab from '../components/settings/InstanceFeaturesTab';
-import CredentialsTab from '../components/settings/CredentialsTab';
-import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
-import { MortalLoomTab } from '../components/settings/MortalLoomTab';
-import { SecurityTab } from '../components/settings/SecurityTab';
-import { SharingTab } from '../components/settings/SharingTab';
-import SoftwareTab from '../components/settings/SoftwareTab';
-import { VoiceTab } from '../components/settings/VoiceTab';
-import OrchestrationTab from '../components/settings/OrchestrationTab';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
+import { lazyWithReload } from '../utils/lazyWithReload';
+import BrailleSpinner from '../components/BrailleSpinner';
+
+// GeneralTab stays static as the default tab; every other tab is fetched on first visit.
+const ApiAccessTab = lazyWithReload(() => import('../components/settings/ApiAccessTab').then(m => ({ default: m.ApiAccessTab })));
+const AutofixerTab = lazyWithReload(() => import('../components/settings/AutofixerTab').then(m => ({ default: m.AutofixerTab })));
+const AiAssignmentsTab = lazyWithReload(() => import('../components/settings/AiAssignmentsTab'));
+const BackupTab = lazyWithReload(() => import('../components/settings/BackupTab').then(m => ({ default: m.BackupTab })));
+const DatabaseTab = lazyWithReload(() => import('../components/settings/DatabaseTab').then(m => ({ default: m.DatabaseTab })));
+const InstanceFeaturesTab = lazyWithReload(() => import('../components/settings/InstanceFeaturesTab'));
+const CredentialsTab = lazyWithReload(() => import('../components/settings/CredentialsTab'));
+const TelegramTab = lazyWithReload(() => import('../components/settings/TelegramTab').then(m => ({ default: m.TelegramTab })));
+const MortalLoomTab = lazyWithReload(() => import('../components/settings/MortalLoomTab').then(m => ({ default: m.MortalLoomTab })));
+const SecurityTab = lazyWithReload(() => import('../components/settings/SecurityTab').then(m => ({ default: m.SecurityTab })));
+const SharingTab = lazyWithReload(() => import('../components/settings/SharingTab').then(m => ({ default: m.SharingTab })));
+const SoftwareTab = lazyWithReload(() => import('../components/settings/SoftwareTab'));
+const VoiceTab = lazyWithReload(() => import('../components/settings/VoiceTab').then(m => ({ default: m.VoiceTab })));
+const OrchestrationTab = lazyWithReload(() => import('../components/settings/OrchestrationTab'));
 
 // Settings pages now host themselves as drawers on their feature pages where
 // it makes sense. Redirect old direct URLs to the new home so bookmarks and
@@ -67,7 +72,9 @@ export default function Settings() {
       <SettingsTabsHeader activeTab={activeTab} />
 
       <div className="flex-1 min-w-0 overflow-auto p-4">
-        {renderTabContent()}
+        <Suspense fallback={<BrailleSpinner text="Loading tab" />}>
+          {renderTabContent()}
+        </Suspense>
       </div>
     </div>
   );
