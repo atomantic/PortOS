@@ -472,8 +472,9 @@ async function runTrackedCodexTurn({ provider, source, workspacePath, turnOption
 
 /** No toolkit means no run store or ledger ownership in this process. */
 async function runUntrackedCompletion(request) {
-  const { runChatCompletion } = await import('./chatCompletionExchange.js');
-  return runChatCompletion(request);
+  const { completionContextRefusal, runChatCompletion } = await import('./chatCompletionExchange.js');
+  const refusal = completionContextRefusal(request.provider, request.model, request.prompt);
+  return refusal ? { error: refusal } : runChatCompletion(request);
 }
 
 // The run-record tag for a caller that named none. Operational, so an unnamed

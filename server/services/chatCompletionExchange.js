@@ -26,6 +26,9 @@ import { normalizeReviewFinishReason } from '../lib/reviewerHealth.js';
 import { normalizeChatCompletionUsage } from '../lib/chatCompletionUsage.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { buildOllamaNativeChatBody, ollamaNativeChatUrl } from '../lib/aiToolkit/internal/ollamaNativeChat.js';
+import { contextWindowRejection } from '../lib/aiToolkit/providerStatus.js';
+import { withOllamaRuntimeContextWindow } from '../lib/ollamaContext.js';
+import { estimateTokens } from '../lib/contextBudget.js';
 
 /**
  * The provider's reported token counts as usage-ledger fields, or `null` when
@@ -47,6 +50,25 @@ function reportedUsageFields(normalized) {
     } : {}),
     source: 'measured',
   };
+}
+
+/**
+ * Why this prompt provably cannot fit the provider's known context window, as
+ * the message to refuse it with (naming both numbers), or `null`.
+ *
+ * The streamed path's pre-dispatch rule (`promptRunner.assertRequestFitsContext`)
+ * on the prompt alone, since a completion declares no output reserve. It reads
+ * only configured windows (`contextWindow`, the model catalog, `numCtx`, the
+ * ambient Ollama ceiling) and skips that path's local `/models` probe, so a
+ * completion sends nothing beyond its own request. An unknown window is never a
+ * refusal. The prompt is refused whole, never cut.
+ */
+export function completionContextRefusal(provider, model, prompt) {
+  const reason = contextWindowRejection(withOllamaRuntimeContextWindow(provider), model, { requiredContextTokens: estimateTokens(prompt) });
+  if (!reason) return null;
+  const message = `${provider.name || provider.id}${model ? ` (${model})` : ''}: ${reason}`;
+  console.log(`📏 Refused before dispatch: ${message}`);
+  return message;
 }
 
 /**

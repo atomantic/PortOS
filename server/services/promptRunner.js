@@ -601,17 +601,11 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     if (unsupported.length > 0) {
       throw new Error(`runPromptThroughProvider: a completion request does not support ${unsupported.join(', ')}`);
     }
-    // The streamed path's pre-dispatch refusal, on the prompt alone (a
-    // completion declares no output reserve). A prompt that provably does not
-    // fit a known window is refused with both numbers before any run record
-    // exists, instead of being cut by the daemon; an unknown window refuses
-    // nothing. Configured windows only: no probe request goes to the provider.
-    await assertRequestFitsContext(
-      args.provider,
-      args.model ?? null,
-      refusalCapabilities({ requestCapabilities: buildRequestCapabilities({ prompt: args.prompt }), prompt: args.prompt }),
-      { observe: false },
-    );
+    // Refused before any run record exists, so an over-window prompt is
+    // neither sent nor recorded as an attempt.
+    const { completionContextRefusal } = await import('./chatCompletionExchange.js');
+    const refusal = completionContextRefusal(args.provider, args.model ?? null, args.prompt);
+    if (refusal) throw new Error(refusal);
     // Lazy: only bounded-completion callers pay for the exchange's closure.
     const { executeApiCompletionRun } = await import('./apiCompletionRun.js');
     // Same precedence the streamed path gives `timeout`, resolved here so the
@@ -1169,11 +1163,8 @@ function refusalCapabilities({ requestCapabilities, prompt, outputReserveTokens 
  *     in milliseconds instead of a ten-minute stall.
  *   - It judges the REQUESTED provider, ahead of `createRun`'s proactive swap; a swap target was
  *     already vetted by `capabilityRejection`.
- *   - `observe: false` judges only what is configured (`contextWindow`, the model catalog, `numCtx`,
- *     the ambient Ollama ceiling) and skips the local daemon's `/models` probe, for a caller that
- *     must add no request to the provider beyond its own (a bounded completion).
  */
-async function assertRequestFitsContext(provider, model, requestCapabilities, { runId = null, startTime = null, observe = true } = {}) {
+async function assertRequestFitsContext(provider, model, requestCapabilities, { runId = null, startTime = null } = {}) {
   const required = Number(requestCapabilities?.requiredContextTokens);
   if (!Number.isFinite(required) || required <= 0) return;
 
@@ -1181,7 +1172,7 @@ async function assertRequestFitsContext(provider, model, requestCapabilities, { 
   // NOW rather than what the record remembers: the windows it is serving, and
   // the ceiling PortOS launched it at — including the ambient
   // `OLLAMA_CONTEXT_LENGTH` rung the toolkit cannot reach for itself (#7472).
-  const observed = withOllamaRuntimeContextWindow(observe ? await withObservedContextWindowsLazy(provider) : provider);
+  const observed = withOllamaRuntimeContextWindow(await withObservedContextWindowsLazy(provider));
   // `reason` already names both numbers, which is what the operator needs to
   // decide between a smaller prompt and a wider provider — so it IS the
   // message rather than being re-worded beside it.
