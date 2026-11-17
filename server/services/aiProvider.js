@@ -22,6 +22,7 @@ import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitu
 import { randomUUID } from 'node:crypto';
 import { beginDirectProviderCall } from '../lib/providerCallActivity.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
+import { anyAbortSignal } from '../lib/requestAbort.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 /**
@@ -130,8 +131,11 @@ const lmStudioBaseFromEndpoint = (endpoint) =>
  * Pattern mirrors `ensureLLMModelLoaded` in services/memoryClassifier.js but
  * is provider-config-driven so any caller of callProviderAISimple gets the
  * same auto-recovery on first-use cold starts.
+ *
+ * `signal` is the call's Stop: aborting it ends the listing or the load at
+ * once instead of holding the stopped call open for the load's own deadline.
  */
-async function ensureLMStudioModelLoaded(provider, statusOp) {
+async function ensureLMStudioModelLoaded(provider, statusOp, signal = null) {
   const baseUrl = lmStudioBaseFromEndpoint(provider.endpoint);
   if (!baseUrl) return null;
 
@@ -141,7 +145,7 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
   try {
     const listResp = await fetch(`${baseUrl}/api/v0/models`, {
       method: 'GET',
-      signal: listCtl.signal
+      signal: anyAbortSignal([listCtl.signal, signal])
     });
     if (!listResp.ok) return null;
     payload = await listResp.json();
@@ -179,13 +183,15 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: target.id }),
-      signal: loadCtl.signal
+      signal: anyAbortSignal([loadCtl.signal, signal])
     });
     if (!loadResp.ok) {
       const errText = await loadResp.text().catch(() => 'unknown error');
       throw new Error(errText || 'unknown error');
     }
   } catch (err) {
+    // A Stop is not a failed load: nothing to investigate, nothing to toast.
+    if (signal?.aborted) return null;
     console.error(`❌ Failed to auto-load LM Studio model ${target.id}: ${err.message}`);
     statusOp?.update('error', `Failed to load ${target.id}: ${err.message}`, { model: target.id });
     return null;
@@ -544,11 +550,14 @@ async function callProviderAISimpleImpl(provider, model, prompt, options) {
 
   // The repair step for a failed first attempt. It runs INSIDE the run, so a
   // recovered call is still one run record and one usage session.
-  const recover = options.allowModelRecovery === false ? null : async (first) => {
+  // `stop` is the run's Stop folded with the caller's signal, so a repair in
+  // progress ends with the run instead of outliving it.
+  const recover = options.allowModelRecovery === false ? null : async (first, { signal: stop } = {}) => {
     // LM Studio answers 400 "No models loaded" whatever model was named, so
     // load one and retry with the id that is actually in memory.
     if (first.status === 400 && LM_STUDIO_NO_MODEL_RE.test(first.body || '')) {
-      const loaded = await ensureLMStudioModelLoaded(provider, statusOp);
+      const loaded = await ensureLMStudioModelLoaded(provider, statusOp, stop);
+      if (stop?.aborted) return null;
       if (loaded) {
         statusOp.update('start', `Calling ${provider.name || provider.id} (${loaded})…`, { model: loaded });
         return loaded;

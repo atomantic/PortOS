@@ -141,6 +141,12 @@ ${ticketData}`;
     }).catch(err => ({ error: err.message }));
 
     if (!aiResult.error) return aiResult.text.trim();
+    // Stopped from the Runs page: trying the next provider would start another
+    // (possibly billed) request the operator just declined.
+    if (aiResult.canceled) {
+      console.log('📊 Status summary stopped, using plain ticket list');
+      return buildPlainSummary(completed, inProgress, blocked, todo);
+    }
     console.log(`📊 Provider ${provider.id} failed: ${aiResult.error}`);
   }
 

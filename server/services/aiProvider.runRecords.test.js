@@ -32,7 +32,7 @@ vi.mock('./usage.js', async (importOriginal) => ({
 
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runPromptThroughProvider } = await import('./promptRunner.js');
-const { setAIToolkit, stopRun } = await import('./runner.js');
+const { setAIToolkit, stopRun, serializeRunDeletion } = await import('./runner.js');
 const { setAIToolkitInstance } = await import('../lib/aiToolkitState.js');
 const { createRunnerService } = await import('../lib/aiToolkit/runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
@@ -359,6 +359,52 @@ describe('cancellation', () => {
     // tell an operator Stop from a provider failure.
     expect(result).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
     expect((await record()).metadata).toMatchObject({ canceled: true });
+  });
+
+  it('deleting a live run stops it and leaves it deleted', async () => {
+    const request = hangUntilAborted();
+
+    const pending = callProviderAISimple(provider, 'model-1', 'a prompt', { source: 'goal-check-in', allowModelRecovery: false });
+    await vi.waitFor(() => expect(request.signal()).toBeDefined());
+    const [runId] = await runIds();
+    // Deletion shares the finalizer's per-run turn, as `services/bootstrap.js` wires it.
+    const deleteRun = serializeRunDeletion(runnerService.deleteRun.bind(runnerService));
+    expect(await deleteRun(runId)).toBe(true);
+    const result = await pending;
+
+    expect(request.signal().aborted).toBe(true);
+    expect(result).toMatchObject({ canceled: true });
+    // The aborted request finalizes after the directory is gone; it must not
+    // write an anonymous record back.
+    expect(await runIds()).toEqual([]);
+  });
+
+  it('stops a model load in progress and sends no retry', async () => {
+    let loadSignal;
+    const fetch = vi.fn(async (url, init) => {
+      if (url.endsWith('/chat/completions')) return mockTextResponse('No models loaded', { ok: false, status: 400 });
+      if (url.endsWith('/api/v0/models')) return { ok: true, json: async () => ({ data: [{ type: 'llm', id: 'loaded-model', state: 'not-loaded' }] }) };
+      loadSignal = init.signal;
+      return new Promise((_, reject) => {
+        init.signal.addEventListener('abort', () => reject(new Error('This operation was aborted')), { once: true });
+      });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const pending = callProviderAISimple({ ...provider, defaultModel: 'loaded-model' }, 'asked-model', 'a prompt', { source: 'goal-check-in' });
+    await vi.waitFor(() => expect(loadSignal).toBeDefined());
+    const [runId] = await runIds();
+    expect(await stopRun(runId)).toBe(true);
+    const result = await pending;
+
+    expect(loadSignal.aborted).toBe(true);
+    expect(result).toEqual({ error: 'Provider returned 400: No models loaded', status: 400, canceled: true });
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/chat/completions'))).toHaveLength(1);
+    expect((await record()).metadata).toMatchObject({ canceled: true, success: false });
+    // A Stop is not a failed load: nothing on stderr to investigate.
+    expect(errorLog).not.toHaveBeenCalled();
+    errorLog.mockRestore();
   });
 
   it('sends nothing and opens no run when the signal is already aborted', async () => {

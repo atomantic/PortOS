@@ -20,6 +20,8 @@ const shared = vi.hoisted(() => ({
     id: 'example-api', name: 'Example API', type: 'api', enabled: true,
     endpoint: 'https://api.example.com/v1', defaultModel: 'example-model', models: ['example-model'],
   },
+  // Extra providers the Jira summary may fall through to.
+  moreProviders: [],
   recordSession: vi.fn(async () => {}),
   recordRunUsage: vi.fn(async () => {}),
 }));
@@ -39,7 +41,7 @@ vi.mock('./providers.js', async (importOriginal) => ({
   ...await importOriginal(),
   getProviderById: async () => shared.provider,
   getActiveProvider: async () => shared.provider,
-  getAllProviders: async () => ({ activeProvider: shared.provider.id, providers: [shared.provider] }),
+  getAllProviders: async () => ({ activeProvider: shared.provider.id, providers: [shared.provider, ...shared.moreProviders] }),
   listProviders: async () => [shared.provider],
 }));
 vi.mock('./settings.js', async (importOriginal) => ({
@@ -123,12 +125,14 @@ const goal = (id) => ({
   targetDate: '2099-01-01', createdAt: '2026-01-01T00:00:00.000Z', progress: 40,
 });
 
+let runner;
 beforeEach(async () => {
+  shared.moreProviders = [];
   await rm(tempRoot, { recursive: true, force: true });
   await mkdir(tempRoot, { recursive: true });
   vi.clearAllMocks();
   vi.resetModules();
-  const runner = createRunnerService({
+  runner = createRunnerService({
     dataDir: tempRoot, hooks,
     providerService: { getProviderById: async () => shared.provider, getAllProviders: async () => ({ providers: [shared.provider] }) },
   });
@@ -216,6 +220,27 @@ describe('callers of callProviderAISimple leave one run and one usage session pe
 
     expect(report.statusSummary).toContain('Example work');
     await expectTrackedRuns({ source: 'jira-status-report' });
+  });
+
+  it('jiraReports: a summary stopped from Runs does not fall through to the next provider', async () => {
+    shared.moreProviders = [{ ...shared.provider, id: 'example-api-2', name: 'Example API 2' }];
+    vi.stubGlobal('fetch', vi.fn((_url, { signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('This operation was aborted')), { once: true });
+    })));
+    const { generateReport } = await import('./jiraReports.js');
+
+    const pending = generateReport('example-app', {
+      name: 'Example App', jira: { enabled: true, instanceId: 'example-instance', projectKey: 'EX' },
+    });
+    await vi.waitFor(async () => expect(await records()).toHaveLength(1));
+    const [live] = await records();
+    expect(await runner.stopRun(live.id)).toBe(true);
+    const report = await pending;
+
+    // One request, to the first provider only, and the plain list as the summary.
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(await records()).toHaveLength(1);
+    expect(report.statusSummary).toContain('EX-1');
   });
 
   it('codeReview: API provider reviewer', async () => {

@@ -112,6 +112,9 @@ export async function executeApiCompletionRun({
     ...(failed ? { error: reply.error } : {}),
     startTime,
     reportFailure: false,
+    // Deleting a live run stops it and removes its directory; the aborted
+    // request then lands here and must not write the deleted run back.
+    onlyIfRecorded: true,
     extras: {
       // One HTTP request: no CLI transcript and no nested session can belong to
       // it, whether or not the provider reported counts (usageReconciler).
