@@ -647,14 +647,9 @@ it('keeps PostgreSQL tests out of ordinary server runner selection and routes th
   expect(plan.db).toBe(true);
 });
 
-it('runs the whole-tree import-cycle guards on a PR that touches one server/services file (#14327)', () => {
+it('runs the whole-tree import-cycle guard on a PR that touches one server/services file (#14327)', () => {
   const plan = buildCiTestPlan(['server/services/auth.js'], realTree());
-  expect(plan.server.files).toEqual(expect.arrayContaining([
-    'server/services/agentImportCycles.test.js',
-    'server/services/meatspacePostImportCycles.test.js',
-    'server/services/serviceImportCycles.guard.test.js',
-    'server/services/twinImportCycles.test.js',
-  ]));
+  expect(plan.server.files).toContain('server/services/serviceImportCycles.guard.test.js');
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
