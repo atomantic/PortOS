@@ -13,10 +13,7 @@ const ACTIVITY_FILE = join(DATA_DIR, 'app-activity.json');
 
 const DEFAULT_ACTIVITY = {
   apps: {},
-  global: {
-    lastIdleReviewAt: null,
-    totalReviews: 0
-  }
+  global: {}
 };
 
 /**
@@ -33,9 +30,9 @@ export async function loadAppActivity() {
   const loaded = await readJSONFile(ACTIVITY_FILE, null, { strict: true });
   // structuredClone, not a spread. `{ ...DEFAULT_ACTIVITY }` is shallow, so the
   // returned `apps` and `global` were the SAME objects on every call: on an
-  // absent file the first `updateAppActivity`/`markIdleReviewStarted` mutated
+  // absent file the first `updateAppActivity` mutated
   // the module-level default in place, and every later load inherited that
-  // app map and its incremented totalReviews. Same "the default must never
+  // app map. Same "the default must never
   // become shared mutable state" family as the strict read above.
   const base = structuredClone(DEFAULT_ACTIVITY);
   return loaded ? { ...base, ...loaded } : base;
@@ -69,19 +66,8 @@ export async function updateAppActivity(appId, updates) {
       lastTaskCompletedAt: null,
       activeAgentId: null,
       cooldownUntil: null,
-      lastImprovementType: null,  // Track last self-improvement analysis type
-      stats: {
-        reviewCount: 0,
-        issuesFound: 0,
-        issuesFixed: 0
-      }
+      lastImprovementType: null  // Track last self-improvement analysis type
     };
-  }
-
-  // Merge updates, handling nested stats object
-  if (updates.stats) {
-    activity.apps[appId].stats = { ...activity.apps[appId].stats, ...updates.stats };
-    delete updates.stats;
   }
 
   activity.apps[appId] = { ...activity.apps[appId], ...updates };
@@ -149,14 +135,12 @@ const SYNTHETIC_REVIEW_AGENT_RE = /^(idle-review|on-demand)-/;
  * has several `return null` failure paths *after* that bind (provider resolution
  * fails, workspace prep deferred/blocked, the in_progress `updateTask` fails,
  * max-spawns block). On any of those, no agent runs to completion, so
- * `processAgentCompletion` never clears the marker via `markAppReviewCompleted` +
- * `startAppCooldown` — the app reads "in review" until the next daemon restart's
+ * `processAgentCompletion` never clears the marker via `startAppCooldown` — the app reads "in review" until the next daemon restart's
  * `clearStaleActiveAgents` sweep (the synthetic id is never in the live
  * `agent-*` set). This is the same failure *class* as #978, one step later in the
  * lifecycle. See issue #989.
  *
- * Releasing only clears `activeAgentId`: it does NOT bump `reviewCount` /
- * `issuesFound` (no review actually ran) and it leaves the cooldown that
+ * Releasing only clears `activeAgentId`: it leaves the cooldown that
  * `markAppReviewCooldown` already advanced intact — so the app is re-picked after
  * its normal cooldown window, not immediately. The synthetic-id guard makes this
  * safe to call on any failing task that carries `metadata.app`: a real `agent-*`
@@ -169,21 +153,6 @@ export async function releaseAppReviewMarker(appId) {
   const app = activity.apps?.[appId];
   if (!SYNTHETIC_REVIEW_AGENT_RE.test(app?.activeAgentId || '')) return null;
   return updateAppActivity(appId, { activeAgentId: null });
-}
-
-/**
- * Mark an app review as completed
- */
-export async function markAppReviewCompleted(appId, issuesFound = 0, issuesFixed = 0) {
-  const activity = await getAppActivityById(appId) || { stats: {} };
-  return updateAppActivity(appId, {
-    activeAgentId: null,
-    stats: {
-      reviewCount: (activity.stats?.reviewCount || 0) + 1,
-      issuesFound: (activity.stats?.issuesFound || 0) + issuesFound,
-      issuesFixed: (activity.stats?.issuesFixed || 0) + issuesFixed
-    }
-  });
 }
 
 /**
@@ -283,28 +252,7 @@ export async function getNextAppForReview(apps, cooldownMs) {
   for (const app of apps) {
     const appActivity = activity.apps[app.id];
 
-    // Skip if on cooldown
-    if (appActivity) {
-      // Check explicit cooldown
-      if (appActivity.cooldownUntil && new Date(appActivity.cooldownUntil).getTime() > now) {
-        continue;
-      }
-
-      // Check last activity cooldown
-      const lastActivity = Math.max(
-        appActivity.lastReviewedAt ? new Date(appActivity.lastReviewedAt).getTime() : 0,
-        appActivity.lastTaskCompletedAt ? new Date(appActivity.lastTaskCompletedAt).getTime() : 0
-      );
-
-      if (lastActivity && (now - lastActivity) < cooldownMs) {
-        continue;
-      }
-
-      // Check active agent
-      if (appActivity.activeAgentId) {
-        continue;
-      }
-    }
+    if (isAppActivityOnCooldown(appActivity, cooldownMs)) continue;
 
     // App is eligible
     const lastReview = appActivity?.lastReviewedAt
@@ -322,52 +270,4 @@ export async function getNextAppForReview(apps, cooldownMs) {
   eligible.sort((a, b) => b.timeSinceReview - a.timeSinceReview);
 
   return eligible[0]?.app || null;
-}
-
-/**
- * Update global idle review timestamp
- */
-export async function markIdleReviewStarted() {
-  const activity = await loadAppActivity();
-  activity.global.lastIdleReviewAt = new Date().toISOString();
-  activity.global.totalReviews = (activity.global.totalReviews || 0) + 1;
-  await saveAppActivity(activity);
-  return activity.global;
-}
-
-/**
- * Get time until next eligible app is off cooldown
- */
-export async function getNextCooldownExpiry(apps, cooldownMs) {
-  const activity = await loadAppActivity();
-  const now = Date.now();
-  let nextExpiry = null;
-
-  for (const app of apps) {
-    const appActivity = activity.apps[app.id];
-    if (!appActivity) continue;
-
-    // Check explicit cooldown
-    if (appActivity.cooldownUntil) {
-      const expiryTime = new Date(appActivity.cooldownUntil).getTime();
-      if (expiryTime > now && (!nextExpiry || expiryTime < nextExpiry)) {
-        nextExpiry = expiryTime;
-      }
-    }
-
-    // Check activity-based cooldown
-    const lastActivity = Math.max(
-      appActivity.lastReviewedAt ? new Date(appActivity.lastReviewedAt).getTime() : 0,
-      appActivity.lastTaskCompletedAt ? new Date(appActivity.lastTaskCompletedAt).getTime() : 0
-    );
-
-    if (lastActivity) {
-      const expiryTime = lastActivity + cooldownMs;
-      if (expiryTime > now && (!nextExpiry || expiryTime < nextExpiry)) {
-        nextExpiry = expiryTime;
-      }
-    }
-  }
-
-  return nextExpiry ? nextExpiry - now : null;
 }

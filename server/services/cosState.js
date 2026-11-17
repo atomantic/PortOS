@@ -167,11 +167,9 @@ export const DEFAULT_STATE = {
   pauseReason: null,
   stats: {
     tasksCompleted: 0,
-    totalRuntime: 0,
     agentsSpawned: 0,
     errors: 0,
-    lastEvaluation: null,
-    lastIdleReview: null
+    lastEvaluation: null
   },
   persistentMind: createDefaultPersistentMindState(),
   agents: {}
