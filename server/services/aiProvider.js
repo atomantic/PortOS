@@ -345,7 +345,8 @@ const reportedResetsAt = (readiness) => {
 
 /**
  * Call an API-based AI provider with a simple prompt.
- * Returns { text, usage? } on success, { error } on failure. HTTP providers
+ * Returns { text, usage? } on success, { error } on failure (with
+ * `canceled: true` when the call was stopped rather than failed). HTTP providers
  * surface reported prompt/completion counts when present; callers may estimate
  * only the missing side rather than treating it as a measured zero.
  *
@@ -582,7 +583,14 @@ async function callProviderAISimpleImpl(provider, model, prompt, options) {
   }
   if (answeredBy) statusOp.error(final.error, answeredBy);
   else statusOp.error(final.error);
-  return { error: final.error, ...(Number.isInteger(final.status) ? { status: final.status } : {}), ...(final.stallPhase ? { stallPhase: final.stallPhase } : {}) };
+  return {
+    error: final.error,
+    ...(Number.isInteger(final.status) ? { status: final.status } : {}),
+    ...(final.stallPhase ? { stallPhase: final.stallPhase } : {}),
+    // A stopped run (Stop on the Runs page, or the caller's own signal) is not
+    // a provider failure; same marker the subscription leg returns.
+    ...(final.canceled ? { canceled: true } : {}),
+  };
 }
 
 // Extracted to lib/llmText.js in #4901 — unfencing a string needs no provider,

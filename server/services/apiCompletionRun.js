@@ -44,8 +44,9 @@ const canceledError = (message, runId = null) => Object.assign(new Error(message
  * @returns {Promise<{ text: string, runId: string, model: string|null, provider: object,
  *   finishReason?: string, usage?: object, tokens?: number, retried: boolean }>}
  * @throws {Error} the reply's own error text, with `runId`, `completionFailure`
- *   (the failed reply: `{ error, status?, body?, stallPhase?, model, retried }`)
- *   and, for a Stop or an aborted `signal`, `code: 'RUN_CANCELED'`.
+ *   (the failed reply: `{ error, status?, body?, stallPhase?, model, retried }`,
+ *   plus `canceled: true` for a Stop or an aborted `signal`) and, for those
+ *   two, `code: 'RUN_CANCELED'`.
  */
 export async function executeApiCompletionRun({
   provider, prompt, source, model, timeout, signal = null, cwd, completion, onRunCreated, onRunSettled,
@@ -128,7 +129,8 @@ export async function executeApiCompletionRun({
   if (thrown) throw Object.assign(thrown, { runId });
   if (failed) {
     const err = canceled ? canceledError(reply.error, runId) : Object.assign(new Error(reply.error), { runId });
-    err.completionFailure = reply;
+    // The reply plus the one thing only the run knows: that it was stopped.
+    err.completionFailure = canceled ? { ...reply, canceled: true } : reply;
     throw err;
   }
   return {

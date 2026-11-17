@@ -337,7 +337,7 @@ describe('cancellation', () => {
     const result = await pending;
 
     expect(request.signal().aborted).toBe(true);
-    expect(result).toEqual({ error: 'Provider request failed: This operation was aborted' });
+    expect(result).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
     const run = await record();
     expect(run.metadata).toMatchObject({ success: false, canceled: true, completionReason: 'canceled', errorCategory: ERROR_CATEGORIES.CANCELED });
     await vi.waitFor(() => expect(spies.onRunCanceled).toHaveBeenCalledWith({ runId: run.id }));
@@ -355,7 +355,9 @@ describe('cancellation', () => {
     const result = await pending;
 
     expect(request.signal().aborted).toBe(true);
-    expect(result.error).toBe('Provider request failed: This operation was aborted');
+    // No caller signal fired here, so `canceled` is the only way a caller can
+    // tell an operator Stop from a provider failure.
+    expect(result).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
     expect((await record()).metadata).toMatchObject({ canceled: true });
   });
 
