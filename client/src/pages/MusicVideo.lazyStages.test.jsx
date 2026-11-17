@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { MUSIC_VIDEO_PAGES, MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
@@ -18,18 +18,23 @@ const json = (body) => new Response(JSON.stringify(body), { status: 200, headers
 // import, and `vi.doMock` after `vi.resetModules` re-arms it, so every test starts from a page
 // that has fetched nothing.
 let loaded;
+// How long a stage chunk takes to arrive. React holds a quick reveal back (~300ms) and commits
+// it with its parent, so only a slower one, like a real chunk on a slow link, shows the fallback.
+let chunkDelayMs;
 let MusicVideo;
 beforeEach(async () => {
   vi.resetModules();
   loaded = new Set();
+  chunkDelayMs = 0;
   vi.doMock('../components/musicVideo/ProjectWorkspace.jsx', async (importOriginal) => {
     loaded.add('workspace');
     return importOriginal();
   });
   for (const [id, file] of Object.entries(STAGE_FILES)) {
-    vi.doMock(`../components/musicVideo/stages/${file}.jsx`, () => {
+    vi.doMock(`../components/musicVideo/stages/${file}.jsx`, async () => {
       loaded.add(id);
-      return { default: () => <div data-testid={`stage-${id}`} /> };
+      if (chunkDelayMs) await new Promise((resolve) => { setTimeout(resolve, chunkDelayMs); });
+      return { default: () => <button type="button" id={`mv-anchor-${id}`} data-testid={`stage-${id}`} /> };
     });
   }
   vi.stubGlobal('fetch', vi.fn(async (input) => {
@@ -60,10 +65,13 @@ it('lists projects without fetching the workspace or any stage', async () => {
   expect([...loaded]).toEqual([]);
 });
 
-it.each(STAGE_IDS)('a deep link to %s fetches and renders only that stage', async (id) => {
-  renderAt(`/music-video/${PROJECT.id}/${id}`);
-  expect(await screen.findByTestId(`stage-${id}`)).toBeTruthy();
+it.each(STAGE_IDS)('a deep link to %s fetches only that stage and lands on its anchor', async (id) => {
+  chunkDelayMs = 600;
+  renderAt(`/music-video/${PROJECT.id}/${id}#mv-anchor-${id}`);
+  const panel = await screen.findByTestId(`stage-${id}`);
   expect([...loaded].sort()).toEqual(['workspace', id].sort());
+  // The anchor lives inside the lazily loaded panel, so landing has to wait for it to mount.
+  await waitFor(() => expect(document.activeElement).toBe(panel));
 });
 
 it('switching steps fetches and renders each stage on first open', async () => {
