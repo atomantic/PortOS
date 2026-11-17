@@ -745,6 +745,9 @@ const effortAxisGuidance = (p, levels) => `\`${levels}\` — thinking per step, 
  */
 export const LIGHT_FINDINGS_BATCH_EXCEPTION = 'findings dispatched light and low-effort (`model:light` + `effort:low`, or that tracker\'s spelling) that share an area go into ONE checklist item of up to 10 entries instead; a bug, security or data-safety finding always stays its own item';
 
+/** `source:<lane>`: which scheduled lane filed an issue; deliberately not a dispatch axis and absent from interactive filings. */
+export const SOURCE_LABEL_GUIDANCE = 'Scheduled audit lanes and tasks also add `source:<lane>` (lower-case lane or task type id), created with `gh label create source:<lane> --color 0E8A16 2>/dev/null || true`; interactive and ad-hoc filings omit it.';
+
 /** Canonical filing contract for every autonomous issue producer. */
 export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'If you file issues, follow this contract even when older task text or examples describe dispatch labels as optional. This does not authorize issue creation on its own.',
@@ -759,7 +762,9 @@ export const MANDATORY_DISPATCH_HINT_GUIDANCE = [
   'Contributor labels stay OPTIONAL and independent: `good first issue` (color 7057FF) when the work is self-contained enough for a new contributor with no deep repo context — a `model:light` 40-file sweep is NOT a good first issue. Use the same gh / glab label create form.',
   HELP_WANTED_GUIDANCE,
   HARDWARE_REQUIREMENT_GUIDANCE,
-  'Planner attribution: also apply the `planner:<model>` label naming the model that WROTE the plan. Never guess it from what you believe you are — use the exact label your run\'s "Planner attribution" instruction gives you, and omit the axis when your run was given none. It records the AUTHOR; `model:`/`effort:` say how to RUN the work.',
+  'Planner attribution: also apply the `planner:<model>` label your run\'s "Planner attribution" instruction gives, never a self-guess (omit it if none). It records the AUTHOR.',
+  // Lets each audit lane's value be measured; an interactive filing has no lane (#16571).
+  SOURCE_LABEL_GUIDANCE,
   // A separate issue per light finding cost each one a full claim/review/CI/merge
   // cycle for a ~30-line PR (#16569); batching changes the shipping unit only.
   'Batch light findings: one run\'s `model:light` + `effort:low` findings sharing an `area` label go in ONE checklist issue (up to 10 `- [ ]` items, one PR), since every issue costs a full claim-to-merge cycle. `bug`, security and data-safety findings stay standalone; every finding is still fixed.',
@@ -784,6 +789,7 @@ export const JIRA_DISPATCH_HINT_GUIDANCE = [
   `Apply \`help-wanted\` ${HELP_WANTED_CRITERIA}`,
   HARDWARE_REQUIREMENT_GUIDANCE,
   'Planner attribution: also apply the `planner-<model>` label naming the model that WROTE the plan, taken verbatim from your run\'s "Planner attribution" instruction (omit the axis when your run was given none). It records the AUTHOR, independently of the dispatch axes.',
+  'Source: a scheduled audit lane or task also adds `source-<lane>` (its lower-case lane or task type id); interactive and ad-hoc filings omit it.',
   'Preserve existing category/scope labels. Never relabel a ticket you skipped as a duplicate.',
   ISSUE_QUALITY_GUIDANCE,
 ].join('\n');

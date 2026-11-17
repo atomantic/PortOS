@@ -20,8 +20,9 @@ Check branch, upstream and working-tree state, preserve unrelated changes, and c
 
 ## PR attribution labels
 
-- **Label PRs with the opening agent's model**: `implementer:<model>` (`implementer::<model>` on GitLab) on every PR from a scheduled `claim-issue` run or a manual direct claim, using the exact label from the run's **PR Model Attribution** section; elsewhere, the model verified by the host's execution context, normalized with `normalizePlannerId` in `server/lib/dispatchLabels.js`. Create the label if missing, pass it at creation, and read it back. It records the opener, independent of the issue's `model:` tiers and `planner:` authorship. A delegated opener uses its own model. Keep an existing PR's original attribution on resume, repairing it only from evidence of the original opener. Never guess the model from the provider, reviewer, issue labels or self-identification; report missing evidence or label failures in the handoff.
-- **Attribute completed local reviews** per [PR_REVIEW_ATTRIBUTION.md](../../../docs/PR_REVIEW_ATTRIBUTION.md): `reviewer:<model>` only from actual pre-publication local review receipts (optional reviewers included), never from configured, queued or requested reviewers. Preserve existing labels, normalize with `normalizePlannerId`; GitLab reviewer labels stay unscoped.
+- **Best-effort, never verified.** Nothing reads `implementer:` or `reviewer:` labels back (#16571), so attribution is one label call at PR creation with no read-back, repair or failure report; a failed label never blocks a PR.
+- **Opener**: `implementer:<model>` (`implementer::<model>` on GitLab) from the run's **PR Model Attribution** section, else the model your host's execution context verifies (`normalizePlannerId` in `server/lib/dispatchLabels.js`); omit it rather than guess from the provider, reviewer, issue labels or self-identification. A delegated opener uses its own model; a resumed PR keeps its original label.
+- **Reviewers**: `reviewer:<model>` only from completed local review receipts, per [PR_REVIEW_ATTRIBUTION.md](../../../docs/PR_REVIEW_ATTRIBUTION.md); never from configured, queued or requested reviewers.
 
 ## Reviews
 

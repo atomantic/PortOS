@@ -105,7 +105,6 @@ it('runs saved API review defaults and attribution from the standalone bridge wi
   const noState = await runReview(request);
   expect(noState.code, noState.stderr).toBe(0);
   expect(JSON.parse(noState.stdout)).toMatchObject({ ok: true, model: 'review-model', verdict: 'clean', findings: 'NO FINDINGS' });
-  expect(JSON.parse(noState.stdout).attributionError).toBeUndefined();
   const healthy = JSON.parse(await readFile(join(data, 'settings.json'), 'utf8'));
   expect(healthy.codeReview?.reviewerHealth?.['provider:example-gpu']).toBeUndefined();
   expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\n');
@@ -123,6 +122,15 @@ it('runs saved API review defaults and attribution from the standalone bridge wi
   expect(await readFile(join(root, '.git/portos-local-review-models'), 'utf8')).toBe('review-model\ndefault-model\n');
   const { stdout } = await promisify(execFile)(process.execPath, [fileURLToPath(new URL('./local-review-attribution.mjs', import.meta.url)), 'labels'], { cwd: root, signal: context.signal });
   expect(JSON.parse(stdout).labels).toEqual(['reviewer:review-model', 'reviewer:default-model']);
+}), 15000);
+
+it('keeps the verdict and a zero exit when the attribution receipt cannot be written (#16571)', context => withSavedProviderReview(context, async ({ root, runReview }) => {
+  // A directory at the receipt path makes the append fail; attribution is best-effort and must never block a review.
+  await mkdir(join(root, '.git/portos-local-review-models'));
+  const result = await runReview({ backend: 'provider:example-cli', model: 'review-model', diff: 'diff --git a/example.js b/example.js' });
+  expect(result.code, result.stderr).toBe(0);
+  expect(JSON.parse(result.stdout)).toMatchObject({ ok: true, verdict: 'clean', findings: 'NO FINDINGS' });
+  expect(JSON.parse(result.stdout)).not.toHaveProperty('attributionError');
 }), 15000);
 
 it('runs ordinary and claim CLI reviews in scratch with the explicit model', context => withSavedProviderReview(context, async ({ root, runReview }) => {

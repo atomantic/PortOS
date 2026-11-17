@@ -9,8 +9,8 @@ import {
   DISPATCH_HINT_FANOUT_GUIDANCE,
   DISPATCH_HINT_READING_GUIDANCE,
   MANDATORY_DISPATCH_HINT_GUIDANCE,
-  MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   JIRA_DISPATCH_HINT_GUIDANCE,
+  MANDATORY_JIRA_DISPATCH_HINT_GUIDANCE,
   PORTOS_AREA_LABELS,
   PORTOS_AREA_LABEL_GUIDANCE,
   REPO_STUDY_LABEL_CONTRACT,
@@ -366,6 +366,14 @@ describe('shared guidance', () => {
     }
   });
 
+  it('tells lane-filed issues to carry source:<lane> and interactive filings to omit it (#16571)', () => {
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`source:<lane>`');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('`gh label create source:<lane> --color');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('interactive and ad-hoc filings omit it');
+    expect(MANDATORY_DISPATCH_HINT_GUIDANCE).toContain('lower-case lane or task type id');
+    expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('`source-<lane>`');
+  });
+
   it('keeps the mandatory variant on the same vocabulary but inverts the obligation', () => {
     // Same axes, same colors, same label-create idiom — the ONLY difference is
     // that both axes are required. A drifted second copy of the vocabulary is
@@ -515,7 +523,7 @@ describe('planner attribution labels', () => {
     for (const guidance of [DISPATCH_HINT_GUIDANCE, MANDATORY_DISPATCH_HINT_GUIDANCE]) {
       expect(guidance).toContain('planner:<model>');
       expect(guidance).toContain('Planner attribution');
-      expect(guidance).toContain('Never guess it');
+      expect(guidance).toContain('never a self-guess');
     }
     expect(JIRA_DISPATCH_HINT_GUIDANCE).toContain('planner-<model>');
     expect(JIRA_DISPATCH_HINT_GUIDANCE).not.toMatch(/planner:</);
