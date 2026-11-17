@@ -56,7 +56,6 @@ describe('PreviewDock live composite', () => {
     render(<MemoryRouter><PreviewDock project={project} sources={listPreviewSources(project, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>);
     expect(screen.getByLabelText('Preview source')).toHaveValue('composite');
     expect(screen.getByLabelText('Composition preview')).toBeTruthy();
-    expect(screen.getByText(/Final-quality shot renders are not required/)).toBeTruthy();
     expect(screen.getByRole('option', { name: 'Storyboard animatic' })).toBeEnabled();
   });
 

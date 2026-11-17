@@ -24,18 +24,19 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   const [duration, setDuration] = useState(null);
   const pending = useRef(null);
   const applied = useRef(null);
-  const seekTo = (t, play = false) => {
+  const seekTo = (t, play = false, pause = false) => {
     const video = videoRef.current;
     if (!video) return;
     if (video.readyState >= 1) video.currentTime = Math.min(t, video.duration || t);
     else pending.current = t;
     if (play) video.play?.()?.catch?.(() => {});
+    else if (pause) video.pause?.();
   };
   useEffect(() => {
     if (!seekRequest || applied.current === seekRequest.n) return;
     applied.current = seekRequest.n;
     const t = seekRequest.t - source.startSec;
-    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play);
+    if (t >= 0 && (source.endSec == null || t <= source.endSec - source.startSec)) seekTo(t, !!seekRequest.play, !!seekRequest.pause);
   }, [seekRequest, source.startSec, source.endSec]);
   const startSec = source.startSec || 0;
   const range = { startSec, endSec: source.endSec ?? null };

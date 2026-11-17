@@ -755,6 +755,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     audioRef.current.currentTime = seekRequest.t;
     setTime(seekRequest.t);
     if (seekRequest.play) audioRef.current.play?.()?.catch?.(() => {});
+    else if (seekRequest.pause) audioRef.current.pause?.();
   }, [seekRequest]);
   // Back and Next move the song; it keeps playing or stays paused as it was.
   const seekTo = useCallback((t) => {
@@ -1003,16 +1004,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const exactActive = documentVariant && touched && !playing && !cold.active && !outro.active;
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
-      {composite && !film && (
-        <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
-      )}
-      {film && (
-        <p className="text-xs text-port-text-muted">Each shot's newest Blender render cut on the song, with the film look, shot effects and title card drawn live. No cut is assembled; a shot without a render stays black for its length.</p>
-      )}
-      {documentVariant && (
-        <p className="text-xs text-port-text-muted">{nativeDrawing
-          ? "Plays the selected takes with the template's camera moves, beat reactions, cards, HUD and words. Paused, it shows the composition's exact frame."
-          : "Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's beat reactions, cards and HUD appear only there for now."}</p>
+      {/* The source picker names what plays; only a preview missing part of the composition says so. */}
+      {documentVariant && !nativeDrawing && (
+        <p className="text-xs text-port-text-muted">The template's beat reactions, cards and HUD show only in the paused frame for now.</p>
       )}
       <figure ref={figureRef} aria-label={pictureLabel} className={`relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black ${filmFrame ? 'mx-auto' : ''}`}
         style={nativeDrawing ? { aspectRatio: `${nativeData.render.width} / ${nativeData.render.height}` } : filmFrame || undefined}>

@@ -151,10 +151,10 @@ export default function ProjectWorkspace({
   const [dockExpanded, setDockExpanded] = useState(false);
   // The preview's reading of the song's clock (`PreviewDock` fills it), which the editor's playhead follows.
   const songClockRef = useRef(null);
-  // `play` starts playback from there (a storyboard row); a scene card only cues the shot.
-  const seekToScene = (scene, { play = false } = {}) => {
+  // `play` starts playback from there (a storyboard row), `pause` stops it there; a scene card only cues the shot.
+  const seekToScene = (scene, { play = false, pause = false } = {}) => {
     if (typeof scene?.startSec !== 'number') return;
-    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play }));
+    setSeekRequest((prev) => ({ t: scene.startSec, n: (prev?.n || 0) + 1, play, pause: !play && pause }));
   };
 
   // Lyric cues / phrases / pacing (#8964) and the typography manifest (#8984)

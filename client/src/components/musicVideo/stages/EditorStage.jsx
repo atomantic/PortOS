@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import useMediaQuery from '../../../hooks/useMediaQuery.js';
 import Drawer from '../../Drawer';
 import ShotTimeline from '../ShotTimeline.jsx';
@@ -6,6 +6,31 @@ import ShotCardHost, { blenderShotPosters, shotNamer, useLinkedStoryboard } from
 import { reorderedSceneIds, timelineShots } from '../../../lib/musicVideoTimeline.js';
 import { plannedTransitions } from '../../../lib/musicVideoCutEffects.js';
 import { isLayeredComposition } from '../../../lib/musicVideoLayers.js';
+
+/**
+ * The height that takes `el` from where it sits to the bottom of the page's
+ * scroll area (the nearest `main`), so the docked timeline is on screen
+ * without scrolling whatever the headers above it wrap to. Null until measured.
+ */
+function useScreenFill(el) {
+  const [height, setHeight] = useState(null);
+  useEffect(() => {
+    const scroller = el?.closest('main');
+    if (!el || !scroller || typeof ResizeObserver === 'undefined') return undefined;
+    const apply = () => {
+      const top = el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+      const padBottom = Number.parseFloat(getComputedStyle(scroller).paddingBottom) || 0;
+      // 12px under it, so its border isn't flush with the window's edge.
+      setHeight(Math.max(0, Math.floor(scroller.clientHeight - top - padBottom - 12)));
+    };
+    apply();
+    const observer = new ResizeObserver(apply);
+    // A width change is what rewraps the headers above, and it resizes the scroll area too.
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [el]);
+  return height;
+}
 
 /**
  * The editor, laid out like a desktop editing application from `xl` up: one
@@ -33,6 +58,8 @@ export default function EditorStage({ board }) {
   const desktop = useMediaQuery('(min-width: 1280px)');
   const [libraryEl, setLibraryEl] = useState(null);
   const [inspectorEl, setInspectorEl] = useState(null);
+  const [screenEl, setScreenEl] = useState(null);
+  const screenHeight = useScreenFill(screenEl);
   const editShot = (sceneId, patch) => { board.editSceneLocal(sceneId, patch); return board.saveScene(sceneId, patch); };
   const openShot = (scene) => {
     board.seekToScene?.(scene);
@@ -65,7 +92,7 @@ export default function EditorStage({ board }) {
       onMoveCut={board.locked ? null : (sceneId, edge, t) => (edge === 'end' ? board.onMoveSceneEnd(sceneId, t) : board.onMoveSceneStart(sceneId, t))}
       onReorder={board.locked || orderOwned ? null : reorder}
       effectOptions={effectOptions} onEditShot={board.locked ? null : editShot}
-      onPreview={(t) => board.seekToScene?.({ startSec: t }, { play: true })}
+      onPreview={(t, play) => board.seekToScene?.({ startSec: t }, { play, pause: !play })}
       libraryEl={desktop ? libraryEl : null} inspectorEl={desktop ? inspectorEl : null} />
   );
   const panelCls = 'min-h-0 overflow-y-auto rounded-lg border border-port-border bg-port-card';
@@ -73,12 +100,13 @@ export default function EditorStage({ board }) {
     <div className="min-w-0">
       {desktop ? (
         // One screen: the top row takes what the docked timeline leaves.
-        <div className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-5rem)] min-h-[36rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
+        <div ref={setScreenEl} style={screenHeight ? { height: screenHeight } : undefined}
+          className="grid h-[calc(var(--mv-scroll-h,100dvh)-var(--mv-header-h,9rem)-5rem)] min-h-[32rem] grid-rows-[minmax(0,1fr)_auto] gap-3">
           <div className="grid min-h-0 grid-cols-[17rem_minmax(0,1fr)_20rem] gap-3">
             <section ref={setLibraryEl} aria-label="Effects library" className={panelCls} />
             {/* The player's controls sit under its picture; its width is held to what the row's height allows. */}
-            <div className="flex min-h-0 min-w-0 justify-center overflow-hidden [container-type:size]">
-              <div className="w-full min-w-[20rem] max-w-[calc((100cqh-8rem)*16/9)]">{board.previewDock}</div>
+            <div className="flex min-h-0 min-w-0 justify-center overflow-y-auto [container-type:size]">
+              <div className="w-full min-w-[20rem] max-w-[calc((100cqh-10rem)*16/9)]">{board.previewDock}</div>
             </div>
             <section ref={setInspectorEl} aria-label="Inspector" className={panelCls} />
           </div>
