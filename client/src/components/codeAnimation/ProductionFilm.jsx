@@ -66,7 +66,7 @@ export default function ProductionFilm() {
   return <div className="min-w-0 space-y-4">
     <Link to="/code-animation/production" className="text-port-accent">All Production projects</Link>
     <h2 className="text-lg font-semibold">{project.title}</h2>
-    <FilmDetails key={filmId} project={project} busy={busy}
+    <FilmDetails key={`details-${filmId}`} project={project} busy={busy}
       onSave={input => act(async () => { const saved = await api.patchFilm(filmId, input, { silent: true }); resource.updateData(saved); await blender.refresh(); return saved; })} onAudio={attach} />
     <div className="flex flex-wrap items-center gap-3">
       <button type="button" className={buttonCls} disabled={busy} onClick={() => pickTrack('attach')}>Attach library track and analyze</button>
@@ -85,7 +85,7 @@ export default function ProductionFilm() {
       {promotion.coverageProblems.length > 0 && <ul className="list-disc pl-5">{promotion.coverageProblems.map(problem => <li key={problem}>{problem}</li>)}</ul>}
     </div>}
     {project.promotedTo && promotion?.filmId !== filmId && <Link className="text-sm text-port-accent" to={`/music-video/${project.promotedTo}`}>Open latest Music Video copy</Link>}
-    <FilmLivePreview key={filmId} state={blender.state} durationSec={project.film.timeline.durationSec} audioUrl={audioUrl} mediaUrl={path => api.musicVideoBlenderMediaUrl(filmId, path)} />
+    <FilmLivePreview key={`preview-${filmId}`} state={blender.state} durationSec={project.film.timeline.durationSec} audioUrl={audioUrl} mediaUrl={path => api.musicVideoBlenderMediaUrl(filmId, path)} />
     <BlenderFilmPanel api={api} standalone tab={BLENDER_TAB_IDS.includes(tab) ? tab : 'shots'} onTabChange={onTabChange} shotId={shotId || ''}
       onShotChange={id => navigate(`${base}/shots/${id}`)} board={{ project: { ...project, audioAnalysis: project.film.analysis }, blender, audioUrl, openPreview }} />
     {blender.state?.finalStale && <p className="text-xs text-port-warning">The accepted output is behind the current film. Render current finals and assemble again to replace it.</p>}
