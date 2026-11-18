@@ -497,6 +497,30 @@ describe('a read whose variable segment can leave the directory the source names
     }
   });
 
+  it('restarts resolve() at the rightmost proven absolute anchor and keeps join() left-to-right', () => {
+    // Regression: environment-derived arguments to the left of a proven absolute anchor
+    // are ignored by Node's resolve(), so the known fixture after HERE/FIXTURES is still keyed.
+    const anchoredResolve = "readFileSync(resolve(process.env.FIXTURE_ROOT, FIXTURES, 'f0.json'));";
+    expect(keyedOn(anchoredResolve, 'server/lib/fixtures/f0.json')).toBe(true);
+    expect(keyedOn("readFileSync(resolve(join(HERE, process.argv[2]), FIXTURES, 'f0.json'));", 'server/lib/fixtures/f0.json')).toBe(true);
+
+    // An unresolved suffix or unfollowed anchor after/without a right-side proven anchor still fails closed.
+    expect(refusal("readFileSync(resolve(process.env.FIXTURE_ROOT, FIXTURES, process.env.SUB, 'f0.json'));")).toBe(leaves('server/lib/fixtures'));
+    expect(refusal("readFileSync(resolve(process.env.FIXTURE_ROOT, FIXTURES, process.env.HOME));")).toBe(leaves('server/lib/fixtures'));
+    expect(refusal("readFileSync(resolve(process.env.FIXTURE_ROOT, HERE.replace('a', 'b'), 'f0.json'));")).toBe(`${test}: reads a path the analyzer cannot follow through .replace()`);
+    // A later external absolute value still overrides the repo anchor and remains memoizable.
+    expect(floorOf("readFileSync(resolve(process.env.FIXTURE_ROOT, FIXTURES, '/tmp/fixture.json'));").memoizable).toBe(true);
+
+    // join() does not reset at a later absolute anchor.
+    const joined = [
+      "import { readFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      'const HERE = import.meta.dirname;',
+      "readFileSync(join(process.env.FIXTURE_ROOT, HERE, 'fixture.json'));",
+    ].join('\n');
+    expect(extractFileFacts(joined, { fileRel: test, cwdRel: 'server' }).paths).toEqual([]);
+  });
+
   it('keys the file a helper is called with, not the directory the helper names', () => {
     const helper = "const read = (p) => readFileSync(join(HERE, p), 'utf8');\nconst limits = read('../../client/src/limits.js');";
     expect(keyedOn(helper, 'client/src/limits.js')).toBe(true);

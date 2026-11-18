@@ -514,10 +514,19 @@ function dirnameValue(value) {
   return dirValue(posix.dirname(value.v));
 }
 
+const isProvenAbsolute = (arg) => (arg.k === 'path' && !arg.unfollowed) || (arg.k === 'str' && arg.v.startsWith('/'));
+
 /** `join(...args)`, or `resolve(...args)` when `joins` is false: only `join` keeps a trailing separator. */
 function foldJoin(args, joins = true) {
-  // `join()` reads a leading separator as a plain segment; `resolve()` restarts at the filesystem root.
-  const folded = foldSegments(joins ? args.map((arg, i) => (i > 0 && arg.k === 'str' ? str(arg.v.replace(/^\/+/, '')) : arg)) : args);
+  // `join()` reads a leading separator as a plain segment; `resolve()` restarts at the rightmost proven absolute anchor.
+  let segments = args;
+  if (joins) {
+    segments = args.map((arg, i) => (i > 0 && arg.k === 'str' ? str(arg.v.replace(/^\/+/, '')) : arg));
+  } else {
+    const anchor = args.findLastIndex(isProvenAbsolute);
+    if (anchor > 0) segments = args.slice(anchor);
+  }
+  const folded = foldSegments(segments);
   if (folded.k !== 'path' || folded.partial) return folded;
   const last = args.at(-1);
   const sep = joins && (args.length === 1 ? folded.sep === true : last.k === 'str' && last.v.endsWith('/'));
@@ -526,6 +535,8 @@ function foldJoin(args, joins = true) {
 
 function foldSegments(args) {
   if (args.length === 0) return UNKNOWN;
+  const unfollowed = args.find((arg) => arg.unfollowed);
+  if (unfollowed) return unfollowed;
   let acc = args[0];
   if (acc.k === 'str' && acc.v.startsWith('/')) acc = EXTERNAL;
   for (const arg of args.slice(1)) {
