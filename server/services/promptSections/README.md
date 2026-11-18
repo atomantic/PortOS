@@ -5,7 +5,7 @@ Leaf modules used by `agentPromptBuilder.js`. The builder remains the public fac
 | Module | Responsibility |
 | --- | --- |
 | `appContext.js` | JIRA ticket helpers; compatibility exports for read-only app lookup in `../agentAppWorkspace.js`. |
-| `claimEpic.js` | The GitHub/GitLab claim prompt's epic-decomposition phase, and its on-demand delivery: a file-tool host gets a pointer to a staged copy of the exact text, an API provider keeps it inline. |
+| `claimOnDemand.js` | Conditional GitHub and GitLab claim procedures. File-capable hosts receive pointers to staged copies. API providers receive the same text inline. |
 | `completion.js` | Worktree, completion-workflow, and sentinel sections. |
 | `constants.js` | Constants shared across full and light prompt paths. |
 | `forge.js` | Forge CLI selection for generated workflow text. |

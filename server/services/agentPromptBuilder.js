@@ -34,7 +34,7 @@ import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './promptSe
 import { detectSkillTemplates, getAgentInstructionsContext, loadSkillTemplates } from './promptSections/instructions.js';
 import { buildCompactionSection, buildTaskBlock, reconcileSplitContext } from './promptSections/taskContext.js';
 import { applySlashdoInvocation } from './promptSections/slashdo.js';
-import { deferClaimEpicSection } from './promptSections/claimEpic.js';
+import { deferClaimSections } from './promptSections/claimOnDemand.js';
 import { manualForgeCli, resolveManualForgeCli } from './promptSections/forge.js';
 import { buildOrchestrationDoctrineSection } from './promptSections/orchestrationDoctrine.js';
 import { buildIssueFilingSection } from './promptSections/plannerAttribution.js';
@@ -486,11 +486,9 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
     providerId, providerCommand, leanMode, hasFileTools,
     defaultReviewers, codeReviewDefaults,
   });
-  // Same split for a claim prompt's epic phase, which most claim runs never
-  // reach: a file-tools host reads it from the staged copy only when it lands on
-  // an epic (#16573). The staging store is the slashdo one: an install-root path
-  // every local CLI host can read, managed-app workspaces included.
-  if (hasFileTools) task = await deferClaimEpicSection(task, writeResolvedSlashdoBody);
+  // Stage the claim's conditional procedures at the install root, which local
+  // file-tool hosts can read even when working in a managed app's checkout.
+  if (hasFileTools) task = await deferClaimSections(task, writeResolvedSlashdoBody, PATHS.installRoot);
 
   const {
     isFollowUpNeedingRecipes, localAgentLoopBody,
