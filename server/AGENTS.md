@@ -34,7 +34,7 @@ Record writes reach peer sync only through the subscription adapter in `server/s
 
 ## Import scoping
 
-Every suite reaching a module instantiates its whole closure. `server/lib/importScoping.test.js` pins past narrowings (add a row when you narrow another); measure fan-out with `node scripts/lib/importReach.js <repo-relative source>`.
+Every suite reaching a module instantiates its whole closure. `server/lib/importScoping.test.js` holds the base-relative growth guard and the architectural boundary tests, with no per-edge rows to update when you narrow or move a module; measure fan-out with `node scripts/lib/importReach.js <repo-relative source>`.
 
 - **Don't drag a subtree in for one constant.** Import from the declaring module (`CHECK_SCOPES` from `server/lib/editorial/checkInfra/taxonomy.js`, not the `checkRegistry.js` barrel), and `await import()` a dependency only a boot/rare path needs (`ensureSchemaImpl()` composes DDL that way).
 - **A lazy `import()` cuts instantiation, not CI selection**: `vitest related` follows dynamic imports too (#12285). To cut selection, move the needed piece into a leaf both sides import (`services/readinessSignal.js`), or have the heavy service register a callback at boot (`initAutoFixer()` → `services/provider/providerRecoveryHooks.js`). Cut edges are pinned in `SELECTION_CUTS`; a suite that `vi.mock`ed the heavy module registers test doubles instead.
