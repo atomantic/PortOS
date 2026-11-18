@@ -28,6 +28,7 @@ import { z } from 'zod';
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
+import { LOCAL_VISION_BACKENDS } from '../../lib/localLlmCapabilityBackends.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { runPromptThroughProvider, assertVisionRunUsedImages } from '../promptRunner.js';
 import { buildEvaluateVisionPrompt, CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
@@ -50,11 +51,6 @@ const MAX_EVAL_FRAMES = 5;
 // runner does not send `max_tokens`, so a verbose model is capped by time, not
 // tokens (the structured-JSON prompt keeps a compliant model's reply short).
 const DEFAULT_VISION_EVAL_TIMEOUT_MS = 180000;
-
-// Local backends served by an aiToolkit `api`-type provider. Auto-resolution
-// only picks from these — the whole point is a LOCAL vision model. An explicit
-// assignment (below) may still point at any configured API vision provider.
-const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
 
 // Only `accepted` is load-bearing — everything else is advisory. Map an
 // explicit JSON `null` to `undefined` (absent) BEFORE validation, then
