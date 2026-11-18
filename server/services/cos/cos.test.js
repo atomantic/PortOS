@@ -1786,7 +1786,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(
       fnBody,
       'queue path must not dynamically import ../appActivity.js inside the per-app loop'
-    ).not.toMatch(/await\s+import\(['"]\.\/appActivity\.js['"]\)/);
+    ).not.toMatch(/await\s+import\(['"]\.\.\/appActivity\.js['"]\)/);
 
     // The cooldown check + lastImprovementType lookup both come from the
     // same `data/app-activity.json` file. Before snapshotting, each app
