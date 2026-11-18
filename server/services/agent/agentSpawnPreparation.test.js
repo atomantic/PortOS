@@ -20,7 +20,7 @@ import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
-import { newSpawnBudgetEpisode } from '../spawnBudgetProof.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 
 describe('prepareAgentSpawn — duplicate dispatch', () => {
   it('skips a task another run already owns and reports the skip on stdout, not stderr', async () => {
@@ -37,7 +37,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
 
   it('holds a queued swarm successor if its source changes before spawn', async () => {
     const task = { id: 'sys-swarm-refill-agent-source', taskType: 'internal', metadata: {
-      app: 'app', analysisType: 'claim-issue', cleanupRefillSource: 'agent-source', spawnBudgetProof: newSpawnBudgetEpisode(),
+      app: 'app', analysisType: 'claim-issue', cleanupRefillSource: 'agent-source',
     } };
     loadState.mockResolvedValue({ agents: {} });
     hasActiveTaskOwner.mockReturnValue(false);
@@ -51,33 +51,40 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
     expect(context.cleanupOnError).toHaveBeenCalledWith('cleanup delivery source unavailable');
   });
 
-  it('holds an unproven legacy pending task before claiming or starting a provider', async () => {
-    const task = { id: 'task-legacy', taskType: 'user', status: 'pending', metadata: { totalSpawnCount: '1' } };
+  // The spawn budget is the count alone: a task below the cap dispatches with no
+  // other evidence of its earlier runs.
+  it.each([
+    ['with prior spawns', { totalSpawnCount: String(MAX_TOTAL_SPAWNS - 1), lastSpawnedAt: '2026-01-01T00:00:00.000Z' }],
+    ['that has never been dispatched', {}],
+  ])('admits a pending task below the spawn cap %s', async (_label, metadata) => {
+    const task = { id: 'task-below-cap', taskType: 'user', status: 'pending', metadata };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
-    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
-    updateTask.mockClear();
-    expect(await prepareAgentSpawn(task, context)).toBeNull();
-    expect(context.cleanupOnError).toHaveBeenCalledWith('spawn budget reconciliation required');
-    expect(updateTask).not.toHaveBeenCalled();
-  });
-
-  it('allows a restart refund episode to retain its already-spent baseline', async () => {
-    const task = { id: 'task-refund', taskType: 'user', status: 'pending', metadata: {
-      totalSpawnCount: '2', lastSpawnedAt: '2026-01-01T00:00:00.000Z', spawnBudgetProof: newSpawnBudgetEpisode(2),
-    } };
-    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
-    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
-    
     updateTask.mockResolvedValue(task);
     const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    context.blockAndBail = vi.fn(async () => null);
     expect(await prepareAgentSpawn(task, context)).toBe(context);
     expect(context.claimAcquired).toBe(true);
     expect(context.cleanupOnError).not.toHaveBeenCalled();
+    expect(context.blockAndBail).not.toHaveBeenCalled();
+  });
+
+  it('blocks a task at the spawn cap before claiming it', async () => {
+    const task = { id: 'task-at-cap', taskType: 'user', status: 'pending', metadata: { totalSpawnCount: String(MAX_TOTAL_SPAWNS) } };
+    loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
+    ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
+    updateTask.mockClear();
+    const context = createAgentSpawnContext(task); context.cleanupOnError = vi.fn(async () => {});
+    context.blockAndBail = vi.fn(async () => null);
+    expect(await prepareAgentSpawn(task, context)).toBeNull();
+    expect(context.blockAndBail).toHaveBeenCalledWith({
+      reason: `Max total spawns exceeded (${MAX_TOTAL_SPAWNS}/${MAX_TOTAL_SPAWNS})`, category: 'max-spawns', emit: 'none' });
+    expect(context.claimAcquired).toBe(false);
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it('reports a claim write failure while leaving the task queued', async () => {
-    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
     
@@ -90,7 +97,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
   });
 
   it('reports a failed second task read before trying the claim', async () => {
-    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValueOnce(task).mockRejectedValueOnce(new Error('read failed'));
     
@@ -102,7 +109,7 @@ describe('prepareAgentSpawn — duplicate dispatch', () => {
   });
 
   it('cleans up even when a claim write rejects without an Error', async () => {
-    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: { spawnBudgetProof: newSpawnBudgetEpisode() } };
+    const task = { id: 'sys-release', taskType: 'internal', status: 'pending', metadata: {} };
     loadState.mockResolvedValue({ agents: {} }); hasActiveTaskOwner.mockReturnValue(false);
     ensureInstanceId.mockResolvedValue('local'); getTaskById.mockResolvedValue(task);
     

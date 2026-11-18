@@ -16,7 +16,6 @@ import { getAllTasks, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { isDeepStrictEqual } from 'node:util';
 import { readAgentsStateForSafetyCheck } from './cos/cosState.js';
 import { getSettingsWithStatus } from './settings.js';
-import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 const SHA = /^[a-f0-9]{40}$/;
 const CATEGORY = 'runtime-verification';
@@ -173,7 +172,7 @@ export async function sweepRuntimeVerifications() {
     for (const task of queue?.tasks || []) {
       const m = task.metadata || {};
       const p = m.runtimeVerification;
-      if (task.status !== 'blocked' || isTruthyMeta(m.spawnBudgetReconciledHold) || m.blockedCategory !== CATEGORY || p?.version !== 1 || p.status !== 'waiting'
+      if (task.status !== 'blocked' || m.blockedCategory !== CATEGORY || p?.version !== 1 || p.status !== 'waiting'
         || p.taskId !== task.id || m.runtimeVerificationId !== `${task.id}:${p.agentId}`
         || m.deliveryDecisionAgentId !== p.agentId || (m.app && m.app !== PORTOS_APP_ID)
         || (m.lastSpawnedAt || null) !== p.lastSpawnedAt

@@ -36,7 +36,7 @@ import { unlink, rm } from 'fs/promises';
 import { emitLog } from '../cos/cosEvents.js';
 import { updateAgent, getAgent, getAgentRecord, recordCompletionCleanup, retryCompletionCheckoutCapture } from '../cos/cosAgentLifecycle.js';
 import { updateTask, addTask, reviveBlockedTask, getTaskById } from '../cos/cosTaskStore.js';
-import { SPAWN_HISTORY_METADATA_KEYS } from '../spawnBudgetProof.js';
+import { SPAWN_HISTORY_METADATA_KEYS } from '../cos/cosSpawnBudget.js';
 import { CLAIM_METADATA_KEYS } from '../cos/cosTaskClaim.js';
 import { checkStagePrecondition } from '../cos/cosTaskGenerator.js';
 import { normalizeReviewers } from '../../lib/cos/cosValidation.js';
@@ -192,10 +192,9 @@ export async function handlePipelineProgression(task, agentId, success) {
   // prompt builders — an inherited one made every stage after the first run on the
   // stage before it's instructions.
   delete nextTask.metadata.prompt;
-  // Each stage is a new task with its own spawn budget. The prior stage's
-  // dispatch accounting and claim lease would make addTask withhold the fresh
-  // budget proof, so dispatch held every later stage, and the inherited live
-  // lease refused the explicit budget reset too.
+  // Each stage is a new task with its own spawn budget. Inheriting the prior
+  // stage's dispatch accounting would start it part-way to the spawn cap, and
+  // its live claim lease would refuse an explicit budget reset.
   for (const key of [...SPAWN_HISTORY_METADATA_KEYS, ...CLAIM_METADATA_KEYS, 'lastOrphanedAt', 'worktreeBusyAttempts']) delete nextTask.metadata[key];
   // The profile, unlike the pins applied below, is SET-OR-CLEARED (see the guard at the
   // top of the hand-off): each stage runs under exactly the contract it

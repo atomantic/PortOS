@@ -177,23 +177,21 @@ import { readRunnerCompletionReceipt } from './agentRunnerSync.js';
 import { handleAgentCompletion } from './agentLifecycle.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, pausedAgents, consumePausedAgentExit } from './agentState.js';
 
-// Build the server-owned task/agent evidence used by a real dispatch. Legacy
-// fixtures deliberately omit this helper when testing fail-closed recovery.
-function bindDispatchFixture(task, agentId, metadata = {}, startedAt = '2026-01-01T00:00:01.000Z') {
-  const epoch = '11111111-1111-4111-8111-111111111111';
+// Stamp the task as a real dispatch does and return agent metadata carrying the
+// receipt that dispatch binds. Legacy fixtures deliberately omit this helper
+// when testing fail-closed recovery.
+function bindDispatchFixture(task, metadata = {}) {
   const at = task.metadata?.lastSpawnedAt || '2026-01-01T00:00:00.000Z';
   const count = Number(task.metadata?.totalSpawnCount) || 1;
-  const dispatch = { agentId, startedAt, claimedBy: 'fixture-instance', claimedAt: at, lastSpawnedAt: at, totalSpawnCount: count };
-  task.metadata = { ...task.metadata, lastSpawnedAt: at, totalSpawnCount: count, spawnBudgetProof: { version: 1, epoch, baseline: count - 1, dispatch } };
-  const expected = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]);
-  return { ...metadata, completionTaskDispatch: { taskId: task.id, taskType: task.taskType || 'user', expected,
-    spawnBudgetEpoch: epoch, spawnBudgetStartedAt: startedAt } };
+  task.metadata = { ...task.metadata, lastSpawnedAt: at, totalSpawnCount: count };
+  return { ...metadata, completionTaskDispatch: { taskId: task.id, taskType: task.taskType || 'user',
+    expected: [['claimedBy', 'fixture-instance'], ['claimedAt', at], ['lastSpawnedAt', at], ['totalSpawnCount', count]] } };
 }
 
 async function handleProvenOrphan(taskId, agentId, getTask, options = {}) {
   const task = await getTask(taskId);
   const startedAt = options.agentStartedAt || '2026-01-01T00:00:01.000Z';
-  const agentMetadata = bindDispatchFixture(task, agentId, options.agentMetadata || {}, startedAt);
+  const agentMetadata = bindDispatchFixture(task, options.agentMetadata || {});
   return handleOrphanedTask(taskId, agentId, vi.fn().mockResolvedValue(task), {
     ...options, agentMetadata, agentStartedAt: startedAt,
   });
@@ -205,7 +203,7 @@ async function prepareProvenSweep() {
   const agent = agents.find(entry => entry.taskId === task?.id);
   if (!task || !agent) return;
   agent.startedAt ||= '2026-01-01T00:00:01.000Z';
-  agent.metadata = bindDispatchFixture(task, agent.id, agent.metadata, agent.startedAt);
+  agent.metadata = bindDispatchFixture(task, agent.metadata);
   getTaskById.mockResolvedValue(task);
   getAgents.mockResolvedValue(agents);
 }
@@ -889,9 +887,7 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
     const call = updateTask.mock.calls[0];
     expect(call[3]).toMatchObject({ expectedStatus: 'in_progress', expectedTask: { metadata: expect.any(Object) },
       recoveryOwner: { id: 'agent-dead', startedAt: '2026-01-01T00:00:01.000Z' } });
-    expect(call[1].metadata.spawnBudgetProof).toMatchObject({ version: 1, dispatch: { agentId: 'agent-dead' } });
-    const { spawnBudgetProof, lastSpawnedAt, ...outcome } = call[1].metadata;
-    expect(spawnBudgetProof.epoch).toBe('11111111-1111-4111-8111-111111111111');
+    const { lastSpawnedAt, ...outcome } = call[1].metadata;
     expect(lastSpawnedAt).toBe('2026-01-01T00:00:00.000Z');
     return [call[0], { ...call[1], metadata: outcome }, call[2]];
   };
@@ -913,13 +909,20 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
     expect(resolveTaskResumePatch).not.toHaveBeenCalled();
   });
 
-  it('holds an undercounted dispatch and retains the restart breadcrumb and checkout', async () => {
+  // Only the run that is still the task's latest dispatch may grant its retry.
+  // Every other orphan keeps its breadcrumb and checkout for an explicit decision.
+  it.each([
+    ['whose receipt charged more spawns than the task retained', (task, agentMetadata) => {
+      agentMetadata.completionTaskDispatch.expected = agentMetadata.completionTaskDispatch.expected
+        .map(([key, value]) => [key, key === 'totalSpawnCount' ? 2 : value]);
+    }],
+    ['superseded by a later dispatch', task => { task.metadata.lastSpawnedAt = 'later-spawn'; task.metadata.totalSpawnCount = 2; }],
+    ['dispatched before a budget reset', task => { delete task.metadata.totalSpawnCount; }],
+    ['whose receipt names another task', (task, agentMetadata) => { agentMetadata.completionTaskDispatch.taskId = 'task-other'; }],
+  ])('holds an orphan %s, retaining the restart breadcrumb and checkout', async (_label, drift) => {
     const task = taskWith({ claimedBy: 'fixture', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: '1' });
-    const agentMetadata = bindDispatchFixture(task, 'agent-dead', { interruptedBy: 'host-shutdown' }, iso(NOW - MIN));
-    task.metadata.spawnBudgetProof.dispatch.totalSpawnCount = 2;
-    task.metadata.spawnBudgetProof.baseline = 1;
-    agentMetadata.completionTaskDispatch.expected = agentMetadata.completionTaskDispatch.expected
-      .map(([key, value]) => [key, key === 'totalSpawnCount' ? 2 : value]);
+    const agentMetadata = bindDispatchFixture(task, { interruptedBy: 'host-shutdown' });
+    drift(task, agentMetadata);
     await handleOrphanedTask(task.id, 'agent-dead', vi.fn().mockResolvedValue(task),
       { agentMetadata, agentStartedAt: iso(NOW - MIN), interrupted: true });
     expect(updateTask).not.toHaveBeenCalled();
@@ -928,9 +931,9 @@ describe('handleOrphanedTask — persisted outcome shapes and guard precedence (
     expect(committedDuringRun).not.toHaveBeenCalled();
   });
 
-  it('holds an orphan with a missing dispatch receipt even when task proof remains', async () => {
+  it('holds an orphan with a missing dispatch receipt', async () => {
     const task = taskWith({ totalSpawnCount: 1 });
-    const agentMetadata = bindDispatchFixture(task, 'agent-dead');
+    const agentMetadata = bindDispatchFixture(task);
     delete agentMetadata.completionTaskDispatch;
     await handleOrphanedTask(task.id, 'agent-dead', vi.fn().mockResolvedValue(task),
       { agentMetadata, agentStartedAt: iso(NOW - MIN) });
@@ -2451,7 +2454,7 @@ describe('orphan retries resume what the dead run left behind', () => {
   // repo, including another agent's, and complete a task that did nothing (#3637).
   it('holds before the commit probe when the dead run has no start time', async () => {
     const task = { id: 'task-1', taskType: 'user', status: 'in_progress', metadata: {} };
-    const agentMetadata = bindDispatchFixture(task, 'agent-dead', { workspacePath: '/example-app' });
+    const agentMetadata = bindDispatchFixture(task, { workspacePath: '/example-app' });
     getTaskById.mockResolvedValue(task);
 
     await handleOrphanedTask('task-1', 'agent-dead', getTaskById, {

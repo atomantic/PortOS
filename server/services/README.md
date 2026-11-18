@@ -10,8 +10,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `nativeUsageHistory.js` | Readers for Claude, Codex, Grok and Antigravity session records into native stores, background refresh, and `withNativeUsage` overlay of the ledger for the Usage report and peer digest. |
 | `nativeUsageEvents.js` | Emitter for `usage:native-history-updated` after a refresh changes a store. |
 | `codexUsageSources.js` | Explicit bounded, read-only streamed Codex raw/Zstandard/archive inspection; accounting-only projection, logical-session deduplication, source-integrity coverage and unknown ledger overlap. |
-| `spawnBudgetProof.js` | Server-owned retry-episode and latest-dispatch proof validation, including counter round trips. |
-| `spawnBudgetReconciliation.js` | Ownership-fenced monotone correction of a stopped task from its exact latest dispatch receipt; correction remains held. |
+| `cos/cosSpawnBudget.js` | The spawn budget's vocabulary: the per-run dispatch accounting keys and the count parser. The budget itself is one counter, `totalSpawnCount`, which `cos/cosTaskStore.js` keeps monotonic; only an explicit reset lowers it. |
 | `explicitSpawnBudgetReset.js` | Resolves a unique stopped orphan and its retained checkout before an explicit reset-and-run action. |
 | `catalog/catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
 | `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |

@@ -887,6 +887,21 @@ describe('recovery output-hook dispatch (#3182)', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  // A completion that outlived its dispatch must not overwrite the run that
+  // replaced it. The store admits this write only while the task is still
+  // in_progress under the spawn stamp this run was bound to, with no other owner.
+  it('fences its own completion write to the dispatch it was bound to', async () => {
+    const dispatched = { claimedBy: 'fixture-local', claimedAt: '2026-09-10T00:00:00Z', lastSpawnedAt: '2026-09-10T00:00:01Z', totalSpawnCount: 2 };
+    const task = { ...TASK, status: 'in_progress', metadata: { ...TASK.metadata, ...dispatched } };
+    persistedAgent.taskId = task.id;
+    persistedAgent.metadata.completionTaskDispatch = { taskId: task.id, taskType: task.taskType, expected: Object.entries(dispatched) };
+    await finalizeAgent({ agentId: persistedAgent.id, task, success: true, exitCode: 0, duration: 1000, outputBuffer: '' });
+    expect(updateTask).toHaveBeenLastCalledWith(task.id, expect.objectContaining({ status: 'completed' }), task.taskType, {
+      expectedStatus: 'in_progress', expectedMetadata: { lastSpawnedAt: dispatched.lastSpawnedAt },
+      recoveryOwner: { id: persistedAgent.id, startedAt: persistedAgent.startedAt },
+    });
+  });
+
   it.each(['normal', 'restart'].flatMap(mode => ['not-planned', 'operator-closed'].map(disposition => [mode, disposition])))
   ('settles a selected claim no-op during %s completion from a verified %s disposition', async (mode, disposition) => {
     isProgrammaticIoTaskType.mockReturnValue(false);

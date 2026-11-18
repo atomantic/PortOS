@@ -63,8 +63,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   mediaLibrary: 1,
   // CoS history archive manifest envelope (receiver-pull; ahead senders are skipped).
   cosHistory: 1,
-  // CoS task queues and claim metadata (receiver-pull, claim-aware merge); v12 = typed top-level metadata, nulls and multi-line descriptions (#16407).
-  cosTasks: 12,
+  // CoS task queues and claim metadata (receiver-pull, claim-aware merge); v13 = one spawn counter and no spawn-budget proof metadata; a v12 peer would hold every such task (#16807).
+  cosTasks: 13,
   // Eidoverse foundation offering envelope and withdrawal tombstones (receiver-pull); v3 = `tombstones`.
   eidoverseFoundations: 3,
   // Meatspace daily-log snapshot; v2 = identity-keyed blood, epigenetic and eye rows with `rowTombstones`.

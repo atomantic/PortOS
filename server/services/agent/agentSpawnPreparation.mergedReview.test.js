@@ -5,10 +5,10 @@ import { isDeepStrictEqual } from 'node:util';
 import { setImmediate as flushImmediate } from 'node:timers/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ loadState: vi.fn(), safety: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
+const m = vi.hoisted(() => ({ loadState: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
   app: vi.fn(), origin: vi.fn(), probe: vi.fn(), emit: vi.fn(), releaseMarker: vi.fn() }));
 vi.mock('../cos/cosEvents.js', () => ({ cosEvents: { emit: m.emit }, emitLog: vi.fn() }));
-vi.mock('../cos/cosState.js', () => ({ loadState: m.loadState, readAgentsStateForSafetyCheck: m.safety }));
+vi.mock('../cos/cosState.js', () => ({ loadState: m.loadState }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner: m.owner }));
 vi.mock('../cos/cosTaskStore.js', () => ({ getTaskById: m.read, updateTask: m.update }));
 vi.mock('../apps.js', () => ({ getAppById: m.app }));
@@ -19,13 +19,11 @@ vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: async () => 'local-
 vi.mock('../appActivity.js', () => ({ releaseAppReviewMarker: m.releaseMarker }));
 vi.mock('../cleanupOnlyCompletion.js', () => ({ isCleanupOnlyRecovery: () => false, settleCleanupBeforeSpawn: vi.fn() }));
 
-const epoch = '11111111-1111-4111-8111-111111111111';
-const dispatch = { agentId: 'agent-original', startedAt: 'start', claimedBy: 'local-instance', claimedAt: 'claim', lastSpawnedAt: 'spawn', totalSpawnCount: 2 };
 const queued = () => ({ id: 'sys-rl-example', taskType: 'internal', status: 'pending', priority: 'MEDIUM',
   description: 'Resolve the assigned PR', metadata: {
     app: 'local-app', reviewLoopFollowUp: 'true', reviewLoopPRBranch: 'fix/example',
     reviewLoopPRUrl: 'https://github.com/example/project/pull/42', prCompletion: 'review-then-merge',
-    totalSpawnCount: '2', retryCount: '1', sourceTaskId: 'watchdog-example', spawnBudgetProof: { version: 1, epoch, baseline: 1, dispatch },
+    totalSpawnCount: '2', retryCount: '1', sourceTaskId: 'watchdog-example',
   } });
 let directory; let file; let beforeWrite;
 const readSaved = () => JSON.parse(readFileSync(file, 'utf8'));
@@ -45,9 +43,6 @@ beforeEach(() => {
     const next = { ...current, ...patch, metadata: { ...current.metadata, ...patch.metadata } }; save(next); return next;
   });
   m.loadState.mockResolvedValue({ agents: {} }); m.owner.mockReturnValue(false); m.releaseMarker.mockResolvedValue();
-  m.safety.mockResolvedValue({ trusted: true, agents: { 'agent-original': { id: 'agent-original', taskId: 'sys-rl-example', status: 'completed', startedAt: 'start',
-    metadata: { completionTaskDispatch: { taskId: 'sys-rl-example', taskType: 'internal', spawnBudgetEpoch: epoch,
-      spawnBudgetStartedAt: 'start', expected: ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'].map(key => [key, dispatch[key]]) } } } } });
   m.app.mockResolvedValue({ id: 'local-app', repoPath: '/synthetic/local-project' });
   m.origin.mockResolvedValue({ host: 'github.com', fullName: 'example/project' });
   m.probe.mockResolvedValue({ readable: true, prState: 'MERGED' });
@@ -55,25 +50,6 @@ beforeEach(() => {
 afterEach(() => rmSync(directory, { recursive: true, force: true }));
 
 describe('saved review follow-up at the pre-provider spawn boundary', () => {
-  it('settles a verified merged target without dispatch even when its spawn episode is unverified', async () => {
-    const task = readSaved();
-    delete task.metadata.spawnBudgetProof;
-    save(task);
-    expect(await prepare(task)).toBeNull();
-    expect(readSaved()).toMatchObject({ status: 'completed', metadata: { totalSpawnCount: '2', retryCount: '1',
-      mergedReviewFollowUp: { status: 'verified', prUrl: task.metadata.reviewLoopPRUrl } } });
-    await flushImmediate();
-  });
-
-  it('holds an unverified episode when its review target is still open', async () => {
-    const task = readSaved();
-    delete task.metadata.spawnBudgetProof;
-    save(task);
-    m.probe.mockResolvedValue({ readable: true, prState: 'OPEN' });
-    expect(await prepare(task)).toBeNull();
-    expect(readSaved().status).toBe('pending');
-  });
-
   it('settles the exact merged target before agent/workspace allocation and survives restart replay', async () => {
     const cleanupStarted = Promise.withResolvers();
     const cleanupFinished = Promise.withResolvers();
