@@ -57,6 +57,38 @@ async function beginConnection() {
 }
 
 describe('Moltworld WebSocket connection lifecycle', () => {
+  it('discards non-object JSON and continues dispatching valid frames', async () => {
+    const { result, socket } = await beginConnection();
+    socket.open();
+    await result;
+    socket.acknowledgeHello();
+
+    const onEvent = vi.fn();
+    const onPresence = vi.fn();
+    moltworldWsEvents.on('event', onEvent);
+    moltworldWsEvents.on('presence', onPresence);
+    try {
+      const status = getStatus();
+      await vi.advanceTimersByTimeAsync(1);
+      for (const value of [null, [], 'presence', 42, true]) {
+        socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) }));
+      }
+      expect(getStatus()).toEqual(status);
+      expect(socket.readyState).toBe(MockWebSocket.OPEN);
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(onPresence).not.toHaveBeenCalled();
+
+      const presence = { type: 'presence', agents: [] };
+      socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(presence) }));
+      expect(onEvent).toHaveBeenCalledExactlyOnceWith(presence);
+      expect(onPresence).toHaveBeenCalledExactlyOnceWith(presence);
+      expect(getStatus().lastEvent).toBe(Date.now());
+    } finally {
+      moltworldWsEvents.off('event', onEvent);
+      moltworldWsEvents.off('presence', onPresence);
+    }
+  });
+
   it('recovers after an established socket errors and ignores its later close', async () => {
     const { result, socket } = await beginConnection();
     socket.open();
