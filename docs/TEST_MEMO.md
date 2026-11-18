@@ -146,7 +146,8 @@ A variable segment is now one of three things:
   array nothing in the file can add to (no method that adds an element or
   returns the array itself, no element or `length` assigned, updated or
   deleted, in parentheses or not, no iteration callback that takes the array,
-  not handed to unknown code, declared once). An array literal with an empty
+  not handed to unknown code (`expect(NAMES)` only with a comparing matcher such
+  as `toEqual` or `toHaveLength`), declared once). An array literal with an empty
   slot (`['a', , 'b']`) is not resolved: the slot is `undefined` to the loop.
   The path is evaluated once per
   value (up to 64 combinations) and each file is an ordinary input. No
@@ -195,7 +196,9 @@ The analysis reads tokens, not scopes, so it resolves a name only where no
 other reading is possible: a text constant that another scope declares, binds
 as a parameter or assigns again is unknown, and so is a helper or an array
 whose name turns up inside a string (`eval`, or code the tokenizer took for
-text).
+text). The language and the test API are taken as they are defined: a
+file that replaces `Array.prototype.forEach` or mocks `vitest` itself is past
+what its source can prove, for a variable segment as for a literal path.
 
 The rule belongs to the test file and to `scripts/`, like the git and
 oversized-tree rules. A library module builds such a path from what its caller
