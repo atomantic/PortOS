@@ -130,7 +130,8 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
     });
 
     it('setup and CI enforce the recorded security floor without changing the compatibility job', () => {
-      expect(read('package.json')).toContain('node scripts/checkNodeVersion.js --security');
+      // `npm run setup` is `node scripts/setup.js`, whose first step runs the check.
+      expect(read('scripts/setup.js')).toContain("script('checkNodeVersion.js', '--security')");
       expect(read('setup.sh')).toContain('node scripts/checkNodeVersion.js --security');
       expect(read('setup.ps1')).toContain('node scripts/checkNodeVersion.js --security');
       const workflow = read('.github/workflows/ci.yml');
@@ -157,7 +158,7 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
       expect(read(rel)).not.toMatch(/^\s*engine-strict\s*=\s*true/m);
     });
 
-    it.each(['setup', 'start', 'dev'])(
+    it.each(['start', 'dev'])(
       'the root `%s` script runs the version check first',
       (name) => {
         expect(readJson('package.json').scripts[name]).toMatch(
@@ -165,5 +166,14 @@ describe('Node version contract has exactly one owner (issue #3863)', () => {
         );
       }
     );
+
+    // setup is one Node pipeline (scripts/setup.js), so the check is its first
+    // step rather than a shell `&&` prefix; the order is pinned in setup.test.js.
+    it('the root `setup` script is scripts/setup.js, whose first step is the version check', () => {
+      expect(readJson('package.json').scripts.setup).toBe('node scripts/setup.js');
+      expect(read('scripts/setup.js')).toMatch(
+        /id: 'versions',[\s\S]*?run: all\(script\('checkNodeVersion\.js', '--security'\)/
+      );
+    });
   });
 });

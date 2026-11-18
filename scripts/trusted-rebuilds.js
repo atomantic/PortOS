@@ -8,7 +8,7 @@
  * An allowlist, so adding a dependency never silently grants it an install-time
  * code-execution slot.
  *
- * Consumed by scripts/ensure-deps.js, `setup`, setup.ps1, update.sh/ps1 and CI
+ * Consumed by scripts/ensure-deps.js (whose installWorkspace scripts/setup.js reuses), update.sh/ps1 and CI
  * (`node scripts/trusted-rebuilds.js server`); a second copy of the list drifts.
  */
 import { execFileSync } from 'child_process';
