@@ -800,6 +800,7 @@ describe('a read whose variable segment can leave the directory the source names
       `${text}const read = (FILE) => readFileSync(resolve(FILE));\nread(FILE);`,
       `${text}for (const FILE of items) readFileSync(FILE);`,
       "const STEM = 'lib/fixtures/f0';\nitems.forEach((STEM) => STEM);\nreadFileSync(`${STEM}.json`);",
+      "const STEM = 'lib/fixtures/f0';\nconst read = (STEM) => readFileSync(`${STEM}.json`);\nread(STEM);",
     ]) {
       expect(keyedOn(body, 'server/lib/fixtures/f0.json'), body).toBe(true);
     }
