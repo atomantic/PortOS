@@ -373,9 +373,9 @@ directory carries a `.portos-worktree-links` marker so cleanup removes only what
 it created.
 
 **Existing worktrees** keep whatever they were given (provisioning never replaces
-an existing path). To repair one, delete the `node_modules` symlink in the
+an existing path). To repair, delete the `node_modules` symlink in the
 worktree and rerun `node scripts/link-worktree-deps.js <primary> <worktree>`.
-Still never run `npm install` in a worktree.
+Pregate relinks bare ones. Never `npm install` there.
 
 ### Tasks Not Being Picked Up
 
