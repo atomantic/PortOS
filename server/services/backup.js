@@ -2327,7 +2327,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'database_restore_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_catalog_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -2472,7 +2472,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     releaseSnapshotCut = await acquireBackupSnapshotCut();
   } catch (err) {
     if (err.code !== 'BACKUP_SNAPSHOT_BUSY') throw err;
-    console.warn(`⚠️ restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    console.log(`🚫 restore: refused for snapshot ${snapshotId}: ${err.message}`);
     return {
       status: 'failed',
       reason: 'backup_snapshot_busy',
@@ -2481,6 +2481,10 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   try {
     return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath });
+  } catch (err) {
+    if (err.code !== 'DATABASE_RESTORE_BUSY') throw err;
+    console.log(`🚫 restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    return { status: 'failed', reason: 'database_restore_busy', error: err.message };
   } finally {
     releaseSnapshotCut();
   }

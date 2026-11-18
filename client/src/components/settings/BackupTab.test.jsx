@@ -407,6 +407,21 @@ describe('BackupTab', () => {
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
 
+    it('shows the retry guidance after a confirmed restore times out draining database work', async () => {
+      withSnapshot();
+      const error = 'Timed out waiting for active database work. Wait for active queries and transactions to finish, then retry.';
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'database_restore_busy', error });
+      await renderTab();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i })); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/i })); });
+
+      expect(toast.error).toHaveBeenCalledWith(`The database restore was refused before changing any data. Details: ${error}`);
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(restoreDatabase).toHaveBeenCalledTimes(2);
+    });
+
     it.each(['preview', 'confirmation'])('keeps a lost %s response uncertain and preserves the request explanation', async (phase) => {
       withSnapshot();
       if (phase === 'confirmation') {
