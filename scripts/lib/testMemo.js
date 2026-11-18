@@ -280,6 +280,10 @@ const normalizeRel = (value) => {
 };
 const pathValue = (v, extra = {}) => ({ k: 'path', v: normalizeRel(v), partial: false, isDir: false, ...extra });
 const dirValue = (v) => pathValue(v, { isDir: true });
+const unfollowedReason = (value) => `reads a path the analyzer cannot follow through ${value.unfollowed}`;
+const openReadReason = (rel, via) => via == null
+  ? `reads a path with a variable segment that can leave ${rel || '<repo root>'}`
+  : `reads a path through ${via}() that the analyzer cannot resolve (under ${rel || '<repo root>'})`;
 
 /**
  * A path with a variable part (`partial`) names only its literal prefix `v`.
@@ -309,6 +313,7 @@ function bothContainments(a, b) {
   return { open: true, vars, via: a.via ?? b.via, trust: [] };
 }
 const partialPath = (base, v, containment) => ({ ...base, v: normalizeRel(v), partial: true, sep: false, ...containmentOf(containment) });
+const unfollowedPath = (value, member) => value.unfollowed ? value : { ...partialPath(value, value.v, UNBOUNDED), unfollowed: member };
 /**
  * A partial path under the literal directories of unknown text: `lit/${x}`
  * joined to `base` is under `base/lit`. `outer` keeps `base`, the prefix
@@ -381,6 +386,7 @@ function joinPartial(base, segment, glued = false) {
 }
 
 function joinPath(base, segment) {
+  if (base.unfollowed || segment.unfollowed) return base.unfollowed ? base : segment;
   if (base.partial) return joinPartial(base, segment);
   if (segment.k === 'str') {
     if (segment.v.startsWith('/')) return EXTERNAL;
@@ -428,6 +434,7 @@ function concatValue(left, right) {
     return searchPath(left.entries, concatValue(left.tail, right));
   }
   if (right.k === 'delimiter') return left.k === 'path' ? searchPath([left]) : UNKNOWN;
+  if (left.unfollowed || right.unfollowed) return left.unfollowed ? left : right;
   if (left.k === 'str' && right.k === 'str') return str(left.v + right.v);
   if (left.k === 'str' && left.v === '') return right;
   if (left.k === 'path') {
@@ -463,6 +470,8 @@ function fileUrlPath(baseDir, spec) {
 }
 
 function urlValue(args) {
+  const unfollowed = args.find((arg) => arg.unfollowed);
+  if (unfollowed) return unfollowed;
   if (args.length === 0) return UNKNOWN;
   if (args.length === 1) {
     const only = args[0];
@@ -676,6 +685,8 @@ const isGuardModule = (fileRel, spec) => spec.startsWith('.') && PATH_WITHIN_MOD
 function guardedJoin(args) {
   const [dir, ...segments] = args;
   if (dir?.k !== 'path') return UNKNOWN;
+  const unfollowed = segments.find((segment) => segment.unfollowed);
+  if (unfollowed) return unfollowed;
   if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
   // `maybeSelf`: with an empty segment the result is the directory itself, so text glued onto it names a sibling.
   if (!segments.every((segment) => segment.k === 'str')) return { ...partialPath({ ...dir, isDir: true }, dir.v, { open: false, trust: ['guard'] }), maybeSelf: true };
@@ -725,14 +736,40 @@ const closeOf = (match, open) => (match[open] ?? open) + 1;
  */
 const wholeValue = ({ value, end }, close) => (end !== close && (isVariableText(value) || value.k === 'str') ? UNKNOWN : value);
 
+/** The repository's normalization spellings preserve canonical paths. */
+function pathMemberIdentity(value, tokens, match, name, open, call) {
+  if (!call) return name === 'href' || name === 'pathname';
+  const close = match[open];
+  if (name === 'toString') return close === open + 1;
+  if (name === 'normalize') return close === open + 1 && (value.partial || value.v.normalize() === value.v);
+  // A literal backslash can spell a separator on Windows or be part of a filename on POSIX.
+  if (!value.partial && value.v.includes('\\')) return false;
+  const first = tokens[open + 1];
+  const second = tokens[open + 3];
+  if (close !== open + 4 || tokens[open + 2].v !== ',' || second.t !== 's' || second.v !== '/') return false;
+  return (name === 'replaceAll' && first.t === 's' && first.v === '\\')
+    || (name === 'replace' && first.t === 're' && first.v === '/\\\\/g');
+}
+
 function evaluatePostfix(tokens, match, start, ctx, depth) {
   let { value, end } = evaluatePrimary(tokens, match, start, ctx, depth);
   for (;;) {
     const token = tokens[end];
-    if (!token || token.t !== 'p' || !(token.v === '.' || token.v === '?.') || tokens[end + 1]?.t !== 'id') break;
+    const memberOpen = isPunct(token, '?.') ? end + 1 : end;
+    if (value.k === 'path' && isPunct(tokens[memberOpen], '[')) {
+      value = unfollowedPath(value, '[]');
+      end = closeOf(match, memberOpen);
+      continue;
+    }
+    if (!isPunct(token, '.', '?.') || tokens[end + 1]?.t !== 'id') break;
     const name = tokens[end + 1].v;
     const open = end + 2;
     const call = tokens[open]?.t === 'p' && tokens[open].v === '(';
+    if (value.k === 'path') {
+      if (!pathMemberIdentity(value, tokens, match, name, open, call)) value = unfollowedPath(value, `.${name}${call ? '()' : ''}`);
+      end = call ? closeOf(match, open) : open;
+      continue;
+    }
     if (name === 'href' || name === 'pathname') { end += 2; continue; }
     if (name === 'toString' && call) { end = closeOf(match, open); continue; }
     if (call && value.k === 'unknown' && (PATH_JOIN.has(name) || PATH_DIRNAME.has(name) || PATH_IDENTITY.has(name))) {
@@ -743,8 +780,7 @@ function evaluatePostfix(tokens, match, start, ctx, depth) {
       continue;
     }
     if (call && value.k === 'unknown' && (name === 'tmpdir' || name === 'homedir')) { value = name === 'homedir' ? HOME : EXTERNAL; end = closeOf(match, open); continue; }
-    // Any other member access or method call on a path leaves the subset.
-    return { value: value.k === 'path' ? UNKNOWN : value, end };
+    return { value, end };
   }
   return { value, end };
 }
@@ -787,7 +823,7 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
       let end = start + 3;
       const name = dot(end) && tokens[end + 1]?.t === 'id' ? tokens[end + 1].v : null;
       if (name !== null) end += 2;
-      return { value: name === 'HOME' || name === 'USERPROFILE' ? HOME : EXTERNAL, end };
+      return { value: name === 'HOME' || name === 'USERPROFILE' ? HOME : variableValue(UNBOUNDED), end };
     }
     return { value: UNKNOWN, end: start + 1 };
   }
@@ -1653,6 +1689,8 @@ function widestPathExpression(tokens, match, index, guarded = false) {
     }
     const parent = enclosingOpen(tokens, match, start);
     if (parent === null || tokens[parent].v !== '(') break;
+    // A group does not consume the path. Look for the call or option around it.
+    if (groupsAt(tokens, parent) && parent + 1 === start) { start = parent; continue; }
     const callee = calleeStart(tokens, parent);
     const name = calleeName(tokens, parent);
     const isNew = tokens[callee]?.t === 'id' && tokens[callee].v === 'new';
@@ -1665,7 +1703,7 @@ function widestPathExpression(tokens, match, index, guarded = false) {
   const before = tokens[start - 1];
   if (before?.t === 'p' && before.v === '=') return null;
   const parent = enclosingOpen(tokens, match, start);
-  if (before?.t === 'p' && before.v === ':' && tokens[start - 2]?.t === 'id' && ['cwd', 'root', 'dir', 'base'].includes(tokens[start - 2].v)) {
+  if (before?.t === 'p' && before.v === ':' && ['id', 's'].includes(tokens[start - 2]?.t) && ['cwd', 'root', 'dir', 'base'].includes(tokens[start - 2].v)) {
     return { index: start, consumer: null, walk: false, bare: start === index, option: tokens[start - 2].v, member: true };
   }
   let consumer = null;
@@ -1681,7 +1719,15 @@ function widestPathExpression(tokens, match, index, guarded = false) {
   const punct = (token, ...values) => token?.t === 'p' && values.includes(token.v);
   const keyed = punct(before, ':') && (tokens[start - 2]?.t === 'id' || tokens[start - 2]?.t === 's') && punct(tokens[start - 3], '{', ',');
   const shorthand = start === index && punct(before, '{', ',');
-  return { index: start, consumer, walk, bare: start === index, option: null, member: parent !== null && tokens[parent].v === '{' && (keyed || shorthand) };
+  const member = parent !== null && tokens[parent].v === '{' && (keyed || shorthand);
+  let recipient = consumer;
+  // Unsupported path values can be passed inside an options object or array.
+  if (recipient === null && parent !== null && (member || tokens[parent].v === '[')) {
+    let outer = enclosingOpen(tokens, match, parent);
+    while (outer !== null && punct(tokens[outer], '{', '[')) outer = enclosingOpen(tokens, match, outer);
+    if (outer !== null && punct(tokens[outer], '(')) recipient = calleeName(tokens, outer);
+  }
+  return { index: start, consumer, walk, bare: start === index, option: null, member, recipient };
 }
 
 // ---------------------------------------------------------------------------
@@ -1704,7 +1750,8 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
     cwdLiterals: [], // { value, walk, dir } — resolved against cwd, then repo root, then the file
     unresolvedEdges: [], // the module graph is not fully known from source
     unresolvedInputs: [], // a filesystem input is not fully known from source
-    handedDirs: [], // complete directories given to code the analyzer does not model (a Vite root, a static server)
+    handedProblems: new Set(), // rooting options that a real-browser key cannot follow
+    handedDirs: [], // directories given to code the analyzer does not model (a Vite root, a static server)
     nativeUnresolved: false, // a non-literal require(): a native load no recording shows
     localReads: [], // machine-local state a member reads (home directory); the test or tooling fails closed on it
     tools: new Set(), // external programs reached (TEST_MEMO_TOOLS)
@@ -1803,7 +1850,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
   /** Only a value that is keyed depends on the modules it came through (`valueTrusts`): note them for `gather`. */
   const trusted = () => { for (const spec of valueTrusts) facts.trusts.add(spec); };
 
-  const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false } = {}) => {
+  const record = (value, { walk = false, consumer = null, bare = false, option = null, member = false, recipient = consumer } = {}) => {
     // A search-path entry is where a program the string is handed to is found and run: a directory
     // handed to a spawn (its whole tree is an input), whatever the string is then given to.
     if (value.k === 'search') {
@@ -1811,8 +1858,10 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
       return true;
     }
     if (option !== null) {
-      // The value of a rooting option is not read here; a directory is still what the tool works from.
-      if (value.k === 'path' && !value.partial && option !== 'cwd') { trusted(); facts.handedDirs.push(value.v); }
+      if (value.k !== 'path' || option === 'cwd') return true;
+      if (value.unfollowed) facts.handedProblems.add(unfollowedReason(value));
+      else if (value.partial && value.open) facts.handedProblems.add(openReadReason(value.v, value.via));
+      else { trusted(); trusts(value); facts.handedDirs.push(value.v); }
       return true;
     }
     if (value.k === 'home') {
@@ -1826,6 +1875,14 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
       return true;
     }
     if (value.k !== 'path') return value.k !== 'unknown';
+    if (value.unfollowed) {
+      // An unsupported operation may produce ordinary text. Refuse only when a
+      // sink or an unmodelled call could read through the result.
+      if (recipient !== null && (!NON_READ_CALLEES.has(recipient) || SPAWN_CALLEES.has(recipient) || READ_CALLEES.has(recipient))) {
+        facts.unresolvedInputs.push(unfollowedReason(value));
+      }
+      return true;
+    }
     if (consumer !== null && NON_READ_CALLEES.has(consumer)) return true;
     trusted();
     // A glob pattern is no file: it reads every match under the directory in front of its first wildcard.
@@ -1910,6 +1967,7 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null, export
       for (const value of valuesAt(arg.index)) {
         if (value.k === 'path' || value.k === 'str') trusted();
         if (value.k === 'path') {
+          if (value.unfollowed) { facts.unresolvedInputs.push(unfollowedReason(value)); continue; }
           // A complete path: a file, a directory, or a name the loader completes (`./mod` is `./mod.js`).
           if (!value.partial) { facts.paths.push({ rel: value.v, walk: true }); continue; }
           facts.dirs.push({ rel: value.v, walk: true });
@@ -2258,6 +2316,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       dataModules: new Set(), // side modules only read as data (as text, or listed by a directory read); never spawned, required or run as a worker
       edgeTargets: new Set(), // every file a literal relative import, require or mock-import names, JS or not
       dataTrees: [], // directories past the limit that are keyed from the repository listing (`dataTree`)
+      handedProblems: new Set(),
       handedDirs: [], // existing directories this file gives to a tool; inputs of a real-browser test (`gather`)
       nativeUnresolved: false,
       inputs: new Set(), absent: new Set(), packages: new Map(), tools: new Set(),
@@ -2287,6 +2346,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     resolved.never = raw.never;
     resolved.git = raw.git;
     resolved.nativeUnresolved = raw.nativeUnresolved;
+    resolved.handedProblems = raw.handedProblems;
     resolved.handedDirs = [...new Set(raw.handedDirs)].filter((dirRel) => !dirRel.startsWith('..') && fs.kind(dirRel) === 'dir');
     resolved.unresolvedEdges.push(...raw.unresolvedEdges);
     resolved.unresolvedInputs.push(...raw.unresolvedInputs);
@@ -2337,7 +2397,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const addDir = (dirRel, walk, guessed = false, open = false, via = null) => {
       // Wherever the prefix is, the read may land outside it, which refuses every test that
       // reaches this file (`gather`). The prefix tree is still added below for related selection.
-      if (open) resolved.openReads.add(via === null ? `reads a path with a variable segment that can leave ${dirRel || '<repo root>'}` : `reads a path through ${via}() that the analyzer cannot resolve (under ${dirRel || '<repo root>'})`);
+      if (open) resolved.openReads.add(openReadReason(dirRel, via));
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
       if (underGit(dirRel)) { resolved.unresolvedInputs.push('reads repository state under .git'); return; }
@@ -2569,6 +2629,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     // other test keeps the older reading (a directory passed along is a value).
     if (testRel !== null && members.has(testRel) && reachesChrome(roots, walk)) {
       const own = factsFor(testRel);
+      for (const problem of own.handedProblems) unresolvedInputs.push(`${testRel}: ${problem}`);
       for (const dir of own.handedDirs) {
         const problem = addHandedDir(dir, own, { inputs, absent, dataPackages, trees });
         if (problem) unresolvedInputs.push(`${testRel}: ${problem}`);

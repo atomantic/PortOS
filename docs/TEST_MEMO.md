@@ -112,7 +112,10 @@ A directory a test reads as a whole is an input as a whole.
   read as the client workspace's install directory. Before #16545 such a
   directory was "a value", so a suite that wrote `root: clientDir` and loaded
   its component from a fixture string was skipped after the component
-  changed. A Node test that passes a directory along keeps the older reading.
+  changed. A variable `root:`, `dir:` or `base:` is keyed by its resolved
+  directory or by its proven containing tree. An unbounded rooting option
+  refuses the browser test. A Node test that passes a directory along keeps
+  the older reading.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is
@@ -187,6 +190,8 @@ A variable segment is now one of three things:
   its closure reads the path: `reads a path through read() that the analyzer
   cannot resolve (under <dir>)` when the variable is a helper's parameter,
   `reads a path with a variable segment that can leave <dir>` otherwise.
+  An environment value such as `process.env.FIXTURE` used as a segment under a
+  repository anchor is unbounded because it can contain a relative path.
 
 Code that reads a file it cannot name in its own source (a name from a table
 in another module, a value parsed out of a file) stays memoizable by joining
@@ -223,6 +228,16 @@ constant, or prove containment with `pathWithin()`. The analyzer handles
 call with a literal argument keys the named file. A non-literal argument or
 passing the reader as a callback fails closed. A variable `import()` whose
 module path is unbounded is an unresolved edge for the floor key.
+
+On a path the analyzer has already anchored, `.replaceAll('\\', '/')`,
+`.replace(/\\/g, '/')`, `.normalize()` and `.toString()` preserve its
+identity for the key when the literal spelling stays canonical. A slash
+replacement on a complete path containing a literal backslash or a Unicode
+normalization that changes the literal spelling can name a different file.
+A read, spawn or unmodelled function call that takes the result of one of
+these changes or another member operation fails closed with
+`reads a path the analyzer cannot follow through .<name>()`. An assertion
+or string-only consumer can still use that result.
 
 ## Never memoized (fails closed)
 

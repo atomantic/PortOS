@@ -303,6 +303,18 @@ describe('floor key', () => {
       expect(floorOf(shorthand, { ...SERVED, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).not.toBe(floorOf(shorthand).key);
     });
 
+    it.each(['root', 'dir', '"base"'])('keys a bounded variable %s and rejects an unbounded one only for browsers', (option) => {
+      const optionPath = (path) => `createServer({ ${option}: ${path} });`;
+      const open = optionPath('(join(client, pick()))');
+      expect(floorOf(open)).toMatchObject({ memoizable: false, reason: `${test}: reads a path with a variable segment that can leave client` });
+      expect(keyOf({ ...SERVED, [test]: nodeTest(open) }, test).floor.memoizable).toBe(true);
+      const contained = "import { pathWithin } from '../../scripts/lib/pathWithin.js';\n" + optionPath('pathWithin(client, pick())');
+      const tree = { ...SERVED, 'scripts/lib/pathWithin.js': 'export const pathWithin = (dir, name) => join(dir, name);\n' };
+      const baseline = floorOf(contained, tree);
+      expect(baseline.memoizable).toBe(true);
+      expect(floorOf(contained, { ...tree, 'client/src/Panel.jsx': 'export const Panel = 2;\n' }).key).not.toBe(baseline.key);
+    });
+
     it('keys an install directory by its manifest and lockfile', () => {
       for (const body of ["await symlink(join(client, 'node_modules'), link, 'dir');", 'const bundler = resolveClientBundler(repo);']) {
         const tree = { ...SERVED, 'client/node_modules/vite/package.json': '{"name":"vite","version":"8.0.0"}' };
@@ -439,6 +451,51 @@ describe('a read whose variable segment can leave the directory the source names
   const refusal = (body) => floorOf(body).reason;
   const leaves = (dir) => `${test}: reads a path with a variable segment that can leave ${dir}`;
   const through = (helper, dir) => `${test}: reads a path through ${helper}() that the analyzer cannot resolve (under ${dir})`;
+
+  it('keeps slash normalization and refuses another member operation only when its result can be read', () => {
+    const path = "join(FIXTURES, 'f0.json')";
+    const rel = 'server/lib/fixtures/f0.json';
+    for (const suffix of [String.raw`.replaceAll('\\', '/')`, String.raw`.replace(/\\/g, '/')`, '.normalize()', '.toString()']) {
+      expect(keyedOn(`readFileSync(${path}${suffix});`, rel), suffix).toBe(true);
+    }
+    const changed = `${path}.replace('.json', '.txt')`;
+    const reason = 'reads a path the analyzer cannot follow through .replace()';
+    for (const body of [`readFileSync(${changed});`, `execFileSync('bash', [${changed}]);`,
+      `const target = ${changed}; load(normalize(target));`, `load(join(HERE, ${changed}));`,
+      `load((${changed}));`, `load({ options: [${changed}] });`]) {
+      expect(refusal(body), body).toBe(`${test}: ${reason}`);
+    }
+    for (const suffix of ['[key]', '?.[key]']) {
+      expect(refusal(`readFileSync(${path}${suffix});`)).toBe(`${test}: reads a path the analyzer cannot follow through []`);
+    }
+    expect(floorOf(`expect({ paths: [${changed}] }).toContain('.txt');`).memoizable).toBe(true);
+    const script = 'scripts/load-fixture.js';
+    const scriptBody = `export const load = () => readFileSync(join(import.meta.dirname, 'f0.json').replace('.json', '.txt'));`;
+    expect(floorOf("import '../../scripts/load-fixture.js';", { [script]: scriptBody }).reason).toBe(`${script}: ${reason}`);
+  });
+
+  it('refuses normalization that changes the spelling of a complete literal path', () => {
+    const slashPath = String.raw`join(FIXTURES, 'sub\\f0.json')`;
+    const decomposedPath = String.raw`join(FIXTURES, 'cafe\u0301.json')`;
+    const normalizations = [
+      [slashPath, String.raw`.replaceAll('\\', '/')`, '.replaceAll()'],
+      [slashPath, String.raw`.replace(/\\/g, '/')`, '.replace()'],
+      [decomposedPath, '.normalize()', '.normalize()'],
+    ];
+    for (const [path, operation, method] of normalizations) {
+      expect(refusal(`readFileSync(${path}${operation});`)).toBe(`${test}: reads a path the analyzer cannot follow through ${method}`);
+    }
+  });
+
+  it('refuses an environment-derived segment under an anchor but keeps genuinely external paths', () => {
+    for (const expr of ['process.env.FIXTURE', 'process.env[envKey]', 'process.env.HOME']) {
+      expect(refusal(`readFileSync(join(FIXTURES, ${expr}));`), expr).toBe(leaves('server/lib/fixtures'));
+    }
+    expect(refusal("const segment = process.env.FIXTURE; readFileSync(resolve(FIXTURES, segment));")).toBe(leaves('server/lib/fixtures'));
+    for (const expr of ['tmpdir()', 'mkdtempSync(tmpdir())', "'/tmp/fixture.json'"]) {
+      expect(floorOf(`readFileSync(resolve(FIXTURES, ${expr}));`).memoizable, expr).toBe(true);
+    }
+  });
 
   it('keys the file a helper is called with, not the directory the helper names', () => {
     const helper = "const read = (p) => readFileSync(join(HERE, p), 'utf8');\nconst limits = read('../../client/src/limits.js');";
