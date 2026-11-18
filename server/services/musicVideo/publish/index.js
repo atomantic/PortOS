@@ -64,36 +64,41 @@ async function detachDraft(draft) {
   await browser?.close().catch(() => {});
 }
 
-/** Whether the draft's tab is still open, reconnecting (never launching) when the session was dropped. */
+/** Find the draft's tab. Only a fresh connection belongs to the lookup caller. */
 async function findDraftPage(draft, deps = {}, replacement) {
-  if (draft.page) return draft.page.isClosed() ? null : draft.page;
-  let session = replacement;
-  if (!session) {
-    try { session = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return null; }
-    draft.reconnect = session;
+  if (draft.page) return { page: draft.page.isClosed() ? null : draft.page };
+  let reconnect;
+  if (!replacement) {
+    try { reconnect = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return { page: null }; }
   }
   // The old tab may be gone and the new one may share its composer URL.
-  return session.context.pages().find((candidate) => candidate !== replacement?.page && candidate.url() === draft.url) || null;
+  try {
+    const page = (replacement || reconnect).context.pages()
+      .find((candidate) => candidate !== replacement?.page && candidate.url() === draft.url) || null;
+    return { page, reconnect };
+  } catch (err) {
+    await reconnect?.browser.close().catch(() => {});
+    throw err;
+  }
 }
 
 /** Re-check a detached draft's tab; mark it closed (and tell the UI) when it is gone. */
 async function refreshDraft(draft, deps) {
   if (draft.state === 'closed') return;
-  const page = await findDraftPage(draft, deps);
-  const session = draft.reconnect;
-  draft.reconnect = null;
-  await session?.browser.close().catch(() => {});
+  const { page, reconnect } = await findDraftPage(draft, deps);
+  await reconnect?.browser.close().catch(() => {});
   if (!page) { draft.state = 'closed'; emitDraft(draft); }
 }
 
 async function closeDraft(draft, deps, replacement) {
   drafts.delete(draft.id);
   clearTimeout(draft.timer);
-  const page = await findDraftPage(draft, deps, replacement);
-  await page?.close().catch(() => {});
-  const session = draft.reconnect || { browser: draft.browser };
-  draft.reconnect = null;
-  await session.browser?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  const { page, reconnect } = await findDraftPage(draft, deps, replacement);
+  try {
+    await page?.close().catch(() => {});
+  } finally {
+    await (reconnect?.browser || draft.browser)?.close().catch(() => {}); // disconnects; the PortOS Browser keeps running
+  }
   emitDraft(draft, 'discarded');
 }
 
