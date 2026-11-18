@@ -48,6 +48,7 @@ const DB_RESTORE_FAILURE_MESSAGES = {
   dump_unreadable: 'The snapshot database dump could not be read or staged for restore. Nothing was changed; check the backup media and free temp space, then retry.',
   dump_incomplete: 'The snapshot database dump is incomplete (truncated or damaged). Nothing was changed; choose another snapshot.',
   restore_preflight: 'Database restore was refused because the database contains unexpected objects, ownership, or dependencies. Nothing was changed. Check the server logs and resolve the reported database conflict before trying again.',
+  restore_preflight_unavailable: 'Database restore preflight check could not be completed because the database query failed. Nothing was changed. Restore database connectivity and retry preview before restoring.',
   restore_journal: 'The restore recovery journal could not be written. Nothing was changed. Check the server logs and available disk space before trying again.',
   backup_snapshot_busy: 'A backup is capturing the database, or an asset publication did not finish in time. Nothing was changed. Retry once the backup completes; if it keeps happening, the details that follow name the blocking publication and docs/BACKUP_PUBLICATION_ADMISSION.md explains recovery.',
   database_restore_busy: 'The database restore was refused before changing any data.',

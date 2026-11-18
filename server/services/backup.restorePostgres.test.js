@@ -157,9 +157,33 @@ describe('restorePostgres', () => {
   it('refuses unexpected schema objects before entering maintenance or spawning replay', async () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
     mockLegacyDumpRead();
-    query.mockRejectedValueOnce(new Error('unexpected object'));
+    query.mockRejectedValueOnce(Object.assign(
+      new Error('Restore preflight: unexpected application-schema relation or owner: rogue_table (owner postgres)'),
+      { code: 'P0001' },
+    ));
     expect(await restorePostgres('/dest', 'snap-1', { dryRun: false }))
-      .toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+      .toMatchObject({
+        status: 'failed',
+        reason: 'restore_preflight',
+        error: expect.stringContaining('unexpected application-schema relation or owner: rogue_table (owner postgres)'),
+      });
+    expect(withDatabaseMaintenance).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('reports restore_preflight_unavailable on preflight connection failure (dryRun=%s) before maintenance or replay', async (dryRun) => {
+    vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096, isFile: () => true });
+    mockLegacyDumpRead();
+    query.mockRejectedValueOnce(Object.assign(
+      new Error('terminating connection due to administrator command'),
+      { code: '57P01' },
+    ));
+    expect(await restorePostgres('/dest', 'snap-1', { dryRun }))
+      .toMatchObject({
+        status: 'failed',
+        reason: 'restore_preflight_unavailable',
+        error: expect.stringContaining('Restore database connectivity and retry preview before restoring. No data was changed.'),
+      });
     expect(withDatabaseMaintenance).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });

@@ -2327,7 +2327,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'database_restore_busy'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_preflight_unavailable'|'restore_journal'|'backup_snapshot_busy'|'database_restore_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_catalog_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -2458,9 +2458,24 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);
   if (preflightError) {
-    console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
-    const detail = String(preflightError.message || '').replace(/^Restore preflight:\s*/, '');
-    return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
+    const message = String(preflightError.message || '');
+    // Only explicit PL/pgSQL refusals from backupDatabaseReset.js indicate
+    // unexpected schema objects or ownership; connection/query errors (e.g.
+    // 57P01) must report preflight unavailability instead of a schema conflict.
+    const isExplicitPreflightRefusal = /^Restore preflight:\s*/.test(message)
+      && (!preflightError.code || preflightError.code === 'P0001');
+    if (isExplicitPreflightRefusal) {
+      console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
+      const detail = message.replace(/^Restore preflight:\s*/, '');
+      return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
+    }
+    console.error(`❌ restore: preflight unavailable for snapshot ${snapshotId}: ${preflightError.message}`);
+    const detail = message.trim();
+    return {
+      status: 'failed',
+      reason: 'restore_preflight_unavailable',
+      error: `Could not complete the restore preflight check${detail ? ` (${detail})` : ''}. Restore database connectivity and retry preview before restoring. No data was changed.`,
+    };
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
