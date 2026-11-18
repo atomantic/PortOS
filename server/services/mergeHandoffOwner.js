@@ -22,7 +22,7 @@ const TERMINAL_TASK_STATUSES = ['completed', 'failed', 'cancelled'];
 
 // The persisted task this live agent runs, or null once it is absent or final.
 async function liveTask(agent) {
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const task = await getTaskById(agent.taskId).catch(() => null);
   return task?.id === agent.taskId && !TERMINAL_TASK_STATUSES.includes(task.status) ? task : null;
 }
@@ -104,7 +104,7 @@ async function verifiedReconcileCoordinator(agent, repository, agents) {
   const proof = reconcileMergeTarget(agent, task, agent.metadata.reconcileMergeReservation);
   if (!proof || repositoryKey(proof.assignment.origin) !== repository
     || !await checkoutOnBranch(proof.target.workspacePath, proof.target.branch, repository)) return false;
-  const { checkReconcileOwnership } = await import('./cosClaimOwnership.js');
+  const { checkReconcileOwnership } = await import('./cos/cosClaimOwnership.js');
   const admission = await checkReconcileOwnership({ agentId: agent.id, appId: proof.assignment.appId,
     branch: proof.target.branch, worktreePath: proof.target.workspacePath }, {
     reserve: false, getAgents: async () => Object.values(agents),
@@ -125,7 +125,7 @@ async function verifiedReconcileCoordinator(agent, repository, agents) {
  * the coordinator merges same-repository heads only.
  */
 export async function resolveMergeHandoffOwner(agentId) {
-  const { readMergeAdmissionStateForSafetyCheck } = await import('./cosState.js');
+  const { readMergeAdmissionStateForSafetyCheck } = await import('./cos/cosState.js');
   const snapshot = await readMergeAdmissionStateForSafetyCheck().catch(() => null);
   if (!snapshot?.trusted || !isPlainObject(snapshot.agents)) return { refused: 'ownership-unreadable' };
   const agent = snapshot.agents[agentId];

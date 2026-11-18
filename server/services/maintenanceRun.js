@@ -59,7 +59,7 @@ import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
 import { pluralize } from '../lib/textUtils.js';
 import { isQueuedContinuation } from '../lib/agent/agentOutcome.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { getOnDemandHandoffs } from './onDemandHandoff.js';
 import { getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { ACTIVE_TASK_STATUSES, probeSequenceDrain, sequenceStepShapeReason } from './quotaBurnSequence.js';
@@ -257,7 +257,7 @@ export function setMaintenanceRunArchived(id, { appId, archived }) {
     if (!run || run.appId !== appId) return null;
     if (run.status === MAINTENANCE_RUN_STATUS.RUNNING) throw new ServerError('Stop the run before archiving its history', { status: 409, code: 'MAINTENANCE_RUN_ACTIVE' });
     if (archived) {
-      const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
+      const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cos/cosTaskStore.js'), import('./taskSchedule.js')]);
       // Match dispatch's queue -> handoff -> task read order across preparation.
       const queued = (await getOnDemandRequests()).some(request => request?.burn?.maintenanceRunId === id);
       const preparing = Object.values(await getOnDemandHandoffs()).some(claim => claim.request.burn?.maintenanceRunId === id && claim.status === 'preparing');
@@ -350,7 +350,7 @@ async function holdRun(id, run, reason, patch = null) {
 }
 
 async function holdForOutstandingWork(id, run, ignoreTaskId) {
-  const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cosTaskStore.js'), import('./taskSchedule.js')]);
+  const [{ getAllTasks }, { getOnDemandRequests }] = await Promise.all([import('./cos/cosTaskStore.js'), import('./taskSchedule.js')]);
   // Observe queue -> handoff -> task in causal order: preparation may advance
   // between reads, but cannot disappear between two snapshots.
   const queued = (await getOnDemandRequests()).find((request) => request?.burn?.maintenanceRunId === id);
@@ -360,7 +360,7 @@ async function holdForOutstandingWork(id, run, ignoreTaskId) {
     && !(task.status === 'blocked' && run.deepCheckpointTaskIds?.includes(task.id))
     && quotaBurnProvenance(task.metadata).maintenanceRunId === id && ACTIVE_TASK_STATUSES.has(task.status));
   if (ownTask) {
-    const { loadState } = await import('./cosState.js');
+    const { loadState } = await import('./cos/cosState.js');
     const state = await loadState();
     const agent = Object.values(state.agents || {}).find(entry => entry.taskId === ownTask.id && entry.status === 'running');
     return holdRun(id, run, `waiting for ${ownTask.status.replace('_', ' ')} task ${ownTask.id}`, {

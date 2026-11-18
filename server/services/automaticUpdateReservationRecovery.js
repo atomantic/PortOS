@@ -16,7 +16,7 @@ export async function checkActivity(update, operations) {
     if (outcome.status !== 'ok') throw new Error('Database restore recovery is still active or incomplete.');
   }
   const [{ getSystemActivity }, { getActiveAgentsFromRunner }, { getAgentRecord }, { getMediaRecoveryActivity, listJobs }, { isSoleDeferredUpdateAppOperation }, { assertNoScopedLegacyProcesses, getProcessWorkingDirectories }] = await Promise.all([
-    import('./activeProcessing.js'), import('./cosRunnerClient.js'), import('./cosAgentLifecycle.js'), import('./mediaJobQueue/index.js'), import('./appOperations.js'),
+    import('./activeProcessing.js'), import('./cos/cosRunnerClient.js'), import('./cos/cosAgentLifecycle.js'), import('./mediaJobQueue/index.js'), import('./appOperations.js'),
     import('./maintenanceScopedProcesses.js'),
   ]);
   const runnerOps = operations.filter(op => op.kind === 'runner');
@@ -24,7 +24,7 @@ export async function checkActivity(update, operations) {
   const [activity, processes, owners, agents] = await Promise.all([
     getSystemActivity(), snapshotMaintenanceProcesses(), Promise.all(runnerOps.map(op => getAgentRecord(op.resource))),
     Promise.all(agentOps.map(async op => op.resource.startsWith('agent-') ? getAgentRecord(op.resource)
-      : (await import('./cosTaskStore.js')).getTaskById(op.resource))),
+      : (await import('./cos/cosTaskStore.js')).getTaskById(op.resource))),
   ]);
   const runner = await getActiveAgentsFromRunner().catch(async error => {
     // Direct mode is supported when no local runner process is present. An
@@ -59,7 +59,7 @@ export async function checkActivity(update, operations) {
   }
   if (!media.trusted || media.pending)
     throw Object.assign(new Error('Media recovery is active or its inventory is unavailable.'), { code: 'MAINTENANCE_STALE' });
-  const taskFor = async record => record?.taskId ? (await import('./cosTaskStore.js')).getTaskById(record.taskId) : null;
+  const taskFor = async record => record?.taskId ? (await import('./cos/cosTaskStore.js')).getTaskById(record.taskId) : null;
   const [ownerTasks, agentTasks] = await Promise.all([
     Promise.all(owners.map(taskFor)), Promise.all(agents.map(taskFor)),
   ]);

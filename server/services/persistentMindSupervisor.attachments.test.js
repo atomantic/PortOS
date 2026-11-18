@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { basename, join } from 'node:path';
 import { PERSISTENT_MIND_LIMITS, createDefaultPersistentMindState } from '../lib/persistentMind.js';
-import { saveState } from './cosState.js';
+import { saveState } from './cos/cosState.js';
 
 const mocks = vi.hoisted(() => ({
   root: null,
@@ -23,7 +23,7 @@ const mocks = vi.hoisted(() => ({
   imageCapability: { status: 'supported', reason: 'Supported.' },
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(async () => mocks.root),
   saveState: vi.fn(async (state) => { mocks.root = state; }),
   withStateLock: vi.fn(async (fn) => fn()),
@@ -59,7 +59,7 @@ vi.mock('fs/promises', async (importOriginal) => ({
   writeFile: mocks.writeFile,
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn((...args) => mocks.emitted.push(args)) },
   emitLog: vi.fn(),
 }));
@@ -77,7 +77,7 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: vi.fn(async () => {}),
 }));
 
-vi.mock('./cosLocalEndpointSlots.js', () => ({
+vi.mock('./cos/cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mocks.acquireSlot(...args),
 }));
 

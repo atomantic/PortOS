@@ -1,8 +1,8 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { persistentMindImageWorkGuard } from '../lib/persistentMind.js';
 import { getActiveAgentIds, spawningTasks } from './agent/agentState.js';
-import { readPersistentMindStateForSafetyCheck } from './cosState.js';
-import { filterLiveAgentIds } from './cosAgentLifecycle.js';
+import { readPersistentMindStateForSafetyCheck } from './cos/cosState.js';
+import { filterLiveAgentIds } from './cos/cosAgentLifecycle.js';
 import * as updateChecker from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
 import { manualUpdateBlockers, summarizeSystemActivity } from '../lib/systemIdle.js';

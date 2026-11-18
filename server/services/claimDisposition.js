@@ -35,7 +35,7 @@ async function selectedIssues(task, agent, context) {
   if (number) return [number];
   if (task.metadata?.claimTarget || !agent.metadata?.claimSelection
     || agent.metadata?.claimReleasedBranches?.length) return null;
-  const { claimSelectionIssues } = await import('./cosClaimSelection.js');
+  const { claimSelectionIssues } = await import('./cos/cosClaimSelection.js');
   return claimSelectionIssues(agent, task, { ...context, instanceId: await getInstanceId() });
 }
 

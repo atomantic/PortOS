@@ -27,7 +27,7 @@
 
 import { execGit } from '../lib/execGit.js';
 import { toEpochMs } from '../lib/gitCommitProbe.js';
-import { getAgentsWithArchive } from './cosAgentHistory.js';
+import { getAgentsWithArchive } from './cos/cosAgentHistory.js';
 
 // Finished runs leave `getAgents()` when live retention expires. Retries normally
 // follow within minutes, so a longer gap falls back to the ordinary review rather

@@ -12,7 +12,7 @@ import {
 } from './apiContractSchemas.js';
 import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
-import { cosToolCallSchema } from './cosToolContracts.js';
+import { cosToolCallSchema } from './cos/cosToolContracts.js';
 import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import {
   settingsSlicePatchSchema, gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,

@@ -45,7 +45,7 @@ import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey 
 import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep, heldForDeepCheckpoint } from './quotaBurnSequence.js';
 import { burnPlanOwnsAgent } from '../lib/quotaBurnOrigin.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';

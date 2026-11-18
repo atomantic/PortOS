@@ -8,13 +8,13 @@ vi.mock('./notifications.js', () => ({
 }));
 vi.mock('./brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}) }));
 
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), getTaskById: vi.fn(), updateTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn(), getTaskById: vi.fn(), updateTask: vi.fn() }));
 vi.mock('./github.js', () => ({ execGh: vi.fn().mockImplementation(async (args) => args[0] === 'api' ? 'maintainer' : 'false') }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: {} }) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn().mockResolvedValue({ repoPath: '/repos/example' }) }));
 
-import { getTaskById, updateTask } from './cosTaskStore.js';
+import { getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { execGh } from './github.js';
 import { handBackBlockedPrRemediation } from './blockedPrRemediation.js';
 import { addNotification } from './notifications.js';

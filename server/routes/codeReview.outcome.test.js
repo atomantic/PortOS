@@ -11,12 +11,12 @@ vi.mock('../services/settings.js', () => ({
 }))
 
 const cos = vi.hoisted(() => ({ state: null, emitted: [] }))
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   withStateLock: async work => work(),
   loadState: async () => cos.state,
   saveState: async state => { cos.state = structuredClone(state) },
 }))
-vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: (event, payload) => cos.emitted.push([event, payload]) } }))
+vi.mock('../services/cos/cosEvents.js', () => ({ cosEvents: { emit: (event, payload) => cos.emitted.push([event, payload]) } }))
 
 const { default: routes } = await import('./codeReview.js')
 const { pickCodeReviewDefaults } = await import('../services/codeReview.js')

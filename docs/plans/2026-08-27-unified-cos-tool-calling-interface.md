@@ -619,7 +619,7 @@ The adapter boundary must map service errors to these codes using the existing `
 
 ### 6.1 Registry structure
 
-Add a server-side registry, for example `server/services/cosToolRegistry.js`, with one definition per tool and an adapter implementation per operation:
+Add a server-side registry, for example `server/services/cos/cosToolRegistry.js`, with one definition per tool and an adapter implementation per operation:
 
 ```js
 {

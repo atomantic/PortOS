@@ -13,7 +13,7 @@ vi.mock('./providerStatus.js', async (importOriginal) => ({
   initProviderStatus: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('./cosRunnerClient.js', async (importOriginal) => ({
+vi.mock('./cos/cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   isRunnerAvailable: vi.fn().mockResolvedValue(false),
   isRunnerReachable: vi.fn().mockResolvedValue(false),
@@ -31,12 +31,12 @@ vi.mock('./updateChecker.js', async (importOriginal) => ({
   isUpdateInProgress: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock('./cosForgeSpawnGate.js', async (importOriginal) => ({
+vi.mock('./cos/cosForgeSpawnGate.js', async (importOriginal) => ({
   ...(await importOriginal()),
   forgeSpawnHoldReason: vi.fn().mockResolvedValue(null),
 }));
 
-vi.mock('./cosState.js', async (importOriginal) => {
+vi.mock('./cos/cosState.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -57,9 +57,9 @@ vi.mock('./agent/agentOrchestrator.js', async (importOriginal) => {
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { isTruthyMeta, isFalsyMeta } from './agent/agentState.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { initSpawner } from './subAgentSpawner.js';
-import { applyAppWorktreeDefault } from './cosTaskGenerator.js';
+import { applyAppWorktreeDefault } from './cos/cosTaskGenerator.js';
 
 /**
  * Pure decision helpers from the sub-agent spawn path.

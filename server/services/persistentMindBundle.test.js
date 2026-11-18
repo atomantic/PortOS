@@ -9,7 +9,7 @@ const choosePersistentMindName = vi.fn();
 const createPersistentMindMemory = vi.fn();
 const updateConfig = vi.fn();
 
-vi.mock('./cosState.js', () => ({ loadState: (...args) => loadState(...args) }));
+vi.mock('./cos/cosState.js', () => ({ loadState: (...args) => loadState(...args) }));
 vi.mock('./persistentMindContext.js', () => ({
   choosePersistentMindName: (...args) => choosePersistentMindName(...args),
   createPersistentMindMemory: (...args) => createPersistentMindMemory(...args),
@@ -18,7 +18,7 @@ vi.mock('./persistentMindContext.js', () => ({
 }));
 // `applyPersistentMindBundle` reaches `updateConfig` through a lazy
 // `await import()` (import scoping); vitest's mock registry covers that too.
-vi.mock('./cos.js', () => ({ updateConfig: (...args) => updateConfig(...args) }));
+vi.mock('./cos/cos.js', () => ({ updateConfig: (...args) => updateConfig(...args) }));
 
 const {
   applyPersistentMindBundle,

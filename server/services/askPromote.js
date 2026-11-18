@@ -16,7 +16,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import * as convs from './askConversations.js';
 import * as brainService from './brain.js';
-import { addTask } from './cosTaskStore.js';
+import { addTask } from './cos/cosTaskStore.js';
 import * as identityService from './identity.js';
 import { userLocalToday } from './userTimezone.js';
 

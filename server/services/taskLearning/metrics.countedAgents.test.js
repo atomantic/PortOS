@@ -12,7 +12,7 @@ vi.mock('./store.js', async (importActual) => {
     saveLearningData: vi.fn(async (d) => { mem.data = structuredClone(d); }),
   };
 });
-vi.mock('../cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => mem.agents) }));
+vi.mock('../cos/cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => mem.agents) }));
 vi.mock('../layeredIntelligenceOutcomes.js', () => ({ recordProposalExecution: vi.fn(async () => {}) }));
 
 import { recordTaskCompletion } from './metrics.js';

@@ -27,7 +27,7 @@ vi.mock('fs', async (importOriginal) => ({
   existsSync: existsSyncMock
 }));
 
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: getAgentsMock
 }));
 

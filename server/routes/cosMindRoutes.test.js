@@ -42,7 +42,7 @@ vi.mock('../services/agent/agentRunEventLog.js', () => ({
   readPersistentMindEvents: mocks.readPersistentMindEvents,
   readPersistentMindHistory: mocks.readPersistentMindHistory,
 }));
-vi.mock('../services/cosState.js', () => ({ loadState: mocks.loadState }));
+vi.mock('../services/cos/cosState.js', () => ({ loadState: mocks.loadState }));
 vi.mock('../services/persistentMindContext.js', () => ({
   appendPersistentMindAnnotation: mocks.appendPersistentMindAnnotation,
   createPersistentMindMemory: mocks.createPersistentMindMemory,

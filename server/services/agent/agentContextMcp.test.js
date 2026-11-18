@@ -26,7 +26,7 @@ vi.mock('../../lib/navManifest.js', () => ({
     ? { path: '/', matched: 'home', command: { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['home'] } }
     : null,
 }));
-vi.mock('../cosToolRegistry.js', () => ({
+vi.mock('../cos/cosToolRegistry.js', () => ({
   executeCosToolCall: mocks.executeCosToolCall,
   getCosToolCatalog: mocks.getCosToolCatalog,
   readCosToolRecipeCatalog: mocks.readCosToolRecipeCatalog,

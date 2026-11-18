@@ -9,7 +9,7 @@ import {
   __resetCosAdmissionReservations,
   acquireCosActionReservation,
   acquireCosGlobalSlot,
-} from './cosAdmissionReservations.js';
+} from './cos/cosAdmissionReservations.js';
 
 const mock = vi.hoisted(() => ({
   root: null,
@@ -41,14 +41,14 @@ const mock = vi.hoisted(() => ({
   providerAvailable: true,
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(async () => mock.root),
   saveState: vi.fn(async (state) => { mock.root = state; }),
   withStateLock: vi.fn(async (fn) => fn()),
   isDaemonRunning: vi.fn(() => mock.daemonRunning),
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn((...args) => mock.emitted.push(args)) },
   emitLog: vi.fn(),
 }));
@@ -70,7 +70,7 @@ vi.mock('./domainUsage.js', () => ({
   recordDomainUsage: (...args) => mock.recordUsage(...args),
 }));
 
-vi.mock('./cosLocalEndpointSlots.js', () => ({
+vi.mock('./cos/cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mock.acquireSlot(...args),
   localEndpointOfProvider: (...args) => mock.localEndpointOfProvider(...args),
   providerBaseUrl: (provider) => provider?.endpoint || null,
@@ -1144,7 +1144,7 @@ describe('persistent mind supervisor', () => {
         effort: null,
       },
     };
-    const originalWithStateLock = (await import('./cosState.js')).withStateLock;
+    const originalWithStateLock = (await import('./cos/cosState.js')).withStateLock;
     let replaced = false;
     originalWithStateLock.mockImplementationOnce(async (fn) => {
       mock.root.persistentMind.activeTurn = {

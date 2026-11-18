@@ -23,12 +23,12 @@ import { scheduleExecutionFieldsSchema } from '../lib/scheduleExecutionFieldsVal
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { TASK_READINESS_REASON } from '../lib/taskReadinessReasons.js';
-import { cosEvents, emitLog } from './cosEvents.js';
+import { cosEvents, emitLog } from './cos/cosEvents.js';
 import { formatSkipCauses } from '../lib/perpetualSkipCauses.js';
 import { safeDate } from '../lib/fileUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAppById, isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState, clearAllIssueWatcherState } from './apps.js';
-import { loadState, isImprovementEnabled } from './cosState.js';
+import { loadState, isImprovementEnabled } from './cos/cosState.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { parseCronToNextRun } from './eventScheduler.js';

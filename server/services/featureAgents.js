@@ -11,7 +11,7 @@ import { readFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite, rmGuarded } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject } from '../lib/objects.js';
@@ -288,8 +288,8 @@ export async function triggerFeatureAgent(id) {
   }
 
   const task = generateTaskFromFeatureAgent(agent);
-  const { addTask } = await import('./cosTaskStore.js');
-  const { forceSpawnTask } = await import('./cos.js');
+  const { addTask } = await import('./cos/cosTaskStore.js');
+  const { forceSpawnTask } = await import('./cos/cos.js');
   const persisted = await addTask(task, 'internal', { raw: true, suppressDequeue: true });
   if (!persisted?.id) {
     return { triggered: false, reason: 'Feature agent run was not queued', agent };

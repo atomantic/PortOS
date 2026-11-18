@@ -6,7 +6,7 @@ import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 
 const f = vi.hoisted(() => ({ tasks: {}, state: null, disk: null, prompt: null, cliConfig: null }));
 const persist = () => { f.disk = structuredClone(f.state); };
-vi.mock('../cosState.js', () => ({
+vi.mock('../cos/cosState.js', () => ({
   withStateLock: createFileWriteQueue(),
   loadState: async () => f.state,
   saveState: async state => { f.state = state; f.disk = structuredClone(state); },
@@ -14,7 +14,7 @@ vi.mock('../cosState.js', () => ({
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
   getConfig: async () => ({}),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgentRecord: vi.fn(async id => f.state.agents[id]),
   readAgentRecordOrUnreadable: async id => f.state.agents[id],
   getAgents: async () => Object.values(f.state.agents),
@@ -26,7 +26,7 @@ vi.mock('../cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(), isLiveAgentRecord: agent => agent?.status === 'running',
   AGENT_RECORD_UNREADABLE: Symbol('unreadable'),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   getTaskById: vi.fn(async id => f.tasks[id] || null),
   reviveBlockedTask: vi.fn(async (id, patch) => {
     f.tasks[id] = { ...f.tasks[id], status: 'pending', metadata: { ...f.tasks[id].metadata, ...patch.metadata } };
@@ -39,11 +39,11 @@ vi.mock('../cosTaskStore.js', () => ({
     return f.tasks.replacement;
   }),
 }));
-vi.mock('../cos.js', () => ({
+vi.mock('../cos/cos.js', () => ({
   forceSpawnTask: vi.fn(),
 }));
-vi.mock('../cosTaskGenerator.js', () => ({ evaluateTasks: vi.fn() }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
+vi.mock('../cos/cosTaskGenerator.js', () => ({ evaluateTasks: vi.fn() }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: vi.fn() }));
 vi.mock('./agentRunTracking.js', () => ({ createAgentRun: async () => ({ runId: 'run-new' }), completeAgentRun: vi.fn() }));
 vi.mock('../../lib/fileUtils.js', async importOriginal => ({
@@ -71,7 +71,7 @@ vi.mock('./agentCliSpawning.js', () => ({
   spawnDirectly: vi.fn(async ({ prompt }) => { f.prompt = prompt; return 'replacement-agent'; }),
 }));
 vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: vi.fn(), spawnTuiAgent: vi.fn() }));
-vi.mock('../cosRunnerClient.js', () => ({
+vi.mock('../cos/cosRunnerClient.js', () => ({
   terminateAgentViaRunner: vi.fn(),
   killAgentViaRunner: vi.fn(),
   pauseAgentViaRunner: vi.fn(),
@@ -109,12 +109,12 @@ vi.mock('../creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettl
 
 import { resumeAgent } from './agentManagement.js';
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
-import { forceSpawnTask } from '../cos.js';
-import { addTask, getTaskById } from '../cosTaskStore.js';
-import { completeAgent, updateAgent } from '../cosAgentLifecycle.js';
+import { forceSpawnTask } from '../cos/cos.js';
+import { addTask, getTaskById } from '../cos/cosTaskStore.js';
+import { completeAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { spawnDirectly } from './agentCliSpawning.js';
 import { setUseRunner } from './agentState.js';
-import { updateClaimOwnership } from '../cosClaimOwnership.js';
+import { updateClaimOwnership } from '../cos/cosClaimOwnership.js';
 import { resolveMergeHandoffOwner } from '../mergeHandoffOwner.js';
 
 const CLAIM_PROSE = 'Resume the claim swarm, preserve the worktrees, and ship all issues.';

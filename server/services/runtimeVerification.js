@@ -10,11 +10,11 @@ import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { getBootCommit } from './installState.js';
-import { getAgentRecord } from './cosAgentLifecycle.js';
+import { getAgentRecord } from './cos/cosAgentLifecycle.js';
 import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
-import { getAllTasks, getTaskById, updateTask } from './cosTaskStore.js';
+import { getAllTasks, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { isDeepStrictEqual } from 'node:util';
-import { readAgentsStateForSafetyCheck } from './cosState.js';
+import { readAgentsStateForSafetyCheck } from './cos/cosState.js';
 import { getSettingsWithStatus } from './settings.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 

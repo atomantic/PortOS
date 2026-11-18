@@ -48,7 +48,7 @@ it('opens and focuses the task identified by the queue deep link', async () => {
 describe('TasksTab spawning window', () => {
   const pendingTask = (id, extra = {}) => ({ id, description: `Task ${id}`, status: 'pending', metadata: {}, ...extra });
   // `startedAt` is how the settlement tells a live spawn from a zombie record —
-  // registerAgent always stamps it. See server/lib/cosSpawnWindow.js.
+  // registerAgent always stamps it. See server/lib/cos/cosSpawnWindow.js.
   const liveAgent = (id, taskId, ageMs = 0) => ({ id, status: 'running', taskId, startedAt: new Date(Date.now() - ageMs).toISOString() });
 
   it('shows idle cleanup as pending for both queues', async () => {

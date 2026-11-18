@@ -143,7 +143,7 @@ const noBackEdgeRules = (graph) => [
 
 /** Deferring an import hides a cycle from the static graph without removing the hazard. */
 const NO_DEFERRED_IMPORT = [
-  { from: 'cosAgentLifecycle.js', to: 'agent/agentManagement.js', why: 'the agent STATE layer must not forward into the process layer — ask the facade (#3450)' },
+  { from: 'cos/cosAgentLifecycle.js', to: 'agent/agentManagement.js', why: 'the agent STATE layer must not forward into the process layer — ask the facade (#3450)' },
   { from: 'agent/agentLifecycle.js', to: 'agent/agentManagement.js', why: 'the handleOrphanedTask cycle-dodge this cluster was fixed to remove (#2837)' },
   { from: 'agent/agents.js', to: 'subAgentSpawner.js', why: 'agent/agents.js reaches the kill transition through the facade, statically (#3450)' },
 ];
@@ -166,7 +166,7 @@ describe('server/services — static import graph (#5693)', () => {
     const named = [
       ...backEdgeRules.flatMap(({ from, to }) => [...from, ...(to === ANY ? [] : to)]),
       ...NO_DEFERRED_IMPORT.flatMap(({ from, to }) => [from, to]),
-      ...NO_FORWARDING_BARREL, FACADE, 'cos.js',
+      ...NO_FORWARDING_BARREL, FACADE, 'cos/cos.js',
     ];
     expect([...new Set(named)].filter(file => !graph.has(file)), 'a rule names a module that no longer exists').toEqual([]);
   });
@@ -234,10 +234,10 @@ describe('server/services — static import graph (#5693)', () => {
     // from the state layer, which cos.js is right to export), and checked
     // against each module's REAL export surface, so a declared wrapper of the
     // same name fails as surely as a re-export.
-    const stateLayer = new Set(reexportedFrom('cosAgentLifecycle.js'));
+    const stateLayer = new Set(reexportedFrom('cos/cosAgentLifecycle.js'));
     const forbidden = reexportedFrom('agent/agentManagement.js').filter(name => !stateLayer.has(name));
     expect(forbidden.length, 'derived nothing to forbid — check the facade export blocks').toBeGreaterThan(0);
-    for (const barrel of ['cos.js', 'subAgentSpawner.js']) {
+    for (const barrel of ['cos/cos.js', 'subAgentSpawner.js']) {
       const exported = staticExportNames(join(SERVICES_DIR, barrel));
       expect(exported, `${barrel} exports nothing — did the parse fail?`).not.toEqual([]);
       const leaked = forbidden.filter(name => exported.includes(name));
@@ -251,7 +251,7 @@ describe('server/services — static import graph (#5693)', () => {
     // they call, which can never import the facade), the declaring module.
     // Derived from the facade's export blocks, so a new transition is guarded
     // the moment it lands there.
-    const declaringModules = ['agent/agentManagement.js', 'cosAgentLifecycle.js', 'agent/agentLifecycle.js'];
+    const declaringModules = ['agent/agentManagement.js', 'cos/cosAgentLifecycle.js', 'agent/agentLifecycle.js'];
     const declaredBy = new Map(); // transition name → the modules allowed to serve it
     const allow = (name, source) => {
       if (!declaredBy.has(name)) declaredBy.set(name, new Set());
@@ -315,7 +315,7 @@ describe('server/services — static import graph (#5693)', () => {
       }
 
       // DEFERRED forms, invisible to the static graph but this cluster's old
-      // habit (`const { completeAgent } = await import('./cos.js')`). In a
+      // habit (`const { completeAgent } = await import('./cos/cos.js')`). In a
       // destructure the LEFT of `a: b` is the exported name. Skip the scans for
       // the majority of modules with no `import(` at all.
       const hasDeferredImport = /\bimport\s*\(/.test(src);
@@ -328,7 +328,7 @@ describe('server/services — static import graph (#5693)', () => {
           offenders.push(`${file} defer-imports ${name} from ${target}`);
         }
       }
-      // `(await import('./cos.js')).completeAgent`, and its `?.` / `['name']` twins.
+      // `(await import('./cos/cos.js')).completeAgent`, and its `?.` / `['name']` twins.
       for (const [, spec, dotted, bracketed] of hasDeferredImport ? src.matchAll(
         /import\s*\(\s*['"]([^'"]+)['"]\s*\)[\s)]*(?:\?)?(?:\.\s*(\w+)|\.?\s*\[\s*['"`](\w+)['"`]\s*\])/g) : []) {
         const name = dotted || bracketed;

@@ -398,7 +398,7 @@ async function fireCommission(commission, trigger) {
     // no-cold-LLM policy. Both reads FAIL CLOSED: if governance state can't be
     // verified we skip rather than launch a paid planner on a permissive default.
     const [{ loadState }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }] = await Promise.all([
-      import('../cosState.js'),
+      import('../cos/cosState.js'),
       import('../../lib/domainAutonomy.js'),
       import('../domainUsage.js'),
     ]);

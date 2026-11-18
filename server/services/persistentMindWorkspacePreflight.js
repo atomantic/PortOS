@@ -22,7 +22,7 @@ import {
 import {
   isCliReviewer,
   isReviewer,
-} from '../lib/cosValidation.js';
+} from '../lib/cos/cosValidation.js';
 import { compareVersions, satisfiesVersionRequirement } from '../../scripts/checkNodeVersion.js';
 import * as codeReview from './codeReview.js';
 

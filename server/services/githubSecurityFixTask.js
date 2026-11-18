@@ -11,7 +11,7 @@
  */
 import { GHSA_RE } from '../lib/githubNotificationParse.js';
 import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
-import { addTask } from './cosTaskStore.js';
+import { addTask } from './cos/cosTaskStore.js';
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;

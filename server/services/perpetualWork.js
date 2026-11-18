@@ -26,7 +26,7 @@ import { claimIssueNumber, collectGithubPrIssueNumbers, issueCreatedBeforeMs, co
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable } from '../lib/planIds.js';
 import { readOriginRemoteUrl } from '../lib/gitRemote.js';
 import { withGlabJson } from '../lib/glabArgs.js';
@@ -163,7 +163,7 @@ async function resolveGitlabNamespace(repoPath) {
  */
 async function liveClaimIssueNumbers(repoPath, ignoreTaskId) {
   const [{ readAgentsStateForSafetyCheck }, { liveClaimBranches }] = await Promise.all([
-    import('./cosState.js'), import('../lib/claimContinuation.js'),
+    import('./cos/cosState.js'), import('../lib/claimContinuation.js'),
   ]);
   const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
   const agents = snapshot?.trusted === true ? snapshot.agents : null;

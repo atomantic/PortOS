@@ -18,7 +18,7 @@
  * instead of being repeated per operation. Property-level `description`s are
  * KEPT: they are what lets a model pick arguments correctly.
  *
- * Deliberately parallel to `services/cosToolRegistry.js`, which publishes the
+ * Deliberately parallel to `services/cos/cosToolRegistry.js`, which publishes the
  * in-process CoS tool catalog. Same `portos_tool` entry vocabulary
  * (`name` / `version` / `providerName` / `input_schema` / `output_schema` /
  * `policy`) so an agent reads one shape across both surfaces; this one adds
@@ -27,7 +27,7 @@
 
 import { pathParametersFor } from './apiCatalog.js';
 import { API_OPERATION_CONTRACTS } from './apiOperationContracts.js';
-import { providerToolName } from './cosToolContracts.js';
+import { providerToolName } from './cos/cosToolContracts.js';
 import { ERROR_CODES_BY_STATUS } from './errorHandler.js';
 import { OPENAPI_VERSION } from './openapiDowngrade.js';
 

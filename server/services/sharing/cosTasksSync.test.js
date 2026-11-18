@@ -37,7 +37,7 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
 // and the receiver (mergePeerTasks). Spy it so the wire build + merge are
 // observable AND can't read/write the real task files.
 const taskStoreAvailability = vi.hoisted(() => ({ available: true }));
-vi.mock('../cosTaskStore.js', () => {
+vi.mock('../cos/cosTaskStore.js', () => {
   const merge = vi.fn().mockResolvedValue({ changed: false });
   return {
     getUserTasks: vi.fn().mockResolvedValue({ tasks: [] }),
@@ -59,7 +59,7 @@ const endlessChunkedRes = () => {
   const chunk = new Uint8Array(8 * 1024 * 1024);
   return new Response(new ReadableStream({ pull(controller) { controller.enqueue(chunk); } }));
 };
-import { getUserTasks, getCosTasks, mergePeerTasks } from '../cosTaskStore.js';
+import { getUserTasks, getCosTasks, mergePeerTasks } from '../cos/cosTaskStore.js';
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
 

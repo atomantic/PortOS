@@ -14,17 +14,17 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
   reviveBlockedTask: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../cosTaskGenerator.js', () => ({
+vi.mock('../cos/cosTaskGenerator.js', () => ({
   checkStagePrecondition: vi.fn().mockReturnValue({ passed: true }),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn(),
   getAgentRecord: (...args) => getAgent(...args),
   getAgent: vi.fn().mockResolvedValue(null),
@@ -47,10 +47,10 @@ vi.mock('../creativeDirector/completionHook.js', () => ({ handleCreativeDirector
 vi.mock('../taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression, runAgentCompletionCleanup, runSpawnerCompletionCleanup, removeCompletionSentinel } from './agentCompletionCleanup.js';
-import { updateTask, addTask, reviveBlockedTask } from '../cosTaskStore.js';
-import { getAgent } from '../cosAgentLifecycle.js';
-import { checkStagePrecondition } from '../cosTaskGenerator.js';
-import { emitLog } from '../cosEvents.js';
+import { updateTask, addTask, reviveBlockedTask } from '../cos/cosTaskStore.js';
+import { getAgent } from '../cos/cosAgentLifecycle.js';
+import { checkStagePrecondition } from '../cos/cosTaskGenerator.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { cleanupAgentWorktree, releaseRetryHold, spawnMergeRecoveryTask } from './agentWorktreeCleanup.js';
 import { resolveReviewLoopOptions } from '../codeReview.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
@@ -59,7 +59,7 @@ import * as git from '../git.js';
 import * as jira from '../jira.js';
 import { addNotification } from '../notifications.js';
 import { ensureTaskThread } from '../brainTaskThreads.js';
-import { updateAgent } from '../cosAgentLifecycle.js';
+import { updateAgent } from '../cos/cosAgentLifecycle.js';
 import { handleCreativeDirectorCompletion } from '../creativeDirector/completionHook.js';
 
 const runningPipeline = (overrides = {}) => ({

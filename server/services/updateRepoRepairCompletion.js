@@ -210,8 +210,8 @@ async function preservedSubmodules(contract, agentId) {
 async function verifyBoundRepoRepairCompletion(task, agentId, workspacePath) {
   const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
   const { redactRemoteUrlCredentials } = await import('../lib/gitRemote.js');
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const { checkUpdateRepoReadiness } = await import('./updateRepoReadiness.js');
   const { fetchOrigin } = await import('./git.js');
   const contract = contractSchema.parse(task?.metadata?.repoRepairContract);
@@ -253,7 +253,7 @@ export async function verifyUpdateRepoRepairCompletion(task, agentId, workspaceP
   const contract = task.metadata.repoRepair;
   if (contract !== undefined && (contract?.version !== 1 || contract.repoPath !== PATHS.root)) return false;
   const [{ getTaskById }, { getAgentRecord }, { getInstanceId }, { checkUpdateRepoReadiness }] = await Promise.all([
-    import('./cosTaskStore.js'), import('./cosAgentLifecycle.js'),
+    import('./cos/cosTaskStore.js'), import('./cos/cosAgentLifecycle.js'),
     import('./instanceIdentity.js'), import('./updateRepoReadiness.js'),
   ]);
   const [live, owner, instanceId] = await Promise.all([getTaskById(task.id), getAgentRecord(agentId), getInstanceId()]);

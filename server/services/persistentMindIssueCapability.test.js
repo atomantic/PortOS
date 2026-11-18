@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   ensureForgeReachable: vi.fn(),
 }));
 
-vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
+vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn(async () => mocks.root) }));
 vi.mock('./apps.js', () => ({ getActiveApps: vi.fn(async () => mocks.apps) }));
 // Only `listAppIssues` is doubled — `fileForgeIssue`/`probeForgeReachability`/
 // `scrubForgeIssueText` are the shared exec-half wrapper under test here too

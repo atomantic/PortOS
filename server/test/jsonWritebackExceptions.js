@@ -42,7 +42,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Rebuildable status: a lost last-run record only resets the displayed run status; the next sync rewrites it."
   },
   {
-    "key": "cosAgentCompletionIndex.js :: orderFilePath ( )",
+    "key": "cos/cosAgentCompletionIndex.js :: orderFilePath ( )",
     "reason": "Derived projection: an absent or corrupt file reads as empty and is backfilled from the archive metadata."
   },
   {

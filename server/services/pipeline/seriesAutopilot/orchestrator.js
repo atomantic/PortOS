@@ -9,7 +9,7 @@ import { withStagePinsIgnored } from '../../../lib/stagePinPolicy.js';
 import { getDomainMode } from '../../../lib/domainAutonomy.js';
 import { isRunCanceledError } from '../../../lib/aiToolkit/errorDetection.js';
 import { mergeSeverityWeights, resolveBlockingSet } from '../../../lib/editorial/index.js';
-import { loadState } from '../../cosState.js';
+import { loadState } from '../../cos/cosState.js';
 import { getDomainBudgetStatus } from '../../domainUsage.js';
 import { getSettings } from '../../settings.js';
 import { getSeries, updateSeries, listSeries } from '../series.js';

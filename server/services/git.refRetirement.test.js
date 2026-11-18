@@ -6,7 +6,7 @@ import { execGit } from '../lib/execGit.js';
 import { deleteBranch } from './git.js';
 
 const ownership = vi.hoisted(() => ({ agents: [], moveHead: null }));
-vi.mock('./cosClaimOwnershipState.js', () => ({
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({
   withClaimOwnershipLock: work => work(),
   readClaimOwnershipAgents: async () => ownership.agents,
 }));

@@ -15,11 +15,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./videoExecution.js', () => ({ effectiveVideoProject: project => project, reserveVideoAttempt: vi.fn(async () => ({ id: 'example-attempt' })), assertVideoAttemptDispatch: vi.fn(async () => ({})), settleVideoAttempt: vi.fn(async () => {}), pauseVideoExecution: vi.fn(async () => {}) }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: mocks.addTask,
   reviveBlockedTask: mocks.reviveBlockedTask,
 }));
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   cosEvents: { emit: mocks.emit },
 }));
 vi.mock('../creativeDirectorPrompts.js', () => ({

@@ -14,17 +14,17 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const recoveryCheck = vi.hoisted(() => vi.fn(async () => null));
 const pendingGuardCheck = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('../pendingMergeRecovery.js', () => ({ validatePendingMergeRecovery: (...args) => pendingGuardCheck(...args) }));
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosMergeHandoff.js', () => ({ validateCleanupReviewTarget: (...args) => recoveryCheck(...args) }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 vi.mock('../../lib/execGit.js', () => ({
   execGit: vi.fn().mockImplementation(async args => ({ stdout: args.includes('--is-inside-work-tree') ? 'true' : '', stderr: '', exitCode: 0 })),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../apps.js', () => ({ getAppById: vi.fn().mockResolvedValue(null) }));
@@ -93,9 +93,9 @@ vi.mock('fs', async (importOriginal) => {
 import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
 import { resolveTaskTargetBranch as resolveTaskExistingBranch } from '../../lib/taskTargetBranch.js';
 import { claimContinuationWorkspace } from '../../lib/claimContinuation.js';
-import { updateTask, addTask } from '../cosTaskStore.js';
-import { getAgents } from '../cosAgentLifecycle.js';
-import { emitLog } from '../cosEvents.js';
+import { updateTask, addTask } from '../cos/cosTaskStore.js';
+import { getAgents } from '../cos/cosAgentLifecycle.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { ensureLatest, isRepo, fetchOrigin, createBranch } from '../git.js';
 import { getAppDataForTask } from './agentAppWorkspace.js';
 import { createJiraTicketForTask } from '../promptSections/appContext.js';

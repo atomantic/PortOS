@@ -198,7 +198,7 @@ function normalizeDescriptionToMarkdown(text) {
 // `line-clamp` can't clamp this — MarkdownOutput emits block children — so it
 // uses CollapsibleText's max-height variant, which measures the real overflow
 // instead of guessing from a character count.
-// The listing bounds `metadata.taskDescription` (server/lib/cosAgentListProjection.js),
+// The listing bounds `metadata.taskDescription` (server/lib/cos/cosAgentListProjection.js),
 // which is exactly what the clamped preview needs and 68% less to download. The
 // rest arrives only if the reader opens it — `onExpand` fires once per mount, so
 // collapsing and re-opening never re-fetches.

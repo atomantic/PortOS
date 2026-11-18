@@ -11,7 +11,7 @@ import {
   createTaskTemplateSchema,
   updateTaskTemplateSchema,
   taskTemplateFromTaskSchema
-} from '../lib/cosValidation.js';
+} from '../lib/cos/cosValidation.js';
 
 const router = Router();
 

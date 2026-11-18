@@ -138,7 +138,7 @@ describe('extractSimplifySummaries', () => {
     // logic split there and serialized 9000+ lines of grep output as the
     // task summary.
     const output = [
-      'server/services/cos.js:1596:9. Run `/simplify` to review changed code.',
+      'server/services/cos/cos.js:1596:9. Run `/simplify` to review changed code.',
       'client/src/components/cos/tabs/AgentCard.jsx:697: title="Will run /simplify before committing">',
       'exec',
       'apply patch',

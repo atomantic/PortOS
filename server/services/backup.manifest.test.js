@@ -7,7 +7,7 @@ import { spawn } from '../lib/childProcess.js';
 import { getBackendName } from './memoryBackend.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { restoreSnapshot } from './backup.js';
-import { withLiveCosRestore } from './cosState.js';
+import { withLiveCosRestore } from './cos/cosState.js';
 
 describe('restoreSnapshot manifest verification', () => {
   let tmpRoot;

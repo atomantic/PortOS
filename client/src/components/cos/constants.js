@@ -208,7 +208,7 @@ export const STATE_MESSAGES = {
 // issue..." with zero agents running and the detail reachable only by guessing
 // at the Health tab. Returns null when there is nothing to report so callers
 // can fall back to their own default. Issue shape mirrors the server's
-// `runHealthCheck` (`{ type, category, message }` — server/services/cosHealthMonitor.js).
+// `runHealthCheck` (`{ type, category, message }` — server/services/cos/cosHealthMonitor.js).
 export const summarizeHealthIssues = (issues) => {
   if (!Array.isArray(issues) || issues.length === 0) return null;
   const messages = issues.map((issue) => issue?.message).filter(Boolean);
@@ -412,7 +412,7 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
 export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
 
 // New-issue grace for autonomous claiming (taskMetadata.issueMinAgeMinutes),
-// mirroring DEFAULT_ISSUE_MIN_AGE_MINUTES in server/lib/cosValidation.js.
+// mirroring DEFAULT_ISSUE_MIN_AGE_MINUTES in server/lib/cos/cosValidation.js.
 export const ISSUE_MIN_AGE_DEFAULT = 5;
 export const ISSUE_MIN_AGE_OPTIONS = [0, 2, 5, 10, 15, 30, 60];
 
@@ -440,7 +440,7 @@ export const BRANCHES_PER_AGENT_OPTIONS = [1, 2, 3, 4, 5, 6].map((value) => ({
 }));
 
 // error-log-triage run caps (taskMetadata integers). Values and defaults mirror
-// ERROR_LOG_TRIAGE_LIMITS in server/lib/cosValidation.js; the server drops a
+// ERROR_LOG_TRIAGE_LIMITS in server/lib/cos/cosValidation.js; the server drops a
 // value outside them.
 export const LOG_TRIAGE_TASK_TYPES = new Set(['error-log-triage']);
 export const LOG_TRIAGE_CAPS = [
@@ -461,7 +461,7 @@ export const LOG_TRIAGE_CAPS = [
 ];
 
 // do-release options (taskMetadata booleans, each ON unless explicitly false).
-// Fields mirror RELEASE_OPTION_KEYS in server/lib/cosValidation.js — the
+// Fields mirror RELEASE_OPTION_KEYS in server/lib/cos/cosValidation.js — the
 // server drops any key outside that list.
 export const RELEASE_OPTIONS_TASK_TYPES = new Set(['do-release']);
 export const RELEASE_OPTIONS = [
@@ -480,7 +480,7 @@ export const STALL_NUDGE_OPTION = {
 };
 
 // better-dependency-freedom's removal bar — the slashdo `/do:depfree` modes.
-// Values mirror DEPFREE_MODES in server/lib/cosValidation.js; the server drops
+// Values mirror DEPFREE_MODES in server/lib/cos/cosValidation.js; the server drops
 // anything else, and an absent key means the default bar.
 export const DEPFREE_MODE_DEFAULT = 'default';
 export const DEPFREE_MODE_TASK_TYPES = new Set(['better-dependency-freedom']);

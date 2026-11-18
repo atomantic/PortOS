@@ -244,7 +244,7 @@ describe('formatTrackerInstructions — ux preset (#3273)', () => {
   //     carries a {trackerInstructions} of its own, and the injected tracker
   //     block carries {appName}/{repoPath} of its own, so running these in any
   //     other order ships a literal placeholder (see the same ordering, and the
-  //     same reason, in services/cosTaskPreStepBlocks.js);
+  //     same reason, in services/cos/cosTaskPreStepBlocks.js);
   //   * the tracker block is resolved by the REAL resolveTrackerFilingBlock, so
   //     this cannot drift from production preset precedence. That matters: ux is
   //     the one audit type present in BOTH registries, and production resolves

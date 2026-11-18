@@ -46,7 +46,7 @@ export default function QueuesPanel() {
   // `spawning` is stamped by GET /api/cos/tasks: a task keeps `status: 'pending'`
   // for a beat after its agent registers as running, and counting it here would
   // put the one task being worked under BOTH cards — and offer "Run now" for a
-  // run already underway. See server/lib/cosSpawnWindow.js.
+  // run already underway. See server/lib/cos/cosSpawnWindow.js.
   const pending = tasks.filter((task) => task.status === 'pending' && !task.spawning);
   const running = tasks.filter((task) => task.status === 'in_progress' || task.spawning);
   const awaitingApproval = pending.filter((task) => task.approvalRequired);

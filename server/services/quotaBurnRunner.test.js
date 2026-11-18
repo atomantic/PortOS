@@ -38,7 +38,7 @@ const state = {
   settlement: { accepted: 0, refused: 0 },
 };
 
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.sequenceTasks || [] } })) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.sequenceTasks || [] } })) }));
 
 vi.mock('./providerUsage.js', () => ({
   getProviderQuotas: vi.fn(async () => state.quotas),

@@ -10,7 +10,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async (path, def = null) => (store.has(path) ? structuredClone(store.get(path)) : def))
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(async () => ({ config: mockConfig }))
 }));
 
@@ -25,7 +25,7 @@ const {
 const {
   __resetCosAdmissionReservations,
   acquireCosActionReservation,
-} = await import('./cosAdmissionReservations.js');
+} = await import('./cos/cosAdmissionReservations.js');
 
 beforeEach(() => {
   store = new Map();

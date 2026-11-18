@@ -7,7 +7,7 @@ export async function prepareExplicitOrphanBudgetReset(task) {
     || hasSpawnBudgetResetPrerequisite(task.metadata)) {
     return { error: 'Task cleanup owns this checkout; inspect its recovery before resetting the budget' };
   }
-  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  const { readAgentsStateForSafetyCheck } = await import('./cos/cosState.js');
   const state = await readAgentsStateForSafetyCheck().catch(() => null);
   if (!state?.trusted) return { error: 'Agent history is unreadable; inspect the retained checkout before retrying' };
   const owners = Object.values(state.agents || {}).filter(agent => agent.taskId === task.id);

@@ -16,7 +16,7 @@ const observationFor = (inspection, purpose, repair) => processAuditFingerprint(
  * Uses the existing review-loop owner and budget, without merge admission bypass.
  */
 export async function inspectOrQueueCompletedReview(input, deps = {}) {
-  const inspect = deps.inspect || (await import('./cosMergeHandoff.js')).inspectCompletedOwnerReview;
+  const inspect = deps.inspect || (await import('./cos/cosMergeHandoff.js')).inspectCompletedOwnerReview;
   const inspected = await inspect(input);
   const purpose = purposeFor(inspected, input.repairEvidence);
   if (!purpose) return inspected;
@@ -25,7 +25,7 @@ export async function inspectOrQueueCompletedReview(input, deps = {}) {
   const permitted = deps.permitted || (await import('./heldCheckoutRecovery.js')).assertAutomaticRetirementAllowed;
   try { await permitted(); } catch (error) { return { disposition: 'held', reason: error.message }; }
   const observation = observationFor(inspected, purpose, input.repairEvidence);
-  const lifecycle = deps.lifecycle || await import('./cosAgentLifecycle.js');
+  const lifecycle = deps.lifecycle || await import('./cos/cosAgentLifecycle.js');
   const reservation = await lifecycle.reserveRepoCleanupRecovery(inspected.agentId, target.branch, observation);
   if (!reservation?.admitted) return { disposition: 'held', reason: reservation?.reason || 'review-reservation-unavailable' };
   // Reservation may wait behind another state writer. Re-prove the same

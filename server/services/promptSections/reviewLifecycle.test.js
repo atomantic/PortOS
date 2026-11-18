@@ -17,7 +17,7 @@ vi.mock('../../lib/httpsState.js', () => ({
 
 import { getHttpsEnabledAtBoot } from '../../lib/httpsState.js';
 import { buildReviewLoopFollowUpSection, prepareSandboxedReviewLoopBody } from './reviewLifecycle.js';
-import { buildLocalReviewerInstructions } from '../cosTaskPrompts.js';
+import { buildLocalReviewerInstructions } from '../cos/cosTaskPrompts.js';
 import { CLI_REVIEW_OUTCOME_GUIDE } from './reviewerOutcome.js';
 import { readFileSync } from 'node:fs';
 

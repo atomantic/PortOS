@@ -8,7 +8,7 @@
  *
  * Split out of the former 4,004-line peerSync.js (#1830).
  */
-import { isMachineLocalCosTask } from '../../lib/cosFederationPolicy.js';
+import { isMachineLocalCosTask } from '../../lib/cos/cosFederationPolicy.js';
 import { join } from 'path';
 import { existsSync } from 'fs';
 import { mkdtemp, readFile, readdir } from 'fs/promises';
@@ -227,7 +227,7 @@ async function reconcileCosHistoryIndex(entries) {
     seen.add(key);
     pairs.push({ date: e.date, agentId: e.agentId });
   }
-  const mod = await import('../cosAgentIndex.js').catch(() => null);
+  const mod = await import('../cos/cosAgentIndex.js').catch(() => null);
   if (!mod?.addAgentArchivesToIndex) return false;
   return mod.addAgentArchivesToIndex(pairs).then(() => true, err => {
     logFailureWithStack('⚠️ peerSync: cos-history index merge failed', err);
@@ -321,7 +321,7 @@ export async function syncCosHistoryFromPeer(peer) {
         // A peer can add or edit a rating on a run already indexed here, so drop the
         // in-memory archive record caches for every metadata.json that landed.
         if (replacedRecords.length) {
-          const { invalidateArchivedRecord } = await import('../cosAgentIndex.js');
+          const { invalidateArchivedRecord } = await import('../cos/cosAgentIndex.js');
           for (const agentId of replacedRecords) invalidateArchivedRecord(agentId);
         }
         // A resolved download does not prove publication. Re-diff before the
@@ -418,7 +418,7 @@ function taskToWireEntry(task, taskType) {
  */
 export async function buildCosTasksPayload() {
   const empty = { schemaVersion: PORTOS_SCHEMA_VERSIONS.cosTasks, listHash: createHash('sha256').update('').digest('hex'), tasks: [] };
-  const mod = await import('../cosTaskStore.js').catch(() => null);
+  const mod = await import('../cos/cosTaskStore.js').catch(() => null);
   if (!mod?.getUserTasks || !mod?.getCosTasks) return empty;
   const [userRes, cosRes] = await Promise.all([
     mod.getUserTasks().catch(() => null),
@@ -458,7 +458,7 @@ const cosTasksSweepInFlight = new Set(); // peerInstanceId
  * Returns changed-file count separately from successful application completion.
  */
 async function mergeCosTasksFromPayload(tasks, { legacySpawnBudget = false } = {}) {
-  const mod = await import('../cosTaskStore.js').catch(() => null);
+  const mod = await import('../cos/cosTaskStore.js').catch(() => null);
   if (!mod?.mergePeerTasks) return { changed: 0, complete: false };
   const user = [];
   const internal = [];

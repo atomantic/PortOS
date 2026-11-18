@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
-import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
+import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
@@ -59,7 +59,7 @@ describe('configured provider reviewers', () => {
     expect(task.reviewerModels).toEqual({ [backend]: 'pinned-coder', codex: 'example-cloud-model' });
     expect(task.optionalReviewers).toEqual([backend]);
     expect(task.reviewerMaxRounds).toEqual({ [backend]: 1 });
-    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
+    const { buildLocalReviewerInstructions } = await import('./cos/cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(task.reviewers, task.reviewerModels);
     expect(instructions).toContain(backend);
     expect(instructions).toContain('pinned-coder');
@@ -108,7 +108,7 @@ describe('configured provider reviewers', () => {
     expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
     expect(isReviewerConfigFault(result.code)).toBe(false);
     expect(result).not.toHaveProperty('findings');
-    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
+    const { buildLocalReviewerInstructions } = await import('./cos/cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(config.reviewers);
     expect(instructions).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings"))');
     expect(instructions).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');

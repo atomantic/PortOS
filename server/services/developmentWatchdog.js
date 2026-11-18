@@ -1,13 +1,13 @@
 /** Agent-free maintenance scans. Receipts live with the existing CoS runtime state. */
 import { randomUUID } from 'node:crypto';
-import { loadState, saveState, withStateLock, isImprovementEnabled } from './cosState.js';
+import { loadState, saveState, withStateLock, isImprovementEnabled } from './cos/cosState.js';
 import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { DEVELOPMENT_ACTIVE_STATUSES, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { safeJSONParse } from '../lib/jsonIo.js';
 import { isUpstreamOwner, UPSTREAM_OWNER } from '../lib/gitRemote.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { execGit } from '../lib/execGit.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
@@ -115,7 +115,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   const { resolveAppForgeTarget } = await import('../lib/workTracker.js');
   const { listAppPullRequests } = await import('./appPullRequests.js');
   const { detectActionableWork, listConfiguredForgeIssues, issueNumberFromRef } = await import('./perpetualWork.js');
-  const { resolveClaimWorkMetadata } = await import('./cosTaskClaimWork.js');
+  const { resolveClaimWorkMetadata } = await import('./cos/cosTaskClaimWork.js');
   const { execGh } = await import('./github.js');
   const { resolveForgeExecOptions } = await import('./forgeExecOptions.js');
   const { createGithubActorTrust } = await import('./forgeActorTrust.js');
@@ -218,7 +218,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
 
 async function retireTerminalReviewFollowUps(app, row) {
   if (!row.terminalReviewFollowUps?.length) return;
-  const { updateTask } = await import('./cosTaskStore.js');
+  const { updateTask } = await import('./cos/cosTaskStore.js');
   for (const followUp of row.terminalReviewFollowUps) {
     const current = await loadState();
     if (!mayCreateTasksForApp(current, app.id)) return;
@@ -245,10 +245,10 @@ async function dispatch(app, decision) {
   // before a write. The queue's shared work-key admission is authoritative.
   const current = await loadState();
   if (authorityLost(current, app.id)) return { reason: 'authority-changed' };
-  const { resolveAutonomyBudget } = await import('./cosTaskGenerator.js');
+  const { resolveAutonomyBudget } = await import('./cos/cosTaskGenerator.js');
   const budget = await resolveAutonomyBudget(current, Object.values(current.agents || {}).filter(a => a.status === 'running'));
   if (budget.cosAutonomyMode !== 'execute' || budget.autonomousActionsRemaining <= 0) return { reason: 'autonomy-budget' };
-  const { getAllTasks, addTask } = await import('./cosTaskStore.js');
+  const { getAllTasks, addTask } = await import('./cos/cosTaskStore.js');
   const peers = await participatingPeerTasks();
   if (peers.blockers.length) return { reason: 'peer-ownership-unknown' };
   const agents = Object.values(current.agents || {}).filter(a => ACTIVE_AGENT_STATUSES.has(a.status));
@@ -276,7 +276,7 @@ async function dispatch(app, decision) {
     const candidate = { metadata: { app: app.id, claimFlow: true } };
     const owner = liveTasks.find(task => DEVELOPMENT_ACTIVE_STATUSES.has(task.status) && sameDevelopmentWork(task, candidate));
     if (owner) return { taskId: owner.id, duplicate: true };
-    const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cosTaskGenerator.js');
+    const { prepareManagedAppImprovementTask, recordDeferredPerpetualDispatch } = await import('./cos/cosTaskGenerator.js');
     const prepared = await prepareManagedAppImprovementTask('claim-issue', app, current);
     if (!prepared.task) return { reason: 'claim-schedule-no-work' };
     const finalState = await loadState();
@@ -328,7 +328,7 @@ function freshCachedReceipt(state, policyKey, role, { dryRun, force }) {
 
 /** Local, participating-peer and live-agent ownership that capacity and dispositions are measured against. */
 async function collectActiveWork(state) {
-  const { getAllTasks } = await import('./cosTaskStore.js');
+  const { getAllTasks } = await import('./cos/cosTaskStore.js');
   const taskSources = await getAllTasks();
   const tasks = tasksFrom(taskSources);
   const peers = await participatingPeerTasks();

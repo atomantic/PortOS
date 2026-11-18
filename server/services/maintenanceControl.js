@@ -57,7 +57,7 @@ export async function wakeAfterMaintenance({ waitForCompletion = false } = {}) {
   // Re-evaluate saved policies. These functions retain their daemon, pause,
   // domain, budget and quota gates; do not call CoS.resume or mind.resume.
   const [{ dequeueNextTask, resumeDeferredCompletions }, { recheckPersistentMindSchedule }] = await Promise.all([
-    import('./cos.js'), import('./persistentMindSupervisor.js'),
+    import('./cos/cos.js'), import('./persistentMindSupervisor.js'),
   ]);
   // The normal-state response must not wait for filesystem verification. Finish
   // the bounded deterministic repair before admitting more queued agent work.

@@ -1,5 +1,5 @@
 import { tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { isMachineLocalCosTask } from '../lib/cosFederationPolicy.js';
+import { isMachineLocalCosTask } from '../lib/cos/cosFederationPolicy.js';
 import { isPlainObject } from '../lib/objects.js';
 /**
  * Federated peer-sync HTTP routes.

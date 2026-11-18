@@ -19,16 +19,16 @@ vi.mock('../shell.js', () => ({
 // Only the spawn rpc is faked. The refusal/ambiguity classifier is the real one
 // (importOriginal): re-implementing it here would make the ledger assertions
 // below agree with a copy of the rule rather than with the rule (#4615).
-vi.mock('../cosRunnerClient.js', async (importOriginal) => ({
+vi.mock('../cos/cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawnTuiSessionViaRunner: vi.fn(),
 }));
 
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   appendAgentOutputLines: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined)
@@ -40,7 +40,7 @@ vi.mock('../providerStatus.js', () => ({
   markProviderRateLimited: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -240,12 +240,12 @@ import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
 } from '../../lib/agent/agentExecutionProfiles.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
-import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cosRunnerClient.js';
+import { spawnTuiSessionViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
 import * as agentLifecycle from './agentFinalization.js';
 import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
 import * as agentErrorAnalysis from './agentErrorAnalysis.js';
-import * as cosAgentLifecycle from '../cosAgentLifecycle.js';
+import * as cosAgentLifecycle from '../cos/cosAgentLifecycle.js';
 import * as gitService from '../git.js';
 import { probePrForBranch } from '../prProbe.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
@@ -276,7 +276,7 @@ import {
 // Real module, not a mock: the flag is a plain process-local boolean, so driving
 // it directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 
 describe('agent TUI spawning', () => {
   // `buildTuiSpawnConfig` → `appendModelArgs` → the REAL `resolveInjectedTuiModel`,

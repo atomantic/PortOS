@@ -4,7 +4,7 @@ import { composeMaintainerInstructions, mergePersistentMindMaintainer } from '..
 const mocks = vi.hoisted(() => ({ root: {}, apps: [] }));
 vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: mocks.root.routeAvailable !== false }) }));
 vi.mock('./persistentMindMaintainerInference.js', () => ({ inspectMaintainerInferenceRoute: async () => ({ ok: true }), readMaintainerInferenceBudget: async () => ({}) }));
-vi.mock('./cosState.js', () => ({ loadState: async () => mocks.root }));
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => mocks.root }));
 vi.mock('./persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => mocks.apps }));
 beforeEach(() => {
   mocks.root = { config: { persistentMindProfile: { enabled: true, providerId: 'local', model: 'example' },

@@ -10,7 +10,7 @@ const mock = vi.hoisted(() => ({
   recordDomainUsage: vi.fn(async () => {}),
 }));
 
-vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mock.root) }));
+vi.mock('./cos/cosState.js', () => ({ loadState: vi.fn(async () => mock.root) }));
 vi.mock('./agent/agentRunEventLog.js', () => ({ appendMindEvent: (...args) => mock.appendMindEvent(...args) }));
 vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn(async () => {

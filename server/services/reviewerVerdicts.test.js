@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const fixture = vi.hoisted(() => ({ state: { agents: {} }, index: new Map(), root: '', epoch: 0 }));
-vi.mock('./cosState.js', () => ({ loadState: async () => fixture.state }));
-vi.mock('./cosAgentIndex.js', () => ({
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => fixture.state }));
+vi.mock('./cos/cosAgentIndex.js', () => ({
   loadAgentIndex: async () => fixture.index,
   getAgentDir: (agentId, date) => join(fixture.root, date, agentId),
   archivedRecordCacheEpoch: () => fixture.epoch,

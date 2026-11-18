@@ -29,7 +29,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Real module except for the two rpcs: the spawn-failure classifier under test
 // stays the production one rather than a copy of itself (#4615).
-vi.mock('../cosRunnerClient.js', async (importOriginal) => ({
+vi.mock('../cos/cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawnAgentViaRunner: vi.fn(),
   // Reported healthy and long-lived so waitForRunnerStability returns on its
@@ -37,7 +37,7 @@ vi.mock('../cosRunnerClient.js', async (importOriginal) => ({
   getRunnerHealth: vi.fn().mockResolvedValue({ available: true, uptime: 3600 }),
 }));
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
@@ -57,15 +57,15 @@ vi.mock('./agentFinalization.js', () => ({
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
 
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
 
-vi.mock('../cosState.js', () => ({
+vi.mock('../cos/cosState.js', () => ({
   getConfig: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
 }));
@@ -118,12 +118,12 @@ vi.mock('../../lib/gitCommitProbe.js', async importOriginal => ({
 
 import { handleAgentCompletion, spawnViaRunner } from './agentLifecycle.js';
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
-import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cosRunnerClient.js';
-import { completeAgent, updateAgent } from '../cosAgentLifecycle.js';
+import { spawnAgentViaRunner, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
+import { completeAgent, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, retireDeadAgent } from './agentFinalization.js';
-import { getAgent, getAgentRecord } from '../cosAgentLifecycle.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { getAgent, getAgentRecord } from '../cos/cosAgentLifecycle.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { handleOrphanedTask } from './agentManagement.js';

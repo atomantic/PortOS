@@ -7,12 +7,12 @@ vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: async () => ({ s
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => [], getRunningJob: () => null, getQueueCapacity: () => ({ byKind: {} }) }));
 vi.mock('../services/imageTo3d/models.js', () => ({ listGeneratingModelSummaries: async () => [], getActiveModelOperationCount: () => 0 }));
 vi.mock('../services/persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: () => false }));
-vi.mock('../services/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => [] }));
+vi.mock('../services/cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => [] }));
 vi.mock('../services/ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: deps.loadedError }));
-vi.mock('../services/cos.js', () => ({}));
-vi.mock('../services/cosTaskStore.js', () => ({ getPendingTaskIds: async () => [] }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
-vi.mock('../services/cosState.js', () => ({ readPersistentMindStateForSafetyCheck: async () => ({ trusted: true }) }));
+vi.mock('../services/cos/cos.js', () => ({}));
+vi.mock('../services/cos/cosTaskStore.js', () => ({ getPendingTaskIds: async () => [] }));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
+vi.mock('../services/cos/cosState.js', () => ({ readPersistentMindStateForSafetyCheck: async () => ({ trusted: true }) }));
 vi.mock('../services/appOperations.js', () => ({ listActiveAppOperations: () => [] }));
 vi.mock('../services/updateChecker.js', () => ({ isUpdateInProgress: () => false }));
 vi.mock('../services/runner.js', () => ({ getActiveRunCount: deps.count, getActiveRunSummaries: deps.runs }));

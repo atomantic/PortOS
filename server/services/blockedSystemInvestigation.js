@@ -48,7 +48,7 @@ async function localOwner(task) {
   const agentId = task.metadata?.deliveryDecisionAgentId || task.metadata?.lastAgentId || task.metadata?.failedAgentId;
   if (!agentId) return null;
   const [{ getAgentRecord }, { getInstanceId, UNKNOWN_INSTANCE_ID }, { readAgentsStateForSafetyCheck }, { activeAgents, runnerAgents }] = await Promise.all([
-    import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agent/agentState.js'),
+    import('./cos/cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cos/cosState.js'), import('./agent/agentState.js'),
   ]);
   const [agent, instanceId, owners] = await Promise.all([getAgentRecord(agentId), getInstanceId(), readAgentsStateForSafetyCheck()]);
   const registered = owners.agents?.[agentId];
@@ -68,9 +68,9 @@ async function localOwner(task) {
  * a real task store adapter, without running providers or touching host tasks. */
 export function _createBlockedSystemInvestigationRecovery(deps = {}) {
   const now = deps.now || Date.now;
-  const read = deps.read || (async () => (await import('./cosTaskStore.js')).getAllTasks());
+  const read = deps.read || (async () => (await import('./cos/cosTaskStore.js')).getAllTasks());
   const ownerFor = deps.ownerFor || localOwner;
-  const update = deps.update || (async (task, state, owner) => (await import('./cosTaskStore.js')).updateTask(task.id,
+  const update = deps.update || (async (task, state, owner) => (await import('./cos/cosTaskStore.js')).updateTask(task.id,
     { metadata: { blockedInvestigation: state } }, 'internal', { expectedStatus: 'blocked',
       expectedTask: { description: task.description, priority: task.priority, approvalRequired: task.approvalRequired, metadata: task.metadata },
       recoveryOwner: { id: owner.agentId, startedAt: owner.agent.startedAt, requireInactive: true } }));

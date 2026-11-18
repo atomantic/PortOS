@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before importing the module under test
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   updateAgent: vi.fn().mockResolvedValue(undefined)
 }));
 // getConfig moved to cosState.js (cos.js re-exports it) to break an import
@@ -9,7 +9,7 @@ vi.mock('../cosAgentLifecycle.js', () => ({
 // name cosState.js or it intercepts nothing and the real loadState() runs,
 // reading data/cos/ and asserting against the running install's config.
 // importOriginal keeps cosState's other exports intact; only getConfig is stubbed.
-vi.mock('../cosState.js', async (importOriginal) => ({
+vi.mock('../cos/cosState.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({ appReviewCooldownMs: 1800000 })
 }));
@@ -17,7 +17,7 @@ vi.mock('../appActivity.js', () => ({
   startAppCooldown: vi.fn().mockResolvedValue(undefined),
   updateAppActivity: vi.fn().mockResolvedValue(undefined)
 }));
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 vi.mock('../memoryExtractor.js', () => ({
@@ -29,7 +29,7 @@ vi.mock('../malwareScanReports.js', () => ({
 
 import { processAgentCompletion } from './agentCompletion.js';
 import * as appActivity from '../appActivity.js';
-import { getConfig } from '../cosState.js';
+import { getConfig } from '../cos/cosState.js';
 import { extractAndStoreMemories } from '../memoryExtractor.js';
 
 describe('processAgentCompletion - cooldown handling for recovery tasks', () => {

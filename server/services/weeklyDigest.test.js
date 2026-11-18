@@ -31,22 +31,22 @@ const mock = vi.hoisted(() => ({
   agentsByDate: {},  // getAgentsByDate(date)
 }));
 
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => mock.agents),
 }));
 
-vi.mock('./cosAgentIndex.js', () => ({
+vi.mock('./cos/cosAgentIndex.js', () => ({
   getAgentDates: vi.fn(async () => Object.keys(mock.agentsByDate).map(date => ({ date }))),
   getAgentsByDate: vi.fn(async (date) => mock.agentsByDate[date] || []),
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: new EventEmitter(),
   emitLog: vi.fn(),
 }));
 
 const digestService = await import('./weeklyDigest.js');
-const { cosEvents } = await import('./cosEvents.js');
+const { cosEvents } = await import('./cos/cosEvents.js');
 
 afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
@@ -495,7 +495,7 @@ describe('generateWeeklyDigest — insights', () => {
 describe('getWeeklyDigest', () => {
   it('returns a stored digest for a past week without recomputing', async () => {
     writeDigest('2026-W05', storedDigest('2026-W05', { totalTasks: 99, successRate: 42, totalWorkTimeMs: 5000 }));
-    const { getAgents } = await import('./cosAgentLifecycle.js');
+    const { getAgents } = await import('./cos/cosAgentLifecycle.js');
 
     const digest = await digestService.getWeeklyDigest('2026-W05');
 

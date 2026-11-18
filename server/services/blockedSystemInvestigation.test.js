@@ -7,9 +7,9 @@ import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agent/agentErr
 import { buildInvestigationFingerprint, couldReleaseBlockedTasks } from '../lib/investigationTasks.js';
 
 const identity = vi.hoisted(() => ({ agent: null, others: [], trusted: true }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
-vi.mock('./cosState.js', async importOriginal => ({ ...(await importOriginal()),
+vi.mock('./cos/cosState.js', async importOriginal => ({ ...(await importOriginal()),
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: identity.trusted,
     agents: Object.fromEntries([identity.agent, ...identity.others].filter(agent => agent?.id).map(agent => [agent.id, agent])) })) }));
 vi.mock('./agent/agentState.js', async importOriginal => ({ ...(await importOriginal()), activeAgents: new Map(), runnerAgents: new Map() }));

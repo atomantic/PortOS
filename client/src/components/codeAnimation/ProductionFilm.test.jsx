@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { blenderFilmState } from '../../test/blenderFilmFixture.js';
@@ -31,6 +31,8 @@ beforeEach(() => {
   filmApi.getMusicVideoBlenderFile.mockResolvedValue({ path: 'film.py', content: '# example' });
   filmApi.assembleMusicVideoBlenderCut.mockResolvedValue({ job: { id: 'cut', kind: 'cut', quality: 'final', status: 'queued' } });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 it('opens the URL-selected film shot, uses standalone media/files/cut APIs and preserves tab navigation in the path', async () => {
   const { container } = render(<MemoryRouter initialEntries={[`/code-animation/production/films/${id}/shots/s020`]}>
@@ -65,6 +67,7 @@ it('keeps film detail drafts after a rejected save', async () => {
 });
 
 it('sends the selected track without analysis and links to the new Music Video with coverage guidance', async () => {
+  const duplicateKeyWarnings = vi.spyOn(console, 'error');
   listTracks.mockResolvedValue([{ id: 'track', title: 'Example song', audioFilename: 'example.wav' }]);
   filmApi.promoteFilm.mockResolvedValue({ project: { id: 'mv-copy', name: 'Song version' }, coverageProblems: ['No shot covers the song after 12 s.'] });
   render(<MemoryRouter initialEntries={[`/code-animation/production/films/${id}/shots`]}><Routes>
@@ -78,4 +81,6 @@ it('sends the selected track without analysis and links to the new Music Video w
   expect(filmApi.promoteFilm).toHaveBeenCalledWith(id, { trackId: 'track' }, { silent: true });
   expect(screen.getByText('No shot covers the song after 12 s.')).toBeTruthy();
   expect(screen.getByText('The copy needs song analysis and a shot sync. Sending starts no jobs.')).toBeTruthy();
+  expect(screen.getAllByRole('heading', { name: 'Silent example' })).toHaveLength(1);
+  expect(duplicateKeyWarnings.mock.calls.filter(([message]) => String(message).includes('same key'))).toHaveLength(0);
 });

@@ -26,8 +26,8 @@ const taskStoreMock = vi.hoisted(() => ({
 vi.mock('./issueWatcher.js', () => issueWatcherMock);
 vi.mock('./prReviewerSecurity.js', () => securityMock);
 vi.mock('./modelAbuseGuard.js', () => guardMock);
-vi.mock('./cosTaskStore.js', () => taskStoreMock);
-vi.mock('./cosEvents.js', async (importActual) => ({ ...(await importActual()), emitLog: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => taskStoreMock);
+vi.mock('./cos/cosEvents.js', async (importActual) => ({ ...(await importActual()), emitLog: vi.fn() }));
 
 import {
   buildSecurityScanPipelineOutput,

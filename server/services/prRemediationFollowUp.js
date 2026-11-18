@@ -48,8 +48,8 @@
  * failed to land the PR.
  */
 
-import { emitLog } from './cosEvents.js';
-import { addTask } from './cosTaskStore.js';
+import { emitLog } from './cos/cosEvents.js';
+import { addTask } from './cos/cosTaskStore.js';
 import { buildCiMergeGateSteps, buildForkBranchInstructions } from './promptSections/reviewLifecycle.js';
 import { isMergeHandoffEnabled } from '../lib/mergeGateContract.js';
 import { normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';

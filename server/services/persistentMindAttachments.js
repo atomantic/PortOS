@@ -27,7 +27,7 @@ import {
   writeFileGuarded,
 } from '../lib/fileUtils.js';
 import { backupSnapshotCutPending, withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
-import { loadState, saveState, withStateLock } from './cosState.js';
+import { loadState, saveState, withStateLock } from './cos/cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import {
   MIND_ATTACHMENT_FILENAME_PREFIX,

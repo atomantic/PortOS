@@ -4,9 +4,9 @@ import { describe, it, expect, vi } from 'vitest';
 // so importing the file does not instantiate the CoS/DB/PM2 graph.
 vi.mock('./pm2.js', () => ({ listProcessesStrict: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ getAppStatusSummary: vi.fn(), annotateExpectedExit: vi.fn() }));
-vi.mock('./cos.js', () => ({}));
-vi.mock('./cosAgentLifecycle.js', () => ({}));
-vi.mock('./cosTaskStore.js', () => ({}));
+vi.mock('./cos/cos.js', () => ({}));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({}));
+vi.mock('./cos/cosTaskStore.js', () => ({}));
 vi.mock('./instanceIdentity.js', () => ({ getSelf: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ checkHealth: vi.fn() }));
 vi.mock('./updateChecker.js', () => ({ getCurrentVersion: vi.fn() }));

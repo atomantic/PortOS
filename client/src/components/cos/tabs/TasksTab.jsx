@@ -131,7 +131,7 @@ export default function TasksTab({ completedRevision = 0, tasks, agents = [], ag
   );
 
   // The live agent working each task, keyed by task id — mid-spawn tasks are
-  // active, not queued (lib/cosSpawnWindow.js). Settled client-side here rather
+  // active, not queued (lib/cos/cosSpawnWindow.js). Settled client-side here rather
   // than trusting the route's `spawning` stamp because this tab also has the
   // socket agent feed, which lands ~400ms ahead of the next task refetch; the
   // map is what lets an Active row offer relaunch without its own agent fetch.

@@ -70,7 +70,7 @@ export async function probePrForBranch(sourceWorkspace, branchName, resolvedForg
     : null;
   const published = !!localHead && localHead === String(found.headRefOid || '').toLowerCase();
   const mergeHandoffQueued = published && !!found.url
-    && await (await import('./cosMergeHandoff.js')).hasQueuedMergeHandoff({ prUrl: found.url, prBranch: branchName, headSha: localHead })
+    && await (await import('./cos/cosMergeHandoff.js')).hasQueuedMergeHandoff({ prUrl: found.url, prBranch: branchName, headSha: localHead })
       .catch(() => false);
   return {
     prState: found.detail ? String(found.detail).toUpperCase() : null,

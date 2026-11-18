@@ -11,16 +11,16 @@ vi.mock('../../services/apps.js', () => ({
   PORTOS_APP_ID: 'portos-default'
 }));
 
-vi.mock('../../services/cos.js', () => ({
+vi.mock('../../services/cos/cos.js', () => ({
   isRunning: vi.fn().mockReturnValue(true)
 }));
-vi.mock('../../services/cosTaskStore.js', () => ({
+vi.mock('../../services/cos/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-vite-1' })
 }));
 
 import * as appsService from '../../services/apps.js';
-import { addTask } from '../../services/cosTaskStore.js';
-import { isRunning } from '../../services/cos.js';
+import { addTask } from '../../services/cos/cosTaskStore.js';
+import { isRunning } from '../../services/cos/cos.js';
 import { writeFileSync, readFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';

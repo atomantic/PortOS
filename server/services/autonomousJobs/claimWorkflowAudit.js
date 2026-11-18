@@ -71,7 +71,7 @@ export async function prepareClaimWorkflowAudit(job) {
   })) {
     throw new ServerError('Choose an explicit provider, model and valid investigation budgets before running the PortOS workflow audit.', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const [{ getCosTasks }, { loadState }] = await (dependencies ??= Promise.all([import('../cosTaskStore.js'), import('../cosState.js')]).catch(error => { dependencies = null; throw error; }));
+  const [{ getCosTasks }, { loadState }] = await (dependencies ??= Promise.all([import('../cos/cosTaskStore.js'), import('../cos/cosState.js')]).catch(error => { dependencies = null; throw error; }));
   const [queue, state] = await Promise.all([getCosTasks(), loadState()]);
   const activeTask = queue.tasks.find(task => task.metadata?.jobId === job.id && ['pending', 'in_progress', 'blocked'].includes(task.status));
   const activeAgent = Object.values(state.agents || {}).some(agent => agent.metadata?.jobId === job.id && agent.status === 'running');

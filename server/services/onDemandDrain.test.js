@@ -59,7 +59,7 @@ vi.mock('./onDemandHandoff.js', () => ({
 }));
 
 vi.mock('./apps.js', () => ({ getActiveApps: (...a) => mocks.getActiveApps(...a) }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   isImprovementEnabled: (...a) => mocks.isImprovementEnabled(...a),
   loadState: (...a) => mocks.loadState(...a),
   saveState: (...a) => mocks.saveState(...a),
@@ -69,7 +69,7 @@ vi.mock('./appActivity.js', () => ({
   markAppReviewCooldown: (...a) => mocks.markAppReviewCooldown(...a),
   bindAppReviewAgent: (...a) => mocks.bindAppReviewAgent(...a),
 }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: (...a) => mocks.addTask(...a),
   reviveBlockedTask: (...a) => mocks.reviveBlockedTask(...a),
 }));
@@ -96,7 +96,7 @@ vi.mock('./preflightTaskCard.js', async () => {
     finishPreflightDispatch: (...a) => mocks.finishPreflightDispatch(...a),
   };
 });
-vi.mock('./cosTaskGenerator.js', () => ({
+vi.mock('./cos/cosTaskGenerator.js', () => ({
   prepareManagedAppImprovementTask: (...a) => mocks.prepareManagedAppImprovementTask(...a),
   generateSelfImprovementTaskForType: (...a) => mocks.generateSelfImprovementTaskForType(...a),
   recordDeferredPerpetualDispatch: (...a) => mocks.recordDeferredPerpetualDispatch(...a),

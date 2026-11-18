@@ -20,21 +20,21 @@ import { join } from 'node:path';
 import { completeAgentRun } from './agentRunTracking.js';
 import { isPrivateSecurityTask } from '../../lib/privateSecurityPolicy.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 // The DEFINING module, not a barrel (#3450). This module is one
 // of the three `agentOrchestrator.js` imports, so it can never reach a transition
 // through the facade — an import back from here closes the loop the facade exists
 // to open. Inside the closure the single address for a transition is the module
 // that declares it; a barrel would be a third answer to "where does completeAgent
 // live", which is the thing this sequencing keeps removing.
-import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from '../cosAgentLifecycle.js';
-import { updateTask, addTask, getTaskById, reviveBlockedTask } from '../cosTaskStore.js';
-import { evaluateTasks } from '../cosTaskGenerator.js';
-import { forceSpawnTask } from '../cos.js';
+import { completeAgent, updateAgent, getAgents, getAgentRecord, AGENT_RECORD_UNREADABLE, isLiveAgentRecord, readAgentRecordOrUnreadable } from '../cos/cosAgentLifecycle.js';
+import { updateTask, addTask, getTaskById, reviveBlockedTask } from '../cos/cosTaskStore.js';
+import { evaluateTasks } from '../cos/cosTaskGenerator.js';
+import { forceSpawnTask } from '../cos/cos.js';
 import { AGENT_PAUSED_CATEGORY, PAUSE_METADATA_KEYS, pauseMetadata, isAgentPausedTask, isResumablePausedTask, registerPauseReleaseAdapter } from '../../lib/taskPauseHold.js';
-import { killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from '../cosRunnerClient.js';
+import { killAgentViaRunner, pauseAgentViaRunner, getAgentStatsFromRunner, getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import { runnerEntryShieldsRunningRecord } from '../../lib/runnerAgentLiveness.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cosValidation.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTerminatedAgents, pausedAgents, whenPausedAgentExits, useRunner, unregisterSpawnedAgent } from './agentState.js';
 // Both were extracted out of agentLifecycle.js (issue #2837) so this module no
@@ -43,7 +43,7 @@ import { activeAgents, runnerAgents, completingAgents, spawningTasks, userTermin
 // lets that edge be a plain static import instead of a dynamic-import dodge.
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
 import { RETRY_HOLD_KEY, RETRY_HOLD_SINCE_KEY, isRetryHeld, clearedRetryHoldMetadata, isDeliveryCleanupHeld } from '../../lib/taskRetryHold.js';
-import { CLAIM_METADATA_KEYS } from '../cosTaskClaim.js';
+import { CLAIM_METADATA_KEYS } from '../cos/cosTaskClaim.js';
 import { REQUEUED_AT_KEY, LAST_SPAWNED_AT_KEY } from '../../lib/taskRequeue.js';
 import { resolveTaskTargetBranch } from '../../lib/taskTargetBranch.js';
 import { readRunnerCompletionReceipt, syncRunnerAgents } from './agentRunnerSync.js';

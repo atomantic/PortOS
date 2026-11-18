@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { availableParallelism } from 'node:os';
 import { dirname, join } from 'node:path';
 
-/** Mirrors DEFAULT_CONFIG.maxConcurrentAgents in server/services/cosState.js. */
+/** Mirrors DEFAULT_CONFIG.maxConcurrentAgents in server/services/cos/cosState.js. */
 export const DEFAULT_MAX_CONCURRENT_AGENTS = 3;
 
 /**

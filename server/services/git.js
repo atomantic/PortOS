@@ -1594,7 +1594,7 @@ async function deleteBranchAdmitted(dir, branchName, { local = false, remote = f
 async function deletePinnedLocalBranch(dir, branch, expectedHead) {
   const ref = `refs/heads/${branch}`;
   const observed = await execGitSafe(['rev-parse', '--verify', `${ref}^{commit}`], dir, { ignoreExitCode: true });
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const assertNoOwner = async () => {
     const agents = await readClaimOwnershipAgents();
     const hold = claimCheckoutOwnerReason({ branchName: branch, holderPath: null, sourceWorkspace: dir, agents });
@@ -1887,7 +1887,7 @@ async function clearSequencerState(dir, gitDirPath) {
  * @returns {Promise<string|null>} - Agent id, or null
  */
 export async function findActiveAgentInWorkspace(dir, { includePaused = false, failClosed = false, excludeAgentId = null } = {}) {
-  const { getAgents } = await import('./cosAgentLifecycle.js').catch((err) => {
+  const { getAgents } = await import('./cos/cosAgentLifecycle.js').catch((err) => {
     if (failClosed) throw err;
     return { getAgents: null };
   });
@@ -2097,7 +2097,7 @@ async function remoteRetirementLocalHold(dir, name) {
 }
 
 async function retireMergedRemoteHead(dir, name, context, { excludeBranches } = {}) {
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   if (PROTECTED_BRANCHES.includes(name) || name === context.defaultBranch || name === 'HEAD') return { reason: 'protected branch' };
   const ref = `refs/heads/${name}`;

@@ -3,15 +3,15 @@
  */
 
 import { Router } from 'express';
-import { addTask, reviveBlockedTask } from '../services/cosTaskStore.js';
-import { forceSpawnTask } from '../services/cos.js';
+import { addTask, reviveBlockedTask } from '../services/cos/cosTaskStore.js';
+import { forceSpawnTask } from '../services/cos/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { computeNextJobRun } from '../services/autonomousJobs/scheduler.js';
 import { parseCronToNextRun, isValidRecurrence } from '../services/eventScheduler.js';
 import { getUserTimezone } from '../services/userTimezone.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/cosValidation.js';
+import { createCosJobSchema, updateCosJobSchema, triggerCosJobSchema } from '../lib/cos/cosValidation.js';
 import { getTaskDataInputCatalog } from '../lib/taskDataInputCatalog.js';
 import { generatedJobTaskFields } from '../lib/autonomousJobTask.js';
 import { describeReaimedValues } from '../lib/jobFormFields.js';

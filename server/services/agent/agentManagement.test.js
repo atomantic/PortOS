@@ -44,17 +44,17 @@ const AGENT_MANAGEMENT_SRC = normalizeEol(readFileSync(join(__dirname, 'agentMan
 const { appendRunEvent } = vi.hoisted(() => ({ appendRunEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent }));
 
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(true),
   addTask: vi.fn().mockResolvedValue({ id: 'sys-mocked' }),
   getTaskById: vi.fn(),
   getAllTasks: vi.fn(),
   reviveBlockedTask: vi.fn().mockResolvedValue(true)
 }));
-vi.mock('../cosTaskGenerator.js', () => ({
+vi.mock('../cos/cosTaskGenerator.js', () => ({
   evaluateTasks: vi.fn().mockResolvedValue(undefined)
 }));
-vi.mock('../cos.js', () => ({
+vi.mock('../cos/cos.js', () => ({
   forceSpawnTask: vi.fn().mockResolvedValue({ success: true })
 }));
 
@@ -65,7 +65,7 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => ({
   exec: execMock
 }));
 
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn()
 }));
 
@@ -84,7 +84,7 @@ vi.mock('./agentRunTracking.js', () => ({
 // `isLiveAgentRecord` and the sentinel come from the real module — the reverse
 // prune turns on that predicate, so a re-implemented copy here would keep
 // passing while the real one changed underneath it.
-vi.mock('../cosAgentLifecycle.js', async (importOriginal) => ({
+vi.mock('../cos/cosAgentLifecycle.js', async (importOriginal) => ({
   ...(await importOriginal()),
   completeAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
@@ -92,7 +92,7 @@ vi.mock('../cosAgentLifecycle.js', async (importOriginal) => ({
   getAgentRecord: vi.fn().mockResolvedValue(null),
   readAgentRecordOrUnreadable: vi.fn().mockResolvedValue(null),
 }));
-vi.mock('../cosRunnerClient.js', () => ({
+vi.mock('../cos/cosRunnerClient.js', () => ({
   killAgentViaRunner: vi.fn(),
   pauseAgentViaRunner: vi.fn(),
   getAgentStatsFromRunner: vi.fn(),
@@ -163,13 +163,13 @@ import * as fileUtils from '../../lib/fileUtils.js';
 import { retireDeadAgent, stampLiExecutionVerdict } from './agentFinalization.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { cleanupAgentWorktree, resolveTaskResumePatch } from './agentWorktreeCleanup.js';
-import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from '../cosAgentLifecycle.js';
+import { getAgents, updateAgent, getAgentRecord, readAgentRecordOrUnreadable, AGENT_RECORD_UNREADABLE, completeAgent as markAgentComplete } from '../cos/cosAgentLifecycle.js';
 import { updateRun, getProject } from '../creativeDirector/local.js';
 import { advanceAfterPlanStepSettled } from '../creativeDirector/planAdvance.js';
 import { advanceAfterSceneSettled } from '../creativeDirector/completionHook.js';
-import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from '../cosTaskStore.js';
-import { forceSpawnTask } from '../cos.js';
-import { pauseAgentViaRunner, killAgentViaRunner, getActiveAgentsFromRunner } from '../cosRunnerClient.js';
+import { updateTask, addTask, getTaskById, getAllTasks, reviveBlockedTask } from '../cos/cosTaskStore.js';
+import { forceSpawnTask } from '../cos/cos.js';
+import { pauseAgentViaRunner, killAgentViaRunner, getActiveAgentsFromRunner } from '../cos/cosRunnerClient.js';
 import * as shellService from '../shell.js';
 import { readHostShutdownMarker, clearHostShutdownMarker } from '../../lib/hostShutdown.js';
 import { committedDuringRun } from '../../lib/gitCommitProbe.js';
@@ -2540,7 +2540,7 @@ describe('the orphan sweep finishes an interrupted retry transition (#3373)', ()
     task.metadata = { ...task.metadata, auditDepth: 'deep', auditWorkflow: 'extended-v1' };
     getTaskById.mockResolvedValue(task);
     updateTask.mockResolvedValueOnce({ error: 'Write rejected' });
-    const { emitLog } = await import('../cosEvents.js');
+    const { emitLog } = await import('../cos/cosEvents.js');
     await handleProvenOrphan(task.id, 'agent-dead', getTaskById);
     expect(updateTask).toHaveBeenCalledWith(task.id, expect.objectContaining({ status: 'pending' }), 'user', expect.objectContaining({
       expectedStatus: 'in_progress', expectedMetadata: { retryPendingCleanup: 'agent-dead' }, expectedTask: expect.any(Object),

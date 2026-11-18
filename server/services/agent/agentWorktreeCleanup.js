@@ -16,10 +16,10 @@ import { existsSync } from 'fs';
 import { realpath, rm } from 'node:fs/promises';
 import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
 import { join, resolve } from 'path';
-import { emitLog } from '../cosEvents.js';
-import { addTask, updateTask, getTaskById, getAllTasks } from '../cosTaskStore.js';
-import { forceSpawnTask } from '../cos.js';
-import { getAgents, getAgentRecord, getAgent, updateAgent, recordRepoStateVerification, recordCleanupOutcome } from '../cosAgentLifecycle.js';
+import { emitLog } from '../cos/cosEvents.js';
+import { addTask, updateTask, getTaskById, getAllTasks } from '../cos/cosTaskStore.js';
+import { forceSpawnTask } from '../cos/cos.js';
+import { getAgents, getAgentRecord, getAgent, updateAgent, recordRepoStateVerification, recordCleanupOutcome } from '../cos/cosAgentLifecycle.js';
 import * as git from '../git.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { removeWorktree, classifyWorktreeDirt, listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch } from '../worktreeManager.js';
@@ -39,10 +39,10 @@ import { normalizeForkHead } from '../../lib/forkHead.js';
 import { PR_COMPLETIONS, resolvePrCompletion, PR_COMPLETION_VALUES, PR_CREATION, PR_MISSING_CATEGORY, leavesPrForHuman, prClaimWasVerified, prHeldForOperator } from '../../lib/prDisposition.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, isProviderReviewer, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, normalizeReviewerMaxRounds, prioritizeToolFreeReviewers } from '../../lib/reviewerConfig.js';
 import { findPullRequestForBranch } from '../github.js';
-import { readClaimOwnershipAgents } from '../cosClaimOwnership.js';
-import { MAX_TOTAL_SPAWNS } from '../../lib/cosValidation.js';
+import { readClaimOwnershipAgents } from '../cos/cosClaimOwnership.js';
+import { MAX_TOTAL_SPAWNS } from '../../lib/cos/cosValidation.js';
 import { completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from '../cosClaimOwnershipState.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents as readClaimOwnershipStateAgents } from '../cos/cosClaimOwnershipState.js';
 
 // In-flight cleanup per agentId, so two completion paths racing to clean the
 // SAME agent coalesce onto one run instead of tripping over each other.
@@ -1460,7 +1460,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   if (prCompletion === PR_COMPLETIONS.LEAVE_OPEN) return null;
 
   if (reviewTarget) {
-    const { validateCleanupReviewTarget } = await import('../cosMergeHandoff.js');
+    const { validateCleanupReviewTarget } = await import('../cos/cosMergeHandoff.js');
     if (reviewTarget.prUrl !== prUrl || reviewTarget.branch !== prBranch
       || reviewTarget.ownerTaskId !== originalTask?.id || reviewTarget.ownerId !== originalAgentId) return { blocked: 'Review recovery identity changed' };
     const refused = await validateCleanupReviewTarget({ target: reviewTarget, workspacePath: sourceWorkspace });

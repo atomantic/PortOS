@@ -9,7 +9,7 @@ vi.mock('../../lib/fileUtils.js', async importOriginal => {
 
 import { PATHS } from '../../lib/fileUtils.js';
 import { cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
-import { loadAgentIndex } from '../cosAgentIndex.js';
+import { loadAgentIndex } from '../cos/cosAgentIndex.js';
 import { readCompletionData, storeCompletionData } from './agentCompletionData.js';
 
 afterAll(cleanupTempDataRoots);

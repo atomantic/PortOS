@@ -6,11 +6,11 @@ import {
   cosToolCallParamsSchema,
   cosToolCallSchema,
   cosToolCatalogQuerySchema,
-} from '../lib/cosToolContracts.js';
+} from '../lib/cos/cosToolContracts.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { loadState } from '../services/cosState.js';
+import { loadState } from '../services/cos/cosState.js';
 import { getSettings } from '../services/settings.js';
 import {
   executeCosToolCall,
@@ -18,7 +18,7 @@ import {
   getCosToolCall,
   getCosToolCatalog,
   readCosToolRecipeCatalog,
-} from '../services/cosToolRegistry.js';
+} from '../services/cos/cosToolRegistry.js';
 
 const router = Router();
 

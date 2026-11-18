@@ -17,7 +17,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  */
 
 import { appendFile, writeFile } from 'fs/promises';
-import { appendAgentOutputLines, updateAgent } from '../cosAgentLifecycle.js';
+import { appendAgentOutputLines, updateAgent } from '../cos/cosAgentLifecycle.js';
 import { OUTPUT_BUFFER_CAP, OUTPUT_BUFFER_HEADROOM, RAW_SPOOL_MAX_BYTES } from '../../lib/tuiHandshake.js';
 
 // Status updates stay responsive; raw recovery output can tolerate a longer

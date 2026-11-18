@@ -40,7 +40,7 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   addTask: vi.fn(),
   updateTask: vi.fn(),
   getAllTasks: vi.fn(),
@@ -57,17 +57,17 @@ vi.mock('../services/cosTaskStore.js', () => ({
   resolveTaskChallengeWithRecheck: vi.fn(),
   reviveBlockedTask: vi.fn(),
 }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(),
 }));
-vi.mock('../services/cosTaskGenerator.js', () => ({
+vi.mock('../services/cos/cosTaskGenerator.js', () => ({
   evaluateTasks: vi.fn(),
 }));
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cos/cos.js', () => ({
   forceSpawnTask: vi.fn(),
 }));
 vi.mock('../services/taskEnhancer.js', () => ({ enhanceTaskPrompt: vi.fn() }));
-vi.mock('../services/cosTaskClaimWork.js', () => ({
+vi.mock('../services/cos/cosTaskClaimWork.js', () => ({
   buildClaimWorkTask: vi.fn(),
   buildJiraTicketTask: vi.fn(),
 }));
@@ -80,9 +80,9 @@ vi.mock('../services/releaseSynchronization.js', () => ({ retireReleaseSynchroni
 vi.mock('../services/goalFidelityCalibration.js', () => ({ reportGoalFidelityFalsePositive: vi.fn() }));
 
 import { ServerError } from '../lib/errorHandler.js';
-import { addTask, approveTask, deleteTask, findTaskWithSource, getAllTasks, getCosTasks, getTaskById, getTaskView, getUserTasks, updateTask } from '../services/cosTaskStore.js';
-import { forceSpawnTask } from '../services/cos.js';
-import { getAgents } from '../services/cosAgentLifecycle.js';
+import { addTask, approveTask, deleteTask, findTaskWithSource, getAllTasks, getCosTasks, getTaskById, getTaskView, getUserTasks, updateTask } from '../services/cos/cosTaskStore.js';
+import { forceSpawnTask } from '../services/cos/cos.js';
+import { getAgents } from '../services/cos/cosAgentLifecycle.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
@@ -652,7 +652,7 @@ describe('CoS task routes write operator-action rows (#5594)', () => {
 // reported the one task already being worked as queued too — "1 pending and 1
 // active" for a queue of one. The route settles that once, here, so no consumer
 // has to know the window exists.
-describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () => {
+describe('GET /api/cos/tasks — the spawn window (lib/cos/cosSpawnWindow.js)', () => {
   const live = (taskId) => ({ id: `agent-${taskId}`, taskId, status: 'running', startedAt: new Date().toISOString() });
   const source = () => ({
     tasks: [{ id: 'user/42', status: 'pending' }, { id: 'user/43', status: 'pending' }],
@@ -711,7 +711,7 @@ describe('GET /api/cos/tasks — the spawn window (lib/cosSpawnWindow.js)', () =
 // The bounded views select inside the store (#9677): the route only picks the
 // reader, settles the spawn window on what came back, and shapes the response.
 // The real selection/cursor contracts are pinned against the store's own reader
-// in services/cosTaskStore.test.js.
+// in services/cos/cosTaskStore.test.js.
 describe('GET /api/cos/tasks — bounded view routing (#9677)', () => {
   const live = (taskId) => ({ id: `agent-${taskId}`, taskId, status: 'running', startedAt: new Date().toISOString() });
   const open = () => ({ tasks: [{ id: 'user/1', status: 'pending' }],

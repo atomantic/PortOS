@@ -20,7 +20,7 @@ import { supportsPublicReviewProvider } from '../../lib/providerVendors.js';
  */
 
 import { MODEL_TIERS } from '../../lib/aiToolkit/constants.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { isPublicReviewNoToolProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { getActiveProvider, getAllProviders, getProviderById } from '../providers.js';
 import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../providerStatus.js';

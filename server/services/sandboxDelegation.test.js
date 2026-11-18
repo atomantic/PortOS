@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ root: null, providers: [], run: vi.fn(), stop: vi.fn() }));
-vi.mock('./cosState.js', () => ({ loadState: async () => mock.root }));
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => mock.root }));
 vi.mock('./providers.js', () => ({
   getAllProviders: async () => ({ providers: mock.providers }),
   getSelectableProviders: async () => ({ providers: mock.providers }),

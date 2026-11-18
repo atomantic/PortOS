@@ -59,7 +59,7 @@ import {
   PERSISTENT_MIND_BUNDLE_SCOPES,
   mindBundleRefusal,
 } from '../lib/mindBundleFormat.js';
-import { loadState } from './cosState.js';
+import { loadState } from './cos/cosState.js';
 import {
   choosePersistentMindName,
   createPersistentMindMemory,
@@ -501,7 +501,7 @@ export async function applyPersistentMindBundle({ text, passphrase, choices }) {
     // Lazily imported: applying a bundle is a rare, explicitly-clicked path,
     // and `cos.js` is a heavy closure that every suite reaching this module
     // would otherwise pay for (server/AGENTS.md "Import scoping").
-    const { updateConfig } = await import('./cos.js');
+    const { updateConfig } = await import('./cos/cos.js');
     await updateConfig(configPatch);
     applied.push(...taking.filter((group) => group !== 'identity' && group !== 'memories'));
   }

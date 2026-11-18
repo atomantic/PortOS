@@ -1,5 +1,5 @@
-import { buildQueuedTask } from '../../services/cosTaskIntake.js';
-import { storedForm } from '../cosTaskRows.js';
+import { buildQueuedTask } from '../../services/cos/cosTaskIntake.js';
+import { storedForm } from '../cos/cosTaskRows.js';
 import { describe, it, expect } from 'vitest';
 import { buildAgentRegistration } from './agentRegistrationRecord.js';
 

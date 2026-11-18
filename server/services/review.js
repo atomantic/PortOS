@@ -11,7 +11,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { EventEmitter } from 'events';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { GOAL_FIDELITY_HOLD_EVENT, formatGoalFidelitySummary } from '../lib/goalFidelity.js';
 
 const SOURCE_OWNED_REVIEW_CATEGORIES = new Set([

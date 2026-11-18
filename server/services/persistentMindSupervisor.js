@@ -33,7 +33,7 @@ import {
   requeuePersistentMindWake,
   takeNextPersistentMindWake,
 } from '../lib/persistentMind.js';
-import { isDaemonRunning, loadState, saveState, withStateLock } from './cosState.js';
+import { isDaemonRunning, loadState, saveState, withStateLock } from './cos/cosState.js';
 import {
   attachmentFailure,
   cleanupPersistentMindAttachments,
@@ -44,12 +44,12 @@ import {
 } from './persistentMindAttachments.js';
 
 export { createPersistentMindAttachment, deletePersistentMindAttachment } from './persistentMindAttachments.js';
-import { cosEvents, emitLog } from './cosEvents.js';
+import { cosEvents, emitLog } from './cos/cosEvents.js';
 import { schedule, cancel, getEvent } from './eventScheduler.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
-import { acquireLocalEndpointProviderSlot, localEndpointOfProvider, providerBaseUrl } from './cosLocalEndpointSlots.js';
+import { acquireLocalEndpointProviderSlot, localEndpointOfProvider, providerBaseUrl } from './cos/cosLocalEndpointSlots.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/index.js';
-import { acquireCosActionReservation, acquireCosGlobalSlot } from './cosAdmissionReservations.js';
+import { acquireCosActionReservation, acquireCosGlobalSlot } from './cos/cosAdmissionReservations.js';
 import {
   createPersistentMindCallBoundary,
   persistentMindCapabilityGrantFingerprint,

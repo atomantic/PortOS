@@ -9,7 +9,7 @@ import {
   persistentMindThinkingRequestSchema,
   PERSISTENT_MIND_THINKING_LIMITS,
 } from '../lib/persistentMindThinkingPresets.js';
-import { loadState, saveState, withStateLock } from './cosState.js';
+import { loadState, saveState, withStateLock } from './cos/cosState.js';
 import { resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 import { appendMindEvent } from './agent/agentRunEventLog.js';
 

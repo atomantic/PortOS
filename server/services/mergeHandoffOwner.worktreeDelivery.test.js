@@ -1,24 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { storedForm } from '../lib/cosTaskRows.js';
+import { storedForm } from '../lib/cos/cosTaskRows.js';
 
 // Generic, operator-configured CoS PR delivery (#11435): a live worktree run
 // whose prompt told it to open and merge its own PR may hand a pending merge to
 // the server through its spawn-time binding, never a caller claim.
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'cos/task-1/agent-1', workspaceRepo: 'example/repo' }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
   withStateLock: createFileWriteQueue(),
   loadState: async () => f.state,
   saveState: async state => { f.state = state; f.disk = structuredClone(state); },
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
 }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async path => ({ host: 'github.com', fullName: path === '/repos/worktree' ? f.workspaceRepo : 'example/repo' }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: f.branch, exitCode: 0 }) }));
 import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { registerAgent } from './cos/cosAgentLifecycle.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 
 const BRANCH = 'cos/task-1/agent-1';

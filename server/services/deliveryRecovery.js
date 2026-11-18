@@ -2,7 +2,7 @@ import { normalizeTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
 import { resolveUndeliveredTaskUpdate } from './agent/agentErrorAnalysis.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount } from './spawnBudgetProof.js';
-import { updateTask } from './cosTaskStore.js';
+import { updateTask } from './cos/cosTaskStore.js';
 import { readAllTasksFlat } from './investigationTaskProducer.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 

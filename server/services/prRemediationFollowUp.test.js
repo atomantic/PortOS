@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const addTaskMock = vi.fn();
-vi.mock('./cosTaskStore.js', () => ({ addTask: (...args) => addTaskMock(...args) }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: (...args) => addTaskMock(...args) }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 const execGhMock = vi.fn();
 vi.mock('./github.js', () => ({ execGh: (...args) => execGhMock(...args) }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: { GH_TOKEN: 'example' } }) }));

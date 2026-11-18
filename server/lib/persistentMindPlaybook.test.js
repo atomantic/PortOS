@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COS_TOOL_CALL_LIMITS } from './cosToolContracts.js';
+import { COS_TOOL_CALL_LIMITS } from './cos/cosToolContracts.js';
 import { renderVisitContinuationPrompt } from './persistentMindVisitReceipts.js';
 import {
   CONTINUOUS_PLAY_PLAYBOOK_INSTRUCTIONS,

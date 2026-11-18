@@ -14,13 +14,13 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
   ...makePathsProxy(await importOriginal(), { dataRoot: root }),
   resolveScreenshot: (name) => typeof name === 'string' && basename(name) === name ? join(dir, name) : null,
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: async () => JSON.parse(await readFile(stateFile, 'utf8')),
   saveState: async (state) => writeFile(stateFile, JSON.stringify(state)),
   withStateLock: (fn) => fn(),
 }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: () => false }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
 
 const { createPersistentMindAttachment, cleanupPersistentMindAttachments } = await import('./persistentMindAttachments.js');
 const { _sweepScreenshots } = await import('./screenshotsGc.js');

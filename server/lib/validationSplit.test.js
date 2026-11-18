@@ -4,7 +4,7 @@ import * as peerSyncValidation from './peerSyncValidation.js';
 import * as creativeDirectorValidation from './creativeDirectorValidation.js';
 import * as storyBuilderValidation from './storyBuilderValidation.js';
 import * as agentValidation from './agent/agentValidation.js';
-import * as cosValidation from './cosValidation.js';
+import * as cosValidation from './cos/cosValidation.js';
 import * as mediaValidation from './mediaValidation.js';
 import * as pipelineValidation from './pipelineValidation.js';
 import * as spriteValidation from './spriteValidation.js';

@@ -52,7 +52,7 @@ import { getCommissionPlanError, getAllCreativeToolMetadata } from '../services/
 import { advanceAfterPlanStepSettled } from '../services/creativeDirector/planAdvance.js';
 import { getCreativeAutonomyMode } from '../lib/domainAutonomy.js';
 import { getDomainBudgetStatus } from '../services/domainUsage.js';
-import { loadState } from '../services/cosState.js';
+import { loadState } from '../services/cos/cosState.js';
 const router = Router();
 
 function assertVideoDispatchAvailable(project) {

@@ -20,7 +20,7 @@ import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../li
 vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-retire-dead-agent-') }));
 afterAll(cleanupTempDataRoots);
 
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
   completeAgent: vi.fn(async () => null),
@@ -29,8 +29,8 @@ vi.mock('./agentCompletionCleanup.js', () => ({
   removeCompletionSentinel: vi.fn(async () => undefined),
 }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn(async () => null) }));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})), addTask: vi.fn(async () => ({ id: 'investigation-test' })) }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('../taskTypeHooks.js', () => ({
   canRunTaskOutputHookWithoutPayload: vi.fn(() => true),
   getTaskOutputHook: vi.fn(async () => null),
@@ -65,8 +65,8 @@ vi.mock('../codeReview.js', async (importOriginal) => ({
 
 import { verifyMergedReviewFollowUp } from '../reviewFollowUpCompletion.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
-import { completeAgent } from '../cosAgentLifecycle.js';
-import { updateTask } from '../cosTaskStore.js';
+import { completeAgent } from '../cos/cosAgentLifecycle.js';
+import { updateTask } from '../cos/cosTaskStore.js';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

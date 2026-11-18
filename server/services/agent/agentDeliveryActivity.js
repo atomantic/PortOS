@@ -1,4 +1,4 @@
-import { cosEvents } from '../cosEvents.js';
+import { cosEvents } from '../cos/cosEvents.js';
 
 // Process-local evidence: persisted "running" stages cannot prove liveness after a crash.
 const activities = new Map();

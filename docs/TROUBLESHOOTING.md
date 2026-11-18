@@ -587,7 +587,7 @@ cat data/apps.json | jq .
 
 **Symptom**: the Agents page is slow or unavailable while PM2 reads time out or peer probes fail around the same time.
 
-CoS runtime records share one serialized state queue (`withStateLock` in `server/services/cosState.js`). Slow operations on it log bounded numbers only: no records, tokens, paths, hostnames or task text.
+CoS runtime records share one serialized state queue (`withStateLock` in `server/services/cos/cosState.js`). Slow operations on it log bounded numbers only: no records, tokens, paths, hostnames or task text.
 
 | Line | When |
 |------|------|

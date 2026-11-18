@@ -50,7 +50,7 @@ vi.mock('./jira.js', () => ({
 }));
 // character.js reads completed-task summaries from the task repository; syncTaskXP
 // the stub feeds the fixture each test sets on `store.tasks.completed`.
-vi.mock('./cosTaskRepository.js', () => ({
+vi.mock('./cos/cosTaskRepository.js', () => ({
   listCompletedTaskSummaries: async () => {
     await store.tasks.before?.();
     return store.tasks.completed;

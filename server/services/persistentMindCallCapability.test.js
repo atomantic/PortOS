@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(),
   saveState: vi.fn(async () => {}),
   withStateLock: (fn) => fn(),
@@ -23,7 +23,7 @@ vi.mock('./voice/proactiveSpeech.js', async () => ({
   getLocalMinutes: vi.fn(async () => 12 * 60),
 }));
 
-import { loadState, saveState } from './cosState.js';
+import { loadState, saveState } from './cos/cosState.js';
 import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { getVoiceConfig } from './voice/config.js';

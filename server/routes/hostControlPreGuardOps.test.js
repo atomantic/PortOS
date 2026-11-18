@@ -39,7 +39,7 @@ vi.mock('../services/agent/agentContextMcp.js', () => ({
 }));
 vi.mock('../services/agent/agentPersonalities.js', () => ({ createAgent: effects.createAgent }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn(async () => {}) }));
-vi.mock('../services/cosHealthMonitor.js', () => ({ runHealthCheck: effects.healthCheck }));
+vi.mock('../services/cos/cosHealthMonitor.js', () => ({ runHealthCheck: effects.healthCheck }));
 vi.mock('../services/taskLearning.js', () => ({ backfillFromHistory: effects.backfill }));
 vi.mock('../services/reviewQueue.js', () => ({ __resetAlertsCache: vi.fn() }));
 vi.mock('../services/subscriptions.js', () => ({
@@ -58,20 +58,20 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 // Service graphs the mounted routers import; their handlers are not reached.
 vi.mock('../services/agent/agentPersonalityGenerator.js', () => ({}));
-vi.mock('../services/cosClaimSelection.js', () => ({}));
+vi.mock('../services/cos/cosClaimSelection.js', () => ({}));
 vi.mock('../services/instanceFeatures.js', () => ({}));
 vi.mock('../services/dockerContainment.js', () => ({}));
 vi.mock('../services/aiAssignments.js', () => ({}));
-vi.mock('../services/cos.js', () => ({}));
-vi.mock('../services/cosReports.js', () => ({}));
+vi.mock('../services/cos/cos.js', () => ({}));
+vi.mock('../services/cos/cosReports.js', () => ({}));
 vi.mock('../services/claudeChangelog.js', () => ({}));
-vi.mock('../services/cosAgentLifecycle.js', () => ({}));
-vi.mock('../services/cosAgentArchive.js', () => ({}));
-vi.mock('../services/cosAgentIndex.js', () => ({}));
-vi.mock('../services/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cos/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cos/cosAgentIndex.js', () => ({}));
+vi.mock('../services/cos/cosAgentFeedback.js', () => ({}));
 vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/weeklyDigest.js', () => ({}));
-vi.mock('../services/cosState.js', () => ({}));
+vi.mock('../services/cos/cosState.js', () => ({}));
 vi.mock('../services/userActionScheduleLog.js', () => ({}));
 vi.mock('../services/maintenanceRun.js', () => ({}));
 vi.mock('../services/usage.js', () => ({}));

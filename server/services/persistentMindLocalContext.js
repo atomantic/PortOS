@@ -26,7 +26,7 @@ import {
 } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { appendMindEvent } from './agent/agentRunEventLog.js';
-import { loadState, withStateLock } from './cosState.js';
+import { loadState, withStateLock } from './cos/cosState.js';
 import { getProviderById, updateProvider } from './providers.js';
 import * as ollamaManager from './ollamaManager.js';
 

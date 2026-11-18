@@ -17,7 +17,7 @@
  * shipped `alwaysOn: true`, so the visible symptom was CoS refusing to come
  * back after an update until the user started it by hand, on top of concurrency
  * caps and Persistent Mind grants reverting to defaults. (`alwaysOn` now
- * defaults to `false` too — see `server/services/cosState.js`.)
+ * defaults to `false` too — see `server/services/cos/cosState.js`.)
  *
  * Two rules keep this from recurring, both recorded in the root `AGENTS.md`:
  * a derive-from-existing-data migration ships no seed (declared in

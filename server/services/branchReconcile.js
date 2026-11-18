@@ -44,7 +44,7 @@ import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { ledgerPath, readVerdictLedger, partitionSuperseded, recordVerdictInstruction, recordVerdict, sameDirtyPaths } from './supersededLedger.js';
 import { claimCheckoutOwnerReason, RECONCILE_AGENT_ID_PLACEHOLDER } from '../lib/claimContinuation.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { agentApiCurl } from '../lib/agent/agentApiToken.js';
 import { localApiBaseUrl } from '../lib/networkExposure.js';
 

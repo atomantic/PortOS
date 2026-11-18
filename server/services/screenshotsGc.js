@@ -24,7 +24,7 @@ import { join, basename } from 'path';
 import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
 import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
 import { createSweepScheduler } from './sweepScheduler.js';
-import { getAllTasks } from './cosTaskStore.js';
+import { getAllTasks } from './cos/cosTaskStore.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SHELL_DROP_MAX_AGE_MS = 7 * DAY_MS;

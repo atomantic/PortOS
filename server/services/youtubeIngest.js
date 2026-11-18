@@ -91,7 +91,7 @@ import { recordEvents } from './humanActivity.js';
 // referenceRepos.js does: it avoids pulling the whole Chief-of-Staff graph in
 // behind a brain-side service. The `tasks:changed` event addTask emits is what
 // cos.js listens on to spawn, so queueing behaves identically either way.
-import { addTask } from './cosTaskStore.js';
+import { addTask } from './cos/cosTaskStore.js';
 import { resolveTrackerFilingBlock } from '../lib/workTracker.js';
 
 // The accept rule and its validator are canonical in `lib/youtubeUrl.js` (#6014);

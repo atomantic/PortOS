@@ -17,7 +17,7 @@ import { PR_COMPLETION_VALUES } from './prDisposition.js';
 import {
   normalizePortosSemanticToolGrants,
   portosSemanticToolGrantsSchema,
-} from './cosToolContracts.js';
+} from './cos/cosToolContracts.js';
 import {
   DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS,
   TOOL_ACTIVATION_LIMITS,

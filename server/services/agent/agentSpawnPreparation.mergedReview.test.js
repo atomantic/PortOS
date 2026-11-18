@@ -7,10 +7,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({ loadState: vi.fn(), safety: vi.fn(), owner: vi.fn(), read: vi.fn(), update: vi.fn(),
   app: vi.fn(), origin: vi.fn(), probe: vi.fn(), emit: vi.fn(), releaseMarker: vi.fn() }));
-vi.mock('../cosEvents.js', () => ({ cosEvents: { emit: m.emit }, emitLog: vi.fn() }));
-vi.mock('../cosState.js', () => ({ loadState: m.loadState, readAgentsStateForSafetyCheck: m.safety }));
+vi.mock('../cos/cosEvents.js', () => ({ cosEvents: { emit: m.emit }, emitLog: vi.fn() }));
+vi.mock('../cos/cosState.js', () => ({ loadState: m.loadState, readAgentsStateForSafetyCheck: m.safety }));
 vi.mock('./agentState.js', () => ({ hasActiveTaskOwner: m.owner }));
-vi.mock('../cosTaskStore.js', () => ({ getTaskById: m.read, updateTask: m.update }));
+vi.mock('../cos/cosTaskStore.js', () => ({ getTaskById: m.read, updateTask: m.update }));
 vi.mock('../apps.js', () => ({ getAppById: m.app }));
 vi.mock('../../lib/gitRemote.js', () => ({ getOriginInfo: m.origin }));
 vi.mock('../prProbe.js', () => ({ probeChangeRequestState: m.probe }));

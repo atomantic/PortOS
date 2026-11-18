@@ -7,10 +7,10 @@
 
 import { createMemory, searchMemories, getMemories } from './memoryBackend.js';
 import { generateMemoryEmbedding } from './memoryEmbeddings.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import * as notifications from './notifications.js';
 import { classifyMemories, isAvailable as isClassifierAvailable } from './memoryClassifier.js';
-import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 
 const DEDUP_SIMILARITY_THRESHOLD = 0.82;

@@ -276,7 +276,7 @@ reasoning effort; it tells the agent to say so at the top of its report when it
 is running on a budget provider, rather than quietly lowering the bar. Pin the
 model and effort on the same Schedule card. The server-side vocabulary is
 `DEPFREE_MODES` in `server/lib/auditCatalog.js`, beside the block text in
-`applyDepfreeMode`; `server/lib/cosValidation.js` re-exports the vocabulary.
+`applyDepfreeMode`; `server/lib/cos/cosValidation.js` re-exports the vocabulary.
 
 ## Reachability check and the app's deployment model
 

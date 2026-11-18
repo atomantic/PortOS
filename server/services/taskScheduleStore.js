@@ -14,7 +14,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { isPlainObject } from '../lib/objects.js';
 import { currentTaskTypeName, taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { LEGACY_INTERVAL_TYPES, normalizeIntervalConfig } from './taskScheduleConstants.js';
 import {
   DEFAULT_TASK_INTERVALS,

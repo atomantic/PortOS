@@ -11,7 +11,7 @@ import { claimCheckoutOwnerReason } from '../lib/claimContinuation.js';
 // retire this path once installs holding such queued tasks have upgraded.
 export async function preparePendingMergeRecovery({ app, entry, headSha, launchTaskId = null }) {
   if (!/^[a-f0-9]{40}$/.test(headSha || '')) return { blocked: 'recovery-head-unreadable' };
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const agents = await readClaimOwnershipAgents();
   if (!agents || agents.some(agent => agent.taskId !== launchTaskId
     && (agent.id === entry.sourceAgentId || agent.taskId === entry.sourceTask?.id)
@@ -26,7 +26,7 @@ export async function preparePendingMergeRecovery({ app, entry, headSha, launchT
     // Its fixed producer policy is merge-on-green; never fabricate a task owner.
     task = entry.sourceTask;
   } else {
-    const { getTaskById } = await import('./cosTaskStore.js');
+    const { getTaskById } = await import('./cos/cosTaskStore.js');
     task = await getTaskById(entry.sourceTask?.id).catch(() => null);
     if (!task || task.metadata?.app !== app.id) return { blocked: 'recovery-owner-unreadable' };
     if (['pending', 'in_progress'].includes(task.status) && task.id !== launchTaskId) return { deferred: true };
@@ -75,7 +75,7 @@ export async function validatePendingMergeRecovery({ target, workspacePath, requ
   const latest = await preparePendingMergeRecovery({ app, entry, headSha: target.headSha, launchTaskId });
   if (!isDeepStrictEqual(latest.target, target)) return latest.blocked || 'recovery-owner-changed';
   if (launchTaskId) {
-    const { getTaskById } = await import('./cosTaskStore.js');
+    const { getTaskById } = await import('./cos/cosTaskStore.js');
     const launch = await getTaskById(launchTaskId).catch(() => null);
     if (!launch || !['pending', 'in_progress'].includes(launch.status) || prHeldForOperator(launch)
       || resolvePrCompletion(launch.metadata) !== target.prCompletion

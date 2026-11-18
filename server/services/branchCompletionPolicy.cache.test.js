@@ -8,7 +8,7 @@ vi.mock('../lib/fileUtils.js', async () => ({
   ...await vi.importActual('../lib/fileUtils.js'),
   PATHS: { root: '/synthetic/repository', data: '/synthetic/data', worktrees: '/synthetic/worktrees', get cos() { return runtime.dir ?? '/synthetic/cos'; } },
 }));
-vi.mock('./cosState.js', async () => ({ ...await vi.importActual('./cosState.js'), readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosState.js', async () => ({ ...await vi.importActual('./cos/cosState.js'), readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual('node:fs/promises');
   return { ...actual, readFile: (path, ...rest) => {
@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', async () => {
   } };
 });
 const { readBranchCompletionPolicies } = await import('./branchCompletionPolicy.js');
-const { invalidateArchivedRecord } = await import('./cosAgentIndex.js');
+const { invalidateArchivedRecord } = await import('./cos/cosAgentIndex.js');
 
 const date = '2026-01-01';
 const writeRecord = async (id, patch = {}) => {

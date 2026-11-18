@@ -15,7 +15,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { persistentMindMemoryProtection, existingPersistentMindReview, createPersistentMindReview, mergePersistentMindReview, createPersistentMindReviewOrigin } from '../lib/persistentMindMemory.js';
 import { DEFAULT_MEMORY_LINK_TYPE, isSymmetricMemoryLinkType } from '../lib/memoryLinkTypes.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { findTopK, findAboveThreshold, clusterBySimilarity } from '../lib/vectorMath.js';
 import * as notifications from './notifications.js';
 import * as memoryBM25 from './memoryBM25.js';

@@ -10,7 +10,7 @@ import { CLAIM_WORKFLOW_AUDIT_ID, CLAIM_WORKFLOW_AUDIT_JOB } from './claimWorkfl
 
 import { v4 as uuidv4 } from '../../lib/uuid.js'
 import { validateCommand } from '../../lib/commandSecurity.js'
-import { cosEvents } from '../cosEvents.js'
+import { cosEvents } from '../cos/cosEvents.js'
 import { withLock, resolveIntervalMs } from './constants.js'
 import { loadJobs, saveJobs } from './store.js'
 import { getNextDueJob } from './scheduler.js'

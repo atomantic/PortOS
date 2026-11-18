@@ -40,7 +40,7 @@ vi.mock('../../services/appQualitySchedule.js', () => ({
   buildQualitySchedulePlan: vi.fn(),
   applyQualitySchedulePlan: vi.fn()
 }));
-vi.mock('../../services/cosTaskClaimWork.js', async (importActual) => ({
+vi.mock('../../services/cos/cosTaskClaimWork.js', async (importActual) => ({
   ...(await importActual()),
   resolveClaimWorkMetadata: vi.fn(),
   resolveAppClaimReviewers: vi.fn()
@@ -50,7 +50,7 @@ import * as appsService from '../../services/apps.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { listWorkItems } from '../../services/workItems.js';
 import { buildQualitySchedulePlan, applyQualitySchedulePlan } from '../../services/appQualitySchedule.js';
-import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cosTaskClaimWork.js';
+import { resolveClaimWorkMetadata, resolveAppClaimReviewers } from '../../services/cos/cosTaskClaimWork.js';
 
 describe('Apps Task-Type Routes', () => {
   let app;

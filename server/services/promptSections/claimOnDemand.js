@@ -9,7 +9,7 @@
  */
 
 import { EPIC_DECOMPOSED_LABEL, formatLabelCreateCommand, formatOptionalIssueLabelFlags, formatVolunteerClaimCommands } from '../../lib/dispatchLabels.js';
-import { TASK_PROMPT_KEY } from '../../lib/cosTaskPrompt.js';
+import { TASK_PROMPT_KEY } from '../../lib/cos/cosTaskPrompt.js';
 import { GITHUB_HOST_SETUP } from './constants.js';
 
 // The epic marker and its idempotent `label create` line come from the shared

@@ -25,11 +25,11 @@ vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn(async () => [{ name: 'example-api', status: 'online' }]),
   restartApp: vi.fn(async () => {}),
 }));
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   addTask: vi.fn(async () => ({ id: 'example-task' })),
   reviveBlockedTask: vi.fn(),
 }));
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cos/cos.js', () => ({
   isRunning: () => true,
 }));
 vi.mock('../services/providers.js', () => ({
@@ -79,7 +79,7 @@ import { registerVoiceHandlers } from '../sockets/voice.js';
 import { dispatchTool } from '../services/voice/tools.js';
 import { streamChat } from '../services/voice/llm.js';
 import { restartApp } from '../services/pm2.js';
-import { addTask } from '../services/cosTaskStore.js';
+import { addTask } from '../services/cos/cosTaskStore.js';
 import { captureThought } from '../services/brain.js';
 import { generateImage } from '../services/imageGen/index.js';
 

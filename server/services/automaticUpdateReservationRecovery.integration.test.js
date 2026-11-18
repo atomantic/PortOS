@@ -17,12 +17,12 @@ vi.mock('./activeProcessing.js', async () => ({ getSystemActivity: async () => {
     llm: { trusted: true, active: 0 }, extras: { imageTo3d: [] }, appOperations: listActiveAppOperations(),
     renders: [], update: { inProgress: true }, backup: { inProgress: false } };
 } }));
-vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => {
+vi.mock('./cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => {
   if (fixture.runnerFails) throw new Error('runner unavailable');
   return [];
 } }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.owners[id] ?? null }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => fixture.tasks[id] ?? null }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgentRecord: async id => fixture.owners[id] ?? null }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: async id => fixture.tasks[id] ?? null }));
 vi.mock('./mediaJobQueue/index.js', () => ({ getMediaRecoveryActivity: () => fixture.media, listJobs: () => fixture.jobs }));
 vi.mock('./videoGen/topazJob.js', () => ({ reconcileTopazStatus: async id => {
   if (id.startsWith('terminal-topaz')) fixture.media = { trusted: true, pending: false };

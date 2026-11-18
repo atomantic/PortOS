@@ -20,9 +20,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { STALL_NUDGE_IDLE_MS, STALL_NUDGE_TEXT } from '../../lib/tuiHandshake.js';
 
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 
 const { createTuiSessionController } = await import('./sessionController.js');
 

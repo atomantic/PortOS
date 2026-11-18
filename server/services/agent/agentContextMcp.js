@@ -21,7 +21,7 @@ import {
   formatCosToolCatalog,
   getCosToolCatalog,
   readCosToolRecipeCatalog,
-} from '../cosToolRegistry.js';
+} from '../cos/cosToolRegistry.js';
 
 export const AGENT_CONTEXT_EXCLUSIONS = Object.freeze([
   'Privacy Vault and encrypted privacy records',

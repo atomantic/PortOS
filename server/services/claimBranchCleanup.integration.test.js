@@ -6,13 +6,13 @@ import { destroyGitSandbox, makeGitSandbox } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 
 const fixture = vi.hoisted(() => ({ agent: null, owners: [], probe: null }));
-vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn() }));
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cos.js', () => ({ forceSpawnTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn() }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgent: async () => fixture.agent, getAgentRecord: async () => fixture.agent, getAgents: async () => [],
 }));
 vi.mock('./agent/agentRepoStateVerification.js', () => ({ verifyAgentRepoState: vi.fn(async () => ({})) }));
-vi.mock('./cosClaimOwnershipState.js', async original => ({
+vi.mock('./cos/cosClaimOwnershipState.js', async original => ({
   ...await original(), readClaimOwnershipAgents: vi.fn(async () => fixture.owners),
 }));
 vi.mock('./prProbe.js', async original => ({

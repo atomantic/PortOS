@@ -9,7 +9,7 @@ import * as fs from 'fs/promises';
 import { reloadSettings, withLiveSettingsRestore } from './settings.js';
 import { invalidateAllCaches as invalidateBrainCaches } from './brainStorage.js';
 import { restoreSnapshot } from './backup.js';
-import { withLiveCosRestore } from './cosState.js';
+import { withLiveCosRestore } from './cos/cosState.js';
 import { withLiveMediaModelsRestore } from '../lib/mediaModels.js';
 import { withLiveTaskScheduleRestore, updateSchedule } from './taskScheduleStore.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';

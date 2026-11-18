@@ -12,7 +12,7 @@
  */
 
 import { z } from 'zod';
-import { COS_TOOL_CALL_LIMITS } from './cosToolContracts.js';
+import { COS_TOOL_CALL_LIMITS } from './cos/cosToolContracts.js';
 import { PERSISTENT_MIND_PLAYBOOK_PHASES } from './persistentMindPlaybookPhase.js';
 
 export const PERSISTENT_MIND_PLAYBOOK_SCHEMA_VERSION = 1;

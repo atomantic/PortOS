@@ -297,7 +297,7 @@ export async function queueRepoRepairTask(verdict) {
     'Work in the primary checkout, not a worktree — the state that needs fixing is there.',
   ].filter((line) => line !== null).join('\n');
 
-  return import('./cosTaskStore.js')
+  return import('./cos/cosTaskStore.js')
     .then(async ({ addTask }) => {
       const repoRepairContract = await captureRepoRepairContract(verdict);
       return addTask({

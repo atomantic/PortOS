@@ -87,7 +87,7 @@ export function matchesCompletionTaskDispatch(agent, task) {
 export async function bindCompletionTaskDispatch(agentId, task, previousTask = null) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
     || spawnCount(task.metadata.totalSpawnCount) === null) return false;
-  const { updateAgent } = await import('../cosAgentLifecycle.js');
+  const { updateAgent } = await import('../cos/cosAgentLifecycle.js');
   const proof = task.metadata.spawnBudgetProof;
   const runtime = previousTask?.metadata?.runtimeVerification;
   // Only the first dispatch directly released by the runtime sweep can carry
@@ -115,10 +115,10 @@ export async function bindCompletionTaskDispatch(agentId, task, previousTask = n
 export async function prepareCompletionTaskHandoff(agent, metadataPatch = {}) {
   const binding = agent?.metadata?.completionTaskDispatch;
   if (!binding || binding.taskId !== agent.taskId || agent.status !== 'running') return false;
-  const { getTaskById } = await import('../cosTaskStore.js');
+  const { getTaskById } = await import('../cos/cosTaskStore.js');
   const task = await getTaskById(agent.taskId);
   if (task?.status !== 'in_progress' || (task.taskType || 'user') !== binding.taskType || !matches(task.metadata, binding.expected)) return false;
-  const { updateAgent } = await import('../cosAgentLifecycle.js');
+  const { updateAgent } = await import('../cos/cosAgentLifecycle.js');
   const saved = await updateAgent(agent.id, { metadata: { completionCleanup: { ...agent.metadata.completionCleanup, taskHandoff: {
     version: 1, taskId: task.id, taskType: task.taskType || 'user', startedAt: agent.startedAt,
     expected: entries(task.metadata, VERSION_KEYS),
@@ -130,7 +130,7 @@ export async function prepareCompletionTaskHandoff(agent, metadataPatch = {}) {
 
 /** Replay only the missing task write, never finalization/hooks or another owner's work. */
 export async function recoverCompletionTaskHandoff(agent) {
-  const { getTaskById, updateTask } = await import('../cosTaskStore.js');
+  const { getTaskById, updateTask } = await import('../cos/cosTaskStore.js');
   const current = await getTaskById(agent.taskId);
   if (current?.status === 'in_progress' && current.metadata?.deliveryRecovery === 'cleanup'
     && current.metadata.deliveryRecoveryAgentId === agent.id) return current;
@@ -138,7 +138,7 @@ export async function recoverCompletionTaskHandoff(agent) {
   if (!agent.result?.cleanupPending || intent?.version !== 1 || intent.taskId !== agent.taskId
     || intent.startedAt !== agent.startedAt || current?.status !== 'in_progress'
     || !matches(current.metadata, intent.expected)) return null;
-  const { readAgentsStateForSafetyCheck } = await import('../cosState.js');
+  const { readAgentsStateForSafetyCheck } = await import('../cos/cosState.js');
   const owners = await readAgentsStateForSafetyCheck();
   if (!owners.trusted || Object.values(owners.agents).some(owner => owner.id !== agent.id
     && owner.taskId === agent.taskId && owner.status === 'running')) return null;

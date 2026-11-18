@@ -54,12 +54,12 @@ vi.mock('../../lib/fileUtils.js', async () => {
 
 vi.mock('../../lib/auditSourceEvidence.js', () => ({ captureAuditSourceEvidence: vi.fn() }));
 
-vi.mock('../cosRunnerClient.js', async (importOriginal) => ({
+vi.mock('../cos/cosRunnerClient.js', async (importOriginal) => ({
   ...(await importOriginal()),
   spawnAgentViaRunner: vi.fn(),
   getRunnerHealth: vi.fn().mockResolvedValue({ available: true, uptime: 3600 }),
 }));
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   registerAgent: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined),
@@ -74,15 +74,15 @@ vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   stampLiExecutionVerdict: vi.fn(async (update) => update),
 }));
-vi.mock('../cosEvents.js', () => ({
+vi.mock('../cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
-vi.mock('../cosState.js', async importOriginal => ({
+vi.mock('../cos/cosState.js', async importOriginal => ({
   ...(await importOriginal()),
   getConfig: vi.fn().mockResolvedValue({}),
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   updateTask: vi.fn().mockResolvedValue(undefined),
   getTaskById: vi.fn().mockResolvedValue(null),
 }));
@@ -145,11 +145,11 @@ import { materializePublicReviewInput, materializePublicReviewPatches, readPubli
 import { removeWorktree } from '../worktreeManager.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { buildAgentPrompt, isClaimFlowTask } from './agentPromptBuilder.js';
-import { registerAgent } from '../cosAgentLifecycle.js';
+import { registerAgent } from '../cos/cosAgentLifecycle.js';
 import { createAgentRun } from './agentRunTracking.js';
 import { buildCliSpawnConfig, isTuiProvider, spawnDirectly } from './agentCliSpawning.js';
-import { spawnAgentViaRunner } from '../cosRunnerClient.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { spawnAgentViaRunner } from '../cos/cosRunnerClient.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { newSpawnBudgetEpisode } from '../spawnBudgetProof.js';
 import { spawningTasks, runnerAgents, setUseRunner } from './agentState.js';
 
@@ -226,9 +226,9 @@ afterAll(() => rmSync(TEMP_ROOT, { recursive: true, force: true }));
 
 describe('spawn setup failure after the worktree exists', () => {
   it('blocks private setup errors without publishing source details', async () => {
-    const { getConfig } = await import('../cosState.js');
-    const { emitLog } = await import('../cosEvents.js');
-    const { registerAgent } = await import('../cosAgentLifecycle.js');
+    const { getConfig } = await import('../cos/cosState.js');
+    const { emitLog } = await import('../cos/cosEvents.js');
+    const { registerAgent } = await import('../cos/cosAgentLifecycle.js');
     getConfig.mockRejectedValueOnce(new Error('synthetic sensitive source details'));
     const task = { id: 'private-setup-task', taskType: 'internal', metadata: { analysisType: 'private-security-assessment' } };
     expect(await spawnAgentForTask(task)).toBeNull();

@@ -9,9 +9,9 @@
 import { readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { emitLog } from './cosEvents.js';
-import { getAgents } from './cosAgentLifecycle.js';
-import { getAgentDates, getAgentsByDate } from './cosAgentIndex.js';
+import { emitLog } from './cos/cosEvents.js';
+import { getAgents } from './cos/cosAgentLifecycle.js';
+import { getAgentDates, getAgentsByDate } from './cos/cosAgentIndex.js';
 import { atomicWrite, ensureDir, readJSONFile, formatDuration, PATHS } from '../lib/fileUtils.js';
 import { getWeekId, weekStartFromWeekId } from '../lib/isoWeek.js';
 import { isAgentHandoff } from '../lib/agent/agentOutcome.js';

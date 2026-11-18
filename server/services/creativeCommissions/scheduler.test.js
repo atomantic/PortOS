@@ -79,7 +79,7 @@ vi.mock('../musicEngineCatalog.js', () => ({
 }));
 
 const loadStateMock = vi.fn(async () => ({ config: {} }));
-vi.mock('../cosState.js', () => ({ loadState: (...a) => loadStateMock(...a) }));
+vi.mock('../cos/cosState.js', () => ({ loadState: (...a) => loadStateMock(...a) }));
 const creativeModeMock = vi.fn(() => 'execute');
 vi.mock('../../lib/domainAutonomy.js', () => ({ getCreativeAutonomyMode: (...a) => creativeModeMock(...a) }));
 const budgetMock = vi.fn(async () => ({ withinBudget: true }));

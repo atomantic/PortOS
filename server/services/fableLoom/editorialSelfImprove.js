@@ -13,7 +13,7 @@
  * boundary.
  */
 
-import * as cosTaskStore from '../cosTaskStore.js';
+import * as cosTaskStore from '../cos/cosTaskStore.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { runStagedLLM } from '../stageRunner.js';
 import {

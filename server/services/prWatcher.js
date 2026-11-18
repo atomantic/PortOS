@@ -402,7 +402,7 @@ function followUpPolicy(entry, binding) {
 
 async function currentHandoffOwnerPolicy(binding, { recovery = false } = {}) {
   if (!binding) return null; // Legacy PortOS-opened entries have no task binding.
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const task = binding.taskId && await getTaskById(binding.taskId).catch(() => null);
   if (!task || task.id !== binding.taskId) return { ownerDeferred: true };
   const metadata = task.metadata || {};
@@ -436,17 +436,17 @@ async function notifyPendingMergeTimeout(app, pending, reason, description = nul
 // Manual policy holds remain with their owner and never grant new authority.
 async function recoverHeldCleanup(app, entry, binding) {
   if (entry.cleanup?.reason === 'pr-completion-human-handoff') return entry;
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   if (entry.cleanup?.recoveryTaskId) {
     const task = await getTaskById(entry.cleanup.recoveryTaskId).catch(() => null);
     return task?.status === 'completed' && !entry.cleanup.recoveryCompleted
       ? { ...entry, cleanup: { ...entry.cleanup, status: 'pending', retryAt: 0, recoveryCompleted: true } } : entry;
   }
   if (await currentHandoffOwnerPolicy(binding, { recovery: true })) return entry;
-  const { loadState } = await import('./cosState.js');
+  const { loadState } = await import('./cos/cosState.js');
   const stateConfig = (await loadState().catch(() => null))?.config;
   if (stateConfig && stateConfig.autoApproveInvestigations !== true) return entry;
-  const { addTask } = await import('./cosTaskStore.js');
+  const { addTask } = await import('./cos/cosTaskStore.js');
   const task = await addTask({
     description: `[Recovery] Prepare retained checkout for coordinator retirement: ${entry.prBranch} in ${app.name || app.id}`,
     app: app.id, priority: 'HIGH', isRecovery: true, useWorktree: false,

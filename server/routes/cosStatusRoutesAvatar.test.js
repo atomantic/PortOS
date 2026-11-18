@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // record spelling persists while traversal-shaped values still 400. The
 // service graph behind the route is stubbed — only the exported schema is
 // under test here.
-vi.mock('../services/cos.js', () => ({}));
+vi.mock('../services/cos/cos.js', () => ({}));
 vi.mock('../services/domainUsage.js', () => ({ getAllDomainUsageToday: vi.fn() }));
 vi.mock('../services/memoryEmbeddings.js', () => ({ reinitialize: vi.fn() }));
 

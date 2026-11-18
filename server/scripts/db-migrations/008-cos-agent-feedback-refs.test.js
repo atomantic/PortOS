@@ -17,7 +17,7 @@ vi.mock('node:fs/promises', async () => ({
   readFile: migrationFsp.readFile,
 }));
 
-vi.mock('../../services/cosState.js', () => migrationState);
+vi.mock('../../services/cos/cosState.js', () => migrationState);
 
 import { derivePendingFeedbackRefs, up } from './008-cos-agent-feedback-refs.js';
 

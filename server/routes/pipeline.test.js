@@ -15,7 +15,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   // the absent-file shape, matching `tryReadFile`'s null above.
   tryReadFileStrict: vi.fn().mockResolvedValue({ ok: true, value: null }),
   // Series Autopilot gates on the cos autonomy domain, so the pipeline route
-  // graph now transitively imports `services/cosState.js`, which computes
+  // graph now transitively imports `services/cos/cosState.js`, which computes
   // `join(PATHS.cos, …)` at module load. The mock must therefore carry the
   // CoS/reports/scripts/root path keys it reads, not just `data`.
   PATHS: { data: '/mock/data', cos: '/mock/cos', reports: '/mock/reports', scripts: '/mock/scripts', root: '/mock/root' },

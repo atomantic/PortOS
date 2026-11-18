@@ -31,7 +31,7 @@ const mock = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(async () => mock.root),
   saveState: vi.fn(async () => {}),
   withStateLock: vi.fn(async (fn) => fn()),
@@ -85,7 +85,7 @@ vi.mock('./persistentMindCallCapability.js', () => ({
 vi.mock('./persistentMindPlaybookSignals.js', () => ({
   resolvePersistentMindPlaybookPhase: (...args) => mock.resolvePlaybookPhase(...args),
 }));
-vi.mock('./cosToolRegistry.js', async (importOriginal) => {
+vi.mock('./cos/cosToolRegistry.js', async (importOriginal) => {
   const actual = await importOriginal();
   mock.realRegistry = actual;
   return {

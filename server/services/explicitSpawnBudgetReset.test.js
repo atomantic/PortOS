@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ state: null, pointer: null }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => fixture.state }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => fixture.state }));
 vi.mock('./agent/agentWorktreeCleanup.js', () => ({ resolveTaskResumePatch: async () => fixture.pointer }));
 import { prepareExplicitOrphanBudgetReset } from './explicitSpawnBudgetReset.js';
 

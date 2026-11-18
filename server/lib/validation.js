@@ -2175,7 +2175,7 @@ export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
 export * from './privacyValidation.js';
 export * from './agent/agentValidation.js';
-export * from './cosValidation.js';
+export * from './cos/cosValidation.js';
 export * from './mediaValidation.js';
 export * from './pipelineValidation.js';
 import { stageConfigUpdateSchema } from './pipelineValidation.js';

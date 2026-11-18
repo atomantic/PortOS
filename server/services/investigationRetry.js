@@ -22,8 +22,8 @@
  * would close a load-time cycle.
  */
 
-import { getAllTasks, reviveBlockedTask, updateTask } from './cosTaskStore.js';
-import { emitLog } from './cosEvents.js';
+import { getAllTasks, reviveBlockedTask, updateTask } from './cos/cosTaskStore.js';
+import { emitLog } from './cos/cosEvents.js';
 import { matchesSpawnBudgetProof, spawnBudgetCount, validSpawnBudgetEpisode } from './spawnBudgetProof.js';
 import {
   MAX_AUTO_RETRIES_PER_TASK,
@@ -33,7 +33,7 @@ import {
   couldReleaseBlockedTasks,
   resolveInvestigationRetryTargets,
 } from '../lib/investigationTasks.js';
-import { readAgentsStateForSafetyCheck } from './cosState.js';
+import { readAgentsStateForSafetyCheck } from './cos/cosState.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 
 // What a task's `blockedReason` becomes once the auto-retry loop gives up on it,

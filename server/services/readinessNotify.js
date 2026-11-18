@@ -92,7 +92,7 @@ export async function armReadinessWatchers() {
   stopWatchers = () => offs.splice(0).forEach(off => off());
   try {
     const [{ cosEvents }, { settingsEvents }, { appsEvents }, { providerStatusEvents }, { mediaJobEvents }] = await Promise.all([
-      import('./cosEvents.js'), import('./settings.js'), import('./apps.js'), import('./providerStatus.js'), import('./mediaJobQueue/index.js'),
+      import('./cos/cosEvents.js'), import('./settings.js'), import('./apps.js'), import('./providerStatus.js'), import('./mediaJobQueue/index.js'),
     ]);
     const listen = (bus, events, domains) => {
       for (const event of events) {

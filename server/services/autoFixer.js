@@ -5,7 +5,7 @@
  * Integrates with error handler and CoS task system
  */
 
-import { isRunning } from './cos.js';
+import { isRunning } from './cos/cos.js';
 import { getBootCommit, getInstallState } from './installState.js';
 import { fileInvestigationTask, __resetInvestigationCircuit } from './investigationTaskProducer.js';
 import { investigationFingerprint } from '../lib/investigationTasks.js';

@@ -9,7 +9,7 @@
  */
 
 import { join } from 'path';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { ensureDir, readJSONFile, PATHS, atomicWrite, tryReadFile } from '../../lib/fileUtils.js';
 import { createMutex } from '../../lib/asyncMutex.js';
 import { EXTERNAL_UNTYPED_TASK_TYPE, isSandboxedTaskType, classifyUntypedTask, extractTaskType } from '../../lib/taskTypeBucket.js';

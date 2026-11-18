@@ -22,7 +22,7 @@ const { checkHealth, close, ensureSchema, query, withTransaction } = await impor
 const { requireDbOrSkip } = await import('../../lib/dbTestGate.js');
 const { up: importUp } = await import('./020-cos-agents-from-state.js');
 const { up: retireUp } = await import('./021-retire-state-agents.js');
-const { __makePgCosAgentBackend } = await import('../../services/cosAgentRepository.js');
+const { __makePgCosAgentBackend } = await import('../../services/cos/cosAgentRepository.js');
 
 const health = await checkHealth().catch(() => ({ connected: false }));
 if (health.connected) await ensureSchema();

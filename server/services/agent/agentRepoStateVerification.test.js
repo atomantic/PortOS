@@ -42,12 +42,12 @@ vi.mock('../../lib/gitRemote.js', () => ({ getOriginInfo: vi.fn(async () => ({ h
 vi.mock('../forgeExecOptions.js', () => ({ resolveForgeExecOptions: vi.fn(async () => ({})) }));
 vi.mock('../mergedPrEvidence.js', () => ({ readMergedPrDelivery: vi.fn(async () => ({ prHead: '1'.repeat(40), mergeCommit: '3'.repeat(40), defaultHead: '2'.repeat(40) })) }));
 vi.mock('../completedCheckoutEvidence.js', async original => ({ ...await original(), readCompletedCheckoutIdentity: vi.fn() }));
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosState.js', () => ({ getConfig: vi.fn(async () => ({ autoApproveInvestigations: true })) }));
 vi.mock('./agentCompletionData.js', () => ({ readCompletionData: vi.fn() }));
 vi.mock('./agentCompletionCleanup.js', () => ({ replayAgentCompletionCleanup: vi.fn(async () => {}) }));
-vi.mock('../cosAgentLifecycle.js', async original => ({ recordAbsentCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), recordSwarmCleanupContinuationAttempt: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
-vi.mock('../cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
+vi.mock('../cos/cosAgentLifecycle.js', async original => ({ recordAbsentCheckoutRetirement: vi.fn(async () => true), isSettleableCompletionReceipt: (await original()).isSettleableCompletionReceipt, settleAbsentTaskCompletion: vi.fn(async () => true), retryCompletionCheckoutCapture: vi.fn(async () => false), reserveRepoCleanupRecovery: vi.fn(async () => ({ admitted: true, attempt: 1 })), recordRepoCleanupRecovery: vi.fn(async () => true), recordCleanupOutcome: vi.fn(async () => true), recordSwarmCleanupDelivery: vi.fn(async () => true), recordSwarmCleanupContinuationAttempt: vi.fn(async () => true), updateAgent: vi.fn().mockResolvedValue({}), recordRepoStateRecovery: vi.fn().mockResolvedValue(true), recordRepoStateVerification: vi.fn().mockResolvedValue(true), getAgentRecord: vi.fn(async () => null), recordCompletionCleanup: vi.fn(async () => true) }));
+vi.mock('../cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn().mockResolvedValue([]), withClaimOwnershipLock: fn => fn() }));
 vi.mock('../branchReconcileOutcome.js', () => ({ recordBranchReconcileCheckout: vi.fn(async (_app, release) => ({ remaining: [release] })), recordBranchReconcileOutcome: vi.fn().mockResolvedValue({}) }));
 vi.mock('../taskScheduleStore.js', () => ({ loadSchedule: vi.fn(async () => ({})) }));
 vi.mock('../taskSchedule.js', () => ({ acknowledgeSwarmCleanupRefill: vi.fn(async () => true) }));
@@ -57,8 +57,8 @@ vi.mock('../heldCheckoutRecovery.js', () => ({
   readMergedDelivery: vi.fn().mockResolvedValue(true),
   assertAutomaticRetirementAllowed: vi.fn(async () => {}),
 }));
-vi.mock('../cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosEvents.js', async original => ({ ...await original(), emitLog: vi.fn() }));
+vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-recovery-1' }),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
   getTaskById: vi.fn().mockResolvedValue(null),
@@ -94,7 +94,7 @@ vi.mock('../notifications.js', () => ({
 vi.mock('../brainTaskThreads.js', () => ({ ensureTaskThread: vi.fn().mockResolvedValue({}), reconcileCleanupThreads: vi.fn(async () => ({ candidates: 0, archived: 0 })) }));
 vi.mock('../../lib/execGit.js', () => ({ execGit: vi.fn() }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
-vi.mock('../cosState.js', async (importOriginal) => {
+vi.mock('../cos/cosState.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -106,22 +106,22 @@ import { inspectOrQueueCompletedReview } from '../repoCleanupRecovery.js';
 import { readLocalBranchPresence, readCheckoutPathPresence } from '../repoCleanupObservation.js';
 import { readMergedPrDelivery } from '../mergedPrEvidence.js';
 import { readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
-import { readClaimOwnershipAgents } from '../cosClaimOwnership.js';
-import { recordSwarmCleanupContinuationAttempt, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from '../cosAgentLifecycle.js';
+import { readClaimOwnershipAgents } from '../cos/cosClaimOwnership.js';
+import { recordSwarmCleanupContinuationAttempt, retryCompletionCheckoutCapture, getAgentRecord, recordCleanupOutcome, recordSwarmCleanupDelivery, reserveRepoCleanupRecovery, recordRepoStateRecovery, recordRepoStateVerification } from '../cos/cosAgentLifecycle.js';
 import { readCompletionData } from './agentCompletionData.js';
-import { recordCompletionCleanup, recordAbsentCheckoutRetirement, settleAbsentTaskCompletion } from '../cosAgentLifecycle.js';
+import { recordCompletionCleanup, recordAbsentCheckoutRetirement, settleAbsentTaskCompletion } from '../cos/cosAgentLifecycle.js';
 import { replayAgentCompletionCleanup } from './agentCompletionCleanup.js';
 import { recheckAgentCleanup, resumeAgentCompletionRetirement, resumeDeferredRepoStateVerifications, verifyAgentRepoState, sweepRepoStateVerifications, bindCompletionRetirementEvents, REPO_STATE_REMEDIATIONS } from './agentRepoStateVerification.js';
 import { readBranchCompletionPolicies } from '../branchCompletionPolicy.js';
 import { releaseRetryHold } from './agentWorktreeCleanup.js';
 import { verifyCleanupClaimDisposition } from '../claimDisposition.js';
-import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { getTaskById, updateTask } from '../cos/cosTaskStore.js';
 import { recordBranchReconcileCheckout, recordBranchReconcileOutcome } from '../branchReconcileOutcome.js';
 import { loadSchedule } from '../taskScheduleStore.js';
 import { acknowledgeSwarmCleanupRefill } from '../taskSchedule.js';
 import { lstat } from 'node:fs/promises';
 import { assertAutomaticRetirementAllowed, readMergedDelivery, retireInventoriedCheckout } from '../heldCheckoutRecovery.js';
-import { addTask, getAllTasks } from '../cosTaskStore.js';
+import { addTask, getAllTasks } from '../cos/cosTaskStore.js';
 import { ensureTaskThread } from '../brainTaskThreads.js';
 import { listWorktrees } from '../worktreeManager.js';
 import { listRemoteHeads, cleanupMerged } from '../branchReconcile.js';
@@ -131,7 +131,7 @@ import { findMergeRequestForBranch } from '../gitlab.js';
 import { getAppById } from '../apps.js';
 import { resolveRetirementApp } from '../retirementAppScope.js';
 import { addNotification, exists as notificationExists } from '../notifications.js';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { readPendingMergePrs } from '../prWatcher.js';
 import { execGit } from '../../lib/execGit.js';
 import { existsSync } from 'fs';
@@ -2605,7 +2605,7 @@ describe('durable completion replay', () => {
     prior.metadata.completionCleanup.retryAt = new Date(Date.now() - 1).toISOString();
     getTaskById.mockResolvedValue(task());
     expect(await sweepRepoStateVerifications()).toMatchObject({ checked: 1 });
-    const { recordCompletionCleanup } = await import('../cosAgentLifecycle.js');
+    const { recordCompletionCleanup } = await import('../cos/cosAgentLifecycle.js');
     expect(recordCompletionCleanup).toHaveBeenCalledWith('agent-1', prior.startedAt, expect.objectContaining({ replayAttempts: 6, retryAt: expect.any(String) }));
     expect(addTask).not.toHaveBeenCalled();
   });

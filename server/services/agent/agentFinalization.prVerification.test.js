@@ -55,10 +55,10 @@ vi.mock('../git.js', () => ({
   getDefaultBranch: (...args) => getDefaultBranchMock(...args),
 }));
 
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 
 const completeAgentMock = vi.fn();
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: vi.fn(async () => null),
   updateAgent: vi.fn(async () => null),
@@ -66,7 +66,7 @@ vi.mock('../cosAgentLifecycle.js', () => ({
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('../providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),

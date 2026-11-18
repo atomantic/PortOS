@@ -885,7 +885,7 @@ export function applyAuditModeWrapper(promptTemplate, modeInstructions) {
 // runtime, security-sensitive protocols and primitives, native bindings,
 // CI-required tooling) and is written for the strongest model at max effort.
 // Catalog-owned, like the mode contracts above, so the sanitizer
-// (lib/cosValidation.js), the generator, and the prompt-expansion guard all
+// (lib/cos/cosValidation.js), the generator, and the prompt-expansion guard all
 // read ONE list and a value cannot be settable yet silently absent from the
 // prompt. Absent = default.
 export const DEPFREE_MODES = ['default', 'heavy', 'extreme'];

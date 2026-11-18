@@ -19,8 +19,8 @@ import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { DOMAIN_IDS } from '../lib/domainAutonomy.js';
 import { getDomainBudget, hasBudget, evaluateBudget } from '../lib/domainBudgets.js';
-import { loadState } from './cosState.js';
-import { pendingCosActionReservations } from './cosAdmissionReservations.js';
+import { loadState } from './cos/cosState.js';
+import { pendingCosActionReservations } from './cos/cosAdmissionReservations.js';
 
 export const USAGE_FILE = join(PATHS.cos, 'domain-usage.json');
 

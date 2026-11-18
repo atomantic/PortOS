@@ -33,14 +33,14 @@ vi.mock('../git.js', () => ({ resolveForgeForRepo: vi.fn(async () => ({ cli: 'gh
 vi.mock('../../lib/workTracker.js', async (importOriginal) => ({
   ...(await importOriginal()), resolveRepoForgeTarget: vi.fn(async () => null),
 }));
-vi.mock('../cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
+vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn(), on: vi.fn() } }));
 vi.mock('../../lib/primaryCheckoutGuard.js', async (importOriginal) => ({
   ...(await importOriginal()),
   detectPrimaryCheckoutDrift: vi.fn(async () => ({ drifted: false })),
 }));
 
 const completeAgentMock = vi.fn();
-vi.mock('../cosAgentLifecycle.js', () => ({
+vi.mock('../cos/cosAgentLifecycle.js', () => ({
   getAgent: vi.fn(async () => null),
   getAgentRecord: vi.fn(async () => null),
   getAgents: vi.fn(async () => []),
@@ -49,10 +49,10 @@ vi.mock('../cosAgentLifecycle.js', () => ({
 }));
 
 const getAgentsByDateMock = vi.fn(async () => []);
-vi.mock('../cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAgentsByDateMock(...args) }));
+vi.mock('../cos/cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAgentsByDateMock(...args) }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
 vi.mock('../providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
 vi.mock('../providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
@@ -113,10 +113,10 @@ import { execGit } from '../../lib/execGit.js';
 import { execGh, findPullRequestForBranch, getPullRequestState } from '../github.js';
 import { execGlab } from '../gitlab.js';
 import { resolveForgeForRepo } from '../git.js';
-import { getAgentRecord, getAgents } from '../cosAgentLifecycle.js';
+import { getAgentRecord, getAgents } from '../cos/cosAgentLifecycle.js';
 import { detectPrimaryCheckoutDrift, PRIMARY_CHECKOUT_MUTATED_REASON } from '../../lib/primaryCheckoutGuard.js';
 import { finalizeAgent } from './agentFinalization.js';
-import { cosEvents, emitLog } from '../cosEvents.js';
+import { cosEvents, emitLog } from '../cos/cosEvents.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { declaresNoCommitCriterion, getTaskOutputHook, isProgrammaticIoTaskType, resolveTaskHookType } from '../taskTypeHooks.js';

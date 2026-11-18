@@ -24,6 +24,7 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const CATALOG_DIRS = Object.freeze([
   'server/lib',
   'server/lib/agent',
+  'server/lib/cos',
   'server/lib/musicVideo',
   'client/src/lib',
   'client/src/hooks',

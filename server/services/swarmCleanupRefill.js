@@ -1,6 +1,6 @@
 import { createSingleFlight } from '../lib/singleFlight.js';
-import { loadState, isDaemonRunning, isImprovementEnabled, canQueueImprovementTasks } from './cosState.js';
-import { emitLog } from './cosEvents.js';
+import { loadState, isDaemonRunning, isImprovementEnabled, canQueueImprovementTasks } from './cos/cosState.js';
+import { emitLog } from './cos/cosEvents.js';
 
 // Delivery and physical retirement are separate obligations. This path opens
 // the next drain slot only after exact merged-head evidence for every captured
@@ -12,8 +12,8 @@ export function refillDeliveredCleanupSwarm(agentId, { wake, refillPlan }) {
     const state = await loadState();
     if (state.paused || !isImprovementEnabled(state)) return;
     const [{ getAgentRecord, markSwarmCleanupContinuationIssued }, { getInstanceId }, contract, scheduleMod, store, generator] = await Promise.all([
-      import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'), import('./taskSchedule.js'),
-      import('./cosTaskStore.js'), import('./cosTaskGenerator.js'),
+      import('./cos/cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./swarmCleanupDelivery.js'), import('./taskSchedule.js'),
+      import('./cos/cosTaskStore.js'), import('./cos/cosTaskGenerator.js'),
     ]);
     const agent = await getAgentRecord(agentId);
     const task = agent && await store.getTaskById(agent.taskId);

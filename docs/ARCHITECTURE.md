@@ -85,7 +85,8 @@ PortOS/
 │   ├── routes/                # HTTP endpoint handlers
 │   │   └── browser.js         # /api/browser/* endpoints
 │   ├── services/              # Business logic
-│   │   ├── cos.js             # Chief of Staff core
+│   │   ├── cos/               # Chief of Staff
+│   │   │   └── cos.js        # Task scheduling and lifecycle
 │   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
 │   │   ├── agent/             # Agent orchestration and execution
 │   │   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
@@ -301,7 +302,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 - CLI and API-based providers
 - Output streaming and capture
 
-### CoS Service (`server/services/cos.js`)
+### CoS Service (`server/services/cos/cos.js`)
 - Task evaluation and prioritization
 - Agent orchestration
 - Health monitoring

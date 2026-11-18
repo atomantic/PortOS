@@ -18,7 +18,7 @@
 import { readdir, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
-import { emitLog, cosEvents } from './cosEvents.js';
+import { emitLog, cosEvents } from './cos/cosEvents.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';
 
