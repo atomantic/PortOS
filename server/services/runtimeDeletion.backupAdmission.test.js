@@ -12,10 +12,10 @@ vi.mock('./apps.js', () => ({ getAppById: async () => null }));
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: async () => {} }));
 vi.mock('./cosRunnerClient.js', () => ({ isRunnerAvailable: async () => false, isRunnerReachable: async () => false,
   initCosRunnerConnection() {}, onCosRunnerEvent() {} }));
-vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: async () => {} }));
-vi.mock('./agentOrchestrator.js', () => ({ spawnAgentForTask: async () => {} }));
-vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: async () => {} }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: async () => {} }));
+vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: async () => {} }));
+vi.mock('./agent/agentOrchestrator.js', () => ({ spawnAgentForTask: async () => {} }));
+vi.mock('./agent/agentLifecycle.js', () => ({ handleAgentCompletion: async () => {} }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: async () => {} }));
 const { createFeatureAgent, deleteFeatureAgent } = await import('./featureAgents.js');
 const { initSpawner } = await import('./subAgentSpawner.js');
 const { acquireBackupSnapshotCut } = await import('../lib/backupSnapshotBoundary.js');

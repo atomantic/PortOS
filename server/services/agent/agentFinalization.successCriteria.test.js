@@ -1,0 +1,638 @@
+/**
+ * Tests for `evaluateSuccessCriteria` (issue #2344) — the success-criteria
+ * validation verdict finalizeAgent stamps onto every completion, distinct from
+ * the runner's exit-code `success`. The run-window commit probe is mocked so
+ * these run without git; the focus is the null-sentinel gating (no criterion
+ * declared vs declared-and-checked).
+ */
+
+// The goal-fidelity gate (#5994) reaches a local model at completion. Pinned OFF
+// here so these tests exercise the path they are about without depending on the
+// developer's own reviewer settings — and so a machine that HAS a local reviewer
+// configured never has its suite dispatch a real review request.
+vi.mock('../codeReview.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getGoalFidelityConfig: vi.fn(async () => null),
+}));
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+vi.mock('./agentRunTracking.js', () => ({
+  // finalizeAgent's imports from this module — stubbed so the graph loads.
+  createAgentRun: vi.fn(),
+  completeAgentRun: vi.fn(),
+}));
+vi.mock('../../lib/gitCommitProbe.js', () => ({
+  committedDuringRun: vi.fn(),
+}));
+
+import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
+import { committedDuringRun } from '../../lib/gitCommitProbe.js';
+import { SKIP_LEARNING_VERDICT } from '../../lib/learningVerdict.js';
+import * as repoRepair from '../updateRepoRepairCompletion.js';
+import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
+
+// The run window every commit-criterion assertion below is evaluated against
+// (#3637). A criterion-declaring call MUST pass one — without a window there is
+// no way to attribute a commit to this run, and the verdict is the null sentinel.
+const STARTED_AT = Date.parse('2026-08-09T00:00:00.000Z');
+
+describe('evaluateSuccessCriteria (#2344)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('uses verified checkout repair rather than a run-window commit, and fails closed on inspection errors', async () => {
+    const verify = vi.spyOn(repoRepair, 'verifyUpdateRepoRepairCompletion');
+    const args = { task: { id: 'sys-repair', taskType: 'internal', description: repoRepair.REPO_REPAIR_TASK_DESCRIPTION,
+      metadata: { app: PORTOS_APP_ID, useWorktree: 'false' } }, agentId: 'agent-repair',
+      workspacePath: '/example/repo', success: true, startedAt: STARTED_AT };
+    try {
+      committedDuringRun.mockResolvedValue(false);
+      verify.mockResolvedValueOnce(true);
+      expect(await evaluateSuccessCriteria(args)).toBe(true);
+      expect(verify).toHaveBeenCalledWith(args.task, args.agentId, args.workspacePath);
+      verify.mockResolvedValueOnce(false);
+      expect(await evaluateSuccessCriteria(args)).toBe(false);
+      verify.mockRejectedValueOnce(new Error('inspection unavailable'));
+      expect(await evaluateSuccessCriteria(args)).toBe(false);
+      expect(committedDuringRun).not.toHaveBeenCalled();
+      expect(await evaluateSuccessCriteria({ ...args, task: { ...args.task, description: 'Ordinary implementation' } })).toBe(false);
+      expect(committedDuringRun).toHaveBeenCalledWith(args.workspacePath, STARTED_AT);
+    } finally {
+      verify.mockRestore();
+    }
+  });
+
+  it('returns null (no declared criterion) for interactive/user tasks', async () => {
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'user' }, workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a user-terminated run — no criterion was evaluated', async () => {
+    const out = await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, terminatedByUser: true, workspacePath: '/w' });
+    expect(out).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('returns null when there is no task id or no workspace to validate against', async () => {
+    expect(await evaluateSuccessCriteria({ task: { taskType: 'internal' }, workspacePath: '/w' })).toBeNull();
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' } })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('returns null for pipeline/media tasks (they deliver artifacts, not a commit)', async () => {
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal', metadata: { pipeline: true } }, workspacePath: '/w' })).toBeNull();
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal', metadata: { mediaJob: true } }, workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('never applies the commit criterion to a programmatic-I/O task (#2700)', async () => {
+    // A layered-intelligence run is explicitly told NOT to commit or open a PR: it
+    // writes `.agent-done` and its output hook does the filing. Checking for a
+    // commit would stamp validationPassed:false on every correct run —
+    // and since a declared verdict OVERRIDES the runner's exit code in task-learning,
+    // that recorded successful LI runs as failures and drove the type's success rate
+    // to ~0.
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence', selfImprovement: true } };
+    await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, hookResult: { ran: true, outcome: { action: 'filed' } } });
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Tracker-filing types (#3273). `reference-watch` and `ux` deliver their findings
+ * as tracker items, not as a commit — but only on a FORGE tracker: on a
+ * `plan`-tracker app the same type appends + commits PLAN.md checklist items. The
+ * static NON_COMMITTING_COORDINATOR_TASK_TYPES set cannot express "sometimes", so
+ * the criterion keys on the per-task `worktreeChangesExpected` flag the generator
+ * already derives from the resolved tracker.
+ */
+describe('evaluateSuccessCriteria — tracker-filing tasks (#3273)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const uxTask = (worktreeChangesExpected) => ({
+    id: 't1', taskType: 'internal',
+    metadata: { analysisType: 'ux', ...(worktreeChangesExpected === undefined ? {} : { worktreeChangesExpected }) },
+  });
+
+  it('declares NO criterion when worktreeChangesExpected is false (forge tracker)', async () => {
+    expect(await evaluateSuccessCriteria({ task: uxTask(false), workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts the string form the TASKS.md round-trip produces', async () => {
+    expect(await evaluateSuccessCriteria({ task: uxTask('false'), workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('still applies the commit criterion when the flag is TRUE (plan tracker)', async () => {
+    committedDuringRun.mockResolvedValue(true);
+    expect(await evaluateSuccessCriteria({ task: uxTask(true), workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('still applies the commit criterion when the flag is ABSENT', async () => {
+    committedDuringRun.mockResolvedValue(false);
+    expect(await evaluateSuccessCriteria({ task: uxTask(undefined), workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('retro-fixes reference-watch on a forge tracker (the same latent artifact)', async () => {
+    const task = { id: 't2', taskType: 'internal', metadata: { analysisType: 'reference-watch', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('resolves the archived-agent projection the same way as the live task', async () => {
+    const task = { id: 't3', taskType: 'internal', metadata: { taskAnalysisType: 'ux', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does NOT let the flag exempt a non-tracker-filing type from its commit criterion', async () => {
+    // `worktreeChangesExpected` is a user-settable per-app taskMetadata override
+    // accepted for EVERY task type — it exists to opt a run out of the TUI
+    // idle-complete clean-tree gate, not to disable success validation. Ungated,
+    // a `security` run that exited 0 having committed nothing would be recorded
+    // as a pass instead of the honest miss it is.
+    committedDuringRun.mockResolvedValue(false);
+    const task = { id: 't4', taskType: 'internal', metadata: { analysisType: 'security', worktreeChangesExpected: false } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+});
+
+/**
+ * The programmatic-I/O criterion (#2727): these tasks declare their OWN success
+ * criterion — "the sentinel parsed and the output hook accepted it" — instead of
+ * declaring none and falling through to the runner's exit code, which recorded an
+ * exit-0 run that produced nothing usable as a success.
+ */
+describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const liTask = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence' } };
+
+  it('records an exit-0 run with a missing/malformed sentinel as a FAILURE', async () => {
+    // The hook reports `unparseable-response` when the `.agent-done` payload is
+    // absent or unparseable — the run exited clean but produced nothing usable.
+    const hookResult = { ran: true, outcome: { action: 'no-op', reason: 'unparseable-response' } };
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult })).toBe(false);
+  });
+
+  it('records an exit-0 run whose output hook THREW as a FAILURE', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
+  });
+
+  it('records an exit-0 run whose hook accepted the payload as a SUCCESS — no commit required', async () => {
+    const hookResult = { ran: true, outcome: { app: 'a1', action: 'filed', reason: null } };
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult })).toBe(true);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('treats benign hook reasons (no-proposal, duplicate, scope-suppressed) as a SUCCESS', async () => {
+    // The agent did its job; the deterministic step simply had nothing to file.
+    for (const reason of ['no-proposal', 'duplicate', 'semantic-duplicate', 'scope-suppressed', 'tracker-read-failed']) {
+      expect(await evaluateSuccessCriteria({
+        task: liTask, workspacePath: '/w', success: true, hookResult: { ran: true, outcome: { action: 'no-op', reason } }
+      })).toBe(true);
+    }
+  });
+
+  it('records a non-zero exit as a FAILURE regardless of the hook outcome', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: false, hookResult: { ran: true, outcome: { action: 'no-op', reason: 'agent-failed' } }
+    })).toBe(false);
+  });
+
+  it('declares NO verdict (null) when no hook ran — "not evaluated" must not become "accepted"', async () => {
+    // Sentinel discipline: a registered type whose module exports no
+    // processTaskOutput yields `{ ran: false }`. Nothing judged the output, so the
+    // verdict is undeclared and task-learning falls back to the exit code.
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult: { ran: false } })).toBeNull();
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true })).toBeNull();
+  });
+
+  it('declares NO verdict for a user-terminated programmatic-I/O run', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: false, terminatedByUser: true, hookResult: { ran: true, threw: true }
+    })).toBeNull();
+  });
+
+  it('judges the hook result even with no workspace to validate against', async () => {
+    // The commit criterion needs a workspace; the programmatic-I/O criterion does
+    // not — a hook that already ran is a real verdict even if the worktree is gone.
+    expect(await evaluateSuccessCriteria({
+      task: liTask, success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
+  });
+
+  it('applies the criterion to a task typed on taskType alone, not just metadata.analysisType', async () => {
+    // The criterion gate and the hook-dispatch gate share one resolver
+    // (resolveTaskHookType), so a task shaped with the scheduled type at the top
+    // level can't run a hook AND still get commit-checked (the #2700 bug, one shape
+    // over).
+    const task = { id: 't9', taskType: 'layered-intelligence' };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `resolveProgrammaticIoVerdict` is the pure criterion behind the branch above.
+ * Tested directly so the three-way sentinel (accepted / rejected / undeclared) is
+ * pinned without routing every case through evaluateSuccessCriteria.
+ */
+describe('resolveProgrammaticIoVerdict (#2727)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('rejects a run whose hook threw, and one whose output was unparseable', () => {
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, threw: true } })).toBe(false);
+    expect(resolveProgrammaticIoVerdict({
+      success: true, hookResult: { ran: true, outcome: { reason: 'unparseable-response' } }
+    })).toBe(false);
+  });
+
+  it('accepts a run whose hook processed the output', () => {
+    expect(resolveProgrammaticIoVerdict({
+      success: true, hookResult: { ran: true, outcome: { action: 'filed', reason: null } }
+    })).toBe(true);
+  });
+
+  it('declares no verdict when nothing evaluated the output', () => {
+    // No hook ran / no hook result at all / the dispatch timed out — none of these
+    // are a rejection, so task-learning falls back to the exit code.
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: false } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: null })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: false, timedOut: true } })).toBeNull();
+  });
+
+  it('declares no verdict when the hook ran but handed back no structured outcome', () => {
+    // `ran: true` with a missing/non-object outcome must NOT optional-chain its way
+    // into the success default — nothing evaluated the output.
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: undefined } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: 'nope' } })).toBeNull();
+  });
+
+  it('declares no verdict when the exit-code result is absent/non-boolean', () => {
+    // "Not supplied" must not silently mean "the run failed".
+    expect(resolveProgrammaticIoVerdict({ hookResult: { ran: true, outcome: { reason: null } } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: undefined, hookResult: { ran: true, outcome: { reason: null } } })).toBeNull();
+  });
+
+  it('treats a downstream tracker failure as a SUCCESS — the output was accepted', () => {
+    // `file-failed` / `tracker-read-failed` mean the reasoning landed but the forge
+    // was unreachable. That is environmental: blaming the run would tank the type's
+    // success rate (and auto-park it) every time `gh` has a bad afternoon. Raised in
+    // review on #2727 and deliberately kept.
+    for (const reason of ['file-failed', 'tracker-read-failed']) {
+      expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: { reason } } })).toBe(true);
+    }
+  });
+
+  it('asks task-learning to SKIP a run whose hook aborted before it could look at the output (#4107)', () => {
+    // `no-app` / `app-not-found` return before the payload is validated (and before
+    // the hook records anything). Nothing evaluated the agent's output, so neither
+    // recordable answer is honest: `false` blames the model for a user deleting an
+    // app mid-run, and the undeclared `null` this used to return still recorded the
+    // run against its EXIT CODE — banking a free win for the type on every exit-0.
+    for (const reason of ['no-app', 'app-not-found']) {
+      const verdict = resolveProgrammaticIoVerdict({
+        success: true, hookResult: { ran: true, outcome: { action: 'no-op', reason } }
+      });
+      expect(verdict).toBe(SKIP_LEARNING_VERDICT);
+      // Explicitly NOT collapsed into any of the three recordable verdicts.
+      expect(verdict).not.toBeNull();
+      expect(typeof verdict).not.toBe('boolean');
+    }
+  });
+
+  it('still skips the run when the exit code says it FAILED', () => {
+    // The skip is about "nothing evaluated this run", not about the exit code —
+    // an aborted hook has no verdict either way, so a non-zero exit must not be
+    // banked as a failure for the type either.
+    expect(resolveProgrammaticIoVerdict({
+      success: false, hookResult: { ran: true, outcome: { action: 'no-op', reason: 'no-app' } }
+    })).toBe(SKIP_LEARNING_VERDICT);
+  });
+
+  it('propagates the skip verdict out through evaluateSuccessCriteria', async () => {
+    // finalizeAgent stamps whatever this returns onto `result.validationPassed`,
+    // which is the only channel the learning writer reads — so the sentinel has to
+    // survive the wrapper, not just the pure criterion.
+    const task = { id: 't10', taskType: 'layered-intelligence' };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true,
+      hookResult: { ran: true, outcome: { action: 'no-op', reason: 'app-not-found' } }
+    })).toBe(SKIP_LEARNING_VERDICT);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The hard bound that keeps a hung output hook from pinning a CoS concurrency slot
+ * until restart — the mitigation matters enough to pin directly (#2727).
+ */
+describe('withOutputHookTimeout (#2727)', () => {
+  beforeEach(() => vi.useRealTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('resolves a hung dispatch to the undeclared sentinel rather than hanging finalize', async () => {
+    vi.useFakeTimers();
+    // A hook that never settles — the wedge case.
+    const settled = withOutputHookTimeout(new Promise(() => {}), { agentId: 'a1', timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    // `ran: false` → resolveProgrammaticIoVerdict returns null → task-learning falls
+    // back to the exit code. A timeout is "we never got a verdict", not a rejection.
+    expect(await settled).toEqual({ ran: false, timedOut: true });
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: await settled })).toBeNull();
+  });
+
+  it('passes a hook that settles in time straight through, and clears its timer', async () => {
+    vi.useFakeTimers();
+    const outcome = { ran: true, outcome: { action: 'filed', reason: null } };
+    const settled = withOutputHookTimeout(Promise.resolve(outcome), { agentId: 'a1', timeoutMs: 1000 });
+    expect(await settled).toBe(outcome);
+    // Timer cleared on the resolve path — nothing left pending to fire.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('propagates a hook rejection (finalizeAgent maps it to the thrown-hook verdict)', async () => {
+    await expect(withOutputHookTimeout(Promise.reject(new Error('boom')), { agentId: 'a1', timeoutMs: 1000 }))
+      .rejects.toThrow('boom');
+  });
+});
+
+/**
+ * The commit criterion (#2344), rebuilt on the run-window probe (#3637). The old
+ * criterion grepped for a task-id commit subject that NOTHING ever emitted,
+ * so it was unsatisfiable: every ordinary code-editing run recorded
+ * `validationPassed: false` regardless of what it did, and — because a declared
+ * verdict overrides the exit code in task-learning — its bucket filled with
+ * fabricated failures. These two cases are the whole fix: a run that committed
+ * inside its own window passes, a run that committed nothing fails.
+ */
+describe('evaluateSuccessCriteria — commit criterion (#2344, #3637)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('accepts a verified no-change result for an explicitly marked autonomous audit', async () => {
+    const task = {
+      id: 'catalog-audit-1',
+      taskType: 'internal',
+      metadata: { autonomousJob: true, noChangeSuccess: true }
+    };
+    expect(await evaluateSuccessCriteria({
+      task,
+      workspacePath: '/w',
+      success: true,
+      branchProvenEmpty: true,
+      startedAt: STARTED_AT
+    })).toBe(true);
+    // The no-change proof came from verifyPrClaim's forge + branch checks; it
+    // must not trigger a second commit probe or turn a clean audit into a miss.
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does not let the marker bypass validation without the verified no-change proof', async () => {
+    const task = {
+      id: 'catalog-audit-2',
+      taskType: 'internal',
+      metadata: { autonomousJob: true, noChangeSuccess: true }
+    };
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task,
+      workspacePath: '/w',
+      success: true,
+      branchProvenEmpty: false,
+      startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  // dependency-updates is not a catalog audit, but "every dependency is already
+  // current" is its ordinary outcome, so its schedule default ships
+  // `noChangeSuccess: true` and lib/noChangeCompletion.js admits the type by name.
+  it('accepts a verified no-change result for a marked dependency-updates run', async () => {
+    const task = {
+      id: 'deps-1',
+      taskType: 'internal',
+      metadata: { analysisType: 'dependency-updates', useWorktree: true, openPR: true, noChangeSuccess: true }
+    };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
+    })).toBe(true);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does not extend the no-change exemption to other marked non-audit scheduled types', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task: { id: 'ideas-1', taskType: 'internal', metadata: { analysisType: 'feature-ideas', noChangeSuccess: true } },
+      workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('does not let an unmarked task claim the no-change exemption', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({
+      task: { id: 'ordinary-audit-1', taskType: 'internal', metadata: { autonomousJob: true } },
+      workspacePath: '/w',
+      success: true,
+      branchProvenEmpty: true,
+      startedAt: STARTED_AT
+    })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('accepts persisted string markers after the task markdown round-trip', async () => {
+    const task = {
+      id: 'catalog-audit-3',
+      taskType: 'internal',
+      metadata: { autonomousJob: 'true', noChangeSuccess: 'true' }
+    };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, branchProvenEmpty: true, startedAt: STARTED_AT
+    })).toBe(true);
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('passes an autonomous code run that COMMITTED during its window', async () => {
+    committedDuringRun.mockResolvedValueOnce(true);
+    expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    // Probed against the run's own window, NOT the whole repo history — a commit
+    // another agent pushed before this run began is not this run's work.
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('fails an autonomous code run that committed NOTHING (an honest miss, not null)', async () => {
+    committedDuringRun.mockResolvedValueOnce(false);
+    expect(await evaluateSuccessCriteria({ task: { id: 't2', taskType: 'internal' }, workspacePath: '/w', startedAt: STARTED_AT })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
+    // The exemption is keyed on the taskTypeHooks registry, not on selfImprovement —
+    // an ordinary self-improve task still commits and must still be checked.
+    committedDuringRun.mockResolvedValueOnce(true);
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'ui', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT })).toBe(true);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+
+  it('declares NO criterion (null) when the run window is missing or unusable', async () => {
+    // Without a window there is no way to attribute a commit to THIS run. The
+    // sentinel — never a manufactured `false`, which task-learning would treat as
+    // a real failure and let override the exit code.
+    for (const startedAt of [undefined, null, NaN, 'not-a-date']) {
+      expect(await evaluateSuccessCriteria({ task: { id: 't3', taskType: 'internal' }, workspacePath: '/w', startedAt })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * gh/git COORDINATOR task types (#2696): branch-reconcile / issue-reconcile drive
+ * their work through git+gh in the app's LIVE checkout (workspacePath IS set) and never
+ * produce a commit at all, so the commit criterion scored every successful run a
+ * failure and drove their learning bucket to ~0% — the same artifact #2700 fixed for the
+ * programmatic-I/O reasoning run. They must declare NO commit criterion (fall back to the
+ * exit code), exactly like pipeline/media jobs.
+ */
+describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('declares NO commit criterion for every non-committing coordinator type', async () => {
+    // The structurally-no-commit coordinators: they run in the live checkout and deliver a
+    // git/gh/external side effect, never a commit.
+    for (const analysisType of ['app-checkout-recovery', 'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('declares NO commit criterion for a PR follow-up (review-loop or merge-only)', async () => {
+    // The happy path makes no commit at all: a merge-only follow-up on an already-green
+    // PR just merges it, and a review follow-up commits nothing when every reviewer is
+    // clean. Commit-checking them would score every successful run a failure (#2696 again).
+    for (const metadata of [
+      { reviewLoopFollowUp: true },
+      { reviewLoopFollowUp: true, reviewLoopMergeOnly: true },
+      { reviewLoopFollowUp: 'true' },
+    ]) {
+      const task = { id: 'sys-rl-1', taskType: 'internal', metadata };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('STILL commit-checks committing self-improve types (jira-sprint-manager, do-replan)', async () => {
+    // jira-sprint-manager commits + opens MRs; do-replan commits PLAN.md edits — their commit
+    // criterion is real, so exempting them would MASK genuine failures. Must stay checked.
+    for (const analysisType of ['jira-sprint-manager', 'do-replan']) {
+      committedDuringRun.mockResolvedValueOnce(true);
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType, selfImprovement: true } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(true);
+    }
+    expect(committedDuringRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('exempts the ARCHIVED coordinator shape (metadata.taskAnalysisType) (#2696 codex)', async () => {
+    // Matches extractTaskType's bucket resolution so the criterion agrees with the bucket on
+    // the archived agent shape too (agentLifecycle stamps taskAnalysisType).
+    const task = { id: 't4', taskType: 'internal', metadata: { taskAnalysisType: 'branch-cleanup' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
+    // Same resolver as the programmatic-I/O gate (resolveTaskHookType), so a task shaped
+    // with the scheduled type at the top level is exempted the same way.
+    const task = { id: 't2', taskType: 'branch-reconcile' };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does NOT exempt accessibility — it is a fixing task that DOES commit (#2696 scope)', async () => {
+    // accessibility's prompt ends "Test and commit changes": it makes code changes in a
+    // worktree and commits, so its commit criterion is real and its 0% (if any) is a
+    // genuine agent failure, NOT the coordinator artifact. Must stay commit-checked.
+    committedDuringRun.mockResolvedValueOnce(false);
+    const task = { id: 't3', taskType: 'internal', metadata: { analysisType: 'accessibility', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+});
+
+/**
+ * CLAIM flows (plan-task / claim-issue / claim-issue-gitlab / claim-issue-jira /
+ * claim-work): the agent cuts its OWN claim/<item> worktree and opens/merges the PR
+ * there, while CoS keeps `useWorktree: false` so the workspace this criterion probes
+ * is the app's live checkout — which the claim run never commits to. The probe is
+ * workspace-scoped, so it stamped `validationPassed: false` on every successful run
+ * (the boolean OVERRIDES the exit code in task-learning), pinning the type's bucket
+ * at ~0-25% while the runs visibly succeed. The exemption falls back to the exit
+ * code; the goal-fidelity gate still judges the run against the claimed issue's
+ * requirements, so nothing is lost but the misattributed probe.
+ */
+describe('evaluateSuccessCriteria — claim-flow exemption', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('declares NO commit criterion for every claim-flow type', async () => {
+    for (const analysisType of ['plan-task', 'claim-issue', 'claim-issue-gitlab', 'claim-issue-jira', 'claim-work']) {
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('accepts the explicit claimFlow marker on a task of any type', async () => {
+    // A manually marked claim (e.g. a dependency task also marked claimFlow) or a
+    // schedule queued before the marker existed carries only the flag.
+    for (const claimFlow of [true, 'true']) {
+      const task = { id: 't2', taskType: 'internal', metadata: { claimFlow } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    }
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('exempts the archived-agent projection (metadata.taskAnalysisType) too', async () => {
+    // Same analysisType → taskAnalysisType → taskType chain the learning bucket
+    // uses, so the criterion agrees with the bucket on the archived shape.
+    const task = { id: 't3', taskType: 'internal', metadata: { taskAnalysisType: 'claim-issue' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('exempts a claim task typed on taskType alone', async () => {
+    const task = { id: 't4', taskType: 'claim-work' };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, startedAt: STARTED_AT })).toBeNull();
+    expect(committedDuringRun).not.toHaveBeenCalled();
+  });
+
+  it('does NOT exempt a task whose claimFlow flag is falsy or absent', async () => {
+    // The flag is the marker of a claim dispatch; a task that merely carries the
+    // string "false" (or nothing) is an ordinary committing run.
+    committedDuringRun.mockResolvedValueOnce(false);
+    const task = { id: 't5', taskType: 'internal', metadata: { analysisType: 'security', claimFlow: 'false' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', startedAt: STARTED_AT, success: true })).toBe(false);
+    expect(committedDuringRun).toHaveBeenCalledWith('/w', STARTED_AT);
+  });
+});
+
+
+describe('no-change quality audit delivery', () => {
+  it('requires both verified empty branch and saved assessment, without waiving changed-branch commit checks', async () => {
+    const args = { task: { id: 'audit', taskType: 'internal', metadata: { analysisType: 'security', noChangeSuccess: true } }, workspacePath: '/worktree', startedAt: 1000, success: true };
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: true, hookResult: { auditAssessment: { status: 'recorded' } } })).toBe(true);
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: true, hookResult: { auditAssessment: { status: 'not-recorded' } } })).toBe(false);
+    committedDuringRun.mockResolvedValue(false);
+    expect(await evaluateSuccessCriteria({ ...args, branchProvenEmpty: false, hookResult: { auditAssessment: { status: 'recorded' } } })).toBe(false);
+  });
+});

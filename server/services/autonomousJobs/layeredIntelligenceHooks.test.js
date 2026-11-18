@@ -144,7 +144,7 @@ import { getTaskInterval } from '../taskSchedule.js';
 import { validateReasonerResponse as realValidateReasonerResponse } from '../layeredIntelligence/proposal.js';
 // The shared heading both sides of the sentinel pointer use: this hook's prompt
 // names the section, agentPromptBuilder emits it.
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
 
 const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides: {} };
 

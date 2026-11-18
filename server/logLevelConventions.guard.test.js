@@ -364,7 +364,7 @@ describe('the failure-log recognizer', () => {
   });
 
   it('would flag a restored quiet emitLog in agentCompletionCleanup.js', () => {
-    const src = readFileSync(join(SERVER_ROOT, 'services/agentCompletionCleanup.js'), 'utf8');
+    const src = readFileSync(join(SERVER_ROOT, 'services/agent/agentCompletionCleanup.js'), 'utf8');
     expect(findMislabeledEmitLogs(src)).toEqual([]);
     const quiet = "emitLog('warn', `" + NO_ENTRY + ' Pipeline';
     const regressed = src.replace(quiet, quiet.replace("'warn'", "'info'"));

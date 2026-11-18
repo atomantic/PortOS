@@ -311,7 +311,7 @@ async function dispatch(app, decision) {
   const { claimSafeReviewers } = await import('../lib/reviewerConfig.js');
   const options = await resolveReviewLoopOptions({});
   const reviewers = claimSafeReviewers(options.reviewers, options.usernames);
-  const { spawnReviewLoopFollowUp } = await import('./agentWorktreeCleanup.js');
+  const { spawnReviewLoopFollowUp } = await import('./agent/agentWorktreeCleanup.js');
   const task = await spawnReviewLoopFollowUp({ originalAgentId: null,
     originalTask: { id: `watchdog-${randomUUID()}`, description: `Resolve PR #${item.number}`, metadata: { app: app.id } },
     prUrl: item.url, prBranch: item.headBranch, forkHead: item.forkHead, sourceWorkspace: app.repoPath,

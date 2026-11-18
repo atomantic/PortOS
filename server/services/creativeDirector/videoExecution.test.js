@@ -12,7 +12,7 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'exa
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => state.settings) }));
 vi.mock('./videoSources.js', () => ({ assertVideoSourcesAvailable: vi.fn(async () => {}) }));
 vi.mock('./agentBridge.js', () => ({ getStageAssignment: vi.fn(async () => ({ providerId: 'example-agent', provider: 'example-agent', model: 'example-model' })) }));
-vi.mock('../agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: vi.fn(async () => ({ ok: true, provider: { id: 'example-agent' }, selectedModel: 'example-model' })) }));
+vi.mock('../agent/agentProviderResolution.js', () => ({ resolveAgentProviderAndModel: vi.fn(async () => ({ ok: true, provider: { id: 'example-agent' }, selectedModel: 'example-model' })) }));
 vi.mock('./sceneEvaluator.js', () => ({ resolveVisionEvalTarget: vi.fn(async () => null) }));
 vi.mock('../videoGen/reactor.js', () => ({ REACTOR_MODEL_ID: 'fast-h3' }));
 vi.mock('../videoGen/modelSelection.js', () => ({ resolveVideoModelSelection: vi.fn() }));

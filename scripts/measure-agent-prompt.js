@@ -32,7 +32,7 @@ const [taskType = 'claim-issue', providerType = 'tui'] = args;
 
 const { getTaskPrompt } = await import('../server/services/taskPromptService.js');
 const { buildImprovementTaskDescription } = await import('../server/services/cosTaskPreStepBlocks.js');
-const { buildAgentPrompt } = await import('../server/services/agentPromptBuilder.js');
+const { buildAgentPrompt } = await import('../server/services/agent/agentPromptBuilder.js');
 const { estimateTokens } = await import('../server/lib/contextBudget.js');
 
 const app = { id: 'example-app', name: 'Example App', repoPath: process.env.REPO || '/repo/example' };

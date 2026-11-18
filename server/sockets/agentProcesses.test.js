@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-vi.mock('../services/agents.js', () => ({ getRunningAgents: vi.fn() }));
-import { getRunningAgents } from '../services/agents.js';
+vi.mock('../services/agent/agents.js', () => ({ getRunningAgents: vi.fn() }));
+import { getRunningAgents } from '../services/agent/agents.js';
 import { registerAgentProcessHandlers } from './agentProcesses.js';
 
 const sockets = [];

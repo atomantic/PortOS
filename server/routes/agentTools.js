@@ -20,15 +20,15 @@ import {
   agentToolsFeedQuerySchema,
   agentToolsRelevantPostsQuerySchema
 } from '../lib/validation.js';
-import { agentToolsAccountQuerySchema, agentToolsPublishedQuerySchema, agentToolsDraftQuerySchema } from '../lib/agentValidation.js';
+import { agentToolsAccountQuerySchema, agentToolsPublishedQuerySchema, agentToolsDraftQuerySchema } from '../lib/agent/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
-import * as agentPersonalities from '../services/agentPersonalities.js';
-import * as agentActivity from '../services/agentActivity.js';
-import * as agentDrafts from '../services/agentDrafts.js';
-import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agentContentGenerator.js';
-import { findRelevantPosts, findReplyOpportunities } from '../services/agentFeedFilter.js';
+import * as agentPersonalities from '../services/agent/agentPersonalities.js';
+import * as agentActivity from '../services/agent/agentActivity.js';
+import * as agentDrafts from '../services/agent/agentDrafts.js';
+import { generatePost, generateComment, generateReply, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
+import { findRelevantPosts, findReplyOpportunities } from '../services/agent/agentFeedFilter.js';
 import { createMoltbookClient, checkRateLimit, isAccountSuspended } from '../integrations/moltbook/index.js';
-import { collectPublishedPosts } from '../services/agentPublished.js';
+import { collectPublishedPosts } from '../services/agent/agentPublished.js';
 import { sleep } from '../lib/fileUtils.js';
 
 // Throttle between successive platform writes (votes/comments/replies) so a

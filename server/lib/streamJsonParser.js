@@ -6,7 +6,7 @@
  * from streaming NDJSON events (text deltas, tool-use markers, tool input summaries, intermediate
  * assistant results). Also exports `summarizeToolInput(toolName, input)` for concise tool-call
  * descriptions and `safeParse(str)` as a plain `JSON.parse` try/catch. Shared by `cos-runner/index.js`
- * and `services/agentCliSpawning.js`.
+ * and `services/agent/agentCliSpawning.js`.
  *
  * Self-contained — no imports, pure functions only — so the isolated
  * `portos-cos` PM2 process stays standalone.

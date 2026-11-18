@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
-import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 
 const sha = z.string().regex(/^[a-f0-9]{40}$/);
 const fileSchema = z.object({ path: z.string().min(1), blob: sha.nullable(), mode: z.string().nullable() });

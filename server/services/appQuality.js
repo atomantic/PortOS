@@ -10,7 +10,7 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  * backfill fabricates scores. The Postgres backup covers it.
  */
 import { ensureSchema, query } from '../lib/db.js';
-import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
+import { doneSentinelPath, parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { tryReadFile } from '../lib/jsonIo.js';
 import { normalizeAuditTaskType } from '../lib/auditCatalog.js';
 import { AUDIT_FRESHNESS_MS, parseAuditQualityReport, parseAuditSlice, summarizeAppQuality, buildAppQualityHistory, dailyQualityRecords } from '../lib/auditQuality.js';

@@ -70,7 +70,7 @@ vi.mock('./github.js', () => ({ execGh: async args => {
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
 import { ensureReleaseSynchronization, verifyReleaseSynchronizationTask, verifyInlineReleaseDelivery, recoverReleaseSynchronizationHandoffs,
   releaseTaskDispatchDisposition, verifyIndependentReleaseDelivery, deliveredReleaseTaskIds, observeReleaseDeliveries } from './releaseSynchronization.js';
-import { markAgentDispatching, clearAgentDispatching, setUseRunner } from './agentState.js';
+import { markAgentDispatching, clearAgentDispatching, setUseRunner } from './agent/agentState.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { cosEvents } from './cosEvents.js';

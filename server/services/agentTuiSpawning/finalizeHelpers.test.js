@@ -8,7 +8,7 @@ import { join } from 'path';
 vi.mock('../git.js', () => ({
   getDiff: vi.fn(),
 }));
-vi.mock('../agentErrorAnalysis.js', () => ({
+vi.mock('../agent/agentErrorAnalysis.js', () => ({
   analyzeAgentFailure: vi.fn(),
 }));
 // The run-window commit probe moved to lib/gitCommitProbe.js (#3637); finalizeHelpers
@@ -18,7 +18,7 @@ vi.mock('../../lib/gitCommitProbe.js', () => ({
 }));
 
 import * as git from '../git.js';
-import { analyzeAgentFailure } from '../agentErrorAnalysis.js';
+import { analyzeAgentFailure } from '../agent/agentErrorAnalysis.js';
 import { commitsSince as commitsSinceMock } from '../../lib/gitCommitProbe.js';
 import {
   readFileTail,

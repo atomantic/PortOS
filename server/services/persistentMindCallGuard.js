@@ -27,7 +27,7 @@ import { normalizePersistentMindState } from '../lib/persistentMind.js';
 import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
 import { buildPersistentMindCallDenial, buildPersistentMindCallReceipt } from '../lib/persistentMindTrajectory.js';
 import { loadState } from './cosState.js';
-import { appendMindEvent } from './agentRunEventLog.js';
+import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';

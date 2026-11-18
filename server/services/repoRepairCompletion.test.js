@@ -23,16 +23,16 @@ vi.mock('./github.js', () => ({ execGh: vi.fn(async (args, timeout, { cwd }) => 
   return JSON.stringify([[pr && { state: pr.state, merged_at: pr.merged_at, head: { sha: pr.headSha, repo: { full_name: pr.headRepo } }, base: { ref: pr.base } }].filter(Boolean)]);
 }) }));
 vi.mock('./codeReview.js', async original => ({ ...(await original()), getGoalFidelityConfig: async () => null }));
-vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: async () => null }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: async () => null }));
+vi.mock('./agent/agentCompletion.js', () => ({ processAgentCompletion: async () => null }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: async () => null }));
 vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { bindCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { captureRepoRepairContract } from './updateRepoRepairCompletion.js';
 import { checkUpdateRepoReadiness, queueRepoRepairTask } from './updateRepoReadiness.js';
-import { evaluateSuccessCriteria, finalizeAgent } from './agentFinalization.js';
-import { resolveTaskOutcome } from '../lib/agentOutcome.js';
+import { evaluateSuccessCriteria, finalizeAgent } from './agent/agentFinalization.js';
+import { resolveTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
 import { getAgents, completeAgent } from './cosAgentLifecycle.js';
 

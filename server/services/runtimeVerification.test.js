@@ -27,7 +27,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn(async args => {
   if (args[0] === 'merge-base') return { exitCode: args[3] === facts.boot ? (facts.ancestor ? 0 : 1) : 0 };
   return { stdout: '', exitCode: 0 };
 }) }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async ({ task, agentId }) => {
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({ releaseRetryHold: vi.fn(async ({ task, agentId }) => {
   const { updateTask } = await import('./cosTaskStore.js');
   await updateTask(task.id, { metadata: { runtimeVerificationReadyAgentId: agentId } }, task.taskType);
 }) }));
@@ -36,7 +36,7 @@ import { resolveRuntimeVerificationUpdate, sweepRuntimeVerifications } from './r
 import { addTask, getTaskById, updateTask, deleteTask, reviveBlockedTask, __resetTaskCache, sweepResolvedFailureTasks } from './cosTaskStore.js';
 import { __resetCosTaskRepository } from './cosTaskRepository.js';
 import { cosEvents } from './cosEvents.js';
-import { normalizeTaskOutcome } from '../lib/agentOutcome.js';
+import { normalizeTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { execGh } from './github.js';
 
 const outcome = () => normalizeTaskOutcome({ status: 'blocked', reason: 'The fix must be running before verification.',

@@ -82,7 +82,7 @@ Thumbs.db
 /.agent-done-*
 
 # Public-review input bundle PortOS materializes into a reviewer's worktree
-# (see server/lib/agentScratchPaths.js) — pipeline state, never work product
+# (see server/lib/agent/agentScratchPaths.js) — pipeline state, never work product
 /PORTOS_PUBLIC_REVIEW_INPUT.json
 /.portos-public-review/
 

@@ -6,7 +6,7 @@
  * runnability filter, and the fail-closed policies security-sensitive pickers
  * apply (tool-free local, and pr-reviewer public-review postures).
  *
- * The posture half MIRRORS `server/lib/agentExecutionProfiles.js`: a stage names a
+ * The posture half MIRRORS `server/lib/agent/agentExecutionProfiles.js`: a stage names a
  * POSTURE, the server publishes each provider's `publicReviewPostures` /
  * `publicReviewEnforcedPostures` on `GET /api/providers`, and the picker offers
  * what this install can run; no vendor is named on either side.
@@ -94,7 +94,7 @@ export const supportsStrictToolFreeOneShot = (provider) => provider?.enabled !==
 export const strictToolFreeOneShotSelectionPolicy = Object.freeze({ provider: supportsStrictToolFreeOneShot });
 
 // The two enforceable public-review postures (MIRROR of
-// `server/lib/agentExecutionProfiles.js`); the server publishes each provider's
+// `server/lib/agent/agentExecutionProfiles.js`); the server publishes each provider's
 // `publicReviewPostures`.
 export const PUBLIC_REVIEW_NO_TOOL_POSTURE = 'no-tool';
 

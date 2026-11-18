@@ -17,7 +17,7 @@ vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn(
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async path => ({ host: 'github.com', fullName: path === '/repos/worktree' ? f.workspaceRepo : 'example/repo' }) }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: f.branch, exitCode: 0 }) }));
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { registerAgent } from './cosAgentLifecycle.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 

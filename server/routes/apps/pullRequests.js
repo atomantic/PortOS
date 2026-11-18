@@ -34,9 +34,9 @@ import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { pullRequestProviderOverrideSchema, pullRequestRunSettingsSchema, reviewerConfigMetadata, claimSafeReviewers, normalizeReviewers } from '../../lib/cosValidation.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { PR_COMPLETIONS, isSelfReviewMode } from '../../lib/prDisposition.js';
-import { isTruthyMeta } from '../../services/agentState.js';
+import { isTruthyMeta } from '../../services/agent/agentState.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
-import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
+import { spawnReviewLoopFollowUp } from '../../services/agent/agentWorktreeCleanup.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
 import {
   MERGE_METHODS,

@@ -24,7 +24,7 @@ vi.mock('../services/updateExecutor.js', () => ({
   launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) }),
 }));
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
-vi.mock('../services/agentState.js', () => ({
+vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks,
 }));
@@ -55,7 +55,7 @@ vi.mock('../services/streamingDetect.js', () => ({ streamDetection: vi.fn() }));
 
 import * as updateChecker from '../services/updateChecker.js';
 import { launchUpdate } from '../services/updateExecutor.js';
-import { getActiveAgentIds } from '../services/agentState.js';
+import { getActiveAgentIds } from './agent/agentState.js';
 import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
 import { updateApp as appUpdaterUpdateApp } from '../services/appUpdater.js';
 import updateRoutes from '../routes/update.js';

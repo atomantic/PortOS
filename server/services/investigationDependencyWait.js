@@ -3,13 +3,13 @@
 import { z } from 'zod';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
-import { isTaskDeliveryComplete } from '../lib/agentOutcome.js';
-import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
+import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
-import { MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
+import { MAX_TASK_RETRIES } from './agent/agentErrorAnalysis.js';
 import { USER_DECISION_BLOCKED_CATEGORIES, PAUSED_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
 import { emitLog } from './cosEvents.js';
-import { getActiveAgentIds } from './agentState.js';
+import { getActiveAgentIds } from './agent/agentState.js';
 import { getAllTasks, updateTask } from './cosTaskStore.js';
 import { execGit } from '../lib/execGit.js';
 
@@ -88,7 +88,7 @@ export function _createInvestigationDependencyWait(deps = {}) {
   const released = deps.released || (async owner => !getActiveAgentIds().includes(owner.id));
   const pointer = deps.pointer || (async owner => {
     const m = owner.metadata;
-    const { resolveResumePointer } = await import('./agentWorktreeCleanup.js');
+    const { resolveResumePointer } = await import('./agent/agentWorktreeCleanup.js');
     const found = await resolveResumePointer(m.sourceWorkspace, m.worktreeBranch, m.workspacePath);
     return found?.branchName === m.worktreeBranch && found.worktreePath === m.workspacePath
       ? { existingBranch: found.branchName, resumeWorktreePath: found.worktreePath, resumedFromAgentId: owner.id } : null;

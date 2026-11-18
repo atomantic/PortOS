@@ -25,7 +25,7 @@ vi.mock('../lib/maintenanceAdmission.js', async original => {
   const actual = await original();
   return { ...actual, maintenance: { ...actual.maintenance, held: () => completionWake.held } };
 });
-vi.mock('./agentRepoStateVerification.js', () => ({
+vi.mock('./agent/agentRepoStateVerification.js', () => ({
   sweepRepoStateVerifications: (...args) => completionWake.run(...args),
   resumeDeferredRepoStateVerifications: async blocked => { const reason = await blocked(); return reason ? { checked: 0, skipReason: reason } : completionWake.run(); },
   bindCompletionRetirementEvents: () => () => {},
@@ -40,7 +40,7 @@ vi.mock('./cosState.js', async (importOriginal) => ({
 }));
 
 const boot = { cleanupOrphanedAgents: vi.fn(async () => 0) };
-vi.mock('./agentManagement.js', () => ({
+vi.mock('./agent/agentManagement.js', () => ({
   cleanupOrphanedAgents: (...args) => boot.cleanupOrphanedAgents(...args),
   handleOrphanedTask: vi.fn(async () => {}),
 }));

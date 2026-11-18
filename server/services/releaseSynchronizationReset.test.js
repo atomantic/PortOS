@@ -11,7 +11,7 @@ const ownership = vi.hoisted(() => ({ agents: [], active: [], runner: [], task: 
 vi.mock('./cosClaimOwnershipState.js', () => ({
   withClaimOwnershipLock: work => work(), readClaimOwnershipAgents: async () => ownership.agents,
 }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => ownership.active }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => ownership.active }));
 vi.mock('./cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => ownership.runner }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => ownership.task?.id === id ? ownership.task : null,

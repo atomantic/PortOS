@@ -38,7 +38,7 @@ import { PAUSED_BLOCKED_CATEGORIES, USER_DECISION_BLOCKED_CATEGORIES } from '../
 import { isPromptPayload, splitTaskPromptFields } from '../lib/cosTaskPrompt.js';
 import { normalizeOrchestrationMode, normalizeOrchestrationProfile } from '../lib/orchestrationProfile.js';
 import { loadState, withStateLock, readAgentsStateForSafetyCheck } from './cosState.js';
-import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agentState.js';
+import { activeAgents, runnerAgents, hasActiveTaskOwner } from './agent/agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS, isLeaseLive } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';

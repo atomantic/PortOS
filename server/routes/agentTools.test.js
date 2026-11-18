@@ -19,18 +19,18 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
 vi.mock('../services/platformAccounts.js', () => fnMap([
   'getAccountWithCredentials', 'recordActivity',
 ]));
-vi.mock('../services/agentPersonalities.js', () => fnMap(['getAgentById']));
-vi.mock('../services/agentActivity.js', () => fnMap(['logActivity']));
-vi.mock('../services/agentDrafts.js', () => fnMap([
+vi.mock('../services/agent/agentPersonalities.js', () => fnMap(['getAgentById']));
+vi.mock('../services/agent/agentActivity.js', () => fnMap(['logActivity']));
+vi.mock('../services/agent/agentDrafts.js', () => fnMap([
   'listDrafts', 'createDraft', 'updateDraft', 'deleteDraft',
 ]));
-vi.mock('../services/agentContentGenerator.js', () => fnMap([
+vi.mock('../services/agent/agentContentGenerator.js', () => fnMap([
   'generatePost', 'generateComment', 'generateReply', 'assertMoltbookCommentProvider',
 ]));
-vi.mock('../services/agentFeedFilter.js', () => fnMap([
+vi.mock('../services/agent/agentFeedFilter.js', () => fnMap([
   'findRelevantPosts', 'findReplyOpportunities',
 ]));
-vi.mock('../services/agentPublished.js', () => fnMap(['collectPublishedPosts']));
+vi.mock('../services/agent/agentPublished.js', () => fnMap(['collectPublishedPosts']));
 
 // createMoltbookClient is a factory; checkRateLimit gates the engage loop's writes.
 const moltbookClient = vi.hoisted(() => ({
@@ -48,10 +48,10 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 
 import agentToolsRoutes from './agentTools.js';
 import * as platformAccounts from '../services/platformAccounts.js';
-import * as agentPersonalities from '../services/agentPersonalities.js';
-import { generatePost, generateComment, assertMoltbookCommentProvider } from '../services/agentContentGenerator.js';
+import * as agentPersonalities from '../services/agent/agentPersonalities.js';
+import { generatePost, generateComment, assertMoltbookCommentProvider } from '../services/agent/agentContentGenerator.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { findRelevantPosts, findReplyOpportunities } from '../services/agentFeedFilter.js';
+import { findRelevantPosts, findReplyOpportunities } from '../services/agent/agentFeedFilter.js';
 
 const ACTIVE_ACCOUNT = { id: 'acc-1', status: 'active', credentials: { apiKey: 'key-123' } };
 const AGENT = { id: 'agent-1', name: 'Bot', aiConfig: {} };

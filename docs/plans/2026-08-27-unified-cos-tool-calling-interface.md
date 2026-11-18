@@ -165,7 +165,7 @@ This audit was performed against the current source tree, without reading live p
 - `server/routes/**/*.js` for route declarations and validation behavior.
 - `client/src/services/api*.js` for the client-facing endpoint contract.
 - `server/services/voice/tools/*.js` for the existing direct function-tool registry.
-- `server/lib/agentContextValidation.js` and `server/routes/agentContextMcp.js` for the existing MCP surface.
+- `server/lib/agent/agentContextValidation.js` and `server/routes/agentContextMcp.js` for the existing MCP surface.
 - `server/lib/persistentMindCapabilities.js`, `server/services/persistentMindTaskCapability.js`, and the Persistent Mind routes for the current authority boundary.
 - `server/lib/apiRegistry.js` and `server/lib/openapiSpec.js` for the intentionally exposed external API subset.
 

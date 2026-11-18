@@ -83,7 +83,7 @@ vi.mock('../lib/gitRemote.js', async (importActual) => ({
 
 import { prepareManagedAppImprovementTask } from './cosTaskGenerator.js';
 import { generateTaskFromJob } from './autonomousJobs/skillTemplates.js';
-import { buildLightContextPrompt } from './agentPromptBuilder.js';
+import { buildLightContextPrompt } from './agent/agentPromptBuilder.js';
 import { declaresNoCommitCriterion } from './taskTypeHooks.js';
 import {
   AUDIT_TASK_TYPES,

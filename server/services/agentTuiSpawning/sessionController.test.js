@@ -1,7 +1,7 @@
 /**
  * Session-controller teardown contract (#8021).
  *
- * The spawner's own suite (`../agentTuiSpawning.test.js`) drives every public
+ * The spawner's own suite (`../agent/agentTuiSpawning.test.js`) drives every public
  * spawn/completion path through a live PTY double, and that stays the primary
  * boundary. What it CANNOT reach is the one invariant the extraction changed:
  * the controller now owns its two intervals and its sentinel watcher in its own

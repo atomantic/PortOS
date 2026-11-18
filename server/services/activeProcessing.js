@@ -13,7 +13,7 @@ import { getAgents } from './cosAgentLifecycle.js';
 import { getPendingTaskIds } from './cosTaskStore.js';
 import { getStatus } from './cos.js';
 import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
-import { activeAgents, spawningTasks } from './agentState.js';
+import { activeAgents, spawningTasks } from './agent/agentState.js';
 import { isPersistentMindTurnRunning } from './persistentMindSupervisor.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and

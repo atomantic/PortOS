@@ -18,12 +18,12 @@ vi.mock('./memoryEmbeddings.js', () => ({
   generateQueryEmbedding: vi.fn(), truncateToTokens: vi.fn(),
 }));
 vi.mock('./usage.js', () => ({ recordSession: async () => {} }));
-vi.mock('./agentRunEventLog.js', () => ({ appendRunEvent: async () => {} }));
+vi.mock('./agent/agentRunEventLog.js', () => ({ appendRunEvent: async () => {} }));
 
 const { PATHS } = await import('../lib/fileUtils.js');
 const { getMemories } = await import('./memoryBackend.js');
 const { getMemorySection } = await import('./memoryRetriever.js');
-const { createAgentRun } = await import('./agentRunTracking.js');
+const { createAgentRun } = await import('./agent/agentRunTracking.js');
 const { findRecentRunsUsingMemory } = await import('./memoryRunUsage.js');
 
 const provider = { id: 'example-provider', name: 'Example', defaultModel: 'example-model' };

@@ -299,7 +299,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const listWorktrees = deps.listWorktrees ?? (await import('./worktreeManager.js')).listWorktrees;
   const getAgents = deps.getAgents ?? readClaimOwnershipAgents;
   const readCompletionHold = deps.readCompletionHold ?? (holdInput => readReconcileCompletionHold(holdInput, deps));
-  const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('./agentState.js')).getActiveAgentIds;
+  const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('./agent/agentState.js')).getActiveAgentIds;
   const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('./branchReconcile.js');
 
   const app = await getAppById(appId).catch(() => null);

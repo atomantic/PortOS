@@ -12,7 +12,7 @@ import { validatePublication } from './publicationValidation.js';
 
 // Cleanup launches this audit without awaiting it. Its own suite covers the
 // probes; keep its daemon/provider graph out of these cleanup workflow tests.
-vi.mock('./agentRepoStateVerification.js', () => ({
+vi.mock('./agent/agentRepoStateVerification.js', () => ({
   verifyAgentRepoState: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -225,7 +225,7 @@ vi.mock('../lib/execGit.js', () => ({
 // The `if-missing` safety net asks finalize's own PR-claim check whether
 // the agent actually opened the PR it was told to open (#3733).
 const verifyPrClaimMock = vi.fn();
-vi.mock('./agentFinalization.js', () => ({
+vi.mock('./agent/agentFinalization.js', () => ({
   PR_MISSING_CATEGORY: 'pr-missing',
   verifyPrClaim: (...args) => verifyPrClaimMock(...args)
 }));
@@ -243,7 +243,7 @@ import { existsSync as existsSyncMock } from 'fs';
 // All five come from `agentWorktreeCleanup.js`, the module that defines them.
 // They used to be pulled through the `subAgentSpawner.js` barrel, which was
 // retired in #3450.
-import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree, resolveWorktreeDisposition, spawnMergeRecoveryTask, spawnReviewLoopFollowUp, resolveResumePointer, resolveTaskResumePatch, recordTaskResumePointer, releaseRetryHold, resumePointerMetadata } from './agent/agentWorktreeCleanup.js';
 import { getAgent, getAgentRecord, getAgents, updateAgent } from './cosAgentLifecycle.js';
 import { getAllTasks, getTaskById, addTask, updateTask } from './cosTaskStore.js';
 import { forceSpawnTask } from './cos.js';

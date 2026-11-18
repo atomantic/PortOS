@@ -3,7 +3,7 @@
 import { readFile } from 'fs/promises';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { runAgentContextEval } from '../server/services/agentContextEval.js';
+import { runAgentContextEval } from '../server/services/agent/agentContextEval.js';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const defaultFixture = resolve(repoRoot, 'server/test/fixtures/agent-context-eval.json');

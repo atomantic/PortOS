@@ -318,7 +318,7 @@ export const verifyPassword = async (password) => {
 };
 
 // `label` is `null` for an ordinary browser session; the agent loopback
-// credential (server/services/agentApiAuth.js) passes `'agent'`.
+// credential (server/services/agent/agentApiAuth.js) passes `'agent'`.
 export const createSession = async ({ label = null } = {}) => {
   await ensureLoaded();
   const token = randomBytes(TOKEN_BYTES).toString('hex');
@@ -359,7 +359,7 @@ export const revokeSessionById = async (id) => {
 };
 
 // Revoke every session carrying `label` except the one addressed by `keepId`.
-// The local agent key (services/agentKey.js) keeps exactly one live session:
+// The local agent key (services/agent/agentKey.js) keeps exactly one live session:
 // a rotation mints the replacement first, then drops the rest here. Like
 // revokeSessionById, no socket kick — these are non-interactive credentials.
 export const revokeSessionsByLabel = async (label, { keepId = null } = {}) => {

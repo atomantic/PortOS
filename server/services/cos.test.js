@@ -1570,7 +1570,7 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('agentLifecycle stamps the resolved endpoint onto the agent record (#4834)', () => {
     // Counting a running agent by provider id alone breaks when the provider is
     // edited or deleted while the agent still holds the GPU.
-    const DISPATCH_SRC = readFileSync(join(__dirname, 'agentSpawnDispatch.js'), 'utf-8');
+    const DISPATCH_SRC = readFileSync(join(__dirname, 'agent/agentSpawnDispatch.js'), 'utf-8');
     expect(DISPATCH_SRC).toMatch(/providerEndpoint:\s*providerBaseUrl\(provider\)/);
   });
 
@@ -2019,7 +2019,7 @@ describe('resetOrphanedTasks — latest run outcome (#12057)', () => {
     const state = await import('./cosState.js');
     taskStore = await import('./cosTaskStore.js');
     const identity = await import('./instanceIdentity.js');
-    agentManagement = await import('./agentManagement.js');
+    agentManagement = await import('./agent/agentManagement.js');
     // Put the older run last in the map: chronology, not insertion order,
     // determines which run can settle this task.
     vi.spyOn(state, 'loadState').mockResolvedValue({ agents: { latest, older } });

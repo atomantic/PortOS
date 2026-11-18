@@ -16,7 +16,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
-vi.mock('./agentActivity.js', () => ({
+vi.mock('./agent/agentActivity.js', () => ({
   getTodayActionCount: vi.fn(async () => 0),
   logActivity: vi.fn(async () => {}),
 }));

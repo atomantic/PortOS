@@ -35,7 +35,7 @@ import {
 import {
   appendMindEvent,
   readPersistentMindHistory,
-} from './agentRunEventLog.js';
+} from './agent/agentRunEventLog.js';
 import {
   extractPersistentMindJournal,
   readPersistentMindJournal,

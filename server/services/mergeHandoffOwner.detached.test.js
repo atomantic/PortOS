@@ -21,7 +21,7 @@ vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async cwd => 
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: async () => f.task }));
 const { createWorktree } = await import('./worktreeManager.js');
 const { resolveMergeHandoffOwner } = await import('./mergeHandoffOwner.js');
-const { buildAgentRegistration } = await import('../lib/agentRegistrationRecord.js');
+const { buildAgentRegistration } = await import('../lib/agent/agentRegistrationRecord.js');
 afterAll(cleanup);
 
 it.skipIf(SKIP_HEAVY_INTEGRATION)('resolves a real detached default-head checkout as handoff owner without switching the primary branch, and refuses a moved head', async () => {

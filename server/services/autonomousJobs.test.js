@@ -50,7 +50,7 @@ vi.mock('./worktreeManager.js', () => ({
 }))
 
 vi.mock('./cosAgentRepository.js', () => ({ listStoredAgentStatuses: vi.fn(async () => []) }))
-vi.mock('./agentState.js', () => ({
+vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([])
 }))
 
@@ -83,7 +83,7 @@ import { listStoredAgentStatuses } from './cosAgentRepository.js'
 import { cosEvents } from './cosEvents.js'
 import { checkAndPrompt } from './autobiography.js'
 import { reapMergedWorktrees, cleanupOrphanedWorktrees } from './worktreeManager.js'
-import { getActiveAgentIds } from './agentState.js'
+import { getActiveAgentIds } from './agent/agentState.js'
 
 describe('autonomousJobs', () => {
   const mockJobsData = {

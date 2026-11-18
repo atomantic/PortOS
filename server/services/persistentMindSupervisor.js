@@ -54,7 +54,7 @@ import {
   createPersistentMindCallBoundary,
   persistentMindCapabilityGrantFingerprint,
 } from './persistentMindCallGuard.js';
-import { appendMindEvent } from './agentRunEventLog.js';
+import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { resolvePersistentMindSelfThinkingRequest } from './persistentMindThinkingRequests.js';
 import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } from './persistentMindProfile.js';
 import { isUpdateInProgress } from './updateChecker.js';

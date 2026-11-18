@@ -43,7 +43,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: m.branch }
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: async () => { throw new Error('offline'); } }));
 vi.mock('./blockedIssueReconcile.js', () => ({ parseBlockingIssueNumbers: () => m.dependencies }));
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({ reviewers: ['codex'] }) }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
 vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
 vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));

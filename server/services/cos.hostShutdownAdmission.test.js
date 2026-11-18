@@ -30,7 +30,7 @@ const { init, dequeueNextTask, forceSpawnTask } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { loadState } = await import('./cosState.js');
 const { getTaskById } = await import('./cosTaskStore.js');
-const { setUseRunner, useRunner } = await import('./agentState.js');
+const { setUseRunner, useRunner } = await import('./agent/agentState.js');
 const { markHostShuttingDown, resetHostShutdownFlagForTests } = await import('../lib/hostShutdown.js');
 
 const originalUseRunner = useRunner;

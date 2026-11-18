@@ -21,8 +21,8 @@
 
 import { emitLog, cosEvents } from './cosEvents.js';
 import { checkGhHealth } from './github.js';
-import { getAppWorkspace, isClaimFlowTask } from './agentPromptBuilder.js';
-import { isTruthyMeta } from './agentState.js';
+import { getAppWorkspace, isClaimFlowTask } from './agent/agentPromptBuilder.js';
+import { isTruthyMeta } from './agent/agentState.js';
 import { parseGitRemote, detectForgeCli } from '../lib/gitForge.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/fileUtils.js';

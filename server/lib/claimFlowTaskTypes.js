@@ -3,7 +3,7 @@
 //
 //   - WRITE side (`services/cosTaskGenerator.js`) stamps `metadata.claimFlow`
 //     on a queued task.
-//   - READ side (`services/agentPromptBuilder.js` → `isClaimFlowTask`) decides
+//   - READ side (`services/agent/agentPromptBuilder.js` → `isClaimFlowTask`) decides
 //     a run's claim posture (prompt shape, `configClaimFlow`,
 //     `configCodingOnMain`).
 //

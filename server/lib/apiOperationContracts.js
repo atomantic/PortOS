@@ -13,7 +13,7 @@ import {
 import { writersRoomWorksQuerySchema, writersRoomWorksResponseSchema } from './pipelineValidation.js';
 import { TTS_ENGINE_IDS } from './voiceEngines.js';
 import { cosToolCallSchema } from './cosToolContracts.js';
-import { agentContextMcpInboundSchema } from './agentContextValidation.js';
+import { agentContextMcpInboundSchema } from './agent/agentContextValidation.js';
 import {
   settingsSlicePatchSchema, gitBranchBodySchema, gitBranchComparisonBodySchema, gitCommitBodySchema, gitCommitsBodySchema, gitDeleteBranchBodySchema,
   logsQuerySchema, pm2ProcessNameSchema, gitDiffBodySchema, gitOptionalBranchBodySchema, gitPathBodySchema, gitCleanupMergedBodySchema, gitRemoteBranchesBodySchema, gitStageBodySchema,

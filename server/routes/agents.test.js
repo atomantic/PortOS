@@ -3,13 +3,13 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/agents.js', () => ({
+vi.mock('../services/agent/agents.js', () => ({
   getRunningAgents: vi.fn(),
   killProcess: vi.fn(),
   getProcessInfo: vi.fn()
 }));
 
-import { getRunningAgents, killProcess, getProcessInfo } from '../services/agents.js';
+import { getRunningAgents, killProcess, getProcessInfo } from '../services/agent/agents.js';
 import agentsRoutes from './agents.js';
 
 const buildApp = () => {

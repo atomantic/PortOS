@@ -11,7 +11,7 @@ const mock = vi.hoisted(() => ({
 }));
 
 vi.mock('./cosState.js', () => ({ loadState: vi.fn(async () => mock.root) }));
-vi.mock('./agentRunEventLog.js', () => ({ appendMindEvent: (...args) => mock.appendMindEvent(...args) }));
+vi.mock('./agent/agentRunEventLog.js', () => ({ appendMindEvent: (...args) => mock.appendMindEvent(...args) }));
 vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn(async () => {
     if (mock.budgetError) throw mock.budgetError;

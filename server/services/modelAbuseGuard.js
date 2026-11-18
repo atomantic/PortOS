@@ -51,7 +51,7 @@ import { detectVenvBasePythonSync, createVenv, installLockedRuntime } from '../l
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 // Declared in lib/ so `classifyWorktreeDirt` can subtract this scratch without
 // importing this module's provider/runtime graph — see agentScratchPaths.js.
-import { PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME } from '../lib/agentScratchPaths.js';
+import { PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME } from '../lib/agent/agentScratchPaths.js';
 import { downloadHfRepo } from './hfDownload.js';
 import { getHfToken } from './hfToken.js';
 import { listModels } from './localLlm.js';

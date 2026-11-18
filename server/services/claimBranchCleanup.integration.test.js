@@ -11,7 +11,7 @@ vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn(), updateTask: vi.fn() }));
 vi.mock('./cosAgentLifecycle.js', () => ({
   getAgent: async () => fixture.agent, getAgentRecord: async () => fixture.agent, getAgents: async () => [],
 }));
-vi.mock('./agentRepoStateVerification.js', () => ({ verifyAgentRepoState: vi.fn(async () => ({})) }));
+vi.mock('./agent/agentRepoStateVerification.js', () => ({ verifyAgentRepoState: vi.fn(async () => ({})) }));
 vi.mock('./cosClaimOwnershipState.js', async original => ({
   ...await original(), readClaimOwnershipAgents: vi.fn(async () => fixture.owners),
 }));
@@ -19,9 +19,9 @@ vi.mock('./prProbe.js', async original => ({
   ...await original(), probePrForBranch: vi.fn(async () => fixture.probe),
 }));
 
-import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { cleanupAgentWorktree } from './agent/agentWorktreeCleanup.js';
 import { readCompletedCheckoutIdentity } from './completedCheckoutEvidence.js';
-import { verifyAgentRepoState } from './agentRepoStateVerification.js';
+import { verifyAgentRepoState } from './agent/agentRepoStateVerification.js';
 
 describe('claim coordinator cleanup', () => {
   let sandbox, checkout, head;

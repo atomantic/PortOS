@@ -14,8 +14,8 @@ import { spawn } from '../../lib/childProcess.js';import { DAY, PATHS, rmGuarded
 import { checkAndPrompt as autobiographyCheckAndPrompt } from '../autobiography.js'
 import { runGoalCheckIn } from '../goalCheckIn.js'
 import { cleanupOrphanedWorktrees, reapMergedWorktrees } from '../worktreeManager.js'
-import { getActiveAgentIds } from '../agentState.js'
-import { sweepStaleDoneSentinels, checkoutDirsOf } from '../agentSentinelSweep.js'
+import { getActiveAgentIds } from '../agent/agentState.js'
+import { sweepStaleDoneSentinels, checkoutDirsOf } from '../agent/agentSentinelSweep.js'
 import { runSelfDiagnostics } from './selfDiagnostics.js'
 import { runBrainParitySweep } from './brainParitySweep.js'
 
@@ -46,7 +46,7 @@ async function runMoltworldExploration() {
   const durationMinutes = process.env.MOLTWORLD_DURATION_MINUTES || '30'
 
   // Lazy: agentApiAuth pulls in the session/auth stack, which this registry must not load at import time.
-  const { resolveAgentApiEnv } = await import('../agentApiAuth.js');
+  const { resolveAgentApiEnv } = await import('../agent/agentApiAuth.js');
   const apiEnv = await resolveAgentApiEnv();
 
   return new Promise((resolve, reject) => {

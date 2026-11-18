@@ -87,7 +87,7 @@ const TRACKED = [
   'server/lib/platform.test.js',
   'server/lib/shellCd.test.js',
   'server/lib/shellCd.js',
-  'server/services/agentTuiSpawning.test.js',
+  'server/services/agent/agentTuiSpawning.test.js',
   'client/src/a11y/controlNames.conventions.test.js',
   'client/src/a11y/dnd.conventions.test.js',
   'client/src/a11y/fileInputsToasts.conventions.test.js',
@@ -952,6 +952,7 @@ describe('CI test impact planner', () => {
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
+    { changed: 'server/lib/agent/agentOutcome.js', runner: 'server', guards: ['server/lib/agent/moduleSummaries.test.js'] },
     { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },

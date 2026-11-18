@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { execGit } from '../lib/execGit.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
-import { doneSentinelCandidateNames } from '../lib/agentSentinel.js';
+import { doneSentinelCandidateNames } from '../lib/agent/agentSentinel.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
 
 export async function validatePublication(context, deps = {}) {

@@ -38,7 +38,7 @@ const mocks = vi.hoisted(() => ({
   correctPersistentMindJournalEvent: vi.fn(),
 }));
 
-vi.mock('../services/agentRunEventLog.js', () => ({
+vi.mock('../services/agent/agentRunEventLog.js', () => ({
   readPersistentMindEvents: mocks.readPersistentMindEvents,
   readPersistentMindHistory: mocks.readPersistentMindHistory,
 }));

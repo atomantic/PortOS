@@ -1,0 +1,505 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock child_process before importing agents.js
+vi.mock('../../lib/childProcess.js', () => ({
+  exec: vi.fn(),
+  // agents.js probes Windows via execFile(powershell, …) — see readWindowsSnapshot.
+  execFile: vi.fn()
+}));
+
+// Mock util.promisify so execAsync uses our mocked exec
+vi.mock('util', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    promisify: (fn) => {
+      // Return a wrapper that calls the mocked fn as a promise
+      return (...args) =>
+        new Promise((resolve, reject) => {
+          fn(...args, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+          });
+        });
+    }
+  };
+});
+
+// Mock the orchestrator facade so killProcess's CoS delegation doesn't import
+// the real agent cluster (#3450 — agents.js reaches killAgent through the facade
+// now, not through the subAgentSpawner barrel).
+vi.mock('./agentOrchestrator.js', () => ({
+  killAgent: vi.fn().mockResolvedValue({ success: true })
+}));
+
+import { exec, execFile } from '../../lib/childProcess.js';
+import { pinPlatform } from '../../lib/testHelper.js';
+import { registerSpawnedAgent, unregisterSpawnedAgent } from './agentState.js';
+import {
+  getRunningAgents,
+  killProcess,
+  getProcessInfo,
+  isAgentProcessCommand
+} from './agents.js';
+
+// Each discovery fixture is one complete process snapshot.
+function mockExecWith(stdout) {
+  exec.mockImplementation((_cmd, _opts, cb) => {
+    // handle both (cmd, cb) and (cmd, opts, cb) forms
+    const callback = typeof _opts === 'function' ? _opts : cb;
+    callback(null, { stdout });
+  });
+}
+
+// getRunningAgents branches on process.platform: POSIX shells out to `ps`,
+// Windows to `powershell Get-CimInstance`. Nearly every test here feeds `ps`
+// output, so pin a POSIX platform rather than letting the host decide — on a
+// Windows runner the source took the CIM branch, the `ps` mock was never
+// consulted, and every assertion saw an empty list. The Windows branch has its
+// own test below.
+let restorePlatform = () => {};
+
+describe('agents.js', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    restorePlatform = pinPlatform('darwin');
+  });
+
+  afterEach(() => {
+    restorePlatform();
+  });
+
+  // ===========================================================================
+  // registerSpawnedAgent / unregisterSpawnedAgent — module-level Map
+  // ===========================================================================
+  describe('registerSpawnedAgent / unregisterSpawnedAgent', () => {
+    // Clean up any PIDs registered by tests in this describe so they don't
+    // leak into subsequent tests via the module-level spawnedAgentCommands Map.
+    afterEach(() => {
+      unregisterSpawnedAgent(12345);
+      unregisterSpawnedAgent(99999);
+    });
+
+    it('registers metadata and surfaces it in getRunningAgents', async () => {
+      // Provide ps output that matches the claude pattern
+      mockExecWith('12345  1001  0.5  0.3  01:00  /usr/bin/claude --print\n');
+
+      registerSpawnedAgent(12345, {
+        agentId: 'agent-abc',
+        taskId: 'task-xyz',
+        model: 'claude-3-opus',
+        workspacePath: '/tmp/ws',
+        fullCommand: '/usr/bin/claude --model opus --print',
+        prompt: 'do something'
+      });
+
+      const agents = await getRunningAgents();
+      const found = agents.find(a => a.pid === 12345);
+      expect(found).toBeDefined();
+      expect(found.agentId).toBe('agent-abc');
+      expect(found.taskId).toBe('task-xyz');
+      expect(found.model).toBe('claude-3-opus');
+      expect(found.source).toBe('cos');
+      expect(found.command).toBe('/usr/bin/claude --model opus --print');
+    });
+
+    it('unregisters agent so it no longer has cos metadata', async () => {
+      mockExecWith('12345  1001  0.5  0.3  01:00  /usr/bin/claude --print\n');
+
+      registerSpawnedAgent(12345, {
+        agentId: 'agent-abc',
+        taskId: 'task-xyz',
+        model: 'claude-3-opus',
+        workspacePath: '/tmp/ws',
+        fullCommand: '/usr/bin/claude --model opus',
+        prompt: 'task'
+      });
+
+      unregisterSpawnedAgent(12345);
+
+      const agents = await getRunningAgents();
+      const found = agents.find(a => a.pid === 12345);
+      // The mocked ps output always includes PID 12345 so found must be defined.
+      // After unregistering, the process appears without CoS metadata.
+      expect(found).toBeDefined();
+      expect(found.agentId).toBeUndefined();
+      expect(found.source).toBeUndefined();
+    });
+
+    it('killProcess delegates to CoS killAgent for a registered PID', async () => {
+      // Register PID 99999 so killProcess detects it as a CoS-spawned agent
+      registerSpawnedAgent(99999, {
+        agentId: 'agent-ts',
+        taskId: 'task-ts',
+        model: 'claude-3-sonnet',
+        workspacePath: '/tmp',
+        fullCommand: 'claude',
+        prompt: 'hello'
+      });
+
+      // killProcess for a registered PID should delegate to killAgent (mocked above)
+      await killProcess(99999);
+
+      // Verify the CoS killAgent mock was invoked with the registered agentId —
+      // this proves the registry entry is live and used by killProcess.
+      const { killAgent } = await import('./agentOrchestrator.js');
+      expect(killAgent).toHaveBeenCalledWith('agent-ts');
+    });
+
+    it('killProcess falls back to a raw kill when CoS killAgent throws', async () => {
+      // killAgent now throws a ServerError when the agent is already gone
+      // (issue #2534). killProcess must catch that and fall through to a raw
+      // kill rather than surfacing the throw.
+      const { killAgent } = await import('./agentOrchestrator.js');
+      killAgent.mockRejectedValueOnce(
+        Object.assign(new Error('Agent not found or not running'), { status: 404, code: 'NOT_FOUND' }),
+      );
+      // Capture the command the fallback raw-kill runs.
+      mockExecWith('');
+
+      registerSpawnedAgent(88888, {
+        agentId: 'agent-gone',
+        taskId: 'task-gone',
+        model: 'claude-3-sonnet',
+        workspacePath: '/tmp',
+        fullCommand: 'claude',
+        prompt: 'hi'
+      });
+
+      const result = await killProcess(88888);
+
+      expect(killAgent).toHaveBeenCalledWith('agent-gone');
+      // Fell through to the raw platform kill (kill -9 on POSIX, taskkill on Windows).
+      const rawKillCmd = exec.mock.calls.map(c => c[0]).find(cmd => /kill/i.test(cmd));
+      expect(rawKillCmd).toBeDefined();
+      expect(rawKillCmd).toContain('88888');
+      expect(result).toBe(true);
+      unregisterSpawnedAgent(88888);
+    });
+  });
+
+  // ===========================================================================
+  // getRunningAgents — ps output parsing
+  // ===========================================================================
+  describe('getRunningAgents', () => {
+    it('parses pid, cpu, memory, and command from ps output for claude pattern', async () => {
+      mockExecWith('PID PPID %CPU %MEM ELAPSED COMMAND\n42000  1  2.5  0.8  05:30  /usr/local/bin/claude --model opus\n');
+
+      const agents = await getRunningAgents();
+      const a = agents.find(a => a.pid === 42000);
+      expect(a).toBeDefined();
+      expect(a.cpu).toBe(2.5);
+      expect(a.memory).toBe(0.8);
+      expect(a.agentName).toBe('Claude');
+      expect(a.agentType).toBe('claude');
+      expect(a.command).toBe('/usr/local/bin/claude --model opus');
+    });
+
+    it('classifies one mixed snapshot and observes starts/exits on the next request', async () => {
+      mockExecWith('PID PPID %CPU %MEM ELAPSED COMMAND\n' +
+        '101 1 1.5 0.2 01:00 CLAUDE --use codex\n' +
+        '102 1 0 0 02:00 agy\n103 1 0 0 03:00 gemini\n' +
+        '104 1 0 0 04:00 aider\n105 1 0 0 05:00 cursor-agent\n' +
+        '106 1 0 0 06:00 copilot\n107 1 0 0 00:00 unrelated\n' +
+        'bad 1 0 0 00:01 claude\n108 1 bad 0 00:01 claude\n' +
+        '109 1 0 0 bad claude\nmalformed\n');
+      const agents = await getRunningAgents();
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith('ps -ww -eo pid,ppid,%cpu,%mem,etime,command',
+        { maxBuffer: 10 * 1024 * 1024 }, expect.any(Function));
+      expect(agents.map(a => [a.pid, a.agentType])).toEqual([
+        [101, 'claude'], [101, 'codex'], [102, 'agy'], [103, 'gemini'],
+        [104, 'aider'], [105, 'cursor'], [106, 'copilot']
+      ]);
+      expect(agents.every(a => !('matchText' in a))).toBe(true);
+      mockExecWith('200 1 0 0 00:01 codex\n');
+      expect((await getRunningAgents()).map(a => a.pid)).toEqual([200]);
+      expect(exec).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['ENOENT', 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'])(
+      'discards failed or oversized Unix snapshots (%s)', async (code) => {
+        exec.mockImplementation((_cmd, _opts, cb) => cb(Object.assign(new Error(code),
+          { code, stdout: '101 1 0 0 00:01 claude\n' })));
+        await expect(getRunningAgents()).resolves.toEqual([]);
+        expect(exec).toHaveBeenCalledTimes(1);
+      });
+
+    it('returns empty array when ps returns no output', async () => {
+      mockExecWith('');
+
+      const agents = await getRunningAgents();
+      expect(agents).toEqual([]);
+      expect(exec).toHaveBeenCalledTimes(1);
+    });
+
+    it('sorts agents newest-first by startTime', async () => {
+      // Two claude processes: one older (10:00 elapsed), one newer (01:00 elapsed)
+      mockExecWith(
+        '1001  1  0.1  0.1  10:00  /usr/bin/claude --old\n' +
+        '1002  1  0.1  0.1  01:00  /usr/bin/claude --new\n'
+      );
+
+      const agents = await getRunningAgents();
+      const claudeAgents = agents.filter(a => a.agentType === 'claude');
+      // Both mock lines must parse; assert the count so this fails on parsing regressions.
+      expect(claudeAgents).toHaveLength(2);
+      // Newest-first: PID 1002 (1m elapsed) started more recently than PID 1001 (10m elapsed)
+      expect(claudeAgents[0].startTime).toBeGreaterThan(claudeAgents[1].startTime);
+    });
+
+    it('skips macOS native CursorUIViewService (framework/XPC helper), not the Cursor editor', async () => {
+      // The `cursor` grep also matches the native TextInputUI helper — a text-caret
+      // UI service, not the Cursor AI editor. It must never appear in the agent list.
+      const nativeCursorHelper =
+        '/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc/Contents/MacOS/CursorUIViewService';
+      mockExecWith(`6001  1  0.0  0.1  02:00  ${nativeCursorHelper}\n` +
+            '6002  1  0.5  0.2  01:00  /usr/local/bin/cursor-agent --print\n'
+      );
+
+      const agents = await getRunningAgents();
+      const pids = agents.map(a => a.pid);
+      expect(pids).not.toContain(6001);
+      expect(pids).toContain(6002);
+    });
+
+    it('skips lines containing "grep" or "ps -eo"', async () => {
+      mockExecWith(
+        '5000  1  0.0  0.0  00:01  grep claude\n' +
+        '5001  1  0.0  0.0  00:01  ps -eo pid command\n' +
+        '5002  1  0.5  0.2  01:00  /usr/bin/claude --print\n'
+      );
+
+      const agents = await getRunningAgents();
+      const pids = agents.map(a => a.pid);
+      expect(pids).not.toContain(5000);
+      expect(pids).not.toContain(5001);
+      expect(pids).toContain(5002);
+    });
+
+    it('enriches process with fullCommand when registered', async () => {
+      const pid = 55555;
+      registerSpawnedAgent(pid, {
+        agentId: 'enriched-agent',
+        taskId: 'enriched-task',
+        model: 'opus',
+        workspacePath: '/tmp/enrich',
+        fullCommand: 'claude --model opus --print /tmp/prompt.md',
+        prompt: 'enrich test'
+      });
+
+      mockExecWith(`${pid}  1  1.0  0.5  02:00  claude\n`);
+      const agents = await getRunningAgents();
+      const found = agents.find(a => a.pid === pid);
+      expect(found?.command).toBe('claude --model opus --print /tmp/prompt.md');
+      unregisterSpawnedAgent(pid);
+    });
+  });
+
+  // ===========================================================================
+  // isAgentProcessCommand — pure predicate
+  // ===========================================================================
+  describe('isAgentProcessCommand', () => {
+    it('accepts real agent CLI invocations', () => {
+      expect(isAgentProcessCommand('/usr/local/bin/claude --print')).toBe(true);
+      expect(isAgentProcessCommand('/usr/local/bin/cursor-agent --print')).toBe(true);
+      expect(isAgentProcessCommand('codex')).toBe(true);
+    });
+
+    it('rejects the scanner itself and its grep', () => {
+      expect(isAgentProcessCommand('grep -i cursor')).toBe(false);
+      expect(isAgentProcessCommand('ps -eo pid,command')).toBe(false);
+    });
+
+    it('rejects macOS app bundles, framework, and XPC helpers', () => {
+      expect(isAgentProcessCommand('/Applications/Cursor.app/Contents/MacOS/Cursor')).toBe(false);
+      expect(isAgentProcessCommand(
+        '/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc/Contents/MacOS/CursorUIViewService'
+      )).toBe(false);
+    });
+
+    it('rejects empty/undefined commands', () => {
+      expect(isAgentProcessCommand('')).toBe(false);
+      expect(isAgentProcessCommand(undefined)).toBe(false);
+    });
+  });
+
+  // ===========================================================================
+  // killProcess
+  // ===========================================================================
+  describe('killProcess', () => {
+    it('rejects invalid (non-integer) PID', async () => {
+      await expect(killProcess('abc')).rejects.toThrow('Invalid PID');
+    });
+
+    it('rejects zero PID', async () => {
+      await expect(killProcess(0)).rejects.toThrow('Invalid PID');
+    });
+
+    it('rejects negative PID', async () => {
+      await expect(killProcess(-5)).rejects.toThrow('Invalid PID');
+    });
+
+    it('calls kill -9 for a valid PID', async () => {
+      exec.mockImplementation((_cmd, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(null, { stdout: '' });
+      });
+
+      await killProcess(12345);
+
+      const calledWith = exec.mock.calls.find(([cmd]) => cmd.includes('kill'));
+      expect(calledWith).toBeDefined();
+      expect(calledWith[0]).toContain('12345');
+    });
+  });
+
+  // ===========================================================================
+  // getProcessInfo
+  // ===========================================================================
+  describe('getProcessInfo', () => {
+    it('returns null for invalid PID', async () => {
+      const result = await getProcessInfo('notanumber');
+      expect(result).toBeNull();
+    });
+
+    it('returns null for zero PID', async () => {
+      const result = await getProcessInfo(0);
+      expect(result).toBeNull();
+    });
+
+    it('parses process info from ps -p output', async () => {
+      exec.mockImplementation((_cmd, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(null, {
+          stdout: 'PID  PPID %CPU %MEM ELAPSED COMMAND\n 9999  1001  3.2  0.5  10:30  /usr/bin/claude --print\n'
+        });
+      });
+
+      const info = await getProcessInfo(9999);
+      expect(info).not.toBeNull();
+      expect(info.pid).toBe(9999);
+      expect(info.ppid).toBe(1001);
+      expect(info.cpu).toBe(3.2);
+      expect(info.memory).toBe(0.5);
+      expect(info.command).toBe('/usr/bin/claude --print');
+    });
+
+    it('returns null when ps output has less than 2 lines', async () => {
+      exec.mockImplementation((_cmd, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(null, { stdout: 'PID PPID CPU MEM ELAPSED COMMAND\n' });
+      });
+
+      const result = await getProcessInfo(9999);
+      expect(result).toBeNull();
+    });
+  });
+
+  // ===========================================================================
+  // Windows process probe (Get-CimInstance) — the branch that had no coverage
+  // and was silently dead: it shelled out to wmic.exe, which Microsoft removed
+  // from Windows 11, and the failure was swallowed into an empty list.
+  // ===========================================================================
+  describe('getRunningAgents on Windows', () => {
+    const cimRow = (over = {}) => ({
+      Name: 'claude.exe',
+      ProcessId: 4242,
+      ParentProcessId: 100,
+      WorkingSetSize: 52428800, // 50 MB
+      CommandLine: 'C:\\Users\\dev\\AppData\\Local\\claude.exe --print hi',
+      CreationDate: '2026-08-13T21:51:42.0985120+00:00',
+      ...over,
+    });
+    const mockCim = (payload) => {
+      execFile.mockImplementation((_bin, _args, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(null, { stdout: typeof payload === 'string' ? payload : JSON.stringify(payload) });
+      });
+    };
+
+    beforeEach(() => pinPlatform('win32'));
+
+    it('probes with PowerShell, not the removed wmic.exe', async () => {
+      mockCim([cimRow()]);
+      await getRunningAgents();
+      expect(execFile).toHaveBeenCalledTimes(1);
+      const [bin, args] = execFile.mock.calls[0];
+      expect(bin).toBe('powershell');
+      expect(args.join(' ')).toContain('Get-CimInstance Win32_Process');
+      // wmic is gone on Windows 11 — never reintroduce it here.
+      expect(args.join(' ')).not.toContain('wmic');
+    });
+
+    it('matches Name rather than arguments and refreshes the mixed snapshot', async () => {
+      mockCim([cimRow({ Name: 'CLAUDE-codex.exe' }),
+        cimRow({ ProcessId: 42, Name: 'aider.exe', CommandLine: 'aider --prompt claude',
+          CreationDate: '2026-08-14T00:00:00Z' }),
+        cimRow({ ProcessId: 43, Name: 'unrelated.exe' }), null, {}, 'bad']);
+      const agents = await getRunningAgents();
+      expect(agents.map(a => [a.pid, a.agentType])).toEqual([
+        [42, 'aider'], [4242, 'claude'], [4242, 'codex']
+      ]);
+      expect(agents.every(a => !('matchText' in a))).toBe(true);
+      expect(execFile).toHaveBeenCalledTimes(1);
+      const [, args, opts] = execFile.mock.calls[0];
+      expect(args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
+      expect(args[3]).toContain("Name LIKE '%claude%' OR Name LIKE '%codex%' OR Name LIKE '%agy%' OR Name LIKE '%gemini%' OR Name LIKE '%aider%' OR Name LIKE '%cursor%' OR Name LIKE '%copilot%'");
+      expect(args[3]).toContain('Select-Object Name,ProcessId');
+      expect(args[3]).toContain("CreationDate.ToString('o')");
+      expect(opts.maxBuffer).toBe(8 * 1024 * 1024);
+      mockCim(cimRow({ ProcessId: 77 }));
+      expect((await getRunningAgents()).map(a => a.pid)).toEqual([77]);
+      expect(execFile).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['', '[]', 'null', '{}'])('handles empty CIM output %s with one probe', async (raw) => {
+      mockCim(raw);
+      await expect(getRunningAgents()).resolves.toEqual([]);
+      expect(execFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('logs one oversized probe failure and discards partial output', async () => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      execFile.mockImplementation((_bin, _args, _opts, cb) => cb(Object.assign(
+        new Error('stdout maxBuffer length exceeded'),
+        { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', stdout: JSON.stringify(cimRow()) })));
+      await expect(getRunningAgents()).resolves.toEqual([]);
+      expect(execFile).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledTimes(1);
+      log.mockRestore();
+    });
+
+    it('maps a CIM row to the shared process shape', async () => {
+      mockCim([cimRow()]);
+      const agents = await getRunningAgents();
+      const found = agents.find((a) => a.pid === 4242);
+      expect(found).toBeDefined();
+      expect(found.ppid).toBe(100);
+      expect(found.memory).toBeCloseTo(50, 5);       // bytes → MB
+      expect(found.startTime).toBe(Date.parse('2026-08-13T21:51:42.0985120+00:00'));
+      expect(Number.isFinite(found.runtime)).toBe(true);
+    });
+
+    it('accepts a single match, which ConvertTo-Json emits as a bare object', async () => {
+      // Not wrapped in an array — the shape that would otherwise be iterated
+      // as an object and yield nothing.
+      mockCim(cimRow({ ProcessId: 777 }));
+      const agents = await getRunningAgents();
+      expect(agents.map((a) => a.pid)).toContain(777);
+    });
+
+    it('survives a failed probe without throwing', async () => {
+      execFile.mockImplementation((_bin, _args, _opts, cb) => {
+        const callback = typeof _opts === 'function' ? _opts : cb;
+        callback(new Error('powershell missing'));
+      });
+      await expect(getRunningAgents()).resolves.toEqual([]);
+    });
+
+    it('survives unparseable probe output without throwing', async () => {
+      mockCim('not json at all');
+      await expect(getRunningAgents()).resolves.toEqual([]);
+    });
+  });
+});

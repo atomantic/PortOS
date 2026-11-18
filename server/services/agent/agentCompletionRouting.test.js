@@ -1,0 +1,242 @@
+/**
+ * Behavioral tests for `handleAgentCompletion`'s ROUTER (issue #3872).
+ *
+ * `handleAgentCompletion` has three mutually exclusive outcomes, picked before
+ * any completion work runs:
+ *
+ *   1. the agent is paused  → return immediately, finalize NOTHING (the resume
+ *      path owns the worktree and the task);
+ *   2. the agent is not in `runnerAgents` (server restarted) → hand off to
+ *      `completeUntrackedAgentFromCosState`, which retires it from persisted
+ *      cos state without running finalize/worktree cleanup;
+ *   3. the agent is live in `runnerAgents` → the full in-memory completion path.
+ *
+ * Outcome 1 is a data-loss guard: completing a paused agent cleans the worktree
+ * and completes the task out from under a later resume. It used to be pinned by
+ * a source-grep assertion in `agentManagement.test.js` ("`pausedAgents.has` must
+ * appear before `completeAgent(` in the function's source text"), which broke the
+ * moment the recovery path was extracted — the only `completeAgent(` in the
+ * function moved with it. These tests drive the real exported function instead,
+ * so they survive any future extraction and still fail if the guard is removed.
+ */
+
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+vi.mock('../cosState.js', () => ({
+  getConfig: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('../cosTaskStore.js', () => ({
+  updateTask: vi.fn().mockResolvedValue(true),
+  getTaskById: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../cosAgentLifecycle.js', () => ({
+  registerAgent: vi.fn().mockResolvedValue(undefined),
+  updateAgent: vi.fn().mockResolvedValue(undefined),
+  completeAgent: vi.fn().mockResolvedValue(undefined),
+  getAgentRecord: vi.fn().mockResolvedValue(null),
+  // The recovery path reaches for this via `await import('../cosAgentLifecycle.js')`.
+  getAgent: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('./agentFinalization.js', () => ({
+  dispatchRecoveredTaskOutputHook: vi.fn().mockResolvedValue(undefined),
+  finalizeAgent: vi.fn().mockResolvedValue(undefined),
+  stampLiExecutionVerdict: vi.fn(async (update) => update),
+  // `retireDeadAgent`'s own step-order/private-security contract is pinned for real
+  // (mocked leaves) in `agentFinalization.retireDeadAgent.test.js`. This suite only
+  // needs it to echo the `success` it was handed, since the router branches on the
+  // returned value.
+  retireDeadAgent: vi.fn(async ({ success }) => ({ success })),
+}));
+
+vi.mock('./agentManagement.js', () => ({
+  handleOrphanedTask: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('./agentWorktreeCleanup.js', () => ({
+  cleanupAgentWorktree: vi.fn().mockResolvedValue(undefined),
+  releaseRetryHold: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('./agentCompletionCleanup.js', () => ({
+  runAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
+  removeCompletionSentinel: vi.fn().mockResolvedValue(undefined),
+  replayAgentCompletionCleanup: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { handleAgentCompletion } from './agentLifecycle.js';
+import { runnerAgents, completingAgents, pausedAgents } from './agentState.js';
+import { completeAgent, getAgent, getAgentRecord } from '../cosAgentLifecycle.js';
+import { getTaskById, updateTask } from '../cosTaskStore.js';
+import { retireDeadAgent } from './agentFinalization.js';
+import { handleOrphanedTask } from './agentManagement.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // clearAllMocks does NOT drain a queued `mockResolvedValueOnce` — and the pause
+  // tests deliberately leave theirs unconsumed (that IS the assertion), so without
+  // an explicit reset the leftover leaks into the next test's first read.
+  getAgent.mockReset().mockResolvedValue(null);
+  getTaskById.mockReset().mockResolvedValue(null);
+  runnerAgents.clear();
+  pausedAgents.clear();
+});
+
+describe('handleAgentCompletion — pause guard (data-loss guard)', () => {
+  // Deliberately staged so that WITHOUT the guard this call completes the agent:
+  // the persisted record says `running`, and the agent is absent from
+  // `runnerAgents` (the post-restart shape), so the recovery path would retire
+  // it and requeue the task the resume was going to pick up.
+  it('finalizes nothing for a paused agent the recovery path would otherwise retire', async () => {
+    getAgent.mockResolvedValueOnce({ agentId: 'agent-paused', status: 'running', taskId: 'task-1', metadata: {} });
+    pausedAgents.set('agent-paused', { pausedAt: Date.now(), reason: 'user' });
+
+    await handleAgentCompletion('agent-paused', 143, false, 1000);
+
+    // The whole point: no completion write of any kind.
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(getAgent).not.toHaveBeenCalled();
+    expect(handleOrphanedTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  // Same guard, live-agent shape: the pause must also win over the in-memory
+  // completion path, which would run finalize + worktree cleanup. `getAgentRecord`
+  // is that path's very first read, so never touching it proves we never entered it.
+  it('does not enter the live completion path for a paused agent still in runnerAgents', async () => {
+    pausedAgents.set('agent-paused', { pausedAt: Date.now(), reason: 'user' });
+    runnerAgents.set('agent-paused', { task: { id: 'task-1' }, providerId: 'claude' });
+
+    await handleAgentCompletion('agent-paused', 143, false, 1000);
+
+    expect(getAgentRecord).not.toHaveBeenCalled();
+    expect(completeAgent).not.toHaveBeenCalled();
+  });
+
+  it('drops both map entries so the pause is consumed and the slot is reclaimable', async () => {
+    pausedAgents.set('agent-paused', { pausedAt: Date.now(), reason: 'user' });
+    runnerAgents.set('agent-paused', { task: { id: 'task-1' } });
+
+    await handleAgentCompletion('agent-paused', 143, false, 1000);
+
+    expect(pausedAgents.has('agent-paused')).toBe(false);
+    expect(runnerAgents.has('agent-paused')).toBe(false);
+  });
+
+  // Bypass probe: with the pause flag absent, the SAME call must reach a
+  // completion path. Without this, a guard that swallowed every event
+  // unconditionally (or a `return` moved to the top of the function) would pass
+  // the two assertions above while breaking all completions.
+  it('does NOT swallow the event when the agent is not paused', async () => {
+    getAgent.mockResolvedValueOnce({ id: 'agent-live', status: 'running', taskId: null, metadata: {} });
+
+    await handleAgentCompletion('agent-live', 0, true, 1000);
+
+    // Retirement itself is `retireDeadAgent`'s job now (#8440) — reaching it at
+    // all is what proves the guard didn't swallow the event.
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-live' }),
+    }));
+  });
+});
+
+describe('handleAgentCompletion — post-restart recovery hand-off', () => {
+  it('retires an untracked agent from persisted cos state', async () => {
+    getAgent.mockResolvedValueOnce({
+      id: 'agent-gone',
+      status: 'running',
+      taskId: 'task-9',
+      startedAt: '2020-01-01T00:00:00.000Z',
+      metadata: { workspacePath: '/repo/wt' },
+    });
+    getTaskById.mockResolvedValue({ id: 'task-9', status: 'running', taskType: 'user' });
+
+    await handleAgentCompletion('agent-gone', 0, true, 500);
+
+    // `retireDeadAgent` (#8440) is the single retirement step list — this only
+    // checks the router hands it the right facts; its own step order and the
+    // completeAgent/output-hook calls it makes are pinned in
+    // `agentFinalization.retireDeadAgent.test.js`.
+    expect(retireDeadAgent).toHaveBeenCalledWith(expect.objectContaining({
+      agent: expect.objectContaining({ id: 'agent-gone' }),
+      success: true,
+      exitCode: 0,
+      duration: 500,
+    }));
+    expect(updateTask).toHaveBeenCalledWith('task-9', expect.objectContaining({ status: 'completed' }), 'user');
+  });
+
+  it('hands the dead run’s metadata + startedAt to the retry handler on failure', async () => {
+    getAgent.mockResolvedValueOnce({
+      id: 'agent-gone',
+      status: 'running',
+      taskId: 'task-9',
+      startedAt: '2020-01-01T00:00:00.000Z',
+      metadata: { worktreeBranch: 'cos/task-9' },
+    });
+    getTaskById.mockResolvedValue({ id: 'task-9', status: 'running', taskType: 'user' });
+
+    await handleAgentCompletion('agent-gone', 1, false, 500);
+
+    expect(handleOrphanedTask).toHaveBeenCalledWith(
+      'task-9',
+      'agent-gone',
+      expect.any(Function),
+      { agentMetadata: { worktreeBranch: 'cos/task-9' }, agentStartedAt: '2020-01-01T00:00:00.000Z' }
+    );
+  });
+
+  it('ignores a completion for an agent whose persisted status is paused', async () => {
+    getAgent.mockResolvedValueOnce({ agentId: 'agent-p', status: 'paused', taskId: 'task-9', metadata: {} });
+
+    await handleAgentCompletion('agent-p', 143, false, 500);
+
+    expect(completeAgent).not.toHaveBeenCalled();
+    expect(handleOrphanedTask).not.toHaveBeenCalled();
+  });
+
+  // The orphan sweep may already have finalized this run from the runner's
+  // completion receipt (#14261); the late broadcast must not finalize it again.
+  it('ignores a late completion for an agent already finalized from its receipt', async () => {
+    getAgent.mockResolvedValueOnce({ id: 'agent-done', status: 'completed', taskId: 'task-9', metadata: {} });
+
+    await handleAgentCompletion('agent-done', 143, false, 500);
+
+    expect(retireDeadAgent).not.toHaveBeenCalled();
+    expect(handleOrphanedTask).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+
+  it('ignores a completion for an agent with no persisted cos record', async () => {
+    getAgent.mockResolvedValueOnce(null);
+
+    await handleAgentCompletion('agent-unknown', 0, true, 500);
+
+    expect(completeAgent).not.toHaveBeenCalled();
+  });
+});
+
+// A recovered TUI's process has exited, but output hooks/validation still own
+// its verdict. Watchdogs must see that ownership through success AND failure.
+describe('runner completion ownership', () => {
+  it.each([false, true])('holds ownership until retirement settles (reject=%s)', async (reject) => {
+    let settle;
+    const pending = new Promise((resolve, rejectPromise) => { settle = reject ? rejectPromise : resolve; });
+    getAgent.mockResolvedValue({ id: 'agent-finishing', status: 'running', metadata: {} });
+    retireDeadAgent.mockImplementationOnce(async () => {
+      expect(completingAgents.has('agent-finishing')).toBe(true);
+      await pending;
+      return { success: true };
+    });
+    const done = handleAgentCompletion('agent-finishing', 0, true, 1000);
+    const assertion = reject ? expect(done).rejects.toThrow('write failed') : expect(done).resolves.toBeUndefined();
+    expect(completingAgents.has('agent-finishing')).toBe(true);
+    await handleAgentCompletion('agent-finishing', 0, true, 1000);
+    settle(reject ? new Error('write failed') : undefined);
+    await assertion;
+    expect(retireDeadAgent).toHaveBeenCalledTimes(1);
+    expect(completingAgents.has('agent-finishing')).toBe(false);
+  });
+});

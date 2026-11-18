@@ -2174,14 +2174,14 @@ export * from './musicVideo/musicVideoValidation.js';
 export * from './storyBuilderValidation.js';
 export * from './moodBoardValidation.js';
 export * from './privacyValidation.js';
-export * from './agentValidation.js';
+export * from './agent/agentValidation.js';
 export * from './cosValidation.js';
 export * from './mediaValidation.js';
 export * from './pipelineValidation.js';
 import { stageConfigUpdateSchema } from './pipelineValidation.js';
 export * from './quotaBurnValidation.js';
 export * from './spriteValidation.js';
-export * from './agentContextValidation.js';
+export * from './agent/agentContextValidation.js';
 export * from './eidoverseValidation.js';
 
 // Reference prices and PortOS-run benchmark observations. A source is attached

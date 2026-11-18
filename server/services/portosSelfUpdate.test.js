@@ -17,7 +17,7 @@ vi.mock('./updateExecutor.js', () => ({
   launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) }),
 }));
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
-vi.mock('./agentState.js', () => ({
+vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks,
 }));

@@ -8,7 +8,7 @@
  * The code reviewers only see a diff, so none can answer "is this the code that was asked for?".
  * This module owns the value half of that second review: the verdict vocabulary, the objective
  * composition (task screenshots included), and the parse/validate of the model's structured answer.
- * The request lives in `services/codeReview.js`, the completion gate in `services/agentFinalization.js`.
+ * The request lives in `services/codeReview.js`, the completion gate in `services/agent/agentFinalization.js`.
  *
  * Pure and I/O-free so the gate, the settings resolver, and the tests share one definition of a verdict.
  */

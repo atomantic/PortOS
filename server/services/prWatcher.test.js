@@ -55,7 +55,7 @@ vi.mock('./notifications.js', () => ({
 }));
 
 const spawnReviewLoopFollowUpMock = vi.fn();
-vi.mock('./agentWorktreeCleanup.js', () => ({
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({
   spawnReviewLoopFollowUp: (...args) => spawnReviewLoopFollowUpMock(...args),
 }));
 

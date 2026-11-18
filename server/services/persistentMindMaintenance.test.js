@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
   resetRuntime: vi.fn(async () => ({ status: 'thinking' })),
 }));
 
-vi.mock('./agentRunEventLog.js', () => ({
+vi.mock('./agent/agentRunEventLog.js', () => ({
   appendMindEvent: (...args) => mocks.appendMindEvent(...args),
   clearPersistentMindHistory: (...args) => mocks.clearHistory(...args),
 }));

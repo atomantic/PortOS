@@ -30,7 +30,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: { ...actual.PATHS, cos: CONTEXT_DIR } };
 });
 
-vi.mock('./agentRunEventLog.js', () => ({
+vi.mock('./agent/agentRunEventLog.js', () => ({
   appendMindEvent: (...args) => mock.appendMindEvent(...args),
   readPersistentMindHistory: vi.fn(async () => mock.history),
 }));

@@ -18,7 +18,7 @@ import { buildCodexAgentThreadArgs, isClaudeCommand, applyLeanClaudeArgs } from 
 import { isCodexCommand } from '../../lib/codex.js';
 import { applyCredentialBootstrap } from '../../lib/credentialBootstrap.js';
 import { buildVendorSpawnConfig, injectTuiModelAndEffort, supportsTuiPublicReviewPosture } from '../../lib/providerVendors.js';
-import { publicReviewPostureForProfile } from '../../lib/agentExecutionProfiles.js';
+import { publicReviewPostureForProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { DEFAULT_TUI_PROMPT_DELAY_MS, inferTuiCommand, applyCommandDefaults } from '../../lib/tuiHandshake.js';
 
 export function buildTuiSpawnConfig(provider, model, {

@@ -44,7 +44,7 @@ vi.mock('./browserService.js', () => ({
 const cases = [
   {
     name: 'agent drafts', path: 'agents/drafts/agent-1.json',
-    load: () => import('./agentDrafts.js'),
+    load: () => import('./agent/agentDrafts.js'),
     mutate: svc => svc.createDraft('agent-1', { type: 'post', content: 'New draft' }),
     seed: [{ id: 'keep', type: 'post', content: 'Existing draft', createdAt: '2026-01-01T00:00:00.000Z' }],
     kept: data => data.some(draft => draft.id === 'keep')

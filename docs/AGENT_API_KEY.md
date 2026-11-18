@@ -1,6 +1,6 @@
 # Agent API key
 
-Lets an AI agent that PortOS did **not** spawn — a Claude Code or Codex session you run in a terminal on the PortOS machine — call the PortOS API without the instance password. Agents PortOS spawns already get `PORTOS_API_TOKEN` injected (`server/services/agentApiAuth.js`) and need nothing here.
+Lets an AI agent that PortOS did **not** spawn — a Claude Code or Codex session you run in a terminal on the PortOS machine — call the PortOS API without the instance password. Agents PortOS spawns already get `PORTOS_API_TOKEN` injected (`server/services/agent/agentApiAuth.js`) and need nothing here.
 
 ## Turning it on
 

@@ -87,8 +87,9 @@ PortOS/
 │   ├── services/              # Business logic
 │   │   ├── cos.js             # Chief of Staff core
 │   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
-│   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
-│   │   ├── agentOrchestrator.js # Agent lifecycle-transition facade
+│   │   ├── agent/             # Agent orchestration and execution
+│   │   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
+│   │   │   └── agentOrchestrator.js # Agent lifecycle-transition facade
 │   │   ├── pm2.js             # PM2 process management
 │   │   ├── runner.js          # AI execution engine
 │   │   ├── memory.js          # Memory system
@@ -310,7 +311,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 - `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn listener, run-directory pruning, orphan sweep
 - The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
 
-### Agent Orchestrator (`server/services/agentOrchestrator.js`)
+### Agent Orchestrator (`server/services/agent/agentOrchestrator.js`)
 - The one entry point for an agent LIFECYCLE TRANSITION (pause / kill / terminate / complete / spawn) — read its header before touching the agent cluster
 
 ### Memory Service (`server/services/memoryBackend.js`)
@@ -343,7 +344,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 - External data import (Goodreads, Spotify, Letterboxd, iCal)
 - Confidence scoring and gap recommendations
 
-### Agent Personalities (`server/services/agentPersonalities.js`)
+### Agent Personalities (`server/services/agent/agentPersonalities.js`)
 - Agent personality CRUD and AI generation
 - Custom communication styles, tones, and quirks
 

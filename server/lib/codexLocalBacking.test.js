@@ -18,7 +18,7 @@ import {
 } from './providerModels.js';
 import { applyCommandDefaults, buildVendorCliArgs, buildVendorSpawnConfig } from './providerVendors.js';
 import { buildTuiInvocation } from './tuiHandshake.js';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { providerPrerequisites, blocksRouting } from './providerPrerequisites.js';
 import { isCodexSubscriptionProvider } from './codexAccount.js';
 

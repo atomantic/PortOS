@@ -17,7 +17,7 @@
  * docs/plans/2026-07-09-programmatic-io-scheduled-tasks.md.
  */
 
-import { isFalsyMeta, isTruthyMeta } from './agentState.js';
+import { isFalsyMeta, isTruthyMeta } from './agent/agentState.js';
 import { TRACKER_FILING_TASK_TYPES, CONCRETE_WORK_TRACKERS } from '../lib/workTracker.js';
 import { isAuditTaskType } from '../lib/auditCatalog.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';

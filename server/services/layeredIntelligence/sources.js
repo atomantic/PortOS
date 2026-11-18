@@ -15,7 +15,7 @@ import { fetchPublicText } from '../../lib/safeUrlFetch.js';
 import { validateUnattendedCommand } from '../../lib/commandSecurity.js';
 import { getSettings } from '../settings.js';
 import { computeWindowedStats } from '../taskLearning/store.js';
-import { computeChurn, summarizeRecentRuns, SHORT_LIVED_MS } from '../agentChurn.js';
+import { computeChurn, summarizeRecentRuns, SHORT_LIVED_MS } from '../agent/agentChurn.js';
 import {
   PLANNED_WORK_LABEL, PLANNED_WORK_NONE, PLANNED_WORK_UNAVAILABLE_PREFIX,
   PLANNED_WORK_MAX_ITEMS, PLANNED_WORK_MAX_CHARS, LI_TASK_TYPE,

@@ -2,7 +2,7 @@ import { writeFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { ensureDir, ensureDirs } from '../lib/fileUtils.js';
-import { writeAgentInstructions } from '../lib/agentInstructionsFile.js';
+import { writeAgentInstructions } from '../lib/agent/agentInstructionsFile.js';
 import {
   XCODE_TEAM_ID, XCODE_BUNDLE_PREFIX, XCODE_ENV_EXAMPLE,
   toBundleId, toTargetName,

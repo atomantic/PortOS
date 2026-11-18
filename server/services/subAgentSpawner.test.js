@@ -21,7 +21,7 @@ vi.mock('./cosRunnerClient.js', async (importOriginal) => ({
   onCosRunnerEvent: vi.fn(),
 }));
 
-vi.mock('./agentManagement.js', async (importOriginal) => ({
+vi.mock('./agent/agentManagement.js', async (importOriginal) => ({
   ...(await importOriginal()),
   cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined),
 }));
@@ -47,7 +47,7 @@ vi.mock('./cosState.js', async (importOriginal) => {
   };
 });
 
-vi.mock('./agentOrchestrator.js', async (importOriginal) => {
+vi.mock('./agent/agentOrchestrator.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -56,7 +56,7 @@ vi.mock('./agentOrchestrator.js', async (importOriginal) => {
 });
 
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
-import { isTruthyMeta, isFalsyMeta } from './agentState.js';
+import { isTruthyMeta, isFalsyMeta } from './agent/agentState.js';
 import { cosEvents } from './cosEvents.js';
 import { initSpawner } from './subAgentSpawner.js';
 import { applyAppWorktreeDefault } from './cosTaskGenerator.js';

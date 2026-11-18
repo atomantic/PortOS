@@ -9,7 +9,7 @@
  * Keep this module pure so the client can re-export the same predicates.
  */
 
-import { isAgentHandoff } from './agentOutcome.js';
+import { isAgentHandoff } from './agent/agentOutcome.js';
 
 export const FEEDBACK_RATINGS = Object.freeze(['positive', 'negative', 'neutral']);
 

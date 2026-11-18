@@ -9,7 +9,7 @@
  * because they already pass the flag unconditionally and must keep doing so.
  */
 import { describe, expect, it } from 'vitest';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { applyCommandDefaults, buildVendorCliArgs, buildVendorSpawnConfig } from './providerVendors.js';
 
 const codexCli = { id: 'codex', type: 'cli', command: 'codex' };

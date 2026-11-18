@@ -33,19 +33,19 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
+vi.mock('./agent/agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
-vi.mock('./agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));
-vi.mock('./agentRunnerOutputBatchers.js', () => ({
+vi.mock('./agent/agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));
+vi.mock('./agent/agentRunnerOutputBatchers.js', () => ({
   getRunnerOutputBatcher: vi.fn(),
   flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
-vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
+vi.mock('./agent/agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
+vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
-vi.mock('./agentOrchestrator.js', () => ({
+vi.mock('./agent/agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
 }));
@@ -58,10 +58,10 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
 import { initSpawner } from './subAgentSpawner.js';
 import { initCosRunnerConnection } from './cosRunnerClient.js';
-import { syncRunnerAgents } from './agentRunnerSync.js';
+import { syncRunnerAgents } from './agent/agentRunnerSync.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { persistAgentSecurityScan } from './agentSecurityScan.js';
-import * as agentState from './agentState.js';
+import { persistAgentSecurityScan } from './agent/agentSecurityScan.js';
+import * as agentState from './agent/agentState.js';
 
 // Read through the module namespace: `useRunner` is reassigned by `setUseRunner`,
 // and a destructured copy would freeze the value at import time.

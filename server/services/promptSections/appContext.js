@@ -7,7 +7,7 @@ import { getActiveProvider } from '../providers.js';
 import * as jiraService from '../jira.js';
 import { emitLog } from '../cosEvents.js';
 
-export { getAppWorkspace, getAppDataForTask } from '../agentAppWorkspace.js';
+export { getAppWorkspace, getAppDataForTask } from '../agent/agentAppWorkspace.js';
 
 /**
  * Generate a concise JIRA ticket title from a task description using AI.

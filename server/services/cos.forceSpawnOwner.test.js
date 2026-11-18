@@ -48,7 +48,7 @@ vi.mock('./cosTaskStore.js', async (importOriginal) => {
     })),
   };
 });
-vi.mock('./agentProviderResolution.js', () => ({
+vi.mock('./agent/agentProviderResolution.js', () => ({
   resolveAgentProviderAndModel: vi.fn(async () => ({ ok: true, provider: { id: 'cloud-cli', type: 'cli' } })),
 }));
 vi.mock('./cosLocalEndpointSlots.js', async (importOriginal) => ({
@@ -60,7 +60,7 @@ const { forceSpawnTask } = await import('./cos.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { cleanupZombieAgents } = await import('./cosAgentLifecycle.js');
 const { getTaskById } = await import('./cosTaskStore.js');
-const { setUseRunner, useRunner, activeAgents } = await import('./agentState.js');
+const { setUseRunner, useRunner, activeAgents } = await import('./agent/agentState.js');
 
 const originalUseRunner = useRunner;
 const holder = (overrides = {}) => ({

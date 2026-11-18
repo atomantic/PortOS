@@ -63,7 +63,7 @@ import { detachItermSocket, registerItermHandlers } from '../sockets/iterm.js';
 import { getBuildId } from '../lib/buildId.js';
 import { authEvents, isAuthEnabled, verifyRequestSession } from './auth.js';
 import { HOST_CONTROL_FORBIDDEN_MESSAGE, socketHasHostControl } from './authGate.js';
-import { runEventLogEvents } from './agentRunEventLog.js';
+import { runEventLogEvents } from './agent/agentRunEventLog.js';
 import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';

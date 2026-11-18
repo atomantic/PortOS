@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { completedCheckoutReceiptValid } from './completedCheckoutEvidence.js';
 
 // A swarm may leave its original task in cleanup recovery while its next batch
@@ -130,7 +130,7 @@ export async function verifiedCleanupSwarmTaskIds(tasks, { allowSourceAgentId = 
     && task.metadata?.deliveryRecovery === 'cleanup' && task.metadata.deliveryRecoveryAgentId);
   if (!candidates.length) return new Set();
   const [{ getAgentRecord }, { getInstanceId }, { readAgentsStateForSafetyCheck }, { hasActiveTaskOwner, getActiveAgentIds }] = await Promise.all([
-    import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agentState.js'),
+    import('./cosAgentLifecycle.js'), import('./instanceIdentity.js'), import('./cosState.js'), import('./agent/agentState.js'),
   ]);
   const [instance, owners] = await Promise.all([getInstanceId(), readAgentsStateForSafetyCheck()]);
   if (!owners.trusted) return new Set();
@@ -157,7 +157,7 @@ export async function validCleanupRefillSource(agentId, taskType, appId) {
     || !cleanupRefillSourceMatches(task, agent, await getInstanceId())) return false;
   if (task.status !== 'completed') return (await verifiedCleanupSwarmTaskIds([task], { allowSourceAgentId: agentId })).has(task.id);
   const [{ readAgentsStateForSafetyCheck }, { hasActiveTaskOwner, getActiveAgentIds }] = await Promise.all([
-    import('./cosState.js'), import('./agentState.js'),
+    import('./cosState.js'), import('./agent/agentState.js'),
   ]);
   const owners = await readAgentsStateForSafetyCheck();
   return owners.trusted && !getActiveAgentIds().includes(agentId) && !hasActiveTaskOwner(task.id, owners.agents)

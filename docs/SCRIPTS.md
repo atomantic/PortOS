@@ -7,7 +7,7 @@ Every top-level file in `scripts/` is either wired into something (CI, a test, a
 | Command | Purpose |
 |---------|---------|
 | `npm run api -- <cmd> …` | Call this machine's PortOS API from a terminal agent without the instance password. See [AGENT_API_KEY.md](./AGENT_API_KEY.md). |
-| `npm run eval:agent-context` | Evaluate the agent instruction context (`server/services/agentContextEval.js`). Takes `--fixture <path>` and `--failure-threshold <n>`. |
+| `npm run eval:agent-context` | Evaluate the agent instruction context (`server/services/agent/agentContextEval.js`). Takes `--fixture <path>` and `--failure-threshold <n>`. |
 | `npm run setup:spotlight` | macOS only. Excludes churny `data/` subdirectories (worktrees, archives, profiles) from Spotlight; user media stays indexed. Also runs from `setup-data.js`. Set `PORTOS_SKIP_SPOTLIGHT_EXCLUDE=1` to opt out. |
 | `npm run setup:ghostty` | Installs the PortOS Ghostty themes and adds a source line to `~/.zshrc`. Run once on a machine that uses Ghostty. |
 | `npm run reset:password -- <newPassword>` | Recovery when the instance password is lost. Writes `secrets.auth` directly; `--disable` turns the gate off. Stop PortOS first, since the running server caches `settings.json`. |

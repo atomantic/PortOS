@@ -60,7 +60,7 @@ vi.mock('./notifications.js', () => ({
   PRIORITY_LEVELS: { HIGH: 'high' },
 }));
 const followUpMock = vi.fn(async () => ({ id: 'follow-up-1' }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: (...args) => followUpMock(...args) }));
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: (...args) => followUpMock(...args) }));
 const cleanupMock = vi.fn();
 vi.mock('./heldCheckoutRecovery.js', () => ({ retirePendingMergeCheckout: (...args) => cleanupMock(...args) }));
 

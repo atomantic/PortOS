@@ -33,7 +33,7 @@ vi.mock('./sharing/peerSync.js', async () => {
 vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn(async () => 0) }));
 vi.mock('./codeReview.js', () => ({ runLocalCodeReview: vi.fn(), getCodeReviewDefaults: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'instance-test') }));
-vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
+vi.mock('./agent/agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn(async () => {}) }));
 
 vi.mock('./cosEvents.js', () => ({
@@ -53,9 +53,9 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
 
 import { addTask, updateTask, challengeTask, resolveTaskChallenge, getTaskById, __resetTaskCache } from './cosTaskStore.js';
 import { __resetCosTaskRepository } from './cosTaskRepository.js';
-import { activeAgents, runnerAgents } from './agentState.js';
+import { activeAgents, runnerAgents } from './agent/agentState.js';
 import { withStateLock } from './cosState.js';
-import { prepareAgentSpawn } from './agentSpawnPreparation.js';
+import { prepareAgentSpawn } from './agent/agentSpawnPreparation.js';
 const { dequeueNextTask } = await vi.importActual('./cos.js');
 
 beforeEach(() => {

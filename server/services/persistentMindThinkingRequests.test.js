@@ -6,7 +6,7 @@ vi.mock('./cosState.js', () => ({ loadState: async () => mock.root,
   saveState: async (root) => { mock.root = JSON.parse(JSON.stringify(root)); }, withStateLock: async (fn) => fn() }));
 vi.mock('./providers.js', () => ({ getProviderById: async () => mock.provider }));
 vi.mock('./providerStatus.js', () => ({ isProviderAvailable: () => true, getProviderStatus: () => null }));
-vi.mock('./agentRunEventLog.js', () => ({ appendMindEvent: async (event) => { mock.events.push(event); } }));
+vi.mock('./agent/agentRunEventLog.js', () => ({ appendMindEvent: async (event) => { mock.events.push(event); } }));
 import { approvePersistentMindThinkingPresets, getPersistentMindThinkingRequestCatalog,
   requestPersistentMindThinkingPreset, resolvePersistentMindSelfThinkingRequest,
   cancelPersistentMindThinkingRequest } from './persistentMindThinkingRequests.js';

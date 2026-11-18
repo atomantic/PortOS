@@ -10,7 +10,7 @@
 import { cosEvents, emitLog } from './store.js';
 import { recordTaskCompletion, recalculateModelTierMetrics } from './metrics.js';
 import { declaresNoCommitCriterion, isClaimFlowDispatch } from '../taskTypeHooks.js';
-import { isAgentHandoff } from '../../lib/agentOutcome.js';
+import { isAgentHandoff } from '../../lib/agent/agentOutcome.js';
 
 // A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
 // jira-status-report) carries a FOSSIL `result.validationPassed` — a boolean the old
@@ -65,7 +65,7 @@ export function initTaskLearning() {
     // the SAME task type is a local diagnostic signal. A coordinator is parked
     // immediately; Layered Intelligence decides later whether it supports a
     // concrete planned fix.
-    const churnModule = await import('../agentChurn.js').catch(() => {
+    const churnModule = await import('../agent/agentChurn.js').catch(() => {
       console.error('❌ 🔁 TaskLearning/CoS churn: Failed to load churn observer');
       return null;
     });

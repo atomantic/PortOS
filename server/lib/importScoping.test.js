@@ -95,9 +95,9 @@ const NARROWED = [
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
   ['services/cos.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/agentFinalization.js', 'services/promptRunner.js',
+  ['services/agent/agentFinalization.js', 'services/promptRunner.js',
     'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/agentFinalization.js', 'services/cosTaskGenerator.js',
+  ['services/agent/agentFinalization.js', 'services/cosTaskGenerator.js',
     'writes task state through the task store without loading the CoS daemon graph'],
   ['services/investigationTaskProducer.js', 'services/cos.js',
     'queues investigation tasks through the task store, not the CoS daemon'],
@@ -148,11 +148,11 @@ const NARROWED = [
     'shares browser-safe family identity without Grok filesystem helpers'],
   ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
     'needs task names, which scheduledTaskTypes.js declares'],
-  ['services/agentAppWorkspace.js', 'services/promptRunner.js',
+  ['services/agent/agentAppWorkspace.js', 'services/promptRunner.js',
     'resolves app records without AI-backed JIRA title generation'],
-  ['services/agentAppWorkspace.js', 'services/jira.js',
+  ['services/agent/agentAppWorkspace.js', 'services/jira.js',
     'reads workspace metadata without ticket creation'],
-  ['services/agentAppWorkspace.js', 'services/agentPromptBuilder.js',
+  ['services/agent/agentAppWorkspace.js', 'services/agent/agentPromptBuilder.js',
     'owns workspace resolution independently of prompt assembly'],
   ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
     'loads version and catalog parsers only when probing a harness'],
@@ -254,7 +254,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
     expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
-    expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
+    expect(reaches('services/agent/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
     expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
     expect(reaches('services/appProcessTypes.js', 'services/appProcessTypes.js')).toBe(true);
@@ -375,8 +375,8 @@ const DEFERRED = [
     'reads endpoints and model capabilities only for an Ollama review', './ollamaManager.js'],
   ['services/codeReview.js', 'services/mtplxServerManager.js',
     'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
-  ['services/agentManagement.js', 'lib/privateSecuritySandbox.js',
-    'loads sandbox cleanup only for private assessments', '../lib/privateSecuritySandbox.js'],
+  ['services/agent/agentManagement.js', 'lib/privateSecuritySandbox.js',
+    'loads sandbox cleanup only for private assessments', '../../lib/privateSecuritySandbox.js'],
   ['services/cos.js', 'services/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
     './persistentMindAdapter.js'],
@@ -601,7 +601,7 @@ describe('server suite import growth (#7993)', () => {
         return null;
       }
     };
-    for (const sample of ['server/lib/db.js', 'server/lib/pipelineValidation.js', 'server/services/agentManagement.test.js', 'server/lib/editorial/checkInfra/taxonomy.js']) {
+    for (const sample of ['server/lib/db.js', 'server/lib/pipelineValidation.js', 'server/services/agent/agentManagement.test.js', 'server/lib/editorial/checkInfra/taxonomy.js']) {
       const measured = measureClosures([sample], read);
       expect(measured.total, sample).toBe(staticImportClosure(join(REPO_ROOT, ...sample.split('/'))).files.size);
     }

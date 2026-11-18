@@ -1,7 +1,7 @@
 import { observeCleanupTarget, verifyCleanupCompletion, recordCleanupCompletion } from './cleanupOnlyCompletion.js';
 import { getAppById } from './apps.js';
 import { getTaskById } from './cosTaskStore.js';
-import { getActiveAgentIds } from './agentState.js';
+import { getActiveAgentIds } from './agent/agentState.js';
 import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
 import { reconcile, buildActiveOwnerIds, describeIdleReconcilePark } from './branchReconcile.js';
 import { emitLog } from './cosEvents.js';

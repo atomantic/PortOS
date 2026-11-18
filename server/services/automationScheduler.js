@@ -9,7 +9,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 import * as eventScheduler from './eventScheduler.js';
-import * as agentActivity from './agentActivity.js';
+import * as agentActivity from './agent/agentActivity.js';
 import { getUserTimezone } from './userTimezone.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 import { ServerError } from '../lib/errorHandler.js';

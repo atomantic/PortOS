@@ -18,7 +18,7 @@ export async function prepareExplicitOrphanBudgetReset(task) {
   }
   const owner = completed[0];
   if (typeof owner.metadata?.isWorktree !== 'boolean') return { error: 'The stopped run has no verified checkout identity' };
-  const { resolveTaskResumePatch } = await import('./agentWorktreeCleanup.js');
+  const { resolveTaskResumePatch } = await import('./agent/agentWorktreeCleanup.js');
   const pointer = await resolveTaskResumePatch({ task, agentId: owner.id, agentMetadata: owner.metadata }).catch(() => null);
   if (!pointer || (owner.metadata.isWorktree && !pointer.existingBranch && !pointer.resumeWorktreePath && !pointer.claimResumeInPlace)) {
     return { error: 'The retained checkout could not be safely identified' };

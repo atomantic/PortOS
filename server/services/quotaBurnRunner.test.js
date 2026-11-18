@@ -693,7 +693,7 @@ describe('completion continuation', () => {
   });
 
   it('settles the ledger and walks the plan when a stranded pause is retired with no continuation queued (#7469)', async () => {
-    // `retireStrandedPausedAgents` (server/services/agentManagement.js) stamps
+    // `retireStrandedPausedAgents` (server/services/agent/agentManagement.js) stamps
     // `resumed: true` on a pause whose task was deleted or moved on — but with
     // no `resumedTaskId`, because nothing was requeued. Reading that as a
     // handoff (the bare `isAgentHandoff`) made `onBurnAgentCompleted` return

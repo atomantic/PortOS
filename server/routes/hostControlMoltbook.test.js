@@ -49,7 +49,7 @@ vi.mock('../integrations/moltbook/index.js', () => ({
 }));
 vi.mock('../integrations/moltworld/index.js', () => ({ createMoltworldClient: vi.fn() }));
 vi.mock('../services/platformAccounts.js', () => effects);
-vi.mock('../services/agentActivity.js', () => effects);
+vi.mock('../services/agent/agentActivity.js', () => effects);
 vi.mock('../services/eventScheduler.js', async (importOriginal) => {
   const actual = await importOriginal();
   effects.schedule.mockImplementation(actual.schedule);
@@ -58,19 +58,19 @@ vi.mock('../services/eventScheduler.js', async (importOriginal) => {
 });
 vi.mock('../services/userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn(async () => {}) }));
-vi.mock('../services/agentContentGenerator.js', () => ({
+vi.mock('../services/agent/agentContentGenerator.js', () => ({
   generatePost: effects.generatePost,
   generateComment: vi.fn(async () => ({ content: 'Example reply' })),
   generateReply: vi.fn(async () => ({ content: 'Example reply' })),
   assertMoltbookCommentProvider: vi.fn(async () => {}),
 }));
-vi.mock('../services/agentPersonalityGenerator.js', () => ({}));
-vi.mock('../services/agentFeedFilter.js', () => ({
+vi.mock('../services/agent/agentPersonalityGenerator.js', () => ({}));
+vi.mock('../services/agent/agentFeedFilter.js', () => ({
   findRelevantPosts: vi.fn(async () => [{ id: 'example-post', title: 'Example title' }]),
   findReplyOpportunities: vi.fn(async () => []),
 }));
-vi.mock('../services/agentPublished.js', () => ({}));
-vi.mock('../services/agentDrafts.js', () => ({
+vi.mock('../services/agent/agentPublished.js', () => ({}));
+vi.mock('../services/agent/agentDrafts.js', () => ({
   createDraft: vi.fn(async data => ({ id: 'example-draft', ...data })),
 }));
 // The AI Assignments facade reads unrelated catalogs after writing. Keep its
@@ -91,10 +91,10 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 
 import { PATHS } from '../lib/fileUtils.js';
 import { createSession } from '../services/auth.js';
-import * as personalities from '../services/agentPersonalities.js';
+import * as personalities from '../services/agent/agentPersonalities.js';
 import * as scheduler from '../services/automationScheduler.js';
 import { cancelAll } from '../services/eventScheduler.js';
-import { init as initExecutor } from '../services/agentActionExecutor.js';
+import { init as initExecutor } from '../services/agent/agentActionExecutor.js';
 import toolsRoutes from './agentTools.js';
 import scheduleRoutes from './automationSchedules.js';
 import personalityRoutes from './agentPersonalities.js';

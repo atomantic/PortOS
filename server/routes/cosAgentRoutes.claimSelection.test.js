@@ -6,7 +6,7 @@ vi.mock('../services/cosAgentFeedback.js', () => ({}));
 vi.mock('../services/cosAgentIndex.js', () => ({}));
 vi.mock('../services/cosAgentLifecycle.js', () => ({}));
 vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/cosTaskStore.js', () => ({ getTaskById: vi.fn(async () => fixture.task) }));
 vi.mock('../services/cosState.js', () => ({
   withStateLock: async work => work(),
@@ -14,7 +14,7 @@ vi.mock('../services/cosState.js', () => ({
   saveState: vi.fn(async state => { fixture.state = structuredClone(state); }),
 }));
 vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
-vi.mock('../services/agentAppWorkspace.js', () => ({ getAppDataForTask: vi.fn() }));
+vi.mock('../services/agent/agentAppWorkspace.js', () => ({ getAppDataForTask: vi.fn() }));
 vi.mock('../lib/workTracker.js', async importOriginal => ({ ...await importOriginal(), resolveAppForgeTarget: vi.fn() }));
 vi.mock('../services/instanceIdentity.js', () => ({ getInstanceId: vi.fn() }));
 vi.mock('../services/forgeAuth.js', () => ({ resolveForgeForRepo: vi.fn() }));
@@ -23,7 +23,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 
 import router from './cosAgentRoutes.js';
 import { saveState } from '../services/cosState.js';
-import { getAppDataForTask } from '../services/agentAppWorkspace.js';
+import { getAppDataForTask } from '../services/agent/agentAppWorkspace.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { getInstanceId } from '../services/instanceIdentity.js';
 import { resolveForgeForRepo } from '../services/forgeAuth.js';

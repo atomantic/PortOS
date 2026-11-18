@@ -81,7 +81,7 @@ vi.mock('./cosLocalEndpointSlots.js', () => ({
   acquireLocalEndpointProviderSlot: (...args) => mocks.acquireSlot(...args),
 }));
 
-vi.mock('./agentRunEventLog.js', () => ({
+vi.mock('./agent/agentRunEventLog.js', () => ({
   appendMindEvent: (...args) => mocks.appendMindEvent(...args),
 }));
 

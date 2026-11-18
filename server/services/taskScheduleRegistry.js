@@ -12,7 +12,7 @@ import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
-} from '../lib/agentExecutionProfiles.js';
+} from '../lib/agent/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
 import { normalizeAutopilotParams } from '../lib/musicVideo/musicVideoAutonomous.js';
 

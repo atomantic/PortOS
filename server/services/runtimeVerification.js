@@ -3,7 +3,7 @@
  * Persist it on the original task and use the task store's compare-and-set to
  * release it once. Updating remains entirely with the configured idle updater.
  */
-import { resolveUndeliveredTaskUpdate } from './agentErrorAnalysis.js';
+import { resolveUndeliveredTaskUpdate } from './agent/agentErrorAnalysis.js';
 import { clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -11,7 +11,7 @@ import { execGit } from '../lib/execGit.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
 import { getBootCommit } from './installState.js';
 import { getAgentRecord } from './cosAgentLifecycle.js';
-import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { getAllTasks, getTaskById, updateTask } from './cosTaskStore.js';
 import { isDeepStrictEqual } from 'node:util';
 import { readAgentsStateForSafetyCheck } from './cosState.js';
@@ -191,7 +191,7 @@ export async function sweepRuntimeVerifications() {
       // pointer is saved. Reuse its guarded preservation path, without re-running
       // finalization, resetting budgets or declaring checkout retirement complete.
       if (m.runtimeVerificationReadyAgentId !== p.agentId) {
-        const { releaseRetryHold } = await import('./agentWorktreeCleanup.js');
+        const { releaseRetryHold } = await import('./agent/agentWorktreeCleanup.js');
         await releaseRetryHold({ agentId: p.agentId, task: { ...task, taskType }, success: false, agentMetadata: owner.metadata,
           recoveryOwner: { id: owner.id, startedAt: owner.startedAt, requireInactive: true } })
           .catch(async () => {

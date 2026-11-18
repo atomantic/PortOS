@@ -282,7 +282,7 @@ export async function recordProcessAuditOutcome(raw, context = {}) {
           const listed = await listAppIssues(app);
           if (listed.transient) throw new Error('Tracker unreadable; nothing filed');
           const cleanupState = args.template === 'recovery-loop' && isUpstreamFullName(app.fullName)
-            && anchors.includes('server/services/agentRepoStateVerification.js')
+            && anchors.includes('server/services/agent/agentRepoStateVerification.js')
             ? await cleanupFixState(app, await getAgentRecord(receipt.agentId)) : null;
           if (cleanupState === 'unknown') {
             receipt.outcome = 'insufficient-evidence'; receipt.reviewedAt = new Date().toISOString();

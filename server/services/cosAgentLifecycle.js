@@ -24,9 +24,9 @@ import { recordDomainUsage } from './domainUsage.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 import { loadAgentIndex, saveAgentIndex, getAgentDir, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import { hasClaimCheckoutBindings, hasReleaseCandidateBinding, readCompletedCheckoutIdentity, readMergedClaimEvidence, captureCompletedCheckouts } from './completedCheckoutEvidence.js';
-import { isAgentHandoff } from '../lib/agentOutcome.js';
+import { isAgentHandoff } from '../lib/agent/agentOutcome.js';
 import { collectProtectedCleanupOwners } from '../lib/taskRetryHold.js';
-import { reconcileStaleAgentReservations, releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { reconcileStaleAgentReservations, releaseAgentReservation } from './agent/agentMaintenanceReservations.js';
 import { initialCandidateLifecycle } from './releaseCandidateLifecycle.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { isHistoricalReleaseReceipt } from '../lib/releasePublication.js';
@@ -423,7 +423,7 @@ export async function recordSwarmCleanupDelivery(agentId, expected, proof) {
   let matched = false;
   const saved = await updateCompletionReceipt(agentId, async (metadata, agent) => {
     const [{ getTaskById }, { getInstanceId }, { activeAgents, runnerAgents, getActiveAgentIds }, contract] = await Promise.all([
-      import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./agentState.js'), import('./swarmCleanupDelivery.js'),
+      import('./cosTaskStore.js'), import('./instanceIdentity.js'), import('./agent/agentState.js'), import('./swarmCleanupDelivery.js'),
     ]);
     const [task, instance] = await Promise.all([getTaskById(agent.taskId), getInstanceId()]);
     if (!contract.sameSwarmCleanupSnapshot(agent, expected)
@@ -526,7 +526,7 @@ async function updateCompletionReceipt(agentId, update, { preserveResult = false
     const result = preserveResult ? agent.result : resultAfterCompletionReceipt(agent, nextMetadata);
     const updated = { ...agent, result, metadata: nextMetadata };
     if (result?.deferredDeliveryOutcome?.recovery?.mode === 'cleanup') {
-      const { reconcileAgentRunDelivery } = await import('./agentRunTracking.js');
+      const { reconcileAgentRunDelivery } = await import('./agent/agentRunTracking.js');
       await reconcileAgentRunDelivery(updated);
     }
     if (nextMetadata === metadata && result === agent.result) return true;
@@ -774,7 +774,7 @@ export async function completeAgent(agentId, result = {}) {
     deliveryOwner = structuredClone(releaseDeliveryIdentity(existing));
   }
   if (existing?.metadata?.taskAnalysisType === 'security' && existing.metadata.useRunner) {
-    const { settleAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const { settleAgentSecurityScan } = await import('./agent/agentSecurityScan.js');
     const scanner = await settleAgentSecurityScan(agentId);
     if (scanner?.status === 'refused') result = { ...result, success: false, error: 'Security scanner safety refusal; automatic retry stopped' };
   }
@@ -866,7 +866,7 @@ export async function completeAgent(agentId, result = {}) {
       // caused deliberately and never saw.
       //
       // Asked of the bare `result` because the record does not exist yet — this is
-      // the same predicate every downstream reader uses (`lib/agentOutcome.js`),
+      // the same predicate every downstream reader uses (`lib/agent/agentOutcome.js`),
       // not a second spelling of it.
       state.stats.errors = (state.stats.errors || 0) + 1;
     }
@@ -1329,7 +1329,7 @@ export async function cleanupZombieAgents() {
   // Direct-spawn handles in this process (not leftover runnerAgents adopts —
   // those are only a handle, same as GET /agents). Read from the side-effect-free
   // state module, not subAgentSpawner.
-  const { activeAgents, completingAgents, spawningTasks } = await import('./agentState.js');
+  const { activeAgents, completingAgents, spawningTasks } = await import('./agent/agentState.js');
 
   // Also check with the CoS runner for agents it's actively tracking
   const { getActiveAgentsFromRunner } = await import('./cosRunnerClient.js');

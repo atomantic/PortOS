@@ -18,7 +18,7 @@ import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { loadAgentIndex, saveAgentIndex, recordArchivedAgentOrder, moveAgentDir, invalidateArchivedRecord } from './cosAgentIndex.js';
 import { readProtectedCleanupOwners } from './cosAgentLifecycle.js';
-import { releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { releaseAgentReservation } from './agent/agentMaintenanceReservations.js';
 
 // Archive stale completed agents from state.json.
 // Completed agents are already persisted to per-agent metadata files on disk

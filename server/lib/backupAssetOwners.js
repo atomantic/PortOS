@@ -471,14 +471,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['lib/runtimeFilePublication.js', 'services/agentTuiSpawning/outputSpooler.js',
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
-      'services/agentCliSpawning.js', 'services/agentSpawnDispatch.js',
+      'services/agent/agentCliSpawning.js', 'services/agent/agentSpawnDispatch.js',
       'services/subAgentSpawner.js', 'services/featureAgents.js',
       'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
   },
   {
     id: 'agent-run-recording-publication',
     status: 'admitted',
-    modules: ['services/agentRunTracking.js'],
+    modules: ['services/agent/agentRunTracking.js'],
   },
   {
     // Downloads remain staged outside admission. Hash-path installation/dedupe

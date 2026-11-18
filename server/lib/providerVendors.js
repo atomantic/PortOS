@@ -145,7 +145,7 @@ import {
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
   PUBLIC_REVIEW_POSTURES,
-} from './agentExecutionProfiles.js';
+} from './agent/agentExecutionProfiles.js';
 
 export {
   isPublicReviewNoToolProfile,
@@ -154,7 +154,7 @@ export {
   PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE,
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
-} from './agentExecutionProfiles.js';
+} from './agent/agentExecutionProfiles.js';
 
 /**
  * For every vendor EXCEPT codex/claude, `buildCliSpawnConfig`'s argv is just

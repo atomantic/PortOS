@@ -229,7 +229,7 @@ describe('authGate middleware', () => {
   it.each(['/api/code-review/local', '/api/code-review/cli-outcome'])('accepts the loopback agent token for %s', async (path) => {
     const auth = await import('./auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
-    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    const { resolveAgentApiEnv } = await import('./agent/agentApiAuth.js');
     const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
     const { authGate } = await import('./authGate.js');
 
@@ -911,7 +911,7 @@ describe('host control by default on /api writes (#16018)', () => {
     const { token } = await (await import('./auth.js')).setPassword({ newPassword: 'example-password' });
     if (authority === 'session') return ['Cookie', `portos_auth=${token}`];
     if (authority === 'basic') return ['Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`];
-    const { resolveAgentApiEnv } = await import('./agentApiAuth.js');
+    const { resolveAgentApiEnv } = await import('./agent/agentApiAuth.js');
     const { PORTOS_API_TOKEN } = await resolveAgentApiEnv();
     expect(PORTOS_API_TOKEN).toBeTruthy();
     return ['Authorization', `Bearer ${PORTOS_API_TOKEN}`];
@@ -1055,7 +1055,7 @@ describe('outbound mail dispatch authority (#11273)', () => {
     expect((await request(session.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)
       .set('Cookie', `portos_auth=${token}`)).status).toBe(200);
 
-    const { PORTOS_API_TOKEN: agentToken } = await (await import('./agentApiAuth.js')).resolveAgentApiEnv();
+    const { PORTOS_API_TOKEN: agentToken } = await (await import('./agent/agentApiAuth.js')).resolveAgentApiEnv();
     expect(agentToken).toBeTruthy();
     const agent = await buildApp();
     expect((await request(agent.app).post(`/api/messages/drafts/${operatorApprovedDraft}/send`)

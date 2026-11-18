@@ -192,7 +192,7 @@ export const CODE_TOOLS = [
     execute: async () => {
       const { loadState } = await import('../../cosState.js');
       const { getAllTasks } = await import('../../cosTaskStore.js');
-      const { isTruthyMeta } = await import('../../agentState.js');
+      const { isTruthyMeta } = await import('../../agent/agentState.js');
 
       const state = await loadState();
       const runningAgents = Object.values(state?.agents || {}).filter((a) => a?.status === 'running');

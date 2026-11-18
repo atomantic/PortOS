@@ -5,7 +5,7 @@ vi.mock('./cosState.js', () => ({
   saveState: vi.fn(async () => {}),
   withStateLock: (fn) => fn(),
 }));
-vi.mock('./agentRunEventLog.js', () => ({ appendMindEvent: vi.fn(async () => ({ appended: true })) }));
+vi.mock('./agent/agentRunEventLog.js', () => ({ appendMindEvent: vi.fn(async () => ({ appended: true })) }));
 vi.mock('./persistentMindContext.js', () => ({
   preparePersistentMindContext: vi.fn(async () => ({ text: '# Persistent mind identity\nmindId=cos-persistent-mind' })),
   readPersistentMindMemories: vi.fn(async () => []),
@@ -24,7 +24,7 @@ vi.mock('./voice/proactiveSpeech.js', async () => ({
 }));
 
 import { loadState, saveState } from './cosState.js';
-import { appendMindEvent } from './agentRunEventLog.js';
+import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
 import { getVoiceConfig } from './voice/config.js';
 import { getVoiceOutputSocket } from './voice/voiceOutput.js';

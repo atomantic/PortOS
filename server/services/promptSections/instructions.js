@@ -6,7 +6,7 @@ import { join, basename } from 'path';
 import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
-import { AGENT_INSTRUCTIONS_FILENAME, CLAUDE_BRIDGE_FILENAME } from '../../lib/agentInstructionsFile.js';
+import { AGENT_INSTRUCTIONS_FILENAME, CLAUDE_BRIDGE_FILENAME } from '../../lib/agent/agentInstructionsFile.js';
 import { SELF_IMPROVEMENT_TASK_TYPES, currentTaskTypeName } from '../../lib/scheduledTaskTypes.js';
 
 const SKILLS_DIR = join(PATHS.root, 'data/prompts/skills');

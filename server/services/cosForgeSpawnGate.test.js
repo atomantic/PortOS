@@ -25,7 +25,7 @@ vi.mock('./github.js', () => ({ checkGhHealth: vi.fn() }));
 // `isClaimFlowTask` is a plain seam here: this suite asserts the gate CONSULTS it
 // and honors its answer, not what it decides (that lives in agentPromptBuilder's
 // own tests, and re-deriving it here is how two copies drift).
-vi.mock('./agentPromptBuilder.js', () => ({
+vi.mock('./agent/agentPromptBuilder.js', () => ({
   getAppWorkspace: vi.fn(),
   isClaimFlowTask: vi.fn().mockReturnValue(false),
 }));
@@ -34,7 +34,7 @@ vi.mock('../lib/execGit.js', () => ({ execGit: vi.fn() }));
 import { taskNeedsForge, forgeSpawnHoldReason, __resetForgeSpawnGate } from './cosForgeSpawnGate.js';
 import { emitLog, cosEvents } from './cosEvents.js';
 import { checkGhHealth } from './github.js';
-import { getAppWorkspace, isClaimFlowTask } from './agentPromptBuilder.js';
+import { getAppWorkspace, isClaimFlowTask } from './agent/agentPromptBuilder.js';
 import { execGit } from '../lib/execGit.js';
 
 const remote = (url) => execGit.mockResolvedValue({ stdout: `${url}\n`, stderr: '', exitCode: 0 });

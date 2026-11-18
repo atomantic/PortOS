@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('./cosAgentLifecycle.js', () => ({ recordCleanupOutcome: vi.fn(async () => true), recordRepoCleanupRecovery: vi.fn(async () => true) }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('./cosTaskStore.js', () => ({ getTaskById: vi.fn() }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: vi.fn(() => new Set(['active'])) }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: vi.fn(() => new Set(['active'])) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn() }));
 vi.mock('./branchReconcile.js', async (importOriginal) => ({
   ...await importOriginal(),

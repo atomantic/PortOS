@@ -11,11 +11,11 @@ vi.mock('../services/auth.js', () => ({
 }));
 vi.mock('../services/settings.js', () => ({ settingsEvents: new EventEmitter(), getSettings: async () => ({}) }));
 vi.mock('../services/cos.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
-vi.mock('../services/agentSecurityScan.js', () => ({ runAgentSecurityScan: vi.fn(async () => ({ evidence: { status: 'running' } })) }));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
+vi.mock('../services/agent/agentSecurityScan.js', () => ({ runAgentSecurityScan: vi.fn(async () => ({ evidence: { status: 'running' } })) }));
 
 import { authGate, hostControlRouteGate } from '../services/authGate.js';
-import { runAgentSecurityScan } from '../services/agentSecurityScan.js';
+import { runAgentSecurityScan } from '../services/agent/agentSecurityScan.js';
 import router from './cosAgentRoutes.js';
 
 const appFor = address => {

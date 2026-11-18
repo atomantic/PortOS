@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { posixPath } from './testHelper.js';
 
 import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { cliProviderAuthDescriptor } from './processEnv.js';
 import { supportsPublicReviewProvider } from './providerVendors.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';

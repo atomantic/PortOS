@@ -34,7 +34,7 @@ import {
 import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
 import { sha256Text } from '../lib/fileUtils.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
-import { appendMindEvent } from './agentRunEventLog.js';
+import { appendMindEvent } from './agent/agentRunEventLog.js';
 import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
 import { preparePersistentMindContext, readPersistentMindMemories } from './persistentMindContext.js';
 import { isInstanceFeatureEnabled } from './instanceFeatures.js';
