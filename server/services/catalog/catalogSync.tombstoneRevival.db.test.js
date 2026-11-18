@@ -21,6 +21,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../../lib/db.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
+import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
+import { catalogEvents } from './catalogEvents.js';
+import { applyRemoteChanges } from './catalogSync.js';
 import * as catalogDB from './catalogDB.js';
 
 let dbReady = false;
@@ -204,5 +207,72 @@ describe.skipIf(!runDb)('catalog tombstone/revival guard (#8347)', () => {
       [ing.id, refKind, refId, role],
     );
     expect(after.rows[0].deleted).toBe(true); // untouched, "no opinion"
+  });
+});
+
+describe.skipIf(!runDb)('catalog federation invalidation (#16743)', () => {
+  it('publishes one ingredient-scoped event after the envelope commits, and ignores replays and failures', async () => {
+    const ingredient = await makeIngredient('Before Sync');
+    const assetsOnly = await makeIngredient('Assets Only');
+    const failedId = `${ingredient.id}-missing`;
+    const portrait = { ingredientId: ingredient.id, mediaKey: 'portrait.png', kind: 'portrait',
+      createdAt: FUTURE_CLOCK, updatedAt: FUTURE_CLOCK, deleted: false };
+    const reference = { ingredientId: assetsOnly.id, mediaKey: 'reference.png', kind: 'reference',
+      createdAt: FUTURE_CLOCK, updatedAt: FUTURE_CLOCK, deleted: false };
+    const legacyMedia = { ingredientId: assetsOnly.id, mediaKey: 'legacy.png', kind: 'reference',
+      createdAt: FUTURE_CLOCK, caption: 'Legacy caption', metadata: { prompt: 'Example prompt' } };
+    const ref = { ingredientId: assetsOnly.id, refKind: 'universe', refId: 'example-universe',
+      role: 'cast', createdAt: FUTURE_CLOCK, updatedAt: FUTURE_CLOCK, deleted: false };
+    const envelope = {
+      portosMeta: { schemaVersions: PORTOS_SCHEMA_VERSIONS },
+      ingredients: [{ ...ingredient, name: 'After Sync', updatedAt: FUTURE_CLOCK }],
+      refs: [ref],
+      media: [portrait, reference, legacyMedia, { ...reference, ingredientId: failedId }],
+    };
+    const reads = [];
+    const capture = (event) => ({ ingredientId }) => {
+      reads.push(Promise.all([
+        catalogDB.getIngredient(ingredientId),
+        catalogDB.listMediaForIngredient(ingredientId),
+        catalogDB.listRefsForIngredient(ingredientId),
+      ]).then(([record, media, refs]) => ({
+        event, ingredientId, name: record?.name,
+        media: media.map(row => row.mediaKey).sort(), refs: refs.map(row => row.refId),
+      })));
+    };
+    const onPrimitive = capture('primitive-changed');
+    const onAssets = capture('assets-changed');
+    catalogEvents.on('primitive-changed', onPrimitive);
+    catalogEvents.on('assets-changed', onAssets);
+    try {
+      const stats = await applyRemoteChanges(envelope);
+      expect(stats.ingredients.updated).toBe(1);
+      expect(stats.media.failed).toBe(1);
+      expect(await Promise.all(reads)).toEqual([
+        { event: 'primitive-changed', ingredientId: ingredient.id, name: 'After Sync',
+          media: ['portrait.png'], refs: [] },
+        { event: 'assets-changed', ingredientId: assetsOnly.id, name: 'Assets Only',
+          media: ['legacy.png', 'reference.png'], refs: ['example-universe'] },
+      ]);
+
+      reads.length = 0;
+      await applyRemoteChanges(envelope);
+      await applyRemoteChanges({ ...envelope,
+        ingredients: [{ ...ingredient, updatedAt: STALE_CLOCK }],
+        refs: [{ ...ref, updatedAt: STALE_CLOCK, deleted: true }],
+        media: [{ ...portrait, updatedAt: STALE_CLOCK, deleted: true }],
+      });
+      expect(await Promise.all(reads)).toEqual([]);
+
+      await applyRemoteChanges({ portosMeta: envelope.portosMeta, refs: [{ ...ref,
+        ingredientId: ingredient.id }] });
+      expect(await Promise.all(reads)).toEqual([
+        { event: 'assets-changed', ingredientId: ingredient.id, name: 'After Sync',
+          media: ['portrait.png'], refs: ['example-universe'] },
+      ]);
+    } finally {
+      catalogEvents.off('primitive-changed', onPrimitive);
+      catalogEvents.off('assets-changed', onAssets);
+    }
   });
 });

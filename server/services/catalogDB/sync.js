@@ -142,7 +142,7 @@ export async function upsertMediaFromPeer(media) {
     // media trigger watches those too), so the same guard additionally
     // protects a live edit from a stale peer resend, not just a tombstone.
     const updatedAtClock = media.updatedAt || media.deletedAt || media.createdAt;
-    await query(
+    const { rowCount } = await query(
       `INSERT INTO catalog_ingredient_media
          (ingredient_id, media_key, kind, role, caption, created_at, deleted, deleted_at, updated_at${metadataColumn}${libraryColumn})
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9${metadataPlaceholder}${libraryPlaceholder})
@@ -160,16 +160,22 @@ export async function upsertMediaFromPeer(media) {
         ...metadataParam, ...libraryParam,
       ],
     );
-  } else {
-    await query(
-      `INSERT INTO catalog_ingredient_media
-         (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn}${libraryColumn})
-       VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder}${libraryPlaceholder})
-       ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
-         SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}`,
-      [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam, ...libraryParam],
-    );
+    return { applied: rowCount > 0 };
   }
+  const changed = ['role', 'caption'];
+  if (hasMetadata) changed.push('metadata');
+  if (hasLibrary) changed.push('library');
+  const differs = changed.map(column => `catalog_ingredient_media.${column} IS DISTINCT FROM EXCLUDED.${column}`).join(' OR ');
+  const { rowCount } = await query(
+    `INSERT INTO catalog_ingredient_media
+       (ingredient_id, media_key, kind, role, caption, created_at${metadataColumn}${libraryColumn})
+     VALUES ($1, $2, $3, $4, $5, $6${metadataPlaceholder}${libraryPlaceholder})
+     ON CONFLICT (ingredient_id, media_key, kind) DO UPDATE
+       SET role = EXCLUDED.role, caption = EXCLUDED.caption${metadataUpdate}${libraryUpdate}
+     WHERE ${differs}`,
+    [media.ingredientId, media.mediaKey, media.kind, media.role ?? null, media.caption ?? null, media.createdAt, ...metadataParam, ...libraryParam],
+  );
+  return { applied: rowCount > 0 };
   });
 }
 
@@ -382,7 +388,7 @@ export async function upsertRefFromPeer(ref) {
     Object.prototype.hasOwnProperty.call(ref, 'deletedAt');
   if (hasTombstoneFields) {
     const updatedAtClock = ref.updatedAt || ref.deletedAt || ref.createdAt;
-    await query(
+    const { rowCount } = await query(
       `INSERT INTO catalog_ingredient_refs
          (ingredient_id, ref_kind, ref_id, role, created_at, deleted, deleted_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -402,17 +408,18 @@ export async function upsertRefFromPeer(ref) {
         updatedAtClock,
       ],
     );
-  } else {
-    // v1-shape payload: insert when missing, leave local tombstone state alone
-    // on conflict. Matches the original v1 `ON CONFLICT DO NOTHING` semantics.
-    await query(
-      `INSERT INTO catalog_ingredient_refs
-         (ingredient_id, ref_kind, ref_id, role, created_at)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO NOTHING`,
-      [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
-    );
+    return { applied: rowCount > 0 };
   }
+  // v1-shape payload: insert when missing, leave local tombstone state alone
+  // on conflict. Matches the original v1 `ON CONFLICT DO NOTHING` semantics.
+  const { rowCount } = await query(
+    `INSERT INTO catalog_ingredient_refs
+       (ingredient_id, ref_kind, ref_id, role, created_at)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (ingredient_id, ref_kind, ref_id, role) DO NOTHING`,
+    [ref.ingredientId, ref.refKind, ref.refId, ref.role, ref.createdAt],
+  );
+  return { applied: rowCount > 0 };
   });
 }
 

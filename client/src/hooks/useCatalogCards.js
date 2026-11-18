@@ -42,12 +42,14 @@ export default function useCatalogCards(ids, { initial = null } = {}) {
       if ([event?.ingredientId, event?.sourceId, event?.survivorId].some(id => requested.includes(id) || Object.values(cardsRef.current).some(card => card.canonicalId === id))) refresh();
     };
     socket.on('catalog:primitive-changed', changed);
+    socket.on('catalog:assets-changed', changed);
     socket.on('catalog:identity-changed', changed);
     socket.on('connect', refresh);
     return () => {
       active = false;
       if (refreshRef.current === refresh) refreshRef.current = null;
       socket.off('catalog:primitive-changed', changed);
+      socket.off('catalog:assets-changed', changed);
       socket.off('catalog:identity-changed', changed);
       socket.off('connect', refresh);
     };
