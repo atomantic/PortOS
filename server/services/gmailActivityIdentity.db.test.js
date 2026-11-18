@@ -19,8 +19,21 @@ vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 import { recordMessageActivity } from './messageSync.js';
 import { importGmailMbox, parseMboxText } from './gmailMboxImport.js';
-import { deleteEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
+import { deleteEvents, listEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
+import { buildPersonMatchIndex } from '../lib/tribeMatch.js';
 import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
+
+import { findUnansweredTribeThreads, invalidateUnansweredThreadsCache } from './tribeOutreach.js';
+import { listAccounts } from './messageAccounts.js';
+
+vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn() }));
+vi.mock('./identityResolve.js', async (loadOriginal) => ({
+  ...await loadOriginal(),
+  loadResolverContext: async () => {
+    const people = [{ id: 'friend', ring: 'tribe', emails: ['friend@example.com'] }];
+    return { people, tribeIndex: buildPersonMatchIndex(people) };
+  },
+}));
 
 let dbReady = false;
 let skipReason = '';
@@ -37,13 +50,14 @@ const runDb = requireDbOrSkip('services/gmailActivityIdentity.db.test', dbReady,
 
 const nonce = `gai${Date.now()}`;
 const tempDirs = [];
+const hashKeys = [];
 
 afterAll(async () => {
   await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
   if (dbReady) {
     await query(
-      `DELETE FROM human_activity_events WHERE source = 'gmail' AND (dedupe_key LIKE $1 OR account_id LIKE $2)`,
-      [`gmail:${nonce}-%`, `${nonce}-%`],
+      `DELETE FROM human_activity_events WHERE source = 'gmail' AND (dedupe_key LIKE $1 OR account_id LIKE $2 OR dedupe_key = ANY($3::text[]))`,
+      [`gmail:${nonce}-%`, `${nonce}-%`, hashKeys],
     );
     await close();
   }
@@ -102,16 +116,37 @@ async function rowsFor(name, acct) {
 describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
   it('keeps one row when the live sync records a message before the Takeout import', async () => {
     const acct = account('live-first');
-    await recordMessageActivity(acct, [liveMessage('live-first')]);
+    await recordMessageActivity(acct, [liveMessage('live-first', { labels: ['SENT'], threadId: 'live-thread' })]);
     expect((await importMbox('live-first')).recorded).toBe(0);
+    expect(await listEvents({ accountId: acct.id, threadId: 'live-thread' })).toMatchObject([{ kind: 'message.sent' }]);
     expect(await rowsFor('live-first', acct)).toEqual([{ dedupe_key: `gmail:${messageId('live-first')}`, account_id: acct.id }]);
   });
 
   it('keeps one row when the Takeout import precedes the live sync', async () => {
     const acct = account('mbox-first');
     expect((await importMbox('mbox-first')).recorded).toBe(1);
-    expect((await recordMessageActivity(acct, [liveMessage('mbox-first')])).recorded).toBe(0);
-    expect(await rowsFor('mbox-first', acct)).toEqual([{ dedupe_key: `gmail:${messageId('mbox-first')}`, account_id: null }]);
+    const key = `gmail:${messageId('mbox-first')}`;
+    const { rows: [imported] } = await query('SELECT id, account_id FROM human_activity_events WHERE source = $1 AND dedupe_key = $2', ['gmail', key]);
+    expect(imported.account_id).toBeNull();
+
+    const threadId = 'live-thread';
+    const now = Date.now();
+    listAccounts.mockResolvedValue([{ ...acct, sentIngestedAt: new Date(now).toISOString() }]);
+    await recordMessageActivity(acct, [liveMessage('inbound', { threadId, date: new Date(now - 3 * 86400000).toISOString() })]);
+    invalidateUnansweredThreadsCache();
+    expect(await findUnansweredTribeThreads()).toMatchObject([{ accountId: acct.id, threadId }]);
+
+    const sent = liveMessage('mbox-first', {
+      labels: ['SENT'], threadId, from: acct.email, to: ['friend@example.com'], date: new Date(now - 86400000).toISOString(),
+    });
+    expect((await recordMessageActivity(acct, [sent])).recorded).toBe(0);
+    expect((await recordMessageActivity(acct, [sent])).recorded).toBe(0);
+    expect(await rowsFor('mbox-first', acct)).toEqual([{ dedupe_key: key, account_id: acct.id }]);
+    expect(await listEvents({ accountId: acct.id, threadId, kind: 'message.sent' })).toMatchObject([{
+      id: imported.id, happenedAt: sent.date, participants: [{ email: 'friend@example.com' }], metadata: { handle: null },
+    }]);
+    invalidateUnansweredThreadsCache();
+    expect(await findUnansweredTribeThreads()).toEqual([]);
   });
 
   it('re-keys a legacy live row on the next sync when no import row exists', async () => {
@@ -131,7 +166,7 @@ describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
     expect(await rowsFor('legacy-dup', acct)).toHaveLength(2);
 
     await recordMessageActivity(acct, [liveMessage('legacy-dup')]);
-    expect(await rowsFor('legacy-dup', acct)).toEqual([{ dedupe_key: `gmail:${messageId('legacy-dup')}`, account_id: null }]);
+    expect(await rowsFor('legacy-dup', acct)).toEqual([{ dedupe_key: `gmail:${messageId('legacy-dup')}`, account_id: acct.id }]);
   });
 
   it('records a message with no Message-ID once, under the legacy key', async () => {
@@ -158,6 +193,7 @@ describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
     const secondLegacyKey = `msg:${second.id}:api-gmail-${nonce}-shared`;
     // The second account recorded the email before the upgrade.
     await recordMessageActivity(second, [liveMessage('shared', { rfcMessageId: undefined })]);
+    await importMbox('shared');
     await recordMessageActivity(first, [liveMessage('shared')]);
 
     await recordMessageActivity(second, [liveMessage('shared')]);
@@ -176,6 +212,16 @@ describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
       [[first.id, second.id]],
     );
     expect(left).toEqual([{ dedupe_key: secondLegacyKey }]);
+  });
+
+  it('keeps both mailbox copies when overlapping syncs claim an imported Message-ID', async () => {
+    const accounts = [account('overlap-a'), account('overlap-b')];
+    const mail = liveMessage('overlap');
+    await importMbox('overlap');
+    await Promise.all(accounts.map((acct) => recordMessageActivity(acct, [mail])));
+    const copies = await Promise.all(accounts.map((acct) => listEvents({ source: 'gmail', accountId: acct.id })));
+    expect(copies.map((rows) => rows.length)).toEqual([1, 1]);
+    expect(copies.flat().filter((row) => row.dedupeKey === `gmail:${mail.rfcMessageId}`)).toHaveLength(1);
   });
 
   it('commits each 500-event chunk on its own, so a failing chunk does not discard the others', async () => {
@@ -276,11 +322,13 @@ describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#153
   it('keeps a legacy row that a stored sibling without a Message-ID also fits', async () => {
     const acct = account('hash-sibling');
     const { thrid, threadKey } = nextThread();
-    await recordLegacy(acct, 'hash-sibling-a', threadKey, { subject: 'Hello hash-sibling', date: '2026-07-04T10:07:30.000Z' });
-    const noId = mboxMessage('hash-sibling-b', { thrid, subject: 'Hello hash-sibling', date: 'Sat, 04 Jul 2026 10:15:00 +0000' })
+    const subject = `Hello hash-sibling ${nonce}`;
+    await recordLegacy(acct, 'hash-sibling-a', threadKey, { subject, date: '2026-07-04T10:07:30.000Z' });
+    const noId = mboxMessage('hash-sibling-b', { thrid, subject, date: 'Sat, 04 Jul 2026 10:15:00 +0000' })
       .split('\n').filter((l) => !l.startsWith('Message-ID')).join('\n');
 
-    await importMboxText([mboxMessage('hash-sibling-a', { thrid, subject: 'Hello hash-sibling' }), noId].join('\n'));
+    hashKeys.push(parseMboxText(noId)[0].dedupeKey);
+    await importMboxText([mboxMessage('hash-sibling-a', { thrid, subject }), noId].join('\n'));
     expect(await gmailRowsForAccountOrIds(acct, ['hash-sibling-a'])).toEqual([
       { dedupe_key: `gmail:${messageId('hash-sibling-a')}`, account_id: null },
       { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-hash-sibling-a`, account_id: acct.id },
