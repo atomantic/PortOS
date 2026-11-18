@@ -416,7 +416,7 @@ export async function deleteJournal(date) {
     await removeFromObsidian(entry).catch((err) => console.error(`📓 Obsidian delete failed: ${err.message}`));
   }
   // Drop the local mirror-location record for this day (sidecar is not synced).
-  await saveObsidianLocation(date, { obsidianPath: null, obsidianVaultId: null });
+  await storeMutex(() => saveObsidianLocation(date, { obsidianPath: null, obsidianVaultId: null }));
   // Explicit deletion signal so memory bridges / integrations can archive
   // the corresponding vector entry.
   brainEvents.emit('journals:deleted', { date, entry });
