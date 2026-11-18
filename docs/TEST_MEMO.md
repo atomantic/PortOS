@@ -142,7 +142,8 @@ A variable segment is now one of three things:
   the file, never exported, stored, handed on or reassigned, and every call
   passes a literal (or another resolved variable; a `let` that is assigned
   again is not a literal); or it is the callback parameter or `for…of`
-  variable of a literal array, an `it.each` table of strings, or a `const`
+  variable (declared with `const` or `let`: a `var` outlives its loop) of a
+  literal array, an `it.each` table of strings, or a `const`
   array nothing in the file can add to (no method that adds an element or
   returns the array itself, no element or `length` assigned, updated or
   deleted, in parentheses or not, no iteration callback that takes the array,
@@ -153,6 +154,9 @@ A variable segment is now one of three things:
   value (up to 64 combinations) and each file is an ordinary input. No
   directory is keyed, and a helper nothing calls contributes nothing. A
   parameter or loop variable shadows a module-level binding of the same name.
+  One named like a module-level path (`function read(ROOT)` beside
+  `const ROOT = …`) is the path every call passes when that is one complete
+  path, and unbounded otherwise: the read is never dropped.
   A resolved value is then read by JavaScript's own rules: text after a path
   continues its last segment unless a separator is written, `join()` keeps a
   trailing separator and `resolve()` does not, a URL spec is parsed (`%20` is
@@ -196,7 +200,8 @@ The analysis reads tokens, not scopes, so it resolves a name only where no
 other reading is possible: a text constant that another scope declares, binds
 as a parameter or assigns again is unknown, and so is a helper or an array
 whose name turns up inside a string (`eval`, or code the tokenizer took for
-text). The language and the test API are taken as they are defined: a
+text). `Object.freeze` is the built-in only where no `Object` is declared in the
+file. The language and the test API are taken as they are defined: a
 file that replaces `Array.prototype.forEach` or mocks `vitest` itself is past
 what its source can prove, for a variable segment as for a literal path.
 
