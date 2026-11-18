@@ -11,23 +11,9 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { logFailureWithStack } from '../lib/failureLogging.js';
-import {
-  validateRequest,
-  creativeDirectorProjectCreateSchema,
-  creativeDirectorProjectUpdateSchema,
-  creativeDirectorTreatmentSchema,
-  creativeDirectorVideoReviewActionSchema,
-  creativeDirectorVideoStartSchema,
-  creativeDirectorPlanSchema,
-  creativeDirectorPlanStepActionSchema,
-  creativeDirectorDirectiveSchema,
-  creativeDirectorSceneUpdateSchema,
-  creativeDirectorAutoCastApplySchema,
-  creativeDirectorProjectQuerySchema,
-  creativeDirectorProjectSlimQuerySchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { creativeDirectorProjectCreateSchema, creativeDirectorProjectUpdateSchema, creativeDirectorTreatmentSchema, creativeDirectorVideoReviewActionSchema, creativeDirectorVideoStartSchema, creativeDirectorPlanSchema, creativeDirectorPlanStepActionSchema, creativeDirectorDirectiveSchema, creativeDirectorSceneUpdateSchema, creativeDirectorAutoCastApplySchema, creativeDirectorProjectQuerySchema, creativeDirectorProjectSlimQuerySchema } from '../lib/creativeDirectorValidation.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   listProjects,
   getProjectsByIds,

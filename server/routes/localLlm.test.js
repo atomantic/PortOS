@@ -14,7 +14,7 @@ import { runOpenCodeAgentBenchmark } from '../services/localModelAgentBenchmark.
 import { getLoadedModels, unloadModel } from '../services/ollamaManager.js';
 import { getLoadedModels as getLoadedLmStudioModels, getLastLoadedModelsError as getLmStudioResidencyError } from '../services/lmStudioManager.js';
 import { getSettings, readSettingsStrict, updateSettingsWith } from '../services/settings.js';
-import { localLlmCompareSchema, localLlmTestSchema } from '../lib/validation.js';
+import { localLlmCompareSchema, localLlmTestSchema } from '../lib/mediaValidation.js';
 import { errorEvents } from '../lib/errorHandler.js';
 
 const getModelAbuseGuardStatus = vi.fn(async () => ({ ready: false, modelCached: false, runtimeReady: false }));

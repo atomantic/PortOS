@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, dataPurgeSchema, dataArchiveBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { dataPurgeSchema, dataArchiveBodySchema } from '../lib/validation.js';
 import {
   getDataOverview,
   getCategoryDetail,

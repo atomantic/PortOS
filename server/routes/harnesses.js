@@ -20,7 +20,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, harnessActionSchema, harnessRefreshSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { harnessActionSchema, harnessRefreshSchema } from '../lib/validation.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
 import { listHarnesses, refreshHarnessModels } from '../services/harnesses.js';
 

@@ -13,14 +13,9 @@
 import { Router } from 'express';
 import { reviewEvents } from '../services/review.js';
 import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  creativeCommissionCreateSchema,
-  creativeCommissionUpdateSchema,
-  commissionFeedbackSchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { creativeCommissionCreateSchema, creativeCommissionUpdateSchema, commissionFeedbackSchema } from '../lib/creativeCommissionValidation.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as svc from '../services/creativeCommissions/store.js';
 

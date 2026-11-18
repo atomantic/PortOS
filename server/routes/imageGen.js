@@ -17,9 +17,8 @@ import { z } from 'zod';
 import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../services/imageGen/fableLoomParams.js';
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import {
-  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';

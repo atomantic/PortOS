@@ -14,7 +14,8 @@ import {
   unlinkGuarded,
 } from '../lib/fileUtils.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
-import { validateRequest, attachmentUploadRequestSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { attachmentUploadRequestSchema } from '../lib/validation.js';
 
 const ATTACHMENTS_DIR = PATHS.cosAttachments;
 

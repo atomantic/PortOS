@@ -5,7 +5,9 @@
 import { Router } from 'express';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
 import * as featureAgents from '../services/featureAgents.js';
-import { validateRequest, featureAgentSchema, featureAgentUpdateSchema, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { featureAgentSchema, featureAgentUpdateSchema } from '../lib/agent/agentValidation.js';
+import { parsePagination } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();

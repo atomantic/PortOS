@@ -257,21 +257,18 @@ describe('cosValidation non-worktree completion choice', () => {
 });
 
 // The reviewer vocabulary moved to reviewerConfig.js (#5702); cosValidation.js
-// re-exports it flat and validation.js re-exports cosValidation.js. Dropping
-// either hop fails no reviewer test (those import the new module directly) — it
-// surfaces as `undefined is not a function` inside prompt assembly for a
-// scheduled review-loop task, so pin both hops as SAME-object re-exports.
+// re-exports it flat. Dropping that hop fails no reviewer test (those import the
+// new module directly) — it surfaces as `undefined is not a function` inside prompt assembly for a
+// scheduled review-loop task, so pin the hop as a SAME-object re-export.
 describe('reviewerConfig transitional re-export shim (#5702)', () => {
-  it('re-exports every reviewerConfig symbol through cosValidation.js and validation.js', async () => {
+  it('re-exports every reviewerConfig symbol through cosValidation.js', async () => {
     const reviewerConfig = await import('../reviewerConfig.js');
     const cos = await import('./cosValidation.js');
-    const validation = await import('../validation.js');
     const keys = Object.keys(reviewerConfig);
     expect(keys).toContain('buildReviewWithArgs');
     expect(keys).toContain('REVIEWER_VALUES');
     for (const key of keys) {
       expect(cos[key], `cosValidation.js re-export of '${key}'`).toBe(reviewerConfig[key]);
-      expect(validation[key], `validation.js re-export of '${key}'`).toBe(reviewerConfig[key]);
     }
   });
 });

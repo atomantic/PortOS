@@ -8,9 +8,8 @@ import { Router } from 'express';
 import { paginationQuerySchema } from '../../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import {
-  validateRequest, optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray,
-} from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray } from '../../lib/validation.js';
 import { recordRenderPinFields, seriesDesignSchema } from '../../lib/sharedSchemas.js';
 import { characterEvolutionSchema } from '../../lib/characterEvolutionValidation.js';
 import * as seriesSvc from '../../services/pipeline/series.js';

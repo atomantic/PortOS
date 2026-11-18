@@ -19,7 +19,8 @@ import {
 } from '../lib/fileUtils.js';
 import { optionalUpload } from '../lib/multipart.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
-import { validateRequest, uploadRequestSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { uploadRequestSchema } from '../lib/validation.js';
 
 const UPLOADS_DIR = PATHS.uploads;
 

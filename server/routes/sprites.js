@@ -14,36 +14,9 @@ import { Router } from 'express';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { unlink } from 'fs/promises';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  spriteImportRequestSchema,
-  spriteRecordUpdateSchema,
-  spriteCreateSchema,
-  spriteReferenceGenerateSchema,
-  spriteReferenceLockSchema,
-  spriteReferenceUnlockSchema,
-  spriteForkSchema,
-  spriteTrackGenerateSchema,
-  spriteTrackApproveSchema,
-  spriteTrackReopenSchema,
-  spriteTrackParamsSchema,
-  spriteAnimationTrackCreateSchema,
-  spriteAnimationTrackUpdateSchema,
-  spriteWalkGenerateSchema,
-  spriteWalkApproveSchema,
-  spriteWalkReopenSchema,
-  spriteWalkUnlockSchema,
-  spriteWalkPostprocessSchema,
-  spriteWalkTargetSchema,
-  spriteWalkSourceFramesParamsSchema,
-  spriteWalkTrimSchema,
-  spritePublishBindingSchema,
-  spriteAtlasCompileSchema,
-  spriteAtlasPublishSchema,
-  spriteAssetDeleteSchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { spriteImportRequestSchema, spriteRecordUpdateSchema, spriteCreateSchema, spriteReferenceGenerateSchema, spriteReferenceLockSchema, spriteReferenceUnlockSchema, spriteForkSchema, spriteTrackGenerateSchema, spriteTrackApproveSchema, spriteTrackReopenSchema, spriteTrackParamsSchema, spriteAnimationTrackCreateSchema, spriteAnimationTrackUpdateSchema, spriteWalkGenerateSchema, spriteWalkApproveSchema, spriteWalkReopenSchema, spriteWalkUnlockSchema, spriteWalkPostprocessSchema, spriteWalkTargetSchema, spriteWalkSourceFramesParamsSchema, spriteWalkTrimSchema, spritePublishBindingSchema, spriteAtlasCompileSchema, spriteAtlasPublishSchema, spriteAssetDeleteSchema } from '../lib/spriteValidation.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {

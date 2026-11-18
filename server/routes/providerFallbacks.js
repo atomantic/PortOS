@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, providerFallbackChainBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { providerFallbackChainBodySchema } from '../lib/validation.js';
 import { getFallbackChain, saveFallbackChain } from '../services/provider/providerFallbackChain.js';
 
 const router = Router();

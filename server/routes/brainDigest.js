@@ -8,7 +8,8 @@ import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { parsePagination } from '../lib/validation.js';
 import { brainDigestRunSchema } from '../lib/brainValidation.js';
 
 const router = Router();

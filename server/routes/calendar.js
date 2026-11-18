@@ -1,7 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { parsePagination, calendarAutoConfigureBodySchema, dailyReviewQuerySchema } from '../lib/validation.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MEETING_URL_MAX } from '../lib/meetingUrl.js';

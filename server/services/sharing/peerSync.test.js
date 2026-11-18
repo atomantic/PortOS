@@ -5884,7 +5884,7 @@ describe('peerSync', () => {
 
   describe('peerSyncPushSchema — mediaCollection validation', () => {
     it('accepts a valid mediaCollection push payload', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       expect(() => peerSyncPushSchema.parse({
         kind: 'mediaCollection',
         record: { id: 'col-x', name: 'My Collection', items: [] },
@@ -5894,7 +5894,7 @@ describe('peerSync', () => {
     });
 
     it('rejects a mediaCollection push payload missing sourceInstanceId', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       expect(() => peerSyncPushSchema.parse({
         kind: 'mediaCollection',
         record: { id: 'col-x' },
@@ -5903,7 +5903,7 @@ describe('peerSync', () => {
     });
 
     it('accepts music push payloads and music asset manifests', async () => {
-      const { peerSyncPushSchema } = await import('../../lib/validation.js');
+      const { peerSyncPushSchema } = await import('../../lib/peerSyncValidation.js');
       for (const kind of ['artist', 'album', 'track']) {
         expect(() => peerSyncPushSchema.parse({
           kind,

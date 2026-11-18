@@ -22,10 +22,8 @@ import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { optionalUpload, optionalUploadFields } from '../lib/multipart.js';
-import {
-  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoExtendBodySchema } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
   REACTOR_MAX_CLIP_ID_LENGTH, REACTOR_MIN_CLIP_SECONDS, REACTOR_MAX_CLIP_SECONDS,

@@ -7,7 +7,8 @@
  */
 import { Router } from 'express';
 import * as workspaceContext from '../services/workspaceContext.js';
-import { validateRequest, workspaceContextParamsSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { workspaceContextParamsSchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();

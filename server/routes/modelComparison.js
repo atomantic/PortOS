@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, modelComparisonImportSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { modelComparisonImportSchema } from '../lib/validation.js';
 import { getPublicModelComparison, importModelComparison } from '../services/modelComparison.js';
 import { getSelectableProviders } from '../services/provider/providers.js';
 import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels, isAntigravityProvider } from '../lib/provider/providerModels.js';

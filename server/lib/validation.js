@@ -3,9 +3,11 @@
  * `validateRequest` middleware and shared helpers.
  *
  * Catch-all Zod schemas (app/process/provider, social accounts, backup/sharing,
- * document/legacy-export) + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`,
- * `isSafeRecordId`, `parseIndexParam`, `parsePagination`). Re-exports the per-domain validation files
- * below so existing deep imports keep working.
+ * document/legacy-export) + shared helpers (`optionalBooleanMap`, `isSafeRecordId`,
+ * `parseIndexParam`, `parsePagination`). Per-domain schemas live in their own
+ * `*Validation.js` files and `validateRequest` in `validateRequest.js`; import each name
+ * from its declaring module, never through this file (#16803). A domain file must NOT
+ * import from here: shared primitives they need live in zodCompat.js / sharedSchemas.js.
  */
 
 import { MAX_IMAGE_EDGE } from './imageLimits.js';
@@ -16,7 +18,7 @@ import { z } from 'zod';
 import { isHeaderSafeKey, headerSafeKeyMessage } from './headerSafeKey.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { POLLUTING_KEYS } from './objects.js';
-import { pipelineEditorialChecksSettingsSchema } from './pipelineValidation.js';
+import { pipelineEditorialChecksSettingsSchema, stageConfigUpdateSchema } from './pipelineValidation.js';
 import { ServerError } from './errorHandler.js';
 import { isSafeGitRef } from './gitArgs.js';
 import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessName.js';
@@ -962,13 +964,11 @@ export const autoUpdateSettingsSchema = z.object({
 // defaults for those (add a field only when a control exists to set it).
 // Cron syntax/range validation lives in the pure leaf `cronValidation.js` so the
 // scheduler, every save boundary, and the browser cron editor share ONE
-// implementation (#6634). Re-exported here because callers already reach for
-// `isValidCronExpression` through validation.js. Rejects a 5-token-but-out-of-
+// implementation (#6634). Rejects a 5-token-but-out-of-
 // range cron like `99 99 * * *` at the PUT boundary (a 400 the UI surfaces)
 // instead of letting it be saved+enabled and then silently dropped by
 // activeSchedules — which would leave the user with an "enabled" schedule that
 // never fires (#2174).
-export { isValidCronExpression, findCronExpressionError } from './cronValidation.js';
 
 export const seriesAutopilotScheduleSchema = z.object({
   seriesId: z.string().min(1).max(64),
@@ -1441,9 +1441,6 @@ export const agentToolsRelevantPostsQuerySchema = z.object({
   accountId: z.string().min(1),
   maxResults: z.coerce.number().int().min(1).max(100).default(10),
 });
-
-// validateRequest lives in its own leaf (#16096); re-exported for existing deep imports.
-export { validateRequest } from './validateRequest.js';
 
 // Media cancellation bodies (#9932). An OMITTED jobId keeps the legacy
 // "newest/running job" selection; a SUPPLIED jobId must be a usable id — a
@@ -2154,35 +2151,6 @@ export const submoduleUpdateSchema = z.object({
   repoPath: optionalRepoPath,
   commit: z.boolean().optional().default(false)
 });
-
-// =============================================================================
-// TRANSITIONAL RE-EXPORTS (issue #1151 split)
-// =============================================================================
-// These domain schema groups moved to their own per-domain files (the
-// brainValidation.js pattern); the re-exports keep every existing deep
-// `import { x } from '../lib/validation.js'` working. New code should import
-// from the domain file (or the barrel's namespace export) directly.
-//
-// Cycle note: the domain files must NOT import from this module — ESM hoists
-// `export * from`, so they evaluate before this module's body runs and any
-// value read back from here hits the TDZ. Shared zod primitives they need
-// (e.g. `emptyToUndefined`) live in zodCompat.js.
-export * from './peerSyncValidation.js';
-export * from './creativeDirectorValidation.js';
-export * from './creativeCommissionValidation.js';
-export * from './musicVideo/musicVideoValidation.js';
-export * from './storyBuilderValidation.js';
-export * from './moodBoardValidation.js';
-export * from './privacyValidation.js';
-export * from './agent/agentValidation.js';
-export * from './cos/cosValidation.js';
-export * from './mediaValidation.js';
-export * from './pipelineValidation.js';
-import { stageConfigUpdateSchema } from './pipelineValidation.js';
-export * from './quotaBurnValidation.js';
-export * from './spriteValidation.js';
-export * from './agent/agentContextValidation.js';
-export * from './eidoverseValidation.js';
 
 // Reference prices and PortOS-run benchmark observations. A source is attached
 // to each metric because prices, scores and runtime measurements differ.

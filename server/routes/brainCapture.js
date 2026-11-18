@@ -8,7 +8,8 @@ import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { recordUserAction } from '../services/userActions.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, brainInboxRetryBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { brainInboxRetryBodySchema } from '../lib/validation.js';
 import {
   captureInputSchema,
   resolveReviewInputSchema,

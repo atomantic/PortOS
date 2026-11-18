@@ -7,19 +7,9 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  generatePostSchema,
-  generateCommentSchema,
-  publishPostSchema,
-  publishCommentSchema,
-  engageSchema,
-  checkPostsSchema,
-  createDraftSchema,
-  updateDraftSchema,
-  agentToolsFeedQuerySchema,
-  agentToolsRelevantPostsQuerySchema
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { generatePostSchema, generateCommentSchema, publishPostSchema, publishCommentSchema, engageSchema, checkPostsSchema, createDraftSchema, updateDraftSchema } from '../lib/agent/agentValidation.js';
+import { agentToolsFeedQuerySchema, agentToolsRelevantPostsQuerySchema } from '../lib/validation.js';
 import { agentToolsAccountQuerySchema, agentToolsPublishedQuerySchema, agentToolsDraftQuerySchema } from '../lib/agent/agentValidation.js';
 import * as platformAccounts from '../services/platformAccounts.js';
 import * as agentPersonalities from '../services/agent/agentPersonalities.js';

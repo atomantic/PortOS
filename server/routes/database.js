@@ -1,14 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  databaseSwitchSchema,
-  databaseBackendSchema,
-  databaseExportSchema,
-  databaseMaintenancePreflightSchema,
-  databaseMaintenanceCutoverSchema,
-  databaseMaintenanceRecoverSchema
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { databaseSwitchSchema, databaseBackendSchema, databaseExportSchema, databaseMaintenancePreflightSchema, databaseMaintenanceCutoverSchema, databaseMaintenanceRecoverSchema } from '../lib/validation.js';
 import * as dbAdmin from '../services/dbAdmin.js';
 
 const router = Router();

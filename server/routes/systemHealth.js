@@ -7,7 +7,8 @@ import { getSelf } from '../services/instanceIdentity.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
-import { validateRequest, systemHealthWarningParamsSchema, systemHealthWarningDismissSchema, systemHealthThresholdsBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { systemHealthWarningParamsSchema, systemHealthWarningDismissSchema, systemHealthThresholdsBodySchema } from '../lib/validation.js';
 import { getSettingsWithStatus, updateSettingsWith } from '../services/settings.js';
 
 import { isAuthEnabled } from '../services/auth.js';

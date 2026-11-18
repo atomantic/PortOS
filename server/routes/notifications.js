@@ -4,7 +4,8 @@
 
 import { Router } from 'express';
 import * as notifications from '../services/notifications.js';
-import { validateRequest, listNotificationsQuerySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { listNotificationsQuerySchema } from '../lib/validation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();

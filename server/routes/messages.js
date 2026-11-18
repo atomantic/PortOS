@@ -2,10 +2,8 @@ import { messageInboxRead, messageDetailRead, messageParamsSchema } from './mess
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import {
-  validateRequest, MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema,
-  messageActionBodySchema, messageTokenProviderBodySchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { MESSAGE_TOKEN_PROVIDERS, messageSyncBodySchema, messageFetchFullBodySchema, messageActionBodySchema, messageTokenProviderBodySchema } from '../lib/validation.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import { MESSAGE_ACCOUNT_TRANSPORT, MESSAGE_ACCOUNT_TYPES, sendViaForAccountType } from '../lib/messageTransport.js';
 import * as messageAccounts from '../services/messageAccounts.js';

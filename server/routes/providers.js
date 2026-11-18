@@ -35,25 +35,8 @@ import { applyModelAccess, applyModelAccessList } from '../lib/aiToolkit/interna
 import { ALLOWED_COMMANDS } from '../cos-runner/allowedCommands.js';
 import { onClientDisconnect, openSseStream } from '../lib/sseDownload.js';
 import { createInstallLogger } from '../lib/installLogger.js';
-import {
-  validateRequest,
-  codexLoginCancelSchema,
-  codexLoginStartSchema,
-  modelPinClearSchema,
-  providerVisionTestSchema,
-  providerVisionSuiteSchema,
-  providerBindingCreateSchema,
-  providerBindingUpdateSchema,
-  providerConnectionCreateSchema,
-  providerConnectionUpdateSchema,
-  providerServiceCreateSchema,
-  providerServiceUpdateSchema,
-  providerRouteSettingsUpdateSchema,
-  providerPresetCreateSchema,
-  credentialBootstrapsSettingsSchema,
-  harnessEnablementUpdateSchema,
-  harnessIdParamSchema,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { codexLoginCancelSchema, codexLoginStartSchema, modelPinClearSchema, providerVisionTestSchema, providerVisionSuiteSchema, providerBindingCreateSchema, providerBindingUpdateSchema, providerConnectionCreateSchema, providerConnectionUpdateSchema, providerServiceCreateSchema, providerServiceUpdateSchema, providerRouteSettingsUpdateSchema, providerPresetCreateSchema, credentialBootstrapsSettingsSchema, harnessEnablementUpdateSchema, harnessIdParamSchema } from '../lib/validation.js';
 import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,

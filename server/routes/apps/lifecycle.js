@@ -14,7 +14,8 @@
  */
 
 import { Router } from 'express';
-import { logsQuerySchema, pm2ProcessNameSchema, validateRequest } from '../../lib/validation.js';
+import { logsQuerySchema, pm2ProcessNameSchema } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
 import { join, extname } from 'path';
 import { tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import * as appsService from '../../services/apps.js';

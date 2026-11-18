@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, htmlCompositionRenderSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { htmlCompositionRenderSchema } from '../lib/validation.js';
 import { MOTION_SKILL_PACKS, detectMotionSkills, skillInstallCommand } from '../lib/motionSkills.js';
 import { enqueueJob, attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 
