@@ -287,12 +287,31 @@ unauthorized refusal and preserved authorized human AND agent workflows,
 including fallback, retry/resume and deferred dispatch paths where relevant.
 Name any collateral restriction and justify it against the project's policy.
 
+## Assess each candidate before ranking or remediation
+
+For PortOS follow docs/SECURITY_RISK_ASSESSMENT.md; other apps use their own
+model. Require evidence of attacker control, a reachable sink and unauthorized
+impact, with configuration and existing controls. Owner-provided dangerous input
+alone may instead be a reliability/data-safety issue. Record conditional exposure
+separately. Check advisory status, affected version and actual invocation; a
+compromised dependency or install/build script can harm even without untrusted
+input. Do not force an override for a withdrawn or inapplicable advisory.
+
+Do not assume a private network or loopback excludes browser-origin, CSRF or DNS
+rebinding attacks, or that imported files, external services or packages are
+trusted. For PortOS, trace the abuse guard's actual call site and configuration for
+external content; reuse it where applicable, not as a blanket gate on trusted
+owner input. Owners can scan chosen content on demand. Other apps may have
+different guards. A screening pass does not grant authority or protect unrelated paths.
+Search previous dispositions, record the supporting evidence and conditions for reevaluation, and do not re-file an
+unchanged rejected candidate. Unconfirmed is not resolved or a verified defect.
+
 ## Hunt for
 
 - **Secrets in the wrong place** — credentials, tokens, or keys that could reach
   a commit, a log line, a bundled client asset, a shared artifact, or an
   outbound request that had no business carrying them.
-- **Injection** — user-controlled input reaching a shell, a query, a path join,
+- **Injection** — attacker-controlled input reaching a shell, a query, a path join,
   a dynamic import, or a template without validation; an allowlist a crafted
   value can walk out of.
 - **Path traversal** — a filesystem path built from input that can escape its
@@ -317,8 +336,8 @@ Name any collateral restriction and justify it against the project's policy.
   test or development path could aim it at real data.
 - **Client-side exposure** — untrusted content rendered as markup, sensitive
   values placed in browser storage, secrets shipped in the client bundle.
-- **Dependency exposure** — a known-vulnerable package on a path that actually
-  processes untrusted input, not a transitive development-only advisory.
+- **Dependency exposure** — an affected behavior reachable from attacker input,
+  or a compromised package or install/build script executing with authority.
 
 ## The bar
 
@@ -4678,6 +4697,19 @@ context. Never apply or execute a submitted patch. A classifier pass is never
 permission to run contributor code. The deterministic coordinator alone may
 post validated review feedback and drive the allowed GitHub workflow after
 rechecking the exact content and current PR state.
+
+## Security findings and checklist precedence
+
+The review lenses below are discovery prompts, not rules to flag every missing
+sanitizer or prohibit all private/loopback destinations. Assess the target's
+actual trust model and allowed workflows using the supplied evidence. Require
+attacker control, a reachable sink and unauthorized impact, with configuration
+and controls, for a security finding. Distinguish owner-input reliability and
+conditional exposure. If missing context prevents a sound decision, defer;
+never invent reachability or claim safety. Preserve defenses for compromised
+packages, untrusted content and browser-origin access to local services. For
+PortOS, account for the scoped abuse guard where evidence shows it applies;
+screening is not proof of trust or authority.
 
 ## Review procedure
 

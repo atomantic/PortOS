@@ -48,9 +48,10 @@
     "retired": []
   },
   "skills/security-audit.md": {
-    "current": "cd2380a3363c6db68566bc26cb68c603",
+    "current": "e09ed760af3a80f75cc5bea503c5601d",
     "retired": [
-      "4b6d257ff6c4b4bd36b5044338eb7634"
+      "4b6d257ff6c4b4bd36b5044338eb7634",
+      "cd2380a3363c6db68566bc26cb68c603"
     ]
   },
   "skills/simplify.md": {

@@ -122,6 +122,7 @@ describe('gatherBlockedIssueState (GitHub)', () => {
   const mockGh = (list, blockers = {}) => {
     execGhMock.mockImplementation(async (args) => {
       if (args[0] === 'issue') return JSON.stringify(list);
+      if (args.at(-1).endsWith('/collaborators/maintainer/permission')) return JSON.stringify({ user: { login: 'maintainer' }, permission: 'write' });
       if (args[0] === 'api' && args[1].startsWith('repos/')) {
         const hit = blockers[Number(args[1].split('/').pop())];
         if (hit instanceof Error) throw hit;

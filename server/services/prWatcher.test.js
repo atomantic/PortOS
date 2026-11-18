@@ -896,7 +896,7 @@ describe('checkPullRequests trusted maintenance boundary', () => {
       if (args[0] === 'pr') return JSON.stringify(prs);
       if (args.at(-1) === 'user') return JSON.stringify({ login: 'operator' });
       const login = args.at(-1).split('/').at(-2);
-      return JSON.stringify({ user: { login }, permission: login === 'collaborator' ? permission : 'read' });
+      return JSON.stringify({ user: { login }, permission: login === 'operator' ? 'write' : login === 'collaborator' ? permission : 'read' });
     });
   }
 

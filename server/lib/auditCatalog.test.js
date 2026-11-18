@@ -491,6 +491,20 @@ describe('banner-owned rules are not restated by mission bodies (#12080)', () =>
   });
 });
 
+describe('security quality assessment', () => {
+  it('applies reachability to customized security audits without excluding real external threats', async () => {
+    const { auditQualityInstructions } = await import('./auditQuality.js');
+    const security = auditQualityInstructions('security');
+    expect(security).toContain('attacker control, a reachable sink and unauthorized impact');
+    expect(security).toContain('conditional exposure');
+    expect(security).toContain('compromised dependencies');
+    expect(security).toContain('browser-origin access');
+    expect(security).toContain('only where the actual path invokes it');
+    expect(security).toContain('do not reject one solely because it adds validation');
+    expect(auditQualityInstructions('code-quality')).not.toContain('Security assessment:');
+  });
+});
+
 // Out-of-lane findings used to end as summary notes; both banners carry this
 // rule (see the banner equality tests), and each owner must keep its metric
 // label, which is what lane health attributes on.

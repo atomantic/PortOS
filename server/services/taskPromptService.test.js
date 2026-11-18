@@ -85,6 +85,9 @@ describe('slashdo placeholder substitution', () => {
     expect(stage).not.toContain('FULL /do:review BODY');
     expect(stage).toContain('# review-surface-scan lens');
     expect(stage).toContain('# review-security-audit lens');
+    expect(stage).toContain('attacker control, a reachable sink and unauthorized impact');
+    expect(stage).toContain('If missing context prevents a sound decision, defer');
+    expect(stage).toContain('not proof of trust or authority');
     expect(stage).toContain('# review-cross-file-contract lens');
     expect(stage).toContain(BACKREFERENCE_BAIT);
     expect(vi.mocked(loadSlashdoFile)).not.toHaveBeenCalledWith('review', expect.anything());

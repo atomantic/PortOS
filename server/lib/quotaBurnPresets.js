@@ -91,8 +91,16 @@ export const AUDIT_CONTRACT_HEADING = '## How to run this audit';
  * forty nits, or one that quietly stopped at the first `gh` failure) fixes every
  * preset at once.
  */
-const auditContract = ({ labels, dedupeSearch }) => `
+const auditContract = ({ id, labels, dedupeSearch }) => `
 ${AUDIT_CONTRACT_HEADING}
+${id === 'security-audit' ? `
+Use the target's risk model (PortOS: docs/SECURITY_RISK_ASSESSMENT.md).
+Require attacker control, reachable sink and unauthorized impact. Separate owner
+reliability, conditional exposure and unknowns. Check advisory status; assess
+build/test paths too, including vulnerable or compromised dev dependencies.
+Preserve browser and CSRF defenses; reuse screening only on covered paths.
+Record dispositions and reevaluation conditions; do not re-file unchanged ones.
+` : ''}
 
 Most of this window belongs to RESEARCH, not to filing. Two issues another agent
 can execute cold — trigger named, fix decided, files listed — are worth more than
@@ -181,7 +189,7 @@ const auditPreset = ({ id, label, summary, labels, dedupeSearch, mission }) => O
   label,
   summary,
   jobType: QUOTA_BURN_JOB_TYPE.AGENT_PROMPT,
-  params: Object.freeze({ ...AUDIT_PARAMS, prompt: `${mission.trim()}\n\n${auditContract({ labels, dedupeSearch })}\n` }),
+  params: Object.freeze({ ...AUDIT_PARAMS, prompt: `${mission.trim()}\n\n${auditContract({ id, labels, dedupeSearch })}\n` }),
 });
 
 /**

@@ -48,7 +48,7 @@
     "plan-task-claim": "2acac033c34658a4b7d0c64f6cb69ecd",
     "pr-reviewer": "de9c295018df7c403a722a9ac2e780af",
     "pr-reviewer-eligibility": "a5652f7bcb7e2e50b1cfb9a54a6fabe0",
-    "pr-reviewer-review": "37f6ff606146317c8c56a35a5c12d586",
+    "pr-reviewer-review": "e9f00a9cd5df022927029d11c19c7420",
     "pr-reviewer-security": "d1e99626b12939ee39ab38eaa7d23f59",
     "pr-watcher": "5246968aa90bb2bbf7957dcd9ae13a51",
     "privacy": "71fd4422a7d1c67e405eb6cfb3acc426",
@@ -56,7 +56,7 @@
     "refresh-local-llm-catalog": "a02928079b46bf9323274db7b135834b",
     "reliability": "f2468e63d460d435448e2a013fb9438d",
     "repo-sync": "0a648d35d43b023b758226b9c709c8ea",
-    "security": "a66f5ec9d0ed0b42b6e59087783eb9fb",
+    "security": "8c8f84a625d6bc4b7d6ce485f0a631e5",
     "simplify": "6b74e0f8b20935ef7ccc143316ffb397",
     "stash-cleanup": "1c12bac5aac6bb27008c40981e7db08c",
     "test-coverage": "1956a18f937cda50343dfa4259d1af30",
@@ -122,7 +122,7 @@
     "refresh-local-llm-catalog": 5,
     "reliability": 2,
     "repo-sync": 1,
-    "security": 6,
+    "security": 7,
     "simplify": 4,
     "stash-cleanup": 2,
     "test-coverage": 4,
@@ -584,7 +584,8 @@
       "8e58c1305a391ac765b0b13ab9615eb3",
       "c5e35a12eeb06e6afe4617f4428fa1ab",
       "4bd26243a5792a39040da0b49321ca27",
-      "f09a7b5894f8221b466add6d5d68c77c"
+      "f09a7b5894f8221b466add6d5d68c77c",
+      "a66f5ec9d0ed0b42b6e59087783eb9fb"
     ],
     "simplify": [
       "2a048214d1dd3b75bee9ae1a38fa1589",

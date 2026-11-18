@@ -13,6 +13,7 @@ describe('trusted maintenance discussion boundary', () => {
     const discussion = { body: 'External discussion evidence', user: { login: 'external' } };
     const item = { number: 7, state: 'open', title: 'Example change', user: { login: 'operator' }, head: { sha: 'a'.repeat(40) }, body: 'Trusted change request' };
     const runGh = vi.fn(async args => JSON.stringify(args.at(-1) === 'user' ? { login: 'operator' }
+      : args.at(-1) === 'repos/example/project/collaborators/operator/permission' ? { user: { login: 'operator' }, permission: 'write' }
       : args.at(-1) === 'repos/example/project' ? { default_branch: 'main' }
       : args.at(-1) === 'repos/example/project/pulls/17' ? { number: 17, merged: true, state: 'closed', merge_commit_sha: 'c'.repeat(40), base: { ref: 'main', repo: { full_name: 'example/project' } } }
       : args.includes('--paginate') ? [[discussion]] : item));
@@ -60,13 +61,17 @@ describe('trusted maintenance discussion boundary', () => {
     });
   });
 
-  it('screens issue bodies and comments without fetching a PR or executing code', async () => {
+  it('screens issue bodies and comments while verifying merged PR metadata without executing code', async () => {
     const { options, runGh } = setup('issue');
-    expect((await screenForgeMaintenance(options)).ok).toBe(true);
+    const result = await screenForgeMaintenance(options);
+    expect(result.ok).toBe(true);
+    expect(result.records[0].maintenanceEvidence).toMatchObject({ body: 'Trusted change request', mergeCommitSha: 'c'.repeat(40) });
     expect(analyze.mock.calls[0][0].source).toBe('github-issue');
     expect(runGh.mock.calls.every(([args]) => args[0] === 'api' && args.includes('GET'))).toBe(true);
     expect(runGh.mock.calls.filter(([args]) => args.some(arg => arg.includes('/pulls/')))).toHaveLength(1);
-    expect(analyze.mock.calls[0][0].content).toContain('mergeCommitSha');
+    const evidence = JSON.parse(analyze.mock.calls[0][0].content);
+    expect(evidence).toEqual({ title: 'Example change', body: 'Trusted change request', comments: [{ body: 'External discussion evidence', author: 'external' }] });
+    expect(analyze).toHaveBeenCalledTimes(1);
   });
 
   it('withholds a head changed while the model was analyzing the discussion', async () => {
