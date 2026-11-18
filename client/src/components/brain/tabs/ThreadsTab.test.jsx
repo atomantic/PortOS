@@ -5,15 +5,19 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 
+// ThreadSourceClosedAction imports apiBrainThreads.js directly, not the barrel (#16813),
+// so both mocks share one updateThread fn.
+const threadApi = vi.hoisted(() => ({ updateThread: vi.fn() }));
 vi.mock('../../../services/api', () => ({
   listThreads: vi.fn(),
   getThread: vi.fn(),
   createThread: vi.fn(),
-  updateThread: vi.fn(),
+  updateThread: threadApi.updateThread,
   deleteThread: vi.fn(),
   addThreadRef: vi.fn(),
   removeThreadRef: vi.fn(),
 }));
+vi.mock('../../../services/apiBrainThreads.js', () => ({ updateThread: threadApi.updateThread }));
 vi.mock('../../ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 
 import * as api from '../../../services/api';
