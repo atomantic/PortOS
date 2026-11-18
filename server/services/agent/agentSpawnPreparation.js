@@ -14,7 +14,6 @@ import { ensureInstanceId } from '../instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from '../cos/cosTaskClaim.js';
 import { releaseAppReviewMarker } from '../appActivity.js';
 import { v4 as uuidv4 } from '../../lib/uuid.js';
-import { spawnBudgetHoldReason } from '../spawnBudgetProof.js';
 import { isExpectedUnpersistedMiss } from '../../lib/autonomousJobTask.js';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -149,12 +148,6 @@ export async function prepareAgentSpawn(task, context = createAgentSpawnContext(
     // No agent:completed follows this path. Wake normal gated dequeue after
     // this dispatch unwinds and releases its dedup/capacity reservations.
     if (reviewSettlement === 'completed') setImmediate(() => cosEvents.emit('cos:dequeue-requested'));
-    return null;
-  }
-
-  if (checkedTask && await spawnBudgetHoldReason(checkedTask)) {
-    emitLog('warn', `Holding task ${task.id}: inspect its dispatch receipts and explicitly reset its budget only if intended`, { taskId: task.id });
-    await context.cleanupOnError('spawn budget reconciliation required');
     return null;
   }
 

@@ -1,16 +1,11 @@
-import { validSpawnBudgetEpisode } from '../spawnBudgetProof.js';
+import { spawnBudgetCount as spawnCount } from '../cos/cosSpawnBudget.js';
 
 /** Crash-safe task handoff inside the original completion receipt. No branch discovery. */
 const DISPATCH_KEYS = ['claimedBy', 'claimedAt', 'lastSpawnedAt', 'totalSpawnCount'];
 const VERSION_KEYS = [...DISPATCH_KEYS, 'updatedAt', 'deliveryRecovery', 'deliveryRecoveryAgentId'];
 const entries = (metadata, keys) => keys.map(key => [key, metadata?.[key] ?? null]);
-// Task persistence round-trips scalar metadata through the markdown contract;
-// dispatch sees a number, while a later read (or a legacy receipt) sees text.
-const spawnCount = value => {
-  if (typeof value !== 'number' && !(typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value))) return null;
-  const count = Number(value);
-  return Number.isSafeInteger(count) && count >= 0 ? count : null;
-};
+// Dispatch sees the count as a number, while a legacy row or receipt holds its
+// text, so counts compare by value (`spawnCount`) and never by identity.
 const matches = (metadata, expected) => expected.every(([key, value]) => key === 'totalSpawnCount'
   ? spawnCount(value) !== null && spawnCount(metadata?.[key]) === spawnCount(value)
   : (metadata?.[key] ?? null) === value);
@@ -83,12 +78,38 @@ export function matchesCompletionTaskDispatch(agent, task) {
     && matches(task.metadata, binding.expected);
 }
 
+/**
+ * Is `agent` the run that last dispatched `task`? Every dispatch stamps a new
+ * `lastSpawnedAt` and raises the store-monotonic count, and only an explicit
+ * budget reset lowers it, so a receipt that still agrees with the task on both is
+ * its latest dispatch. The claim fields are taken from the receipt rather than
+ * the task: they describe the lease, which leaving `in_progress` releases, so
+ * the bare binding above can never match a stopped task.
+ */
+export function matchesLatestTaskDispatch(agent, task) {
+  const claim = dispatchClaimRows(agent?.metadata?.completionTaskDispatch?.expected);
+  return !!claim && !!task && matchesCompletionTaskDispatch(agent, { ...task,
+    metadata: { ...task.metadata, claimedBy: claim.claimedBy, claimedAt: claim.claimedAt } });
+}
+
+/**
+ * Store fence for a run's own completion write: the task must still be
+ * `in_progress` under this run's spawn stamp, with no other live owner, so a
+ * completion that outlived its dispatch cannot overwrite the run that replaced
+ * it. Null for a run with no receipt (an unpersisted scheduled job).
+ */
+export function completionDispatchFence(agent) {
+  const claim = dispatchClaimRows(agent?.metadata?.completionTaskDispatch?.expected);
+  if (!claim?.lastSpawnedAt || !agent.id) return null;
+  return { expectedStatus: 'in_progress', expectedMetadata: { lastSpawnedAt: claim.lastSpawnedAt },
+    recoveryOwner: { id: agent.id, startedAt: agent.startedAt } };
+}
+
 /** Called by the trusted dispatcher after its task write, before provider launch. */
 export async function bindCompletionTaskDispatch(agentId, task, previousTask = null) {
   if (task?.status !== 'in_progress' || !task.metadata?.lastSpawnedAt || !task.metadata?.claimedBy
     || spawnCount(task.metadata.totalSpawnCount) === null) return false;
   const { updateAgent } = await import('../cos/cosAgentLifecycle.js');
-  const proof = task.metadata.spawnBudgetProof;
   const runtime = previousTask?.metadata?.runtimeVerification;
   // Only the first dispatch directly released by the runtime sweep can carry
   // this evidence. A later generic retry retains metadata but has a new count.
@@ -106,8 +127,6 @@ export async function bindCompletionTaskDispatch(agentId, task, previousTask = n
     ...(runtimeContinuation ? { runtimeContinuation: structuredClone({
       prerequisite: runtime, description: task.description, priority: task.priority,
     }) } : {}),
-    ...(validSpawnBudgetEpisode(proof) && proof.dispatch?.agentId === agentId
-      ? { spawnBudgetEpoch: proof.epoch, spawnBudgetStartedAt: proof.dispatch.startedAt } : {}),
   } } });
 }
 

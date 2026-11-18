@@ -125,15 +125,15 @@ export async function validateCleanupReviewTarget({ target, workspacePath, requi
 const lowerLogin = (value) => String(value ?? '').replace(/^@+/, '').toLowerCase();
 
 // Retries of one scheduler dispatch are one owner, not competing claims. Use
-// the persisted budget epoch and ordinal, never recency alone. Inspection still
-// reads every historical completion policy and the current task below.
+// the recorded spawn ordinals of one task on one instance, never recency alone.
+// Inspection still reads every historical completion policy and the current
+// task below.
 function completedRetryOwner(owners, branch) {
   if (owners.length === 1) return owners[0];
   const sorted = [...owners].sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
   const first = sorted[0];
-  const epoch = first?.metadata?.completionTaskDispatch?.spawnBudgetEpoch;
   const instance = first?.metadata?.instanceId;
-  if (!epoch || !instance || instance === 'unknown' || !first.taskId) return null;
+  if (!instance || instance === 'unknown' || !first.taskId) return null;
   let prior;
   for (const owner of sorted) {
     const dispatch = owner.metadata?.completionTaskDispatch;
@@ -143,7 +143,7 @@ function completedRetryOwner(owners, branch) {
     const ordinal = typeof recorded === 'number' || (typeof recorded === 'string' && /^\d+$/.test(recorded)) ? Number(recorded) : NaN;
     if (owner.status !== 'completed' || owner.taskId !== first.taskId
       || owner.metadata?.instanceId !== instance || dispatch?.taskId !== first.taskId
-      || dispatch.spawnBudgetEpoch !== epoch || !Number.isSafeInteger(ordinal) || ordinal < 1
+      || !Number.isSafeInteger(ordinal) || ordinal < 1
       || !Number.isFinite(Date.parse(owner.startedAt)) || !(Date.parse(owner.completedAt) >= Date.parse(owner.startedAt))
       || (prior && (ordinal !== prior.ordinal + 1 || Date.parse(owner.startedAt) < Date.parse(prior.owner.completedAt)))) return null;
     // Recovery reservations and attempts belong to the execution that spent

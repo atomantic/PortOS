@@ -640,6 +640,17 @@ describe('CoS task routes write operator-action rows (#5594)', () => {
     expect(await onlyType('cos.task.spawn')).toEqual([]);
   });
 
+  // The client offers "Reset spawn budget and run" on this code, not on the message.
+  it('answers a Run now at the spawn cap with 409 SPAWN_BUDGET_EXHAUSTED and records nothing', async () => {
+    forceSpawnTask.mockResolvedValue({ error: 'Spawn budget exhausted (5/5) — reset the spawn budget to run this task again', code: 'SPAWN_BUDGET_EXHAUSTED' });
+
+    const res = await request(buildApp()).post('/api/cos/tasks/task-1/spawn');
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'SPAWN_BUDGET_EXHAUSTED', error: expect.stringContaining('Spawn budget exhausted') });
+    expect(await onlyType('cos.task.spawn')).toEqual([]);
+  });
+
   it('records nothing when the mutation itself failed', async () => {
     updateTask.mockResolvedValueOnce({ error: 'Task not found' });
     expect((await request(buildApp()).put('/api/cos/tasks/ghost').send({ priority: 'HIGH' })).status).toBe(404);

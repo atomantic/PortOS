@@ -53,14 +53,29 @@ describe('TaskItem task source', () => {
     expect(screen.queryByText('~2m')).toBeNull();
   });
 
-  it('explains the budget reset and runs only after explicit confirmation', async () => {
+  // The reset is offered only where it means something: a stopped run that still
+  // holds the task, or a Run now the server refused at the spawn cap.
+  it('offers the budget reset once Run now is refused at the spawn cap, and runs it only after explicit confirmation', async () => {
+    api.forceSpawnTask.mockRejectedValue(Object.assign(new Error('Spawn budget exhausted (5/5)'), { code: 'SPAWN_BUDGET_EXHAUSTED' }));
     api.resetSpawnBudgetAndRun.mockResolvedValue({ success: true });
     render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Reset spawn budget and run' }));
+    expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Process task now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Reset spawn budget and run' }));
     expect(screen.getByText('Reset spawn count to zero and run? Failure count stays.')).toBeInTheDocument();
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Reset and run' }));
     await waitFor(() => expect(api.resetSpawnBudgetAndRun).toHaveBeenCalledWith(task.id, { silent: true }));
+    // The budget is fresh again, so the offer goes with it.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull());
+  });
+
+  it('does not offer the reset for any other Run now refusal', async () => {
+    api.forceSpawnTask.mockRejectedValue(Object.assign(new Error('No available agent slots (3/3)'), { code: 'NO_CAPACITY' }));
+    render(<TaskItem task={task} isSystem onRefresh={vi.fn()} providers={providers} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Process task now' }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('No available agent slots (3/3)'));
+    expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
   });
 
   it('offers the same explicit recovery for a stopped in-progress orphan', () => {
@@ -69,9 +84,12 @@ describe('TaskItem task source', () => {
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
   });
 
-  it('offers explicit recovery for a blocked legacy task without unblocking it on render', () => {
-    render(<TaskItem task={{ ...task, status: 'blocked', metadata: { failureCount: '3' } }} isSystem onRefresh={vi.fn()} providers={providers} />);
-    expect(screen.getByRole('button', { name: 'Reset spawn budget and run' })).toBeInTheDocument();
+  it.each([
+    ['a queued task', { status: 'pending', metadata: { totalSpawnCount: 2 } }],
+    ['a blocked task', { status: 'blocked', metadata: { failureCount: '3' } }],
+  ])('offers no budget reset on %s the server has not refused', (_label, overrides) => {
+    render(<TaskItem task={{ ...task, ...overrides }} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.queryByRole('button', { name: 'Reset spawn budget and run' })).toBeNull();
     expect(api.updateCosTask).not.toHaveBeenCalled();
     expect(api.resetSpawnBudgetAndRun).not.toHaveBeenCalled();
   });

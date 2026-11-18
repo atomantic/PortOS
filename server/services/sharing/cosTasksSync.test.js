@@ -101,7 +101,7 @@ describe('buildCosTasksPayload', () => {
     vi.mocked(getUserTasks).mockResolvedValue({ tasks: [task('task-a', 'pending')] });
     vi.mocked(getCosTasks).mockResolvedValue({ tasks: [task('sys-b', 'in_progress', { metadata: { claimedBy: 'i1' } })] });
     const p = await buildCosTasksPayload();
-    expect(p.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.cosTasks); // v7: plan-only issue-filing execution semantics
+    expect(p.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.cosTasks);
     expect(p.listHash).toMatch(/^[a-f0-9]{64}$/);
     expect(p.tasks).toHaveLength(2);
     const user = p.tasks.find((t) => t.id === 'task-a');
@@ -136,7 +136,7 @@ describe('buildCosTasksPayload', () => {
   it('returns an empty payload when there are no tasks', async () => {
     const p = await buildCosTasksPayload();
     expect(p.tasks).toEqual([]);
-    expect(p.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.cosTasks); // v7: plan-only issue-filing execution semantics
+    expect(p.schemaVersion).toBe(PORTOS_SCHEMA_VERSIONS.cosTasks);
   });
 });
 
@@ -187,8 +187,25 @@ describe('syncCosTasksFromPeer', () => {
     const internalCall = calls.find(([type]) => type === 'internal');
     expect(userCall[1].map((t) => t.id)).toEqual(['task-a']);
     expect(internalCall[1].map((t) => t.id)).toEqual(['sys-b']);
-    expect(userCall[2]).toEqual({ legacySpawnBudget: true });
-    expect(internalCall[2]).toEqual({ legacySpawnBudget: true });
+    // The store merge takes no per-version option: an older payload merges like any other.
+    expect(userCall).toHaveLength(2);
+    expect(internalCall).toHaveLength(2);
+  });
+
+  // The spawn-budget proof was retired at v13 (#16807). A peer still on v12 holds
+  // every task that arrives without proof metadata, so it must see this install's
+  // payload as schema-ahead and skip it; its own payload still merges here, where
+  // the store drops the proof keys.
+  it('advertises a schema a proof-era peer skips, and still merges that peer\'s payload', async () => {
+    const PROOF_ERA_SCHEMA = 12;
+    expect(PORTOS_SCHEMA_VERSIONS.cosTasks).toBeGreaterThan(PROOF_ERA_SCHEMA);
+    const tasks = [{ id: 'task-proof-era', taskType: 'user', status: 'pending', priority: 'MEDIUM', description: 'd',
+      metadata: { totalSpawnCount: '1', spawnBudgetProof: { version: 1 }, spawnBudgetReconciledHold: 'true' } }];
+    vi.mocked(peerFetch).mockResolvedValue(payloadRes({ schemaVersion: PROOF_ERA_SCHEMA, listHash: sha('proof-era'), tasks }));
+    vi.mocked(mergePeerTasks).mockResolvedValue({ changed: true, count: 1 });
+
+    expect(await syncCosTasksFromPeer({ ...PEER, instanceId: 'proof-era-peer' })).toEqual({ merged: 2 });
+    expect(vi.mocked(mergePeerTasks).mock.calls.find(([type]) => type === 'user')).toEqual(['user', tasks]);
   });
 
   it.each(['user', 'internal'])('retries the identical payload immediately after the %s file merge fails', async (failedType) => {
