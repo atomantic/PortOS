@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { CAMERA_MOVEMENTS, CAMERA_MOVEMENT_VALUES } from '../../../../lib/cameraMovements.js';
+import { CAMERA_MOVEMENTS, CAMERA_MOVEMENT_VALUES } from '../cameraMovements.js';
 
 // cameraRig.js is a classic browser script; load it the way a document does.
 const rigSource = readFileSync(new URL('./cameraRig.js', import.meta.url), 'utf8');
@@ -72,7 +72,7 @@ describe('camera rig paths', () => {
 
 // The engine's math helpers and cover transform, evaluated from the engine source itself
 // (like engine.overlay.test.js) so the edge invariant runs against the engine's own easing and clamps.
-const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
+const engine = readFileSync(new URL('../../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
 const engineSlice = (from, to) => engine.slice(engine.indexOf(from), engine.indexOf(to));
 const mathBlock = engineSlice('  // ---------- math ----------', '  // ---------- song ----------');
 const settingsBlock = engineSlice('  function templateEffects(scene) {', '  // ---------- scenes ----------');

@@ -22,7 +22,7 @@ import { applyDocumentHandheld, documentHandheld } from '../handheldCamera.js';
  * cannot import this module. `musicVideoDocumentCamera.test.js` runs the real
  * engine and fails when the two disagree.
  *
- * `rig` is `globalThis.PORTOS_CAMERA_RIG` (documentTemplates/layered/cameraRig.js).
+ * `rig` is `globalThis.PORTOS_CAMERA_RIG` (cameraRig.js).
  * Browser-safe.
  */
 

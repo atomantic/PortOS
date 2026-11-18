@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 
 const ROOT = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
+const SHARED_BROWSER_ROOT = fileURLToPath(new URL('../../lib/musicVideo/', import.meta.url));
 const ENGINE_SHA256 = '86434cf86f7730299558da8d39cbc6f7952dfdda5e112e72e34b7d5154ac46e8';
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (directory, name) => readFile(join(directory, name));
@@ -113,9 +114,9 @@ async function shippedEntrypoint(directory) {
 // The whole graph must match, not only engine.js.
 async function shippedHelpersMismatch(directory, template) {
   const helpers = [
-    ['cameraRig.js', join(ROOT, 'layered')],
+    ['cameraRig.js', SHARED_BROWSER_ROOT],
     ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
-    ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/musicVideo/', import.meta.url))],
+    ['musicVideoImageEffects.js', SHARED_BROWSER_ROOT],
   ];
   const { isStaleShippedHelper } = await import('./compositionDocument.js');
   try {

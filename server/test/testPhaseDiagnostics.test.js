@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createTestPhaseDiagnostics } from './testPhaseDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../lib/testPhaseDiagnostics.js';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ it('retains bounded phase evidence with the original failure before suite teardo
   const root = mkdtempSync(join(tmpdir(), 'test-phase-contract-'));
   const vitest = fileURLToPath(new URL('../node_modules/vitest/vitest.mjs', import.meta.url));
   const api = fileURLToPath(new URL('../node_modules/vitest/dist/index.js', import.meta.url));
-  const diagnostics = fileURLToPath(new URL('./testPhaseDiagnostics.js', import.meta.url));
+  const diagnostics = fileURLToPath(new URL('../../lib/testPhaseDiagnostics.js', import.meta.url));
   const report = join(root, 'report.json');
   const cleanup = join(root, 'cleanup.json');
   try {

@@ -10,7 +10,7 @@ import { materializeGitRepo, resetGitWorktreeSandbox, SKIP_HEAVY_INTEGRATION } f
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { cleanupOrphanedWorktrees } from './worktreeManager.js';
-import { createTestPhaseDiagnostics } from '../test/testPhaseDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../lib/testPhaseDiagnostics.js';
 
 
 vi.mock('fs', async (importOriginal) => {
