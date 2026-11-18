@@ -337,6 +337,30 @@ describe('publish drafts (#9282)', () => {
     }
   });
 
+  it('keeps the replacement open when a closed detached draft had the same composer URL', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages, browsers } = fakeBrowser();
+      const stackerNews = adapter({ prepare: vi.fn(async (page) => {
+        page.href = 'https://example.com/composer';
+        return {};
+      }) });
+      const deps = { connect, adapters: { stackerNews }, platforms };
+      await preparePublishDraft(id, 'stackerNews', {}, deps);
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      pages[0].closed = true;
+
+      const replacement = await preparePublishDraft(id, 'stackerNews', {}, deps);
+
+      expect(pages[1].closed).toBe(false);
+      expect(browsers[1].close).not.toHaveBeenCalled();
+      expect(await listPublishDrafts(id)).toEqual([replacement]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('discards a detached draft by closing its still-open tab', async () => {
     vi.useFakeTimers();
     try {

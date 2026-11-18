@@ -65,13 +65,15 @@ async function detachDraft(draft) {
 }
 
 /** Whether the draft's tab is still open, reconnecting (never launching) when the session was dropped. */
-async function findDraftPage(draft, deps = {}) {
+async function findDraftPage(draft, deps = {}, replacement) {
   if (draft.page) return draft.page.isClosed() ? null : draft.page;
-  let session;
-  try { session = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return null; }
-  const page = session.context.pages().find((candidate) => candidate.url() === draft.url) || null;
-  draft.reconnect = session;
-  return page;
+  let session = replacement;
+  if (!session) {
+    try { session = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return null; }
+    draft.reconnect = session;
+  }
+  // The old tab may be gone and the new one may share its composer URL.
+  return session.context.pages().find((candidate) => candidate !== replacement?.page && candidate.url() === draft.url) || null;
 }
 
 /** Re-check a detached draft's tab; mark it closed (and tell the UI) when it is gone. */
@@ -84,10 +86,10 @@ async function refreshDraft(draft, deps) {
   if (!page) { draft.state = 'closed'; emitDraft(draft); }
 }
 
-async function closeDraft(draft, deps) {
+async function closeDraft(draft, deps, replacement) {
   drafts.delete(draft.id);
   clearTimeout(draft.timer);
-  const page = await findDraftPage(draft, deps);
+  const page = await findDraftPage(draft, deps, replacement);
   await page?.close().catch(() => {});
   const session = draft.reconnect || { browser: draft.browser };
   draft.reconnect = null;
@@ -272,7 +274,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       // Keep the previous draft available until its replacement is ready. The
       // shared browser queue covers both the lookup and the swap.
       for (const previous of [...drafts.values()]) {
-        if (previous.projectId === projectId && previous.target === target) await closeDraft(previous, deps);
+        if (previous.projectId === projectId && previous.target === target) await closeDraft(previous, deps, { context, page });
       }
       draft.timer = setTimeout(() => { detachDraft(draft).catch(() => {}); }, DRAFT_DETACH_MS);
       draft.timer.unref?.();
