@@ -9,8 +9,6 @@ import PostSessionLauncher from '../post/PostSessionLauncher';
 import PostDrillRunner from '../post/PostDrillRunner';
 import PostSessionResults from '../post/PostSessionResults';
 import PostSessionDetail from '../post/PostSessionDetail';
-import PostHistory from '../post/PostHistory';
-import PostProgress from '../post/PostProgress';
 import PostDrillConfig from '../post/PostDrillConfig';
 import PracticePlan from '../post/PracticePlan';
 import PracticeLibrary from '../post/PracticeLibrary';
@@ -22,7 +20,7 @@ import { ELEMENTS_MODE_IDS, MEMORY_PRACTICE_MODE_IDS, MORSE_MODE_IDS } from '../
 import BrailleSpinner from '../../BrailleSpinner';
 import { lazyWithReload } from '../../../utils/lazyWithReload';
 
-// The six largest trainers and runners load the first time their drill opens,
+// The largest trainers, runners and chart views load the first time their drill opens,
 // so the launcher, config and progress views never download them. Each starts
 // its clock in its own mount effect, so the time a chunk takes to arrive is
 // never counted against a timed drill: the Suspense fallback stays on screen
@@ -33,6 +31,9 @@ const MemoryPractice = lazyWithReload(() => import('../post/MemoryPractice'));
 const ElementsSong = lazyWithReload(() => import('../post/ElementsSong'));
 const MorseTrainer = lazyWithReload(() => import('../post/MorseTrainer'));
 const RhetoricTrainer = lazyWithReload(() => import('../post/RhetoricTrainer'));
+// History and Progress draw recharts charts the launcher never needs.
+const PostHistory = lazyWithReload(() => import('../post/PostHistory'));
+const PostProgress = lazyWithReload(() => import('../post/PostProgress'));
 
 // The live in-progress run lives at /post/session/run; every OTHER `:subtab`
 // under the `session` tab is a saved session id served at /post/session/:id.
