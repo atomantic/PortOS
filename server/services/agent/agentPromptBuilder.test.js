@@ -1,6 +1,7 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
 import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
+import { buildIssueFilingSection } from '../promptSections/plannerAttribution.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { buildMergeAdmissionSection } from '../promptSections/completion.js';
 import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from '../promptSections/reviewerOutcome.js';
@@ -4957,6 +4958,16 @@ describe('planner attribution', () => {
     expectDeduped(text);
   });
 
+  it('adds only the GitLab separator paragraph for a glab run whose template embeds the GitHub contract', () => {
+    const embedded = buildIssueFilingSection({ forgeCli: 'glab', taskBody: [MANDATORY_DISPATCH_HINT_GUIDANCE] });
+    expect(embedded).toContain('DOUBLE colon');
+    expect(embedded).not.toContain('REQUIRED on every issue you file');
+    const bare = buildIssueFilingSection({ forgeCli: 'glab', taskBody: ['File issues.'] });
+    expect(bare).toContain('REQUIRED on every issue you file');
+    expect(bare).toContain('DOUBLE colon');
+    expect(buildIssueFilingSection({ forgeCli: 'gh', taskBody: ['File issues.'] })).not.toContain('DOUBLE colon');
+  });
+
   it('keeps the full contract for a task that paraphrased it', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ description: 'File issues with model: and effort: labels.', metadata: { openPR: false } }),
@@ -4973,8 +4984,8 @@ describe('planner attribution', () => {
     expect(prompt).not.toMatch(/## Planner Attribution/);
     expect(prompt).toContain('## Issue Filing Labels');
     expect(prompt).toContain('exactly one `model:` and exactly one `effort:`');
-    expect(prompt).toContain('specific hardware');
-    expect(prompt).toContain('multiple real users');
+    expect(prompt).toContain('`portos-file-issue` skill');
+    expect(prompt).not.toContain('DOUBLE colon');
   });
 });
 

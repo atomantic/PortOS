@@ -120,7 +120,7 @@ describe('formatTrackerInstructions — forge dispatch hints (#4351)', () => {
     expect(github).toContain('Reference-watch complete-label contract (mandatory)');
     expect(github).not.toContain('[--label model:<tier>]');
     expect(github).not.toContain('[--label effort:<level>]');
-    expect(github).toContain('Create each label immediately before applying it');
+    expect(github).toContain('The labels already exist');
     expect(formatTrackerInstructions('github')).toBe(github);
     expect(formatTrackerInstructions('github', TRACKER_FILING_PRESETS['reference-watch'])).toBe(github);
   });

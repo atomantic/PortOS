@@ -18,7 +18,7 @@ import {
   EPIC_LABEL,
   ISSUE_QUALITY_GUIDANCE,
   LIGHT_FINDINGS_BATCH_EXCEPTION,
-  MANDATORY_DISPATCH_HINT_GUIDANCE,
+  MANDATORY_DISPATCH_HINT_GUIDANCE, mandatoryDispatchHintGuidance,
   formatOptionalIssueLabelFlags,
   formatContributorLabelReleaseCommands,
 } from '../../lib/dispatchLabels.js';
@@ -3760,7 +3760,7 @@ Effective PR completion policy: ${policy}. Execute preparation and current-need 
     : [CLAIM_GITLAB_QUEUE, CLAIM_BEFORE_HANDOFF, 'Set `CANDIDATE="$NUM"` before the contributor check.', CLAIM_GITLAB_COMMENTS].join('\n\n');
   return [intro, `## Selection exit\n\n${selectionExit}`,
     `**Security-model eligibility — before claiming, assigning a volunteer, or implementing:**\n${CONTRIBUTION_SECURITY_POLICY}`,
-    buildIssueRevalidationGuidance(pinned), MANDATORY_DISPATCH_HINT_GUIDANCE,
+    buildIssueRevalidationGuidance(pinned), mandatoryDispatchHintGuidance({ cli: github ? 'gh' : 'glab' }),
     github ? CLAIM_GITHUB_TRUST : CLAIM_GITLAB_TRUST,
     ...(review ? [CLAIM_REVIEW_TRUST] : []),
     github ? CLAIM_GITHUB_OWNERSHIP : CLAIM_GITLAB_OWNERSHIP,
