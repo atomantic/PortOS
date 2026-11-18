@@ -1,5 +1,6 @@
 
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
+import { prStaysOpen } from '../lib/prDisposition.js';
 import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 /**
  * CoS Task Pre-Step Blocks
@@ -250,8 +251,8 @@ export function applyReleaseOptions(promptTemplate, taskType, metadata) {
 // trailer — which would send the agent off to "correct" a stranger's MR. That is
 // the #3489 clobbering failure re-created by the check meant to prevent it.
 const SWARM_FORGE = {
-  gh: { pr: 'PR', mergeCmd: 'gh pr merge', mergePin: '--match-head-commit <ci-verified-sha>', bodyCmd: 'gh pr view --json body -q .body' },
-  glab: { pr: 'MR', mergeCmd: 'glab mr merge', mergePin: '--sha <ci-verified-sha>', bodyCmd: 'glab mr view --output json | jq -r .description' }
+  gh: { pr: 'PR', mergeCmd: 'gh pr merge <PR_URL>', mergePin: '--match-head-commit <ci-verified-sha>', bodyCmd: 'gh pr view --json body -q .body' },
+  glab: { pr: 'MR', mergeCmd: 'glab mr merge <MR_IID>', mergePin: '--sha <ci-verified-sha>', bodyCmd: 'glab mr view --output json | jq -r .description' }
 };
 
 /**
@@ -281,7 +282,7 @@ const SWARM_FORGE = {
  * Phase B carries `DISPATCH_HINT_FANOUT_GUIDANCE` because the orchestrator is the
  * only actor in this flow that gets to CHOOSE how an agent runs.
  */
-export function resolveSwarmBlock(promptTaskType, count) {
+export function resolveSwarmBlock(promptTaskType, count, { leaveOpen = false } = {}) {
   const n = Number.isInteger(count) ? count : 0;
   if (n < SWARM_COUNT_MIN) return '';
   const forgeKey = promptTaskType === 'claim-issue-gitlab' ? 'glab'
@@ -291,7 +292,7 @@ export function resolveSwarmBlock(promptTaskType, count) {
   const { pr, mergeCmd, mergePin, bodyCmd } = SWARM_FORGE[forgeKey];
   return `# ⚡ SWARM MODE — claim and ship up to ${n} independent issues in parallel
 
-**This run operates in slashdo \`/do:next --swarm=${n}\` mode.** The single-issue framing in the task body below is your PER-AGENT playbook, not the shape of the whole run: instead of claiming ONE issue, claim up to ${n} *mutually independent* open issues and ship them concurrently, then serialize only the merges. Swarm adds exactly two things over the single-issue flow — a partition step up front and a serialized merge queue at the end; everything in between (claim, worktree, verify, implement, changelog, review gate) is the unchanged single-issue flow run once per agent. Never special-case a swarm agent's claim/ship logic.
+**This run operates in slashdo \`/do:next --swarm=${n}\` mode.** The single-issue framing in the task body below is your PER-AGENT playbook, not the shape of the whole run: instead of claiming ONE issue, claim up to ${n} *mutually independent* open issues and run the claim, worktree, verification, implementation, and review steps concurrently, then ${leaveOpen ? 'verify every human handoff' : 'serialize the merges'}.
 
 **Swarm is issues-mode only.** If the resolved work tracker is not a forge issue tracker (no claimable open issues), ignore this section entirely and run the normal single-issue flow below.
 
@@ -311,12 +312,15 @@ ${DISPATCH_HINT_FANOUT_GUIDANCE}
 
 **Verify the ${pr} body's issue trailer after create AND after every edit.** The ${pr}-body flow is create-then-edit — the file is written once, then re-read minutes later during the review loop — which is a wide window for a stale or foreign body to land. Belt to the namespacing's braces: immediately after \`create\` and after each body \`edit\`, re-read the published body with \`${bodyCmd}\` — **note it takes no number: both CLIs resolve the ${pr} from your checked-out \`claim/issue-<num>\` branch, and passing an ISSUE number where a ${pr} number belongs is how you end up reading (and then "correcting") someone else's ${pr}** — and confirm the body carries this agent's own trailer. A full-scope ship MUST carry \`Closes #<num>\` for this issue; \`Refs #<num>\` is permitted ONLY for a deliberate earlier slice whose body lists the Remaining scope; the orchestrator's Phase 7 ships the rest under the same claim. If it does not, rewrite the body from this agent's own scratch file and re-verify. **Cap this at 2 rewrites:** if the trailer still doesn't match, the scratch file itself is suspect — re-derive the body from your own branch's commits/diff for one final attempt, and if that also fails, STOP, leave the ${pr} open, and say so in the result you hand back. Never loop on it: Phase C waits for every agent to finish, so one agent stuck re-publishing blocks the whole batch's merges. And never assume a zero exit code means the right body was published.
 
-## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
-Bring every ready ${pr} to a CI-verified head CONCURRENTLY, without merge admission: re-sync each onto the latest default branch, run pregate, push, and gate on **required** CI on that exact head (one re-run on a flaky required check, then proceed; a real failure or an irreconcilable conflict leaves that ${pr} OPEN and recorded — move to the next). Then merge them ONE AT A TIME: for each green ${pr}, the parent orchestrator acquires the repository merge admission described in the Claim Workflow Handoff, re-reads the ${pr}, merges with \`${mergeCmd} ${mergePin}\` when the forge still reports it mergeable, and releases its own lease immediately (outcome merged). A ${pr} the forge no longer reports mergeable releases with outcome resync and goes back through the concurrent sync/pregate/CI step outside the lease; a base that moved while the ${pr} stays mergeable needs no resync. After all merges, run Phase 7 cleanup once per merged worktree.
+${leaveOpen ? `## Phase C — Verify open handoffs (orchestrator, after all agents finish)
+Check required CI on each exact published head in parallel. Leave every ${pr} open, report its URL, head, review and CI state, and retain the issue, claim markers, worktree and branch.` : `## Phase C — Serialize only the merge instant (orchestrator, after all agents finish)
+Check readiness and **required** CI CONCURRENTLY for each exact published head. Re-sync only for an actual conflict or an enforced up-to-date requirement. After a resync, run the repository's validation (including pregate where required), push, and wait for required CI and applicable approvals on the new head. An unresolved failure, review block or conflict leaves that ${pr} OPEN and recorded — move to the next.
 
-${forgeKey === 'gh' ? MANAGED_WORKTREE_CLEANUP_CONTRACT : ''}
+Only the parent merges, ONE AT A TIME. Re-read each ${pr} and confirm its head still equals the CI-verified SHA and that it remains open, ready and eligible under the forge's rules. Merge through the forge with \`${mergeCmd} ${mergePin}\`. Return that ${pr} to the parallel readiness checks if the head changed, the forge reports a conflict, or the forge requires a fresher base. A base advance by itself needs no resync. Record other refusals and leave the affected ${pr} open. Confirm the provider reports MERGED before advancing the merge queue. A pending forge queue entry is not delivery. After all merges, run Phase 7 cleanup once per merged worktree.
 
-**Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (write it at the EXACT sentinel path that section gives you — the filename carries your agent id — with a short run summary of the issues claimed + their ${pr}s + merge outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
+${forgeKey === 'gh' ? MANAGED_WORKTREE_CLEANUP_CONTRACT : ''}`}
+
+**Then — orchestrator only, ALWAYS, even though swarm work ships via ${pr}s with no working-tree change — write the completion sentinel** described in the **Completion Workflow** section below (write it at the EXACT sentinel path that section gives you — the filename carries your agent id — with a short run summary of the issues claimed, their ${pr}s, and the ${leaveOpen ? 'handoff' : 'merge'} outcomes). Skip the \`/simplify\` and push/${pr} steps of that workflow (each fan-out agent already ran them), but the sentinel write is NOT optional: it is the ONLY signal that marks this CoS task complete and hands the orchestrator's summary back. A swarm run that ends without the sentinel leaves the task hanging as if it never finished.
 
 Everything not covered above (claim mechanics, branch naming, verify/skip rules, implement conventions, ${pr} body, review loop) is exactly the single-issue flow documented below.
 
@@ -1160,7 +1164,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
   // merged (global → per-app override) + value-constrained by
   // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
   // trackers and when swarm is off.
-  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
+  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount, { leaveOpen: prStaysOpen({ metadata }) });
   // Persist what the prompt just named, so `resolveReviewerConfig(task.metadata, …)`
   // at spawn time reads back THIS list instead of re-deriving the install-wide
   // Code Review Defaults — that is what lets the reviewer pin be emitted once,

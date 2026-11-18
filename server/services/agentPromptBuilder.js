@@ -15,7 +15,7 @@ import { isTruthyMeta, isFalsyMeta } from '../lib/metadataFlags.js';
 import { permitsNoChangeCompletion } from '../lib/noChangeCompletion.js';
 import { PATHS, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
 import { loadSlashdoFile, loadSlashdoLib, writeResolvedSlashdoBody } from '../lib/slashdoLoader.js';
-import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy } from '../lib/cosValidation.js';
+import { DEFAULT_REVIEWER, isToolFreeReviewer, isCliReviewer, hasRequiredReviewer, resolveReviewerConfig, resolveReviewPolicy, SWARM_COUNT_MIN } from '../lib/cosValidation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { doneSentinelName } from '../lib/agentSentinel.js';
 import { canTypeSlashCommands, PR_OPENED_BY, SLASHDO_INLINE_BUDGET_CHARS } from '../lib/slashdoInvocation.js';
@@ -380,6 +380,12 @@ function fillReconcileAgentId(task, agentId) {
 // merge-owning section reads one value; an explicit per-task choice wins.
 const usesAutoMerge = (task) => isTruthyMeta(task.metadata?.useAutoMerge);
 
+// Queued task metadata can round-trip through Markdown as a numeric string.
+function usesSwarmClaim(task) {
+  const count = Number(task.metadata?.swarmCount);
+  return Number.isSafeInteger(count) && count >= SWARM_COUNT_MIN;
+}
+
 // The pending-merge handoff is opt-in per app (`mergeHandoffMinQueuedRuns`), so
 // merge-owning sections read the pinned threshold and stay silent without it.
 const mergeHandoffEnabled = (task) => isMergeHandoffEnabled(task.metadata?.mergeHandoffMinQueuedRuns);
@@ -657,6 +663,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       prStaysOpen: prStaysOpen(task),
       rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      swarmClaim: usesSwarmClaim(task),
       agentId,
       autoMerge: usesAutoMerge(task),
       mergeHandoff: mergeHandoffEnabled(task),
@@ -1238,6 +1245,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       prStaysOpen: prStaysOpen(task),
       rawPrCompletion: task.metadata?.prCompletion || null,
       claimResume: claimResumeContext(task, worktreeInfo),
+      swarmClaim: usesSwarmClaim(task),
       agentId,
       autoMerge: usesAutoMerge(task),
       mergeHandoff: mergeHandoffEnabled(task),

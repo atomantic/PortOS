@@ -37,7 +37,7 @@ Check branch, upstream and working-tree state, preserve unrelated changes, and c
 **Finish authorized merges and teardown before reporting success.**
 
 - Never pass `--delete-branch` to `gh pr merge` (including fallbacks), since it can remove another linked checkout.
-- Pin every attempt to the CI-verified head, verify remote `MERGED`, and release merge admission before cleanup. The forge is the source of truth for pushed and merged state; don't re-derive it with local archives.
+- Pin every attempt to the CI-verified head, and verify remote `MERGED` before cleanup. The forge is the source of truth for pushed and merged state; don't re-derive it with local archives.
 - Once a PR is merged at the local tip and no active agent owns the checkout, remove the worktree (ignored, untracked and uncommitted files included) and branch directly (`git worktree remove --force` + `git branch -D`), with no retirement-review service; that authorizes discarding this checkout's own files, never another checkout or ref. An unmerged checkout keeps its work in place.
 - Delete only the authorized remote ref, with an expected-head lease; an advanced ref or unmerged held checkout stays intact with a tracked handoff.
 - Recheck ownership, release only this task's locks, and delete only the explicitly named local branch, never one inferred from its upstream. Preserve other owners' locks and manual handoffs, and name the owner, blocker and next step of any work left behind.

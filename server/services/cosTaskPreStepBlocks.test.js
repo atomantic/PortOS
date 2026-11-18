@@ -231,16 +231,20 @@ describe('resolveSwarmBlock', () => {
     expect(block).toMatch(/Never loop on it/i);
   });
 
-  it('validates every PR concurrently and holds admission only around each pinned merge', () => {
-    const block = resolveSwarmBlock('claim-issue', 3);
+  it.each([
+    ['claim-issue', 'gh pr merge <PR_URL> --match-head-commit <ci-verified-sha>'],
+    ['claim-issue-gitlab', 'glab mr merge <MR_IID> --sha <ci-verified-sha>'],
+  ])('checks readiness in parallel and serializes confirmed head-pinned merges for %s', (type, mergeCommand) => {
+    const block = resolveSwarmBlock(type, 3);
     const phaseC = block.slice(block.indexOf('## Phase C'));
-    const order = ['CONCURRENTLY, without merge admission', 'required** CI', 'acquires the repository merge admission', 'gh pr merge --match-head-commit <ci-verified-sha>', 'releases its own lease immediately'];
+    expect(phaseC).toContain('required** CI CONCURRENTLY for each exact published head');
+    expect(phaseC).toContain('Re-sync only for an actual conflict or an enforced up-to-date requirement');
+    const order = ['Only the parent merges, ONE AT A TIME', 'its head still equals the CI-verified SHA', mergeCommand,
+      'Confirm the provider reports MERGED before advancing the merge queue'];
     const positions = order.map((marker) => phaseC.indexOf(marker));
     expect(positions.every((at) => at >= 0)).toBe(true);
-    expect(positions).toEqual([...positions].sort((x, y) => x - y));
-    expect(phaseC).toContain('outcome resync');
-    expect(phaseC).not.toMatch(/before its final base sync/i);
-    expect(resolveSwarmBlock('claim-issue-gitlab', 3)).toContain('glab mr merge --sha <ci-verified-sha>');
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+    expect(phaseC).not.toMatch(/merge admission|lease/);
   });
 
   it('returns a glab/MR swarm directive for the gitlab claim body', () => {
@@ -284,7 +288,7 @@ describe('resolveSwarmBlock', () => {
 // prompt-default version bump.
 describe('swarm block wiring', () => {
   it('prepends resolveSwarmBlock(...) to the rendered prompt at both render sites', () => {
-    const occurrences = LAYER_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount\)/g) || [];
+    const occurrences = LAYER_SRC.match(/resolveSwarmBlock\(promptTaskType, metadata\.swarmCount, \{ leaveOpen\b/g) || [];
     expect(occurrences.length).toBe(2);
     expect(CLAIM_SRC).toContain('`${swarmBlock}${template}`');
     expect(PRESTEP_SRC).toContain('`${swarmBlock}${promptTemplate}`');
