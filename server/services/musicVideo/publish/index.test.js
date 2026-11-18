@@ -182,7 +182,7 @@ describe('publish drafts (#9282)', () => {
 
   it('records the post the director makes by hand in the filled tab, and nothing else they browse to', async () => {
     const id = await readyProject();
-    const { connect, pages } = fakeBrowser();
+    const { connect, pages, browsers } = fakeBrowser();
     const events = [];
     const onEvent = (e) => events.push(e);
     musicVideoEvents.on('publish-draft', onEvent);
@@ -200,9 +200,46 @@ describe('publish drafts (#9282)', () => {
       expect((await projects.getProject(id)).publishKit.posts.stackerNews).toMatchObject({ url: 'https://stacker.news/items/123', postedAt: expect.any(String) });
       expect(adapters.stackerNews.submit).not.toHaveBeenCalled();
       expect(pages[0].closed).toBe(false); // the tab now shows their post
+      expect(browsers[0].close).toHaveBeenCalledOnce();
       expect(await listPublishDrafts(id, { connect })).toEqual([]);
     } finally {
       musicVideoEvents.off('publish-draft', onEvent);
+    }
+  });
+
+  it.each([true, false])('keeps only the current draft after a detected-post write fails (replacement: %s)', async (replace) => {
+    const id = await readyProject();
+    const { connect, pages, browsers } = fakeBrowser();
+    const url = 'https://stacker.news/items/123';
+    const deps = { connect, platforms, adapters: { stackerNews: adapter({ findPost: async () => url }) } };
+    const original = await preparePublishDraft(id, 'stackerNews', {}, deps);
+    const writeStarted = Promise.withResolvers();
+    const write = Promise.withResolvers();
+    const mutation = vi.spyOn(projects, 'mutateProjectRecord').mockImplementationOnce(() => {
+      writeStarted.resolve();
+      return write.promise;
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await pages[0].navigate(url);
+      await writeStarted.promise;
+      const current = replace ? await preparePublishDraft(id, 'stackerNews', {}, deps) : original;
+      write.reject(new Error('Post save failed'));
+      await vi.waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining('Post save failed')));
+
+      expect(await listPublishDrafts(id, deps)).toEqual([expect.objectContaining({ draftId: current.draftId, state: 'open' })]);
+      expect(pages[0].closed).toBe(replace);
+      expect(browsers[0].close).toHaveBeenCalledTimes(replace ? 1 : 0);
+      if (replace) expect(pages[1].closed).toBe(false);
+      else {
+        const { post } = await recordPublishPost(id, 'stackerNews', { url });
+        expect(post.url).toBe(url);
+      }
+      await discardPublishDraft(id, current.draftId, deps);
+    } finally {
+      write.resolve();
+      warn.mockRestore();
+      mutation.mockRestore();
     }
   });
 
