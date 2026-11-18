@@ -23,6 +23,7 @@ import { dirname, join } from 'path';
 import databaseSettings from './lib/databaseSettings.cjs';
 import { parseEnvFile } from './lib/envFile.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
+import { REQUIRED_DB_EXTENSIONS } from '../server/lib/db/extensions.js';
 
 const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -90,10 +91,9 @@ async function applyBaseSchema(connection, database) {
   }
 }
 
-// `vector` and `pgcrypto` need a role that can create extensions, which the ordinary application
-// role is not. A database cloned from the test database carries them, so that role needs only CREATEDB.
+// A database cloned from the test database carries its extensions, so the
+// ordinary application role needs only CREATEDB.
 export const TEMPLATE_DATABASE = 'portos_test';
-const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
 const REPAIR_HINT = 'run `npm run setup:db:test`, or see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"';
 
 // Identifiers are interpolated (DDL cannot be parameterized) only after assertScratchDbName has
@@ -107,8 +107,8 @@ async function findExtensionTemplate(connection) {
   const client = new Client({ ...connection, database: TEMPLATE_DATABASE, connectionTimeoutMillis: 5000 });
   try {
     await client.connect();
-    const { rows } = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]);
-    return rows.length === REQUIRED_EXTENSIONS.length ? TEMPLATE_DATABASE : null;
+    const { rows } = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_DB_EXTENSIONS]);
+    return rows.length === REQUIRED_DB_EXTENSIONS.length ? TEMPLATE_DATABASE : null;
   } catch (err) {
     // Absent (3D000) or not connectable by this role (42501) just means no template; anything else is a real fault.
     if (err.code === '3D000' || err.code === '42501') return null;
@@ -126,7 +126,7 @@ export function explainScratchDbError(err, { phase = 'create', template = null, 
   const busyNote = templateBusy ? ` (${TEMPLATE_DATABASE} was busy, so it could not be cloned: disconnect its sessions and retry)` : '';
   if (err.code === '55006' && template) return new Error(`cannot clone ${template} while another session is connected to it: disconnect its sessions (stop other DB test runs) and retry`, { cause: err });
   if (err.code === '42501' && phase === 'schema' && /extension/i.test(err.message)) {
-    return new Error(`the database role cannot create the vector/pgcrypto extensions${templateBusy ? '' : ` and has no ${TEMPLATE_DATABASE} copy to clone`}: ${REPAIR_HINT}${busyNote}`, { cause: err });
+    return new Error(`the database role cannot create the ${REQUIRED_DB_EXTENSIONS.join('/')} extensions${templateBusy ? '' : ` and has no ${TEMPLATE_DATABASE} copy to clone`}: ${REPAIR_HINT}${busyNote}`, { cause: err });
   }
   if (err.code === '42501' && phase === 'create') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busyNote}`, { cause: err });
   return err;

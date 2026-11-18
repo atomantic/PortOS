@@ -13,6 +13,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import databaseSettings from './databaseSettings.cjs';
 import { parseEnvFile } from './envFile.js';
+import { REQUIRED_DB_EXTENSIONS } from '../../server/lib/db/extensions.js';
 import { findFfmpeg } from '../../server/lib/ffmpeg.js';
 import { browserSuiteBlockReason, chromeWithH264, resolveClientBundler, resolveTestChrome } from '../../server/lib/browserSuiteGate.js';
 
@@ -59,16 +60,13 @@ export function resolveTestDatabaseStageEnv(repoRoot, env = process.env) {
   return testDatabaseStageEnv({ env, saved: parseEnvFile(join(repoRoot, '.env')) });
 }
 
-/** Extensions init-db.sql creates; keep in sync with server/scripts/init-db.base.sql. */
-const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
-
 /**
  * Names the extensions `setup:db:test` would fail to create: absent from the
  * database and neither creatable by a superuser nor marked trusted. Pure.
  */
 export function uncreatableExtensions({ installed, trusted, superuser }) {
   if (superuser) return [];
-  return REQUIRED_EXTENSIONS.filter((name) => !installed.includes(name) && !trusted.includes(name));
+  return REQUIRED_DB_EXTENSIONS.filter((name) => !installed.includes(name) && !trusted.includes(name));
 }
 
 /**
@@ -100,8 +98,8 @@ export async function probeTestDatabase(stageEnv, { repoRoot, createClient }) {
     await client.query('SELECT 1');
     // CREATE EXTENSION IF NOT EXISTS is a no-op for installed extensions, so only
     // a missing one needs privilege; a non-superuser role cannot supply it (#13134).
-    const present = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]);
-    const available = await client.query('SELECT DISTINCT name FROM pg_available_extension_versions WHERE trusted AND name = ANY($1)', [REQUIRED_EXTENSIONS]);
+    const present = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_DB_EXTENSIONS]);
+    const available = await client.query('SELECT DISTINCT name FROM pg_available_extension_versions WHERE trusted AND name = ANY($1)', [REQUIRED_DB_EXTENSIONS]);
     const role = await client.query('SELECT rolsuper FROM pg_roles WHERE rolname = current_user');
     const blocked = uncreatableExtensions({
       installed: present.rows.map((row) => row.extname),
@@ -109,10 +107,11 @@ export async function probeTestDatabase(stageEnv, { repoRoot, createClient }) {
       superuser: role.rows[0]?.rolsuper === true,
     });
     if (blocked.length > 0) {
+      const setupSql = blocked.map((name) => `CREATE EXTENSION IF NOT EXISTS ${pg.escapeIdentifier(name)};`).join(' ');
       return {
         ok: false,
         endpoint,
-        reason: `Postgres extension(s) ${blocked.join(', ')} missing in ${TEST_DATABASE} and the test role is not a superuser; as a superuser run \`psql -d ${TEST_DATABASE} -c 'CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pgcrypto;'\``,
+        reason: `Postgres extension(s) ${blocked.join(', ')} missing in ${TEST_DATABASE} and the test role is not a superuser; connect as a superuser with \`psql -d ${TEST_DATABASE}\` and run \`${setupSql}\``,
       };
     }
     return { ok: true, endpoint, provision: false };
