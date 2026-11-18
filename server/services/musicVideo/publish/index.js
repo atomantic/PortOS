@@ -17,7 +17,7 @@ import { mutateProjectRecord } from '../projects.js';
 import { requireProject } from '../requireProject.js';
 import { buildPublishPayload, publishPreviewParts, publishSongUrl } from './payloads.js';
 import { canonicalizeSunoUrl, isSunoShareLink, readSunoSongTitle } from '../../sunoShareLink.js';
-import { browserOperationInProgress, connectPortosBrowser, serializeBrowserOperation as serialize } from './browser.js';
+import { browserOperationInProgress, connectPortosBrowser, pageTargetId, serializeBrowserOperation as serialize } from './browser.js';
 import { assertAccount, assertPlatformEnabled, getPublishPlatforms, normalizePost } from './platforms.js';
 import { youtubeAdapter, shortsAdapter } from './youtube.js';
 import { tiktokAdapter } from './tiktok.js';
@@ -57,8 +57,7 @@ const emitDraft = (draft, state = draft.state) => musicVideoEvents.emit('publish
 /** Drop the CDP session only (the PortOS Browser and the tab keep running). */
 async function detachDraft(draft) {
   clearTimeout(draft.timer);
-  const { browser, page } = draft;
-  if (page && !page.isClosed()) draft.url = page.url(); // the tab may have moved on while the human worked
+  const { browser } = draft;
   draft.browser = null;
   draft.page = null;
   await browser?.close().catch(() => {});
@@ -67,15 +66,17 @@ async function detachDraft(draft) {
 /** Find the draft's tab. Only a fresh connection belongs to the lookup caller. */
 async function findDraftPage(draft, deps = {}, replacement) {
   if (draft.page) return { page: draft.page.isClosed() ? null : draft.page };
+  if (!draft.targetId) return { page: null };
   let reconnect;
   if (!replacement) {
     try { reconnect = await (deps.connect || connectPortosBrowser)({ launch: false }); } catch { return { page: null }; }
   }
-  // The old tab may be gone and the new one may share its composer URL.
   try {
-    const page = (replacement || reconnect).context.pages()
-      .find((candidate) => candidate !== replacement?.page && candidate.url() === draft.url) || null;
-    return { page, reconnect };
+    const { context } = replacement || reconnect;
+    for (const page of context.pages()) {
+      if (page !== replacement?.page && await pageTargetId(context, page) === draft.targetId) return { page, reconnect };
+    }
+    return { page: null, reconnect };
   } catch (err) {
     await reconnect?.browser.close().catch(() => {});
     throw err;
@@ -268,6 +269,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
     try {
       const page = await context.newPage();
       tab = page;
+      const targetId = await pageTargetId(context, page);
       await page.bringToFront();
       const summary = await adapter.prepare(page, payload);
       // A dedicated account for this content must be the one signed in (where the adapter can tell).
@@ -275,7 +277,7 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
       const shot = await page.screenshot({ type: 'jpeg', quality: 70 }).catch(() => null);
       const id = `mvpub-${randomUUID()}`;
       const screenshot = shot ? `data:image/jpeg;base64,${shot.toString('base64')}` : null;
-      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, url: page.url(), state: 'open', createdAt: Date.now() };
+      const draft = { id, projectId, target, payload, page, browser, summary, screenshot, targetId, state: 'open', createdAt: Date.now() };
       // Keep the previous draft available until its replacement is ready. The
       // shared browser queue covers both the lookup and the swap.
       for (const previous of [...drafts.values()]) {
