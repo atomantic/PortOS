@@ -156,7 +156,10 @@ A variable segment is now one of three things:
   parameter or loop variable shadows a module-level binding of the same name.
   One named like a module-level path (`function read(ROOT)` beside
   `const ROOT = …`) is the path every call passes when that is one complete
-  path, and unbounded otherwise: the read is never dropped.
+  path, and unbounded otherwise: the read is never dropped. Where a
+  shared name leaves only unknown text for a whole path (`readFileSync(FILE)`
+  beside a parameter `FILE`), the file the constant names stays an input, as
+  it was before parameters were modelled.
   A resolved value is then read by JavaScript's own rules: text after a path
   continues its last segment unless a separator is written, `join()` keeps a
   trailing separator and `resolve()` does not, a URL spec is parsed (`%20` is

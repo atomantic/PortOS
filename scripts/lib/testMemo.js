@@ -1405,6 +1405,7 @@ function createScopes(ctx) {
  * unknown, named after the helper it is a parameter of.
  */
 function identifierValue(token, ctx, depth) {
+  if (ctx.unscoped) return bindingValue(token.v, ctx, depth);
   ctx.shared.scopes ??= createScopes(ctx.shared.root);
   const binder = ctx.shared.scopes.binderAt(token.v, token.i);
   if (binder === null) return bindingValue(token.v, ctx, depth);
@@ -1436,7 +1437,7 @@ function bindingValue(name, ctx, depth = 0) {
   // as a parameter or loop variable: which one a use means is scoping this pass models only roughly.
   const declarator = ctx.tokens[bound - 2];
   const constant = isWord(ctx.tokens[bound - 3], 'const');
-  const rebound = (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name) || ctx.shared.scopes.hasBinder(name)
+  const rebound = !ctx.unscoped && (initial.k === 'str' || isVariableText(initial)) && (ctx.shared.scopes.declaredTwice(name) || ctx.shared.scopes.hasBinder(name)
     || (!constant && (ctx.shared.scopes.writtenIn(name, () => true, declarator) || ctx.shared.scopes.hiddenWrite(name))));
   const value = rebound ? UNKNOWN : initial;
   ctx.bindingValues.set(name, value);
@@ -1637,6 +1638,14 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
    */
   const valuesAt = (index) => {
     const { value } = evaluate(tokens, match, index, ctx);
+    if (value.k === 'unknown' || value.k === 'tail') {
+      // Unknown text read as a whole path is runtime data and no input. Where it is unknown only because
+      // a parameter or a loop variable shares a constant's name (`unscoped`: every name is its
+      // module-level binding, as before binders were modelled), what the constant names stays an input:
+      // the scope rules may refuse a read, never drop one.
+      const before = evaluate(tokens, match, index, { ...ctx, unscoped: true, bindingValues: new Map(), resolving: new Set() }).value;
+      if (before.k !== 'unknown' && before.k !== 'tail') return [before];
+    }
     const combinations = value.k === 'path' && value.partial && value.open ? variableCombinations(value.vars) : null;
     // `a\\b` is one name on POSIX and two segments on Windows, and `C:` is a drive there: no single file to key.
     if (combinations === null || combinations.some((chosen) => [...chosen.values()].some((text) => /\\|^[A-Za-z]:/.test(text)))) return [value];
