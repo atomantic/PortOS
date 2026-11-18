@@ -4,6 +4,7 @@
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect } from 'vitest';
 import { execFileSync, spawn, spawnSync } from 'child_process';
+import { pathToFileURL } from 'url';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, symlinkSync, existsSync, lstatSync, readdirSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { cp } from 'fs/promises';
@@ -737,6 +738,9 @@ describe('pregate hidden-content invocation', () => {
 
   // This regression catches stale inherited packages before any lint/test child
   // can produce a misleading product failure or repair the shared source tree.
+  // A fresh worktree with no links (or only cache dirs) is linked from its
+  // primary checkout by pregate itself (#16802); a dangling link, a stale
+  // install or any real directory stays a read-only diagnostic.
   it.each(['matching', 'stale', 'missing-package', 'unreadable-package', 'dangling', 'missing-link', 'unlinked'])(
     'checks %s linked dependencies read-only before executing stages', (state) => {
       // The server lockfile selects the native Windows job.
@@ -745,18 +749,25 @@ describe('pregate hidden-content invocation', () => {
       git('worktree', 'add', '--detach', worktree, base);
       root = worktree;
       for (const workspace of ['', 'client', 'server', 'autofixer']) mkdirSync(join(root, workspace, 'node_modules'), { recursive: true });
-      const shared = join(scratch, 'source', 'server', 'node_modules');
+      const shared = join(scratch, 'primary', 'server', 'node_modules');
+      const autoLinks = ['missing-link', 'unlinked'].includes(state);
+      // The linker only visits workspaces that have a manifest.
+      write('server/package.json', '{}');
+      // The sandbox copies only pregate's builtin-only entrypoints, so the
+      // linker entrypoint delegates to the real worktreeManager module.
+      write('scripts/link-worktree-deps.js', `import { linkWorktreeDependencies } from ${JSON.stringify(pathToFileURL(join(REPO_ROOT, 'server/services/worktreeManager.js')).href)};
+await linkWorktreeDependencies(process.argv[2], process.argv[3]);\n`);
       const installed = join(shared, 'express', 'package.json');
       const modules = join(root, 'server', 'node_modules');
       mkdirSync(dirname(installed), { recursive: true });
       writeFileSync(installed, state === 'unreadable-package' ? '{broken' : JSON.stringify({ version: state === 'stale' ? '5.2.1' : '5.3.0' }));
       if (state === 'missing-package') rmSync(installed);
+      mkdirSync(join(scratch, 'source'));
       const sourceReceipt = join(scratch, 'source', 'deps-hashes.json');
       writeFileSync(sourceReceipt, '{"server":"legacy"}');
       writeFileSync(join(shared, '.package-lock.json'), '{"packages":{"node_modules/express":{"version":"5.3.0"}}}');
-      const sourceSnapshot = () => Object.fromEntries(readdirSync(join(scratch, 'source'), { recursive: true })
-        .filter(path => lstatSync(join(scratch, 'source', path)).isFile())
-        .map(path => [path, readFileSync(join(scratch, 'source', path), 'utf8')]));
+      const sourceSnapshot = () => Object.fromEntries([installed, join(shared, '.package-lock.json'), sourceReceipt]
+        .map(path => [path, existsSync(path) ? readFileSync(path, 'utf8') : null]));
       const before = sourceSnapshot();
       const fakeBin = join(scratch, 'fake-bin');
       mkdirSync(fakeBin);
@@ -764,7 +775,7 @@ describe('pregate hidden-content invocation', () => {
       writeFileSync(join(fakeBin, 'npm.cmd'), '@node "%~dp0npm" %*\r\n');
       rmSync(modules, { recursive: true });
       const target = state === 'dangling' ? join(scratch, 'absent-deps') : shared;
-      if (state === 'unlinked') mkdirSync(modules);
+      if (state === 'unlinked') mkdirSync(join(modules, '.cache'), { recursive: true });
       else if (state !== 'missing-link') symlinkSync(target, modules, process.platform === 'win32' ? 'junction' : 'dir');
       write('server/package-lock.json', JSON.stringify({ packages: {
         '': {}, 'node_modules/express': { version: '5.3.0' },
@@ -776,14 +787,15 @@ describe('pregate hidden-content invocation', () => {
         write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
       }
       const result = run();
-      if (state === 'matching') {
+      if (state === 'matching' || autoLinks) {
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain('Dependency consistency preflight passed');
+        expect(result.stdout.includes('Linked worktree dependencies from the primary checkout')).toBe(autoLinks);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(true);
       } else {
         expect(result.status).toBe(1);
-        const needsLink = ['dangling', 'missing-link', 'unlinked'].includes(state);
-        expect(result.stderr).toContain(`server (${['missing-link', 'unlinked'].includes(state) ? 'owned' : 'linked'} node_modules)`);
+        const needsLink = state === 'dangling';
+        expect(result.stderr).toContain('server (linked node_modules)');
         if (needsLink) expect(result.stderr).toContain('Re-link with: node scripts/link-worktree-deps.js');
         else {
           expect(result.stderr).toContain('owning source checkout');
@@ -797,20 +809,27 @@ describe('pregate hidden-content invocation', () => {
           'missing-package': 'missing package.json (ENOENT)',
           'unreadable-package': 'unreadable package.json (invalid JSON)',
           dangling: 'linked target unavailable',
-          'missing-link': 'node_modules missing',
-          unlinked: 'missing package.json',
         }[state];
         expect(result.stderr).toContain(diagnostic);
         expect(existsSync(join(root, 'unexpected-stage'))).toBe(false);
       }
-      if (state === 'missing-link') expect(existsSync(modules)).toBe(false);
-      else expect(lstatSync(modules).isSymbolicLink()).toBe(state !== 'unlinked');
+      expect(lstatSync(modules).isSymbolicLink()).toBe(true);
       expect(sourceSnapshot()).toEqual(before);
       expect(existsSync(join(root, 'unexpected-npm'))).toBe(false);
       expect(readFileSync(sourceReceipt, 'utf8')).toBe('{"server":"legacy"}');
       if (state === 'dangling') expect(existsSync(target)).toBe(false);
     },
   );
+
+  it('does not link or check dependencies for --plan-only, even in a bare worktree', () => {
+    const worktree = join(scratch, 'plan-only-worktree');
+    git('worktree', 'add', '--detach', worktree, base);
+    root = worktree;
+    const result = run('--plan-only');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain('Linked worktree dependencies');
+    expect(existsSync(join(root, 'server', 'node_modules'))).toBe(false);
+  });
 
   it('diagnoses a production-only install before spawning development checks', () => {
     prepareWindowsInventory();

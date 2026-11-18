@@ -67,7 +67,11 @@ Before lint or tests, pregate checks installed package versions against all
 four workspace lockfiles without modifying dependency trees. Stale, missing or
 unreadable evidence stops lint/tests with a reconciliation diagnostic. Pregate
 requires development dependencies (`npm ci --include=dev` in an owning
-workspace); a production-only installation cannot run its checks. Ordinary
+workspace); a production-only installation cannot run its checks. A fresh
+linked git worktree whose `node_modules` are missing (or hold only cache
+directories) is linked from its primary checkout automatically, once, by
+`scripts/link-worktree-deps.js` before the check reruns; pregate never runs npm.
+A dangling link, stale versions and real directories keep the diagnostic. Ordinary
 worktree links must be repaired only in their owning source checkout; a
 separate clone with its own locked installs is also suitable for validation.
 `--plan-only` prints the plan without checking installed dependencies.

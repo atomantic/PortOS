@@ -837,6 +837,41 @@ function reportSlowGuards(result) {
   }
 }
 
+/** Primary checkout path when REPO_ROOT is a linked git worktree, else null. */
+function linkedWorktreePrimary() {
+  try {
+    const gitCommonDir = git(['rev-parse', '--git-common-dir']);
+    const gitDir = git(['rev-parse', '--git-dir']);
+    if (resolve(REPO_ROOT, gitCommonDir) !== resolve(REPO_ROOT, gitDir)) {
+      return resolve(REPO_ROOT, gitCommonDir, '..');
+    }
+  } catch {
+    // not a git checkout we can inspect: no auto-link
+  }
+  return null;
+}
+
+/**
+ * A fresh `git worktree add` checkout has no node_modules. Creating the
+ * symlinks is non-destructive (the linker never replaces a real dependency
+ * directory) and is exactly what the diagnostic used to ask the agent to type,
+ * so do it once and re-check. Never runs npm; stale versions stay diagnostics.
+ */
+function autoLinkWorktreeDependencies(problems) {
+  if (!problems.some(({ linked, directoryAvailable }) => !linked || !directoryAvailable)) return problems;
+  const primaryCheckout = linkedWorktreePrimary();
+  if (!primaryCheckout) return problems;
+  const result = spawnSync(process.execPath, [join(REPO_ROOT, 'scripts', 'link-worktree-deps.js'), primaryCheckout, REPO_ROOT], {
+    cwd: REPO_ROOT, encoding: 'utf8',
+  });
+  if (result.status !== 0) {
+    console.log(`⚠️ Worktree dependency auto-link did not complete: ${(result.stderr || result.error?.message || '').trim()}`);
+    return problems;
+  }
+  console.log('🔗 Linked worktree dependencies from the primary checkout');
+  return dependencyConsistencyProblems(REPO_ROOT);
+}
+
 /** Print each dependency-consistency problem with the re-link or reconcile hint that fits its checkout. */
 function reportDependencyProblems(problems) {
   let primaryCheckout = null;
@@ -1012,7 +1047,7 @@ async function main() {
     process.exit(0);
   }
 
-  const dependencyProblems = dependencyConsistencyProblems(REPO_ROOT);
+  const dependencyProblems = autoLinkWorktreeDependencies(dependencyConsistencyProblems(REPO_ROOT));
   if (dependencyProblems.length > 0) {
     reportDependencyProblems(dependencyProblems);
     process.exit(1);
