@@ -25,6 +25,7 @@ import {
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   LINUX_CONTAINMENT_TESTS,
+  CLIENT_FANOUT_TEST_FILES,
   MAX_TARGETED_TEST_FILES,
   needsSlashdoSubmodule,
   PLATFORM_PACKAGE_RES,
@@ -1621,18 +1622,32 @@ describe('CI test impact planner', () => {
       expect(plan.slashdo).toBe(true);
     });
 
-    it('fans the client out only when its own selection is over the cap', () => {
+    it('keeps a client selection of 165 files on one runner (the server cap does not apply to the client)', () => {
       const source = 'client/src/components/bigfeature/Panel.jsx';
-      const tests = featureTests('client/src/components/bigfeature', MAX_TARGETED_TEST_FILES + 5, 'jsx');
+      const tests = featureTests('client/src/components/bigfeature', 165, 'jsx');
       const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
 
       expect(plan).toMatchObject({ full: false, client: { mode: 'related', sources: [source] }, build: true });
       expect(plan.client.files).toEqual(expect.arrayContaining(tests));
+      expect(plan.shards.client).toEqual([1]);
+      expect(plan.shards.server).toEqual([1]);
+    });
+
+    it('fans the client out only when its own selection exceeds CLIENT_FANOUT_TEST_FILES', () => {
+      const source = 'client/src/components/bigfeature/Panel.jsx';
+      const tests = featureTests('client/src/components/bigfeature', CLIENT_FANOUT_TEST_FILES + 1, 'jsx');
+      const plan = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests] });
+
+      expect(plan.client.files).toEqual(expect.arrayContaining(tests));
       expect(plan.shards.client).toEqual(CLIENT_FANOUT);
       expect(plan.shards.server).toEqual([1]);
+      expect(plan.suiteReasons.client).toMatch(/exceed the 400-file cap, sharded 3 ways/);
 
-      const underCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, 20)] });
-      expect(underCap.shards.client).toEqual([1]);
+      // TRACKED adds client selectors of its own, so size the boundary case from the measured floor.
+      const floor = plan.client.files.length - tests.length;
+      const atCap = buildCiTestPlan([source], { trackedFiles: [...TRACKED, source, ...tests.slice(0, CLIENT_FANOUT_TEST_FILES - floor)] });
+      expect(atCap.client.files).toHaveLength(CLIENT_FANOUT_TEST_FILES);
+      expect(atCap.shards.client).toEqual([1]);
     });
 
     it('keeps a server related graph and an exact-file plan under the cap on one runner', () => {

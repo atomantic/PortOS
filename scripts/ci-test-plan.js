@@ -39,6 +39,11 @@ const MAX_CHANGED_CODE_FILES = 30;
 // selection now stays exactly as computed and only execution is partitioned
 // (#11871). 125 is that former full-plan threshold (#10312).
 export const MAX_TARGETED_TEST_FILES = 125;
+// The client runner has no reach measure and its cold-memo cost is about 0.4s per
+// file including overhead (#16805 measurements), so one runner absorbs 400 client
+// files inside the existing critical path. Fanning out earlier only adds three
+// runner starts, Chrome warm-ups and memo restores.
+export const CLIENT_FANOUT_TEST_FILES = 400;
 
 // Preserve the planner's public registry export for existing callers.
 export { BROWSER_SUITES } from './lib/browserSuites.js';
@@ -76,7 +81,8 @@ export const shardIndexes = (mode, count) => (
 /**
  * Whether a scoped Linux runner fans out across its full-suite shard count.
  *
- * - Over MAX_TARGETED_TEST_FILES explicit selectors: either runner, either mode.
+ * - Over the runner's cap of explicit selectors (MAX_TARGETED_TEST_FILES for the
+ *   server, CLIENT_FANOUT_TEST_FILES for the client): either mode.
  * - A server `related` plan whose measured import reach (`serverReach.selected`,
  *   the suites Vitest's related walk will select) exceeds the same cap (#16547):
  *   its explicit selectors stay few, yet one runner would execute ~1,000 suites.
@@ -88,8 +94,9 @@ export const shardIndexes = (mode, count) => (
  * No shard-count floor is needed: the runner slices the selection itself and
  * never hands Vitest `--shard`, so a shard whose slice is empty exits green.
  */
-const fansOut = ({ mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
-  && (files.length > MAX_TARGETED_TEST_FILES || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
+const runnerFanOutCap = (runner) => (runner === 'client' ? CLIENT_FANOUT_TEST_FILES : MAX_TARGETED_TEST_FILES);
+const fansOut = (runner, { mode, files }, reach = 0) => mode !== 'skip' && mode !== 'full'
+  && (files.length > runnerFanOutCap(runner) || (mode === 'related' && reach > MAX_TARGETED_TEST_FILES));
 
 const serverReachCount = (serverReach) => (Number.isFinite(serverReach?.selected) ? serverReach.selected : 0);
 
@@ -949,10 +956,11 @@ export const isRouteOnlyAppDiff = (diff) => {
 const fanOutNote = (plan, runner) => {
   const count = plan.shards[runner].length;
   if (plan.full || count === 1) return '';
-  if (plan[runner].files.length <= MAX_TARGETED_TEST_FILES) {
+  const cap = runnerFanOutCap(runner);
+  if (plan[runner].files.length <= cap) {
     return `; related import reach of ${plan.reachSelected} suites exceeds the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
   }
-  return `; ${plan[runner].files.length} selected test files exceed the ${MAX_TARGETED_TEST_FILES}-file cap, sharded ${count} ways`;
+  return `; ${plan[runner].files.length} selected test files exceed the ${cap}-file cap, sharded ${count} ways`;
 };
 
 const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
@@ -1305,7 +1313,7 @@ function buildSuitePlan(changedFiles, {
 const finishPlan = (plan, options = {}) => {
   const reachSelected = serverReachCount(options.serverReach);
   const linuxShards = (runner) => shardIndexes(
-    fansOut(plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
+    fansOut(runner, plan[runner], runner === 'server' ? reachSelected : 0) ? 'full' : plan[runner].mode,
     FULL_SUITE_SHARDS[runner],
   );
   const shards = {

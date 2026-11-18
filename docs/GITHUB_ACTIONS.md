@@ -688,8 +688,8 @@ Windows emits `[1]` for its native contract runner. `scripts/run-ci-tests.js`
 turns `CI_SHARD=<index>/<count>` into a disjoint path-hash file slice before
 launching Vitest; the union is the complete selected suite. Windows uses exact
 native selectors and never repeats a related-graph traversal. A scoped Linux plan fans out the same way
-(`fansOut()` in the planner) only when its explicit selection exceeds
-`MAX_TARGETED_TEST_FILES` (125). That cap keeps the scoped selection and only partitions it, so a server-only
+(`fansOut()` in the planner) only when its explicit selection exceeds its cap: `MAX_TARGETED_TEST_FILES` (125) for the server,
+`CLIENT_FANOUT_TEST_FILES` (400) for the client, since one client runner absorbs 400 files at about 0.4 s each (#16805). That cap keeps the scoped selection and only partitions it, so a server-only
 overflow does not start three client shards, the DB/browser
 suites, and a Windows run (#11871). A server `related` plan also fans out
 when its measured import reach (`serverReach.selected`, the suites the related
