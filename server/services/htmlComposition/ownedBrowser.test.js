@@ -23,7 +23,6 @@ let child;
 let profile;
 let startup;
 let diagnostics;
-const endpoint = 'ws://127.0.0.1:12345/devtools/browser/synthetic-browser';
 beforeEach(() => {
   vi.spyOn(process, 'kill').mockImplementation(() => true);
   vi.mocked(drainBrowserProcessGroup).mockReset().mockResolvedValue();
@@ -37,11 +36,15 @@ beforeEach(() => {
     child.emit('close', null, signal);
     return true;
   });
-  startup = () => {
-    child.emit('spawn');
-    child.stderr.write(`DevTools listening on ${endpoint.slice(0, 25)}`);
-    child.stderr.write(`${endpoint.slice(25)}\n`);
-  };
+  startup = () => { child.emit('spawn'); };
+  const pipeIn = new PassThrough();
+  const pipeOut = new PassThrough();
+  child.stdio = [null, null, child.stderr, pipeIn, pipeOut];
+  pipeIn.on('data', chunk => {
+    if (chunk.toString().includes('Browser.getVersion')) {
+      pipeOut.write(Buffer.from(`${JSON.stringify({ id: 0, result: { product: 'Chrome/1' } })}\0`));
+    }
+  });
   launch.spawn.mockReset().mockImplementation((_, args) => {
     profile = args.find(arg => arg.startsWith('--user-data-dir=')).slice('--user-data-dir='.length);
     diagnostics.track(child, args);
@@ -127,11 +130,12 @@ describe('owned composition capture browser lifecycle', () => {
   it('uses the configured executable with a fresh sandboxed profile and disposes only its child', async () => {
     setUid(1000);
     const owner = await launchCompositionBrowser();
-    expect(owner.webSocketDebuggerUrl).toBe(endpoint);
+    expect(owner.transport.readyState).toBe(1);
     const [executable, args, options] = launch.spawn.mock.calls[0];
     expect(executable).toBe('/synthetic/chrome');
     expect(args).toContain('--headless=new');
-    expect(args).toContain('--remote-debugging-address=127.0.0.1');
+    expect(args).toContain('--remote-debugging-pipe');
+    expect(args).not.toContain('--remote-debugging-port=0');
     expect(args).not.toContain('--no-sandbox');
     expect(options.windowsHide).toBe(true);
     await expect(access(profile)).resolves.toBeUndefined();
@@ -152,6 +156,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('names a recognized startup exit cause without copying browser output', async () => {
+    child.stdio[3].removeAllListeners('data');
     startup = () => {
       child.emit('spawn');
       child.stderr.write('[0101/000000:ERROR:zygote_host_impl_linux.cc(101)] Running as root without --no-sandbox is not supported. /private/profile/path\n');
@@ -163,9 +168,10 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('cleans a child and profile after a bounded startup timeout without leaking stderr', async () => {
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); child.stderr.write('private profile path and diagnostics'); };
     await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(
-      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-devtools-endpoint, spawnMs=\d+, group=(?:unavailable|not-requested)\)$/,
+      /startup exceeded its deadline \(elapsedMs=\d+, deadlineMs=20, phase=awaiting-handshake, spawnMs=\d+, group=(?:unavailable|not-requested)\)$/,
     );
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
     await expect(access(profile)).rejects.toThrow();
@@ -173,6 +179,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('reports the owned group snapshot on startup timeout without waiting for diagnostics', async () => {
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); };
     vi.mocked(observeBrowserProcessGroup).mockResolvedValueOnce('leader:uninterruptible|parent:same|group:same');
     const error = await launchCompositionBrowser({ startupMs: 40 }).catch(caught => caught);
@@ -183,6 +190,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('does not delay timeout or cleanup when the group observation does not settle', async () => {
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); };
     vi.mocked(observeBrowserProcessGroup).mockReturnValueOnce(new Promise(() => {}));
     const error = await launchCompositionBrowser({ startupMs: 40 }).catch(caught => caught);
@@ -191,15 +199,31 @@ describe('owned composition capture browser lifecycle', () => {
     await expect(access(profile)).rejects.toThrow();
   });
 
+  it('waits for the owned browser pipe handshake beyond ten seconds within its startup budget', async () => {
+    child.stdio[3].removeAllListeners('data');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
+    const opening = launchCompositionBrowser({ startupMs: 60000 }).finally(() => { settled = true; });
+    await vi.waitFor(() => expect(launch.spawn).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(11000);
+    expect(settled).toBe(false);
+    child.stdio[4].write(Buffer.from(`${JSON.stringify({ id: 0, result: {} })}\0`));
+    const owner = await opening;
+    expect(owner.transport.readyState).toBe(1);
+    await owner.close();
+  });
+
   it('names a browser that never produced output, and honors a startup override only when it is a positive integer', async () => {
     const key = 'PORTOS_COMPOSITION_BROWSER_STARTUP_MS';
     const prior = process.env[key];
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); };
     try {
       process.env[key] = '25';
       await expect(launchCompositionBrowser()).rejects.toThrow(/deadlineMs=25, phase=spawned-no-output/);
       // A malformed override falls back to the 20s default, so a tight explicit deadline is the only way out.
       process.env[key] = 'abc';
+      child.stdio = [null, null, child.stderr, new PassThrough(), new PassThrough()];
       await expect(launchCompositionBrowser({ startupMs: 20 })).rejects.toThrow(/deadlineMs=20,/);
     } finally {
       if (prior === undefined) delete process.env[key]; else process.env[key] = prior;
@@ -207,6 +231,7 @@ describe('owned composition capture browser lifecycle', () => {
   });
 
   it('settles a spawn failure without trying to signal a nonexistent process', async () => {
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.pid = undefined; child.emit('error', Object.assign(new Error('/private/path'), { code: 'ENOENT' })); };
     await expect(launchCompositionBrowser()).rejects.toThrow('failed to start (ENOENT)');
     expect(child.kill).not.toHaveBeenCalled();
@@ -215,6 +240,7 @@ describe('owned composition capture browser lifecycle', () => {
 
   it('preserves cancellation during startup and cleans its profile', async () => {
     const controller = new AbortController();
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); controller.abort(new Error('Synthetic render canceled')); };
     await expect(launchCompositionBrowser({ signal: controller.signal })).rejects.toThrow('Synthetic render canceled');
     expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
@@ -225,6 +251,7 @@ describe('owned composition capture browser lifecycle', () => {
     const controller = new AbortController();
     const onCleanupFailure = vi.fn();
     child.kill = vi.fn(() => true);
+    child.stdio[3].removeAllListeners('data');
     startup = () => { child.emit('spawn'); controller.abort(new Error('Canceled during startup')); };
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const opening = launchCompositionBrowser({ signal: controller.signal, shutdownMs: 100, onCleanupFailure }).catch(error => error);
@@ -355,6 +382,14 @@ describe('owned composition capture browser lifecycle', () => {
     await owner.close();
   });
 
+  it('rejects a pipe that closes before its startup handshake and cleans up', async () => {
+    child.stdio[3].removeAllListeners('data');
+    startup = () => { child.emit('spawn'); child.stdio[4].end(); };
+    await expect(launchCompositionBrowser()).rejects.toThrow('Composition browser failed to start (pipe closed)');
+    expect(child.kill).toHaveBeenCalledExactlyOnceWith('SIGTERM');
+    await expect(access(profile)).rejects.toThrow();
+  });
+
   it.each([3, 4])('rejects a startup error on pipe fd %s and disposes its owned browser', async fd => {
     const pipeIn = new PassThrough();
     const pipeOut = new PassThrough();
@@ -447,7 +482,7 @@ it.each([
     termMs: '2000', killMs: '3000', closeStartedMs: '2000', timeoutMs: '7000',
   });
   expect(result.message).toMatch(/^Composition browser cleanup exceeded its deadline /);
-  for (const privateValue of [profile, '/synthetic/chrome', String(child.pid), endpoint, '/private/']) {
+  for (const privateValue of [profile, '/synthetic/chrome', String(child.pid), '/private/']) {
     expect(result.message).not.toContain(privateValue);
   }
   expect(vi.getTimerCount()).toBe(timersBeforeClose);

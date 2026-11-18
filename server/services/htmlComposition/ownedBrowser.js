@@ -81,14 +81,13 @@ function isolationUnavailable(reason) {
 
 // Only this child/profile belong to the render. Never discover processes by
 // name, attach to a user profile, or restart the managed browsing service.
-// `isolation: 'legacy'` keeps the render browser's loopback DevTools port.
-// Generated previews pass `'required'` and talk CDP over pipes so loopback IP
-// can be denied too. `'off'` exists for the egress negative control.
+// Owned browsers use CDP pipes, avoiding a separate loopback handshake after
+// Chrome reports its endpoint. Generated previews pass `'required'` so even
+// loopback IP can be denied. `'off'` exists for the egress negative control.
 export async function launchCompositionBrowser({
   signal, startupMs = resolveStartupMs(), shutdownMs = 5000, isolation = 'legacy', support, onCleanupFailure,
 } = {}) {
   signal?.throwIfAborted();
-  const piped = isolation !== 'legacy';
   const ownsProcessGroup = process.platform !== 'win32';
   const { loadConfig } = await import('../browserService.js');
   const executable = browserExecutablePath(await loadConfig());
@@ -171,10 +170,8 @@ export async function launchCompositionBrowser({
     // Chrome helpers may retain inherited stderr after the browser exits.
     // Release our pipe without signaling unrelated or discovered processes.
     proc?.stderr?.destroy();
-    if (piped) {
-      proc?.stdio?.[3]?.destroy();
-      proc?.stdio?.[4]?.destroy();
-    }
+    proc?.stdio?.[3]?.destroy();
+    proc?.stdio?.[4]?.destroy();
   };
   const onClose = () => {
     closed = true;
@@ -275,36 +272,34 @@ export async function launchCompositionBrowser({
   const abort = () => { close().catch(() => {}); };
   try {
     signal?.throwIfAborted();
-    const facts = piped ? (support || await readPreviewIsolationSupport()) : null;
+    const facts = isolation !== 'legacy' ? (support || await readPreviewIsolationSupport()) : null;
     // Chrome cannot stack its process sandbox inside Seatbelt or bubblewrap:
     // sandbox_init fails with EPERM and the renderer, network, and GPU
     // processes crash. The outer jail is the egress boundary, so only those
     // launches pass --no-sandbox. Legacy renders keep Chrome's sandbox.
     const jailed = isolation === 'required' || isolation === 'os';
-    const plan = piped ? previewIsolationPlan({
+    const plan = isolation !== 'legacy' ? previewIsolationPlan({
       ...facts, executable, profileDir: profile, dropSandbox: sandboxArgs().length > 0 || jailed, isolation,
     }) : null;
-    if (piped && (isolation === 'required' || isolation === 'os') && !plan.supported) throw isolationUnavailable(plan.reason);
-    const command = piped ? plan.command : executable;
-    const args = piped ? plan.args : [
-      '--headless=new', ...sandboxArgs(), '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
+    if ((isolation === 'required' || isolation === 'os') && !plan.supported) throw isolationUnavailable(plan.reason);
+    const command = plan ? plan.command : executable;
+    const args = plan ? plan.args : [
+      '--headless=new', ...sandboxArgs(), '--remote-debugging-pipe',
       `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
       '--mute-audio', '--disable-background-networking', '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank',
     ];
-    proc = spawn(command, args, piped
+    proc = spawn(command, args, plan
       ? { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], env: previewBrowserEnv(), detached: true }
-      : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe'], detached: ownsProcessGroup }));
+      : safeChildProcessOptions({ stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], detached: ownsProcessGroup }));
     proc.once('spawn', () => { spawned = true; observed.spawnMs = observedMs(); });
     proc.once('exit', onExit);
     proc.once('close', onClose);
     proc.on('error', onError);
     observe('child', profile, { child: proc });
-    if (piped) {
-      transport = createCdpPipeTransport(proc);
-      transport.on('error', onPipeError);
-    }
-    const ready = await new Promise((resolve, reject) => {
+    transport = createCdpPipeTransport(proc);
+    transport.on('error', onPipeError);
+    await new Promise((resolve, reject) => {
       let tail = '';
       let sawOutput = false;
       let startupGroup = 'not-requested';
@@ -322,7 +317,7 @@ export async function launchCompositionBrowser({
       // without copying browser output; the error text survives CI quiet mode.
       const startupPhase = () => !spawned ? 'before-spawn'
         : !sawOutput ? 'spawned-no-output'
-          : piped ? 'awaiting-handshake' : 'awaiting-devtools-endpoint';
+          : 'awaiting-handshake';
       const timer = setTimeout(() => finish(new Error(
         `Composition browser startup exceeded its deadline (elapsedMs=${observedMs()}, deadlineMs=${startupMs}, phase=${startupPhase()}, spawnMs=${observed.spawnMs ?? 'none'}, group=${startupGroup})`,
       )), startupMs);
@@ -332,6 +327,7 @@ export async function launchCompositionBrowser({
         clearTimeout(sampleTimer);
         proc.stderr?.removeListener('data', onData);
         transport?.removeListener('message', onHandshake);
+        transport?.removeListener('close', onPipeClose);
         proc.removeListener('error', fail);
         proc.removeListener('exit', stopped);
         signal?.removeEventListener('abort', canceled);
@@ -344,14 +340,10 @@ export async function launchCompositionBrowser({
         finish(new Error(`Composition browser exited during startup (${status})${cause}`));
       };
       const canceled = () => finish(signal.reason ?? new Error('Render canceled'));
+      const onPipeClose = () => finish(new Error('Composition browser failed to start (pipe closed)'));
       const onData = bytes => {
         sawOutput = true;
         tail = (tail + bytes.toString()).slice(-8192);
-        if (piped) return;
-        // No paths or raw browser output are copied into errors. An endpoint must
-        // be loopback and come from this child's complete DevTools line.
-        const match = tail.match(/(?:^|\n)DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\/[a-zA-Z0-9-]+)\r?\n/);
-        if (match) finish(null, match[1]);
       };
       const onHandshake = (bytes) => {
         let message;
@@ -364,15 +356,15 @@ export async function launchCompositionBrowser({
       proc.once('error', fail);
       proc.once('exit', stopped);
       signal?.addEventListener('abort', canceled, { once: true });
-      if (piped) {
-        rejectStartupPipe = () => finish(new Error('Composition browser failed to start (pipe)'));
-        transport.on('message', onHandshake);
-        transport.send(JSON.stringify({ id: 0, method: 'Browser.getVersion' }), (error) => {
-          if (error) finish(new Error('Composition browser failed to start (pipe)'));
-        });
-      }
+      rejectStartupPipe = () => finish(new Error('Composition browser failed to start (pipe)'));
+      transport.on('message', onHandshake);
+      transport.once('close', onPipeClose);
+      transport.send(JSON.stringify({ id: 0, method: 'Browser.getVersion' }), (error) => {
+        if (error) finish(new Error('Composition browser failed to start (pipe)'));
+      });
       if (signal?.aborted) canceled();
       else if (exited) stopped();
+      else if (transport.readyState !== 1) onPipeClose();
     });
     // Drain subsequent diagnostics without retaining private output or letting
     // Chrome block on a full stderr pipe during a song-length capture.
@@ -380,8 +372,7 @@ export async function launchCompositionBrowser({
     signal?.addEventListener('abort', abort, { once: true });
     signal?.throwIfAborted();
     if (startupPipeError) throw new Error('Composition browser failed to start (pipe)');
-    if (piped) return { transport, close, lifecycleFacts, mechanism: plan.mechanism };
-    return { webSocketDebuggerUrl: ready, close, lifecycleFacts };
+    return { transport, close, lifecycleFacts, ...(plan ? { mechanism: plan.mechanism } : {}) };
   } catch (error) {
     try { await close(); } catch (cleanupError) { onCleanupFailure?.(cleanupError); throw cleanupError; }
     throw error;
