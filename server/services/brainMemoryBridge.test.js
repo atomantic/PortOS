@@ -1156,6 +1156,41 @@ describe('brainMemoryBridge — pending resyncs survive a restart (#11756)', () 
     expect(persisted()).toEqual([]);
   });
 
+  it('retains a failed hard delete for restart while settling successful resyncs', async () => {
+    const first = await loadBridge();
+    bridgeFileContents = JSON.stringify({
+      [first.bridgeKey('people', 'deleted')]: 'mem-deleted',
+      [first.bridgeKey('people', 'archived')]: 'mem-archived',
+    });
+    purgeMemory.mockRejectedValueOnce(new Error('database unavailable'));
+
+    first.queueResync([
+      { type: 'people', id: 'deleted', hardDelete: true },
+      { type: 'people', id: 'archived' },
+    ]);
+    await first.flushPendingResync();
+    await first.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(updateMemory).toHaveBeenCalledExactlyOnceWith('mem-archived', { status: 'archived' });
+    expect(persisted()).toEqual(['people:deleted:true']);
+
+    // A later peer touch must preserve the failed local hard-delete intent.
+    purgeMemory.mockRejectedValueOnce(new Error('database still unavailable'));
+    first.queueResync([{ type: 'people', id: 'deleted' }]);
+    await first.flushPendingResync();
+    await first.flushPendingResyncWrites();
+    expect(persisted()).toEqual(['people:deleted:true']);
+
+    purgeMemory.mockClear();
+    const second = await loadBridge();
+    expect(await second.replayPersistedResync()).toBe(1);
+    await second.flushPendingResync();
+    await second.flushPendingResyncWrites();
+    expect(purgeMemory).toHaveBeenCalledExactlyOnceWith('mem-deleted');
+    expect(await second.loadBridgeMap()).not.toHaveProperty(first.bridgeKey('people', 'deleted'));
+    expect(persisted()).toEqual([]);
+  });
+
   it('archives a synced-in delete and hard-deletes a local one after the restart', async () => {
     const first = await loadBridge();
     first.queueResync([{ type: 'people', id: 'synced' }]);
