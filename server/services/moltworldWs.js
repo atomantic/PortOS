@@ -102,6 +102,11 @@ function handleMessage(raw) {
     return;
   }
 
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+    console.log(`🌐 Moltworld WS: ignored non-object JSON frame`);
+    return;
+  }
+
   lastEvent = Date.now();
   const eventType = data.type || data.event || 'unknown';
 
