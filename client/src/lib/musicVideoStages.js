@@ -406,6 +406,9 @@ export function describeProjectStatus(project, { progress, nextAction = null, re
 
 export const STALE_RENDER_MESSAGE = 'Final render is out of date — re-render';
 
+// Summaries carry the server's read-time classification; full records carry dependency state.
+export const isMusicVideoCompleted = (project) => project?.isCompleted ?? (project?.status === 'complete' && project.renderDependencyState?.status !== 'stale');
+
 /** The server's dependency projection says scenes changed after the final render was made. */
 export const isFinalRenderStale = (project) => !!project?.renderHistoryId && project.renderDependencyState?.status === 'stale';
 

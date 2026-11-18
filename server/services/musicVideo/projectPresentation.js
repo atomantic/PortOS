@@ -6,7 +6,7 @@
  * so an edit can present its before and after records from one set of reads (editResult.js).
  */
 
-import { presentMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { presentMusicVideoDependencies, musicVideoRenderDependencyState } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { productionReadiness } from './productionReview.js';
 import { presentProjectCastAndSets } from './castAndSetsService.js';
 import { presentProjectAutonomousRun } from './autonomousService.js';
@@ -26,6 +26,19 @@ export async function readPresentationInputs(project) {
   const [{ projectSongAudioChange }, { readProjectRenderSpend }] = await Promise.all([import('./songAudio.js'), import('./renderSpend.js')]);
   const [songAudioChange, renderSpend] = await Promise.all([projectSongAudioChange(project), readProjectRenderSpend(project)]);
   return { film, songAudioChange, renderSpend };
+}
+
+/** Classify a stored project without presenting every take or reading unrelated local ledgers. */
+export async function projectCompletionState(project) {
+  if (project.status !== 'complete') return false;
+  const current = project.castAndSets?.source === 'catalog' ? await withCatalogCheckin(project) : project;
+  const renderDependencyState = musicVideoRenderDependencyState(current);
+  if (renderDependencyState?.status === 'stale') return false;
+  if (project.composition?.mode === 'blender') {
+    const { blenderFilmReadState } = await import('./blender/renderIndex.js');
+    if ((await blenderFilmReadState(project)).finalStale === true) return false;
+  }
+  return true;
 }
 
 /** The presented record from a stored one (with its catalog check-in resolved) and its read inputs. */

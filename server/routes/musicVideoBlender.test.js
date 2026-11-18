@@ -797,7 +797,7 @@ runpy.run_path(driver, run_name="__main__")
     await renderAll('final');
     const readFinal = async () => (await request(app).get(`/api/music-video/${project.id}`)).body.renderDependencyState;
     const joined = async (final) => projects.mutateProjectRecord(project.id, (current) => ({
-      project: { ...current, renderHistoryId: 'example-final', renderDependencies: null, blender: { ...current.blender, final } },
+      project: { ...current, status: 'complete', renderHistoryId: 'example-final', renderDependencies: null, blender: { ...current.blender, final } },
     }));
     // A final some other render made (or one made before the film recorded this) is left alone.
     await joined({ jobId: 'another-final', signature: 'x' });
@@ -807,6 +807,10 @@ runpy.run_path(driver, run_name="__main__")
     await joined({ jobId: 'example-final', signature: 'the-renders-it-was-joined-from' });
     expect(await readFinal()).toEqual({ status: 'stale', reasons: ['Blender shots changed or were rendered again after this final was joined'] });
     expect((await state()).finalStale).toBe(true);
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress');
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(progress.body.items).toContainEqual(expect.objectContaining({ id: project.id, isCompleted: false }));
+    expect(completed.body.items).not.toContainEqual(expect.objectContaining({ id: project.id }));
   });
 
   it('renders stills at the requested song times and lists them newest first', async () => {

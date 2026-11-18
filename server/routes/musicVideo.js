@@ -27,7 +27,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
-import { listProjects, listProjectNames, listProjectPage, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, setProjectMidiTranscription, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listProjectPage, listProjectHeaders, getProjectsByIds, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, setProjectMidiTranscription, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
@@ -50,7 +50,8 @@ import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackL
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
-import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
+import { recordEvents } from '../services/sharing/recordEvents.js';
+import { presentProjectForRead, projectCompletionState } from '../services/musicVideo/projectPresentation.js';
 import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideo/musicVideoSummary.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
 import sceneRoutes from './musicVideoScenes.js';
@@ -65,6 +66,15 @@ import { getMusicVideoMediaPool, searchMusicVideoMediaPool, importMusicVideoPool
 import { getMusicVideoOutroStats } from '../services/musicVideo/statsOutro.js';
 
 const router = Router();
+// Blender files and linked catalog records can change without a project write.
+const completionCache = new Map();
+let completionGeneration = 0;
+const invalidateCompletion = ({ recordKind, recordId }) => {
+  if (recordKind !== 'musicVideoProject') return;
+  completionGeneration += 1;
+  completionCache.delete(recordId);
+};
+for (const event of ['updated', 'invalidated', 'deleted']) recordEvents.on(event, invalidateCompletion);
 // A take decision's reply carries the change, so its own tab can skip the refetch its broadcast asks for.
 router.use(writeOriginScope);
 
@@ -95,8 +105,44 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const filter = query.statusFilter ? (project) => (project.status === 'complete') === (query.statusFilter === 'completed') : undefined;
-    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
+    // Read headers once; only complete records need render evidence. Hydrate those
+    // in batches, then hydrate the matching page for full presentation.
+    let page;
+    if (summary && query.statusFilter) {
+      const headers = (await listProjectHeaders()).sort(compareMusicVideoProjectsNewestFirst);
+      const liveIds = new Set(headers.map(({ id }) => id));
+      for (const id of completionCache.keys()) if (!liveIds.has(id)) completionCache.delete(id);
+      const generation = completionGeneration;
+      const candidates = headers.filter((project) => project.status === 'complete');
+      const completed = new Set();
+      const unresolved = [];
+      for (const header of candidates) {
+        const cached = completionCache.get(header.id);
+        if (header.updatedAt && header.compositionMode !== 'blender' && header.castSource !== 'catalog' && cached?.updatedAt === header.updatedAt) {
+          if (cached.completed) completed.add(header.id);
+        } else unresolved.push(header);
+      }
+      for (let offset = 0; offset < unresolved.length; offset += 50) {
+        const batch = unresolved.slice(offset, offset + 50);
+        const records = await getProjectsByIds(batch.map(({ id }) => id));
+        const states = await Promise.all(records.map(projectCompletionState));
+        const headersById = new Map(batch.map((header) => [header.id, header]));
+        records.forEach((record, index) => {
+          const header = headersById.get(record.id);
+          if (states[index]) completed.add(record.id);
+          // A concurrent edit must not be cached under the older header's timestamp.
+          if (generation === completionGeneration && header.updatedAt && record.updatedAt === header.updatedAt && header.compositionMode !== 'blender' && header.castSource !== 'catalog') {
+            completionCache.set(record.id, { updatedAt: header.updatedAt, completed: states[index] });
+          }
+        });
+      }
+      const matching = headers.filter((project) => completed.has(project.id) === (query.statusFilter === 'completed'));
+      const selected = matching.slice(paging.offset, paging.offset + paging.limit);
+      const records = new Map((await getProjectsByIds(selected.map(({ id }) => id))).map((record) => [record.id, record]));
+      page = { items: selected.map(({ id }) => records.get(id)).filter(Boolean), total: matching.length, ...paging };
+    } else {
+      page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
+    }
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
     // A deletion between header selection and hydration still consumes its slot.

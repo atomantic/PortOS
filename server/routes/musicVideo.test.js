@@ -21,6 +21,8 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectPage: vi.fn(),
+  listProjectHeaders: vi.fn(),
+  getProjectsByIds: vi.fn(),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   cloneProject: vi.fn(async (id, options) => ({
@@ -123,6 +125,10 @@ import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
+import { emitRecordUpdated } from '../services/sharing/recordEvents.js';
+import * as catalogCheckin from '../services/musicVideo/catalogCheckin.js';
+import { musicVideoClipReferenceChoices } from '../lib/musicVideo/musicVideoConditioning.js';
+import { captureClipReferenceDependency, captureMusicVideoEvidence } from '../lib/musicVideo/musicVideoDependencies.js';
 import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideo/musicVideoLimits.js';
 import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 
@@ -133,6 +139,8 @@ describe('musicVideo routes', () => {
     app.use(express.json());
     app.use('/api/music-video', musicVideoRoutes);
     vi.clearAllMocks();
+    svc.listProjectHeaders.mockImplementation(async () => (await svc.listProjects()).map(({ id, createdAt, updatedAt, status, composition, castAndSets }) => ({ id, createdAt, updatedAt, status, compositionMode: composition?.mode, castSource: castAndSets?.source })));
+    svc.getProjectsByIds.mockImplementation(async (ids) => (await svc.listProjects()).filter((project) => ids.includes(project.id)));
     svc.listProjectPage.mockImplementation(async ({ limit, offset, compare, filter }) => {
       const projects = [...await svc.listProjects()].filter(filter || (() => true));
       if (compare) projects.sort(compare);
@@ -280,19 +288,68 @@ describe('musicVideo routes', () => {
     expect(r2.body.items[0].id).toBe('mv-older');
   });
 
-  it('filters project status before paging and keeps missing and failed statuses in progress', async () => {
+  it('filters stale exports before paging while preserving current and legacy completion', async () => {
+    const base = { status: 'complete', renderHistoryId: 'render-example', uploadedAudioFilename: 'before.wav', scenes: [] };
+    const evidence = captureMusicVideoEvidence(base);
     svc.listProjects.mockResolvedValue([
-      { id: 'done', status: 'complete', createdAt: '2026-03-01' },
+      { ...base, id: 'stale', uploadedAudioFilename: 'after.wav', renderDependencies: evidence, createdAt: '2026-05-01' },
+      { ...base, id: 'current', renderDependencies: evidence, createdAt: '2026-04-01' },
+      { ...base, id: 'legacy', createdAt: '2026-03-01' },
       { id: 'failed', status: 'failed', createdAt: '2026-02-01' },
       { id: 'draft', createdAt: '2026-01-01' },
     ]);
     const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1');
-    expect(progress.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'failed' }] });
+    expect(progress.body).toMatchObject({ total: 3, nextCursor: '1', items: [{ id: 'stale', isCompleted: false }] });
     const next = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1&cursor=1');
-    expect(next.body).toMatchObject({ total: 2, nextCursor: null, items: [{ id: 'draft' }] });
+    expect(next.body).toMatchObject({ total: 3, nextCursor: '2', items: [{ id: 'failed', isCompleted: false }] });
     const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
-    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'done' }] });
+    expect(completed.body).toMatchObject({ total: 2, items: [{ id: 'current', isCompleted: true }, { id: 'legacy', isCompleted: true }] });
     expect((await request(app).get('/api/music-video?summary=1&statusFilter=unknown')).status).toBe(400);
+  });
+
+  it('classifies older render evidence using the current catalog check-in', async () => {
+    const scene = { sceneId: 'scene', startSec: 0, endSec: 4, videoHistoryId: 'clip', takes: [] };
+    const checkin = { problems: [], items: [{ subjectId: 'a', ingredientId: 'a', kind: 'character', name: 'Example', images: ['example.png'] }] };
+    const record = { id: 'catalog-example', status: 'complete', renderHistoryId: 'render', scenes: [scene], castAndSets: { source: 'catalog' } };
+    const presented = { ...record, castAndSets: { ...record.castAndSets, catalogCheckin: checkin } };
+    scene.clipReferenceIds = [musicVideoClipReferenceChoices(presented, scene)[0].id];
+    scene.takes = [{ kind: 'video', assetId: 'clip', dependencies: { version: 1, references: [captureClipReferenceDependency(presented, scene)] } }];
+    record.renderDependencies = captureMusicVideoEvidence(presented);
+    vi.spyOn(catalogCheckin, 'withCatalogCheckin').mockImplementation(async (project) => ({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: checkin } }));
+    svc.listProjects.mockResolvedValue([record]);
+    const response = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(response.body).toMatchObject({ total: 1, items: [{ id: record.id, isCompleted: true }] });
+    checkin.problems = [{ code: 'CATALOG_UNAVAILABLE' }];
+    checkin.items = [];
+    const unavailable = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(unavailable.body).toMatchObject({ total: 1, items: [{ id: record.id, isCompleted: true, preview: { label: 'Final video' } }] });
+    record.uploadedAudioFilename = 'changed.wav';
+    const changed = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress');
+    expect(changed.body).toMatchObject({ total: 1, items: [{ id: record.id, isCompleted: false }] });
+    vi.restoreAllMocks();
+  });
+
+  it('scans headers once and hydrates completed records in bounded batches', async () => {
+    svc.listProjects.mockResolvedValue(Array.from({ length: 102 }, (_, index) => ({
+      id: `mv-${String(index).padStart(3, '0')}`, status: index < 101 ? 'complete' : 'ready',
+      createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, index)).toISOString(), updatedAt: '2026-10-01T00:00:00.000Z',
+    })));
+    const response = await request(app).get('/api/music-video?summary=1&statusFilter=completed&limit=2');
+    expect(response.body).toMatchObject({ total: 101, items: [{ id: 'mv-100' }, { id: 'mv-099' }], nextCursor: '2' });
+    expect(svc.listProjectHeaders).toHaveBeenCalledTimes(1);
+    expect(svc.getProjectsByIds.mock.calls.map(([ids]) => ids.length)).toEqual([50, 50, 1, 2]);
+    svc.getProjectsByIds.mockClear();
+    await request(app).get('/api/music-video?summary=1&statusFilter=completed&limit=2&cursor=2');
+    expect(svc.getProjectsByIds.mock.calls.map(([ids]) => ids.length)).toEqual([2]);
+    const changed = (await svc.listProjects())[0];
+    changed.updatedAt = '2026-10-02T00:00:00.000Z';
+    svc.getProjectsByIds.mockClear();
+    await request(app).get('/api/music-video?summary=1&statusFilter=completed&limit=2');
+    expect(svc.getProjectsByIds.mock.calls.map(([ids]) => ids.length)).toEqual([1, 2]);
+    emitRecordUpdated('musicVideoProject', changed.id);
+    svc.getProjectsByIds.mockClear();
+    await request(app).get('/api/music-video?summary=1&statusFilter=completed&limit=2');
+    expect(svc.getProjectsByIds.mock.calls.map(([ids]) => ids.length)).toEqual([1, 2]);
   });
 
   it('presents only the requested summary page, including cursor precedence and an empty page', async () => {

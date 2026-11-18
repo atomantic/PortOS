@@ -1,3 +1,4 @@
+import { isMusicVideoCompleted } from '../../lib/musicVideoStages.js';
 import { useEffect, useRef } from 'react';
 import socket from '../../services/socket';
 import { getMusicVideoProject } from '../../services/apiMusicVideo.js';
@@ -8,11 +9,11 @@ import { getMusicVideoProject } from '../../services/apiMusicVideo.js';
  * again by id (dropped on a 404), an unlisted one refreshes the first page. The
  * open project and this tab's own writes are skipped; the page follows those.
  */
-export default function useProjectSummarySync({ summaries, selectedId, enabled, resetOnMembershipChange = false }) {
+export default function useProjectSummarySync({ summaries, selectedId, enabled, resetOnMembershipChange = false, statusFilter = null }) {
   const summarySyncRef = useRef(null);
   summarySyncRef.current = {
     selectedId,
-    resetOnMembershipChange,
+    resetOnMembershipChange, statusFilter,
     reconcileFirst: summaries.reconcileFirst,
     items: summaries.items,
     refreshFirst: summaries.refreshFirst,
@@ -23,6 +24,7 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
     if (!enabled) return undefined;
     let active = true;
     const inflight = new Map();
+    const membership = new Map();
     const readListed = (id) => {
       const slot = inflight.get(id);
       if (slot) { slot.queued = true; return; }
@@ -32,10 +34,16 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
           if (!active || !fresh) return;
           const current = summarySyncRef.current;
           const previous = current.items.find((p) => p.id === id);
-          if (current.resetOnMembershipChange && previous && (previous.status === 'complete') !== (fresh.status === 'complete')) {
+          const completed = isMusicVideoCompleted(fresh);
+          const wasCompleted = previous ? isMusicVideoCompleted(previous) : membership.get(id);
+          membership.set(id, completed);
+          if (current.resetOnMembershipChange && previous && wasCompleted !== completed) {
             current.setItems((items) => items.filter((p) => p.id !== id));
             current.reconcileFirst();
-          } else current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+          } else if (previous) current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+          else if (current.resetOnMembershipChange && completed === (current.statusFilter === 'completed') && wasCompleted !== completed) {
+            current.reconcileFirst();
+          }
         })
         .catch((err) => {
           if (active && err?.status === 404) {
@@ -52,7 +60,7 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
         });
     };
     const onChanged = (data) => {
-      const id = data?.id;
+      const id = data?.id || data?.projectId;
       if (!id) return;
       if (data.origin && data.origin === socket.id) return;
       if (id === summarySyncRef.current.selectedId) return;
@@ -61,7 +69,19 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
       else if (!listed) summarySyncRef.current.refreshFirst();
       else readListed(id);
     };
+    const onRunOrFilm = (data) => {
+      if (data?.kind === 'job' && !['done', 'failed', 'canceled'].includes(data.job?.status)) return;
+      if (data?.projectId && data.projectId !== summarySyncRef.current.selectedId) readListed(data.projectId);
+    };
+    const onCatalogChanged = () => {
+      for (const item of summarySyncRef.current.items) readListed(item.id);
+      summarySyncRef.current.reconcileFirst();
+    };
     socket.on('music-video:project:changed', onChanged);
-    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
-  }, [enabled]);
+    const catalogEvents = resetOnMembershipChange ? ['catalog:primitive-changed', 'catalog:assets-changed'] : [];
+    catalogEvents.forEach((event) => socket.on(event, onCatalogChanged));
+    const events = resetOnMembershipChange ? ['music-video:autonomous', 'music-video:production', 'music-video:blender'] : [];
+    events.forEach((event) => socket.on(event, onRunOrFilm));
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); catalogEvents.forEach((event) => socket.off(event, onCatalogChanged)); events.forEach((event) => socket.off(event, onRunOrFilm)); };
+  }, [enabled, resetOnMembershipChange]);
 }

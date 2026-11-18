@@ -91,6 +91,18 @@ export async function listProjectPage(options = {}) {
   return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
 }
 
+/** Small headers and bounded record hydration for status-filtered lists. */
+export async function listProjectHeaders(options = {}) {
+  return (await selectBackend()).listProjectHeaders(options);
+}
+
+export async function getProjectsByIds(ids) {
+  const projects = await (await selectBackend()).getProjectsByIds(ids);
+  if (getBackendName() !== 'postgres' || !projects.some(hasLinkedSubjects)) return projects;
+  const { resolveProjectsCatalogDescriptions } = await import('./subjectDescriptionSync.js');
+  return resolveProjectsCatalogDescriptions(projects);
+}
+
 /** The stored snapshots, used when offering a legacy difference for review. */
 export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));

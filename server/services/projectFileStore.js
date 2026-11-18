@@ -43,6 +43,10 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     return includeDeleted ? all : all.filter((project) => !project.deleted);
   }
 
+  async function listProjectHeaders(options = {}) {
+    return (await listProjects(options)).map(({ id, createdAt, updatedAt, status, composition, castAndSets }) => ({ id, createdAt, updatedAt, status, compositionMode: composition?.mode, castSource: castAndSets?.source }));
+  }
+
   async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
     const all = await listProjects({ includeDeleted });
     const projects = filter ? all.filter(filter) : all;
@@ -136,6 +140,7 @@ export function createProjectFileStore({ file, kind, idPrefix, logEmoji, logLabe
     loadAllAndIndex,
     listProjects,
     listProjectPage,
+    listProjectHeaders,
     getProject,
     getProjectsByIds,
     listProjectIds,

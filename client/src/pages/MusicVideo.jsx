@@ -30,7 +30,7 @@ import { MUSIC_VIDEO_PAGE_ID, MUSIC_VIDEO_SCROLL_ID } from '../components/musicV
 import ProjectIndex from '../components/musicVideo/ProjectIndex.jsx';
 import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlots.js';
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
-import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
+import { resolveStageParam, compareMusicVideoProjectsNewestFirst, isMusicVideoCompleted } from '../lib/musicVideoStages.js';
 import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
 
 // The open-project workspace (and, through it, every stage) is its own chunk, so
@@ -299,11 +299,8 @@ export default function MusicVideo() {
       const index = indexRef.current;
       const previous = index.items.find((p) => p.id === data.project.id);
       if (!previous) return;
-      if (statusFilter !== 'all' && (previous.status === 'complete') !== (data.project.status === 'complete')) {
-        index.setItems((items) => items.filter((p) => p.id !== data.project.id));
-        index.reconcileFirst();
-      }
-      else index.setItems((items) => items.map((p) => p.id === data.project.id ? data.project : p));
+      // The summary sync reads presented evidence for filtered run events.
+      if (statusFilter === 'all') index.setItems((items) => items.map((p) => p.id === data.project.id ? data.project : p));
     };
     const events = ['music-video:autonomous', 'music-video:production'];
     events.forEach((e) => socket.on(e, onRunEvent));
@@ -407,7 +404,7 @@ export default function MusicVideo() {
   // above ignores every other id, and the first page is newest-created-first, so
   // a blanket refresh cannot update an older card or drop a deleted one.
   useProjectSummarySync({ summaries, selectedId, enabled: summariesWanted });
-  useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, resetOnMembershipChange: statusFilter !== 'all' });
+  useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, resetOnMembershipChange: statusFilter !== 'all', statusFilter });
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -628,7 +625,7 @@ export default function MusicVideo() {
               </div>
             ) : projectsError ? null : (
               <ProjectIndex
-                projects={indexSummaries.items.filter((project) => statusFilter === 'all' || (project.status === 'complete') === (statusFilter === 'completed'))}
+                projects={indexSummaries.items.filter((project) => statusFilter === 'all' || isMusicVideoCompleted(project) === (statusFilter === 'completed'))}
                 statusFilter={statusFilter}
                 nameQuery={nameQuery}
                 onNameQueryChange={setNameQuery}

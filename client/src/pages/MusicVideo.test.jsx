@@ -163,8 +163,8 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
         {MV_ROUTES}
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/No projects in progress/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/));
+    expect(await screen.findByText(/No projects in progress/)).toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
   });
 });
@@ -275,6 +275,56 @@ describe('MusicVideo index follows projects changed elsewhere (#15724)', () => {
     expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Old Name');
     expect(getMusicVideoProject).toHaveBeenCalledWith('mv-listed', { silent: true });
     expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
+  });
+
+  it('moves a newly stale completed project out of the completed list after a run event', async () => {
+    const done = { ...summary('mv-listed', 'Finished'), status: 'complete', isCompleted: true };
+    let stale = false;
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = statusFilter === 'completed' && !stale ? [done] : [];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    stale = true;
+    getMusicVideoProject.mockResolvedValueOnce({ ...done, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    await pushSocket('music-video:production', { projectId: done.id, project: { ...done, isCompleted: undefined } });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Finished' })).not.toBeInTheDocument());
+    expect(getMusicVideoProject).toHaveBeenCalledWith(done.id, { silent: true });
+  });
+
+  it('rechecks Blender changes and avoids repeated pagination resets for an off-page run', async () => {
+    const listed = { ...summary('mv-listed', 'Finished'), status: 'complete', isCompleted: true };
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [listed], total: 1, nextCursor: null });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    getMusicVideoProject.mockResolvedValue({ ...listed, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    await pushSocket('music-video:blender', { projectId: listed.id, kind: 'state' });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Finished' })).not.toBeInTheDocument());
+    getMusicVideoProject.mockResolvedValue({ ...listed, id: 'mv-off-page' });
+    await pushSocket('music-video:production', { projectId: 'mv-off-page' });
+    await waitFor(() => expect(getMusicVideoProject).toHaveBeenCalledWith('mv-off-page', { silent: true }));
+    await waitFor(() => expect(listMusicVideoProjectSummaries).toHaveBeenCalled());
+    const calls = listMusicVideoProjectSummaries.mock.calls.length;
+    await pushSocket('music-video:production', { projectId: 'mv-off-page' });
+    await waitFor(() => expect(getMusicVideoProject.mock.calls.filter(([id]) => id === 'mv-off-page')).toHaveLength(2));
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(calls);
+  });
+
+  it('rechecks visible projects and the first page when catalog assets change', async () => {
+    const listed = { ...summary('mv-listed', 'Finished'), status: 'complete', isCompleted: true };
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [listed], total: 1, nextCursor: null });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    getMusicVideoProject.mockResolvedValue({ ...listed, isCompleted: undefined, renderDependencyState: { status: 'stale' } });
+    listMusicVideoProjectSummaries.mockResolvedValue({ items: [], total: 0, nextCursor: null });
+    await pushSocket('catalog:assets-changed', { ingredientId: 'example' });
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Finished' })).not.toBeInTheDocument());
+    expect(getMusicVideoProject).toHaveBeenCalledWith(listed.id, { silent: true });
   });
 
   it('removes a listed card when the record read is a 404', async () => {

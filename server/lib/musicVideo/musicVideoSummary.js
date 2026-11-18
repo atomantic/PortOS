@@ -131,6 +131,9 @@ function shotSummary(project) {
   return `${count} ${document ? 'document shot' : 'scene'}${count === 1 ? '' : 's'}`;
 }
 
+/** A stale export cannot put an otherwise complete project in Completed. Legacy evidence remains unknown. */
+export const isMusicVideoCompleted = (project) => project?.status === 'complete' && project.renderDependencyState?.status !== 'stale';
+
 /** Newest created first, then newest updated — the order the index and picker show. */
 export function compareMusicVideoProjectsNewestFirst(a, b) {
   const created = (Date.parse(b?.createdAt || b?.updatedAt) || 0) - (Date.parse(a?.createdAt || a?.updatedAt) || 0);
@@ -163,6 +166,7 @@ export function summarizeMusicVideoProject(project, readiness) {
     parentProjectId: project.parentProjectId || null,
     mode: project.mode || 'director',
     status: project.status || 'draft',
+    isCompleted: isMusicVideoCompleted(project),
     stage: currentStage(project, readiness, run),
     runStatus: project.autonomousRun?.status || run?.status || null,
     runInterrupted: Boolean(project.autonomousRun?.interrupted || project.castAndSets?.interrupted || run?.interrupted),

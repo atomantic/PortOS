@@ -348,6 +348,9 @@ function createDependencyReader(project) {
         : { assetId: 'scene-set', revision: checksum((project.scenes || []).filter((scene) => intersects(scene, ref.startSec, ref.endSec)).map((scene) => scene.sceneId).sort()) };
       return references[ref.role];
     }
+    if (ref.role === 'clipReferences' && project.castAndSets?.catalogCheckin?.problems?.some((problem) => problem.code === 'CATALOG_UNAVAILABLE')) {
+      return { unavailable: true };
+    }
     if (!scenesById) {
       scenesById = new Map();
       for (const scene of project.scenes || []) {
@@ -374,6 +377,10 @@ function dependencyChanges(dependencies, readCurrent) {
     ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
+    if (current?.unavailable) {
+      changes.push({ role: 'unknown', reason: 'Catalog references could not be read; review again' });
+      continue;
+    }
     if (!current || current.assetId !== ref.assetId || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
       changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
@@ -467,6 +474,14 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
     current: captureMusicVideoEvidence(project) }), shots, evidence, estimate };
 }
 
+/** Render evidence alone, without projecting every historical take and review. */
+export function musicVideoRenderDependencyState(project) {
+  if (!project?.renderHistoryId || !project.renderDependencies) return project?.renderDependencyState;
+  const changes = dependencyChanges(project.renderDependencies, createDependencyReader(project));
+  return { status: changes.length ? (changes.some((change) => change.role !== 'unknown') ? 'stale' : 'unknown') : 'current',
+    reasons: [...new Set(changes.map((change) => change.reason))] };
+}
+
 /**
  * Bounded projection for readers: retain verdicts/assets, expose their validity separately.
  * A selected take's `characterReferenceState` (#16473) is advice beside `dependencyState`, never part of it,
@@ -477,12 +492,12 @@ export function presentMusicVideoDependencies(project) {
   const readCurrent = createDependencyReader(project);
   const state = (dependencies) => {
     const changes = dependencyChanges(dependencies, readCurrent);
-    return { status: changes.length ? (changes[0].role === 'unknown' ? 'unknown' : 'stale') : 'current',
+    return { status: changes.length ? (changes.some((change) => change.role !== 'unknown') ? 'stale' : 'unknown') : 'current',
       reasons: [...new Set(changes.map((change) => change.reason))] };
   };
   return presentCharacterReferenceStates({ ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
-    ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
+    ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: musicVideoRenderDependencyState(project) } : {}),
     scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => {
       const frame = take.kind === 'image' || take.kind === 'endImage' ? imageFrameDependencyState(project, scene, take) : null;
       const inherited = inheritedFrameReasons(project, scene, take);
