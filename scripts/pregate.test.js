@@ -1809,6 +1809,8 @@ describe('probeTestDatabase', () => {
     const result = await probeWith({ installed: ['pgcrypto'], superuser: false });
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/^Postgres extension\(s\) vector missing/);
+    expect(result.reason).toContain('CREATE EXTENSION IF NOT EXISTS "vector";');
+    expect(result.reason).not.toContain('pgcrypto');
   });
 });
 

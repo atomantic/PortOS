@@ -6,6 +6,7 @@ import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { checkHealth, ensureSchema, query, close, getServerMajorVersion, isTestDatabase, POOL_CONFIG } from '../lib/db.js';
+import { REQUIRED_DB_EXTENSIONS } from '../lib/db/extensions.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -65,9 +66,8 @@ const feedSequenceValues = async () => Object.fromEntries((await query(
   [syncFeedTables.map(syncFeedSequenceName)],
 )).rows.map(({ sequencename, v }) => [sequencename, v]));
 
-const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
 const extensionIds = async () => (await query(
-  'SELECT extname, oid::text AS oid FROM pg_extension WHERE extname = ANY($1::text[]) ORDER BY extname', [REQUIRED_EXTENSIONS],
+  'SELECT extname, oid::text AS oid FROM pg_extension WHERE extname = ANY($1::text[]) ORDER BY extname', [REQUIRED_DB_EXTENSIONS],
 )).rows;
 
 // The application role cannot CREATE EXTENSION (needs a superuser), so a
@@ -113,8 +113,8 @@ $portos_fixture_reset$`;
 // extensions survived the reset by identity (an unchanged oid was not recreated).
 async function resetApplicationObjects() {
   const before = await extensionIds();
-  if (before.length !== REQUIRED_EXTENSIONS.length) {
-    throw new Error(`${REQUIRED_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
+  if (before.length !== REQUIRED_DB_EXTENSIONS.length) {
+    throw new Error(`${REQUIRED_DB_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
       + `(see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"); found ${before.map(e => e.extname).join(', ') || 'none'}`);
   }
   await query(DROP_APPLICATION_OBJECTS);
