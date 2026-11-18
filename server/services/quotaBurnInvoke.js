@@ -80,7 +80,7 @@ export async function getQuotaBurnTaskCatalog({ manual = false } = {}) {
       import('./apps.js'),
       import('./taskSchedule.js'),
       import('./autonomousJobs.js'),
-      import('./cosState.js'),
+      import('./cos/cosState.js'),
     ]);
 
   const [schedule, apps, jobs, state] = await Promise.all([
@@ -285,8 +285,8 @@ function unattendedApprovalRefusal(job) {
  */
 async function activeCustomJobReason(job) {
   const [{ loadState }, { isJobFireInFlight }] = await Promise.all([
-    import('./cosState.js'),
-    import('./cosJobScheduler.js'),
+    import('./cos/cosState.js'),
+    import('./cos/cosJobScheduler.js'),
   ]);
   const state = await loadState().catch(() => null);
   if (!state) return null;
@@ -423,7 +423,7 @@ async function runCustomJobStep({ resolved, step, family, candidate, maintenance
 
   const [{ generateTaskFromJob }, { addTask }] = await Promise.all([
     import('./autonomousJobs.js'),
-    import('./cosTaskStore.js'),
+    import('./cos/cosTaskStore.js'),
   ]);
   const generated = await generateTaskFromJob(resolved.job);
   const persisted = await addTask({

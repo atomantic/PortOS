@@ -12,7 +12,7 @@
 
 import { getSettings, updateSettingsWith } from './settings.js';
 import { BUILT_IN_ORCHESTRATION_PROFILES } from '../lib/orchestrationProfile.js';
-import { namedOrchestrationProfileSchema } from '../lib/cosValidation.js';
+import { namedOrchestrationProfileSchema } from '../lib/cos/cosValidation.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const BUILT_IN_IDS = new Set(BUILT_IN_ORCHESTRATION_PROFILES.map((p) => p.id));

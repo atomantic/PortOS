@@ -63,6 +63,13 @@ export const PLAN_STEP_STATUSES = Object.freeze([
   'pending', 'running', 'blocked', 'done', 'failed', 'skipped',
 ]);
 
+// Creative tool cost classes shared by the dispatch gate and Plan board.
+export const COST_FREE = 'free';
+export const COST_LLM = 'llm';
+export const COST_RENDER = 'render';
+export const COST_CLASSES = Object.freeze([COST_FREE, COST_LLM, COST_RENDER]);
+export const BUDGETED_COST_CLASSES = new Set([COST_LLM, COST_RENDER]);
+
 // `failed` is terminal but not success (dependents never run), so it is excluded.
 export const PLAN_STEP_TERMINAL_SUCCESS = Object.freeze(new Set(['done', 'skipped']));
 

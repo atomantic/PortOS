@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   callAgentContextTool: vi.fn(),
 }));
 
-vi.mock('../services/agentContextMcp.js', () => ({
+vi.mock('../services/agent/agentContextMcp.js', () => ({
   getAgentContextManifest: mocks.getAgentContextManifest,
   callAgentContextTool: mocks.callAgentContextTool,
 }));

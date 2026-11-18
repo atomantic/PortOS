@@ -24,10 +24,10 @@ import { listModelStore } from './modelStoreStorage.js';
 import * as ollamaManager from './ollamaManager.js';
 import * as lmStudioManager from './lmStudioManager.js';
 import { getQueueCapacity } from './mediaJobQueue/index.js';
-import { getAgents } from './cosAgentLifecycle.js';
-import { getAllTasks } from './cosTaskStore.js';
-import { getStatus } from './cos.js';
-import { runningAgentsByTaskId, countSpawningTasks } from '../lib/cosSpawnWindow.js';
+import { getAgents } from './cos/cosAgentLifecycle.js';
+import { getAllTasks } from './cos/cosTaskStore.js';
+import { getStatus } from './cos/cos.js';
+import { runningAgentsByTaskId, countSpawningTasks } from '../lib/cos/cosSpawnWindow.js';
 import { getSettings } from './settings.js';
 import {
   hfInventoryRow,
@@ -363,7 +363,7 @@ function readAgentCensus() {
  * Queue depth vs work in flight, settled against the agent list.
  *
  * A mid-spawn task moves from the pending counts to `inProgress` rather than
- * being counted on both sides (lib/cosSpawnWindow.js), so the two halves move
+ * being counted on both sides (lib/cos/cosSpawnWindow.js), so the two halves move
  * together and the summary's queued+running total never dips while a spawn
  * lands. `awaitingApproval` needs no settling: approval is a pre-spawn gate
  * (`forceSpawnTask` refuses an unapproved task and approving clears the flag),

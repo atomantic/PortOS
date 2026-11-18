@@ -17,8 +17,8 @@
  * the SAME project while one is already in flight.
  */
 
-import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { captureMusicVideoEvidence } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { unlink } from 'fs/promises';
 import { join } from 'path';
@@ -41,16 +41,16 @@ import { encodeCodeComposition, prepareCodeRender, writeCodeProofSheet } from '.
 import { encodeDocumentComposition, prepareDocumentRender } from './documentRender.js';
 import { composedLyricWindows, projectTypographyPlan } from './composition.js';
 import { renderTypographyOverlays, removeCompositionScratch } from './compositionRender.js';
-import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideo/musicVideoTitleCard.js';
 import { applyFilmLookFinish, filmLookFinishNeeded } from './filmLookFinish.js';
 import { startExcerptOnProject, applyExcerptPatch } from './excerpt.js';
 import { markRevisionRendering, settleRevisionRender } from './revision.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
-import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideoAspect.js';
+import { musicVideoAspect, musicVideoAtAspect } from '../../lib/musicVideo/musicVideoAspect.js';
 import { musicVideoEvents } from './events.js';
 import { pilotDependencies, productionPilotRenderProject } from './productionPilot.js';
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
-import { excerptRangeFits } from '../../lib/musicVideoExcerptRange.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { excerptRangeFits } from '../../lib/musicVideo/musicVideoExcerptRange.js';
 import { admittedRenderMap } from '../renderActivity.js';
 
 const jobs = new Map();

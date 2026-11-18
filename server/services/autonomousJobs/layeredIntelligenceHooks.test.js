@@ -30,7 +30,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
 // The provider-type guard in buildTaskInput looks the pinned provider up to
 // reject an api-only (harnessless) provider. Default to a CLI provider so the
 // happy path passes; the dedicated test overrides it to an api provider.
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'cli' }))
 }));
 
@@ -136,7 +136,7 @@ import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcome
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../../lib/workTracker.js';
 import { tryReadFile } from '../../lib/fileUtils.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { getTaskInterval } from '../taskSchedule.js';
 // The REAL validator (its own module, so untouched by the `../layeredIntelligence.js`
 // mock above) — used by the #4166 end-to-end case so the envelope→reason verdict is
@@ -144,7 +144,7 @@ import { getTaskInterval } from '../taskSchedule.js';
 import { validateReasonerResponse as realValidateReasonerResponse } from '../layeredIntelligence/proposal.js';
 // The shared heading both sides of the sentinel pointer use: this hook's prompt
 // names the section, agentPromptBuilder emits it.
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
 
 const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides: {} };
 

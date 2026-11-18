@@ -11,7 +11,7 @@
  * matches DistroKid's option by its text.
  */
 
-import { parseSongStyle } from './musicVideoCreativeContext.js';
+import { parseSongStyle } from './musicVideo/musicVideoCreativeContext.js';
 
 /**
  * The DistroKid answers that stay the same from release to release (the

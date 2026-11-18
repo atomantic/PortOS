@@ -14,10 +14,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { buildFalVideoRequest, coerceFalVideoSeconds, getFalVideoModel } from '../../lib/falVideoModels.js';
 import {
   composeSequenceTakePrompt, defaultSequenceTakeModelId, sequenceTakeModelProblem, sequenceTakeRun, unionSequenceTakeReferences,
-} from '../../lib/musicVideoSequenceTake.js';
-import { SEQUENCE_PROMPT_EXPANSION } from '../../lib/musicVideoSequenceCoverage.js';
-import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideoConditioning.js';
-import { assertShotActionContract } from '../../lib/musicVideoActionContract.js';
+} from '../../lib/musicVideo/musicVideoSequenceTake.js';
+import { SEQUENCE_PROMPT_EXPANSION } from '../../lib/musicVideo/musicVideoSequenceCoverage.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { assertShotActionContract } from '../../lib/musicVideo/musicVideoActionContract.js';
 
 const refuse = (status, code, message, context) => { throw new ServerError(message, { status, code, ...(context ? { context } : {}) }); };
 
@@ -46,7 +46,7 @@ async function gatherReferences(project, members, model) {
  */
 export async function sequenceTake(projectId, { sceneIds, modelId: requestedModelId, resolution: requestedResolution, prompt: override, dryRun = false } = {}) {
   const [{ requireProject }, { musicVideoBriefAllowsVideo }] = await Promise.all([
-    import('./requireProject.js'), import('../../lib/musicVideoMediumPlan.js'),
+    import('./requireProject.js'), import('../../lib/musicVideo/musicVideoMediumPlan.js'),
   ]);
   const project = await requireProject(projectId);
   if (!musicVideoBriefAllowsVideo(project)) {
@@ -101,8 +101,8 @@ export async function sequenceTake(projectId, { sceneIds, modelId: requestedMode
   if (dryRun) return { dryRun: true, ...plan };
 
   const [{ captureTakeDependencies }, { musicVideoAspect }, { enqueueJob }] = await Promise.all([
-    import('../../lib/musicVideoDependencies.js'),
-    import('../../lib/musicVideoAspect.js'), import('../mediaJobQueue/index.js'),
+    import('../../lib/musicVideo/musicVideoDependencies.js'),
+    import('../../lib/musicVideo/musicVideoAspect.js'), import('../mediaJobQueue/index.js'),
   ]);
   members.forEach((scene) => assertShotActionContract(scene));
   const built = build(references.map((ref) => ref.key));

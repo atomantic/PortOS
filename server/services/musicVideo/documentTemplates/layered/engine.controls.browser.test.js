@@ -10,7 +10,7 @@ import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
 // Frozen shipped engine: compare both engines in the same browser, since canvas rasterization differs across OS/Chrome builds.
 const priorEngine = readFileSync(new URL('../../../../routes/fixtures/musicVideoLayeredEngineBeforeTemplateControls.txt', import.meta.url), 'utf8');
-const rig = readFileSync(new URL('./cameraRig.js', import.meta.url), 'utf8');
+const rig = readFileSync(new URL('../../../../lib/musicVideo/cameraRig.js', import.meta.url), 'utf8');
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('layered template controls', { Chrome: chrome, ffmpeg });

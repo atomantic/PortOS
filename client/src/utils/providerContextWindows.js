@@ -3,7 +3,7 @@
  * ladder guess) via `KNOWN_MODEL_CONTEXT_WINDOWS` and `knownModelContextWindow`.
  *
  * The rungs (vendor constants, known-model table, per-provider fallback, catalog read, live-daemon merge) are re-exported from the pure leaf
- * `server/lib/providerContextWindows.js`, the ones the server's `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the client's
+ * `server/lib/provider/providerContextWindows.js`, the ones the server's `effectiveContextWindow` budgets with. `resolveModelContextWindow` is the client's
  * own walk because the UI also needs the SOURCE; it and `isLikelyLargeContextProvider` can drift from their server twins in `stageRunner.js`, so keep them together.
  *
  * The Ollama `num_ctx` ceiling is shared with the server's dispatch gate so the meter cannot promise a window a run would be refused for (#7466). Its
@@ -21,7 +21,7 @@ import {
   catalogModelContextWindow,
   knownModelContextWindow,
   knownProviderContextWindow,
-} from '../../../server/lib/providerContextWindows.js';
+} from '../../../server/lib/provider/providerContextWindows.js';
 // The Ollama `num_ctx` ceiling, resolved as the server's budgeter and pre-dispatch gate do (#7466), via the toolkit's dependency-free `internal/` leaf.
 import { clampToRuntimeContextWindow } from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 
@@ -41,7 +41,7 @@ export {
   catalogModelContextWindow,
   // Folds a daemon's live `/v1/models` windows onto the catalog rung exactly as the server's budgeter does, so the card can't rank the observation differently.
   mergeObservedContextWindows,
-} from '../../../server/lib/providerContextWindows.js';
+} from '../../../server/lib/provider/providerContextWindows.js';
 
 export const isLikelyLargeContextProvider = (provider) => {
   if (isProcessProvider(provider)) return true;

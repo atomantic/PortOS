@@ -27,7 +27,7 @@ vi.mock('./modelProvisioners.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, getVoiceProvisioner: vi.fn() };
 });
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 
@@ -35,7 +35,7 @@ import { existsSync } from 'fs';
 const { whichFirst } = await import('../../lib/processEnv.js');
 const { execPm2 } = await import('../pm2.js');
 const { execFile } = await import('../../lib/childProcess.js');
-const { getProviderById } = await import('../providers.js');
+const { getProviderById } = await import('../provider/providers.js');
 const { VOICE_DEFAULTS } = await import('./config.js');
 const { getVoiceProvisioner } = await import('./modelProvisioners.js');
 const { reconcile, ensureToolCapableModel, preloadModel } = await import('./bootstrap.js');

@@ -16,12 +16,11 @@
  */
 
 import { query } from '../../lib/db.js';
-import { resolveRefs } from '../catalogRefResolver.js';
+import { resolveRefs } from '../catalog/catalogRefResolver.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable, assertCatalogRelationRemovable } from './identityAccess.js';
-import { rowToRef, rowToSource, rowToIngredient } from './shared.js';
-import { catalogReferenceRole } from '../../lib/catalogTypes.js';
+import { announceAssetsChanged, rowToRef, rowToSource, rowToIngredient } from './shared.js';
+import { catalogReferenceRole } from '../../lib/catalog/catalogTypes.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { catalogEvents } from '../catalogEvents.js';
 
 // Canonical detail views omit local-merge originals; original-ID user exports
 // retain those raw rows alongside the bilateral receipt-backed evidence.
@@ -110,7 +109,7 @@ export async function linkIngredientToRef(ingredientId, refKind, refId, role, { 
   );
   // Joining a universe or a story in one can place the record's images in a
   // universe collection (catalogUniverseFiling.js).
-  catalogEvents.emit('assets-changed', { ingredientId });
+  announceAssetsChanged(ingredientId, client);
 }
 
 // Catalog ingredient `type` → series ref role (#1761). Anything outside this

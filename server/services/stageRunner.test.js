@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
@@ -27,11 +27,11 @@ vi.mock('./runner.js', () => ({
   patchRunMetadata: vi.fn(async () => undefined),
 }));
 
-const providers = await import('./providers.js');
+const providers = await import('./provider/providers.js');
 const prompts = await import('./promptService.js');
 const runner = await import('./runner.js');
 const probeCache = await import('../lib/openAiModelsProbeCache.js');
-const { buildEffortArgs } = await import('../lib/providerModels.js');
+const { buildEffortArgs } = await import('../lib/provider/providerModels.js');
 const { CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 const {
   runStagedLLM,
@@ -45,9 +45,9 @@ const {
   resolveEffortHint,
   effectiveStage,
 } = await import('./stageRunner.js');
-const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } = await import('./promptRunner.js');
+const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY } = await import('../lib/localLlmConcurrency.js');
 const { withStagePinsIgnored, stagePinsIgnored } = await import('../lib/stagePinPolicy.js');
-const { CODEX_CONTEXT_WINDOW, DEFAULT_LARGE_CONTEXT_WINDOW } = await import('../lib/providerContextWindows.js');
+const { CODEX_CONTEXT_WINDOW, DEFAULT_LARGE_CONTEXT_WINDOW } = await import('../lib/provider/providerContextWindows.js');
 // The pre-dispatch gate itself, imported from the toolkit leaf rather than its
 // `fs`/`child_process`-reaching barrel: the contract test below asserts the
 // budgeter and the gate agree, so it has to ask the real gate.

@@ -18,7 +18,7 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../services/agents.js', () => ({
+vi.mock('../services/agent/agents.js', () => ({
   getRunningAgents: vi.fn(async () => []), getProcessInfo: vi.fn(async (pid) => ({ pid })), killProcess: effects.killProcess,
 }));
 

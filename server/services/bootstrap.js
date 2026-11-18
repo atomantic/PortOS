@@ -46,7 +46,7 @@ import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { createEventLoopLagProbe } from '../lib/eventLoopLagProbe.js';
 import { quiesce as quiesceScheduledEvents, drain as drainScheduledEvents } from './eventScheduler.js';
-import { setUserCatalogTypes } from '../lib/catalogTypes.js';
+import { setUserCatalogTypes } from '../lib/catalog/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
 
 import {
@@ -64,11 +64,11 @@ import {
 
 import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
-import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
+import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
-import { setAIToolkit as setProvidersToolkit } from './providers.js';
-import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
+import { setAIToolkit as setProvidersToolkit } from './provider/providers.js';
+import { setAIToolkit as setProviderStatusToolkit } from './provider/providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed, serializeRunDeletion } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
@@ -80,14 +80,14 @@ import { initTaskLearning } from './taskLearning.js';
 import { initSpawner } from './subAgentSpawner.js';
 import { initCertRenewer } from './certRenewer.js';
 
-import * as cos from './cos.js';
-import { markCosAgentMigrationsSettled } from './cosState.js';
+import * as cos from './cos/cos.js';
+import { markCosAgentMigrationsSettled } from './cos/cosState.js';
 // Side-effect-free shared state module — importing it here does NOT pull in the
 // agent-lifecycle orchestrator graph (that's why activeAgents lives in its own
 // leaf module), so the shutdown handler can read the live agent set cheaply.
-import { activeAgents, dispatchingAgentIds } from './agentState.js';
+import { activeAgents, dispatchingAgentIds } from './agent/agentState.js';
 import * as automationScheduler from './automationScheduler.js';
-import * as agentActionExecutor from './agentActionExecutor.js';
+import * as agentActionExecutor from './agent/agentActionExecutor.js';
 import * as telegram from './telegram.js';
 import * as telegramBridge from './telegramBridge.js';
 import { getSettings as getInitSettings } from './settings.js';
@@ -112,7 +112,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
-import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './providerGraph.js';
+import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './provider/providerGraph.js';
 import { reportRetiredModelPins } from './modelPinAuditNotifier.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
@@ -154,8 +154,8 @@ import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
-import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
-import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalogUniverseFiling.js';
+import { initCatalogImageAttachHook } from './catalog/catalogImageAttachHook.js';
+import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalog/catalogUniverseFiling.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';
@@ -193,9 +193,9 @@ import { backfillProjectCommissionIds } from './creativeCommissions/projectContr
 import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.js';
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
-import { prerequisitesMetForRouting } from './providerPrerequisites.js';
-import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
-import { initFallbackChain } from './providerFallbackChain.js';
+import { prerequisitesMetForRouting } from './provider/providerPrerequisites.js';
+import { peekFallbackChain } from '../lib/provider/providerFallbackChainCache.js';
+import { initFallbackChain } from './provider/providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';
@@ -460,7 +460,7 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   // Keep the opt-in agent API key file current (Settings > Security). A no-op
   // beyond one settings read while the key is off. Disabled under smoke boot
   // with the rest of this function, so a smoke run never writes to $HOME.
-  import('./agentKey.js')
+  import('./agent/agentKey.js')
     .then(({ initAgentKey }) => initAgentKey({ httpsEnabled, port }))
     .catch((err) => logBootstrapFailure('❌ Agent API key init failed', err));
 

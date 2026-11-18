@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./settings.js', () => ({ getSettings: mocks.getSettings, updateSettings: mocks.updateSettings }));
-vi.mock('./providers.js', async () => ({
+vi.mock('./provider/providers.js', async () => ({
   getSelectableProviders: mocks.getSelectableProviders,
   getProviderById: mocks.getProviderById,
   setActiveProvider: mocks.setActiveProvider,
@@ -63,7 +63,7 @@ vi.mock('./taskSchedule.js', () => ({
 }));
 vi.mock('./loops.js', () => ({ getLoops: mocks.getLoops, updateLoop: mocks.updateLoop }));
 vi.mock('./featureAgents.js', () => ({ getAllFeatureAgents: mocks.getAllFeatureAgents, updateFeatureAgent: mocks.updateFeatureAgent }));
-vi.mock('./agentPersonalities.js', () => ({
+vi.mock('./agent/agentPersonalities.js', () => ({
   getAllAgents: mocks.getAllAgents,
   getAgentById: mocks.getAgentById,
   updateAgent: mocks.updateAgent,

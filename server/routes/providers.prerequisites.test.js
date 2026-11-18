@@ -5,7 +5,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // The probe is the host's PATH; stub it so this suite asserts the PAYLOAD shape
 // rather than which CLIs happen to be installed on the machine running it.
-vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
+vi.mock('../services/provider/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
   peekProviderRuntimeStatuses: vi.fn(() => ({
     codex: { id: 'codex', label: 'Codex CLI', installed: false },
@@ -13,7 +13,7 @@ vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
   })),
 }));
 
-const { peekProviderRuntimeStatuses } = await import('../services/providerRuntimeInstaller.js');
+const { peekProviderRuntimeStatuses } = await import('../services/provider/providerRuntimeInstaller.js');
 const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const CODEX = { id: 'codex', name: 'Codex CLI', type: 'cli', command: 'codex', envVars: {} };

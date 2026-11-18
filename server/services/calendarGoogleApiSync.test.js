@@ -17,8 +17,9 @@ vi.mock('./calendarAccounts.js', () => ({
   mergeDiscoveredSubcalendars: vi.fn((existing, discovered) => discovered),
 }));
 
-vi.mock('./calendarGoogleSync.js', () => ({
-  pushSyncEvents: vi.fn(async () => ({ newEvents: 1, updated: 0, pruned: 0, total: 1 })),
+vi.mock('./calendarGoogleSync.js', async importOriginal => ({
+  ...await importOriginal(),
+  pushSyncEvents: vi.fn(async () => ({ newEvents: 1, updated: 0, pruned: 0, total: 1, status: 'success' })),
   getSyncDateRange: vi.fn(() => ({ pastDate: new Date('2026-03-01T00:00:00Z'), futureDate: new Date('2026-04-01T00:00:00Z') })),
 }));
 
@@ -71,7 +72,7 @@ describe('apiSyncAccount conference-metadata projection (#6289)', () => {
     vi.clearAllMocks();
     getAccount.mockResolvedValue(account());
     getAuthenticatedClient.mockResolvedValue({});
-    pushSyncEvents.mockResolvedValue({ newEvents: 1, updated: 0, pruned: 0, total: 1 });
+    pushSyncEvents.mockResolvedValue({ newEvents: 1, updated: 0, pruned: 0, total: 1, status: 'success' });
   });
 
   it('carries the video entry point and hangoutLink through to the cache write', async () => {

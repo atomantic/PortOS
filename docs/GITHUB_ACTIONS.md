@@ -100,7 +100,7 @@ its caller's `with:` inputs, so they assert the steps GitHub runs. Its reads are
 anchored at `import.meta.url`, which makes `ci.yml` and `.github/actions/` test
 memo inputs for every test that uses it. actionlint validates each caller's
 inputs against the action's metadata while it lints `ci.yml`;
-`scripts/github-actions-pinned.test.js` applies the SHA-pin contract to the
+`scripts/github-actions-pinned.guard.test.js` applies the SHA-pin contract to the
 action files, and any change under `.github/actions/` makes the impact plan
 full, Windows included.
 
@@ -189,12 +189,25 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
-Tree-scanning guards need no registration: the planner derives them from the
-tracked tests with the detectors in `scripts/lib/guardScanners.js` and adds them
-to every plan (client scanners ride any `client/src` js/jsx change).
-`EXPLICIT_ALWAYS_RUN_TESTS` lists only guards the detector cannot see, and
-`TREE_GUARDS_SELECTED_ELSEWHERE` the few scanners another selector already
-reaches. `scripts/repo-scan-guards.test.js` pins the derivation.
+**A tree guard registers by its filename.** The planner selects every tracked
+`*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
+read): a guard outside `client/src` joins every plan, and a client guard rides
+any `client/src` js/jsx change. The test memo never skips one. So a test that
+scans the tracked tree is named `<name>.guard.test.js`, and a suite that mixes
+one scan with behavioural tests keeps the scan in a sibling guard file, so the
+behavioural tests go back to import-graph selection instead of riding every
+push. `EXPLICIT_ALWAYS_RUN_TESTS` lists only the always-run tests whose file is
+not named as a guard (doc parity, route policy, import cycles, the
+prompt-upgrade contract).
+
+The content detectors in `scripts/lib/guardScanners.js` (git enumeration, the
+shared source walkers, `readdirSync` with `recursive: true`, a hand-rolled
+recursive directory walker, an unnamed cross-root read) select nothing. They
+are a one-way check in `scripts/repo-scan-guards.guard.test.js`: a test they
+recognise as a scanner fails unless it carries the suffix or is listed in that
+file's `SCANNERS_WITHOUT_SUFFIX` with the reason (another selector reaches it,
+or its walk reads a temporary directory). A scanner the detectors cannot see
+(one that scans through an imported helper) is still selected by its name.
 
 Because they run on every PR, each always-run guard has a per-file time budget
 (`CI_GUARD_BUDGET_MS`, 6s, in `scripts/lib/guardBudget.js`; calibrated to the
@@ -212,12 +225,12 @@ carry contract suites that exercise the real bundled renderer in
 `lib/slashdo` (see AGENTS.md "Slashdo Commands"). A git diff reports only the
 gitlink pointer at that path, never the files inside it, so the planner can't
 detect a relevant change the way it does an ordinary source edit.
-`needsSlashdoSubmodule()` in `ci-test-plan.js` sets the `slashdo` output
+`needsSlashdoSubmodule()` in `ci-test-plan.js` sets the `slashdo` plan key
 whenever the plan is full, the gitlink itself changed, or either contract
 suite (or the loader/adapter source it exercises) is selected. The `server`
 job's "Initialize slashdo submodule" step runs `git submodule update --init
-lib/slashdo` only when that output is true, so an unrelated scoped PR pays
-nothing for the fetch. When the output is true, the two contract suites fail
+lib/slashdo` only when that key is true, so an unrelated scoped PR pays
+nothing for the fetch. When the key is true, the two contract suites fail
 the job instead of silently skipping if the submodule still isn't there
 (`CI_EXPECT_SLASHDO_SUBMODULE`); outside that signal — a local checkout, or a
 CI run that never needed it — they keep the documented skip.
@@ -348,7 +361,7 @@ than written side by side:
 
 **The ordering is the point, not the values.** An inner bound that reaches the
 budget enclosing it can never report its own failure: the test dies first with a
-bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.test.js` fails CI on an inline
+bare "test timed out" naming nothing it was waiting on. `client/src/test/timeouts.guard.test.js` fails CI on an inline
 `waitFor`/`findBy*` bound at or above the per-test budget — recognised by the
 option object's keys, so `{ timeout, interval }` counts and a fixture record
 that merely holds a `timeout` field does not. It asserts the EFFECTIVE runtime
@@ -581,7 +594,7 @@ The selected work is split across parallel jobs:
   that every prompt body ever shipped is current or retired in
   `data.reference/prompts/shipped-hashes.json`.
   On a pull request it runs only when the impact planner's `prompt_history`
-  output is true: the diff touches `scripts/migrations/`,
+  plan key is true: the diff touches `scripts/migrations/`,
   `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
   prompt-hash regenerator, `ci.yml`, or any module the guard statically
   imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
@@ -590,7 +603,7 @@ The selected work is split across parallel jobs:
   it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
-  the `linux_containment` output is true: the diff touches the static import
+  the `linux_containment` plan key is true: the diff touches the static import
   closure of those tests and the server Vitest harness, `server/package.json`,
   `server/package-lock.json` or `ci.yml`. The closure is recomputed from the
   head tree on every run, so a new dependency is gated without a list edit.
@@ -604,7 +617,7 @@ The selected work is split across parallel jobs:
   validate phase, registry-only egress in the install phase, kill-and-remove on
   timeout, and lifecycle writes kept out of the host worktree. It is part of
   `CI Gate`. On a pull request it runs only when the
-  `docker_containment_live` output is true: the diff touches the static import
+  `docker_containment_live` plan key is true: the diff touches the static import
   closure of the live suite and the server Vitest harness,
   `server/package.json`, `server/package-lock.json` or `ci.yml`
   (`DOCKER_CONTAINMENT_LIVE_ENTRIES`, `DOCKER_CONTAINMENT_LIVE_PATH_RE`).
@@ -613,7 +626,7 @@ The selected work is split across parallel jobs:
   it as CI-only. CI has no macOS Docker, so Docker Desktop is verified manually.
 - **macOS native release-agent supervision** — runs the launchd-coalition
   release-agent suites on `macos-latest`. It is part of `CI Gate` and runs on a
-  pull request only when the `macos_native` output is true; see
+  pull request only when the `macos_native` plan key is true; see
   "macOS native release-agent supervision" below.
 - **SuperCollider native containment** — builds `docker/supercollider/`, runs
   `npm run setup:supercollider` twice and executes the opt-in live suite
@@ -621,7 +634,7 @@ The selected work is split across parallel jobs:
   native amd64 and arm64 runners. It is the only run of the container boundary
   for untrusted generated `sclang` source, and it is part of `CI Gate`: a red
   run blocks the merge, a skipped one passes. On a pull request it runs only
-  when the `supercollider_live` output is true: the diff touches the static
+  when the `supercollider_live` plan key is true: the diff touches the static
   import closure of the live test, `scripts/setup-supercollider.js` and the
   server Vitest harness (so the spawn, kill and child-environment helpers it
   depends on select it), `docker/supercollider/`, a `package.json` or
@@ -776,7 +789,7 @@ checks and also runs in the Windows contract set.
 
 macOS runners are the scarcest hosted capacity, so the job is gated by an
 explicit path list (`MACOS_NATIVE_PATH_RE`), not an application import closure. On a pull request the
-`macos_native` output is true only when the diff touches
+`macos_native` plan key is true only when the diff touches
 `server/lib/windowsAgentProcess*.js`, `server/lib/darwinAgentSupervisor.py`,
 the server Vitest harness
 (`server/vitest.config.js`, `server/vitest.setup.js`,
@@ -1065,6 +1078,8 @@ successor run".
 
 ### Impact-planner safety rules
 
+- Jobs read decisions as `fromJSON(needs.impact.outputs.plan).<key>`
+  (`githubPlanOutput()`); only `*_shards` and `db_image` are separate outputs.
 - A directory feature such as `server/services/sprites/` additively selects
   tests carrying the same feature segment across server and client. The feature
   name never identifies all consumers (a nested leaf can be imported by a
@@ -1077,10 +1092,11 @@ successor run".
 - Barrel/catalog guards are added when reusable `lib`, `hooks`, or `utils`
   directories change, and catalog-only barrels are excluded from import-graph
   expansion. JSX changes include the global accessibility convention guard.
-- Any server source change adds the tree-scanning guards
-  (`server/lib/apiRouteGraph.test.js`, `server/lib/apiRouteParity.test.js`,
-  `scripts/generate-prompt-stage-call-sites.test.js`): they read the tree
+- Any server source change adds `server/lib/apiRouteParity.test.js` and
+  `scripts/generate-prompt-stage-call-sites.test.js`: they read the tree
   rather than importing what they scan, so no import edge reaches them (#5898).
+  The route-graph guard, `server/lib/apiRouteGraph.guard.test.js`, rides every
+  plan by its name.
 - A change to `server/scripts/init-db.sql` or `init-db.base.sql` adds
   `server/lib/db.ddlParity.test.js`, which fails when the generated file is
   stale (#16092).
@@ -1144,7 +1160,7 @@ action clears it (the review ledger that recorded this was retired in #16425).
 The fix path is a digest bump: weekly `docker-compose` (`/`) and `docker`
 (`/docker/*`) Dependabot entries propose newer pins. The pgvector digest lives only
 in `docker-compose.yml`; `dbImage.js` and the `ci.yml` DB service derive it, and
-`scripts/dbImageDigestPin.test.js` rejects a second copy. Do not move the Debian
+`scripts/dbImageDigestPin.guard.test.js` rejects a second copy. Do not move the Debian
 snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
@@ -1257,7 +1273,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`import-case`, `plan`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or

@@ -8,7 +8,7 @@ Harness  ×  Method  ×  Service  ×  Model  ×  Effort
 
 | Axis | What it is | Where it lives |
 |---|---|---|
-| **Harness** | The program that drives a model: Claude Code, OpenCode, Codex, Antigravity, Cursor, Grok, Kimi, Pi, … and `direct` — PortOS's own HTTP runner. | `PROVIDER_HARNESSES` (`server/lib/providerHarnesses.js`); per-install enablement in `settings.harnesses` |
+| **Harness** | The program that drives a model: Claude Code, OpenCode, Codex, Antigravity, Cursor, Grok, Kimi, Pi, … and `direct` — PortOS's own HTTP runner. | `PROVIDER_HARNESSES` (`server/lib/provider/providerHarnesses.js`); per-install enablement in `settings.harnesses` |
 | **Method** | How the harness is driven: `cli` (headless), `tui` (a PTY the agent runner attaches to), or `api` (the `direct` harness's only method). | Declared per harness (`modes`) |
 | **Service** | The backend a harness is pointed at — a hosted API you hold a key for, a local runtime daemon, a subscription the harness signs into, or a fleet peer's gateway. An **instance** is a definition plus the **plan** you declared (`free` / `paid` / `subscription` / `local`), a credential, and the model catalog it last listed. | Definitions in `server/lib/serviceDefinitions.js`; instances are `ai_connections` rows (`docs/STORAGE.md`) |
 | **Model** | One entry of the service's catalog, narrowed by its plan. | The instance's `catalog` |

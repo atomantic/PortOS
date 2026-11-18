@@ -157,18 +157,18 @@ vi.mock('./config.js', () => ({
 // agentState.js. Default to empty so tests that don't care can ignore it.
 const cosStateRef = { value: { agents: {} } };
 const tasksRef = { value: [] };
-vi.mock('../cosState.js', () => ({
+vi.mock('../cos/cosState.js', () => ({
   loadState: vi.fn(async () => cosStateRef.value),
 }));
-vi.mock('../agentState.js', () => ({
+vi.mock('../agent/agentState.js', () => ({
   isTruthyMeta: (v) => v === true || v === 'true',
 }));
-vi.mock('../cosTaskStore.js', () => ({
+vi.mock('../cos/cosTaskStore.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
   reviveBlockedTask: vi.fn(async () => ({})),
   getAllTasks: vi.fn(async () => ({ user: { tasks: tasksRef.value }, cos: { tasks: [] } })),
 }));
-vi.mock('../cos.js', () => ({
+vi.mock('../cos/cos.js', () => ({
   isRunning: vi.fn(() => true),
 }));
 // dispatch_code_agent fuzzy-resolves the optional `app` parameter against the
@@ -191,7 +191,7 @@ vi.mock('../appProcessStatus.js', () => ({
 }));
 const catalogItemsRef = { value: [] };
 const catalogRefsRef = { value: [] };
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   listIngredients: vi.fn(async () => ({ items: catalogItemsRef.value, nextOffset: catalogItemsRef.value.length })),
   listRefsForIngredient: vi.fn(async () => catalogRefsRef.value),
 }));
@@ -199,7 +199,7 @@ vi.mock('../catalogDB.js', () => ({
 // Default the active provider to a code-capable (tui) one so the inherit path
 // is exercised; individual tests override for the API-default / substitution
 // / no-CLI-provider cases.
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'claude-code', type: 'tui', enabled: true })),
   getAllProviders: vi.fn(async () => ({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] })),
   // Default: a pinned provider isn't in the test registry → resolves to null,
@@ -209,9 +209,9 @@ vi.mock('../providers.js', () => ({
 
 const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = await import('./tools.js');
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
-const { addTask: mockedAddTask } = await import('../cosTaskStore.js');
-const { isRunning: mockedIsRunning } = await import('../cos.js');
-const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
+const { addTask: mockedAddTask } = await import('../cos/cosTaskStore.js');
+const { isRunning: mockedIsRunning } = await import('../cos/cos.js');
+const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../provider/providers.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {
@@ -225,7 +225,7 @@ describe('getToolSpecs', () => {
   });
 
   it('catalog_lookup advertises user-defined catalog types in its type enum', async () => {
-    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    const { setUserCatalogTypes } = await import('../../lib/catalog/catalogTypes.js');
     try {
       setUserCatalogTypes([{ id: 'faction', label: 'Faction', primaryContentKey: 'creed', fields: [] }]);
       const lookup = getToolSpecs().find((s) => s.function.name === 'catalog_lookup');
@@ -238,7 +238,7 @@ describe('getToolSpecs', () => {
   });
 
   it('intent gating surfaces catalog_lookup for an utterance naming a user-defined type', async () => {
-    const { setUserCatalogTypes } = await import('../../lib/catalogTypes.js');
+    const { setUserCatalogTypes } = await import('../../lib/catalog/catalogTypes.js');
     try {
       // Before the type exists, "search my wardrobes" must NOT trip the catalog
       // group (proves the static regex doesn't already cover the word).

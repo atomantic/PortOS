@@ -25,8 +25,8 @@
  * from the standalone autofixer.
  */
 
-import { isCliProvider, isTuiProvider } from './providerTypes.js';
-import { argvHasFlag, commandBasename, hasModelFlag } from './providerModels.js';
+import { isCliProvider, isTuiProvider } from './provider/providerTypes.js';
+import { argvHasFlag, commandBasename, hasModelFlag } from './provider/providerModels.js';
 
 const NOOP_CLEANUP = () => {};
 

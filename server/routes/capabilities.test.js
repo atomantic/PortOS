@@ -5,19 +5,19 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // Stub every integration the aggregator reads. Defaults describe a fully
 // configured, healthy install; individual tests override a single source.
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => ({ activeProvider: 'p1', providers: [{ id: 'p1', enabled: true }] })),
   getProviderById: vi.fn(async () => ({ id: 'lmstudio', endpoint: 'http://x/v1', enabled: true })),
 }));
-vi.mock('../services/providerStatus.js', () => ({
+vi.mock('../services/provider/providerStatus.js', () => ({
   getAllProviderStatuses: vi.fn(() => ({ providers: {} })),
 }));
-vi.mock('../services/providerPrerequisites.js', () => ({
+vi.mock('../services/provider/providerPrerequisites.js', () => ({
   getProviderPrerequisiteReadinessMap: vi.fn(async () => ({
     p1: { status: 'ready', reasonCodes: [] },
   })),
 }));
-vi.mock('../services/providerReadiness.js', () => ({
+vi.mock('../services/provider/providerReadiness.js', () => ({
   getProviderReadinessMap: vi.fn(async () => ({})),
 }));
 vi.mock('../services/calendarAccounts.js', () => ({
@@ -29,7 +29,7 @@ vi.mock('../services/messageAccounts.js', () => ({
 vi.mock('../services/memoryBackend.js', () => ({
   countMemories: vi.fn(async () => 7),
 }));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   getConfig: vi.fn(async () => ({ embeddingProviderId: 'lmstudio' })),
 }));
 vi.mock('../services/voice/config.js', () => ({
@@ -68,9 +68,9 @@ vi.mock('../services/appProcessStatus.js', () => ({
 
 const { countMemories } = await import('../services/memoryBackend.js');
 const { getGenomeSummary } = await import('../services/genome.js');
-const { getAllProviders } = await import('../services/providers.js');
-const { getProviderPrerequisiteReadinessMap } = await import('../services/providerPrerequisites.js');
-const { getProviderReadinessMap } = await import('../services/providerReadiness.js');
+const { getAllProviders } = await import('../services/provider/providers.js');
+const { getProviderPrerequisiteReadinessMap } = await import('../services/provider/providerPrerequisites.js');
+const { getProviderReadinessMap } = await import('../services/provider/providerReadiness.js');
 const { default: capabilitiesRoutes } = await import('./capabilities.js');
 
 const makeApp = () => {

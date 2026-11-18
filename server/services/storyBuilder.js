@@ -46,8 +46,8 @@ import {
 } from '../lib/storyBuilderSteps.js';
 import { hashUpstream, computeStaleSteps, computeSyncDrift } from '../lib/storyBuilderIntegrity.js';
 import { getStoryBuilderStore } from './storyBuilderStore/store.js';
-import { linkIngredientsToSeries, resolveIngredientsByIds } from './catalogDB.js';
-import { getActiveCatalogType, payloadSnippet } from '../lib/catalogTypes.js';
+import { linkIngredientsToSeries, resolveIngredientsByIds } from './catalog/catalogDB.js';
+import { getActiveCatalogType, payloadSnippet } from '../lib/catalog/catalogTypes.js';
 import { createUniverse, deleteUniverse, getUniverse, mergeInfluencesWithLocks, updateUniverse } from './universeBuilder.js';
 import { expandWorldTemplate } from './universeBuilderExpand.js';
 import { extractPreservedFromDraft, mergeExpandIntoDraft } from '../lib/universeExpandMerge.js';

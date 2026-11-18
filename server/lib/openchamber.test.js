@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { isOpenchamberCommand, isOpenchamberModelId, ensureOpenchamberHeadlessArgs } from './openchamber.js';
-import { applyCommandDefaults } from './providerVendors.js';
-import { harnessForProvider, harnessSupportsMode } from './providerHarnesses.js';
+import { applyCommandDefaults } from './provider/providerVendors.js';
+import { harnessForProvider, harnessSupportsMode } from './provider/providerHarnesses.js';
 import { isAllowedCommand } from '../cos-runner/allowedCommands.js';
 
 const HEADLESS = ['session', 'create', '--wait', '--last-assistant', '--quiet'];

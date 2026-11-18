@@ -43,7 +43,7 @@ vi.mock('../services/creative/toolRegistry.js', () => ({
 }));
 vi.mock('../lib/domainAutonomy.js', () => ({ getCreativeAutonomyMode: vi.fn(() => 'dry-run') }));
 vi.mock('../services/domainUsage.js', () => ({ getDomainBudgetStatus: vi.fn(async () => ({ withinBudget: false, exceeded: 'actions' })) }));
-vi.mock('../services/cosState.js', () => ({ loadState: vi.fn(async () => ({ config: {} })) }));
+vi.mock('../services/cos/cosState.js', () => ({ loadState: vi.fn(async () => ({ config: {} })) }));
 
 // Mock the auto-cast service so the route test doesn't pull the real
 // catalogDB/embeddings graph; the route's job here is to validate + dispatch.

@@ -57,7 +57,7 @@ export async function settleOnDemandRequest(claim, { taskId = null, reason = nul
 export async function reconcileOnDemandHandoffs() {
   const snapshot = await loadSchedule();
   if (!Object.values(snapshot.onDemandHandoffs || {}).some(claim => claim.status === 'preparing' && ownerIsGone(claim))) return;
-  const { getAllTasks } = await import('./cosTaskStore.js');
+  const { getAllTasks } = await import('./cos/cosTaskStore.js');
   const { user, cos } = await getAllTasks();
   const tasks = [...(user?.tasks || []), ...(cos?.tasks || [])];
   await updateSchedule(async (schedule) => {

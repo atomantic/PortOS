@@ -5,7 +5,7 @@
  * had no automatic writer — nothing in the server called its incremental
  * updater, so the file only changed when a human opened that page and pressed
  * Refresh. Both surfaces now read agent history directly
- * (`server/services/cosActivityCalendar.js`), so the file is orphaned.
+ * (`server/services/cos/cosActivityCalendar.js`), so the file is orphaned.
  *
  * Safe to delete: every field in it was DERIVED from the agent records in
  * `data/cos/agents/`, which this migration does not touch. Nothing reads the

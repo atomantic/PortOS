@@ -23,7 +23,7 @@ vi.mock('../settings.js', async (importOriginal) => ({
   getSettings: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
 }));
 
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' })),
   getProviderById: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' }))
 }));

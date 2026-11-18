@@ -8,15 +8,15 @@ const client = vi.hoisted(() => ({
   getProfile: vi.fn(), getBalance: vi.fn(), getRateLimitStatus: vi.fn(),
 }));
 vi.mock('../services/platformAccounts.js', () => ({ getAccountWithCredentials: vi.fn(), recordActivity: vi.fn() }));
-vi.mock('../services/agentPersonalities.js', () => ({ getAgentById: vi.fn() }));
-vi.mock('../services/agentActivity.js', () => ({ logActivity: vi.fn() }));
+vi.mock('../services/agent/agentPersonalities.js', () => ({ getAgentById: vi.fn() }));
+vi.mock('../services/agent/agentActivity.js', () => ({ logActivity: vi.fn() }));
 vi.mock('../services/moltworldQueue.js', () => ({
   getQueue: vi.fn(), addAction: vi.fn(), removeAction: vi.fn(), markCompleted: vi.fn(), markFailed: vi.fn(),
 }));
 vi.mock('../integrations/moltworld/index.js', () => ({ createMoltworldClient: vi.fn(() => client) }));
 
 import * as platformAccounts from '../services/platformAccounts.js';
-import * as agentActivity from '../services/agentActivity.js';
+import * as agentActivity from '../services/agent/agentActivity.js';
 import * as moltworldQueue from '../services/moltworldQueue.js';
 import { createMoltworldClient } from '../integrations/moltworld/index.js';
 import moltworldToolsRoutes from './moltworldTools.js';

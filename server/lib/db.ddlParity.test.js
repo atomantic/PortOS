@@ -17,7 +17,8 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
+import { REQUIRED_DB_EXTENSIONS } from './db/extensions.js';
+import { FTS_PAYLOAD_FIELDS } from './catalog/catalogTypes.js';
 import {
   INIT_DB_BASE_PATH, INIT_DB_SQL_PATH, SCHEMA_MODULES_MARKER, generateInitDbSql,
 } from '../../scripts/generate-init-db-sql.js';
@@ -66,6 +67,12 @@ describe('init-db.sql (generated from db/schema)', () => {
 
   it('matches the generator output — run `node scripts/generate-init-db-sql.js` after a schema module change', () => {
     expect(INIT_SQL === generateInitDbSql(), 'server/scripts/init-db.sql is stale').toBe(true);
+  });
+
+  it('requires the same extensions as the hand-written base schema', () => {
+    const declarations = BASE_SQL.matchAll(/^\s*CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"((?:""|[^"])+)"|([\w$]+))/gim);
+    const extensions = Array.from(declarations, ([, quoted, bare]) => quoted?.replaceAll('""', '"') ?? bare.toLowerCase());
+    expect([...REQUIRED_DB_EXTENSIONS].sort()).toEqual(extensions.sort());
   });
 
   // The base file is for what ensureSchema() must not run on every boot. A table

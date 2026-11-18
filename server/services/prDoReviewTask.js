@@ -23,7 +23,7 @@
 
 import { UNTRUSTED_PULL_REQUEST_NOTICE } from '../lib/promptFencing.js';
 import { getSlashdoWorkflow } from '../lib/slashdoCatalog.js';
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 
@@ -79,8 +79,8 @@ export async function spawnPrDoReviewTask({
   selfReview = false, reviewerConfig = null, immediate = true,
   githubAccount = null, notificationAccount = null, notificationOrigin = 'user',
 } = {}) {
-  const { addTask } = await import('./cosTaskStore.js');
-  const { forceSpawnTask } = await import('./cos.js');
+  const { addTask } = await import('./cos/cosTaskStore.js');
+  const { forceSpawnTask } = await import('./cos/cos.js');
   const { number, url } = pullRequest;
   const appLabel = app ? String(app.name || app.id).replace(/\s+/g, ' ').trim() : repoFullName;
   const repoLabel = repoFullName || appLabel;

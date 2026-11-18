@@ -8,13 +8,13 @@
  */
 
 import { callerModeRejection } from '../lib/callerModePolicy.js';
-import { isProcessProvider } from '../lib/providerTypes.js';
+import { isProcessProvider } from '../lib/provider/providerTypes.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
 import { buildRequestCapabilities, resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, isLocalEndpoint, withObservedContextWindowsLazy } from './promptRunner.js';
 import { stripCodeFences } from '../lib/llmText.js';
 import { extractCodexAssistant } from '../lib/codexAssistantExtract.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { buildPrompt, getStage } from './promptService.js';
 import { stagePinsIgnored } from '../lib/stagePinPolicy.js';
 import {
@@ -22,7 +22,7 @@ import {
   knownModelContextWindow,
   knownProviderContextWindow,
   catalogModelContextWindow,
-} from '../lib/providerContextWindows.js';
+} from '../lib/provider/providerContextWindows.js';
 // The Ollama `num_ctx` ceiling, resolved through the same module as the pre-dispatch gate so
 // budgeter and gate agree (#7466). The dependency-free `internal/` leaf, not the toolkit barrel
 // (which reaches `fs`/`child_process`; this module is inside the server suite's import budget).
@@ -140,7 +140,7 @@ const isLikelyLargeContextProvider = (provider) => {
 // Which window this provider/model CLAIMS, before the runtime ceiling: explicit
 // `contextWindow`, then the provider catalog's window, a known model window, a known
 // provider window, `numCtx`, a large frontier default, else null (the budgeter applies a
-// floor). Rungs live in lib/providerContextWindows.js, shared with the browser's meter.
+// floor). Rungs live in lib/provider/providerContextWindows.js, shared with the browser's meter.
 // `numCtx` only DECIDES for a non-Ollama local endpoint; on Ollama the clamp already bounds it.
 function claimedContextWindow(provider, model) {
   if (Number(provider?.contextWindow) > 0) return Number(provider.contextWindow);

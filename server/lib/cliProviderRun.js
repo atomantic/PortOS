@@ -28,9 +28,9 @@ import { killProcessTree, guardChildStdin } from './bufferedSpawn.js';
 import { buildCliChildEnv } from './cliChildEnv.js';
 import { modelPinIsOffered } from './localProviderRuntime.js';
 import { filterCallerModeEligible } from './callerModePolicy.js';
-import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './providerVendors.js';
-import { isPublicReviewNoToolProfile } from './agentExecutionProfiles.js';
-import { resolveCliModel, stripProviderPinArgs } from './providerModels.js';
+import { buildCodeReviewSpawnConfig, buildVendorSpawnConfig, supportsPublicReviewProvider, toolFreeOneShotArgs } from './provider/providerVendors.js';
+import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
+import { resolveCliModel, stripProviderPinArgs } from './provider/providerModels.js';
 import { GROK_STREAMING_JSON_FORMAT, extractGrokFinalMessage, grokReviewFinishReason, grokReviewProgress, grokToolsEscapingNoToolPosture } from './grok.js';
 import { resolveCliSpawn, needsProcessGroup, trackDetachedGroup } from './credentialBootstrap.js';
 
@@ -144,7 +144,7 @@ export function runCliProviderPrompt(args = {}) {
 
   if ((args.executionOptions !== undefined || (Object.keys(provider.executionOptions || {}).length > 0 && !provider.executionOptionAttribution))) {
     const preparationStarted = Date.now();
-    return import('./providerExecutionOptions.js')
+    return import('./provider/providerExecutionOptions.js')
       .then(({ prepareExecutionOptions }) => prepareExecutionOptions(provider, model ?? provider.defaultModel, args.executionOptions, 'run', { cwd, timeoutMs }))
       .then((prepared) => {
         const remaining = timeoutMs - (Date.now() - preparationStarted);

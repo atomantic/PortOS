@@ -18,7 +18,7 @@
  */
 
 import { isPlainObject } from './objects.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 
 export const REPO_INTAKE_KEYS = ['malwareScan', 'learn'];
 

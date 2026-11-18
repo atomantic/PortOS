@@ -1,4 +1,4 @@
-import { notifyProviderQuotaUpdated } from './providerQuotaEvents.js';
+import { notifyProviderQuotaUpdated } from './provider/providerQuotaEvents.js';
 import { spawn } from '../lib/childProcess.js';
 import { existsSync, lstatSync, readlinkSync, readFileSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';

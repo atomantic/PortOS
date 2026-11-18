@@ -81,6 +81,8 @@ async function runScheduledBackup(logReason) {
     console.log(`⏭️ Backup scheduler: ${logReason} backup skipped — a backup is already running`);
     return { skipped: true, reason: 'already running' };
   }
+  // runBackup has already saved the partial snapshot and its degraded status.
+  if (result?.status === 'degraded') throw new Error(result.error || 'Backup completed with degraded status');
 }
 
 /**

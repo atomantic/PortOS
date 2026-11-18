@@ -32,7 +32,7 @@ vi.mock('../lib/huggingfaceModel.js', () => ({
   ADDABLE_IMAGE_RUNNERS: ['flux2', 'z-image', 'ernie', 'hidream', 'qwen'],
 }));
 
-vi.mock('../services/cosTaskStore.js', () => ({ addTask: vi.fn(async () => ({ id: 'task-support', status: 'pending' })) }));
+vi.mock('../services/cos/cosTaskStore.js', () => ({ addTask: vi.fn(async () => ({ id: 'task-support', status: 'pending' })) }));
 
 vi.mock('../services/mediaModelInstall.js', () => ({
   addModelFromHuggingface: vi.fn(async (input) => ({
@@ -164,7 +164,7 @@ describe('DELETE /custom/:id', () => {
 
 describe('catalog availability and support requests', () => {
   it('validates availability and queues explicit implementation work', async () => {
-    const { addTask } = await import('../services/cosTaskStore.js');
+    const { addTask } = await import('../services/cos/cosTaskStore.js');
     const invalid = await request(makeApp()).patch('/api/image-video/models/registry/dev/availability').send({ enabled: 'false' });
     expect(invalid.status).toBe(400);
     const saved = await request(makeApp()).patch('/api/image-video/models/registry/dev/availability').send({ enabled: false });

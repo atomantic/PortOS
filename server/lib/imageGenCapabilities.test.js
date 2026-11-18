@@ -7,7 +7,7 @@ import {
   CODEX_IMAGEGEN_DEFAULT_MODEL,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
 } from './imageGenCapabilities.js';
-import { pickAntigravityRelayModel } from './providerModels.js';
+import { pickAntigravityRelayModel } from './provider/providerModels.js';
 
 // The cheap-tier pins here are code-level defaults: no migration carries them,
 // so nothing forces them to move when a vendor retires a model id, and they

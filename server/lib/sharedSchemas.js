@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from './imageLimits.js';
 import { SERIES_DESIGN_MODES, SERIES_DESIGN_TEXT_MAX, SERIES_DESIGN_FIELDS } from './storyArcLimits.js';
 
 import { RENDER_TARGET_BACKEND_AUTO, RECORD_RENDER_MODEL_MAX } from './renderTargets.js';
@@ -169,3 +170,8 @@ export function storableAutoUpdateConfig(raw) {
   const { minIntervalMs: _derived, ...storable } = resolveAutoUpdateConfig(raw);
   return storable;
 }
+
+export const imageEdgeSchema = z.number().int().min(64).max(MAX_IMAGE_EDGE).optional();
+export const refineImagePixelCap = (d) =>
+  !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
+export const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;

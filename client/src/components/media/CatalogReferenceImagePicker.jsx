@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowLeft, X } from 'lucide-react';
 import { getCatalogIngredientDetails } from '../../services/apiCatalog';
 import { listSheetPointers } from '../../lib/sheetPointers';
-import { isLeftOutOfLikeness, referenceReviewStatus } from '../../../../server/lib/catalogMediaLibrary.js';
+import { isLeftOutOfLikeness, referenceReviewStatus } from '../../../../server/lib/catalog/catalogMediaLibrary.js';
 import MediaImage from '../MediaImage';
 import { safeBasename } from '../catalog/CatalogImagePreview';
 import Modal from '../ui/Modal';

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: vi.fn(),
   getTaskById: vi.fn(),
   updateTask: vi.fn(),
@@ -11,7 +11,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
   updateSchedule: vi.fn(async mutate => (await mutate(schedule.value)).result),
 }));
 
-const { addTask, getTaskById, updateTask } = await import('./cosTaskStore.js');
+const { addTask, getTaskById, updateTask } = await import('./cos/cosTaskStore.js');
 const {
   PREFLIGHT_CARD_STALE_MS,
   finishPreflightCard,
@@ -59,7 +59,7 @@ describe('preflightTaskCard', () => {
     // The rest of this suite mocks the store, which is exactly why that was
     // invisible here; this test runs the real stored form.
     const { isInternalTaskId } = await import('../lib/taskParser.js');
-    const { storedForm } = await import('../lib/cosTaskRows.js');
+    const { storedForm } = await import('../lib/cos/cosTaskRows.js');
     await startPreflightCard({ requestId: 'demand-1', taskType: 'pr-reviewer', appId: 'portos', appName: 'PortOS', targetPullRequest: 42 });
     const [card] = addTask.mock.calls[0];
     const reparsed = storedForm(card, 'internal');

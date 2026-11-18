@@ -3,7 +3,7 @@
 // `client/src/lib/textUtils.js` re-exports `escapeRegExp` from here, so keep this pure: no Node built-in, nothing outside `server/lib`.
 
 /**
- * The one string-type predicate under `server/` (and the browser bundle via the client mirror); the "no private string predicate or bounder" guard in `textUtils.test.js` fails on a copy (#6837).
+ * The one string-type predicate under `server/` (and the browser bundle via the client mirror); the "no private string predicate or bounder" guard in `textUtils.guard.test.js` fails on a copy (#6837).
  *
  * @param {unknown} v
  * @returns {v is string}
@@ -91,7 +91,7 @@ export function clampToCharLimit(text, max) {
 }
 
 /**
- * Escape a string for literal use inside a RegExp. The ONE copy: import it, never re-inline the class (the `no private escapeRegExp` guard in textUtils.test.js fails the build).
+ * Escape a string for literal use inside a RegExp. The ONE copy: import it, never re-inline the class (the `no private escapeRegExp` guard in textUtils.guard.test.js fails the build).
  * Non-string input is coerced, not thrown: callers escape user tokens (LoRA triggers, aliases, catalog labels) where a TypeError would be an opaque 500 instead of a non-match.
  */
 export function escapeRegExp(value) {
@@ -100,7 +100,7 @@ export function escapeRegExp(value) {
 
 /**
  * First non-empty line of a string, trimmed: the CoS task-description headline (`cosTaskStore.addTask` collapses a description to its first line). A dependency-free leaf because the goal-fidelity
- * follow-up needs it for its dedup key and can't import the task store (server/AGENTS.md "Import scoping"); `services/cosTaskStore.js` re-exports it.
+ * follow-up needs it for its dedup key and can't import the task store (server/AGENTS.md "Import scoping"); `services/cos/cosTaskStore.js` re-exports it.
  */
 export const firstLine = (text) => String(text ?? '').split('\n').map(line => line.trim()).find(Boolean) || '';
 

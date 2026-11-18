@@ -17,7 +17,7 @@ import {
   isValidRecurrence,
   BOOT_GRACE_MS,
 } from './eventScheduler.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 
 // Production runs under PM2 with TZ=UTC (ecosystem.config.cjs); pin the same
 // env here. The "UTC cron on a non-UTC host" case below overrides it.

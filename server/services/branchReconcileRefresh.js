@@ -1,10 +1,10 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { getAppById } from './apps.js';
-import { getActiveAgentIds } from './agentState.js';
-import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { getActiveAgentIds } from './agent/agentState.js';
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 import { reconcile, buildActiveOwnerIds, describeIdleReconcilePark } from './branchReconcile.js';
 import { recordBranchReconcileOutcome, getBranchReconcileInventory } from './branchReconcileOutcome.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 
 /** Refresh evidence only: no cleanup, provider dispatch, or delivery recovery. */
 export async function refreshBranchReconcileInventory(appId) {

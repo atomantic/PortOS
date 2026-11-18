@@ -231,11 +231,11 @@ vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
 vi.mock('../memoryBackend.js', async () => ({
   getBackendName: vi.fn(() => 'file'),
 }));
-vi.mock('../catalogDB.js', async () => ({
+vi.mock('../catalog/catalogDB.js', async () => ({
   getCatalogBundleForRef: vi.fn(),
   getLocalIngredientRefOwnership: vi.fn(),
 }));
-vi.mock('../catalogSync.js', async () => ({
+vi.mock('../catalog/catalogSync.js', async () => ({
   applyRemoteChanges: vi.fn(),
 }));
 
@@ -324,8 +324,8 @@ import { peerFetch } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
-import { getCatalogBundleForRef, getLocalIngredientRefOwnership } from '../catalogDB.js';
-import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalogSync.js';
+import { getCatalogBundleForRef, getLocalIngredientRefOwnership } from '../catalog/catalogDB.js';
+import { applyRemoteChanges as applyCatalogRemoteChanges } from '../catalog/catalogSync.js';
 import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 import { contentHashForRecord, getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 

@@ -27,7 +27,7 @@
  */
 
 import { applyPreflightStep, createPreflightState, finalizePreflight, preflightHeadline } from '../lib/preflightPlan.js';
-import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
+import { addTask, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { isUserOriginRequest } from './taskScheduleConstants.js';
 import { isPreflightActive } from './preflightActivity.js';
 import { isTruthyMeta } from '../lib/metadataFlags.js';

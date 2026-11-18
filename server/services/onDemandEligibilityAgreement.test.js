@@ -44,13 +44,13 @@ vi.mock('./instanceFeatures.js', () => ({
   isInstanceFeatureEnabled: vi.fn(async (feature) => world.features[feature] !== false),
 }));
 
-vi.mock('./cosState.js', async () => {
-  const actual = await vi.importActual('./cosState.js');
+vi.mock('./cos/cosState.js', async () => {
+  const actual = await vi.importActual('./cos/cosState.js');
   return { ...actual, loadState: vi.fn(async () => ({ config: { improvementEnabled: world.improvementEnabled } })) };
 });
 
 vi.mock('./autonomousJobs.js', () => ({ getAllJobs: vi.fn(async () => []) }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./userActions.js', () => ({ recordUserAction: vi.fn() }));
 
 const { ON_DEMAND_ORIGINS, triggerOnDemandTask } = await import('./taskSchedule.js');

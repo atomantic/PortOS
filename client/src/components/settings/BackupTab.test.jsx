@@ -407,6 +407,51 @@ describe('BackupTab', () => {
       expect(screen.queryByText(/Restore database\?/i)).toBeNull();
     });
 
+    it.each(['preview', 'confirmation'])('explains preflight unavailability at %s with connectivity guidance without admitting another restore', async (phase) => {
+      withSnapshot();
+      const unavailable = {
+        status: 'failed',
+        reason: 'restore_preflight_unavailable',
+        error: 'Could not complete the restore preflight check (terminating connection due to administrator command). Restore database connectivity and retry preview before restoring. No data was changed.',
+      };
+      if (phase === 'confirmation') {
+        restoreDatabase.mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 });
+      }
+      restoreDatabase.mockResolvedValueOnce(unavailable);
+      await renderTab();
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i }));
+      });
+      if (phase === 'confirmation') {
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: /^Restore$/i }));
+        });
+      }
+
+      expect(toast.error).toHaveBeenCalledWith(
+        'Database restore preflight check could not be completed because the database query failed. Nothing was changed. Restore database connectivity and retry preview before restoring. Details: ' + unavailable.error
+      );
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(restoreDatabase).toHaveBeenCalledTimes(phase === 'preview' ? 1 : 2);
+      expect(screen.queryByText(/Restore database\?/i)).toBeNull();
+    });
+
+    it('shows the retry guidance after a confirmed restore times out draining database work', async () => {
+      withSnapshot();
+      const error = 'Timed out waiting for active database work. Wait for active queries and transactions to finish, then retry.';
+      restoreDatabase
+        .mockResolvedValueOnce({ status: 'ok', sizeBytes: 2048, tableCount: 12 })
+        .mockResolvedValueOnce({ status: 'failed', reason: 'database_restore_busy', error });
+      await renderTab();
+      await act(async () => { fireEvent.click(await screen.findByRole('button', { name: /Restore DB/i })); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Restore$/i })); });
+
+      expect(toast.error).toHaveBeenCalledWith(`The database restore was refused before changing any data. Details: ${error}`);
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(restoreDatabase).toHaveBeenCalledTimes(2);
+    });
+
     it.each(['preview', 'confirmation'])('keeps a lost %s response uncertain and preserves the request explanation', async (phase) => {
       withSnapshot();
       if (phase === 'confirmation') {

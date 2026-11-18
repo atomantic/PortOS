@@ -9,7 +9,7 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * strips ANSI and returns the captured text. Persists a run record under
  * `data/runs/<runId>/` so /runs can replay TUI invocations alongside CLI/API.
  *
- * Distinct from `server/services/agentTuiSpawning.js` — that path wraps
+ * Distinct from `server/services/agent/agentTuiSpawning.js` — that path wraps
  * long-running CoS agents (worktree, /simplify, /do:pr, .agent-done sentinel).
  * This is the synchronous "send prompt, get text back" variant the central
  * promptRunner needs when `provider.type === 'tui'`.
@@ -79,7 +79,7 @@ import {
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createPasteSubmitDriver } from '../lib/tuiPasteSubmitDriver.js';
 import { isCodexCommand } from '../lib/codex.js';
-import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { applyCredentialBootstrap, needsProcessGroup, processGroupKillable } from '../lib/credentialBootstrap.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -187,7 +187,7 @@ async function executeAdmittedTuiRun({ runId, provider, prompt, screenshots = []
   }
 
   if (provider.executionOptions && !provider.executionOptionAttribution) {
-    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'provider', { cwd: workspacePath });
     provider = prepared.provider;
     await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });

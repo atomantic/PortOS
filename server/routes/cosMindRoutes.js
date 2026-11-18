@@ -1,14 +1,14 @@
-import { composeMaintainerInstructions } from '../lib/persistentMindMaintainer.js';
+import { composeMaintainerInstructions } from '../lib/persistent/persistentMindMaintainer.js';
 import mindToolRecipeRoutes from './mindToolRecipeRoutes.js';
-import { persistentMindMemoryProtectionSchema } from '../lib/persistentMindMemory.js';
-import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistentMindThinkingRequests.js';
+import { persistentMindMemoryProtectionSchema } from '../lib/persistent/persistentMindMemory.js';
+import { getPersistentMindThinkingRequestCatalog, cancelPersistentMindThinkingRequest } from '../services/persistent/persistentMindThinkingRequests.js';
 /** Persistent Chief-of-Staff mind conversation and lifecycle routes. */
 
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
-import { PERSISTENT_MIND_LIMITS } from '../lib/persistentMind.js';
+import { PERSISTENT_MIND_LIMITS } from '../lib/persistent/persistentMind.js';
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js';
 import {
   normalizePersistentMindCapabilities,
@@ -16,32 +16,32 @@ import {
   PERSISTENT_MIND_CLEANUP_SCOPES,
   PERSISTENT_MIND_TOOL_BOUNDARIES,
   PERSISTENT_MIND_TOOL_CATALOG,
-} from '../lib/persistentMindCapabilities.js';
+} from '../lib/persistent/persistentMindCapabilities.js';
 import {
   PERSISTENT_MIND_ID,
   PERSISTENT_MIND_TRAJECTORY_LIMITS,
   parsePersistentMindCursor,
-} from '../lib/persistentMindTrajectory.js';
+} from '../lib/persistent/persistentMindTrajectory.js';
 import {
   PERSISTENT_MIND_JOURNAL_KINDS,
   PERSISTENT_MIND_JOURNAL_LIMITS,
   PERSISTENT_MIND_JOURNAL_STATUSES,
   publicPersistentMindJournalEvent,
-} from '../lib/persistentMindJournal.js';
-import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+} from '../lib/persistent/persistentMindJournal.js';
+import { normalizePersistentMindProfile } from '../lib/persistent/persistentMindProfile.js';
 import {
   normalizePersistentMindThinkingPresets,
   persistentMindThinkingPresetSchema,
   persistentMindThinkingSelectionSchema,
-} from '../lib/persistentMindThinkingPresets.js';
-import { normalizePersistentMindPrompt } from '../lib/persistentMindPrompt.js';
-import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistentMindPlaybook.js';
-import { resolvePersistentMindPlaybookPhase } from '../services/persistentMindPlaybookSignals.js';
-import { publicPersistentMindState } from '../lib/persistentMindPublic.js';
-import { publicPersistentMindTurnExecutions } from '../lib/persistentMindTrajectory.js';
+} from '../lib/persistent/persistentMindThinkingPresets.js';
+import { normalizePersistentMindPrompt } from '../lib/persistent/persistentMindPrompt.js';
+import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PERSISTENT_MIND_PLAYBOOK_CATALOG } from '../lib/persistent/persistentMindPlaybook.js';
+import { resolvePersistentMindPlaybookPhase } from '../services/persistent/persistentMindPlaybookSignals.js';
+import { publicPersistentMindState } from '../lib/persistent/persistentMindPublic.js';
+import { publicPersistentMindTurnExecutions } from '../lib/persistent/persistentMindTrajectory.js';
 import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
-import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agentRunEventLog.js';
-import { loadState } from '../services/cosState.js';
+import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agent/agentRunEventLog.js';
+import { loadState } from '../services/cos/cosState.js';
 import {
   appendPersistentMindAnnotation,
   createPersistentMindMemory,
@@ -52,27 +52,27 @@ import {
   readPersistentMindName,
   readPersistentMindRollups,
   updatePersistentMindMemory,
-} from '../services/persistentMindContext.js';
+} from '../services/persistent/persistentMindContext.js';
 import {
   correctPersistentMindJournalEvent,
   readPersistentMindJournal,
-} from '../services/persistentMindJournal.js';
-import { getProviderById } from '../services/providers.js';
-import { persistentMindHarnessInfo } from '../services/persistentMindAdapter.js';
-import { cleanupPersistentMind } from '../services/persistentMindMaintenance.js';
+} from '../services/persistent/persistentMindJournal.js';
+import { getProviderById } from '../services/provider/providers.js';
+import { persistentMindHarnessInfo } from '../services/persistent/persistentMindAdapter.js';
+import { cleanupPersistentMind } from '../services/persistent/persistentMindMaintenance.js';
 import {
   applyPersistentMindBundle,
   exportPersistentMindBundle,
   previewPersistentMindBundle,
-} from '../services/persistentMindBundle.js';
-import { resolvePersistentMindImageCapability } from '../services/persistentMindImageCapability.js';
+} from '../services/persistent/persistentMindBundle.js';
+import { resolvePersistentMindImageCapability } from '../services/persistent/persistentMindImageCapability.js';
 
-import { inspectPersistentMindRuntime } from '../services/persistentMindRuntime.js';
-import { readPersistentMindVisibility } from '../services/persistentMindVisibility.js';
+import { inspectPersistentMindRuntime } from '../services/persistent/persistentMindRuntime.js';
+import { readPersistentMindVisibility } from '../services/persistent/persistentMindVisibility.js';
 import {
   createPersistentMindAttachment,
   deletePersistentMindAttachment,
-} from '../services/persistentMindAttachments.js';
+} from '../services/persistent/persistentMindAttachments.js';
 import {
   enqueuePersistentMindMessage,
   getPersistentMindState,
@@ -82,10 +82,10 @@ import {
   stopPersistentMind,
   wakePersistentMind,
   persistentMindUsageLimitRetryAt,
-} from '../services/persistentMindSupervisor.js';
+} from '../services/persistent/persistentMindSupervisor.js';
 
-import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cosToolRegistry.js';
-import { readPersistentMindManagedApps } from '../services/persistentMindManagedApps.js';
+import { getCosToolCatalog, readCosToolRecipeCatalog } from '../services/cos/cosToolRegistry.js';
+import { readPersistentMindManagedApps } from '../services/persistent/persistentMindManagedApps.js';
 const router = Router();
 router.use('/mind/recipes', mindToolRecipeRoutes);
 
@@ -274,7 +274,7 @@ router.post('/mind/maintainer/watchdog', asyncHandler(async (req, res) => {
 }));
 
 router.get('/mind/maintainer', asyncHandler(async (_req, res) => {
-  const { describePersistentMindMaintainerSetup } = await import('../services/persistentMindMaintainer.js');
+  const { describePersistentMindMaintainerSetup } = await import('../services/persistent/persistentMindMaintainer.js');
   res.json(await describePersistentMindMaintainerSetup());
 }));
 
@@ -358,7 +358,7 @@ router.get('/mind/tools', asyncHandler(async (_req, res) => {
   const [recipes, roster, reportAccess] = await Promise.all([
     readCosToolRecipeCatalog({ scope: 'mind' }),
     managedApps,
-    import('../services/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root })),
+    import('../services/persistent/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root })),
   ]);
   res.json({
     semanticTools: getCosToolCatalog({ scope: 'mind', capabilities, recipes, reportAccess }).tools,

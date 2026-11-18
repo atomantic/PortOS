@@ -4,7 +4,7 @@ import {
   providerCatalogListsModel,
   reconcileModelPins,
 } from './modelPinReconcile.js';
-import { ANTIGRAVITY_CONFIGURED_DEFAULT } from './providerModels.js';
+import { ANTIGRAVITY_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 
 const AGY = {
   id: 'antigravity-cli',

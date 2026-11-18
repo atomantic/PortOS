@@ -19,14 +19,14 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../lib/provider/providerModels.js';
 // The stream parser is shared with the capability test suite: two independent
 // parsers of the same OpenCode envelope is how the two end up reporting
 // different tool-call counts for the same run.
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
-import { getProviderById } from './providers.js';
-import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
+import { getProviderById } from './provider/providers.js';
+import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { getRunsPath } from './runner.js';
 

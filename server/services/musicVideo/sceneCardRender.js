@@ -5,18 +5,18 @@ import { googleShotRequestFields } from '../../lib/googleVideoModels.js';
 // and slot still sends the references the card would.
 
 import { ServerError, failValidation } from '../../lib/errorHandler.js';
-import { musicVideoClipConditioningReferences } from '../../lib/musicVideoConditioning.js';
-import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
-import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
-import { authoredShotPrompt } from '../../lib/musicVideoShotPrompt.js';
-import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
+import { musicVideoClipConditioningReferences } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { preMusicClipSound } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { sceneEndFrameRequestFields } from '../../lib/musicVideo/musicVideoEndFrame.js';
+import { authoredShotPrompt } from '../../lib/musicVideo/musicVideoShotPrompt.js';
+import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
 import {
   falSceneTake, falTakeRequestFields, grokCoverage, isPerformanceScene, ltxReferenceFrames, performanceBlockedReason,
   runwaySceneTake, runwayTakeRequestFields, sceneRenderShot, shotRequestSpanSec,
-} from '../../lib/musicVideoShotTiming.js';
+} from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../../lib/runners.js';
 import { buildSceneFrameGenerateBody } from './sceneFrameReferences.js';
-import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideoRenderTier.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../lib/musicVideo/musicVideoRenderTier.js';
 
 const LTX_REFERENCES_MODE = 'ltxReferences';
 const LTX_IC_MODE = 'ic-ingredients-25';

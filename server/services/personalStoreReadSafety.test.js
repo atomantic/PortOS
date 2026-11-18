@@ -22,9 +22,9 @@ vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC', userLo
 vi.mock('./characterSkills.js', () => ({ getCharacterSkills: async () => [] }));
 vi.mock('./characterMetrics.js', () => ({ getCharacterMetrics: async () => [] }));
 vi.mock('./characterSignals.js', () => ({ createSignalContext: () => () => null }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
 vi.mock('./jira.js', () => ({}));
-vi.mock('./providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: vi.fn() }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ query: async () => ({ rows: [] }), ensureSchema: async () => {} }));
@@ -45,7 +45,7 @@ vi.mock('./settings.js', async () => {
     mortalloom: { enabled: false, path: join(lazyTempDataRoot('portos-personal-read-safety-'), 'mortal-source.json') },
   }) };
 });
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgents: async () => [] }));
 vi.mock('./digital-twin-meta.js', () => ({ loadMeta: async () => ({}), saveMeta: vi.fn(), withMetaLock: (fn) => fn(), digitalTwinEvents: { emit: vi.fn() } }));
 vi.mock('./taste-questionnaire.js', () => ({ applyTasteProfileMerge: vi.fn() }));
 

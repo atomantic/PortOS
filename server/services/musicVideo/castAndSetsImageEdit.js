@@ -1,11 +1,11 @@
 /** A preview edits one saved image; only an explicit accept replaces the stage image. */
 import { CAST_SETS_MAX_KEY_NOTES, CAST_SETS_MAX_IMAGE_HISTORY } from './castAndSets.js';
 import { randomUUID } from 'node:crypto';
-import { buildCastSetsImageEditPrompt } from '../../lib/musicVideoCastSetsImageEdit.js';
+import { buildCastSetsImageEditPrompt } from '../../lib/musicVideo/musicVideoCastSetsImageEdit.js';
 import { isEditCapableMode, maxInputImages } from '../../lib/imageGenCapabilities.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
-import { castSetsInspectionInputs, sameCastSetsInspectionInputs } from '../../lib/musicVideoCastSetsInspection.js';
+import { castSetsInspectionInputs, sameCastSetsInspectionInputs } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { findProductionRun, reserveProductionStep, settleProductionStep } from './production.js';

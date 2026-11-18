@@ -3,10 +3,10 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 const store = vi.hoisted(() => ({ get: vi.fn(), sources: vi.fn(), relations: vi.fn(), revisions: vi.fn(), media: vi.fn(), missing: vi.fn(), siblings: vi.fn(), context: vi.fn(), cover: vi.fn() }));
-vi.mock('../services/catalogDB.js', () => ({ getIngredient: store.get, listSourcesForIngredient: store.sources, listRelationsForIngredient: store.relations,
+vi.mock('../services/catalog/catalogDB.js', () => ({ getIngredient: store.get, listSourcesForIngredient: store.sources, listRelationsForIngredient: store.relations,
   listIngredientRevisions: store.revisions, listMediaForIngredient: store.media, getMissingMediaForIngredient: store.missing, listSiblingIngredientsBySource: store.siblings, getIngredientMediaCover: store.cover }));
-vi.mock('../services/catalogSync.js', () => ({}));
-vi.mock('../services/catalogPrimitives.js', () => ({ getPrimitiveContext: store.context, setPrimitiveOwner: vi.fn(), forkPrimitive: vi.fn() }));
+vi.mock('../services/catalog/catalogSync.js', () => ({}));
+vi.mock('../services/catalog/catalogPrimitives.js', () => ({ getPrimitiveContext: store.context, setPrimitiveOwner: vi.fn(), forkPrimitive: vi.fn() }));
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ getCatalogIdentityAccess: async () => null }));
 import router from './catalog.js';
 const app = express();

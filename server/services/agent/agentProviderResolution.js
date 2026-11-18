@@ -1,0 +1,391 @@
+import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../../lib/forgeMaintenanceTasks.js';
+import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { isCompositeProviderId } from '../../lib/provider/providerRef.js';
+import { peekFallbackChain } from '../../lib/provider/providerFallbackChainCache.js';
+import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../../lib/privateSecurityPolicy.js';
+import { supportsPublicReviewProvider } from '../../lib/provider/providerVendors.js';
+/**
+ * Agent Provider Resolution
+ *
+ * Resolves which AI provider + model an agent task should run on. Extracted
+ * from `spawnAgentForTask` in agentLifecycle.js to keep that orchestrator
+ * readable — this owns the availability check, fallback selection, the
+ * user-specified provider override, and per-task model selection/validation.
+ *
+ * The function never touches spawn-local state (the dedup guard, execution
+ * lane, tool-execution tracking). On a resolvable failure it returns
+ * `{ ok: false, error, ... }` and lets the caller fire `cleanupOnError` +
+ * the `agent:error` event; an unexpected throw bubbles to the caller's
+ * widened try/catch the same way the inline code did.
+ */
+
+import { MODEL_TIERS } from '../../lib/aiToolkit/constants.js';
+import { emitLog } from '../cos/cosEvents.js';
+import { isPublicReviewNoToolProfile } from '../../lib/agent/agentExecutionProfiles.js';
+import { getActiveProvider, getAllProviders, getProviderById } from '../provider/providers.js';
+import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../provider/providerStatus.js';
+import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
+import { modelPinIsOffered } from '../../lib/localProviderRuntime.js';
+import { allowedModesFor, callerModeRejection } from '../../lib/callerModePolicy.js';
+import { attachGatewaySiblingKey } from '../../lib/provider/providerGateways.js';
+import { PRIMARY_ORCHESTRATION_ROLE, roleAssignment } from '../../lib/orchestrationProfile.js';
+import { publicReviewPostureForTask, resolvePublicReviewProvider } from '../publicReviewProviderSelection.js';
+
+/**
+ * Resolve the provider + model for a task.
+ *
+ * @param {object} task
+ * @returns {Promise<
+ *   | { ok: true, provider: object, selectedModel: string, modelSelection: object }
+ *   | { ok: false, error: string, providerId?: string, providerStatus?: object }
+ * >}
+ */
+export async function resolveAgentProviderAndModel(task) {
+  if (task?.metadata?.videoProduction) {
+    const { assertVideoAttemptDispatch } = await import('../creativeDirector/videoExecution.js');
+    const marker = task.metadata.videoProduction;
+    const project = await assertVideoAttemptDispatch(marker.projectId, marker.attemptId).catch(() => null);
+    if (!project) return { ok: false, permanent: true, error: 'Video production is paused or changed. Review and Resume from the project.' };
+    const choice = project.videoExecution.choices[marker.kind === 'evaluate' ? 'evaluation' : marker.kind];
+    const provider = choice?.providerId ? await getProviderById(choice.providerId) : null;
+    if (!provider || provider.enabled === false || !isProcessProvider(provider) || !await isProviderAvailable(provider.id)) {
+      return { ok: false, permanent: true, error: 'The reviewed Video agent provider is unavailable. Change Models or Settings and Resume.' };
+    }
+    return { ok: true, provider, selectedModel: choice.model, modelSelection: { model: choice.model, tier: 'user-specified', reason: 'Reviewed Video production choice' } };
+  }
+  if (isPrivateSecurityTask(task)) {
+    const { privateSecurityEndpoint } = await import('../../lib/privateSecuritySandbox.js');
+    Object.assign(task.metadata, PRIVATE_SECURITY_DELIVERY);
+    delete task.metadata.pipeline;
+    const provider = task.metadata.provider ? await getProviderById(task.metadata.provider) : null;
+    const model = task.metadata.model;
+    if (process.platform !== 'darwin' || !provider || provider.enabled === false
+      || !privateSecurityEndpoint(provider) || !supportsPublicReviewProvider(provider)
+      || typeof model !== 'string' || !model.trim() || /:cloud(?:$|[\s/])/i.test(model)
+      || Object.values(MODEL_TIERS).includes(model)) {
+      return { ok: false, permanent: true, error: 'Private security assessment requires macOS Seatbelt and an explicitly pinned loopback Ollama/LM Studio CLI provider and local model. No cloud or unsandboxed fallback is allowed.' };
+    }
+    return { ok: true, provider, selectedModel: model, modelSelection: { model, tier: 'user-specified', reason: 'Private local assessment pin' } };
+  }
+
+  // Old schedules may already have queued raw issue-watcher prompts. New runs
+  // execute entirely in the server's constrained analysis boundary; an upgrade
+  // must not let the old backlog retain a general-purpose agent harness.
+  if (task?.metadata?.analysisType === 'issue-watcher') {
+    return { ok: false, permanent: true,
+      error: 'This legacy issue-watcher task cannot run in an agent. Run Issue Watcher again from the schedule to use screened, tool-free analysis.' };
+  }
+  if (isForgeMaintenanceTask(task) && !hasCurrentForgeMaintenanceEvidence(task)) {
+    return { ok: false, permanent: true,
+      error: LEGACY_FORGE_MAINTENANCE_REASON };
+  }
+  if (task?.metadata?.analysisType === 'pr-reviewer' && !isPublicReviewNoToolProfile(task.metadata.executionProfile)) {
+    return { ok: false, permanent: true,
+      error: 'This legacy PR review task permits tools. Run PR Reviewer again to use the screened, tool-free review pipeline.' };
+  }
+  // A public-review stage is resolved against the POSTURE it declares, not the
+  // usual pin → active → fallback chain: the ordinary chain is allowed to swap
+  // onto any healthy provider, and swapping untrusted contributor content onto
+  // a provider with no enforced posture is exactly what must not happen. The
+  // eligible set comes from this install's own enabled providers, so a stage
+  // configured on a machine that only has grok resolves to grok.
+  const publicReviewPosture = publicReviewPostureForTask(task);
+  if (publicReviewPosture) return resolvePublicReviewAgentProvider(task, publicReviewPosture);
+  return resolveOrdinaryProviderAndModel(task);
+}
+
+/**
+ * Provider + model for a public-review stage. A stage's own provider/model/
+ * effort pins (`metadata.provider` / `metadata.model`, set by the pipeline
+ * hand-off from the stage config) are honored or fail permanently with a
+ * configuration diagnosis. Only unpinned stages use the install's eligible set.
+ */
+async function resolvePublicReviewAgentProvider(task, posture) {
+  const resolved = await resolvePublicReviewProvider({
+    posture,
+    pinnedProviderId: task.metadata?.provider || null,
+  });
+  if (!resolved.ok) {
+    return { ok: false, permanent: true, error: resolved.error, infrastructureCode: resolved.code, providerId: task.metadata?.provider || undefined };
+  }
+  const { provider } = resolved;
+  const strictFallback = task.metadata?.pipeline?.securityScan?.usedLargeInputFallback === true;
+  if (strictFallback && !resolved.pinHonored) {
+    return { ok: false, permanent: true, infrastructureCode: 'public-review-provider-pin-unavailable', error: 'Configured large-input review fallback provider is unavailable' };
+  }
+  // A model pin only survives when it was chosen FOR this provider AND that
+  // provider still offers it; otherwise stop instead of silently
+  // selecting another model or handing one vendor's model id to another (the failure mode
+  // documented in the ordinary path). Matching the provider alone is not
+  // enough: a stage pin outlives edits to that provider's own `models` list,
+  // and a retired id reaches the CLI as a model it cannot serve, so the stage
+  // spawns, produces no output, and is retried. The ordinary path guards this
+  // at its list check, by a different rule (it exempts any user pin outright).
+  // Three other sites still hand-roll a raw `models.includes` — see #6151.
+  const pinnedModel = task.metadata?.model;
+  const isTierRequest = Object.values(MODEL_TIERS).includes(pinnedModel);
+  const pinnedForThisProvider = !isTierRequest && Boolean(pinnedModel) && task.metadata?.provider === provider.id;
+  // `modelPinIsOffered` owns which provider records may invalidate a pin at all
+  // — an empty catalog and a local daemon's cached snapshot are both
+  // pass-throughs (see its doc comment).
+  const honorPin = pinnedForThisProvider && modelPinIsOffered(provider, pinnedModel);
+  const pinRejected = pinnedForThisProvider && !honorPin;
+  if (pinRejected || (strictFallback && !honorPin)) {
+    return { ok: false, permanent: true, providerId: provider.id, infrastructureCode: 'public-review-model-pin-unavailable', error: 'The selected PR review model is unavailable. Review stopped without model or provider fallback; check the stage settings.' };
+  }
+  // A model-only pin with no provider cannot be transferred to an inferred
+  // provider. Tier requests and unpinned stages keep ordinary model selection.
+  const modelSelection = await selectModelForTask(
+    pinnedModel && !isTierRequest && !honorPin ? { ...task, metadata: { ...task.metadata, model: null } } : task,
+    provider,
+  );
+  const selectedModel = honorPin
+    ? pinnedModel
+    : (modelSelection.model || provider.defaultModel || null);
+  emitLog('info', `Public-review stage (${posture}) resolved to provider ${provider.id}${selectedModel ? ` model ${selectedModel}` : ''}`, {
+    taskId: task.id,
+    providerId: provider.id,
+    model: selectedModel,
+  });
+  return { ok: true, provider, selectedModel, modelSelection };
+}
+
+/**
+ * A CoS agent task needs a harness that can read/write files and run commands,
+ * so `api` records are ineligible however they are reached — by a task pin, by
+ * `activeProvider` inheritance, or by the fallback chain. Naming the policy once
+ * is what keeps the pin gate and the fallback gate from drifting apart.
+ */
+const AGENT_CALLER_POLICY = 'agent-harness';
+
+async function resolveOrdinaryProviderAndModel(task) {
+  // A task can pin a specific provider via metadata.provider (e.g. a CoS job's
+  // per-job AI override). Resolve it BEFORE the active-provider availability
+  // gate so a pinned-but-healthy provider isn't blocked when the *active*
+  // provider is down or unset — independence from the active provider is the
+  // whole point of pinning. The pinned provider then runs through the same
+  // availability/fallback logic below as any other resolved provider.
+  let provider = null;
+  // An orchestration profile (#5992) pins the top-level agent's provider under
+  // the architect role — that agent is the one that plans and delegates. It is
+  // read as an ordinary provider pin so it inherits the whole chain below
+  // (availability, fallback swap, the model-pin invalidation a swap triggers)
+  // rather than growing a second, subtly-different resolution path. Null on a
+  // `direct` task, so the metadata pin stays authoritative as before.
+  const userProviderId = roleAssignment(task, PRIMARY_ORCHESTRATION_ROLE)?.provider || task.metadata?.provider;
+  let userProviderMissing = false;
+  if (userProviderId) {
+    const userProvider = await getProviderById(userProviderId);
+    if (userProvider) {
+      emitLog('info', `Using user-specified provider: ${userProviderId}`, { taskId: task.id });
+      provider = userProvider;
+    } else {
+      userProviderMissing = true;
+      emitLog('warn', `User-specified provider "${userProviderId}" not found, using active provider`, { taskId: task.id });
+    }
+  }
+  if (!provider) provider = await getActiveProvider();
+
+  if (!provider) {
+    return { ok: false, error: 'No active AI provider configured' };
+  }
+
+  // Type of the DIRECTLY-resolved (pinned/active) provider, captured before any
+  // fallback swap below. It gates the "permanent" flag on the api-type rejection:
+  // an api provider is permanent (a config error that re-fails identically
+  // forever) ONLY when the task was directly resolved onto an api provider — i.e.
+  // the pinned/active provider is itself api. A fallback that lands on an api
+  // provider is instead judged by THIS type: a CLI primary that's momentarily
+  // unavailable (directType 'cli') may recover, so its api fallback is transient
+  // and stays retryable; but an api primary whose fallback is also api (directType
+  // 'api') can never gain a harness, so it stays permanent (no infinite retry).
+  const directProviderType = provider.type;
+  // Id of that same DIRECTLY-resolved provider — the one a `task.metadata.model`
+  // pin was chosen FOR. Compared against `provider.id` after the fallback block
+  // to detect a provider swap, which invalidates the pin (see below).
+  const directProviderId = provider.id;
+  // Check provider availability (usage limits, rate limits, etc.)
+  // Set when we fall back below to a provider with a configured "Fallback
+  // Model" pin — it overrides the usual per-task model selection so the
+  // user's chosen fallback provider+model pair is honored on agent runs.
+  let fallbackModelPin = null;
+  const providerAvailable = isProviderAvailable(provider.id);
+  if (!providerAvailable) {
+    const status = getProviderStatus(provider.id);
+    // A sidelined provider (quota, cooldown) is handled by the fallback below;
+    // only the no-fallback path is a failure.
+    emitLog('info', `⏸️ Provider ${provider.id} unavailable: ${status.message}`, {
+      taskId: task.id,
+      providerId: provider.id,
+      reason: status.reason
+    });
+
+    // Try to get a fallback provider (check task-level, then provider-level, then system default).
+    // getFallbackProvider indexes its providers arg by id, so pass a map — NOT the
+    // { activeProvider, providers: [...] } shape getAllProviders() returns (mirrors promptRunner.js).
+    const { providers: providerList = [] } = await getAllProviders();
+    const providersMap = Object.fromEntries(providerList.map((p) => [p.id, p]));
+    const taskFallbackId = task.metadata?.fallbackProvider;
+    const taskFallbackModel = task.metadata?.fallbackModel;
+    // A composite (`harness.method@service`, #7564) is never in the stored map.
+    // Materialize the ones this pick can name — the primary (for the toolkit's
+    // self-loop guard) and the task-level fallback — so `getFallbackProvider`
+    // judges a composite candidate under the SAME `allowedModes` policy as every
+    // stored one, and admits it only when its method is allowed.
+    if ([provider.id, taskFallbackId].some(isCompositeProviderId)) {
+      await (await import('../compositeProviders.js')).withCompositeCandidates(providersMap, [provider.id, taskFallbackId]);
+    }
+    // The caller's mode policy travels WITH the fallback request, so an
+    // ineligible candidate is skipped during selection rather than picked and
+    // then rejected below — which used to burn the one retry the cascade had.
+    const chainComposites = peekFallbackChain().map((e) => e.providerId).filter(isCompositeProviderId);
+    if (chainComposites.length) {
+      await (await import('../compositeProviders.js')).withCompositeCandidates(providersMap, chainComposites);
+    }
+    const fallbackResult = await getFallbackProvider(provider.id, providersMap, taskFallbackId, taskFallbackModel, {
+      allowedModes: allowedModesFor(AGENT_CALLER_POLICY),
+    });
+
+    if (fallbackResult) {
+      emitLog('info', `Using fallback provider: ${fallbackResult.provider.id} (source: ${fallbackResult.source})`, {
+        taskId: task.id,
+        primaryProvider: provider.id,
+        fallbackProvider: fallbackResult.provider.id,
+        fallbackSource: fallbackResult.source
+      });
+      // The fallback comes from the RAW provider map (`getAllProviders`), which
+      // carries no gateway-inherited key — a gateway-backed wrapper picked here
+      // would spawn without its sibling's apiKey and fail auth (NVIDIA NIM 401s
+      // "Header of type `authorization` was missing") despite a stored key.
+      // Attach it from the same map (synchronous — no re-read to go stale).
+      provider = attachGatewaySiblingKey(fallbackResult.provider, providersMap);
+      fallbackModelPin = fallbackResult.model || null;
+    } else {
+      const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
+      // TRANSIENT, never permanent: a null fallback here can mean a configured
+      // CLI/TUI fallback is merely momentarily down (getFallbackProvider skips
+      // unavailable candidates), so blocking would strand a task that recovers
+      // when that fallback returns. Permanence is decided by PROVIDER TYPE where we
+      // can actually inspect it — the harness check below, reached once the
+      // provider is available again — not inferred from a transient unavailable +
+      // null-fallback combination. A down api provider with no viable path retries
+      // cheaply (it fails fast here, spawning no agent) and self-heals to a
+      // permanent block the moment it becomes reachable.
+      return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status };
+    }
+  }
+
+  // Harness boundary guard — the LAST line of the same policy the fallback
+  // request above carries, so it still fires for a provider that never went
+  // through fallback selection: a task pin or the inherited active provider.
+  // `api`-type providers (Ollama / LM Studio / kimi over HTTP) return plain text
+  // with NO filesystem tool harness — they can't Read/Write/Edit/Bash, so a CoS
+  // agent task resolved onto one would spawn a child process that writes nothing
+  // to disk. A record with no recognizable mode at all is refused here too. The
+  // fix for users: add a CLI coding provider — e.g. Claude Ollama, or OpenCode
+  // MTPLX when a separate MTPLX runtime is already running locally.
+  const harnessRejection = callerModeRejection(provider, AGENT_CALLER_POLICY);
+  if (harnessRejection) {
+    return {
+      ok: false,
+      // PERMANENT config error when the DIRECTLY-resolved (pinned/active) provider
+      // was itself ineligible — no CLI/TUI harness is reachable for this task no
+      // matter how many times it re-dispatches, so the caller must retire it
+      // rather than leave it silently re-failing forever. An ineligible provider
+      // reached by falling back from a CLI primary (directProviderType 'cli') is
+      // instead TRANSIENT: the primary may recover, so the task stays retryable.
+      permanent: Boolean(callerModeRejection({ type: directProviderType }, AGENT_CALLER_POLICY)),
+      error: `Provider "${provider.id}" ${harnessRejection.reason} — it has no file-writing harness, and CoS agent tasks need a CLI/TUI coding provider (claude, codex, "Claude Ollama", or "OpenCode MTPLX").`,
+      providerId: provider.id
+    };
+  }
+
+  // Resolve the task's model: its explicit pin or tier, else the provider default.
+  // Routed through the ARCHITECT role so an orchestrated task's planning model
+  // wins here; with no profile this is `selectModelForTask` unchanged.
+  const modelSelection = await selectModelForRole(task, PRIMARY_ORCHESTRATION_ROLE, provider);
+  let selectedModel = modelSelection.model;
+
+  // A configured "Fallback Model" pin (from the provider- or task-level
+  // fallback we took above) wins over the usual selection — the user
+  // explicitly chose this model to run on the fallback. The compatibility
+  // check below still guards it against the fallback provider's model list.
+  if (fallbackModelPin) selectedModel = fallbackModelPin;
+
+  // Validate model is compatible with provider. An EXPLICIT user-specified
+  // model (task.metadata.model → tier 'user-specified') is honored even when
+  // it isn't in the provider's `models` list: that list is a convenience
+  // enumeration, but the pass-through CLIs (claude/codex/opencode) accept any
+  // valid id — and the claude providers even disagree on alias form
+  // (`claude-code` lists `claude-haiku-4-5`, `claude-code-tui` lists the dated
+  // `claude-haiku-4-5-20251001`). Silently downgrading an explicit pin to the
+  // tier fallback — which for the default tier is the HEAVY model — both
+  // violates the user's intent and maximizes cost, so we trust the pin and let
+  // the provider reject a genuine typo at runtime. Auto-selected models (and a
+  // fallback-model pin, which the comment above deliberately guards) still fall
+  // back to the provider's tier default.
+  //
+  // …but ONLY on the provider the pin was chosen for. A `task.metadata.model`
+  // pin is provider-scoped (the task form picks a provider and then a model from
+  // THAT provider's catalog) — it is not a provider-agnostic preference. When
+  // the pinned/active provider is down and the fallback block above swapped us
+  // onto a different provider, the pin no longer describes anything the new
+  // provider can run, and the pass-through exemption — which deliberately skips
+  // the model list — is exactly what stops us from noticing. That combination
+  // shipped `claude --model gemini-3.6-flash` after an `antigravity-tui` auth
+  // outage: the CLI rejected it in ~1.5s ("There's an issue with the selected
+  // model"), on every retry, until the task hit max retries and blocked. So a
+  // provider swap drops the pin back to the new provider's own default unless
+  // that provider actually lists it.
+  // A missing pinned provider is also a provider swap, even when the active
+  // provider happens to be the same object the resolver returned. The task's
+  // model was selected for the missing provider and must not silently become a
+  // pin for the active provider.
+  const providerSwapped = userProviderMissing || provider.id !== directProviderId;
+  const pinnedProviderId = userProviderId || directProviderId;
+  const isUserPin = modelSelection.tier === 'user-specified' && !fallbackModelPin;
+  const isUserPinnedModel = isUserPin && !providerSwapped;
+  if (isUserPin && providerSwapped && !(provider.models || []).includes(selectedModel)) {
+    // Handled here rather than left to the list check below, which can't fire at
+    // all for a fallback provider that enumerates no `models`.
+    // The same handled fallback as the sidelined-provider notice above: not a fault.
+    emitLog('info', `Dropping model "${selectedModel}" pinned for provider "${pinnedProviderId}" — running on fallback "${provider.id}" with its default model`, {
+      taskId: task.id,
+      requestedModel: selectedModel,
+      pinnedProviderId,
+      providerId: provider.id
+    });
+    selectedModel = provider.defaultModel || null;
+  }
+  if (selectedModel && provider.models && provider.models.length > 0) {
+    const modelIsValid = provider.models.includes(selectedModel);
+    if (!modelIsValid && isUserPinnedModel) {
+      emitLog('info', `Honoring user-specified model "${selectedModel}" not in provider "${provider.id}" list (CLI pass-through)`, {
+        taskId: task.id,
+        requestedModel: selectedModel,
+        providerId: provider.id
+      });
+    } else if (!modelIsValid) {
+      emitLog('warn', `Model "${selectedModel}" not valid for provider "${provider.id}", falling back to provider default`, {
+        taskId: task.id,
+        requestedModel: selectedModel,
+        providerId: provider.id,
+        validModels: provider.models
+      });
+      selectedModel = modelSelection.tier === 'ultra' ? ([provider.heavyModel, provider.defaultModel].find(model => model && provider.models.includes(model)) || null) :
+                      modelSelection.tier === 'heavy' ? provider.heavyModel :
+                      modelSelection.tier === 'light' ? provider.lightModel :
+                      modelSelection.tier === 'medium' ? provider.mediumModel :
+                      provider.defaultModel;
+    }
+  }
+
+  emitLog('info', `Model selection: ${selectedModel} (${modelSelection.reason})`, {
+    taskId: task.id,
+    model: selectedModel,
+    tier: modelSelection.tier,
+    reason: modelSelection.reason,
+  });
+
+  return { ok: true, provider, selectedModel, modelSelection };
+}

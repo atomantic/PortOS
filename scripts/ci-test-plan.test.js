@@ -19,7 +19,9 @@ import {
   collectPlanInputs,
   collectSuperColliderLiveInputs,
   emitGitHubPlan,
+  formatPlanSummary,
   forceFullReasonFor,
+  githubPlanOutput,
   FULL_SUITE_SHARDS,
   isRouteOnlyAppDiff,
   LINUX_CONTAINMENT_TESTS,
@@ -85,7 +87,7 @@ const TRACKED = [
   'server/lib/platform.test.js',
   'server/lib/shellCd.test.js',
   'server/lib/shellCd.js',
-  'server/services/agentTuiSpawning.test.js',
+  'server/services/agent/agentTuiSpawning.test.js',
   'client/src/a11y/controlNames.conventions.test.js',
   'client/src/a11y/dnd.conventions.test.js',
   'client/src/a11y/fileInputsToasts.conventions.test.js',
@@ -96,7 +98,7 @@ const TRACKED = [
   'client/src/a11y/scanner.conventions.test.js',
   'client/src/App.jsx',
   'client/src/App.test.jsx',
-  'client/src/hooks/mountedRefConventions.test.js',
+  'client/src/hooks/mountedRefConventions.guard.test.js',
   'client/src/components/catalog/CatalogCard.jsx',
   'client/src/components/catalog/CatalogCard.test.jsx',
   'client/src/components/sprites/WalkWorkflow.test.jsx',
@@ -202,15 +204,15 @@ it('preserves Git-quoted source and contract paths through the planner CLI', () 
     commit();
     const sourcePlan = plan(base);
     expect(sourcePlan.full).toBe(false);
-    expect(JSON.parse(sourcePlan.server_files)).toContain(contract);
+    expect(sourcePlan.server_files).toContain(contract);
 
     write(unicodeSource, 'export const value = 2;\n');
     commit();
     const unicodePlan = plan(base);
     expect(unicodePlan.full).toBe(false);
     expect(unicodePlan.changed_files).toEqual([unicodeSource, source]);
-    expect(JSON.parse(unicodePlan.server_sources)).toContain(unicodeSource);
-    expect(JSON.parse(unicodePlan.server_files)).toContain(contract);
+    expect(unicodePlan.server_sources).toContain(unicodeSource);
+    expect(unicodePlan.server_files).toContain(contract);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -437,14 +439,14 @@ it('carries transitive browser re-exports through the planner CLI and fails clos
 
     const shared = plan([leaf]);
     expect(shared).toMatchObject({ full: false, build: true,
-      client_mode: 'related', client_sources: JSON.stringify([leaf]) });
+      client_mode: 'related', client_sources: [leaf] });
     expect(shared.server_mode).not.toBe('skip');
     expect(plan(['server/lib/shared/leaf.ts'])).toMatchObject({ build: true,
-      client_mode: 'related', client_sources: JSON.stringify(['server/lib/shared/leaf.ts']) });
+      client_mode: 'related', client_sources: ['server/lib/shared/leaf.ts'] });
 
     const mixed = plan([leaf, clientSource, clientTest]);
-    expect(mixed).toMatchObject({ client_mode: 'related', client_sources: JSON.stringify([clientSource, leaf]),
-      client_files: JSON.stringify([clientTest]) });
+    expect(mixed).toMatchObject({ client_mode: 'related', client_sources: [clientSource, leaf],
+      client_files: [clientTest] });
     expect(mixed.build).toBe(true);
     expect(plan([serverOnly])).toMatchObject({ full: false, build: false, client_mode: 'skip' });
     expect(plan([leaf, 'client/vite.config.js'])).toMatchObject({ full: true, build: true, client_mode: 'full' });
@@ -490,16 +492,16 @@ it('projects test-only shared re-exports and retains unresolved consumers withou
     git('add', '--all');
 
     expect(plan(leaf)).toMatchObject({ full: false, build: false,
-      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+      client_mode: 'files', client_files: [consumer] });
     expect(plan(unused)).toMatchObject({ full: false, build: false, client_mode: 'skip' });
 
     write('client/src/test/fixture.js', "export { value } from './missing.js';\n");
     expect(plan(leaf)).toMatchObject({ full: false, build: false,
-      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+      client_mode: 'files', client_files: [consumer] });
 
     write(consumer, "const fixture = await import(globalThis.fixturePath);\n");
     expect(plan(leaf)).toMatchObject({ full: false, build: false,
-      client_mode: 'files', client_files: JSON.stringify([consumer]) });
+      client_mode: 'files', client_files: [consumer] });
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -647,14 +649,9 @@ it('keeps PostgreSQL tests out of ordinary server runner selection and routes th
   expect(plan.db).toBe(true);
 });
 
-it('runs the whole-tree import-cycle guards on a PR that touches one server/services file (#14327)', () => {
+it('runs the whole-tree import-cycle guard on a PR that touches one server/services file (#14327)', () => {
   const plan = buildCiTestPlan(['server/services/auth.js'], realTree());
-  expect(plan.server.files).toEqual(expect.arrayContaining([
-    'server/services/agentImportCycles.test.js',
-    'server/services/meatspacePostImportCycles.test.js',
-    'server/services/serviceImportCycles.test.js',
-    'server/services/twinImportCycles.test.js',
-  ]));
+  expect(plan.server.files).toContain('server/services/serviceImportCycles.guard.test.js');
 });
 
 it('requests DB verification for the real deck, model pin and backup source contracts', () => {
@@ -697,7 +694,7 @@ it('follows DB-only deferred dependencies through the pre-install CLI and preser
     // dependency walk can request the otherwise excluded database suite.
     const related = plan([leaf]);
     expect(related).toMatchObject({ full: false, db: true, server_mode: 'related' });
-    expect(JSON.parse(related.server_files)).not.toContain(contract);
+    expect(related.server_files).not.toContain(contract);
     expect(plan(['server/services/unrelated.js'])).toMatchObject({ full: false, db: false });
     expect(plan(['docs/README.md'])).toMatchObject({ full: false, db: false });
 
@@ -821,10 +818,10 @@ describe('CI test impact planner', () => {
   it('routes always-run selectors to the runner that globs them', () => {
     expect(splitByRunner([
       'server/services/taskPromptDefaults.test.js',
-      'scripts/agent-instructions-files.test.js',
+      'scripts/agent-instructions-files.guard.test.js',
       'client/src/a11y/overlays.conventions.test.js',
     ])).toEqual({
-      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.test.js'],
+      server: ['server/services/taskPromptDefaults.test.js', 'scripts/agent-instructions-files.guard.test.js'],
       client: ['client/src/a11y/overlays.conventions.test.js'],
     });
   });
@@ -955,7 +952,12 @@ describe('CI test impact planner', () => {
   const STRUCTURAL_GUARD_ROWS = [
     { changed: 'server/sockets/chat.js', runner: 'server', guards: ['server/sockets/asyncHandlerGuard.test.js'] },
     { changed: 'server/lib/bufferedSpawn.js', runner: 'server', guards: ['server/lib/moduleSummaries.test.js'] },
-    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
+    { changed: 'server/lib/agent/agentOutcome.js', runner: 'server', guards: ['server/lib/agent/moduleSummaries.test.js'] },
+    { changed: 'server/lib/cos/cosValidation.js', runner: 'server', guards: ['server/lib/cos/moduleSummaries.test.js'] },
+    { changed: 'server/lib/catalog/catalogValidation.js', runner: 'server', guards: ['server/lib/catalog/moduleSummaries.test.js'] },
+    { changed: 'server/lib/persistent/persistentMindCapabilities.js', runner: 'server', guards: ['server/lib/persistent/moduleSummaries.test.js'] },
+    { changed: 'server/lib/provider/providerModels.js', runner: 'server', guards: ['server/lib/provider/moduleSummaries.test.js'] },
+    { changed: 'server/routes/sprites.js', runner: 'server', guards: ['server/lib/apiRouteGraph.guard.test.js', 'server/lib/apiRouteParity.test.js', 'scripts/generate-prompt-stage-call-sites.test.js'] },
     { changed: 'server/scripts/init-db.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'server/scripts/init-db.base.sql', runner: 'server', guards: ['server/lib/db.ddlParity.test.js'] },
     { changed: 'client/src/lib/catalogLinks.js', runner: 'client', guards: ['client/src/lib/moduleSummaries.test.js'] },
@@ -1094,7 +1096,7 @@ describe('CI test impact planner', () => {
     expect(plan.client.files).toContain('client/src/a11y/overlays.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/routeHeadings.conventions.test.js');
     expect(plan.client.files).toContain('client/src/a11y/scanner.conventions.test.js');
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
+    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
     expect(plan.lint).toEqual({
       mode: 'files',
       files: [
@@ -1111,7 +1113,7 @@ describe('CI test impact planner', () => {
     // by a change that touches no `.jsx` at all.
     const plan = buildCiTestPlan(['client/src/hooks/useAsyncAction.js'], { trackedFiles: TRACKED });
 
-    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.test.js');
+    expect(plan.client.files).toContain('client/src/hooks/mountedRefConventions.guard.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/controlNames.conventions.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/dnd.conventions.test.js');
     expect(plan.client.files).not.toContain('client/src/a11y/fileInputsToasts.conventions.test.js');
@@ -1444,7 +1446,7 @@ describe('CI test impact planner', () => {
 
   it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
-      'server/lib/apiRouteGraph.test.js',
+      'server/lib/apiRouteGraph.guard.test.js',
       'server/lib/apiRouteParity.test.js',
       'scripts/generate-prompt-stage-call-sites.test.js',
     ];
@@ -2065,7 +2067,7 @@ it('projects transitive browser consumers through the planner CLI without replac
     env: { ...process.env, CI_BASE_SHA: 'HEAD', CI_BASE_REF: 'main', CI_FORCE_FULL: String(forceFull),
       CI_CHANGED_FILES: JSON.stringify(changedFiles), GITHUB_OUTPUT: '', GITHUB_STEP_SUMMARY: '' },
   }));
-  const browsers = (result) => JSON.parse(result.browser_files);
+  const browsers = (result) => result.browser_files;
   try {
     git('init', '-q');
     WINDOWS_CONTRACT_TESTS.forEach(path => write(path, '// native inventory fixture\n'));
@@ -2084,11 +2086,11 @@ it('projects transitive browser consumers through the planner CLI without replac
     // Neither browser suite shares leaf's feature or names its basename. Only
     // transitive import discovery can report the real related-test consumers.
     const related = plan([leaf]);
-    expect(related).toMatchObject({ full: false, server_mode: 'related', server_sources: JSON.stringify([leaf]) });
-    expect(JSON.parse(related.server_files)).not.toContain(staticSuite);
-    expect(JSON.parse(related.server_files)).not.toContain(deferredSuite);
+    expect(related).toMatchObject({ full: false, server_mode: 'related', server_sources: [leaf] });
+    expect(related.server_files).not.toContain(staticSuite);
+    expect(related.server_files).not.toContain(deferredSuite);
     expect(browsers(related)).toEqual([staticSuite, deferredSuite]);
-    expect(JSON.parse(related.suite_reasons).browser).toBe('2 cross-workspace browser suite(s) selected');
+    expect(related.suite_reasons.browser).toBe('2 cross-workspace browser suite(s) selected');
     expect(browsers(plan([leaf, staticSuite]))).toEqual([staticSuite, deferredSuite]);
     expect(browsers(plan([unrelated]))).toEqual([]);
     expect(browsers(plan(['docs/README.md']))).toEqual([]);
@@ -2100,7 +2102,7 @@ it('projects transitive browser consumers through the planner CLI without replac
     for (const expression of ["'../services/missing.js'", 'modulePath']) {
       write(independentSuite, `export const load = () => import(${expression});\n`);
       const conservative = plan([unrelated]);
-      expect(conservative).toMatchObject({ full: false, server_mode: 'related', server_sources: JSON.stringify([unrelated]) });
+      expect(conservative).toMatchObject({ full: false, server_mode: 'related', server_sources: [unrelated] });
       expect(browsers(conservative)).toEqual([independentSuite]);
       expect(browsers(plan([leaf]))).toEqual([staticSuite, deferredSuite, independentSuite]);
       // No behavioral source traversal on test-only edits or documentation.
@@ -2144,8 +2146,9 @@ describe('cross-workspace browser suites (#10312)', () => {
       !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) || BROWSER_SUITES.includes(path));
     const plan = buildCiTestPlan([source], { ...inputs, trackedFiles });
 
-    // Server-only media suites do not mount the changed client component.
-    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js', 'server/lib/musicVideoTitleCard.browser.test.js',
+    // Server-only media suites do not mount the changed client component. The title-card suite is
+    // not among them: it lives in server/lib/musicVideo/ (#16561), so the musicVideo feature selects it.
+    const runtimeOnly = ['server/lib/filmLook.browser.test.js', 'server/lib/filmLookGpu.browser.test.js',
       'server/services/federatedMedia/sourceAudio.browser.test.js',
       'server/services/greyboxRender.browser.test.js',
       'server/services/fableLoom/static-player/player.browser.test.js',
@@ -2467,11 +2470,9 @@ describe('path-gated single-purpose jobs', () => {
     }
 
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
-    expect(jobs.impact).toContain('prompt_history: ${{ steps.plan.outputs.prompt_history }}');
-    expect(jobs.impact).toContain('linux_containment: ${{ steps.plan.outputs.linux_containment }}');
     expect(jobs['prompt-history']).toContain('needs: impact');
-    expect(jobs['prompt-history']).toContain("if: needs.impact.outputs.prompt_history == 'true'");
-    expect(jobs['linux-containment']).toContain("if: needs.impact.outputs.linux_containment == 'true'");
+    expect(jobs['prompt-history']).toContain('if: fromJSON(needs.impact.outputs.plan).prompt_history\n');
+    expect(jobs['linux-containment']).toContain('if: fromJSON(needs.impact.outputs.plan).linux_containment\n');
     // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
     const run = jobs['linux-containment'].match(/run: bash scripts\/ci-install-containment-tools\.sh npm test --prefix server -- --run (.*)/)[1];
     expect(run.split(' ').map((path) => posix.normalize(posix.join('server', path)))).toEqual(LINUX_CONTAINMENT_TESTS);
@@ -2481,21 +2482,72 @@ describe('path-gated single-purpose jobs', () => {
 
     // The native SuperCollider matrix lives in ci.yml, is planner-gated, and a
     // red run fails CI Gate (#12612). No second workflow may run it on a PR.
-    expect(jobs.impact).toContain('supercollider_live: ${{ steps.plan.outputs.supercollider_live }}');
     expect(jobs['supercollider-live']).toContain('needs: impact');
-    expect(jobs['supercollider-live']).toContain("if: needs.impact.outputs.supercollider_live == 'true'");
+    expect(jobs['supercollider-live']).toContain('if: fromJSON(needs.impact.outputs.plan).supercollider_live\n');
     expect(jobs['supercollider-live']).toContain('runs-on: ${{ matrix.runner }}');
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bsupercollider-live\]/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_SUPERCOLLIDER_LIVE: ${{ needs.supercollider-live.result }}');
     expect(existsSync(join(repo, '.github/workflows/supercollider-live.yml'))).toBe(false);
 
     // The Docker containment live suite (#12844) is planner-gated the same way.
-    expect(jobs.impact).toContain('docker_containment_live: ${{ steps.plan.outputs.docker_containment_live }}');
-    expect(jobs['docker-containment-live']).toContain("if: needs.impact.outputs.docker_containment_live == 'true'");
+    expect(jobs['docker-containment-live']).toContain('if: fromJSON(needs.impact.outputs.plan).docker_containment_live\n');
     expect(jobs['docker-containment-live']).toContain("PORTOS_DOCKER_CONTAINMENT_LIVE: '1'");
     expect(jobs['docker-containment-live']).toContain(`vitest run ${DOCKER_CONTAINMENT_LIVE_ENTRIES[0].replace('server/', '')}`);
     expect(jobs.gate).toMatch(/needs: \[[^\]]*\bdocker-containment-live\b/);
     expect(jobs.gate).toContain('CI_GATE_RESULT_DOCKER_CONTAINMENT_LIVE: ${{ needs.docker-containment-live.result }}');
+  });
+
+  // #16555: ci.yml reads every decision from the one `plan` output. A read of
+  // a key the planner never emits is `null` in Actions, which silently skips
+  // the job (or, in a gate's `!…` test, silently passes it) instead of failing.
+  it('emits every plan key ci.yml reads, with JSON types the expressions compare correctly', () => {
+    const output = githubPlanOutput(buildCiTestPlan(['docs/README.md'], {
+      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+    }));
+    const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
+    const reads = [...ci.matchAll(/fromJSON\(needs\.impact\.outputs\.plan\)\.(\w+)(\s*[!=]=\s*'[^']*')?/g)];
+    expect(reads.length).toBeGreaterThan(20);
+    for (const [, key, comparison] of reads) {
+      expect(Object.keys(output), `ci.yml reads plan.${key}`).toContain(key);
+      // After fromJSON a boolean never equals the string 'true' (Actions
+      // coerces both to numbers), so a boolean key is tested bare.
+      if (typeof output[key] === 'boolean') expect(comparison, `plan.${key} compared as a string`).toBeUndefined();
+    }
+    // Every other impact output stays a declared, separately emitted value.
+    const impactOutputs = [...workflowJobs(ci).impact.matchAll(/^      (\w+): \$\{\{/gm)].map(([, name]) => name);
+    expect(impactOutputs).toEqual(['plan', 'server_shards', 'client_shards', 'windows_shards', 'db_image']);
+    for (const [, name] of ci.matchAll(/needs\.impact\.outputs\.(\w+)/g)) expect(impactOutputs, name).toContain(name);
+  });
+
+  it('writes the plan, the shard matrices and the step summary through the GitHub command files', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ci-plan-emit-'));
+    const env = { GITHUB_OUTPUT: join(dir, 'output'), GITHUB_STEP_SUMMARY: join(dir, 'summary') };
+    const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      Object.assign(process.env, env);
+      const plan = buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [] });
+      emitGitHubPlan(plan, { gatedBaseSha: 'a'.repeat(40) });
+      const lines = readFileSync(env.GITHUB_OUTPUT, 'utf8').trim().split('\n');
+      const outputs = Object.fromEntries(lines.map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
+      expect(Object.keys(outputs)).toEqual(['plan', 'server_shards', 'client_shards', 'windows_shards']);
+      expect(JSON.parse(outputs.plan)).toEqual(githubPlanOutput(plan));
+      expect(JSON.parse(outputs.plan)).toMatchObject({ full: false, lint_files: [], browser: false, browser_files: [] });
+      expect(JSON.parse(outputs.server_shards)).toEqual(plan.shards.server);
+      const summary = readFileSync(env.GITHUB_STEP_SUMMARY, 'utf8');
+      expect(summary).toBe(`${formatPlanSummary(githubPlanOutput(plan), plan.shards, 'a'.repeat(40))}\n`);
+      expect(summary).toMatch(/^### CI impact plan\n\n- Reason: `documentation-only change`\n/);
+      expect(summary).toContain(`- Native jobs gated against last green main run: \`${'a'.repeat(40)}\``);
+      expect(summary).toContain('- Node minimum compatibility: `false`');
+      expect(formatPlanSummary(githubPlanOutput(plan), plan.shards)).toContain('main run: `none`');
+    } finally {
+      log.mockRestore();
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('selects the Docker containment live job for the profile, executor and engine resolver only', () => {
@@ -2523,8 +2575,7 @@ describe('path-gated single-purpose jobs', () => {
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).macosNative).toBe(true);
 
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
-    expect(jobs.impact).toContain('macos_native: ${{ steps.plan.outputs.macos_native }}');
-    expect(jobs['macos-native']).toContain("if: needs.impact.outputs.macos_native == 'true'");
+    expect(jobs['macos-native']).toContain('if: fromJSON(needs.impact.outputs.plan).macos_native\n');
     expect(jobs['macos-native']).toContain('runs-on: macos-latest');
     const run = jobs['macos-native'].match(/npm test --prefix server -- --run (.+)/)[1].trim();
     expect(run.split(' ').map((path) => posix.join('server', path))).toEqual(MACOS_NATIVE_TESTS);
@@ -2535,7 +2586,7 @@ describe('path-gated single-purpose jobs', () => {
 
   it('runs the Node minimum job only for the manifests, runtime gate and workflow that can change its answer', () => {
     for (const file of ['package.json', 'server/package-lock.json', 'client/.npmrc', 'autofixer/package.json', '.nvmrc',
-      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.test.js', '.github/workflows/ci.yml',
+      'scripts/checkNodeVersion.js', 'scripts/lib/directInvocation.js', 'scripts/node-version-drift.guard.test.js', '.github/workflows/ci.yml',
     ]) expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(true);
     for (const file of ['docs/README.md', 'server/lib/processEnv.js', 'client/src/App.jsx', 'browser/package.json', '.github/workflows/release.yml']) {
       expect(buildCiTestPlan([file]).nodeMinimum, file).toBe(false);
@@ -2543,8 +2594,7 @@ describe('path-gated single-purpose jobs', () => {
     expect(buildCiTestPlan(['docs/README.md'], { forceFull: true }).nodeMinimum).toBe(true);
 
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
-    expect(jobs.impact).toContain('node_minimum: ${{ steps.plan.outputs.node_minimum }}');
-    expect(jobs['node-minimum']).toContain("if: needs.impact.outputs.node_minimum == 'true'");
+    expect(jobs['node-minimum']).toContain('if: fromJSON(needs.impact.outputs.plan).node_minimum\n');
     expect(jobs.gate).toContain('CI_GATE_RESULT_NODE_MINIMUM: ${{ needs.node-minimum.result }}');
   });
 });

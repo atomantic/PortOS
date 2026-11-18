@@ -10,25 +10,34 @@
 import { describe, it, expect, vi, afterAll, beforeAll, beforeEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'path';
-import { captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideoDependencies.js';
+import { captureClipReferenceDependency, captureMusicVideoEvidence, musicVideoDependencyImpact } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { musicVideoClipReferenceChoices } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { checkHealth, ensureSchema, query, close } from '../../lib/db.js';
 import * as database from '../../lib/db.js';
 import { toPgJson } from '../../lib/pgJson.js';
-import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideoSummary.js';
+import { compareMusicVideoProjectsNewestFirst } from '../../lib/musicVideo/musicVideoSummary.js';
 import { requireDbOrSkip } from '../../lib/dbTestGate.js';
 import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflictJournal.js';
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
 
-vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+vi.mock('../../lib/paths.js', async (importOriginal) => {
   const actual = await importOriginal();
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
   testState.dataRoot ??= mkdtempSync(join(tmpdir(), 'music-video-projects-db-test-'));
   return {
     ...actual,
-    PATHS: { ...actual.PATHS, data: testState.dataRoot },
+    PATHS: { ...actual.PATHS, data: testState.dataRoot, images: join(testState.dataRoot, 'images') },
+  };
+});
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
     atomicWrite: async (path, data) => {
       if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) testState.writeCounter.baseHash += 1;
       return actual.atomicWrite(path, data);
@@ -89,7 +98,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
   });
 
   it('commits a linked description with the project and rolls both back on a later failure', async () => {
-    const catalog = await import('../catalogDB.js');
+    const catalog = await import('../catalog/catalogDB.js');
     const { syncEditedSubjectDescriptions } = await import('./subjectDescriptionSync.js');
     const id = `cat-obj-test-${randomUUID()}`;
     catalogFixtures.push(id);
@@ -121,7 +130,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       ) };
     });
     const service = await import('./projects.js');
-    const catalog = await import('../catalogDB.js');
+    const catalog = await import('../catalog/catalogDB.js');
     const id = `cat-obj-test-${randomUUID()}`;
     catalogFixtures.push(id);
     await catalog.createIngredient({ id, type: 'object', name: 'Example prop', payload: { description: 'Original' } });
@@ -269,6 +278,70 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       expect((await db.listProjectPage({ limit: 2, offset: 1 })).items).toEqual(all.slice(1, 3));
     } finally {
       read.mockRestore();
+    }
+  });
+
+  it('reads affected completion only after committed catalog media changes', async () => {
+    const [catalog, { catalogEvents }, { withCatalogCheckin }, { readProjectCompletion }] = await Promise.all([
+      import('../catalog/catalogDB.js'), import('../catalog/catalogEvents.js'), import('./catalogCheckin.js'), import('./projectPresentation.js'),
+    ]);
+    const id = `cat-obj-test-${randomUUID()}`;
+    catalogFixtures.push(id);
+    await catalog.createIngredient({ id, type: 'object', name: 'Example prop' });
+    const images = join(testState.dataRoot, 'images');
+    await mkdir(images, { recursive: true });
+    await Promise.all(['original.png', 'replacement.png'].map(name => writeFile(join(images, name), 'fixture')));
+    await catalog.setPortraitMedia(id, 'original.png');
+    const scene = { sceneId: 'example-shot', startSec: 0, endSec: 4, videoHistoryId: 'clip', takes: [] };
+    const project = {
+      id: 'mv-catalog-completion', name: 'Example Video', status: 'complete', scenes: [scene], renderHistoryId: 'final',
+      concept: { subjects: [{ id: 'prop', kind: 'object', name: 'Example prop', ingredientId: id }] },
+      castAndSets: { source: 'catalog' },
+    };
+    const presented = await withCatalogCheckin(project);
+    expect(presented.castAndSets.catalogCheckin).toMatchObject({ problems: [], items: [{ images: ['original.png'] }] });
+    scene.clipReferenceIds = [musicVideoClipReferenceChoices(presented, scene)[0].id];
+    scene.takes = [{ kind: 'video', assetId: 'clip', dependencies: {
+      version: 1, references: [captureClipReferenceDependency(presented, scene)],
+    } }];
+    project.renderDependencies = captureMusicVideoEvidence(presented);
+    await query(`INSERT INTO music_video_projects (id, status, data, created_at, updated_at)
+      VALUES ($1, 'complete', $2::jsonb, now(), now())`, [project.id, toPgJson(project)]);
+    expect(await db.listCompletionCandidateIds()).toEqual([project.id]);
+    expect(await db.listCompletionCandidateIds(['cat-unrelated'])).toEqual([]);
+    const named = await db.listProjectPage({ limit: 1, filter: ({ status, name }) => status === 'complete' && name === project.name });
+    expect(named).toMatchObject({ total: 1, items: [{ id: project.id }] });
+    const read = async () => {
+      const [affectedId] = await db.listCompletionCandidateIds([id]);
+      expect(affectedId).toBe(project.id);
+      return readProjectCompletion(await db.getProject(affectedId), { requireCatalog: true });
+    };
+    expect(await read()).toBe(true);
+
+    const observed = [];
+    const onChanged = ({ ingredientId }) => {
+      if (ingredientId === id) observed.push(read());
+    };
+    catalogEvents.on('assets-changed', onChanged);
+    try {
+      await expect(database.withTransaction(async client => {
+        await catalog.setPortraitMedia(id, 'replacement.png', { client });
+        expect(observed).toHaveLength(0);
+        throw new Error('Rollback fixture');
+      })).rejects.toThrow('Rollback fixture');
+      expect(observed).toHaveLength(0);
+      expect(await read()).toBe(true);
+
+      await database.withTransaction(async client => {
+        await catalog.setPortraitMedia(id, 'replacement.png', { client });
+        expect(observed).toHaveLength(0);
+      });
+      expect(await Promise.all(observed)).toEqual([false]);
+      await catalog.setPortraitMedia(id, 'original.png');
+      expect(await Promise.all(observed)).toEqual([false, true]);
+    } finally {
+      catalogEvents.off('assets-changed', onChanged);
+      await query('DELETE FROM music_video_projects WHERE id = $1', [project.id]);
     }
   });
 

@@ -40,7 +40,7 @@ import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageMod
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../lib/imageGenCapabilities.js';
 import { applyImageClean, applyWatermarkRemoval, applyLightRegenVariant } from '../services/imageGen/variants.js';
 import { applyFilmLookBake, readFilmLookSource } from '../services/imageGen/filmLookBake.js';
-import { musicVideoCastInputsSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastInputsSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { universeVisualProfileSchema } from '../lib/universeVisualProfileValidation.js';
 import { previewImagePrompt, previewQuickImageEdit } from '../services/imageGen/promptPreview.js';
 import { assertReviewedReference } from '../services/imageGen/reviewedReference.js';
@@ -65,11 +65,11 @@ import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmissi
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 import { attachNodeImage } from '../services/fableLoom/records.js';
-import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
-import { attachGeneratedMedia } from '../services/catalogDB.js';
-import { catalogEvents } from '../services/catalogEvents.js';
+import { attachGeneratedMedia } from '../services/catalog/catalogDB.js';
+import { catalogEvents } from '../services/catalog/catalogEvents.js';
 const router = Router();
 
 router.get('/runway-models', asyncHandler(async (_req, res) => {

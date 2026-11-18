@@ -56,14 +56,14 @@ async function unlockAbandonedCandidate(app, tree, deps = {}) {
   const options = await resolveForgeExecOptions(app.repoPath, { forgeAccount: app.forgeAccount ?? null });
   const open = JSON.parse(await execGh(['pr', 'list', '--state', 'open', '--head', branch, '--json', 'number', '--limit', '1'], undefined, options));
   if (!Array.isArray(open) || open.length) return false;
-  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock, readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const { claimCheckoutOwnerReason } = await import('../lib/claimContinuation.js');
   const { listWorktrees } = await import('./worktreeManager.js');
   const { execGit } = await import('../lib/execGit.js');
   return withClaimOwnershipLock(() => withGitMutationLifetime(async () => {
     await (deps.beforeMutation || (await import('./heldCheckoutRecovery.js')).assertAutomaticRetirementAllowed)();
     const agents = await readClaimOwnershipAgents();
-    const { getActiveAgentIds } = await import('./agentState.js');
+    const { getActiveAgentIds } = await import('./agent/agentState.js');
     const active = new Set(getActiveAgentIds());
     if (!agents || [...active].some(id => !agents.some(agent => agent.id === id))) return false;
     const owners = agents.map(agent => active.has(agent.id) ? { ...agent, status: 'running' } : agent);

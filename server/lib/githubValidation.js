@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 
 export const githubRepoUpdateSchema = z.object({
   flags: z.record(z.boolean()).optional(),

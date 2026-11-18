@@ -21,11 +21,11 @@
 
 import { MODEL_ABUSE_GUARD_ID, issuePrerequisiteWaived, normalizeEligibilityFacts } from '../lib/modelAbuseGuard.js';
 import { isScreenedPullRequestFingerprint } from '../lib/prReviewContent.js';
-import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agent/agentExecutionProfiles.js';
 import { applyStageExecution } from '../lib/pipelineStageExecution.js';
 import { createPrReviewerDefaultStages } from './taskScheduleRegistry.js';
-import { getCosTasks } from './cosTaskStore.js';
-import { emitLog } from './cosEvents.js';
+import { getCosTasks } from './cos/cosTaskStore.js';
+import { emitLog } from './cos/cosEvents.js';
 import {
   isTaskOutputPayload as isIssueWatcherPayload,
   processTaskOutput as processIssueWatcherOutput,

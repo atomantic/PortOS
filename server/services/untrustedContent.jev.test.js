@@ -19,8 +19,8 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('./modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('./settings.js', () => ({ readSettingsStrict: mocks.read }));
-vi.mock('./providers.js', () => ({ getAllProviders: mocks.providers }));
-vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: mocks.providers }));
+vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: async () => ({ success: true }) }));
 vi.mock('./jev.js', () => ({ decide: mocks.decide }));
 vi.mock('./instanceFeatures.js', () => ({ isInstanceFeatureEnabled: mocks.feature }));
 // The counters store runs for real against a temp data root, so these

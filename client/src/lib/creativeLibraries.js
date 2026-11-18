@@ -5,7 +5,7 @@
 
 import { Sparkles, Drama, Mountain, Package } from 'lucide-react';
 import { GREYBOX_SHOT_ROLE_PREFIX } from '../../../server/lib/greyboxVocabulary.js';
-import { isDesignRole } from '../../../server/lib/catalogDesign.js';
+import { isDesignRole } from '../../../server/lib/catalog/catalogDesign.js';
 
 // Casting, Environments and Objects: focused library pages over the catalog's
 // character, place and object ingredients. The catalog row stays the single

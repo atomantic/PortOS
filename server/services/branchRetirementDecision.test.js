@@ -11,8 +11,8 @@ import { describe, it, expect } from 'vitest';
 import {
   decideBranchRetirement, decideDetachedRetirement, decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner,
   decideCleanPushedDetach, decideForceRemoval, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideIdleNextHolderRelease, decideMergedDelivery, decideMergedWorktreeReap, decideMergedWorktreeRemoval, decidePendingMergeReceipt, decideWith, gatheredHoldReason,
-  recoveryWorktreeReason, supersededPolicyHold,
-  SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
+  claimIssueOfBranch, MERGED_OWNERSHIP_HOLDS, recoveryWorktreeReason, supersededPolicyHold,
+  ANCESTRY_RETIREMENT_IDLE_MS, UNPROBED_CHECKOUT_IDLE_MS, SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS,
 } from './branchRetirementDecision.js';
 import { classifyBranches } from './branchReconcile.js';
 import { classifyWorktreeDirt } from './worktreeManager.js';
@@ -36,7 +36,9 @@ function mergedCase(branch, path, { scan = {}, facts = {}, locked = false, ...in
     input: { repoPath: REPO, branch, mergedRetirement: true, activeAgentIds: new Set(), roots: ROOTS, nowMs: NOW,
       scan: { worktreePath: path, worktreeLocked: false, worktreeAgeMs: 30 * DAY, openPr: null, prStateUnavailable: false, tip: HEAD, ...scan }, ...input },
     facts: { agents: [], defaultBranch: 'main', head: HEAD, policyHold: null, holders, mergedAtHead: true, dirty: false,
-      completionRecords: [], receipt: false, forgeMerge: null, githubOrigin: false, idleMs: null, ...facts },
+      completionRecords: [], receipt: false, forgeMerge: null, githubOrigin: false, idleMs: null,
+      // Own commits replayed onto main (a rebase merge), unpublished: what mergedOwnershipHold retires.
+      lineage: 'patch', published: false, mergedPrAtHead: false, ...facts },
   };
 }
 
@@ -110,7 +112,7 @@ describe('decideBranchRetirement — merged named branches', () => {
 
   it('retires a branch with no checkout from the merge evidence alone', () => {
     expect(decide(mergedCase('fix/ref-only', null, { scan: { worktreePath: null } }))).toMatchObject({
-      admit: { worktreePath: null, claimCompletion: null }, asked: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'],
+      admit: { worktreePath: null, claimCompletion: null }, asked: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead', 'lineage', 'published'],
     });
   });
 
@@ -163,6 +165,85 @@ describe('decideBranchRetirement — merged named branches', () => {
       .toEqual(['receipt', 'forgeMerge', 'githubOrigin', 'idleMs']);
     // A young checkout is held before any forge read.
     expect(decide(mergedCase('claim/issue-29', `${MANAGED}/claim-issue-29`, { scan: { worktreeAgeMs: 0 } })).asked.at(-1)).toBe('receipt');
+  });
+});
+
+// A branch that reads as merged by ancestry may be new or still owned (#16625).
+// Driven through the reaper (a .claude tree passes every earlier gate) and,
+// without a checkout, through branch retirement; `asked` lists only the gate's reads.
+describe('mergedOwnershipHold', () => {
+  const CHECKOUT = `${MANAGED}/next-issue-7`;
+  const IDLE = 2 * HOUR;
+  const BASE_READS = { reap: ['dirty', 'mergeEvidence'], branch: ['agents', 'defaultBranch', 'head', 'policyHold', 'holders', 'mergedAtHead'] };
+  const own = ({ branch = 'feat/x', checkoutPath = CHECKOUT, facts = {} } = {}) => {
+    const answers = { lineage: 'ancestry', published: false, claimReserved: false, checkoutPresent: true, checkoutProcess: false, idleMs: IDLE, mergedPrAtHead: false, ...facts };
+    const step = checkoutPath === null
+      ? decide(mergedCase(branch, null, { scan: { worktreePath: null }, facts: answers }))
+      : drive(decideMergedWorktreeReap, {
+        tree: { path: checkoutPath, branch: `refs/heads/${branch}`, head: HEAD, locked: false }, defaultBranch: 'main', currentBranch: 'main',
+        worktreesDir: '/data/cos/worktrees', claudeTreesRoot: MANAGED, activeAgentIds: new Set(), nowMs: NOW,
+      }, { dirty: false, mergeEvidence: true, ...answers });
+    const base = BASE_READS[checkoutPath === null ? 'branch' : 'reap'];
+    expect(step.asked.slice(0, base.length)).toEqual(base);
+    return { ...step, asked: step.asked.slice(base.length) };
+  };
+
+  it.each([
+    // [case, overrides, verdict]
+    ['a branch still at its creation commit is new', { facts: { lineage: 'new' } }, 'branch-has-no-own-commits'],
+    ['a new branch whose PR merged at exactly this head retires', { facts: { lineage: 'new', mergedPrAtHead: true } }, 'retire'],
+    ['an unreadable or expired reflog holds', { facts: { lineage: null } }, 'branch-own-commits-unreadable'],
+    ['an unreadable reflog with a PR merged at this head retires', { facts: { lineage: null, mergedPrAtHead: true } }, 'retire'],
+    ['a published branch with no PR merged at its head is a claim', { facts: { lineage: 'patch', published: true } }, 'published-claim-unmerged'],
+    ['unreadable publication holds', { facts: { lineage: 'patch', published: null } }, 'branch-publication-unreadable'],
+    ['a published branch whose PR merged at this head retires', { facts: { published: true, mergedPrAtHead: true } }, 'retire'],
+    ['rebase- or squash-merged own commits retire, however recent', { facts: { lineage: 'patch', checkoutProcess: true, idleMs: 0 } }, 'retire'],
+    ['an idle, unoccupied no-ff merge retires', {}, 'retire'],
+    ['a checkout directory proven absent needs no activity read', { facts: { checkoutPresent: false, checkoutProcess: null, idleMs: null } }, 'retire'],
+    ['an unreadable checkout directory holds', { facts: { checkoutPresent: null } }, 'checkout-presence-unreadable'],
+    ['a process in the checkout holds an ancestry merge', { facts: { checkoutProcess: true } }, 'checkout-process-active'],
+    ['a probe that cannot tell needs a day of quiet, not an hour', { facts: { checkoutProcess: null } }, 'checkout-process-unverified'],
+    ['a quiet day retires a checkout no probe can see into', { facts: { checkoutProcess: null, idleMs: 25 * HOUR } }, 'retire'],
+    ['recent activity holds an ancestry merge', { facts: { idleMs: 10 * 60 * 1000 } }, 'checkout-recently-touched'],
+    ['unreadable activity holds', { facts: { idleMs: null } }, 'checkout-idle-unreadable'],
+    ['a PR merged at this head outranks recent activity', { facts: { idleMs: 0, mergedPrAtHead: true } }, 'retire'],
+    ['a reserved issue claim holds an ancestry merge', { branch: 'next/issue-7', facts: { claimReserved: true } }, 'claim-issue-reserved'],
+    ['an unreadable issue reservation holds', { branch: 'claim/issue-7', facts: { claimReserved: null } }, 'claim-issue-unverified'],
+    ['a released issue claim retires once idle', { branch: 'next/issue-7' }, 'retire'],
+    ['a reserved claim with no checkout is still held', { branch: 'next/issue-7', checkoutPath: null, facts: { claimReserved: true } }, 'claim-issue-reserved'],
+    ['a branch with no checkout needs no checkout activity', { checkoutPath: null, facts: { checkoutProcess: undefined, idleMs: undefined } }, 'retire'],
+  ])('%s', (_name, overrides, expected) => {
+    expect(verdict(own(overrides))).toBe(expected);
+    // Every hold is one the sweeps log as a deliberate keep.
+    if (expected !== 'retire') expect(MERGED_OWNERSHIP_HOLDS.has(expected)).toBe(true);
+  });
+
+  it('dates a recent-activity hold for when the idle window lapses', () => {
+    expect(own({ facts: { idleMs: 10 * 60 * 1000 } }).hold.retryAt).toBe(new Date(NOW + ANCESTRY_RETIREMENT_IDLE_MS - 10 * 60 * 1000).toISOString());
+    expect(own({ facts: { checkoutProcess: null } }).hold.retryAt).toBe(new Date(NOW + UNPROBED_CHECKOUT_IDLE_MS - IDLE).toISOString());
+  });
+
+  it('reads the forge only once a hold would apply, and checkout activity only for an ancestry merge', () => {
+    expect(own().asked).toEqual(['lineage', 'published', 'checkoutPresent', 'checkoutProcess', 'idleMs']);
+    expect(own({ facts: { checkoutPresent: false } }).asked).toEqual(['lineage', 'published', 'checkoutPresent']);
+    expect(own({ facts: { lineage: 'patch' } }).asked).toEqual(['lineage', 'published']);
+    expect(own({ facts: { lineage: 'new' } }).asked).toEqual(['lineage', 'mergedPrAtHead']);
+    expect(own({ branch: 'next/issue-7', facts: { claimReserved: true } }).asked).toEqual(['lineage', 'published', 'claimReserved', 'mergedPrAtHead']);
+  });
+
+  it('names the issue a /do:next or /claim branch reserves, and nothing else', () => {
+    expect(['next/issue-7', 'claim/issue-12', 'feat/issue-7', 'next/issue-07', 'next/issue-7/x'].map(claimIssueOfBranch)).toEqual(['7', '12', null, null, null]);
+  });
+
+  it('applies after the merged-retirement gates, and a completed run receipt answers it instead', () => {
+    const fresh = mergedCase('next/issue-7', CHECKOUT, { facts: { lineage: 'new' } });
+    expect(decide(fresh)).toMatchObject({ hold: { reason: 'branch-has-no-own-commits' } });
+    expect(decide(mergedCase('fix/ref-only', null, { scan: { worktreePath: null }, facts: { lineage: 'new' } })).hold.reason).toBe('branch-has-no-own-commits');
+    // Dirt and locks keep their own, earlier reasons.
+    expect(reasonOf(mergedCase('next/issue-7', CHECKOUT, { facts: { lineage: 'new', dirty: true } }))).toBe('worktree-dirty');
+    const receipt = decide(mergedCase('claim/issue-11', `${MANAGED}/claim-issue-11`, { facts: { receipt: true, lineage: 'new' } }));
+    expect(receipt.admit.claimCompletion).toBe('receipt');
+    expect(receipt.asked).not.toContain('lineage');
   });
 });
 
@@ -480,7 +561,7 @@ describe('decideMergedWorktreeReap', () => {
   const reap = ({ tree: t = tree('merged', 'merged-br'), facts = {}, ...input } = {}) => drive(decideMergedWorktreeReap, {
     tree: t, defaultBranch: 'main', currentBranch: 'main', worktreesDir: COS, claudeTreesRoot: MANAGED, includeClaudeTrees: true,
     activeAgentIds: new Set(), ...input,
-  }, { dirty: false, disposableHead: false, mergeEvidence: true, ...facts });
+  }, { dirty: false, mergedPrAtHead: false, mergeEvidence: true, lineage: 'patch', published: false, ...facts });
 
   it.each([
     // [removed real-git case, overrides, verdict]
@@ -488,13 +569,17 @@ describe('decideMergedWorktreeReap', () => {
     ['a merged branch whose checkout vanished (its status reads empty) is reaped', { facts: { dirty: false } }, 'retire'],
     ['an unmerged tree is preserved', { facts: { mergeEvidence: false } }, 'unmerged'],
     ['a merged tree with uncommitted changes is preserved', { facts: { dirty: true } }, 'uncommitted'],
-    ['a dirty tree whose PR merged at its exact head is reaped', { facts: { dirty: true, disposableHead: true } }, 'retire'],
-    ['a dirty tree whose PR merged at another head is preserved', { facts: { dirty: true, disposableHead: false } }, 'uncommitted'],
+    ['a dirty tree whose PR merged at its exact head is reaped', { facts: { dirty: true, mergedPrAtHead: true } }, 'retire'],
+    ['a dirty tree whose PR merged at another head is preserved', { facts: { dirty: true, mergedPrAtHead: false } }, 'uncommitted'],
     ['a fresh-from-main tree with uncommitted changes is preserved', { facts: { dirty: true, mergeEvidence: false } }, 'uncommitted'],
     ['a locked merged tree is preserved', { tree: tree('locked', 'locked-br', { locked: true }) }, 'worktree-locked'],
     ['an active agent\'s merged tree is skipped', { tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }, 'worktree-active-agent'],
     ['an agent tree holds while liveness is unknown', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345'), activeAgentIds: null }, 'worktree-agent-liveness-unknown'],
     ['a merged clean agent tree is reaped', { tree: tree('agent-abc12345', 'cos/task-1/agent-abc12345') }, 'retire'],
+    // #16625: a .claude tree has no owner record, so a new branch there is a session's, not merged work.
+    ['a new .claude tree with no commits of its own is held', { facts: { lineage: 'new' } }, 'branch-has-no-own-commits'],
+    ['a published .claude tree with no PR at its head is held', { facts: { published: true } }, 'published-claim-unmerged'],
+    ['an ended agent\'s empty tree in the CoS root is still reaped', { tree: { ...tree('x', 'cos/task-1/agent-abc12345'), path: `${COS}/agent-abc12345` }, facts: { lineage: 'new' } }, 'retire'],
     ['a human /claim tree is never reaped, even merged and clean', { tree: tree('claim-issue-42', 'claim/issue-42') }, 'worktree-human-claim'],
     ['a claim-shaped tree in the CoS root lacks an agent id', { tree: { ...tree('x', 'claim/issue-42'), path: `${COS}/claim-issue-42` } }, 'worktree-missing-agent-id'],
     ['a merged tree outside the managed roots is preserved', { tree: { ...tree('x', 'loose-br'), path: '/work/elsewhere/loose' } }, 'worktree-unmanaged-location'],
@@ -514,14 +599,14 @@ describe('decideMergedWorktreeReap', () => {
     expect(reap({ tree: tree('detached', 'x', { branch: undefined, detached: true }) }).branch).toBeNull();
     expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).branch).toBe('locked-br');
     expect(reap().admit).toEqual({ branch: 'merged-br', disposable: false });
-    expect(reap({ facts: { dirty: true, disposableHead: true } }).admit).toEqual({ branch: 'merged-br', disposable: true });
+    expect(reap({ facts: { dirty: true, mergedPrAtHead: true } }).admit).toEqual({ branch: 'merged-br', disposable: true });
   });
 
   it('reads facts lazily: a lock or live owner reads nothing, a clean tree asks no forge, dirt reads no merge evidence', () => {
     expect(reap({ tree: tree('locked', 'locked-br', { locked: true }) }).asked).toEqual([]);
     expect(reap({ tree: tree('agent-active', 'active-br'), activeAgentIds: new Set(['agent-active']) }).asked).toEqual([]);
-    expect(reap().asked).toEqual(['dirty', 'mergeEvidence']);
-    expect(reap({ facts: { dirty: true } }).asked).toEqual(['dirty', 'disposableHead']);
+    expect(reap().asked).toEqual(['dirty', 'mergeEvidence', 'lineage', 'published']);
+    expect(reap({ facts: { dirty: true } }).asked).toEqual(['dirty', 'mergedPrAtHead']);
     expect(reap({ facts: { dirty: null } }).asked).toEqual(['dirty']);
   });
 

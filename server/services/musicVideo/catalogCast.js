@@ -16,7 +16,7 @@ import { isFileBackend } from '../../lib/pgFileFacade.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideoSubjectLimits.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX as SUBJECT_DESCRIPTION_MAX } from '../../lib/musicVideo/musicVideoSubjectLimits.js';
 import { CAST_SETS_SUBJECT_PREFIX } from './castAndSetsPlan.js';
 import { leadingAge, musicVideoCastIngredientId, subjectNameParts } from './castAndSetsDirection.js';
 
@@ -335,11 +335,11 @@ async function commitCatalogCast(projectId, decisions, deps) {
 
 async function defaultDeps() {
   const [catalogDB, projects, { getUniverse }, { queueProjectCatalogLinkSync }, { createOwnedPrimitive }] = await Promise.all([
-    import('../catalogDB.js'),
+    import('../catalog/catalogDB.js'),
     import('./projects.js'),
     import('../universeBuilder.js'),
     import('./catalogLinks.js'),
-    import('../catalogPrimitives.js'),
+    import('../catalog/catalogPrimitives.js'),
   ]);
   return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }

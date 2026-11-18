@@ -4,8 +4,8 @@ import { resolve } from 'path';
 import * as git from '../services/git.js';
 import * as gitSubmodules from '../services/gitSubmodules.js';
 import * as appsService from '../services/apps.js';
-import { getAgents } from '../services/cosAgentLifecycle.js';
-import { protectedAgentIds } from '../services/agentState.js';
+import { getAgents } from '../services/cos/cosAgentLifecycle.js';
+import { protectedAgentIds } from '../services/agent/agentState.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
 import { validateRequest, submoduleStatusQuerySchema, submoduleUpdateSchema, gitDeleteBranchBodySchema,

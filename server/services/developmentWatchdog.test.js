@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({ state: null, tasks: [], prs: [], backlog: [], peers: [], adds: [], updates: [], save: vi.fn(), branch: '', account: 'atomantic', fullName: 'atomantic/example', execOptions: [], nextPrs: null, prReads: 0, prStates: {}, dependencies: [], dependencyOpen: false, execGhFailureOn: null, invalidGhJsonOn: null, issueTruncated: false, readiness: { shouldRun: true }, requests: [], duplicate: false, prepare: vi.fn(), record: vi.fn(), execution: vi.fn(), metadata: vi.fn() }));
-vi.mock('./cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => m.state, saveState: m.save, withStateLock: async fn => fn(), isImprovementEnabled: state => state.config.improvementEnabled }));
 vi.mock('./apps.js', () => ({ getActiveApps: async () => [{ id: 'app', name: 'Example', repoPath: '/example' }] }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), updateTask: async (id, updates, type, options) => {
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: m.tasks } }), updateTask: async (id, updates, type, options) => {
   m.updates.push({ id, updates, type, options });
   const task = m.tasks.find(item => item.id === id);
   if (!task) return { error: 'Task not found' };
@@ -18,10 +18,10 @@ vi.mock('./appPullRequests.js', () => ({ listAppPullRequests: async () => {
   return { pullRequests: m.prReads > 1 && m.nextPrs ? m.nextPrs : m.prs, transient: false };
 } }));
 vi.mock('./perpetualWork.js', async importOriginal => ({ ...(await importOriginal()), detectActionableWork: async () => ({ count: m.backlog.length, items: m.backlog }), listConfiguredForgeIssues: async () => ({ ok: true, truncated: m.issueTruncated, issues: m.backlog.map(i => ({ number: Number(i.ref), labels: [], assignees: [] })) }) }));
-vi.mock('./cosTaskClaimWork.js', () => ({
+vi.mock('./cos/cosTaskClaimWork.js', () => ({
   resolveClaimWorkMetadata: (...args) => m.metadata(...args),
 }));
-vi.mock('./cosTaskGenerator.js', () => ({
+vi.mock('./cos/cosTaskGenerator.js', () => ({
   resolveAutonomyBudget: async () => ({ cosAutonomyMode: 'execute', autonomousActionsRemaining: 10 }),
   prepareManagedAppImprovementTask: (...args) => m.prepare(...args),
   recordDeferredPerpetualDispatch: (...args) => m.record(...args),
@@ -43,13 +43,13 @@ vi.mock('../lib/execGit.js', () => ({ execGit: async () => ({ stdout: m.branch }
 vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: async () => { throw new Error('offline'); } }));
 vi.mock('./blockedIssueReconcile.js', () => ({ parseBlockingIssueNumbers: () => m.dependencies }));
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({ reviewers: ['codex'] }) }));
-vi.mock('./agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
 vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
-vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
-vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
+vi.mock('./persistent/persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
+vi.mock('./persistent/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
 import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './developmentWatchdog.js';
-import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanceContext.js';
+import { readPersistentMindMaintenanceContext } from './persistent/persistentMindMaintenanceContext.js';
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };

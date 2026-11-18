@@ -17,7 +17,7 @@ import {
   FEDERATED_MEDIA_MAX_VIDEO_FRAMES,
   FEDERATED_MEDIA_WIRE_VERSION,
 } from '../../lib/federatedMediaWire.js';
-import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/validation.js';
+import { federatedMediaVideoJobSubmissionBaseSchema } from '../../lib/federatedMediaValidation.js';
 import { inputAssetRejection } from './inputAssets.js';
 
 // The BASE (un-refined) schema: this validates a partially-negotiated body,

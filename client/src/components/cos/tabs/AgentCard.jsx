@@ -198,7 +198,7 @@ function normalizeDescriptionToMarkdown(text) {
 // `line-clamp` can't clamp this — MarkdownOutput emits block children — so it
 // uses CollapsibleText's max-height variant, which measures the real overflow
 // instead of guessing from a character count.
-// The listing bounds `metadata.taskDescription` (server/lib/cosAgentListProjection.js),
+// The listing bounds `metadata.taskDescription` (server/lib/cos/cosAgentListProjection.js),
 // which is exactly what the clamped preview needs and 68% less to download. The
 // rest arrives only if the reader opens it — `onExpand` fires once per mount, so
 // collapsing and re-opening never re-fetches.
@@ -839,7 +839,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
             {!inactive && (
               // 'stalled' is the one phase that does NOT pulse: the run is still
               // alive but has ignored every nudge, and an animated badge reads as
-              // progress. See the stall gate in server/services/agentTuiSpawning.js.
+              // progress. See the stall gate in server/services/agent/agentTuiSpawning.js.
               <span className={`px-2 py-0.5 text-xs rounded shrink-0 ${
                 agent.metadata?.phase === 'stalled' ? 'bg-orange-500/20 text-orange-400' :
                 agent.metadata?.phase === 'initializing' ? 'bg-yellow-500/20 text-yellow-400 animate-pulse' :

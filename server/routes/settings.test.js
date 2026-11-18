@@ -64,7 +64,7 @@ vi.mock('../services/codeReview.js', async (importOriginal) => ({
   getProviderReviewUnsupported: vi.fn(async () => ({})),
 }));
 const reviewerProviders = vi.hoisted(() => ({ current: [] }));
-vi.mock('../services/providers.js', async (importOriginal) => ({
+vi.mock('../services/provider/providers.js', async (importOriginal) => ({
   ...await importOriginal(),
   getAllProviders: vi.fn(async () => ({ providers: reviewerProviders.current })),
 }));

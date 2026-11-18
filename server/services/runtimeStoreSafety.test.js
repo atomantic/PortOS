@@ -24,8 +24,8 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(), getAllApps: vi.fn(), PORTOS_APP_ID: 'self' }));
 vi.mock('./git.js', () => ({ getBranch: vi.fn(), getStatus: vi.fn(), isRepo: vi.fn() }));
 vi.mock('./shell.js', () => ({ listAllSessions: vi.fn(() => []) }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn(), on: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('./quotaBurnInvoke.js', () => ({ getQuotaBurnTaskCatalog: vi.fn(), invokeQuotaBurnStep: vi.fn() }));
 vi.mock('./quotaBurnSequence.js', () => ({ ACTIVE_TASK_STATUSES: new Set(), probeSequenceDrain: vi.fn(), sequenceStepShapeReason: vi.fn() }));
 vi.mock('./promptRunner.js', () => ({ resolveProviderAndModel: vi.fn(), runPromptThroughProvider: vi.fn(), assertProvider: vi.fn() }));

@@ -40,7 +40,7 @@ export async function probeSequenceDrain(job, { catalog, ignoreTaskId = null }) 
     return { reason: 'sequence drain requires perpetual claim-issue in Scheduled Tasks' };
   }
   const [{ getAppById }, { detectActionableWork }, { sanitizeTaskMetadata }] = await Promise.all([
-    import('./apps.js'), import('./perpetualWork.js'), import('../lib/cosValidation.js'),
+    import('./apps.js'), import('./perpetualWork.js'), import('../lib/cos/cosValidation.js'),
   ]);
   const app = await getAppById(resolved.ref.appId);
   if (!app) return { reason: 'sequence target app is unavailable' };
@@ -68,7 +68,7 @@ async function sequenceStepNotApplicable(job, catalog) {
 }
 
 export async function nextQuotaBurnSequenceJob(family, { completions, reservations, catalog, ignoreTaskId = null }) {
-  const { getAllTasks } = await import('./cosTaskStore.js');
+  const { getAllTasks } = await import('./cos/cosTaskStore.js');
   const { user, cos } = await getAllTasks();
   const active = [...(user?.tasks || []), ...(cos?.tasks || [])].find(task => task.id !== ignoreTaskId
     && burnPlanOwnsTask(task.metadata) && quotaBurnProvenance(task.metadata).family === family.id

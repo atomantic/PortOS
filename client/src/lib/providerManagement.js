@@ -41,7 +41,7 @@ export function catalogSummary(catalog) {
 }
 
 /**
- * One phrasing per service `readiness` value (`server/lib/providerServiceInstances.js`),
+ * One phrasing per service `readiness` value (`server/lib/provider/providerServiceInstances.js`),
  * for every surface that names it: the Services card badge (`tone` + `label`),
  * the compose popover's readiness line and the compatibility matrix's blocked
  * reason (`reason`, a predicate that follows the service's name). A value this

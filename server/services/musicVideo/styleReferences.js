@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { promptAddition } from '../../lib/modelInput.js';
-import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { musicVideoStyleImages, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideo/musicVideoConditioning.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 
 /** Resolve style capacity on the actual route, preserving every explicit identity input. */

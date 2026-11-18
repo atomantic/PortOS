@@ -18,13 +18,13 @@ vi.mock('../instanceIdentity.js', () => ({ getInstanceId: async () => 'example-o
 
 const getActiveAgentsMock = vi.fn(() => []);
 const killAgentMock = vi.fn(async () => ({ success: true }));
-vi.mock('../agentManagement.js', () => ({
+vi.mock('../agent/agentManagement.js', () => ({
   getActiveAgents: (...a) => getActiveAgentsMock(...a),
   killAgent: (...a) => killAgentMock(...a),
 }));
 
 const updateTaskMock = vi.fn(async () => ({}));
-vi.mock('../cosTaskStore.js', () => ({ updateTask: (...a) => updateTaskMock(...a) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...a) => updateTaskMock(...a) }));
 
 const listJobsMock = vi.fn(() => []);
 const cancelJobMock = vi.fn(async () => ({}));

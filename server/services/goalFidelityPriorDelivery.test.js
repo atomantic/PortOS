@@ -10,8 +10,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const agents = vi.hoisted(() => ({ resident: [], archived: [] }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agents.resident) }));
-vi.mock('./cosAgentIndex.js', () => ({ getAgentsByDate: vi.fn(async () => agents.archived) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agents.resident) }));
+vi.mock('./cos/cosAgentIndex.js', () => ({ getAgentsByDate: vi.fn(async () => agents.archived) }));
 
 import { priorTaskDelivery } from './goalFidelityPriorDelivery.js';
 

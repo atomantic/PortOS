@@ -62,20 +62,28 @@ it('keeps every shared film module outside the Music Video service graph', () =>
     const closure = staticImportClosure(abs(`services/film/${name}`)).files;
     expect([...closure].filter((file) => file.startsWith(`${abs('services/musicVideo')}${sep}`)), name).toEqual([]);
   }
-  expect(reaches('services/film/sync.js', 'lib/musicVideoBlender.js')).toBe(true);
+  expect(reaches('services/film/sync.js', 'lib/musicVideo/musicVideoBlender.js')).toBe(true);
 });
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
+  ['lib/insightsValidation.js', 'lib/validation.js',
+    'defines insights schemas without loading the catch-all validation barrel'],
+  ['routes/insights.js', 'lib/validation.js',
+    'validates insights requests through domain schemas and the leaf validator'],
+  ['lib/federatedMediaValidation.js', 'lib/validation.js',
+    'validates federated jobs through domain schemas without loading the catch-all barrel'],
+  ['lib/federatedMediaRequest.js', 'lib/validation.js',
+    'builds federated requests through domain schemas and the leaf validator'],
   ['services/videoGen/renderArgs.js', 'services/videoGen/loraStages.js',
     'checks the shared request contract without runtime capability validation'],
   ['services/videoGen/prepareParams.js', 'services/videoGen/loraStages.js',
     'loads runtime LoRA validation only when preparing a render'],
   ['services/videoGen/generateVideo.js', 'services/videoGen/loraStages.js',
     'loads runtime LoRA validation only when executing a render'],
-  ['lib/catalogValidation.js', 'lib/greyboxScene.js',
+  ['lib/catalog/catalogValidation.js', 'lib/greyboxScene.js',
     'leaves greybox scene validation to its endpoint-specific schemas'],
-  ['lib/catalogValidation.js', 'lib/greyboxPrompt.js',
+  ['lib/catalog/catalogValidation.js', 'lib/greyboxPrompt.js',
     'leaves greybox prompt validation to its endpoint-specific schemas'],
   ['services/videoGen/spawnWatch.js', 'services/videoGen/metalBufferProfiles.js',
     'loads learned Metal buffer policies only when executing a render'],
@@ -83,23 +91,23 @@ const NARROWED = [
     'probes runtime capability only for a non-default per-stage request'],
   ['routes/mediaJobs.js', 'services/videoGen/prepareParams.js',
     'loads local render preparation only when retrying a local video'],
-  ['services/cosLocalEndpointSlots.js', 'services/promptRunner.js',
+  ['services/cos/cosLocalEndpointSlots.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/cos.js', 'services/promptRunner.js',
+  ['services/cos/cos.js', 'services/promptRunner.js',
     'reads the local-LLM concurrency cap from its leaf without loading the prompt runner'],
-  ['services/agentFinalization.js', 'services/promptRunner.js',
+  ['services/agent/agentFinalization.js', 'services/promptRunner.js',
     'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/agentFinalization.js', 'services/cosTaskGenerator.js',
+  ['services/agent/agentFinalization.js', 'services/cos/cosTaskGenerator.js',
     'writes task state through the task store without loading the CoS daemon graph'],
-  ['services/investigationTaskProducer.js', 'services/cos.js',
+  ['services/investigationTaskProducer.js', 'services/cos/cos.js',
     'queues investigation tasks through the task store, not the CoS daemon'],
-  ['services/repoIntake.js', 'services/cos.js',
+  ['services/repoIntake.js', 'services/cos/cos.js',
     'queues intake tasks through the task store, not the CoS daemon'],
-  ['services/askPromote.js', 'services/cos.js',
+  ['services/askPromote.js', 'services/cos/cos.js',
     'queues promoted tasks through the task store, not the CoS daemon'],
-  ['routes/gsd.js', 'services/cos.js',
+  ['routes/gsd.js', 'services/cos/cos.js',
     'queues GSD tasks through the task store, not the CoS daemon'],
-  ['routes/apps/agents.js', 'services/cos.js',
+  ['routes/apps/agents.js', 'services/cos/cos.js',
     'lists agents from the declaring agent modules, not the CoS daemon'],
   ['services/imageGen/prepareParams.js', 'services/imageGen/index.js',
     'reads cleaner request policy without loading execution backends'],
@@ -122,7 +130,7 @@ const NARROWED = [
     'loads GPU memory management only for generation, not gallery reads'],
   ['services/imageGen/local.js', 'services/imageGen/regen.js',
     'loads pixel comparison only for a regeneration, not gallery reads'],
-  ['services/persistentMindSupervisor.js', 'services/persistentMindContext.js',
+  ['services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindContext.js',
     'loads context and memory orchestration only after a turn is admitted'],
   ['services/github.js', 'services/settings.js',
     'loads settings only for secret operations, not repository reads or sync'],
@@ -130,23 +138,23 @@ const NARROWED = [
     'loads bible asset handling only for Writers Room work pushes'],
   ['services/sharing/peerSyncReceive.js', 'services/writersRoom/bibleSync.js',
     'loads bible asset handling only for Writers Room work receives'],
-  ['services/persistentMindAttachments.js', 'services/persistentMindSupervisor.js',
+  ['services/persistent/persistentMindAttachments.js', 'services/persistent/persistentMindSupervisor.js',
     'owns screenshot attachment lifecycle without supervisor turn execution'],
   ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
     'reads repository ages through shared metadata without catalog selection'],
   ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
     'owns Hub transport and caching independently of audio rendering'],
-  ['lib/providerFamilies.js', 'lib/grok.js',
+  ['lib/provider/providerFamilies.js', 'lib/grok.js',
     'shares browser-safe family identity without Grok filesystem helpers'],
   ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
     'needs task names, which scheduledTaskTypes.js declares'],
-  ['services/agentAppWorkspace.js', 'services/promptRunner.js',
+  ['services/agent/agentAppWorkspace.js', 'services/promptRunner.js',
     'resolves app records without AI-backed JIRA title generation'],
-  ['services/agentAppWorkspace.js', 'services/jira.js',
+  ['services/agent/agentAppWorkspace.js', 'services/jira.js',
     'reads workspace metadata without ticket creation'],
-  ['services/agentAppWorkspace.js', 'services/agentPromptBuilder.js',
+  ['services/agent/agentAppWorkspace.js', 'services/agent/agentPromptBuilder.js',
     'owns workspace resolution independently of prompt assembly'],
-  ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
+  ['services/provider/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
     'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
     'the DDL composer is boot-only — ensureSchemaImpl() imports it lazily'],
@@ -172,7 +180,7 @@ const NARROWED = [
     'needs inferTuiCommand, which providerVendors.js declares'],
   ['services/voice/tools/pipeline.js', 'services/pipeline/issues.js',
     'needs only the pure pipelineStages.js identity leaf'],
-  ['services/cosTaskIntake.js', 'lib/validation.js',
+  ['services/cos/cosTaskIntake.js', 'lib/validation.js',
     'needs SWARM_COUNT_* and the reviewer normalizers, which cosValidation.js / reviewerConfig.js declare'],
   ['services/brainStorage.js', 'services/instances.js',
     'needs getInstanceId, which instanceIdentity.js declares'],
@@ -201,13 +209,13 @@ const NARROWED = [
   ['services/installState.js', '../scripts/run-migrations.js',
     'reads pending migrations through the scripts/lib/migrationLedger.js leaf'],
   // #14867: optional music-video and agent workflows load where they run.
-  ['lib/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
+  ['lib/musicVideo/musicVideoValidation.js', 'lib/imageGenCapabilities.js',
     'reads IMAGE_REFERENCE_REQUEST_LIMIT from the referenceLimits.js leaf'],
-  ['lib/musicVideoValidation.js', 'lib/musicVideoConditioning.js',
+  ['lib/musicVideo/musicVideoValidation.js', 'lib/musicVideo/musicVideoConditioning.js',
     'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
   ['routes/signal.js', 'lib/validation.js',
     'validates through the validateRequest leaf'],
-  ['routes/signal.js', 'lib/musicVideoValidation.js',
+  ['routes/signal.js', 'lib/musicVideo/musicVideoValidation.js',
     'validates through the validateRequest leaf'],
   ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
     'loads vocal-stem storage only when checking a stem against the master'],
@@ -215,9 +223,9 @@ const NARROWED = [
     'loads vocal-stem storage only when picking the alignment audio'],
   ['services/musicVideo/vocalSeparation.js', 'services/musicVideo/vocalStem.js',
     'loads vocal-stem storage only when attaching a separated stem'],
-  ['services/cosAgentHistory.js', 'services/cosAgentLifecycle.js',
+  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentLifecycle.js',
     'loads agent lifecycle storage inside the archived-agent lookup'],
-  ['services/cosAgentHistory.js', 'services/cosAgentIndex.js',
+  ['services/cos/cosAgentHistory.js', 'services/cos/cosAgentIndex.js',
     'loads agent index storage inside the archived-agent lookup'],
 ];
 
@@ -229,34 +237,40 @@ describe('narrowed imports stay narrow (#6009)', () => {
   // Positive controls. Without these the negatives above would also pass if
   // `staticImportClosure` stopped resolving these files at all.
   it('still sees the modules the narrowed entries were pointed AT', () => {
+    expect(reaches('lib/insightsValidation.js', 'lib/zodCompat.js')).toBe(true);
+    expect(reaches('routes/insights.js', 'lib/insightsValidation.js')).toBe(true);
+    expect(reaches('routes/insights.js', 'lib/validateRequest.js')).toBe(true);
+    expect(reaches('lib/federatedMediaValidation.js', 'lib/sharedSchemas.js')).toBe(true);
+    expect(reaches('lib/federatedMediaRequest.js', 'lib/federatedMediaValidation.js')).toBe(true);
+    expect(reaches('lib/federatedMediaRequest.js', 'lib/validateRequest.js')).toBe(true);
     expect(reaches('services/eidoverseWorld.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseTravel.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseWorld.test.js', 'services/eidoverseWorldProjection.js')).toBe(true);
     expect(reaches('services/eidoverseWorldSources.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseWorldSources.js', 'services/apps.js')).toBe(true);
-    expect(reaches('services/persistentMindSupervisor.js', 'services/persistentMindAttachments.js')).toBe(true);
-    expect(reaches('services/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindAttachments.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
     expect(reaches('services/promptSections/instructions.js', 'lib/scheduledTaskTypes.js')).toBe(true);
-    expect(reaches('services/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
+    expect(reaches('services/agent/agentAppWorkspace.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('lib/pipelineValidation.js', 'lib/editorial/checkInfra/taxonomy.js')).toBe(true);
-    expect(reaches('services/apps.js', 'lib/cosValidation.js')).toBe(true);
+    expect(reaches('services/apps.js', 'lib/cos/cosValidation.js')).toBe(true);
     expect(reaches('services/appProcessTypes.js', 'services/appProcessTypes.js')).toBe(true);
     expect(reaches('services/streamingDetect.js', 'services/appProcessTypes.js')).toBe(true);
     expect(reaches('services/appProcessStatus.js', 'services/apps.js')).toBe(true);
     expect(reaches('services/appProcessStatus.js', 'services/pm2.js')).toBe(true);
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
     expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
-    expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
+    expect(reaches('lib/slashdoInvocation.js', 'lib/provider/providerVendors.js')).toBe(true);
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
     expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
     expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
-    expect(reaches('lib/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
-    expect(reaches('lib/validation.js', 'lib/musicVideoValidation.js')).toBe(true);
+    expect(reaches('lib/musicVideo/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
+    expect(reaches('lib/validation.js', 'lib/musicVideo/musicVideoValidation.js')).toBe(true);
     expect(reaches('services/musicVideo/vocalStem.js', 'services/musicVideo/projects.js')).toBe(true);
   });
 
@@ -347,28 +361,28 @@ const DEFERRED = [
     'loads Homebrew version discovery only for an installed Homebrew harness', '../lib/homebrewPackage.js'],
   ['services/localLlm.js', 'lib/homebrewPackage.js',
     'loads Homebrew discovery only when checking a managed Ollama installation', '../lib/homebrewPackage.js'],
-  ['services/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
-    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../lib/homebrewPackage.js'],
+  ['services/provider/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
+    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../../lib/homebrewPackage.js'],
   ['lib/homebrewPackage.js', 'lib/safeUrlFetch.js',
     'loads the bounded response reader only for a Homebrew version fetch, not runtime path classification', './safeUrlFetch.js'],
   ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
     'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
-  ['services/aiProvider.js', 'services/providerExecutionReadiness.js',
-    'loads managed runtime readiness only for an actual inference call', './providerExecutionReadiness.js'],
+  ['services/aiProvider.js', 'services/provider/providerExecutionReadiness.js',
+    'loads managed runtime readiness only for an actual inference call', './provider/providerExecutionReadiness.js'],
   ['services/codeReview.js', 'services/lmStudioManager.js',
     'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
   ['services/codeReview.js', 'services/ollamaManager.js',
     'reads endpoints and model capabilities only for an Ollama review', './ollamaManager.js'],
   ['services/codeReview.js', 'services/mtplxServerManager.js',
     'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
-  ['services/agentManagement.js', 'lib/privateSecuritySandbox.js',
-    'loads sandbox cleanup only for private assessments', '../lib/privateSecuritySandbox.js'],
-  ['services/cos.js', 'services/persistentMindAdapter.js',
+  ['services/agent/agentManagement.js', 'lib/privateSecuritySandbox.js',
+    'loads sandbox cleanup only for private assessments', '../../lib/privateSecuritySandbox.js'],
+  ['services/cos/cos.js', 'services/persistent/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
-    './persistentMindAdapter.js'],
-  ['services/promptRunner.js', 'services/providerExecutionReadiness.js',
+    '../persistent/persistentMindAdapter.js'],
+  ['services/promptRunner.js', 'services/provider/providerExecutionReadiness.js',
     'runs readiness only on the TUI execution branch, not when a run is built or classified',
-    './providerExecutionReadiness.js'],
+    './provider/providerExecutionReadiness.js'],
   ['services/promptRunner.js', 'services/tuiPromptRunner.js',
     'drags node-pty in through services/shell.js for a branch most promptRunner suites never take',
     './tuiPromptRunner.js'],
@@ -378,9 +392,9 @@ const DEFERRED = [
   ['services/runner.js', 'services/ollamaAgentContext.js',
     'needs the daemon manager only for an ollama-backed CLI run; the call was already predicate-gated',
     './ollamaAgentContext.js'],
-  ['services/reviewQueue.js', 'services/cosAgentFeedback.js',
+  ['services/reviewQueue.js', 'services/cos/cosAgentFeedback.js',
     'loads feedback persistence only when gathering or rating CoS feedback',
-    './cosAgentFeedback.js'],
+    './cos/cosAgentFeedback.js'],
   ['services/reviewQueue.js', 'services/askPromote.js',
     'loads Ask promotion orchestration only for an explicit promotion action',
     './askPromote.js'],
@@ -418,8 +432,8 @@ describe('deferred imports stay deferred (#6156)', () => {
   // with real graphs, so a resolver gap can't be what makes the negatives pass.
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
-    expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
-    expect(reaches('services/persistentMindAdapter.js', 'services/cosToolRegistry.js')).toBe(true);
+    expect(reaches('services/provider/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });
 });
@@ -429,13 +443,13 @@ describe('deferred imports stay deferred (#6156)', () => {
 // dynamically connected CoS cluster (#12285): the entry must import its target
 // neither way. Re-measure with `node scripts/lib/importReach.js <source>`.
 const SELECTION_CUTS = [
-  ['services/cosClaimOwnershipState.js', 'services/cosClaimOwnership.js',
+  ['services/cos/cosClaimOwnershipState.js', 'services/cos/cosClaimOwnership.js',
     'owns the shared state fence without importing its reconciliation consumers'],
   ['services/systemActivityNotify.js', 'services/systemActivityWatchers.js',
     'never re-exports boot observers into notification producers'],
-  ['services/memoryConfig.js', 'services/cos.js',
+  ['services/memoryConfig.js', 'services/cos/cos.js',
     'updates memory approval counts through the declaring agent lifecycle module'],
-  ['services/worktreeManager.js', 'services/cosClaimOwnership.js',
+  ['services/worktreeManager.js', 'services/cos/cosClaimOwnership.js',
     'shares the ownership fence and trusted reader without reconciliation dependencies'],
   ['services/promptRunner.js', 'services/compositeProviders.js',
     'uses the toolkit resolver already registered before runners start'],
@@ -460,7 +474,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 
   it('the leaves the cut entries import stay import-free', () => {
     expect(importTargets('services/readinessSignal.js')).toEqual([]);
-    expect(importTargets('services/providerRecoveryHooks.js')).toEqual([]);
+    expect(importTargets('services/provider/providerRecoveryHooks.js')).toEqual([]);
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
@@ -480,7 +494,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
  * on macOS, against ~445ms for the same import in a quiet node process:
  *
  *   routes/imageGen.js ......... 29,789ms   (beforeAll -> "Hook timed out in 10000ms")
- *   services/cosToolRegistry.js  34,571ms   (it()      -> "Test timed out in 10000ms")
+ *   services/cos/cosToolRegistry.js  34,571ms   (it()      -> "Test timed out in 10000ms")
  *   routes/settings.js ......... 28,184ms   (it(), then 530-970ms per re-import)
  *
  * Under the flat 10s budget these files failed with zero failing assertions, in
@@ -505,7 +519,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 const HOISTED = [
   ['routes/imageGen.multipart.test.js', './imageGen.js',
     'the route graph costs ~30s to transform cold, which a beforeAll charges to hookTimeout'],
-  ['services/beeperOutboxHumanGate.test.js', './cosToolRegistry.js',
+  ['services/beeperOutboxHumanGate.test.js', './cos/cosToolRegistry.js',
     'the CoS tool registry costs ~35s to transform cold, which an it() charges to testTimeout'],
   ['routes/settings.secretsStrip.test.js', './settings.js',
     'warms the graph once so each vi.resetModules() re-import costs under a second'],
@@ -587,7 +601,7 @@ describe('server suite import growth (#7993)', () => {
         return null;
       }
     };
-    for (const sample of ['server/lib/db.js', 'server/lib/pipelineValidation.js', 'server/services/agentManagement.test.js', 'server/lib/editorial/checkInfra/taxonomy.js']) {
+    for (const sample of ['server/lib/db.js', 'server/lib/pipelineValidation.js', 'server/services/agent/agentManagement.test.js', 'server/lib/editorial/checkInfra/taxonomy.js']) {
       const measured = measureClosures([sample], read);
       expect(measured.total, sample).toBe(staticImportClosure(join(REPO_ROOT, ...sample.split('/'))).files.size);
     }
@@ -641,10 +655,10 @@ it('keeps Video compilation independent of project storage and execution', () =>
 
 describe('shared provider type leaf', () => {
   it('keeps provider models independent of the type leaf and browser-safe', () => {
-    expect(reaches('lib/providerModels.js', 'lib/providerTypes.js')).toBe(false);
-    const closure = staticImportClosure(abs('lib/providerTypes.js'));
+    expect(reaches('lib/provider/providerModels.js', 'lib/provider/providerTypes.js')).toBe(false);
+    const closure = staticImportClosure(abs('lib/provider/providerTypes.js'));
     expect(closure.packages.size).toBe(0);
-    expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
+    expect(reaches('lib/provider/providerTypes.js', 'lib/provider/providerModels.js')).toBe(true);
   });
 });
 

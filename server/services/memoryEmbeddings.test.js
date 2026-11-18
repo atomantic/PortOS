@@ -5,8 +5,8 @@ const getCosConfig = vi.fn();
 const getProviderById = vi.fn();
 const summarizeForEmbedding = vi.fn();
 
-vi.mock('./cosState.js', () => ({ getConfig: getCosConfig }));
-vi.mock('./providers.js', () => ({ getProviderById }));
+vi.mock('./cos/cosState.js', () => ({ getConfig: getCosConfig }));
+vi.mock('./provider/providers.js', () => ({ getProviderById }));
 // generateMemoryEmbedding dynamically imports this for over-budget records.
 vi.mock('./memorySummarizer.js', () => ({ summarizeForEmbedding }));
 // memoryBackend pulls in the DB; stub it to just the default config export.

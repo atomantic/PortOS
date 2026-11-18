@@ -4,7 +4,7 @@ import { Compass, Loader2, Star, ThumbsDown, ThumbsUp, Trash2 } from 'lucide-rea
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogReferenceReview from './CatalogReferenceReview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
-import { REFERENCE_REVIEW_WRITE_STATUSES, isLeftOutOfLikeness, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_WRITE_STATUSES, isLeftOutOfLikeness, referenceReviewStatus, rejectedReferenceKeys } from '../../../../server/lib/catalog/catalogMediaLibrary.js';
 import { formatCount } from '../../utils/formatters';
 import { updateCatalogIngredientMediaLibrary, attachCatalogIngredientMediaFromMoodBoard } from '../../services/apiCatalog';
 

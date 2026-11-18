@@ -58,7 +58,7 @@ function legacyCleanupThread(thread, task) {
  * A queued per-record recheck prevents clobbering a concurrent personal edit.
  */
 export async function reconcileCleanupThreads({ dryRun = true } = {}) {
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const threads = await brainStorage.getThreads();
   let candidates = 0;
   let archived = 0;

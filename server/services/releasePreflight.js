@@ -39,11 +39,11 @@ export async function releasePreflight({ repoPath, agentId, agents, version, for
   const origin = await getOriginInfo(repoPath);
   if (!origin.isGithub || !origin.fullName) return { ok: false, reason: 'release-forge-unavailable' };
   if (!agents) {
-    const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+    const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
     agents = await readClaimOwnershipAgents();
   }
   if (!agents) return { ok: false, reason: 'release-ownership-unavailable' };
-  const { getActiveAgentIds } = await import('./agentState.js');
+  const { getActiveAgentIds } = await import('./agent/agentState.js');
   const active = new Set(getActiveAgentIds());
   if ([...active].some(id => id !== agentId && !agents.some(agent => agent.id === id))) {
     return { ok: false, reason: 'release-ownership-unavailable' };

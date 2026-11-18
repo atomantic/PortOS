@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { BUDGETED_COST_CLASSES, COST_CLASSES, PLAN_STEP_STATUSES } from '../../../server/lib/creativeDirectorPresets.js';
 import {
   annotatePlanSteps,
+  COST_CLASS_META,
+  PLAN_STEP_STATUS_META,
   planCostSummary,
   planStatusSummary,
   stepRequiresApproval,
@@ -15,6 +18,17 @@ const toolMap = new Map([
   ['media_enqueueImage', { costClass: 'render', longRunning: true, destructive: false }],
   ['universe_delete', { costClass: 'free', longRunning: false, destructive: true }],
 ]);
+
+describe('Plan board vocabulary', () => {
+  it('has a badge for every server step status and tool cost class', () => {
+    expect(Object.keys(PLAN_STEP_STATUS_META).sort()).toEqual([...PLAN_STEP_STATUSES].sort());
+    expect(Object.keys(COST_CLASS_META).sort()).toEqual([...COST_CLASSES].sort());
+  });
+
+  it.each(COST_CLASSES)('uses the server budget policy for %s tools', (costClass) => {
+    expect(stepRequiresApproval({ costClass }, { withinBudget: false })).toBe(BUDGETED_COST_CLASSES.has(costClass));
+  });
+});
 
 describe('annotatePlanSteps', () => {
   const steps = [
@@ -97,6 +111,11 @@ describe('planCostSummary / planStatusSummary', () => {
   });
   it('counts statuses', () => {
     expect(planStatusSummary(annotated)).toEqual({ pending: 1, running: 1, blocked: 1, done: 1, failed: 0, skipped: 0 });
+  });
+  it('ignores values outside the supported vocabularies', () => {
+    const unknown = [{ costClass: 'constructor', status: 'toString' }];
+    expect(planCostSummary(unknown)).toEqual(planCostSummary([]));
+    expect(planStatusSummary(unknown)).toEqual(planStatusSummary([]));
   });
 });
 

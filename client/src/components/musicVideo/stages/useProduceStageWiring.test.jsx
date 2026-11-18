@@ -28,14 +28,14 @@ import { render, screen, waitFor, fireEvent, within, act } from '@testing-librar
 import { findEnabledByRole } from '../../../test/enabledBarrier.js';
 import { MemoryRouter } from 'react-router';
 import toast from '../../ui/Toast';
-import { createTestPhaseDiagnostics } from '../../../../../server/test/testPhaseDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../../../../lib/testPhaseDiagnostics.js';
 import { addMusicVideoScene, approveMusicVideoFinal, rejectUnusedMusicVideoSceneTakes, measureMusicVideoColorMatch, listMusicVideoProjects, renderMusicVideoProject, reorderMusicVideoScenes, updateMusicVideoProject, updateMusicVideoScene, proposeMusicVideoShotSheet, splitMusicVideoScene, moveMusicVideoSceneStart, selectMusicVideoSceneTake, reviewMusicVideoSceneTake, importMusicVideoHandoff, addMusicVideoSceneTake, getMusicVideoHandoffBundle, getMusicVideoProject, startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision, renderMusicVideoSceneFrame, getMusicVideoBlender, getMusicVideoCastAndSets } from '../../../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../../../services/apiSystem.js';
 import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewImagePrompt, previewVideoPrompt, trimVideo } from '../../../services/apiImageVideo.js';
 import { downloadBlob } from '../../../lib/downloadBlob.js';
 import { blenderFilmProject, blenderFilmState } from '../../../test/blenderFilmFixture.js';
 import { problem, withProblems } from '../../../test/musicVideoProblems.js';
-import { finalApprovalPatch } from '../../../../../server/lib/musicVideoFinalApproval.js';
+import { finalApprovalPatch } from '../../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 
 installMusicVideoPageHooks();
 

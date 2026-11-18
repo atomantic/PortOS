@@ -3,18 +3,18 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/catalogPhotoreal.js', () => ({
+vi.mock('../services/catalog/catalogPhotoreal.js', () => ({
   getPhotorealStatus: vi.fn(), openPhotorealBlend: vi.fn(), photorealBlendPath: vi.fn(), startPhotorealRender: vi.fn(),
 }));
-vi.mock('../services/catalogPhotorealLook.js', () => ({
+vi.mock('../services/catalog/catalogPhotorealLook.js', () => ({
   draftPhotorealLook: vi.fn(), previewPhotorealLookPrompt: vi.fn(), savePhotorealLook: vi.fn(),
 }));
 vi.mock('../services/photorealTextures.js', () => ({
   installTexture: vi.fn(), listInstalledTextures: vi.fn(), searchTextures: vi.fn(),
 }));
-const { openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalogPhotoreal.js');
+const { openPhotorealBlend, photorealBlendPath, startPhotorealRender } = await import('../services/catalog/catalogPhotoreal.js');
 const { installTexture, searchTextures } = await import('../services/photorealTextures.js');
-const { savePhotorealLook } = await import('../services/catalogPhotorealLook.js');
+const { savePhotorealLook } = await import('../services/catalog/catalogPhotorealLook.js');
 const router = (await import('./catalog.js')).default;
 const app = express();
 app.use(express.json());

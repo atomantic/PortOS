@@ -32,7 +32,7 @@
  * below, which were written for hosted ids and read a GGUF repo name wrong.
  */
 
-import { isConfiguredDefaultModel } from './providerModels.js';
+import { isConfiguredDefaultModel } from './provider/providerModels.js';
 import { BACKENDS, LOCAL_LLM_CATALOG, entryIdsForBackend, normalizeBackendModelId } from './localLlmCatalog.js';
 
 /**

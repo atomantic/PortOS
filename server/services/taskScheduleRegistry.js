@@ -6,15 +6,15 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
  * so app configuration can consume task definitions without forming a cycle.
  */
 
-import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
+import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cos/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
 import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
-} from '../lib/agentExecutionProfiles.js';
+} from '../lib/agent/agentExecutionProfiles.js';
 import { INTERVAL_TYPES } from './taskScheduleConstants.js';
-import { normalizeAutopilotParams } from '../lib/musicVideoAutonomous.js';
+import { normalizeAutopilotParams } from '../lib/musicVideo/musicVideoAutonomous.js';
 
 // Programmatic handler types + target-scope vocabulary live in
 // `lib/taskTargetScope.js` (see that file for why); re-exported here because
@@ -87,7 +87,7 @@ export const DEFAULT_BRANCHES_PER_AGENT = 3;
 /**
  * Target scope for a task type — which app (if any) a run must name. The vocabulary lives in
  * `lib/taskTargetScope.js` because `server/lib` may not import upward into `server/services`
- * (`lib/layering.test.js`); re-exported here for registry readers.
+ * (`lib/layering.guard.test.js`); re-exported here for registry readers.
  */
 export {
   INSTALL_WIDE_TASK_TYPES,
@@ -340,7 +340,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // the investigation agents it files on providerId/model below. The
   // collect/fingerprint/dedupe pass itself makes no provider call, and its
   // buildTaskInput hook never spawns a coordinator agent — hence no prompt.
-  // taskMetadata holds the run caps (lib/cosValidation.js clamps them).
+  // taskMetadata holds the run caps (lib/cos/cosValidation.js clamps them).
   'error-log-triage': { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: Object.fromEntries(Object.entries(ERROR_LOG_TRIAGE_LIMITS).map(([key, limit]) => [key, limit.default])) },
   // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). On-demand
   // by default; per-app scheduling (enabled/interval/provider/model) is set in the

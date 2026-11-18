@@ -78,7 +78,7 @@ const linkIngredientToRef = vi.fn(async (ingredientId, refKind, refId, role) => 
   if (!exists) refLinks.push({ ingredientId, refKind, refId, role });
 });
 
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   createIngredient: (...args) => createIngredient(...args),
   getIngredient: (...args) => getIngredient(...args),
   reviveDeletedIngredient: (...args) => reviveDeletedIngredient(...args),

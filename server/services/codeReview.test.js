@@ -43,11 +43,11 @@ const commandExistsMock = { impl: async () => true }
 vi.mock('../lib/commandExists.js', () => ({ commandExists: (...args) => commandExistsMock.impl(...args) }))
 
 // Vitest 5 clears mock call histories before each case by default.
-vi.mock('./providerStatus.js', () => ({
+vi.mock('./provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(),
   markProviderUnavailable: vi.fn(),
 }))
-import { markProviderUsageLimit } from './providerStatus.js'
+import { markProviderUsageLimit } from './provider/providerStatus.js'
 
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js'
 import {
@@ -73,7 +73,7 @@ import {
   __resetReviewerCliInstalledCache,
   __resetThinkingUnsupportedCache,
 } from './codeReview.js'
-import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cosValidation.js'
+import { MODEL_SELECTABLE_REVIEWERS, EFFORT_SELECTABLE_REVIEWERS, codeReviewSettingsSchema } from '../lib/cos/cosValidation.js'
 import { taskObjective } from '../lib/goalFidelity.js'
 import { updateSettingsWith } from './settings.js'
 

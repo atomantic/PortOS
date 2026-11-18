@@ -1,16 +1,34 @@
 /**
- * Detectors for tests that assert over the tracked tree (#5055, #6363, #8723).
+ * Tree guards: tests that assert over the tracked tree (#5055, #6363, #8723).
  * CI's impact selection follows imports and named basenames; a scanner reads
  * files it never imports, so only an always-run registration can reach it.
- * The planner derives that set from these detectors instead of a hand list.
+ *
+ * The registration is the filename (#16553): the planner selects every
+ * `*.guard.test.js` by suffix and reads no test source. The content detectors
+ * below no longer select anything. They are a one-way check
+ * (scripts/repo-scan-guards.guard.test.js): a test they recognise as a scanner
+ * must carry the suffix, so a new scanner cannot ride no plan unnoticed.
  * Builtins only: ci-test-plan.js imports this before `npm ci` runs.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tokenize } from './sourceTokens.js';
 import { trackedFiles } from './trackedFiles.js';
 
-/** A `git` invocation… */
-const GIT_CALL = /execFileSync\(\s*['"]git['"]/;
+/**
+ * The filename suffix that marks a test as a tree guard (#16553). The name is
+ * the registration: the planner runs every server-side `*.guard.test.js` on
+ * every plan and every client one on any client source change, and the test
+ * memo never skips one.
+ */
+export const GUARD_TEST_RE = /\.guard\.test\.jsx?$/;
+export const isGuardTest = (relPath) => GUARD_TEST_RE.test(relPath);
+
+/** Tracked guard tests (relative paths), by suffix alone: no source is read. */
+export const guardTestFiles = (repoRoot) => trackedFiles(repoRoot, ['*.guard.test.js', '*.guard.test.jsx']).sort();
+
+/** A `git` invocation through any child_process spawner that takes the program first… */
+const GIT_CALL = /\b(?:execFileSync|execFile|spawnSync|spawn)\(\s*['"]git['"]/;
 /** …carrying a tree-enumerating subcommand. */
 const GIT_ENUMERATION = /['"](?:ls-files|grep)['"]/;
 /**
@@ -40,11 +58,134 @@ const stripLineComments = (source) => source.replace(/^\s*(?:\/\/|\*|\/\*).*$/gm
 const STRING_LITERAL = /'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\]|\\.)*`/g;
 const blankLiterals = (source) => source.replace(STRING_LITERAL, (lit) => (/[\s(]/.test(lit.slice(1, -1)) ? '""' : lit));
 
+const OPENERS = new Set(['(', '[', '{']);
+const CLOSERS = new Set([')', ']', '}']);
+const isPunct = (token, value) => token?.t === 'p' && token.v === value;
+/** Template holes hold code too: a walker called from `${…}` is still a call. */
+const flattenTokens = (tokens, out = []) => {
+  for (const token of tokens) {
+    if (token.t === 'tpl') for (const hole of token.exprs) flattenTokens(hole, out);
+    else out.push(token);
+  }
+  return out;
+};
+/** Index of the bracket closing the opener at `open`. */
+const closerOf = (tokens, open) => {
+  let depth = 0;
+  for (let i = open; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'p') continue;
+    if (OPENERS.has(tokens[i].v)) depth += 1;
+    else if (CLOSERS.has(tokens[i].v) && --depth === 0) return i;
+  }
+  return tokens.length - 1;
+};
+/** End of a braceless arrow body: the first `;` or `,` at depth zero, or the enclosing closer. */
+const expressionEnd = (tokens, start) => {
+  let depth = 0;
+  for (let i = start; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'p') continue;
+    if (OPENERS.has(tokens[i].v)) depth += 1;
+    else if (CLOSERS.has(tokens[i].v)) { if (depth === 0) return i; depth -= 1; }
+    else if (depth === 0 && (tokens[i].v === ';' || tokens[i].v === ',')) return i;
+  }
+  return tokens.length;
+};
+/** `{ name, from, to }` body token spans of every function bound to a name: a declaration, or a function/arrow assigned to an identifier. */
+const namedFunctionBodies = (tokens) => {
+  const bodies = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].t !== 'id') continue;
+    if (tokens[i].v === 'function' && tokens[i + 1]?.t === 'id' && isPunct(tokens[i + 2], '(')) {
+      const params = closerOf(tokens, i + 2);
+      if (isPunct(tokens[params + 1], '{')) bodies.push({ name: tokens[i + 1].v, from: params + 1, to: closerOf(tokens, params + 1) });
+      continue;
+    }
+    if (!isPunct(tokens[i + 1], '=') || isPunct(tokens[i + 2], '=')) continue;
+    let j = i + 2;
+    if (tokens[j]?.t === 'id' && tokens[j].v === 'async') j += 1;
+    if (tokens[j]?.t === 'id' && tokens[j].v === 'function') {
+      while (j < tokens.length && !isPunct(tokens[j], '(')) j += 1;
+      const params = closerOf(tokens, j);
+      if (isPunct(tokens[params + 1], '{')) bodies.push({ name: tokens[i].v, from: params + 1, to: closerOf(tokens, params + 1) });
+      continue;
+    }
+    let arrow = -1;
+    if (isPunct(tokens[j], '(')) {
+      const params = closerOf(tokens, j);
+      if (isPunct(tokens[params + 1], '=>')) arrow = params + 1;
+    } else if (tokens[j]?.t === 'id' && isPunct(tokens[j + 1], '=>')) arrow = j + 1;
+    if (arrow < 0) continue;
+    bodies.push({
+      name: tokens[i].v,
+      from: arrow + 1,
+      to: isPunct(tokens[arrow + 1], '{') ? closerOf(tokens, arrow + 1) : expressionEnd(tokens, arrow + 1),
+    });
+  }
+  return bodies;
+};
+
+const READDIR_CALL = /\breaddir(?:Sync)?\b/;
+const READDIR_NAMES = new Set(['readdirSync', 'readdir']);
+
+/**
+ * A hand-rolled directory walker (#16553): a named function that lists a
+ * directory and calls itself. The regex detectors above see only the shared
+ * walkers and `{ recursive: true }`, so a test that wrote its own `walk(dir)`
+ * scanned the tree unseen. Token-based, so a walker quoted in a string or a
+ * comment does not count. A source the tokenizer rejects counts as a walker
+ * when it lists a directory at all: the check fails closed.
+ */
+export const hasRecursiveDirectoryWalk = (source) => {
+  if (!READDIR_CALL.test(source)) return false;
+  let tokens;
+  try {
+    tokens = flattenTokens(tokenize(source));
+  } catch {
+    return true;
+  }
+  return namedFunctionBodies(tokens).some(({ name, from, to }) => {
+    let lists = false;
+    let recurses = false;
+    for (let i = from; i <= to && i < tokens.length; i += 1) {
+      if (tokens[i].t !== 'id') continue;
+      if (READDIR_NAMES.has(tokens[i].v)) lists = true;
+      else if (tokens[i].v === name && isPunct(tokens[i + 1], '(') && !isPunct(tokens[i - 1], '.')) recurses = true;
+    }
+    return lists && recurses;
+  });
+};
+
+const SHELL_EXEC_CALL = /\bexec(?:Sync)?\s*\(/;
+const SHELL_EXEC_NAMES = new Set(['execSync', 'exec']);
+const SHELL_GIT_ENUMERATION = /^\s*git\s+(?:-C\s+\S+\s+)?(?:ls-files|grep)\b/;
+
+/**
+ * `execSync('git ls-files …')`: the enumeration written as one shell string
+ * (#16553). The regex detectors blank a literal holding whitespace, so this
+ * reads the call's first argument as a token; a command quoted inside a
+ * fixture string is one string token and never reaches here as a call.
+ */
+export const shellsOutToGitEnumeration = (source) => {
+  if (!SHELL_EXEC_CALL.test(source)) return false;
+  let tokens;
+  try {
+    tokens = tokenize(source);
+  } catch {
+    return /\bgit\s+(?:ls-files|grep)\b/.test(source);
+  }
+  const commandText = (token) => (token?.t === 's' ? token.v : token?.t === 'tpl' ? token.quasis[0] : '');
+  const inList = (list) => list.some((token, i) => (token.t === 'tpl' && token.exprs.some(inList))
+    || (token.t === 'id' && SHELL_EXEC_NAMES.has(token.v) && isPunct(list[i + 1], '(')
+      && SHELL_GIT_ENUMERATION.test(commandText(list[i + 2]))));
+  return inList(tokens);
+};
+
 /** True when `source` asserts over the tracked tree instead of over its imports. */
 export const scansTrackedTree = (source) => {
   const code = blankLiterals(stripLineComments(source));
   return (GIT_CALL.test(code) && GIT_ENUMERATION.test(code)) || TRACKED_HELPER.test(code)
-    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code);
+    || SHARED_WALKER_CALL.test(code) || RECURSIVE_READDIR.test(code)
+    || hasRecursiveDirectoryWalk(source) || shellsOutToGitEnumeration(source);
 };
 
 /** Which runner owns `relPath` (a `git ls-files`-relative path): 'client' or 'server'. */
@@ -73,12 +214,23 @@ export const readsUnnamedCrossRootFile = (source, relPath) => {
 };
 
 
-/** Tracked test files (relative paths) that scan the tree or read an unnamed cross-root file. */
+/** True when the test at `relPath` scans the tree or reads an unnamed cross-root file. */
+export const isTreeScanner = (source, relPath) => scansTrackedTree(source) || readsUnnamedCrossRootFile(source, relPath);
+
+/**
+ * The one-way check: paths in `sources` (`{ path: source }`) the detectors
+ * recognise as scanners that neither carry the guard suffix nor appear in
+ * `exempt`. A scanner named here is selected by nothing.
+ */
+export const findUnsuffixedScanners = (sources, exempt = new Set()) => Object.keys(sources)
+  .filter((path) => !isGuardTest(path) && !exempt.has(path) && isTreeScanner(sources[path], path))
+  .sort();
+
+/** Tracked test files (relative paths) the detectors recognise as scanners, whatever their name. */
 export const detectTreeGuards = (repoRoot) => {
   const found = [];
   for (const rel of trackedFiles(repoRoot, ['*.test.js', '*.test.jsx'])) {
-    const source = readFileSync(join(repoRoot, rel), 'utf8');
-    if (scansTrackedTree(source) || readsUnnamedCrossRootFile(source, rel)) found.push(rel);
+    if (isTreeScanner(readFileSync(join(repoRoot, rel), 'utf8'), rel)) found.push(rel);
   }
   return found.sort();
 };

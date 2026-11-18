@@ -18,8 +18,8 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
-import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
-import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideo/musicVideoTitleCard.js';
+import { sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { buildDocumentPreview } from './documentPreview.js';
 import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
 import { buildDocumentData, documentRenderClock, documentSongDuration } from './documentRender.js';

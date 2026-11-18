@@ -3,14 +3,14 @@
 import { z } from 'zod';
 import { isTruthyMeta } from '../lib/metadataFlags.js';
 import { isInvestigationTask } from '../lib/investigationTasks.js';
-import { isTaskDeliveryComplete } from '../lib/agentOutcome.js';
-import { matchesCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
-import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
-import { MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
+import { isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
+import { matchesCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cos/cosValidation.js';
+import { MAX_TASK_RETRIES } from './agent/agentErrorAnalysis.js';
 import { USER_DECISION_BLOCKED_CATEGORIES, PAUSED_BLOCKED_CATEGORIES } from '../lib/taskBlockCategories.js';
-import { emitLog } from './cosEvents.js';
-import { getActiveAgentIds } from './agentState.js';
-import { getAllTasks, updateTask } from './cosTaskStore.js';
+import { emitLog } from './cos/cosEvents.js';
+import { getActiveAgentIds } from './agent/agentState.js';
+import { getAllTasks, updateTask } from './cos/cosTaskStore.js';
 import { execGit } from '../lib/execGit.js';
 
 const id = z.string().regex(/^[A-Za-z0-9_-]{1,160}$/);
@@ -76,7 +76,7 @@ async function delivered(owner, task, wait) {
 
 export function _createInvestigationDependencyWait(deps = {}) {
   const read = deps.read || (async () => getAllTasks());
-  const agent = deps.agent || (async key => (await import('./cosAgentLifecycle.js')).getAgentRecord(key));
+  const agent = deps.agent || (async key => (await import('./cos/cosAgentLifecycle.js')).getAgentRecord(key));
   const instance = deps.instance || (async () => (await import('./instanceIdentity.js')).getInstanceId());
   const sameRepo = deps.sameRepo || sameRepository;
   const verifyDelivery = deps.delivered || delivered;
@@ -88,7 +88,7 @@ export function _createInvestigationDependencyWait(deps = {}) {
   const released = deps.released || (async owner => !getActiveAgentIds().includes(owner.id));
   const pointer = deps.pointer || (async owner => {
     const m = owner.metadata;
-    const { resolveResumePointer } = await import('./agentWorktreeCleanup.js');
+    const { resolveResumePointer } = await import('./agent/agentWorktreeCleanup.js');
     const found = await resolveResumePointer(m.sourceWorkspace, m.worktreeBranch, m.workspacePath);
     return found?.branchName === m.worktreeBranch && found.worktreePath === m.workspacePath
       ? { existingBranch: found.branchName, resumeWorktreePath: found.worktreePath, resumedFromAgentId: owner.id } : null;

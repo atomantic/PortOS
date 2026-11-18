@@ -3,7 +3,7 @@ import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'on-demand-handoff-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 const world = vi.hoisted(() => ({ tasks: [], fail: false }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: async () => {
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => {
   if (world.fail) throw new Error('unreadable tasks');
   return { cos: { tasks: world.tasks }, user: { tasks: [] } };
 } }));

@@ -42,7 +42,7 @@ import {
   WSL2_PREPARE_CONFIG_HINT,
   WSL2_PREPARE_MIN_BYTES,
 } from '../lib/vllmQwenProvision.js';
-import { getAllProviders, updateProvider } from './providers.js';
+import { getAllProviders, updateProvider } from './provider/providers.js';
 import { ensureWslProjectDir } from './wslProjectPlacement.js';
 
 /** Upstream's frozen packaging of patched vLLM + the requantized checkpoint. */

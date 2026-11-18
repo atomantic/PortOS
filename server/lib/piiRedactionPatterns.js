@@ -1,7 +1,7 @@
 /**
  * `PII_PATTERNS`: shared table of machine-identity and PII `{ code, pattern, replacement }` entries used for federation detection and free-text redaction.
  *
- * The one list that `server/services/agentContextMcp.js#redactAgentContextText`, `server/services/agentErrorAnalysis.js#redactFailureSnippet` and `federationSafety.js#federationSafetyFindings` read to recognize a home path, network host, IP/MAC literal, email, phone number or labelled GPS coordinate
+ * The one list that `server/services/agent/agentContextMcp.js#redactAgentContextText`, `server/services/agent/agentErrorAnalysis.js#redactFailureSnippet` and `federationSafety.js#federationSafetyFindings` read to recognize a home path, network host, IP/MAC literal, email, phone number or labelled GPS coordinate
  * before it lands in a log line, an LLM prompt or a federated payload (three copies drifted, #7474). DETECTION: `pattern.test(text)` as-is. REPLACEMENT: `text.replace(globalPattern(pattern), replacement)`.
  * Every `pattern` is non-global on purpose: `federationSafetyFindings` calls `.test()` on the SAME regex across many strings, and a global flag makes that stateful (`lastIndex` can silently miss a match); `globalPattern()` derives a fresh global copy for `.replace()`.
  * Its own dependency-free leaf (AGENTS.md "Watch the import budget"), not part of `federationSafety.js`, which also reaches `secretText.js`/`secretKeys.js` for the credential-shaped checks that stay OUTSIDE this table. Pure; reads no environment.

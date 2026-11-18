@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../lib/db.js', () => ({ query: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 
-const { addTask } = await import('./cosTaskStore.js');
+const { addTask } = await import('./cos/cosTaskStore.js');
 const { queueNotificationResolveTask } = await import('./githubNotificationResolveTask.js');
 const { queueSecurityFixTask } = await import('./githubSecurityFixTask.js');
 

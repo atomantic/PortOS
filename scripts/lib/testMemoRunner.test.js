@@ -19,6 +19,7 @@ import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
+import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -57,19 +58,19 @@ describe('planTestMemo and recordTestMemo', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-layering-memo-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-layering-memo-store-'));
     writeRepo(root, FILES);
-    const guard = 'server/lib/layering.test.js';
+    const guard = 'server/lib/layering.guard.test.js';
     const source = 'server/lib/unrelated.js';
     // Keep the real scanner and assertions; this standalone Vitest fixture
     // supplies globals instead of resolving its intentionally stubbed package.
-    const original = readFileSync(new URL('../../server/lib/layering.test.js', import.meta.url), 'utf8');
+    const original = readFileSync(new URL('../../server/lib/layering.guard.test.js', import.meta.url), 'utf8');
     writeRepo(root, { [guard]: original.replace(/^import \{ describe, it, expect \} from 'vitest';\n/m, ''), [source]: 'export const unrelated = true;\n' });
     const config = join(root, 'vitest.config.mjs');
-    writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.test.js"], maxWorkers: 1 } };\n');
+    writeFileSync(config, 'export default { test: { globals: true, include: ["server/lib/layering.guard.test.js"], maxWorkers: 1 } };\n');
     const planned = () => {
       const impact = buildCiTestPlan([source], { trackedFiles: [guard, source] });
       expect(impact.full).toBe(false);
       const memo = plan({ mode: impact.server.mode, repoFiles: impact.server.files, repoSources: impact.server.sources,
-        listTests: () => ['lib/layering.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
+        listTests: () => ['lib/layering.guard.test.js'], readRecord: () => ({ modules: [guard], digests: null }), readEntry: () => true });
       expect(memo.selected).toContain(guard);
       expect(memo.skipped).toEqual([]);
       expect(memo.run).toContain(guard);
@@ -208,6 +209,54 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
+  it.each([
+    { mode: 'full', partition: 'unit' },
+    { mode: 'files', partition: 'unit' },
+    { mode: 'full', partition: 'browser' },
+    { mode: 'files', partition: 'browser' },
+  ])('analyzes only owned files in a $partition $mode plan and still verifies green keys', ({ mode, partition }) => {
+    root = mkdtempSync(join(tmpdir(), 'portos-shard-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-shard-memo-store-'));
+    const candidates = (partition === 'browser' ? BROWSER_SUITES.slice(0, 4) : TESTS.map((test) => `server/${test}`)).sort();
+    const explicit = candidates.at(-1);
+    const listTests = () => candidates.slice(0, -1).map((test) => test.slice('server/'.length));
+    const repoFiles = mode === 'full' ? [explicit] : candidates;
+    writeRepo(root, { ...FILES, ...Object.fromEntries(candidates.map((test) => [test, FILES['server/lib/c.test.js']])) });
+    const shardSlice = partition === 'browser' ? browserShardSlice : vitestShardSlice;
+
+    for (const index of [1, 2]) {
+      const shard = { index, count: 2 };
+      const owned = shardSlice(candidates, { ...shard, repoRoot: root, scope: 'server' });
+      const recordReads = [];
+      const makePlan = () => plan({ mode, repoFiles, listTests, shard, shardSlice, readRecord: (dir, scope, test) => {
+        recordReads.push(test);
+        return readMemoRecord(dir, scope, test);
+      } });
+      const cold = makePlan();
+      expect(cold.selected).toEqual(candidates);
+      expect(recordReads).toEqual(owned);
+      expect([...cold.verdicts.keys()]).toEqual(owned);
+      expect(cold.run).toEqual(owned);
+      expect(cold.skipped).toEqual([]);
+
+      const [green] = owned;
+      const dependencies = new Map([[green, [green]]]);
+      expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed: [green], dependencies, source: 'ci' }).written).toBe(2);
+
+      recordReads.length = 0;
+      const warm = makePlan();
+      expect(recordReads).toEqual(owned);
+      expect(warm.run).toEqual(owned.slice(1));
+      expect(warm.skipped).toEqual([{ test: green, via: 'recorded' }]);
+
+      // A changed owned file still cannot be recorded under its pre-run key.
+      for (const test of warm.run) {
+        writeFileSync(join(root, test), `${FILES['server/lib/c.test.js']}// changed during run\n`);
+        expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: warm, passed: [test], dependencies: new Map([[test, [test]]]), source: 'ci' }).written).toBe(0);
+      }
+    }
+  });
+
   // The #16424 probe: real Vitest records what each test loaded, the record
   // narrows related selection, and a deliberately broken lazily imported
   // module is still caught by the tests the narrowed plan selects.
@@ -256,6 +305,27 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(narrowed.narrowed).toBeGreaterThanOrEqual(2);
     expect(narrowed.selected).toEqual([user]);
     expect(narrowed.run).toEqual([user]);
+
+    // A restored narrowing record exists only on the bystander's shard.
+    // Its absence on siblings cannot change ownership or drop an explicit file.
+    const candidates = tests.map((test) => `server/${test}`);
+    const count = candidates.length;
+    const siblingPlans = (repoFiles) => Array.from({ length: count }, (_, i) => {
+      const shard = { index: i + 1, count };
+      const owned = vitestShardSlice(candidates, { ...shard, repoRoot: root, scope: 'server' });
+      const reads = [];
+      const result = related({ repoFiles, shard, readRecord: (dir, scope, test) => {
+        reads.push(test);
+        return owned.includes(bystander) ? readMemoRecord(dir, scope, test) : null;
+      } });
+      expect(reads).toEqual(owned);
+      return { owned, result };
+    });
+    expect(siblingPlans([]).flatMap(({ result }) => result.run)).toEqual([user]);
+    for (const { owned, result } of siblingPlans([bystander])) {
+      expect(result.slice).toEqual(owned.filter((test) => test === user || test === bystander));
+    }
+
     const red = vitest(narrowed.run);
     expect(red.status).toBe(1);
     expect(fileResultsFromReport(report)).toEqual([expect.objectContaining({ file: join(root, user), status: 'failed' })]);
@@ -266,7 +336,7 @@ describe('planTestMemo and recordTestMemo', () => {
   it('names every passed file it could not record, with the reason each key was refused', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-unrecorded-store-'));
-    const guard = 'server/lib/layering.test.js'; // always-run guard: never analyzed in a files plan
+    const guard = 'server/lib/layering.guard.test.js'; // always-run guard: never analyzed in a files plan
     const dynamic = 'server/lib/dynamic.test.js';
     const marked = 'server/lib/markedMember.test.js';
     writeRepo(root, {
@@ -288,7 +358,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(unrecorded).toEqual([
       { test: c, declared: false, reason: 'floor key: an input changed while the run was in flight; recorded key: Vitest recorded no modules for this file' },
       { test: dynamic, declared: false, reason: `floor key: ${dynamic}: import() with a non-literal specifier; recorded key: Vitest recorded no modules for this file` },
-      { test: guard, declared: true, reason: 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)' },
+      { test: guard, declared: true, reason: 'never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker)' },
       { test: marked, declared: true, reason: 'floor key: test-memo: never marker; recorded key: Vitest recorded no modules for this file' },
     ]);
     // No depfile at all (a Vitest that stopped writing one) is a different cause from a file missing in it.
@@ -302,7 +372,7 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(memoUnrecordedLines(unrecorded)).toEqual([
       `🧠   not recorded: ${c} (${unrecorded[0].reason})`,
       `🧠   not recorded: ${dynamic} (${unrecorded[1].reason})`,
-      '🧠   not recorded: 2 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).',
+      '🧠   not recorded: 2 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).',
     ]);
     expect(memoUnrecordedLines([])).toEqual([]);
     const many = Array.from({ length: MEMO_UNRECORDED_LINE_LIMIT + 3 }, (_, index) => ({ test: `server/lib/t${index}.test.js`, reason: 'floor key: x; recorded key: y', declared: false }));
@@ -425,7 +495,7 @@ describe('planTestMemo and recordTestMemo', () => {
   it('skips closure analysis for a files plan member that can never be memoized but still memoizes ordinary suites', () => {
     root = mkdtempSync(join(tmpdir(), 'portos-memo-never-'));
     memoDir = mkdtempSync(join(tmpdir(), 'portos-memo-never-store-'));
-    const guard = 'server/lib/layering.test.js'; // always-run guard
+    const guard = 'server/lib/layering.guard.test.js'; // always-run guard
     const listed = 'server/lib/moduleSummaries.test.js'; // TEST_MEMO_NEVER entry
     const marked = 'server/lib/marked.test.js';
     const ordinary = 'server/lib/c.test.js';
@@ -448,12 +518,23 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(warm.run).toEqual([guard, listed, marked].sort());
 
     // A plan made only of never-memoized files analyzes nothing and says so.
-    const only = plan({ repoFiles: [guard, marked] });
+    const only = plan({ repoFiles: [guard, marked], listTests: () => { throw new Error('Files mode already has its inventory'); } });
     expect(only.verdicts.size).toBe(0);
     expect(only.run).toEqual([guard, marked].sort());
     expect(memoSummaryLine(only)).toContain('2 never-memoized guards not analyzed.');
-    // Related mode still resolves every closure: the marker only prunes files-mode plans.
-    expect(plan({ mode: 'related', repoFiles: [marked], repoSources: [] }).unanalyzed).toBe(0);
+    const listTests = () => [guard, listed, marked].map(test => test.slice('server/'.length));
+    const full = plan({ mode: 'full', repoFiles: [], listTests, readRecord: () => { throw new Error('Declared never tests have no memo'); } });
+    expect(full.run).toEqual([guard, listed, marked].sort());
+    expect(full.verdicts.size).toBe(0);
+    const recorded = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed: full.run, dependencies: null, source: 'ci' });
+    expect(recorded.written).toBe(0);
+    expect(recorded.unrecorded.map(({ test, declared }) => [test, declared])).toEqual(full.run.map(test => [test, true]));
+
+    // Related mode still analyzes workspace tests it discovers to resolve reach.
+    const related = plan({ mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'], listTests: () => ['lib/a.test.js', ...listTests()] });
+    expect(related.selected).toContain('server/lib/a.test.js');
+    expect(related.verdicts.has(marked)).toBe(true);
+    expect(related.unanalyzed).toBe(0);
   });
 
   it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {

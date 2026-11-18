@@ -22,7 +22,7 @@ const projects = await import('./projects.js');
 const thumbs = await import('./youtubeThumbnail.js');
 const cover = await import('./coverArt.js');
 const { buildPublishPayload } = await import('./publish/payloads.js');
-const { normalizeCoverDesign } = await import('../../lib/musicVideoCoverOverlay.js');
+const { normalizeCoverDesign } = await import('../../lib/musicVideo/musicVideoCoverOverlay.js');
 const sharp = (await import('sharp')).default;
 
 afterAll(() => cleanupTempDataRoots());

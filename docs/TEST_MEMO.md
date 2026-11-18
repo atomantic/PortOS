@@ -15,8 +15,8 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
   with literal specifiers);
 - the **recorded** key hashes the modules the file actually loaded in the
   green run that produced its entry (Vitest's
-  `experimental.recordDependencies` depfile, cleared before each run so only
-  this run's records count). A module the test mocks away or never reaches
+  `experimental.recordDependencies` depfile, cleared before a run that
+  records new dependencies so only that run's records count). A module the test mocks away or never reaches
   cannot change its outcome, so a change to the lazily imported server
   cluster invalidates only the suites that loaded it; a new edge still
   invalidates because the importer's own bytes changed. Only plain import
@@ -112,29 +112,153 @@ A directory a test reads as a whole is an input as a whole.
   read as the client workspace's install directory. Before #16545 such a
   directory was "a value", so a suite that wrote `root: clientDir` and loaded
   its component from a fixture string was skipped after the component
-  changed. A Node test that passes a directory along keeps the older reading.
+  changed. A variable `root:`, `dir:` or `base:` is keyed by its resolved
+  directory or by its proven containing tree. An unbounded rooting option
+  refuses the browser test. A Node test that passes a directory along keeps
+  the older reading.
 
 The key still fails closed for the repository root; for a tree the test
 spawns, imports or requires through a variable path; for a directory that is
-only the known prefix of a path with a variable segment (`join(HERE, p)`:
-the read may land outside it); for a test with a
+only the known prefix of a path with a variable segment, even one proven to
+stay inside it ([Variable path segments](#variable-path-segments)); for a test with a
 non-literal `require()`, which could load the tree natively where no
 recording shows it (a browser suite therefore loads its driver with
 `import { chromium } from 'playwright-core'`, never through
 `require(require.resolve(…))`, #16586); for a tree holding a submodule or
 nested repository (one listed entry, whatever it contains); and outside a git checkout. A product
 module's own oversized read is still ignored, as before: only a tree-scanning
-guard calls those walkers, and the planner keeps those always-run.
+guard calls those walkers, and a guard (`*.guard.test.js`) is never memoized.
+
+## Variable path segments
+
+`join(HERE, name)` names a directory and leaves the rest to run time. Until
+#16602 the key took that directory's tree, as if the read had to land in it.
+A helper called as `read('../../client/src/limits.js')` leaves it, and a
+template URL (``new URL(`../../data.reference/templates/${name}`, import.meta.url)``)
+was keyed as the importing file's own directory: the key held files the test
+never read and missed the one it did. `server/test/fixtures/ecosystemConfigCopy.js`
+was keyed that way in every suite that imports it.
+
+A variable segment is now one of three things:
+
+- **Resolved.** The variable is a parameter of a function declared once in
+  the file, never exported, stored, handed on or reassigned, and every call
+  passes a literal (or another resolved variable; a `let` that is assigned
+  again is not a literal); or it is the callback parameter or `for…of`
+  variable (declared with `const` or `let`: a `var` outlives its loop) of a
+  literal array, an `it.each` table of strings, or a `const`
+  array nothing in the file can add to (no method that adds an element or
+  returns the array itself, no element or `length` assigned, updated or
+  deleted, in parentheses or not, no iteration callback that takes the array,
+  not handed to unknown code (`expect(NAMES)` only with a comparing matcher such
+  as `toEqual` or `toHaveLength`), declared once). An array literal with an empty
+  slot (`['a', , 'b']`) is not resolved: the slot is `undefined` to the loop.
+  An imported name can also resolve when its repository module exports a literal
+  string or a literal array wrapped in the built-in `Object.freeze()`.
+  The path is evaluated once per
+  value (up to 64 combinations) and each file is an ordinary input. No
+  directory is keyed, and a helper nothing calls contributes nothing. A
+  parameter or loop variable shadows a module-level binding of the same name.
+  One named like a module-level path (`function read(ROOT)` beside
+  `const ROOT = …`) is the path every call passes when that is one complete
+  path, and unbounded otherwise: the read is never dropped. Where a
+  shared name leaves only unknown text for a whole path (`readFileSync(FILE)`
+  beside a parameter `FILE`), the file the constant names stays an input, as
+  it was before parameters were modelled.
+  A resolved value is then read by JavaScript's own rules: text after a path
+  continues its last segment unless a separator is written, `join()` keeps a
+  trailing separator and `resolve()` does not, `resolve()` restarts at the
+  rightmost proven absolute anchor (ignoring preceding segments such as
+  environment expressions) while `join()` does not, a URL spec is parsed (`%20` is
+  a space, `?raw` is not part of the path), a module path is completed the
+  way the loader completes it, and a glob pattern keys the directory in front
+  of its first wildcard. A value that names different files on Windows
+  (`a\b`, `C:`) is not resolved.
+- **Contained.** The variable is an unchanged entry of a `readdir`/
+  `readdirSync` listing (imported from Node's `fs`; not `withFileTypes`), a
+  `randomUUID()` from `node:crypto`, or the path is built with `pathWithin(dir, ...segments)`
+  (`lib/pathWithin.js`, re-exported by `scripts/lib/pathWithin.js`), which joins like `path.join` and throws when
+  the result is outside `dir`. The directory's tree is the input, as before.
+  The literal directories in front of the variable are part of it:
+  `` `${HERE}/fixtures/${name}` `` keys `fixtures`, not `HERE`. Literal text
+  after the variable is judged as it accumulates (`name + '/.' + './x'`
+  climbs), and `dirname()` of such a path, or a URL resolved against it, is
+  no longer contained.
+- **Unbounded.** Anything else: a property, a call result, an argument that is
+  not a literal, a name that was rewritten (`name.replace(…)`), chosen
+  (`cond ? a : name`), followed by a `..` segment, glued to the directory
+  with no separator, or resolved through `new URL()` (which decodes `%2e%2e`
+  and reads `\` as a separator). The test fails closed, whichever member of
+  its closure reads the path: `reads a path through read() that the analyzer
+  cannot resolve (under <dir>)` when the variable is a helper's parameter,
+  `reads a path with a variable segment that can leave <dir>` otherwise.
+  An environment value such as `process.env.FIXTURE` used as a segment under a
+  repository anchor is unbounded because it can contain a relative path.
+
+Code that reads a file it cannot name in its own source (a name from a table
+in another module, a value parsed out of a file) stays memoizable by joining
+with `pathWithin()`. The analyzer accepts the call only when the name is
+imported from either guard module. A file that mocks `fs`, `crypto` or `pathWithin.js`
+(`vi.mock`, a `vi.spyOn` of the member, any use of the `fs` namespace but a
+call through it), or that imports a helper or runs under a workspace setup
+file that does, decides what they return, and a parameter or
+local named `readdirSync`, `randomUUID` or `pathWithin` is not the import, so
+nothing is inferred from them there. A mock counts against a read that relies
+on it: every `pathWithin()` call (literal segments included), a listing or a
+generated id only where a read is contained by it. It counts only from a
+member that runs: a test file another member reads as text registers nothing.
+
+A read that relies on an imported constant is refused if a file that runs
+mocks its exporting module.
+
+The analysis reads tokens, not scopes, so it resolves a name only where no
+other reading is possible: a text constant that another scope declares, binds
+as a parameter or assigns again is unknown, and so is a helper or an array
+whose name turns up inside a string (`eval`, or code the tokenizer took for
+text). `Object.freeze` is the built-in only where no `Object` is declared in the
+file. The language and the test API are taken as they are defined: a
+file that replaces `Array.prototype.forEach` or mocks `vitest` itself is past
+what its source can prove, for a variable segment as for a literal path.
+
+A search path built with Node's `path.delimiter` keys its repository
+directory entries, including the agent guard's executable shims.
+
+The unbounded-read rule applies to every member of a test's closure (#16660).
+A library module can supply a literal name, resolve that name from an imported
+constant, or prove containment with `pathWithin()`. The analyzer handles
+`readServerSource()` and `readClientSource()` at their call sites. A direct
+call with a literal argument keys the named file. A non-literal argument or
+passing the reader as a callback fails closed. A variable `import()` whose
+module path is unbounded is an unresolved edge for the floor key.
+
+On a path the analyzer has already anchored, `.replaceAll('\\', '/')`,
+`.replace(/\\/g, '/')`, `.normalize()` and `.toString()` preserve its
+identity for the key when the literal spelling stays canonical. A slash
+replacement on a complete path containing a literal backslash, on a partial
+path whose variable parts cannot be expanded to canonical literals (including
+a guarded path from `pathWithin()` or a directory listing, where a POSIX
+filename can contain a literal backslash), or a Unicode normalization that
+changes the literal spelling can name a different file and escape its
+bounded directory. A read, spawn or unmodelled function call that takes the
+result of one of these changes or another member operation fails closed with
+`reads a path the analyzer cannot follow through .<name>()`. An assertion
+or string-only consumer can still use that result. A later `pathWithin(dir, ...)`
+call establishes a new bound only when `dir` is already bounded and the guard
+operates on the normalized value itself as a segment.
 
 ## Never memoized (fails closed)
 
-A file in the planner's always-run set
-or in `TEST_MEMO_NEVER` (the tree-wide convention and catalog scanners); a
+A tree guard, named `*.guard.test.js` (the planner selects guards by that
+suffix, see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md)); any other file in the
+planner's always-run set or in `TEST_MEMO_NEVER` (the catalog and enumeration
+tests another selector reaches); a
 file whose closure contains the `// test-memo: never` marker; a test file or
 `scripts/` module that spawns `git` (repository state is not in the key —
 product modules that run git on their own targets are under the test's
 control); a test file or `scripts/` member that reads machine-local state
-(`data/`, the home directory); a member that reads a path the analyzer
+(`data/`, the home directory); any member that reads
+a path whose variable segment nothing bounds
+([Variable path segments](#variable-path-segments)); a member that reads a path the analyzer
 cannot resolve (`import.meta.glob`, anything under `.git/`, a non-literal
 `readServerSource`/`readClientSource`, a directory with more than 400
 files that the listing cannot stand in for, see
@@ -183,7 +307,7 @@ was refused:
 ```
 🧠 Test memo: recorded 12 green entries for 14 passed files.
 🧠   not recorded: client/src/components/Example.browser.test.js (floor key: …: require() with a non-literal specifier; recorded key: …: directory input too large: client)
-🧠   not recorded: 3 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).
+🧠   not recorded: 3 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).
 ```
 
 At most 40 files are listed, then the rest are counted. Files that are never
@@ -225,7 +349,7 @@ under the run's own key only.
 `smoke` skips `[fidelity]` cases and `full` skips `[local-performance]` ones.
 Every `[local-performance]` case is also `[fidelity]`, so a file's smoke cases
 are a subset of its full cases, and a full verdict covers them.
-`scripts/browser-suite-registry.test.js` reads every registered suite and fails
+`scripts/browser-suite-registry.guard.test.js` reads every registered suite and fails
 on a line that mentions `local-performance` without `[fidelity]`. The reverse
 never holds: a `smoke` entry skipped the fidelity cases, so `full` and
 `fidelity` accept only their own entries. The verbose listing marks such a
@@ -233,11 +357,13 @@ skip `(recorded key, full profile verdict)`.
 
 ## Shards
 
-A matrix shard takes its slice of the FULL selected list with
-Vitest's own hash-sort-and-range algorithm (`vitestShardSlice`, pinned
-against a real `vitest run --shard`) before the memo subtracts anything, so
-every file lands in exactly one shard whatever each shard's store holds;
-Vitest itself is never given `--shard`.
+The runner determines shard ownership from the complete memo-independent
+candidate inventory, including explicit files. Unit jobs use Vitest's
+hash-sort-and-range algorithm (`vitestShardSlice`, checked against a real
+`vitest run --shard`), and browser jobs use the browser suite registry order.
+The runner then evaluates related reach and subtracts memo hits within each
+shard's own candidates. Each file has one owner even when sibling shards
+restore different memo records. Vitest receives the final selection directly.
 
 ## Related selection
 
@@ -265,8 +391,10 @@ memoizable (the gate the record was written under) is now selected through
   when the reader has a non-literal import that could evaluate it.
 
 A test with no record, a version 1 record, a record naming a deleted module,
-or a record the recorded key rejects is selected exactly as before, through
-its full static and dynamic closure. Selection never trusts a record further
+or a record the recorded key rejects is selected through its full static and
+dynamic closure and tracked inputs. An unresolved edge or an unbounded read
+anywhere in that closure selects the test for every changed source, since it
+could reach outside the known inputs. Selection never trusts a record further
 than the memo already does to skip the test outright, and it is stricter about
 staleness. The full suite on every push to `main` still runs everything, so a
 miss is caught by the next completed run.
@@ -283,13 +411,15 @@ full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
 would leave those jobs permanently cold. A fallback contains only one shard's
 entries: matching content keys may skip those tests; all other selected tests
 still run. Partitioning happens before memo lookup, so changing the memo's
-source shard cannot omit or duplicate a selected test. The server and client jobs also
-restore every full-run shard lineage (`merge-shards`, equal to
-`FULL_SUITE_SHARDS` for the family and pinned by `scripts/ci-test-memo-cache.test.js`)
-and fold them in with `scripts/merge-test-memo.js`, keeping the newer record
-per test and every live entry: a shard records only its slice, and related
-selection narrows a test only through its own record. Each lineage restores to the path it was saved from (a cache version hashes the path; restoring elsewhere finds nothing) and is then moved aside before the next. Each shard saves as soon
-as its own tests pass.
+source shard cannot omit or duplicate a selected test. The server and client
+jobs restore each distinct full-run lineage once, counting the initial partition
+or family match. Their `merge-shards` input equals `FULL_SUITE_SHARDS` for the
+family and is pinned by `scripts/ci-test-memo-cache.test.js`. They fold the
+lineages in with `scripts/merge-test-memo.js`, keeping the newer record per test
+and every live entry. A shard records only its slice, and related selection
+narrows a test only through its own record. Each lineage restores to the path it
+was saved from because the cache version hashes that path. The job then moves
+it aside before the next restore. Each shard saves as soon as its own tests pass.
 Pull requests only read. Pushes to `main`, the scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
 by run id, and only when the test step itself succeeded, so the cache holds

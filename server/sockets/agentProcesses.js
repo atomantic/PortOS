@@ -5,7 +5,7 @@ let run = null;
 let runningAgentsLoader;
 
 const loadRunningAgents = () => {
-  runningAgentsLoader ??= import('../services/agents.js').then(({ getRunningAgents }) => getRunningAgents);
+  runningAgentsLoader ??= import('../services/agent/agents.js').then(({ getRunningAgents }) => getRunningAgents);
   return runningAgentsLoader;
 };
 

@@ -24,10 +24,10 @@
  * run under a browser profile's name pattern is seeded so Vitest records it
  * at all (`seedVitestDependencies`).
  *
- * Sharding: a matrix shard takes its slice of the FULL selected list with
- * the runner's selected algorithm (Vitest by default) before the memo subtracts
- * anything, so every file lands in exactly one shard whatever each shard's
- * store holds. Vitest itself is never given `--shard`.
+ * Sharding: the runner partitions the memo-independent candidate inventory
+ * (using Vitest's algorithm by default), then evaluates related reach and
+ * memo hits within the owned slice. Each file has one owner across shards
+ * even when their memo records differ. Vitest itself never receives `--shard`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -39,6 +39,7 @@ import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
 import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
 import { TEST_SCOPES, listWorkspaceTests, toRepoPath, toWorkspacePath, workspaceOf } from './workspaceTests.js';
@@ -48,19 +49,22 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
 
 /**
  * True when the analyzer could only conclude "not memoizable" for `test`: it is
- * an always-run guard, is named in `TEST_MEMO_NEVER`, or carries the
+ * a tree guard (`*.guard.test.js`) or another always-run test, is named in
+ * `TEST_MEMO_NEVER`, or carries the
  * `// test-memo: never` marker itself. Deciding that here is what spares a
- * files-mode plan of tree-wide guards the closure walk (seconds per stage)
+ * full or files plan of tree-wide guards the closure walk (seconds per stage)
  * whose only possible answer is "run it". An unreadable file is not decided
  * here; the analyzer reports it.
  */
 const neverMemoized = (test, repoRoot, alwaysRun) => {
-  if (alwaysRun.has(test) || TEST_MEMO_NEVER[test]) return true;
+  if (alwaysRun.has(test) || isGuardTest(test) || TEST_MEMO_NEVER[test]) return true;
   try { return NEVER_MARKER.test(readFileSync(join(repoRoot, ...test.split('/')), 'utf8')); } catch { return false; }
 };
 
 /**
- * The runner's selection and memo verdicts for one workspace.
+ * The runner's selection and memo verdicts for one workspace. Verdicts cover
+ * only owned candidates. For related plans, selection is also local to the
+ * shard because reach is determined from those verdicts.
  *
  * @param {object} options
  * @param {'server'|'client'|'db'} options.scope
@@ -74,11 +78,15 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
  *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
-  const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
-  const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
-  // Files mode only: the other modes need every closure to resolve their selection.
+  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
+    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
+  // Related reach can differ between sibling shards with different memo records.
+  // Partition the complete inventory first so this cannot move a test's owner.
+  const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
+  // Full and files modes already know what to run without analyzing never-memoized tests.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const unmemoizable = new Set(mode === 'files' ? candidates.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
+  const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
+    ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
@@ -108,7 +116,7 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   // least of all for a launcher the browser supervisor holds to a deadline.
   const verdicts = new Map();
   if (memoDir || mode === 'related') {
-    for (const test of candidates) {
+    for (const test of owned) {
       if (unmemoizable.has(test)) continue;
       const record = memoDir ? readRecord(memoDir, scope, test) : null;
       // Digests only matter to related selection; other modes skip the narrowed walk.
@@ -116,21 +124,13 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
     }
   }
 
-  const selected = mode === 'related'
-    ? uniqueSorted([...relatedTests(verdicts, repoSources), ...repoFiles])
-    : candidates;
-  // A related selection depends on each shard's restored memo records, which
-  // can differ between sibling shards (a trusted save landing between their
-  // restores). Slicing that list by rank could then hand a test to neither
-  // shard, so a related plan slices the memo-independent candidate set and
-  // keeps the selected tests that fall in it: ownership never moves.
-  let slice = selected;
-  if (shard && mode === 'related') {
-    const owned = new Set(shardSlice(candidates, { repoRoot, scope, ...shard }));
-    slice = selected.filter((test) => owned.has(test));
-  } else if (shard) {
-    slice = shardSlice(selected, { repoRoot, scope, ...shard });
+  let selected = candidates;
+  if (mode === 'related') {
+    const ownedTests = new Set(owned);
+    const explicit = repoFiles.filter((test) => ownedTests.has(test));
+    selected = uniqueSorted([...relatedTests(verdicts, repoSources), ...explicit]);
   }
+  const slice = mode === 'related' ? selected : owned;
 
   const skipped = [];
   const run = [];
@@ -295,7 +295,7 @@ export function readVitestDependencies(path, scope) {
 }
 
 /**
- * Remove every depfile under the workspace's Vitest cache before a run, so
+ * Remove every depfile under the workspace's Vitest cache before recording, so
  * the records read afterwards come from this run alone: Vitest merges the
  * file across runs, and CI restores it through a near-miss cache key.
  */
@@ -327,7 +327,7 @@ export function vitestDependenciesPath(repoRoot, scope) {
  * by merging into one it already has (`DependenciesCache.update`): cases the
  * filter skipped may import modules the record would then lack, which matters
  * to Vitest because it reuses the record for unfiltered runs. This runner
- * clears the depfile before every run, so without a seed a filtered run
+ * clears the depfile before recording, so without a seed a filtered run
  * recorded nothing and the real-Chrome suites, whose closures have
  * non-literal imports and therefore no floor key, never got an entry
  * (#16545). The memo does not share Vitest's concern: the filter is in the
@@ -393,7 +393,7 @@ export function currentCommit(repoRoot, env = process.env) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-const DECLARED_NEVER = 'never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker)';
+const DECLARED_NEVER = 'never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker)';
 const CHANGED_DURING_RUN = 'an input changed while the run was in flight';
 
 /**

@@ -1,0 +1,1007 @@
+import { notifyProviderQuotaUpdated } from './providerQuotaEvents.js';
+import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { readdir } from 'fs/promises';
+import { join } from 'path';
+import { getAllProviders } from './providers.js';
+import { getClaudeCodeUsage, systemTimeZone } from '../claudeCodeUsage.js';
+import { commandBasename } from '../../lib/provider/providerModels.js';
+import { PROVIDER_FAMILIES, familyForProvider } from '../../lib/provider/providerFamilies.js';
+import { scrapeTuiUsage } from '../../lib/tuiUsageScrape.js';
+import { applyCredentialBootstrap, needsProcessGroup } from '../../lib/credentialBootstrap.js';
+import { createStaleWhileRevalidate, PENDING, WAIT } from '../../lib/staleWhileRevalidate.js';
+import { parseHumanReset, limitWindowExpired } from '../../lib/quotaReset.js';
+import { isLimitStale } from '../../lib/quotaWindows.js';
+import { compareNewerWins, parseTsMs } from '../../lib/lwwTimestamp.js';
+import { createSingleFlight } from '../../lib/singleFlight.js';
+import { readFileTail } from '../../lib/fileUtils.js';
+import { codexHomeDir, readCodexRoutingOverride } from '../../lib/codexUserConfig.js';
+import { getSettings } from '../settings.js';
+import { getImageGenQuota, IMAGE_GEN_FAMILY, isQuotaTrackedImageMode } from '../imageGenQuota.js';
+import { mergeFleetQuotaCards } from '../../lib/fleetQuotas.js';
+import { getFleetQuotaEntries } from '../peerUsage.js';
+import { recordLocalQuotaCards } from './providerQuotaShare.js';
+import { getApiBilledInstanceIds } from '../usageFleetBilling.js';
+import { enabledCloudImageModes } from '../imageGen/modes.js';
+
+/**
+ * Provider subscription-quota adapters for /devtools/usage — one card per
+ * enabled provider *family* (claude, codex, agy, grok), each answering "how
+ * much usage do I have left." Every adapter returns the common shape:
+ *
+ *   { family, label, supported, plan?, limits[], activity[], metrics?[],
+ *     approximate, fetchedAt, note?, error?, burnable? }
+ *
+ * `supported: false` means the provider has no queryable usage surface at all
+ * (the UI renders a muted "not available" note, never an error). A supported
+ * adapter that fails transiently returns `error` instead of throwing so one
+ * broken CLI can't 500 the whole endpoint. `error` also carries the reason a
+ * reading that DID succeed has nothing to meter (a spent credit balance, a
+ * degraded panel) — in both cases it is the sentence to show in place of
+ * meters, so consumers must not word it as a failure.
+ *
+ * `fetchedAt` is WHEN THE READING WAS TAKEN, never when it was served — an
+ * adapter reading a log of past events stamps that log's own timestamp, not its
+ * clock. Every consumer ranks cards by it: the federated merge takes the
+ * freshest reading per limit key (`lib/fleetQuotas.js`), the shared store keeps
+ * the newest card per family (`services/provider/providerQuotaShare.js`), and the UI
+ * ages what it shows. A card that overstates its freshness wins all three.
+ *
+ * `metrics[]` is for a backend whose quota cannot be queried at all: it renders
+ * as labelled stat tiles instead of a meter, so an adapter never has to invent
+ * a percentage to have something to show. `burnable: false` marks a card the
+ * quota-burn candidate feed must skip — a limit with no measurable headroom is
+ * not capacity to spend down.
+ *
+ * AI Provider Usage Policy: these fetches run only on user request from the
+ * usage page — never at server boot — and none of them consume tokens (the
+ * Claude `/usage` print-mode call is 0-token; the Codex adapter only reads
+ * local session logs or reads account quota via app-server; the Antigravity/Grok adapters drive an interactive
+ * `/usage` slash command that renders synchronously, with no LLM turn).
+ *
+ * Caching: the claude adapter carries its own 60s cache + single-flight inside
+ * claudeCodeUsage.js; the codex adapter is a bounded local-file tail read (1-2
+ * leaf dirs on a typical layout) plus a retained copy of the last LIVE account
+ * reading, served whenever it is the fresher of the two; the Antigravity/Grok
+ * adapters carry a 5-min cache + single-flight here (`cachedScrape`) because
+ * each TUI scrape costs ~10-15s (spawn + sign-in + render), too slow to repeat
+ * per page poll.
+ */
+
+// --- Codex: parse rate-limit telemetry out of local session logs -----------
+//
+// The Codex CLI has no queryable usage command, but every session appends
+// `token_count` events carrying `rate_limits` (used %, window minutes, reset
+// epoch, plan type) to its rollout log. Reading those events costs zero tokens;
+// the numbers are "as of the last Codex telemetry that reported a window" —
+// which is not always the newest event (see parseCodexRateLimits).
+
+const CODEX_SCAN_FILE_LIMIT = 15;
+const CODEX_TAIL_BYTES = 256 * 1024;
+// Longest window Codex meters (7 days) plus a day of slack for the timezone
+// its day-directory names are written in. A session older than this cannot
+// hold a window that has not already reset.
+const CODEX_MAX_WINDOW_MS = 8 * 24 * 60 * 60 * 1000;
+
+function humanizeWindowMinutes(minutes) {
+  if (!Number.isFinite(minutes)) return 'window';
+  if (minutes % 10080 === 0) return minutes === 10080 ? 'week' : `${minutes / 10080} weeks`;
+  if (minutes % 1440 === 0) return minutes === 1440 ? 'day' : `${minutes / 1440} days`;
+  if (minutes % 60 === 0) return `${minutes / 60}h window`;
+  return `${minutes}m window`;
+}
+
+/**
+ * Pure: pick the most informative `rate_limits` payload out of rollout-JSONL
+ * content, scanning lines from the end. Returns `{ rateLimits, timestamp }` or
+ * null.
+ *
+ * Most informative, NOT most recent: Codex emits a `rate_limits` event per
+ * limit bucket, and the credits bucket reports `primary: null, secondary:
+ * null` — no meters at all. Taking the newest line unconditionally let one of
+ * those wipe out a perfectly good "100% used, resets <date>" reading from a
+ * session minutes earlier, so an exhausted quota rendered as "No rate-limit
+ * data reported" instead of a full meter. So: prefer the newest payload that
+ * actually carries a usable (unexpired) window, and fall back to the newest
+ * window-less payload only when the text holds nothing better.
+ *
+ * Exported for tests.
+ */
+export function parseCodexRateLimits(jsonlText, { now = Date.now() } = {}) {
+  const lines = String(jsonlText || '').split('\n');
+  let fallback = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (!line.includes('"rate_limits"')) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue; // tail-read can clip the oldest line in the chunk mid-JSON
+    }
+    const rateLimits = parsed?.payload?.rate_limits ?? parsed?.rate_limits;
+    if (!rateLimits || typeof rateLimits !== 'object') continue;
+    const entry = { rateLimits, timestamp: parsed.timestamp || null };
+    if (codexUsableWindows(rateLimits, now).length) return entry;
+    fallback ??= entry;
+  }
+  return fallback;
+}
+
+/**
+ * A window whose reset has already passed has rolled over — its used_percent
+ * describes a spent allowance, not the current one. This matters now that a
+ * reading can come from an older session: otherwise a week-old "100% used"
+ * meter would keep rendering long after the quota came back. One definition,
+ * because `codexNoWindowsMessage` explains the drop this decides.
+ */
+const codexWindowExpired = (window, now) =>
+  Number.isFinite(window?.resets_at) && window.resets_at * 1000 <= now;
+
+function codexLimitEntry(scopeKey, window, now) {
+  if (!window || typeof window.used_percent !== 'number') return null;
+  if (codexWindowExpired(window, now)) return null;
+  const windowLabel = humanizeWindowMinutes(window.window_minutes);
+  const percentUsed = Math.round(window.used_percent);
+  return {
+    key: scopeKey,
+    label: `Current ${windowLabel}`,
+    scope: scopeKey,
+    model: null,
+    percentUsed,
+    percentRemaining: Math.max(0, 100 - percentUsed),
+    resetsAt: Number.isFinite(window.resets_at) ? new Date(window.resets_at * 1000).toISOString() : null,
+    timezone: null,
+    // How long this window's allowance lasts — stated exactly by the telemetry,
+    // so quota-burn ranks it without inferring from the scope word (a plan whose
+    // primary window is 7h must not be read as the 5h `session` default). See
+    // `lib/quotaWindows.js`; omitted when the payload doesn't state it, which
+    // falls back to that classifier.
+    ...(Number.isFinite(window.window_minutes) ? { periodHours: window.window_minutes / 60 } : {})
+  };
+}
+
+/** Pure: the usable (present, numeric, unexpired) meters in a payload. */
+function codexUsableWindows(rateLimits, now) {
+  return [
+    codexLimitEntry('session', rateLimits?.primary, now),
+    codexLimitEntry('week', rateLimits?.secondary, now)
+  ].filter(Boolean);
+}
+
+/**
+ * Pure: say WHY a payload produced no meters, so the card explains itself
+ * instead of falling through to the client's bare "No rate-limit data
+ * reported" — which reads as "we couldn't tell" when the telemetry actually
+ * did say something (a spent credit balance, a limit that has since reset).
+ */
+function codexNoWindowsMessage(rateLimits, now) {
+  const bucket = rateLimits?.limit_id ? ` for the "${rateLimits.limit_id}" limit` : '';
+  if (rateLimits?.rate_limit_reached_type) {
+    return `Codex reports its ${rateLimits.rate_limit_reached_type} rate limit reached${bucket}, with no window telemetry to meter.`;
+  }
+  // The windows were real and metered — they have simply rolled over since.
+  if ([rateLimits?.primary, rateLimits?.secondary].some((w) => codexWindowExpired(w, now))) {
+    return `Every rate-limit window Codex last reported${bucket} has since reset — run Codex once for a current reading.`;
+  }
+  const credits = rateLimits?.credits;
+  const balance = credits && !credits.unlimited && credits.has_credits === false
+    ? ` — credit balance ${credits.balance ?? 0}`
+    : '';
+  return `Codex reported no rate-limit windows${bucket} in its latest telemetry${balance}.`;
+}
+
+/**
+ * Pure: map a codex `rate_limits` payload + event timestamp to the common
+ * quota shape. Exported for tests.
+ */
+/**
+ * The caveat every Codex quota card carries when the install's own
+ * `~/.codex/config.toml` re-points model routing: these meters describe the
+ * signed-in ChatGPT account, and PortOS's Codex runs may not be going there.
+ * Names no base URL — that value is machine-local and belongs only in the UI
+ * that reads it directly.
+ */
+const CODEX_ROUTING_CAVEAT = 'Your ~/.codex/config.toml overrides Codex model routing, so PortOS runs may not be counted here.';
+
+export function mapCodexQuota(rateLimits, timestamp, {
+  now = Date.now(),
+  // Injected so the mapper stays deterministic in a test: read from the
+  // install's own config by default, never probed twice per card.
+  routingOverridden = readCodexRoutingOverride()?.overridden === true,
+} = {}) {
+  const limits = codexUsableWindows(rateLimits, now);
+  const expired = !rateLimits?.rate_limit_reached_type
+    && [rateLimits?.primary, rateLimits?.secondary].some((window) => codexWindowExpired(window, now));
+  const reachedScope = { weekly: 'week', week: 'week', session: 'session' }[String(rateLimits?.rate_limit_reached_type || '').toLowerCase()];
+  return {
+    family: 'codex',
+    label: 'Codex',
+    supported: true,
+    plan: rateLimits?.plan_type || 'unknown',
+    limits,
+    activity: [],
+    approximate: true,
+    ...(routingOverridden ? { routingOverridden: true } : {}),
+    // Wording is "telemetry", not "session activity": the reading can come from
+    // an older session than the newest one when that session reported no window.
+    note: [
+      timestamp
+        ? `As of the last Codex rate-limit telemetry (${timestamp}). Local telemetry only.`
+        : 'As of the last Codex rate-limit telemetry. Local telemetry only.',
+      // Advisory only — a routing override never suppresses the meters, it just
+      // stops them being presented as if they described PortOS's own work.
+      routingOverridden ? CODEX_ROUTING_CAVEAT : null,
+    ].filter(Boolean).join(' '),
+    ...(limits.length ? {} : { error: codexNoWindowsMessage(rateLimits, now),
+      ...(rateLimits?.rate_limit_reached_type ? { quotaStatus: 'limit_reached', ...(reachedScope ? { quotaScope: reachedScope } : {}) } : expired ? { quotaStatus: 'expired' } : {}) }),
+    // The TELEMETRY's own timestamp, not the clock we read it at: Codex emits
+    // `rate_limits` only while a turn runs, so this reading can be days old and
+    // `fetchedAt` is the card contract every consumer ranks by (see the card
+    // shape above). Stamping "now" here let a stale log tail outrank both a
+    // peer's current reading and this machine's own live account reading.
+    fetchedAt: telemetryIso(timestamp) || new Date().toISOString()
+  };
+}
+
+/** An ISO string for a telemetry timestamp, or null when it isn't a usable date. */
+function telemetryIso(timestamp) {
+  const ms = parseTsMs(timestamp);
+  return ms === null ? null : new Date(ms).toISOString();
+}
+
+/**
+ * Newest-first rollout logs under <codexHome>/sessions, as
+ * `{ path, dayStartMs }`. Codex lays sessions out as
+ * `sessions/YYYY/MM/DD/rollout-<ISO-timestamp>-<uuid>.jsonl`, so directory and
+ * file names both sort chronologically — walk them in descending lexicographic
+ * order and stop as soon as the scan limit is hit (typically 1-2 leaf dirs
+ * touched, zero stat calls). `dayStartMs` comes from the directory names, so
+ * a caller can age a file out without stat'ing it.
+ */
+async function listCodexRolloutFiles(codexHome) {
+  const sessionsDir = join(codexHome, 'sessions');
+  const newestFirstDirs = async (dir) =>
+    (await readdir(dir, { withFileTypes: true }).catch(() => []))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .reverse();
+
+  const files = [];
+  for (const year of await newestFirstDirs(sessionsDir)) {
+    for (const month of await newestFirstDirs(join(sessionsDir, year))) {
+      for (const day of await newestFirstDirs(join(sessionsDir, year, month))) {
+        const dayDir = join(sessionsDir, year, month, day);
+        // Local midnight of the directory's date — the earliest instant any
+        // session inside it can have started. NaN for a non-date dir name,
+        // which compares false against every cutoff and so is never aged out.
+        const dayStartMs = new Date(`${year}-${month}-${day}T00:00:00`).getTime();
+        const names = (await readdir(dayDir).catch(() => []))
+          .filter((n) => n.startsWith('rollout-') && n.endsWith('.jsonl'))
+          .sort()
+          .reverse();
+        for (const name of names) {
+          files.push({ path: join(dayDir, name), dayStartMs });
+          if (files.length >= CODEX_SCAN_FILE_LIMIT) return files;
+        }
+      }
+    }
+  }
+  return files;
+}
+
+/**
+ * The last live account reading, retained so a passive page load can serve it.
+ *
+ * NOT a TTL cache: `codexAppServer` already caches readiness for 15s, and a
+ * reading's usefulness here is decided by its own `fetchedAt` against the
+ * rollout log's, never by how long this module has held it. So the pair is
+ * exactly "retain the last reading" plus "coalesce concurrent live reads" —
+ * a single-flight and a variable, which is what the code does.
+ */
+let retainedLiveCodexCard = null;
+const codexLiveFlight = createSingleFlight();
+
+/** Test-only: forget the retained live Codex account reading. */
+export function __resetCodexLiveQuotaCache() {
+  retainedLiveCodexCard = null;
+}
+
+/**
+ * Query the signed-in ChatGPT account's quota through the Codex app-server.
+ * Starts no turn and spends no tokens. Throws when the account can't answer.
+ */
+async function readLiveCodexQuota() {
+  const { getCodexAccountReadiness } = await import('../codexAppServer.js');
+  const readiness = await getCodexAccountReadiness({ fresh: true });
+  if (readiness?.rateLimits == null) throw new Error('Codex reported no account rate limits');
+  const window = (value) => value && ({
+    used_percent: value.usedPercent,
+    window_minutes: value.windowDurationMins,
+    resets_at: value.resetsAt ? Date.parse(value.resetsAt) / 1000 : null,
+  });
+  const quota = mapCodexQuota({
+    primary: window(readiness.rateLimits.primary),
+    secondary: window(readiness.rateLimits.secondary),
+    plan_type: readiness.account?.planType,
+  }, null);
+  const checkedAt = Number.isFinite(readiness.checkedAt) ? readiness.checkedAt : Date.now();
+  retainedLiveCodexCard = {
+    ...quota,
+    approximate: false,
+    fetchedAt: new Date(checkedAt).toISOString(),
+    note: ['Live Codex account quota.', readCodexRoutingOverride()?.overridden === true ? CODEX_ROUTING_CAVEAT : null].filter(Boolean).join(' '),
+  };
+  return retainedLiveCodexCard;
+}
+
+/**
+ * Pure: the meters in a card that have NOT rolled over as of `now`.
+ *
+ * A retained reading ages meter-by-meter, not all at once — a card holding a
+ * spent 5h window beside a live weekly one is half stale, and serving it whole
+ * shows an exhausted meter whose reset time has already passed. Same rule
+ * `codexWindowExpired` applies to a rolled-over log entry, applied at serve
+ * time because the card outlives the read that produced it. A window whose
+ * reset can't be resolved hasn't been shown to have passed, so it counts live.
+ */
+const unexpiredLimits = (card, now) =>
+  (card?.limits || []).filter((limit) => !limitWindowExpired(limit, { now }));
+
+/**
+ * Every card, with the windows that have already reset dropped.
+ *
+ * Applied to EVERY family rather than only the retained Codex card, because
+ * every adapter can serve a reading older than the window it describes: the
+ * claude cache serves stale for 60s, the TUI scrapes for 5 minutes, and the
+ * federated store keeps the last card until a newer one is read. A spent
+ * meter's percentage is a reading of an allowance that has since come back, so
+ * it must not reach the page, the burn gate, or a peer.
+ *
+ * A card emptied by the pruning says WHY. Otherwise it renders through the
+ * empty branch as "No rate-limit data reported", which is a verdict about the
+ * provider rather than a statement about a reading that simply aged out.
+ */
+const EXPIRED_ONLY_MESSAGE = 'Every window in this reading has since reset — refresh for a current one.';
+
+const pruneExpiredWindows = (card, now) => {
+  const limits = unexpiredLimits(card, now);
+  if (limits.length === (card?.limits?.length ?? 0)) return card;
+  return {
+    ...card,
+    limits,
+    ...(limits.length ? {} : { error: card.error || EXPIRED_ONLY_MESSAGE,
+      ...(!card.error ? { quotaStatus: 'expired' } : {}) }),
+  };
+};
+
+/**
+ * Stamp every limit with WHEN it was read and whether that reading has aged
+ * past its own window's staleness threshold (`lib/quotaWindows.js`).
+ *
+ * Applied to EVERY card here — not only the ones a federated merge later
+ * touches — so a purely local install (or a multi-instance one whose card
+ * never gets a second contributor) still ages a cached TUI/log-tail reading by
+ * the same rule a peer's reading is judged by. `mergeQuotaCard`'s
+ * `unifyLimits` recomputes both fields for a MERGED limit, since the winning
+ * reading can come from a peer whose own `fetchedAt` differs from this card's.
+ */
+const stampReadAt = (card, now) => {
+  if (!card?.limits?.length) return card;
+  const readAt = card.fetchedAt || null;
+  const readAtMs = parseTsMs(readAt);
+  const ageMs = readAtMs === null ? null : now - readAtMs;
+  return {
+    ...card,
+    limits: card.limits.map((limit) => ({ ...limit, readAt, stale: isLimitStale(limit, ageMs) })),
+  };
+};
+
+/**
+ * Passive reads stay local; a fresh request queries the account without
+ * starting a turn.
+ *
+ * The two sources disagree by design: the app-server knows the account's
+ * current state, while the rollout logs only know what the last Codex TURN was
+ * told — which may be days stale. Serving the log tail unconditionally on
+ * passive reads is what made the card snap back to an old percentage as soon as
+ * the user navigated away from an explicit Refresh.
+ *
+ * METERS decide, not clocks. A card carrying no meters is the absence of a
+ * reading, not a newer one: `fetchCodexQuota` stamps its own clock on a
+ * synthetic "no session logs" card and on window-less telemetry, so ranking the
+ * two cards by `fetchedAt` alone let an empty card retire a live account
+ * reading — an install that runs Codex only through PortOS (no rollout logs at
+ * all) lost its quota meters on the very next poll. Only when both sides
+ * actually have meters is the timestamp the question.
+ */
+async function fetchCurrentCodexQuota({ wait = WAIT.CACHED } = {}) {
+  if (wait === WAIT.FRESH) {
+    const live = await codexLiveFlight.run('codex:account', readLiveCodexQuota).catch(() => null);
+    if (live) return live;
+    const quota = await fetchCodexQuota();
+    return { ...quota, refreshUnavailable: true, note: `Live Codex quota refresh unavailable; showing local telemetry. ${quota.note || ''}`.trim() };
+  }
+  const now = Date.now();
+  const quota = await fetchCodexQuota({ now });
+  // Pruned at serve time and never written back: the retained card stays the
+  // canonical reading, so a later read prunes further rather than compounding.
+  const liveLimits = unexpiredLimits(retainedLiveCodexCard, now);
+  if (!liveLimits.length) return quota;
+  const live = { ...retainedLiveCodexCard, limits: liveLimits };
+  if (!quota.limits.length) return live;
+  return compareNewerWins(quota.fetchedAt, live.fetchedAt) ? quota : live;
+}
+
+/** Exported for tests (which point `codexHome` at a fixture tree). */
+export async function fetchCodexQuota({ codexHome = codexHomeDir(), now = Date.now() } = {}) {
+  const routingOverridden = readCodexRoutingOverride()?.overridden === true;
+  const files = await listCodexRolloutFiles(codexHome);
+  // Newest-usable-wins across files, exactly as parseCodexRateLimits applies it
+  // within one: keep the newest window-less reading as a fallback, but keep
+  // looking for one that carries a meter.
+  let fallback = null;
+  for (const { path: file, dayStartMs } of files) {
+    // Nothing older than the longest window can still hold an unexpired meter,
+    // so once a fallback is in hand those files can only repeat it — stop
+    // rather than tail-read every remaining session. Without this an install
+    // whose last Codex run has aged out re-reads the full CODEX_SCAN_FILE_LIMIT
+    // on every poll, and this adapter (unlike the others) has no cache.
+    if (fallback && dayStartMs < now - CODEX_MAX_WINDOW_MS) break;
+    const tail = await readFileTail(file, CODEX_TAIL_BYTES);
+    if (!tail) continue;
+    const found = parseCodexRateLimits(tail, { now });
+    if (!found) continue;
+    const quota = mapCodexQuota(found.rateLimits, found.timestamp, { now, routingOverridden });
+    if (quota.limits.length) return quota;
+    fallback ??= quota;
+  }
+  if (fallback) return fallback;
+  return {
+    family: 'codex',
+    label: 'Codex',
+    supported: true,
+    plan: 'unknown',
+    limits: [],
+    activity: [],
+    approximate: true,
+    fetchedAt: new Date().toISOString(),
+    error: files.length
+      ? 'No rate-limit telemetry found in recent Codex session logs.'
+      : 'No Codex session logs found — run Codex once to populate usage telemetry.'
+  };
+}
+
+// --- Antigravity + Grok: scrape the interactive TUI `/usage` panel ----------
+//
+// Neither CLI exposes quota in non-interactive `--print` mode (there, `/usage`
+// is treated as an LLM prompt — wrong data, and it burns tokens). Their only
+// usage surface is an interactive slash command, so we drive the real TUI in a
+// sandbox PTY (see lib/tuiUsageScrape.js) and parse the rendered screen. The
+// slash command renders synchronously (no LLM turn) → 0-token, user-triggered.
+
+// A TUI scrape costs ~10-15s (spawn + sign-in + render) — far too slow to repeat
+// on every page poll, and far too slow to BLOCK one on. Stale-while-revalidate:
+// a cached reading goes out immediately and the refresh lands behind the
+// response, so only a genuinely cold cache (or an explicit `wait: 'fresh'`) ever
+// waits. Each card stamps its own `fetchedAt` inside the producer, so a served
+// stale reading still reports its real age. See lib/staleWhileRevalidate.js for
+// the failure-backoff and PENDING contracts.
+//
+// A scrape that produced NO limits is a degraded panel, not a real reading — it
+// gets the short TTL so the next view self-heals, while still being cached
+// (leaving it uncached turns each poll into a fresh PTY spawn).
+const scrapeCache = createStaleWhileRevalidate({
+  ttlMs: 5 * 60 * 1000,
+  onSettled: notifyProviderQuotaUpdated,
+  isComplete: (card) => Boolean(card?.limits?.length),
+});
+
+/** Test-only: clear the TUI-scrape TTL cache so a suite isn't order-dependent. */
+export function __resetUsageScrapeCache() {
+  scrapeCache.clear();
+}
+
+/**
+ * Render an acronym-preserving title label from an ALL-CAPS token: long words
+ * become Title Case (`GEMINI` → `Gemini`), short all-caps tokens stay as-is
+ * (`GPT` → `GPT`). Pure.
+ */
+function titleizeToken(token) {
+  if (token.length <= 4) return token; // GPT, GPU, etc. — keep the acronym
+  return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+}
+
+/** `GEMINI MODELS` → `Gemini`; `CLAUDE AND GPT MODELS` → `Claude/GPT`. Pure. */
+function agyGroupLabel(header) {
+  const core = header.replace(/\s*MODELS\s*$/i, '').trim();
+  return core
+    .split(/\s+AND\s+/i)
+    .map((part) => part.split(/\s+/).map(titleizeToken).join(' '))
+    .join('/');
+}
+
+/** `Weekly Limit` / `Weekly Limit Remaining` → `Weekly`; `Five Hour Limit` → `5-hour`. Pure. */
+function agyWindowLabel(raw) {
+  // agy 1.1.x renamed the rows from "… Limit" to "… Limit Remaining"; accept both.
+  const core = raw.replace(/\s*Limit(?:\s+Remaining)?\s*$/i, '').trim();
+  return /^five hour$/i.test(core) ? '5-hour' : core;
+}
+
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+/**
+ * Parse `Refreshes in 167h 57m` / `4h 57m` / `2d 3h` into an absolute ISO reset
+ * time (now + duration). Returns null when no duration is found. `now` is
+ * injectable for tests. Pure given `now`.
+ */
+export function agyRefreshToIso(text, now = Date.now()) {
+  if (typeof text !== 'string') return null;
+  const d = text.match(/(\d+)\s*d/i);
+  const h = text.match(/(\d+)\s*h/i);
+  const m = text.match(/(\d+)\s*m(?!o)/i); // `m` but not `mo`(nth)
+  if (!d && !h && !m) return null;
+  const ms = ((d ? +d[1] : 0) * 86400 + (h ? +h[1] : 0) * 3600 + (m ? +m[1] : 0) * 60) * 1000;
+  return new Date(now + ms).toISOString();
+}
+
+/**
+ * Parse the Antigravity `/usage` panel text into common-shape limit rows.
+ * The panel groups models (e.g. `GEMINI MODELS`, `CLAUDE AND GPT MODELS`); each
+ * group has one or more window rows — `Weekly Limit` / `Five Hour Limit` on
+ * older builds, or `… Limit Remaining` on agy 1.1.x+ — showing a bar `NN.NN%`
+ * that is the percent REMAINING (a full bar = full quota), then either
+ * `NN% remaining · Refreshes in <dur>` or `Quota available` (full, no reset).
+ * Exported for tests. Pure given `now`.
+ *
+ * @returns {{ limits: Array, groups: number }}
+ */
+export function parseAgyUsage(text, { now = Date.now() } = {}) {
+  const lines = String(text || '').split('\n').map((l) => l.trim());
+  // The scraped buffer is an append-only terminal stream: if the TUI repaints
+  // the panel, an older and newer copy of each window both survive the ANSI
+  // strip. Key by the stable limit key so a repaint OVERWRITES (latest wins)
+  // instead of emitting duplicate rows (which would collide on the React key).
+  const byKey = new Map();
+  const groups = new Set();
+  let group = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const g = line.match(/^([A-Z][A-Z0-9 &/+-]*?MODELS|GEMINI \d+ ARGON)$/);
+    if (g) { group = agyGroupLabel(g[1]); groups.add(group); continue; }
+    if (!group) continue;
+    // Optional " Remaining" suffix: agy 1.1.x renamed "Weekly Limit" →
+    // "Weekly Limit Remaining" (and same for Five Hour). Capture stops at
+    // "Limit" so agyWindowLabel stays agnostic of the suffix.
+    // Argon's separate bucket repeats its group name in the window heading.
+    const windowLine = line.toLowerCase().startsWith(`${group.toLowerCase()} `)
+      ? line.slice(group.length).trim()
+      : line;
+    const w = windowLine.match(/^([A-Z][A-Za-z ]{0,24}?Limit)(?:\s+Remaining)?$/);
+    if (!w) continue;
+    // Look ahead a few lines for the bar percentage + reset/quota-available.
+    let remaining = null;
+    let resetsAt = null;
+    let quotaAvailable = false;
+    for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
+      const pct = lines[j].match(/([\d.]+)\s*%/);
+      if (pct && remaining === null) remaining = parseFloat(pct[1]);
+      if (/quota available/i.test(lines[j])) quotaAvailable = true;
+      const r = lines[j].match(/refreshes in\s+(.+?)(?:\s{2,}|·|$)/i);
+      if (r && !resetsAt) resetsAt = agyRefreshToIso(r[1], now);
+    }
+    if (remaining === null) continue; // not a real limit block
+    const windowLabel = agyWindowLabel(w[1]);
+    const key = `${slug(group)}-${slug(windowLabel)}`;
+    // Round ONE side and derive the other so used + remaining always == 100.
+    // Independently rounding both (e.g. 98.50% remaining → 99 left + 2 used)
+    // would show a card totalling 101%.
+    const percentUsed = Math.min(100, Math.max(0, Math.round(100 - remaining)));
+    byKey.set(key, {
+      key,
+      label: `${group} · ${windowLabel}`,
+      scope: slug(windowLabel),
+      model: group,
+      percentUsed,
+      percentRemaining: 100 - percentUsed,
+      resetsAt: quotaAvailable ? null : resetsAt,
+      timezone: null,
+    });
+  }
+  return { limits: [...byKey.values()], groups: groups.size };
+}
+
+// Grok's `/usage show` panel reports usage as `<Window> limit: N%` (percent
+// USED). Its binary strings expose both `Weekly limit` and `Monthly limit`, so
+// different plans surface different windows — parse whichever appear.
+// `periodHours` is stated rather than left to `quotaWindows.js` to infer from
+// the scope word: this table already knows the answer exactly, and quota-burn
+// ranks the target/limiting windows off it (see lib/quotaWindows.js).
+const GROK_WINDOWS = {
+  weekly: { label: 'Weekly', scope: 'week', periodHours: 7 * 24 },
+  monthly: { label: 'Monthly', scope: 'month', periodHours: 30 * 24 },
+};
+
+/**
+ * Parse the Grok Build `/usage show` panel text. Emits one row per usage window
+ * present (`Weekly limit: N%` and/or `Monthly limit: N%`, percent USED) plus a
+ * shared `Next reset: <date>`. Exported for tests. Pure given `now`.
+ *
+ * The panel's reset is a local-time date with no year and no zone (`August 10,
+ * 06:07`); it is normalized to ISO here, at the adapter, so the Usage page can
+ * localize it. `timezone` is the zone the TUI rendered in — the fetcher forces
+ * the machine's zone on the child, so it passes the same one back in.
+ *
+ * @returns {{ limits: Array, plan: string|null }}
+ */
+export function parseGrokUsage(text, { now = Date.now(), timezone } = {}) {
+  const str = String(text || '');
+  // Append-only terminal stream: a repaint leaves an older copy of a line ahead
+  // of the newer one, so keep the LAST value seen per window (freshest frame) —
+  // same repaint hazard as parseAgyUsage.
+  const byWindow = new Map();
+  // Grok 1.0 names the subscription in the window header:
+  // `Weekly limit (SuperGrok)`. Last named frame wins on a repaint.
+  // Anything else in those parens — a note, a timestamp, a repaint fragment —
+  // is not a plan name, so only identifier-like tokens are accepted:
+  // alphanumeric start, then alphanumeric plus separators (dots, commas, underscores,
+  // plus, hyphen), with interior spaces allowed only before uppercase letters/digits
+  // (vendor names like "Claude Max 20x"). This rejects arbitrary English prose like
+  // "as of Tuesday" while keeping recognized tiers on the Usage card. The 60-char
+  // cap is unchanged from the single-token form: a scraped fragment that happens to
+  // be shaped like a tier is still not one. A missing plan reads as unknown; a wrong
+  // one reads as fact.
+  const PLAN_NAME =
+    /^(?=.*[A-Za-z])(?=.{1,60}$)[A-Za-z0-9](?:[A-Za-z0-9.,_+-]*(?:[ ][A-Z0-9][A-Za-z0-9.,_+-]*)*)?$/;
+  let plan = null;
+
+  const matches = [...str.matchAll(/(weekly|monthly)\s+limit(?:\s*\(([^)]+)\))?:?/gi)];
+  for (let idx = 0; idx < matches.length; idx++) {
+    const m = matches[idx];
+    const window = m[1].toLowerCase();
+    const named = m[2]?.trim();
+    if (named && PLAN_NAME.test(named)) plan = named;
+    if (!GROK_WINDOWS[window]) continue;
+
+    const startPos = m.index + m[0].length;
+    const endPos = idx + 1 < matches.length ? matches[idx + 1].index : str.length;
+    const segment = str.slice(startPos, endPos);
+    const segmentLines = segment.split('\n');
+
+    let percentUsed = null;
+    for (let l = 0; l < Math.min(segmentLines.length, 5); l++) {
+      const pct = segmentLines[l].match(/([\d.]+)\s*%/);
+      if (pct) {
+        percentUsed = Math.round(parseFloat(pct[1]));
+        break;
+      }
+    }
+
+    if (percentUsed !== null && !Number.isNaN(percentUsed)) {
+      byWindow.set(window, percentUsed);
+    }
+  }
+
+  if (!byWindow.size) return { limits: [], plan };
+
+  const resets = [...str.matchAll(/(?:next reset|resets):\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|│|$|\n)/gi)];
+  const resetsAt = resets.length ? parseHumanReset(resets[resets.length - 1][1], { now, timezone }) : null;
+
+  const limits = [...byWindow].map(([window, percentUsed]) => ({
+    key: window,
+    label: GROK_WINDOWS[window].label,
+    scope: GROK_WINDOWS[window].scope,
+    periodHours: GROK_WINDOWS[window].periodHours,
+    model: null,
+    percentUsed,
+    percentRemaining: Math.max(0, 100 - percentUsed),
+    resetsAt,
+    timezone: null,
+  }));
+  return { limits, plan };
+}
+
+/**
+ * Pick the enabled provider to actually drive for a TUI scrape: a `tui` or `cli`
+ * process provider, never an `api` provider. The `/usage` panel is a property of
+ * the local CLI/TUI, not the OpenAI-compatible API endpoint — an install that
+ * enables only the API provider (e.g. the built-in `grok` API, matched by id)
+ * has no scrapeable surface and no `command` to spawn, so return null and let
+ * the fetcher report it unsupported rather than launching an unrelated binary.
+ *
+ * A `tui`-type provider is preferred over a `cli`-type one (and within a type,
+ * the one whose command basename is `binary`): a TUI provider is configured for
+ * interactive use, so its `args` are safe to forward, whereas a CLI provider's
+ * args are one-shot/headless flags that would break the interactive `/usage`.
+ */
+function pickScrapeProvider(providers, binary) {
+  const cliTui = (providers || []).filter(isProcessProvider);
+  const byBinary = (list) => list.find((p) => commandBasename(p.command) === binary) || list[0];
+  const tui = cliTui.filter((p) => p.type === 'tui');
+  const cli = cliTui.filter((p) => p.type === 'cli');
+  return byBinary(tui) || byBinary(cli) || null;
+}
+
+/**
+ * Build a family `fetch` fn that scrapes a TUI `/usage` panel and maps it to the
+ * common quota shape (cached; `refresh` bypasses). It drives the matched
+ * provider's configured `command` (falling back to `binary`) and `envVars`, so
+ * an absolute-path or env-authenticated provider scrapes with the same
+ * invocation a normal run uses. `parse` returns `{ limits }`; an empty result
+ * becomes a `supported`-but-`error` card so the UI shows a soft warning rather
+ * than a blank card. `name` is the human product name spliced into the copy.
+ */
+function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, readyMarker }) {
+  return async ({ wait = WAIT.CACHED, providers = [] } = {}) => {
+    const base = { family: id, label, plan: null, activity: [], approximate: true, fetchedAt: new Date().toISOString() };
+    const provider = pickScrapeProvider(providers, binary);
+    // No CLI/TUI provider (e.g. only the API provider is enabled) → unsupported.
+    // Returned OUTSIDE cachedScrape so it is NOT cached: enabling the CLI later
+    // must take effect on the next load, not be masked by a 5-min stale "off".
+    if (!provider) {
+      return Promise.resolve({ ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` });
+    }
+    const command = provider.command || binary;
+    // Args are forwarded ONLY for a `tui`-type provider — those are interactive
+    // args (a wrapper script path, `--project <id>`, etc.). A `cli`-type
+    // provider's args are one-shot/headless flags (`-p`, `exec -`, `--print`,
+    // `--prompt-file`) that would break the interactive TUI `/usage` needs.
+    const args = provider.type === 'tui' && Array.isArray(provider.args) ? provider.args : [];
+    // The TUI renders reset times in its own timezone; a server under PM2 runs
+    // in UTC, so pass the machine's real zone (as claudeCodeUsage.js does) or
+    // Grok's zoneless "Next reset" is off for non-UTC installs.
+    const tz = systemTimeZone();
+    const env = { ...(provider.envVars || {}), ...(tz ? { TZ: tz } : {}) };
+    // Key the cache by the resolved invocation, not just the family id — so a
+    // provider edit (different account via envVars, tui↔cli switch, arg change)
+    // doesn't serve the previous account's quota from a stale entry.
+    const cacheKey = `${id}:${command}:${provider.type}:${JSON.stringify(env)}:${JSON.stringify(args)}`;
+    const card = await scrapeCache.read(cacheKey, async () => {
+      // The scrape spawns the provider like any other site: wrapped by its
+      // credential bootstrap when configured (credentialBootstrap.js), or the
+      // TUI comes up unauthenticated and never renders a usage panel.
+      const spawned = applyCredentialBootstrap(provider, command, args);
+      const text = await scrapeTuiUsage({
+        command: spawned.command, args: spawned.args, slashCommand, env, readyMarker,
+        // The scrape kills the PTY on every exit path; with a wrapper in front
+        // that has to reach the harness behind it, not just the wrapper (#7496).
+        processGroup: needsProcessGroup(spawned.wrapped),
+      });
+      // The panel's reset is relative (agy) or zone-less (grok) — both resolve
+      // against the read's own clock and the zone the child rendered in.
+      const { limits, plan } = parse(text, { now: Date.now(), timezone: tz });
+      const namedPlan = typeof plan === 'string' && plan.trim() && plan !== 'unknown' ? plan.trim() : null;
+      return limits.length
+        ? { ...base, supported: true, limits, ...(namedPlan ? { plan: namedPlan } : {}), note: `Scraped from the ${name} /usage panel — local, approximate.` }
+        : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };
+    }, { wait });
+    return card === PENDING ? pendingCard(base, name) : card;
+  };
+}
+
+/**
+ * A cold-cache placeholder: the reading has STARTED but there is none yet.
+ *
+ * Distinct from both an error card and an empty one — `pending` is what lets a
+ * consumer say "still reading" and come back, rather than rendering a provider
+ * that looks broken or out of quota. It carries no limits, so every gate that
+ * needs a number fails closed on it (see `evaluateFamily`). One definition, used
+ * by every family: a field added here must reach the claude card too.
+ */
+const pendingCard = (base, name) => ({
+  ...base, supported: true, limits: [], pending: true,
+  note: `Reading the ${name} /usage panel…`,
+});
+
+// --- Claude: wrap the existing /usage CLI parser ---------------------------
+
+const CLAUDE_BASE = { family: 'claude', label: 'Claude Code', plan: null, activity: [], approximate: true };
+
+async function fetchClaudeQuota({ wait = WAIT.CACHED } = {}) {
+  const data = await getClaudeCodeUsage({ wait });
+  // Cold cache and the caller can poll — the CLI run has been started, so the
+  // next read gets a real card.
+  if (data === PENDING) return pendingCard({ ...CLAUDE_BASE, fetchedAt: new Date().toISOString() }, 'Claude Code');
+  return {
+    family: 'claude',
+    label: 'Claude Code',
+    supported: true,
+    plan: data.plan,
+    limits: data.limits,
+    activity: data.activity,
+    approximate: data.approximate,
+    // Activity is an approximation for the machine that took this reading;
+    // the peer merge can replace this note with its own combined caption.
+    note: data.approximate ? 'Activity is approximate and observed on this instance.' : null,
+    fetchedAt: data.fetchedAt
+  };
+}
+
+// --- Family registry --------------------------------------------------------
+
+/**
+ * The quota reader for each family, keyed by the family id that
+ * `lib/provider/providerFamilies.js` defines. Identity (which provider is on which plan)
+ * lives in that pure lib so cost attribution and route validation can ask
+ * without importing this module's PTY-scraping graph; only the readers — which
+ * genuinely spawn subprocesses — live here.
+ */
+const FAMILY_FETCHERS = {
+  claude: fetchClaudeQuota,
+  codex: fetchCurrentCodexQuota,
+  agy: makeTuiUsageFetcher({ id: 'agy', binary: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI', readyMarker: /Weekly Limit(?:\s+Remaining)?|Five Hour Limit(?:\s+Remaining)?|Models & Quota/i }),
+  grok: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI', readyMarker: /(Weekly|Monthly) limit/i })
+};
+
+const FAMILIES = PROVIDER_FAMILIES.map((family) => ({ ...family, fetch: FAMILY_FETCHERS[family.id] }));
+
+/**
+ * Distinct quota families among the enabled providers, in registry order.
+ * Local-runtime wrappers are excluded regardless of which CLI binary they
+ * launch — a local model has no subscription quota, so e.g. an enabled
+ * `claude-ollama` must not surface a Claude Code card (nor a codex/agy/grok
+ * wrapper its family's card).
+ *
+ * Membership comes from `familyForProvider` rather than a second copy of the
+ * matcher + local-runtime exclusion list. That predicate is ALREADY what cost
+ * attribution and the Subscriptions page's enabled state use, and this function
+ * is what the savings card uses — one definition is what makes "the two can
+ * never disagree" structural instead of a promise two predicates have to keep.
+ * (It also settles a provider config that matched two families: it now belongs
+ * to the first, here as everywhere else, rather than lighting up both.)
+ */
+export function resolveEnabledFamilies(providers) {
+  const enabledIds = new Set(
+    (providers || [])
+      .filter((p) => p?.enabled)
+      .map((p) => familyForProvider(p))
+      .filter(Boolean)
+  );
+  return FAMILIES.filter((family) => enabledIds.has(family.id));
+}
+
+const fetchFamilyQuota = (family, { wait, providers }) =>
+  Promise.resolve(family.fetch({ wait, providers })).catch((err) => ({
+    family: family.id,
+    label: family.label,
+    supported: true,
+    limits: [],
+    activity: [],
+    approximate: false,
+    fetchedAt: new Date().toISOString(),
+    error: err?.message || String(err)
+  }));
+
+/**
+ * Quota status for every enabled provider family. Never rejects — per-family
+ * failures surface as `error` entries. Each family fetch receives the enabled
+ * providers that matched it, so TUI-scrape adapters drive the actual configured
+ * provider (command + envVars), not a hardcoded binary.
+ *
+ * `wait` (see lib/staleWhileRevalidate.js) decides what a slow reading costs the
+ * caller. The default `'cached'` serves what is cached and blocks only on a cold
+ * one; `'never'` answers a cold cache with a `pending: true` card, for pages
+ * that render "still reading" and poll; `'fresh'` bypasses the caches entirely
+ * and waits — an explicit Refresh, or a burn cycle about to spend real quota.
+ *
+ * `family` narrows the read to one card. Each family's reading is an
+ * independent multi-second scrape, so the usage page's per-card Refresh asks
+ * for exactly the one the user clicked instead of respawning every provider's
+ * TUI. A family id that isn't enabled resolves to an empty list — the caller
+ * reads that as "this card is gone", not as an error.
+ *
+ * The reading this machine takes is only ever part of the answer: a
+ * subscription is one account across every federated instance. Each card is
+ * therefore unified with what peers published for the same family before it is
+ * returned — see `lib/fleetQuotas.js` for the two merge rules.
+ */
+async function readPeerQuotaEntries({ includeEmpty = false } = {}) {
+  const excludedInstanceIds = await getApiBilledInstanceIds({ requireReadable: true }).catch((err) => {
+    console.error(`❌ Could not read quota billing selection: ${err?.message || err}`);
+    return null;
+  });
+  if (!excludedInstanceIds) return { entries: null, excludedInstanceIds: null };
+  const entries = await getFleetQuotaEntries({ excludeInstanceIds: excludedInstanceIds, ...(includeEmpty ? { includeEmpty: true } : {}) }).catch((err) => {
+    console.error(`❌ Could not read federated quota readings: ${err?.message || err}`);
+    return null;
+  });
+  return { entries, excludedInstanceIds };
+}
+
+function instancePeerQuotas({ entries, excludedInstanceIds }, family) {
+  return {
+    providers: (entries || []).flatMap((peer) => peer.quotas.filter((card) => !family || card.family === family).map((card) => ({
+      ...stampReadAt(pruneExpiredWindows(card, Date.now()), Date.now()), supported: card.supported !== false,
+      origin: { self: false, instanceId: peer.instanceId, name: peer.name, capturedAt: peer.capturedAt },
+    }))),
+    unreportedInstances: (entries || []).filter((peer) => peer.usageExpected !== false && !peer.quotaReported).map((peer) => peer.name || peer.instanceId),
+    federationUnavailable: entries === null,
+    excludedInstanceIds,
+  };
+}
+
+export async function getProviderQuotas({ wait = WAIT.CACHED, family = null, period, scope } = {}) {
+  // Billing changes only need the already-published peer readings. Do not
+  // start a local CLI scrape or rewrite the shared quota store for that read.
+  if (scope === 'peers') return instancePeerQuotas(await readPeerQuotaEntries({ includeEmpty: true }), family);
+  const { cards, families, complete, imageQuotaComplete } = await readProviderQuotas({ wait, family, period });
+  // Publish this machine's reading to the fleet and fold in every peer's. The
+  // two are independent — the peer read excludes our own slot — so they
+  // overlap. Recording is awaited rather than fired off so a caller that
+  // immediately re-reads (the page's per-card Refresh) sees its own reading.
+  const [, peerEntries] = await Promise.all([
+    recordLocalQuotaCards(cards, { families, complete }).catch((err) => {
+      console.error(`❌ Could not record local quota readings: ${err?.message || err}`);
+    }),
+    readPeerQuotaEntries({ includeEmpty: scope === 'instances' }),
+  ]);
+  if (scope === 'instances') {
+    const peers = instancePeerQuotas(peerEntries, family);
+    return {
+      ...peers,
+      providers: [
+        ...cards.map((card) => ({ ...card, origin: { self: true, name: 'This instance' } })),
+        ...peers.providers,
+      ],
+      imageQuotaComplete,
+    };
+  }
+  return mergeFleetQuotaCards(cards, peerEntries.entries || []);
+}
+
+/** The local readings, before any federated merge. */
+async function readProviderQuotas({ wait, family, period }) {
+  const result = await getAllProviders();
+  const providers = Array.isArray(result) ? result : (result?.providers || []);
+  const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true && p.lmstudioBacked !== true && p.mtplxBacked !== true && p.llamaBacked !== true && p.vllmBacked !== true && p.sglangBacked !== true);
+  const families = resolveEnabledFamilies(providers).filter((f) => !family || f.id === family);
+  const familyCards = await Promise.all(families.map((f) =>
+    fetchFamilyQuota(f, { wait, providers: enabled.filter((p) => f.matches(p)) })));
+  // Image gen last: it is a derived/observed card, not a provider-family
+  // scrape, and it reads as a footnote to the model-quota cards above it. Not
+  // raced with the family scrapes — this is two small local file reads against
+  // their multi-second TUI PTY spawns, so concurrency would buy no wall-clock.
+  // One expiry pass over every card, here rather than inside an adapter or the
+  // fleet merge: "this window has already reset" is a property of any reading,
+  // and a rule applied only on the federated path would have a single-machine
+  // install rendering a spent meter its federated twin drops.
+  const now = Date.now();
+  const prune = (cards) => cards.map((card) => stampReadAt(pruneExpiredWindows(card, now), now));
+  if (family && family !== IMAGE_GEN_FAMILY) return { cards: prune(familyCards), families: null, complete: null, imageQuotaComplete: null };
+  const image = await fetchImageGenQuota({ period });
+  const cards = prune(image.card ? [...familyCards, image.card] : familyCards);
+  if (family) return { cards, families: null, complete: null, imageQuotaComplete: image.complete };
+  const ids = familyCards.map((card) => card.family);
+  if (image.card || !image.complete) ids.push(IMAGE_GEN_FAMILY);
+  const complete = image.complete && cards.filter((card) => card.family !== IMAGE_GEN_FAMILY)
+    .every((card) => !card.pending && !card.error && (card.supported === false || card.limits?.length || card.activity?.length || card.metrics?.length));
+  return { cards, families: ids, complete: Boolean(complete), imageQuotaComplete: image.complete };
+}
+
+/**
+ * The image-gen card is keyed off the imageGen SETTINGS, not the provider
+ * registry — a cloud image backend is enabled per-mode in Settings → Image Gen,
+ * independently of whether that CLI is also an enabled agent provider. That is
+ * why it isn't a FAMILIES entry: `resolveEnabledFamilies` gates on
+ * `matches(providerConfig)` and there is no provider config to match.
+ *
+ * Never rejects — a broken read must not 500 the whole usage page, and no card
+ * is a better answer than a card asserting a quota state we failed to read.
+ */
+const fetchImageGenQuota = async ({ period } = {}) => {
+  // A settings read that FAILS is not "no cloud backend enabled" — without it
+  // we can't tell which backends to report, and silently dropping the card is
+  // indistinguishable from the user running local-only. Say so in the log.
+  const settings = await getSettings().catch((err) => {
+    console.error(`❌ Image-gen quota card: could not read settings (${err?.message || err}) — card omitted`);
+    return null;
+  });
+  // Only quota-window backends — a fal.ai-only install has no quota to show.
+  if (!settings) return { card: null, complete: false };
+  const enabledModes = enabledCloudImageModes(settings).filter(isQuotaTrackedImageMode);
+  if (!enabledModes.length) return { card: null, complete: true };
+  return getImageGenQuota({ enabledModes, ...(period ? { period } : {}) }).then((card) => ({ card, complete: !card?.error })).catch((err) => {
+    console.error(`❌ Image-gen quota card failed: ${err?.message || err}`);
+    return { card: null, complete: false };
+  });
+};

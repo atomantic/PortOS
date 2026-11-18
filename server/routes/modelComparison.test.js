@@ -8,6 +8,7 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/paths.js';
 import { createModelComparisonRoutes } from './modelComparison.js';
 import { importModelComparison } from '../services/modelComparison.js';
+import codex62Migration from '../../scripts/migrations/462-codex-gpt-62.js';
 
 let dir;
 let originalData;
@@ -96,6 +97,108 @@ it('exposes Terra pricing and measured effort scores to existing Codex installs'
   expect(ultra.quality.method).toContain('Nearest effort of this exact model');
   expect(ultra.costPerTask).toBeNull();
   expect(ultra.needsResearch).toBe(true);
+});
+
+it('exposes every supported GPT-6.2 effort after upgrading an existing Codex catalog', async () => {
+  await mkdir(join(dir, 'data'));
+  const local = { ...observation, id: 'local-research', notes: 'Local research retained' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  await writeFile(join(dir, 'model-comparison.json'), localContents);
+  await writeFile(join(dir, 'data/providers.json'), JSON.stringify({ providers: {
+    codex: { id: 'codex', name: 'Codex', command: 'codex', models: ['custom'], defaultModel: 'custom' },
+  } }));
+  await codex62Migration.up({ rootDir: dir });
+  const { providers } = JSON.parse(await readFile(join(dir, 'data/providers.json'), 'utf8'));
+  const codexApp = express();
+  codexApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [providers.codex] }) }));
+  codexApp.use(errorMiddleware);
+
+  const result = await request(codexApp).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const model of ['gpt-6.2-astra', 'gpt-6.2-sol']) {
+    const expected = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
+    expect(result.body.inventory[0].models.find(row => row.model === model).efforts).toEqual(expected);
+    const rows = result.body.composite.rows.filter(row => row.model === model);
+    expect(rows.map(row => row.effort)).toEqual(expected);
+    for (const row of rows) {
+      expect(row.quality).toMatchObject({ estimated: true });
+      expect(row.needsResearch).toBe(true);
+      expect(row.costPerTask).toBeNull();
+    }
+    expect(result.body.observations.some(row => row.model === model && row.benchmark.startsWith('Official API pricing'))).toBe(true);
+  }
+  expect(result.body.observations).toContainEqual(local);
+  expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(localContents);
+  expect(providers.codex.defaultModel).toBe('custom');
+});
+
+it('ships both GPT-6.2 models in the Codex preset lists', async () => {
+  const { providers } = JSON.parse(await readFile(join(PATHS.root, 'data.reference/providers.json'), 'utf8'));
+  for (const id of ['codex', 'codex-tui']) {
+    expect(providers[id].models).toEqual(expect.arrayContaining(['gpt-6.2-astra', 'gpt-6.2-sol']));
+  }
+});
+
+it('plots published GPT-6.2 v5 scores and task costs on an existing install without overwriting local research', async () => {
+  const local = { ...observation, id: 'local-research-v5', notes: 'Local research retained' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  await writeFile(join(dir, 'model-comparison.json'), localContents);
+  const codexApp = express();
+  codexApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'codex', name: 'Codex', command: 'codex', models: ['gpt-6.2-astra', 'gpt-6.2-sol'] },
+  ] }) }));
+  codexApp.use(errorMiddleware);
+  const result = await request(codexApp).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const [model, scores, costs] of [
+    ['gpt-6.2-astra', [46, 57, 60, 62, 62], [0.66, 1.62, 2.07, 2.52, 4]],
+    ['gpt-6.2-sol', [41, 53, 55, 56, 57], [0.18, 0.41, 0.56, 0.65, 1.01]],
+  ]) {
+    const rows = result.body.currentComposite.rows.filter(row => row.model === model);
+    for (const [index, effort] of ['low', 'medium', 'high', 'xhigh', 'max'].entries()) {
+      const row = rows.find(candidate => candidate.effort === effort);
+      expect(row.quality).toMatchObject({ value: scores[index], estimated: false });
+      expect(row.costPerTask).toMatchObject({ value: costs[index], estimated: false });
+      const evidence = result.body.observations.find(item => item.model === model && item.effort === effort && item.benchmark === 'Artificial Analysis Intelligence Index v5.0.1');
+      expect(evidence.quality.source.url).toBe(`https://artificialanalysis.ai/models/${model.replaceAll('.', '-')}`);
+      expect(evidence.costPerTask.source.methodology).toContain('rounded to cents');
+    }
+    expect(rows.find(row => row.effort === 'ultra').costPerTask).toBeNull();
+    expect(result.body.observations.some(row => row.model === model && row.effort === 'ultra' && row.benchmark === 'Artificial Analysis Intelligence Index v5.0.1')).toBe(false);
+  }
+  expect(result.body.observations).toContainEqual(local);
+  expect(await readFile(join(dir, 'model-comparison.json'), 'utf8')).toBe(localContents);
+});
+
+it('exposes shipped GPT-6.2 prices to existing installs without inventing benchmark measurements', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const result = await request(app).get('/comparison');
+  expect(result.status).toBe(200);
+  for (const [model, input, output] of [['gpt-6.2-astra', 8, 40], ['gpt-6.2-sol', 2, 10]]) {
+    const rows = result.body.observations.filter(row => row.model === model && row.benchmark.startsWith('Official API pricing'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      effort: 'unspecified', billing: 'api', quality: null, costPerTask: null,
+      inputPerMillion: { value: input, source: { url: `https://developers.openai.com/api/docs/models/${model}` } },
+      outputPerMillion: { value: output }, reasoningPerMillion: null,
+      responseSeconds: null, tokensPerSecond: null, quota: null,
+    });
+  }
+});
+
+it('ships measured GPT-6.2 coding efforts without treating evaluation totals as per-task metrics', async () => {
+  const result = await request(app).get('/comparison');
+  expect(result.status).toBe(200);
+  const measured = model => result.body.observations.filter(row => row.model === model && row.benchmark.startsWith('ModelDial'));
+  expect(measured('gpt-6.2-astra').map(row => [row.effort, row.quality.value])).toEqual([
+    ['low', 87.1], ['medium', 86.15], ['high', 89.4], ['xhigh', 92.05], ['max', 93],
+  ]);
+  expect(measured('gpt-6.2-sol').map(row => [row.effort, row.quality.value])).toEqual([['max', 88.9]]);
+  for (const row of [...measured('gpt-6.2-astra'), ...measured('gpt-6.2-sol')]) {
+    expect(row.costPerTask).toBeNull();
+    expect(row.responseSeconds).toBeNull();
+    expect(row.quality.source.url).toBe(`https://modeldial.com/en/models/${row.model}`);
+  }
 });
 
 it('exposes Fable 5.2 task costs and scores on the matching v5 workload without changing the legacy composite', async () => {

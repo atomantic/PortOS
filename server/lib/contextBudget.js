@@ -11,7 +11,7 @@
  * Pure / side-effect-free — unit-tested in contextBudget.test.js.
  */
 
-import { chunkRawText } from './catalogChunking.js';
+import { chunkRawText } from './catalog/catalogChunking.js';
 
 export const CHARS_PER_TOKEN = 4;
 export const DEFAULT_OUTPUT_RESERVE_TOKENS = 8_000;

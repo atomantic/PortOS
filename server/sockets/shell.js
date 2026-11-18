@@ -1,8 +1,8 @@
 import { homedir } from 'node:os';
 import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 import * as shellService from '../services/shell.js';
-import { getProviderById } from '../services/providers.js';
-import { prepareExecutionOptions } from '../lib/providerExecutionOptions.js';
+import { getProviderById } from '../services/provider/providers.js';
+import { prepareExecutionOptions } from '../lib/provider/providerExecutionOptions.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import {
   shellAttachSchema,

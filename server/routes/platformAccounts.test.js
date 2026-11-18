@@ -8,7 +8,7 @@ vi.mock('../services/platformAccounts.js', () => ({
   getAccountsByPlatform: vi.fn(),
   getAllAccounts: vi.fn(),
 }));
-vi.mock('../services/agentPersonalities.js', () => ({}));
+vi.mock('../services/agent/agentPersonalities.js', () => ({}));
 vi.mock('../services/history.js', () => ({ logAction: vi.fn() }));
 vi.mock('../integrations/moltbook/index.js', () => ({}));
 vi.mock('../integrations/moltworld/index.js', () => ({}));

@@ -1,7 +1,7 @@
 /**
  * Is a provider READY to run on this install, and why not.
  *
- * Browser MIRROR of `server/lib/providerPrerequisites.js` (where the server has
+ * Browser MIRROR of `server/lib/provider/providerPrerequisites.js` (where the server has
  * published `missingPrerequisites` it WINS) and of the normalization in
  * `server/cos-runner/allowedCommands.js` (pinned by
  * `server/cos-runner/allowedCommands.parity.test.js`). Unknown lookup values
@@ -94,7 +94,7 @@ export const isRunnerAllowedCommand = (command, allowedCommands) => {
  * The runtime row answers one question, "does the bare binary resolve on
  * PortOS's PATH?", and neither of these is that question: the runner spawns
  * such a provider against its own resolution. MIRROR of the same two guards in
- * `providerRuntimeKey` in server/lib/providerPrerequisites.js, which is what
+ * `providerRuntimeKey` in server/lib/provider/providerPrerequisites.js, which is what
  * keeps the card's badge and the server's routing decision agreeing.
  * @param {{type?:string,command?:string,envVars?:Record<string,string>}} provider
  */
@@ -277,7 +277,7 @@ export const PROVIDER_CARD_STATE = Object.freeze({
  * toggle, credentials and the server's bench status, and the two render side by side.
  *
  * The prerequisite half is the SERVER's answer: `GET /api/providers` publishes
- * `missingPrerequisites` (server/lib/providerPrerequisites.js) and
+ * `missingPrerequisites` (server/lib/provider/providerPrerequisites.js) and
  * `getFallbackProvider` routes on the same computation. Routing acts only on
  * that finding; credential findings are presentation-only. This function adds
  * what the browser alone can see (local-app runtime shape, sanitized env

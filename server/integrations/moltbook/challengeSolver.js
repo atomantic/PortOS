@@ -15,7 +15,7 @@
 
 import { z } from 'zod';
 import { isUntrustedContentProvider } from '../../lib/untrustedContent.js';
-import { getProviderById } from '../../services/providers.js';
+import { getProviderById } from '../../services/provider/providers.js';
 import { runUntrustedContentAnalysis } from '../../services/untrustedContent.js';
 
 const answerSchema = z.string().regex(/^-?\d+\.\d{2}$/);

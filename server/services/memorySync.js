@@ -23,8 +23,8 @@
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { query, withTransaction, arrayToPgvector, pgvectorToArray } from '../lib/db.js';
-import { PERSISTENT_MIND_ID } from '../lib/persistentMindTrajectory.js';
-import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistentMindChosenName.js';
+import { PERSISTENT_MIND_ID } from '../lib/persistent/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_CHOSEN_NAME_TAG } from '../lib/persistent/persistentMindChosenName.js';
 import { BRAIN_BRIDGE_SOURCE_AGENT_ID } from '../lib/brainBridgeSource.js';
 import { dedupeByKey } from '../lib/arrayUtils.js';
 

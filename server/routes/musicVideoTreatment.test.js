@@ -13,7 +13,7 @@ import express from 'express';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../lib/testHelper.js';
-import { captureMusicVideoEvidence } from '../lib/musicVideoDependencies.js';
+import { captureMusicVideoEvidence } from '../lib/musicVideo/musicVideoDependencies.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 import { stillMoveForCamera } from '../lib/cameraMovements.js';
@@ -884,7 +884,7 @@ describe('shot sheet directions (#15587)', () => {
     expect(shot.direction.frameClause).not.toContain(oldFocal);
     expect(shot.direction.frameClause).not.toMatch(/lower third|upper third/);
     expect(shot.direction.treatmentRevision).toBe(revision + 1);
-    const { musicVideoFrameModelInput } = await import('../lib/musicVideoShotPrompt.js');
+    const { musicVideoFrameModelInput } = await import('../lib/musicVideo/musicVideoShotPrompt.js');
     const previewPrompt = musicVideoFrameModelInput(synced.body.project, shot);
     expect(previewPrompt.prompt).not.toContain('lower third');
     expect(previewPrompt.prompt).not.toContain(oldFocal);

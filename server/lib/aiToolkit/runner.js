@@ -351,6 +351,9 @@ export function createRunnerService(config = {}) {
         // this provider or report its own failure", where a benched or
         // since-edited store record must not change which request goes out.
         provider: pinnedProvider = null,
+        // A host executor can make Stop effective before metadata becomes
+        // visible, including cancellation from the onRunCreated hook.
+        externalRun = null,
       } = options;
 
       if (!providerService) {
@@ -468,14 +471,19 @@ export function createRunnerService(config = {}) {
         outputSize: 0
       };
 
-      await withAssetPublication(async () => {
-        // The record must never name missing prompt/output bytes after a failure.
-        await atomicWrite(join(runDir, 'prompt.txt'), prompt);
-        await atomicWrite(join(runDir, 'output.txt'), '');
-        await atomicWrite(join(runDir, 'metadata.json'), metadata);
-      });
-
-      hooks.onRunCreated?.(metadata);
+      if (externalRun) service.registerExternalRun(runId, externalRun);
+      try {
+        await withAssetPublication(async () => {
+          // The record must never name missing prompt/output bytes after a failure.
+          await atomicWrite(join(runDir, 'prompt.txt'), prompt);
+          await atomicWrite(join(runDir, 'output.txt'), '');
+          await atomicWrite(join(runDir, 'metadata.json'), metadata);
+        });
+        hooks.onRunCreated?.(metadata);
+      } catch (error) {
+        if (externalRun) service.unregisterExternalRun(runId);
+        throw error;
+      }
       console.log(`🤖 AI run [${source}]: ${provider.name}/${metadata.model}`);
 
       const effectiveTimeout = timeout ?? provider.timeout;
@@ -1086,7 +1094,10 @@ export function createRunnerService(config = {}) {
       const runDir = existingRunDir(runId);
       if (!runDir) return false;
 
-      await withAssetPublication(() => rm(runDir, { recursive: true }));
+      // A live run's finalizer can still be flushing a file into the directory
+      // when the recursive remove lists it; ENOTEMPTY then means "retry", not
+      // "the delete failed" (flaked the live-delete cancellation test, #16657).
+      await withAssetPublication(() => rm(runDir, { recursive: true, maxRetries: 5, retryDelay: 20 }));
       runRecordCache.delete(runId);
       return true;
     },

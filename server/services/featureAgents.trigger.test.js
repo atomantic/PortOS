@@ -11,10 +11,10 @@ vi.mock('../lib/fileUtils.js', async () => {
   return makePathsProxy(actual, { dataRoot: tempRoot });
 });
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: vi.fn()
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   forceSpawnTask: vi.fn()
 }));
 
@@ -22,11 +22,11 @@ vi.mock('./apps.js', () => ({
   getAppById: vi.fn()
 }));
 
-import { addTask } from './cosTaskStore.js';
-import { forceSpawnTask } from './cos.js';
+import { addTask } from './cos/cosTaskStore.js';
+import { forceSpawnTask } from './cos/cos.js';
 import { getAppById } from './apps.js';
 const { generateTaskFromFeatureAgent, triggerFeatureAgent, stopFeatureAgent, updateFeatureAgent } = await import('./featureAgents.js');
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 
 const agent = {
   id: 'fa-example',

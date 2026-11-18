@@ -1,13 +1,13 @@
 vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn(async () => ({ epic: false })) }));
 import { prepareAppIssueClaim } from '../services/appIssues.js';
-vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
-import { getProviderById } from '../services/providers.js';
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../services/provider/providers.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { withDeliveryActivity } from '../services/agentDeliveryActivity.js';
+import { withDeliveryActivity } from '../services/agent/agentDeliveryActivity.js';
 
 // The CoS task routes write operator-action rows (#5594) through the ledger's
 // file backend, which resolves under PATHS.data — re-root it so this suite can
@@ -30,7 +30,7 @@ afterAll(() => rmSync(ledgerRoot, { recursive: true, force: true }));
 import cosRoutes from './cos.js';
 
 // Mock the cos service
-vi.mock('../services/cos.js', () => ({
+vi.mock('../services/cos/cos.js', () => ({
   getStatus: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
@@ -39,10 +39,10 @@ vi.mock('../services/cos.js', () => ({
   updateConfig: vi.fn(),
   forceSpawnTask: vi.fn()
 }));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   getConfig: vi.fn()
 }));
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
   getTaskView: vi.fn(),
   getUserTasks: vi.fn(),
@@ -55,14 +55,14 @@ vi.mock('../services/cosTaskStore.js', () => ({
   deleteTask: vi.fn(),
   approveTask: vi.fn()
 }));
-vi.mock('../services/cosTaskGenerator.js', () => ({
+vi.mock('../services/cos/cosTaskGenerator.js', () => ({
   evaluateTasks: vi.fn()
 }));
-vi.mock('../services/cosHealthMonitor.js', () => ({
+vi.mock('../services/cos/cosHealthMonitor.js', () => ({
   getHealthStatus: vi.fn(),
   runHealthCheck: vi.fn()
 }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   cleanupZombieAgents: vi.fn(),
   getAgents: vi.fn(),
   getAgent: vi.fn(),
@@ -70,20 +70,20 @@ vi.mock('../services/cosAgentLifecycle.js', () => ({
   deleteAgent: vi.fn(),
   sendBtwToAgent: vi.fn()
 }));
-vi.mock('../services/cosAgentIndex.js', () => ({
+vi.mock('../services/cos/cosAgentIndex.js', () => ({
   getAgentDates: vi.fn(),
   getAgentsByDate: vi.fn(),
   getCompletedAgentPage: vi.fn()
 }));
-vi.mock('../services/cosAgentFeedback.js', () => ({
+vi.mock('../services/cos/cosAgentFeedback.js', () => ({
   getPendingAgentFeedback: vi.fn(),
   submitAgentFeedback: vi.fn(),
   getFeedbackStats: vi.fn()
 }));
-vi.mock('../services/cosAgentArchive.js', () => ({
+vi.mock('../services/cos/cosAgentArchive.js', () => ({
   clearCompletedAgents: vi.fn()
 }));
-vi.mock('../services/cosReports.js', () => ({
+vi.mock('../services/cos/cosReports.js', () => ({
   listBriefings: vi.fn(),
   getLatestBriefing: vi.fn(),
   getBriefing: vi.fn(),
@@ -93,7 +93,7 @@ vi.mock('../services/cosReports.js', () => ({
 }));
 
 // Lifecycle transitions moved off `cos.js` onto the agentOrchestrator facade (#3450).
-vi.mock('../services/agentOrchestrator.js', () => ({
+vi.mock('../services/agent/agentOrchestrator.js', () => ({
   pauseAgent: vi.fn(),
   resumeAgent: vi.fn(),
   killAgent: vi.fn(),
@@ -125,7 +125,7 @@ vi.mock('../services/subAgentSpawner.js', () => ({
 // real buildJiraTicketTask runs so the `/tasks/jira-ticket` route still exercises
 // the extracted prompt assembly — it resolves getTaskPrompt/getCodeReviewDefaults,
 // which are mocked below, so the route-level assertions stay verbatim.
-vi.mock('../services/cosTaskClaimWork.js', async (importActual) => ({
+vi.mock('../services/cos/cosTaskClaimWork.js', async (importActual) => ({
   ...(await importActual()),
   buildClaimWorkTask: vi.fn(),
   buildIssueReplanTask: vi.fn()
@@ -150,22 +150,22 @@ vi.mock('../services/codeReview.js', () => ({
 }));
 
 // Import mocked modules
-import { addTask, approveTask, deleteTask, getTaskView, reorderTasks, updateTask } from '../services/cosTaskStore.js';
-import { cleanupZombieAgents, deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cosAgentLifecycle.js';
-import { clearCompletedAgents } from '../services/cosAgentArchive.js';
-import { evaluateTasks } from '../services/cosTaskGenerator.js';
-import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cosReports.js';
-import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cosAgentIndex.js';
-import { getConfig } from '../services/cosState.js';
-import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cosAgentFeedback.js';
-import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
-import { getScript, getStatus, listScripts, pause, resume, start, stop, updateConfig } from '../services/cos.js';
-import * as agentOrchestrator from '../services/agentOrchestrator.js';
+import { addTask, approveTask, deleteTask, getTaskView, reorderTasks, updateTask } from '../services/cos/cosTaskStore.js';
+import { cleanupZombieAgents, deleteAgent, getAgent, getAgentRecord, getAgents, sendBtwToAgent } from '../services/cos/cosAgentLifecycle.js';
+import { clearCompletedAgents } from '../services/cos/cosAgentArchive.js';
+import { evaluateTasks } from '../services/cos/cosTaskGenerator.js';
+import { generateReport, getBriefing, getLatestBriefing, getReport, getTodayActivity, getTodayReport, getWhileAwayActivity, listBriefings, listReports } from '../services/cos/cosReports.js';
+import { getAgentDates, getAgentsByDate, getCompletedAgentPage } from '../services/cos/cosAgentIndex.js';
+import { getConfig } from '../services/cos/cosState.js';
+import { getFeedbackStats, getPendingAgentFeedback, submitAgentFeedback } from '../services/cos/cosAgentFeedback.js';
+import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
+import { getScript, getStatus, listScripts, pause, resume, start, stop, updateConfig } from '../services/cos/cos.js';
+import * as agentOrchestrator from '../services/agent/agentOrchestrator.js';
 import * as appActivity from '../services/appActivity.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
-import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cosTaskClaimWork.js';
+import { buildClaimWorkTask, buildIssueReplanTask } from '../services/cos/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker } from '../services/apps.js';
 import { getTaskPrompt } from '../services/taskPromptService.js';
 import { getCodeReviewDefaults } from '../services/codeReview.js';

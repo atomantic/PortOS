@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the provider registry shim so resolveLlmEndpoint can be exercised
 // without warming the AI toolkit.
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
-import { getProviderById } from '../providers.js';
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../provider/providers.js';
 
 import {
   extractInlineToolCalls, isToolCapable, isReasoningModel,

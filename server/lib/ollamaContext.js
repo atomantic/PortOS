@@ -8,7 +8,7 @@
 
 // The `internal/` leaf on purpose: the toolkit barrel reaches `fs`/`child_process` and this is in the prompt budgeter and dispatch gate closure (import budget).
 import { isOllamaBackedProvider, ollamaBaseFromProvider, withRuntimeContextWindow } from './aiToolkit/internal/ollamaBacked.js'
-import { LIFECYCLE_LINES } from './agentOutputMarkers.js'
+import { LIFECYCLE_LINES } from './agent/agentOutputMarkers.js'
 
 /** Threshold below which PortOS warns before spawning: 32K (the common VRAM auto-pick) is consumed by scaffold, tools and a few reads. */
 export const OLLAMA_AGENT_MIN_CONTEXT = 65536

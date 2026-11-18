@@ -3,7 +3,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { lazyTempDataRoot, makePathsProxy, cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 
 vi.mock('../lib/fileUtils.js', async original => makePathsProxy(await original(), { dataRoot: lazyTempDataRoot('release-sync-workflow-') }));
-vi.mock('./cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => ({ agents: {} }), withStateLock: createFileWriteQueue() }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionPolicies: async () => [] }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 const policy = vi.hoisted(() => ({ app: {}, reviews: {} }));
@@ -11,7 +11,7 @@ vi.mock('./apps.js', () => ({ getAppById: async () => policy.app }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),
   resolveReviewLoopOptions: async () => structuredClone(policy.reviews) }));
 
-import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
+import { addTask, getTaskById, updateTask } from './cos/cosTaskStore.js';
 import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs, releaseTaskDispatchDisposition } from './releaseSynchronization.js';
 import { RELEASE_SYNC_OBLIGATIONS } from '../lib/releaseSynchronization.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';

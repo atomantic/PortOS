@@ -45,13 +45,13 @@ import {
 import { findCachedRepoFiles, getHfCacheRoot } from '../lib/hfCache.js';
 import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/provider/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { detectVenvBasePythonSync, createVenv, installLockedRuntime } from '../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 // Declared in lib/ so `classifyWorktreeDirt` can subtract this scratch without
 // importing this module's provider/runtime graph — see agentScratchPaths.js.
-import { PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME } from '../lib/agentScratchPaths.js';
+import { PUBLIC_REVIEW_INPUT_FILENAME, PUBLIC_REVIEW_PATCH_DIRNAME } from '../lib/agent/agentScratchPaths.js';
 import { downloadHfRepo } from './hfDownload.js';
 import { getHfToken } from './hfToken.js';
 import { listModels } from './localLlm.js';

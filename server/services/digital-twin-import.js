@@ -1,4 +1,4 @@
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';

@@ -17,7 +17,7 @@
  * greyboxes. A set's rotation turns its greybox about Y (0 = as modeled).
  * Browser-safe and pure; the save schema lives in worldMapValidation.js.
  */
-import { ROUTE_MAP_HEADINGS } from './musicVideoRouteMapLimits.js';
+import { ROUTE_MAP_HEADINGS } from './musicVideo/musicVideoRouteMapLimits.js';
 
 export const WORLD_VERSION = 1;
 export const WORLD_LIMITS = Object.freeze({

@@ -37,8 +37,8 @@ describe('extractKeywords', () => {
   });
 
   it('should handle file paths', () => {
-    const keywords = extractKeywords('update server/services/cos.js');
-    expect(keywords).toContain('server/services/cos.js');
+    const keywords = extractKeywords('update server/services/cos/cos.js');
+    expect(keywords).toContain('server/services/cos/cos.js');
   });
 
   it('should return empty for empty string', () => {

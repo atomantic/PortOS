@@ -64,7 +64,7 @@ async function resolveChoices(project) {
   const { getSettings } = await import('../settings.js');
   const { resolveVideoBackendPin } = await import('../videoGen/backendPin.js');
   const { getStageAssignment } = await import('./agentBridge.js');
-  const { resolveAgentProviderAndModel } = await import('../agentProviderResolution.js');
+  const { resolveAgentProviderAndModel } = await import('../agent/agentProviderResolution.js');
   const { resolveVisionEvalTarget } = await import('./sceneEvaluator.js');
   const settings = await getSettings();
   const pin = resolveVideoBackendPin(project, settings);
@@ -171,7 +171,7 @@ export async function reconcileVideoExecution(projectId, { restarting = false, r
   if (!restarting) {
     const liveAgents = (snapshot?.videoExecution?.attempts || []).filter(attempt => !isMediaAttempt(attempt) && LIVE_ATTEMPTS.has(attempt.status) && attempt.taskId);
     if (liveAgents.length) {
-      const { getTaskById } = await import('../cosTaskStore.js');
+      const { getTaskById } = await import('../cos/cosTaskStore.js');
       for (const attempt of liveAgents) tasks.set(attempt.taskId, await getTaskById(attempt.taskId));
     }
   }

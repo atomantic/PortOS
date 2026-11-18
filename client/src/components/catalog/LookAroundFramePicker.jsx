@@ -3,7 +3,7 @@ import { Check, Loader2, Plus, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatCount } from '../../utils/formatters';
 import { saveCatalogLookAroundAngles, scoreCatalogLookAroundClip } from '../../services/apiCatalog';
-import { lookAroundAngleLabel } from '../../../../server/lib/catalogLookAround.js';
+import { lookAroundAngleLabel } from '../../../../server/lib/catalog/catalogLookAround.js';
 
 const FIELD = 'rounded border border-port-border bg-port-bg px-2 py-1 text-sm text-white min-h-[44px] pointer-fine:sm:min-h-0';
 const BUTTON = 'inline-flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';

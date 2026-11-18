@@ -1,0 +1,929 @@
+import { randomUUID } from 'node:crypto';
+import { ServerError } from '../../lib/errorHandler.js';
+import {
+  providerConnectionProfile,
+  projectConnectionOwnedFields,
+  withConnectionOwnedFields,
+} from '../../lib/provider/providerConnections.js';
+import {
+  connectionOwnedSnapshot,
+  isDerivedPreset,
+  mergeConnectionCredentials,
+  planGraphReconciliation,
+  reconciliationIsNoop,
+  routeBelongsOnConnection,
+  toConnectionDto,
+  toManagementGraphDto,
+} from '../../lib/provider/providerGraphRecords.js';
+import { harnessById } from '../../lib/provider/providerHarnesses.js';
+import { modeSiblingName } from '../../lib/aiToolkit/internal/providerModes.js';
+import {
+  planPresetBackfill,
+  presetBackfillVerdict,
+  rederivePreset,
+} from '../../lib/provider/providerPresets.js';
+import { effortLevelsForProvider } from '../../lib/provider/providerModels.js';
+import {
+  bindingBlocker,
+  buildRouteRecord,
+  connectionBlocker,
+  connectionKindLabel,
+  mintRouteIds,
+} from '../../lib/provider/providerRouteRecipes.js';
+import {
+  routeSettingsFor,
+  routeSettingsRevision,
+  unsupportedRouteSettings,
+} from '../../lib/provider/providerRouteSettings.js';
+import { buildTuiShellLaunch } from '../../lib/tuiShellLaunch.js';
+import {
+  instanceForConnection,
+  planServiceColumnBackfill,
+  serviceColumnsForConnection,
+  takenServiceSlugs,
+} from '../../lib/provider/providerServiceInstances.js';
+import { planServiceInstanceMerges } from '../../lib/provider/providerServiceMerge.js';
+import { SERVICE_CREDENTIAL_VIAS, assertServicePlan, serviceDefinitionById } from '../../lib/serviceDefinitions.js';
+import { requireToolkit } from '../../lib/aiToolkitState.js';
+import {
+  acknowledgeProjection,
+  applyReconciliation,
+  applyServiceColumnBackfill,
+  commitPendingProjection,
+  deleteConnection,
+  mergeServiceInstances,
+  readGraph,
+  saveBindingSettings,
+  saveConnectionSettings,
+  writeGraph,
+} from './providerGraphStore.js';
+
+/**
+ * The provider connection graph's orchestration layer (#6367).
+ *
+ * Two stores have to agree here and neither can be locked against the other:
+ * the DB graph (`providerGraphStore.js`) and the executable
+ * `data/providers.json` the toolkit owns. `providers.json` stays fully
+ * materialized and authoritative for EXECUTION -- a downgraded release runs it
+ * with no graph at all -- so every rule below is written from that direction:
+ * the file is what a run reads, and the graph follows it.
+ *
+ * **Serialization.** Every pass runs on one promise queue, so a legacy provider
+ * write, a boot reconcile and a link can never interleave their reads and
+ * writes. This is re-entrancy control, not multi-actor locking (AGENTS.md
+ * Security Model): there is one server process and one human.
+ *
+ * **Projection ordering.** A graph mutation commits its rows AND the pending
+ * projection snapshot in one DB transaction, writes providers.json through the
+ * toolkit, then acknowledges. A crash at any point leaves a `pending` snapshot
+ * the next reconcile pass can resolve against the file's actual values --
+ * retrying only when the file still holds the old value, and refusing outright
+ * when it holds a third one.
+ *
+ * **No AI provider is ever contacted here.** Import, reconcile, link, unlink
+ * and projection are local I/O only (AGENTS.md "No cold-bootstrap LLM calls").
+ */
+
+/** Off until the database phase says the graph tables exist. */
+let graphEnabled = false;
+/** Re-entrancy latch: a projection's own file write must not re-trigger a pass. */
+let reconciling = false;
+let queue = Promise.resolve();
+/**
+ * Why each routed legacy record stayed legacy on the LAST pass (#7565), by
+ * provider id. The editor offers "Convert to derived preset" only where this
+ * holds no reason: the conversion runs the very same pass, so a record the pass
+ * just refused would refuse again (the pre-fix editor offered the button to
+ * every shipped preset it could never convert).
+ */
+let presetSkipReasons = new Map();
+
+/**
+ * One-at-a-time execution. A rejected pass must not poison the next one.
+ * Exported (as `serializeProviderGraph`) for the service-instance operations
+ * in `providerServices.js`, which mutate the same rows.
+ */
+const serialize = (fn) => {
+  queue = queue.then(() => undefined, () => undefined).then(fn);
+  return queue;
+};
+export { serialize as serializeProviderGraph };
+
+export const providerGraphEnabled = () => graphEnabled;
+
+/** The reason the last pass left `providerId` a legacy preset, or null when it did not refuse it. */
+export const presetSkipReason = (providerId) => presetSkipReasons.get(providerId) ?? null;
+
+/** Test seam: reset module state between suites. */
+export function resetProviderGraphState() {
+  graphEnabled = false;
+  reconciling = false;
+  queue = Promise.resolve();
+  presetSkipReasons = new Map();
+}
+
+const providerService = () => requireToolkit().services.providers;
+
+// Deferred: the bootstrap-app table is read only when a preset is derived, and
+// its module reaches `lib/validation.js` — a closure nothing on the graph's
+// boot path otherwise pays for (server/AGENTS.md "Import scoping").
+const bootstrapApps = async () => (await import('../credentialBootstrapApps.js')).listCredentialBootstraps();
+
+/**
+ * A connection addressed by UUID or by service slug (#7563). Every
+ * `/connections/:id` route accepts either, so a client that learned the slug
+ * from `/services` can use it on the older surface too. `null` when neither
+ * matches — and never a label match.
+ */
+export const findConnectionByRef = (graph, ref) =>
+  graph.connections.find((candidate) => candidate.id === ref || (candidate.slug != null && candidate.slug === ref)) ?? null;
+
+/**
+ * The patch that materializes a connection-owned snapshot into an executable
+ * record. Built from the live record so unknown custom fields and route-owned
+ * env vars survive untouched.
+ */
+function projectionPatch(provider, owned) {
+  const merged = withConnectionOwnedFields(provider, owned);
+  const patch = { ...owned.fields };
+  if (owned.hasEnvVars) patch.envVars = merged.envVars;
+  return patch;
+}
+
+/**
+ * One reconciliation pass: read both stores, plan, apply.
+ *
+ * Retries are written to the file BEFORE the plan is applied so their rows can
+ * be acknowledged in the same transaction -- a retry that could not be written
+ * stays pending and is retried on the next pass rather than being marked done.
+ */
+async function reconcilePass(reason) {
+  const graph = await readGraph();
+  const { providers, activeProvider } = await providerService().getAllProviders();
+  const plan = planGraphReconciliation(graph, providers, { mintId: randomUUID });
+
+  if (plan.retries.length > 0) {
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    const patches = Object.fromEntries(plan.retries
+      .filter(({ providerId }) => byId.has(providerId))
+      .map(({ providerId, owned }) => [providerId, projectionPatch(byId.get(providerId), owned)]));
+    const written = await providerService().applyProviderPatches(patches);
+    plan.acknowledgements.push(...written.map((providerId) => ({ providerId })));
+  }
+
+  // Service-instance columns (#7563): a row written before they existed, an
+  // imported fragment and a detached clone all arrive with no slug. The fresh
+  // rows in the plan are named BEFORE it is applied, so they land addressed;
+  // the pre-existing unnamed rows are backfilled after. Row-derived (never a
+  // seed) and idempotent, so it rides every pass rather than a one-shot
+  // migration. Local I/O only; nothing here contacts a provider.
+  const taken = takenServiceSlugs(graph.connections);
+  const harnessOf = (bindings, test) => bindings.find(test)?.harnessId ?? null;
+  for (const connection of plan.imports.connections) {
+    const harnessId = harnessOf(plan.imports.bindings, (binding) => binding.connectionId === connection.id);
+    Object.assign(connection, serviceColumnsForConnection(connection, { harnessId, taken }));
+  }
+  for (const regroup of plan.regroups) {
+    if (regroup.connectionAction !== 'clone') continue;
+    const harnessId = regroup.binding?.harnessId ?? harnessOf(graph.bindings, (binding) => binding.id === regroup.bindingId);
+    Object.assign(regroup.connection, serviceColumnsForConnection(regroup.connection, { harnessId, taken }));
+  }
+  const backfill = planServiceColumnBackfill(graph, taken);
+
+  const noop = reconciliationIsNoop(plan);
+  if (!noop) await applyReconciliation(plan);
+  if (backfill.length > 0) {
+    await applyServiceColumnBackfill(backfill);
+    console.log(`🔗 Provider graph: named ${backfill.length} service instance(s) (${backfill.map((row) => row.slug).join(', ')})`);
+  }
+
+  // Derived presets (#7565): every legacy record the graph now routes onto a
+  // named instance is stamped with its structural keys — when re-deriving it
+  // from that service is a fixpoint. Row-derived like the slugs above, so it
+  // rides every pass; the latch this pass holds keeps the file write from
+  // re-entering. The view it reads is the graph AS APPLIED, composed from the
+  // plan rather than re-read (one read per pass is the recursion guard the
+  // save hook relies on): the rows this pass imported and the slugs it named
+  // are eligible now, a clone or split waits for the next pass.
+  const named = new Map(backfill.map((row) => [row.id, row]));
+  const removed = new Set(plan.removals);
+  const applied = {
+    connections: [...graph.connections.map((connection) => ({ ...connection, ...(named.get(connection.id) || {}) })), ...plan.imports.connections],
+    bindings: [...graph.bindings, ...plan.imports.bindings],
+    routes: [...graph.routes.filter((route) => !removed.has(route.providerId)), ...plan.imports.routes],
+  };
+  const presets = await backfillPresets(applied, providers);
+  presetSkipReasons = new Map(presets.skipped.map(({ id, reason }) => [id, reason]));
+
+  // One service per backend (epic #7561): the import gave every harness its
+  // own row, so fold rows that provably reach one backend under one set of
+  // terms into a single instance. Row-derived and idempotent like the steps
+  // above — a folded graph plans nothing — so it rides every pass. It reads
+  // the same as-applied view, which a regroup (clone, split, in-place update)
+  // leaves stale, so a pass that moved rows leaves the fold to the next one.
+  const regrouped = plan.regroups.some((regroup) => regroup.connectionAction !== 'unchanged' || !regroup.bindingId);
+  const folded = regrouped ? 0 : await foldDuplicateServices(applied, presets.stamped.length > 0 ? null : providers);
+
+  const detached = plan.regroups.filter((regroup) => regroup.connectionAction === 'clone').length;
+  const split = plan.regroups.filter((regroup) => !regroup.bindingId).length;
+  if (!noop || plan.conflicts.length > 0 || presets.stamped.length > 0 || folded > 0) {
+    console.log(`🔗 Provider graph reconciled (${reason}): ${plan.imports.routes.length} imported, `
+      + `${detached} detached, ${split} split, ${plan.removals.length} removed, `
+      + `${plan.acknowledgements.length} acknowledged, ${plan.conflicts.length} conflicted, ${presets.stamped.length} presets derived, `
+      + `${folded} services folded`);
+  }
+  for (const conflict of plan.conflicts) {
+    console.error(`⚠️ Provider route ${conflict.providerId} changed outside the graph mid-projection; `
+      + 'leaving it untouched and blocking its binding until repaired');
+  }
+  return { activeProvider, plan, noop, presets };
+}
+
+/**
+ * The service-fold half of a pass: `planServiceInstanceMerges` over the graph
+ * as the steps above left it, applied one fold at a time. The provider file is
+ * re-read only when the preset backfill just wrote it (`current` is null), so
+ * the fold judges each record as derived or legacy by what it now is. Each
+ * fold's derived presets are re-pointed in `providers.json` BEFORE the rows
+ * move — they then name a slug that already exists, so a crash between the two
+ * writes leaves every record resolvable and the next pass re-plans the same
+ * fold. Writes through the toolkit directly, under the pass's latch, like
+ * {@link backfillPresets}. Local I/O only.
+ *
+ * @returns {Promise<number>} how many rows were folded away
+ */
+async function foldDuplicateServices(graph, current) {
+  const providers = current ?? (await providerService().getAllProviders()).providers;
+  // Only a preset naming a bootstrap app consults the table.
+  const bootstraps = providers.some((record) => record?.credentialBootstrapId) ? await bootstrapApps() : {};
+  const merges = planServiceInstanceMerges(graph, providers, { bootstraps, env: process.env });
+  for (const merge of merges) {
+    if (Object.keys(merge.presetPatches).length > 0) await providerService().applyProviderPatches(merge.presetPatches);
+    await mergeServiceInstances(merge);
+    console.log(`🔗 Provider graph: folded service(s) ${merge.absorbedSlugs.join(', ')} into ${merge.keeper.slug}`);
+  }
+  return merges.reduce((sum, merge) => sum + merge.absorbedIds.length, 0);
+}
+
+/**
+ * The preset backfill half of a pass (#7565). Writes through the toolkit
+ * directly: the caller already holds the `reconciling` latch for the whole
+ * pass, so the save hook this write fires returns immediately.
+ *
+ * @returns {Promise<{stamped: string[], skipped: {id: string, reason: string}[]}>}
+ */
+async function backfillPresets(graph, providers) {
+  // The bootstrap table is read only when a legacy record is routed at all.
+  const routed = new Set(graph.routes.map((route) => route.providerId));
+  if (!providers.some((record) => routed.has(record?.id) && !isDerivedPreset(record))) return { stamped: [], skipped: [] };
+  const { patches, skipped } = planPresetBackfill({ graph, providers, bootstraps: await bootstrapApps(), env: process.env });
+  const stamped = Object.keys(patches).length > 0 ? await providerService().applyProviderPatches(patches) : [];
+  if (stamped.length > 0) console.log(`🔗 Provider graph: derived ${stamped.length} preset(s) from their services (${stamped.join(', ')})`);
+  // Aggregate only: a reason names a record, never a value off it.
+  const legacy = skipped.filter(({ reason }) => reason !== 'unmapped').length;
+  if (legacy > 0) console.log(`🔗 Provider graph: ${legacy} routed record(s) stay legacy presets`);
+  return { stamped, skipped };
+}
+
+/**
+ * Re-derive every DERIVED preset on `connection` from the row as it now is,
+ * and write what changed (#7565). The complement of `projectRoutes`: that one
+ * carries the endpoint and credential through the pending/projected snapshot
+ * protocol, this one re-runs the whole materialization — the inline OpenCode
+ * config, the plan-filtered catalog, the bootstrap app — none of which the
+ * connection profile owns. Called from inside a serialized pass, after the row
+ * is saved; a preset whose derivation is refused (the service lost its
+ * endpoint, its bootstrap app was deleted) is left exactly as it was.
+ *
+ * @param {object} connection - the row as saved
+ * @param {{providerIds?: string[]|null}} [options] - the derived presets to re-derive
+ *   ONTO this row (a binding that just moved here), instead of the ones already naming it
+ * @param {string|null} [options.resetPresetId] preset whose explicit refresh clears its model narrowing
+ * @returns {Promise<string[]>} the preset ids rewritten
+ */
+export async function rematerializeDerivedPresets(connection, { providerIds = null, resetPresetId = null } = {}) {
+  const instance = instanceForConnection(connection);
+  if (!instance) return [];
+  const [{ providers }, bootstraps] = await Promise.all([providerService().getAllProviders(), bootstrapApps()]);
+  const onRow = (record) => (providerIds ? providerIds.includes(record.id) : record.serviceId === connection.slug);
+  const patches = {};
+  for (const record of providers) {
+    if (!isDerivedPreset(record) || !onRow(record)) continue;
+    // A preset refresh explicitly replaces its model list. Service refreshes
+    // and sibling presets retain their declared narrowing.
+    const candidate = record.id === resetPresetId ? { ...record, catalogNarrowing: null } : record;
+    const patch = rederivePreset(candidate, { instance, catalog: connection.catalog, bootstraps, stored: record })?.patch;
+    if (patch && Object.keys(patch).length > 0) patches[record.id] = patch;
+  }
+  if (Object.keys(patches).length === 0) return [];
+  const written = await writeProviderPatches(patches);
+  if (written.length > 0) console.log(`🔗 Re-derived ${written.length} preset(s) from service ${connection.slug}`);
+  return written;
+}
+
+/**
+ * Refresh the cached preset-conversion verdict — {@link presetSkipReason} —
+ * for every LEGACY (not yet derived) record routed on `connection`, against
+ * `connection` AS JUST SAVED (#8159).
+ *
+ * `presetSkipReasons` is otherwise updated only by a full reconcile pass
+ * (`reconcilePass`, on boot or a `providers.json` write), so a connection
+ * SETTINGS edit — which changes nothing `onProvidersSaved` watches — left the
+ * "Convert to derived preset" gate answering against whatever the connection
+ * looked like at the last pass. Scoped to `connection`'s own routes rather
+ * than a whole-graph {@link planPresetBackfill}, because no OTHER route's
+ * verdict can have changed from this edit; and to {@link presetBackfillVerdict}
+ * rather than a write, because this is a read-cache refresh, not a conversion
+ * — an eligible record still needs its own reconcile pass or explicit
+ * "Convert" action to actually stamp.
+ */
+async function refreshPresetSkipReasonsForConnection(graph, connection) {
+  const boundBindings = new Set(
+    graph.bindings.filter((binding) => binding.connectionId === connection.id).map((binding) => binding.id),
+  );
+  const routes = graph.routes.filter((route) => boundBindings.has(route.bindingId));
+  if (routes.length === 0) return;
+  const { providers } = await providerService().getAllProviders();
+  const byId = new Map(providers.map((record) => [record.id, record]));
+  const legacy = routes
+    .map((route) => ({ route, record: byId.get(route.providerId) }))
+    .filter(({ record }) => record && typeof record === 'object' && !isDerivedPreset(record));
+  if (legacy.length === 0) return;
+  const instance = instanceForConnection(connection, process.env);
+  const bootstraps = await bootstrapApps();
+  for (const { route, record } of legacy) {
+    const { reason } = presetBackfillVerdict(record, { route, connection, instance, bootstraps, env: process.env });
+    if (reason) presetSkipReasons.set(record.id, reason);
+    else presetSkipReasons.delete(record.id);
+  }
+}
+
+/**
+ * Reconcile the graph against providers.json.
+ *
+ * `reconciling` is set for the WHOLE pass, not just its write: the retry path
+ * saves through the toolkit, which fires the same hook that calls this -- the
+ * latch is what keeps that from recursing.
+ */
+export function reconcileProviderGraph(reason = 'manual') {
+  if (!graphEnabled || reconciling) return Promise.resolve(null);
+  return serialize(() => {
+    reconciling = true;
+    return reconcilePass(reason).finally(() => { reconciling = false; });
+  });
+}
+
+/**
+ * Boot entry, called from the database phase once the schema is up.
+ *
+ * The first pass on an install with no graph rows imports every provider record
+ * -- including disabled and custom ones -- because each is simply "unmapped" to
+ * the planner. That keeps ONE code path responsible for import, crash recovery
+ * and downgrade reconciliation, so they cannot drift apart.
+ */
+export async function initProviderGraph() {
+  graphEnabled = true;
+  return reconcileProviderGraph('boot');
+}
+
+/**
+ * The toolkit's post-save hook (wired in `bootstrap.js`).
+ *
+ * An old client's `PATCH /api/providers/:id` knows nothing about the graph, so
+ * a connection-owned edit arrives here as a plain file change. Reconciliation
+ * detaches the affected binding rather than letting the edit silently repoint
+ * another harness's backend; a mode-only edit changes no connection-owned value
+ * and is therefore route-scoped and a no-op here; and a deleted record drops
+ * its row without being resurrected.
+ */
+export const onProvidersSaved = () => reconcileProviderGraph('legacy-write');
+
+/**
+ * What one executable record contributes to its route's DTO: the overrides this
+ * mode carries, the effort ladder its harness really accepts, and — for a
+ * launchable TUI — the command line the Shell page would show.
+ *
+ * The command line is DISPLAY ONLY and its env half is dropped here: a launch
+ * goes through `shell:start { providerId }`, which re-resolves both server-side,
+ * so the provider's secret env never reaches a management payload.
+ */
+function describeRoute(provider) {
+  const settings = routeSettingsFor(provider);
+  return {
+    settings,
+    effortLevels: effortLevelsForProvider(provider, settings.defaultModel ?? null),
+    tuiCommandLine: buildTuiShellLaunch(provider)?.commandLine ?? null,
+    // The record's own model strings, so the DTO can say which hand-authored
+    // aliases name a spelling this route no longer carries (#6369).
+    storedModels: Array.isArray(provider?.models) ? provider.models : null,
+  };
+}
+
+/** The sanitized `GET /api/providers/management` body. */
+export async function getManagementGraph() {
+  requireProviderGraph();
+  const [graph, data] = await Promise.all([readGraph(), providerService().getAllProviders()]);
+  // Only the records the graph actually routes: an unmapped legacy provider has
+  // no row to decorate, and resolving a shell invocation for it would be work
+  // this response throws away.
+  const byId = new Map(data.providers.map((provider) => [provider.id, provider]));
+  const routeSettings = new Map(graph.routes
+    .filter((route) => byId.has(route.providerId))
+    .map((route) => [route.providerId, describeRoute(byId.get(route.providerId))]));
+  return toManagementGraphDto({ ...graph, activeProvider: data.activeProvider, routeSettings });
+}
+
+// --- link / unlink -----------------------------------------------------------
+
+export const requireProviderGraph = () => {
+  if (!graphEnabled) {
+    throw new ServerError('Provider connection graph is unavailable on this install', { status: 503, code: 'PROVIDER_GRAPH_UNAVAILABLE' });
+  }
+};
+
+const requireConnection = (graph, ref) => {
+  const connection = findConnectionByRef(graph, ref);
+  if (!connection) throw new ServerError('Connection not found', { status: 404, code: 'CONNECTION_NOT_FOUND' });
+  return connection;
+};
+
+const stale = (what) => new ServerError(
+  `${what} changed since the preview was taken; take a new preview`,
+  { status: 409, code: 'PROVIDER_GRAPH_STALE_REVISION' });
+
+/** A connection row in the shape the endpoint comparator expects. */
+/**
+ * The variant key `binding` may occupy on `connectionId`.
+ *
+ * `default` when free; otherwise a distinct labeled variant. Never a merge:
+ * two harness configurations sharing one connection are both legitimate, and
+ * collapsing them would discard one side's executable route ids.
+ */
+function allocateVariantKey(graph, connectionId, binding) {
+  const taken = new Set(graph.bindings
+    .filter((candidate) => candidate.connectionId === connectionId
+      && candidate.harnessId === binding.harnessId
+      && candidate.id !== binding.id)
+    .map((candidate) => candidate.variantKey));
+  return taken.has('default') ? `variant:${binding.id}` : 'default';
+}
+
+/**
+ * Delete a connection nothing binds any more.
+ *
+ * Reconciliation deliberately KEEPS an emptied connection rather than
+ * garbage-collecting it — a backend the user configured is not something to
+ * remove because a route was temporarily deleted. This is the explicit cleanup
+ * that keeps them from accumulating forever, and it is refused while a binding
+ * still names the row, so no binding is ever silently orphaned.
+ */
+export async function removeConnection(connectionRef) {
+  requireProviderGraph();
+  return serialize(async () => {
+    const connectionId = requireConnection(await readGraph(), connectionRef).id;
+    const result = await deleteConnection(connectionId);
+    if (!result.deleted) {
+      throw new ServerError('This connection is still used by a harness binding',
+        { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_IN_USE' });
+    }
+    console.log(`🔗 Deleted unused provider connection ${connectionId}`);
+    return result;
+  });
+}
+
+/**
+ * Stage, write, acknowledge -- the three-step projection the crash-recovery
+ * contract depends on. Never call the steps separately.
+ */
+async function projectRoutes(providerIds, connection) {
+  const { providers } = await providerService().getAllProviders();
+  const byId = new Map(providers.map((provider) => [provider.id, provider]));
+  const projections = providerIds
+    .filter((providerId) => byId.has(providerId))
+    .map((providerId) => ({ providerId, owned: projectConnectionOwnedFields(byId.get(providerId), connection) }));
+  if (projections.length === 0) return [];
+
+  await commitPendingProjection(projections);
+  const written = await writeProviderPatches(Object.fromEntries(
+    projections.map(({ providerId, owned }) => [providerId, projectionPatch(byId.get(providerId), owned)]),
+  ));
+  await acknowledgeProjection(written);
+  return written;
+}
+
+/**
+ * Write `providers.json` from INSIDE a serialized graph pass.
+ *
+ * The latch is load-bearing, not defensive: the toolkit's post-save hook calls
+ * back into `reconcileProviderGraph`, which queues behind the pass currently
+ * awaiting this write. Holding `reconciling` makes that call return
+ * immediately, so the pass cannot wait on work that is waiting on the pass.
+ *
+ * @param {Record<string, object>} patches - provider id → partial update
+ * @returns {Promise<string[]>} the ids that existed and were written
+ */
+function writeProviderPatches(patches) {
+  return duringProviderWrite(() => providerService().applyProviderPatches(patches));
+}
+
+/**
+ * Hold the re-entrancy latch across any provider-file write made from inside a
+ * serialized pass — a projection patch, or a freshly minted route.
+ *
+ * See {@link writeProviderPatches} for why this is load-bearing rather than
+ * defensive: the toolkit's post-save hook calls back into the graph, and
+ * without the latch that call would queue behind the pass awaiting this write.
+ */
+function duringProviderWrite(work) {
+  reconciling = true;
+  return Promise.resolve().then(work).finally(() => { reconciling = false; });
+}
+
+// --- explicit management edits (#6369) ---------------------------------------
+//
+// The three edits a human makes to a SHARED backend, as opposed to the link and
+// unlink above which change which backend a harness reaches:
+//
+//   1. edit the connection once and have every attached route follow it,
+//   2. refresh its model catalog once for every harness on it,
+//   3. choose the subset of that catalog a harness offers.
+//
+// All three are revision-checked against exactly what the human was looking at,
+// all three run on the same serialization queue as reconciliation, and none of
+// them contacts an AI provider except (3)'s explicitly requested model list.
+
+/** Locate a row the caller named, or 404. Never a partial match on a label. */
+function requireRow(rows, id, what, code) {
+  const row = rows.find((candidate) => candidate.id === id);
+  if (!row) throw new ServerError(`${what} not found`, { status: 404, code });
+  return row;
+}
+
+/**
+ * Refuse a mutation while any of these routes is mid-projection.
+ *
+ * That state is precisely where the graph and `providers.json` disagree, so an
+ * edit decided against it would be decided against unknown values. Same guard
+ * `resolveLink` applies, applied to the connection's whole route set.
+ */
+function requireSettledRoutes(routes) {
+  if (routes.some((route) => route.pending)) {
+    throw new ServerError('This connection has an unresolved projection and cannot be changed yet',
+      { status: 409, code: 'PROVIDER_GRAPH_BINDING_BLOCKED' });
+  }
+}
+
+/** Every binding on a connection, and the executable routes those bindings own. */
+export function connectionFanout(graph, connectionId) {
+  const bindings = graph.bindings.filter((binding) => binding.connectionId === connectionId);
+  const bindingIds = new Set(bindings.map((binding) => binding.id));
+  return { bindings, routes: graph.routes.filter((route) => bindingIds.has(route.bindingId)) };
+}
+
+/**
+ * Edit one shared backend: its label, its transports, its credentials.
+ *
+ * This is the whole point of the graph — the endpoint and secret a human
+ * changes here are materialized into EVERY route on the connection in one
+ * projection, instead of being retyped per harness and drifting. Route ids,
+ * mode settings, pins, `activeProvider` and fallback references are untouched.
+ *
+ * A stale `expectedRevision` is a 409, not a last-writer merge: the human was
+ * editing values they had read, and a moved row means they were not.
+ *
+ * `transports` replaces the map WHOLESALE rather than merging into it, so
+ * dropping a protocol is expressible. That is why the editor renders one field
+ * per declared transport and sends them all back: a client that sends a partial
+ * map is asking to remove the rest.
+ */
+export function updateConnectionSettings({
+  connectionId, expectedRevision, label, transports, credentials, plan, enabled, credentialVia,
+}) {
+  return serialize(async () => {
+    requireProviderGraph();
+    const graph = await readGraph();
+    const connection = requireConnection(graph, connectionId);
+    if (connection.revision !== expectedRevision) throw stale('The connection');
+    const definition = connection.definitionId ? serviceDefinitionById(connection.definitionId) : null;
+    // A row with no definition takes any plan: there is nothing to check it
+    // against, and refusing would strand a legacy row a human is labelling.
+    if (plan !== undefined && definition) assertServicePlan(definition, plan);
+    if (credentialVia !== undefined && !SERVICE_CREDENTIAL_VIAS.includes(credentialVia)) {
+      throw new ServerError(`credentialVia must be one of ${SERVICE_CREDENTIAL_VIAS.join(', ')}`,
+        { status: 400, code: 'PROVIDER_SERVICE_CREDENTIAL_VIA_INVALID' });
+    }
+    const { routes } = connectionFanout(graph, connection.id);
+    requireSettledRoutes(routes);
+
+    const merged = mergeConnectionCredentials(connection.credentials, credentials);
+    if (merged.rejected.length > 0) {
+      throw new ServerError(
+        `Send the real value or null for ${merged.rejected.join(', ')} — a redacted placeholder is not a credential`,
+        { status: 400, code: 'PROVIDER_GRAPH_REDACTED_CREDENTIAL' });
+    }
+
+    const nextVia = credentialVia ?? connection.credentialVia;
+    const next = {
+      ...connection,
+      label: label ?? connection.label,
+      transports: transports ?? connection.transports,
+      // A `bootstrap` instance stores no secret by definition: the launch
+      // wrapper supplies it at spawn. Switching to it drops whatever was held.
+      credentials: nextVia === 'bootstrap' ? {} : merged.credentials,
+      plan: plan ?? connection.plan,
+      enabled: enabled ?? connection.enabled,
+      credentialVia: nextVia,
+    };
+    const revision = await saveConnectionSettings(next);
+    const saved = { ...next, revision: revision ?? next.revision };
+    const applied = await projectRoutes(routes.map((route) => route.providerId), next);
+    // The derived presets on this instance follow the whole row, not only the
+    // profile-owned half the projection carried (#7565).
+    const rederived = await rematerializeDerivedPresets(saved);
+    // This connection's still-legacy routes may have just become convertible,
+    // or stopped being — keep `presetSkipReason` current rather than leaving
+    // it to the next full reconcile pass, which this write never triggers (#8159).
+    await refreshPresetSkipReasonsForConnection(graph, saved);
+    console.log(`🔗 Updated connection ${connection.id} (${applied.length} routes projected, ${rederived.length} presets re-derived)`);
+    return { connectionId: connection.id, revision, affectedRouteIds: [...new Set([...applied, ...rederived])] };
+  });
+}
+
+/**
+ * Choose which of the shared catalog a harness offers, and rename the binding.
+ *
+ * Management state only — nothing here is projected into an executable record,
+ * so choosing a subset can never enable a route, grant a mode's execution
+ * consent, or repoint a saved selection. A pin outside the new subset stays
+ * exactly where it was and simply reads as stale, which is what keeps a
+ * narrowed catalog from silently repicking somebody's model.
+ */
+export function updateBindingSettings({ bindingId, expectedRevision, label, selectedModels }) {
+  return serialize(async () => {
+    requireProviderGraph();
+    const graph = await readGraph();
+    const binding = requireRow(graph.bindings, bindingId, 'Binding', 'BINDING_NOT_FOUND');
+    if (binding.revision !== expectedRevision) throw stale('The binding');
+    requireSettledRoutes(graph.routes.filter((route) => route.bindingId === binding.id));
+
+    const next = {
+      id: binding.id,
+      label: label ?? binding.label,
+      selectedModels: selectedModels ?? binding.selectedModels,
+    };
+    const revision = await saveBindingSettings(next);
+    return { bindingId: binding.id, revision, label: next.label, selectedModels: next.selectedModels };
+  });
+}
+
+/**
+ * Edit ONE route's mode overrides — its args, timeout, effort and model pins.
+ *
+ * The counterpart to `updateConnectionSettings`: that one changes a value every
+ * harness on the backend shares, this one changes a value that belongs to a
+ * single execution mode. Both live on this screen so a human stops bouncing
+ * between a connection and three route editors to configure one backend.
+ *
+ * Three rules make it a genuine OVERRIDE rather than a second way to edit a
+ * provider:
+ *
+ *   - **No sibling fan-out.** The write goes through `applyProviderPatches`,
+ *     which names exactly this route. `updateProvider` would spread the edit
+ *     onto the record's sibling modes, and a CLI route's `--effort` is not the
+ *     TUI route's.
+ *   - **No connection-owned field is reachable.** The accepted key set is the
+ *     route-owned table in `providerRouteSettings.js`, so an endpoint or a
+ *     credential can never be retyped here and silently escape the projection
+ *     that keeps every other harness on the backend in step.
+ *   - **No execution consent.** `enabled` and the transport opt-ins are absent
+ *     from that table; granting them stays an explicit act on the route editor.
+ *
+ * The stale check is a fingerprint of the values as they are ON DISK, so an
+ * edit made in `/ai/edit/:providerId` while this panel was open is caught too —
+ * see `routeSettingsRevision`.
+ */
+export function updateRouteSettings({ providerId, expectedRevision, settings }) {
+  return serialize(async () => {
+    requireProviderGraph();
+    const graph = await readGraph();
+    const route = graph.routes.find((candidate) => candidate.providerId === providerId);
+    if (!route) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+    requireSettledRoutes([route]);
+
+    const { providers } = await providerService().getAllProviders();
+    const provider = providers.find((candidate) => candidate.id === providerId);
+    // A graph row whose record is gone is a reconciliation removal in flight.
+    // Reported as the same 404, because there is nothing left to override.
+    if (!provider) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+
+    const current = routeSettingsFor(provider);
+    if (routeSettingsRevision(current) !== expectedRevision) throw stale("This route's settings");
+
+    const unsupported = unsupportedRouteSettings(route.mode, settings);
+    if (unsupported.length > 0) {
+      throw new ServerError(`A ${route.mode} route has no ${unsupported.join(', ')} setting`,
+        { status: 400, code: 'PROVIDER_ROUTE_SETTING_UNSUPPORTED' });
+    }
+
+    // Effort is a harness capability, not free text: a route whose program takes
+    // no `--effort` gets no control, and a level outside its ladder would be
+    // stored and then silently dropped at spawn time.
+    if (settings.effort != null) {
+      const levels = effortLevelsForProvider(provider, settings.defaultModel ?? current.defaultModel ?? null);
+      if (!levels || !levels.includes(settings.effort)) {
+        throw new ServerError(
+          levels
+            ? `This route accepts effort ${levels.join(', ')}`
+            : 'This route\'s harness takes no effort setting',
+          { status: 400, code: 'PROVIDER_ROUTE_EFFORT_UNSUPPORTED' });
+      }
+    }
+
+    const next = { ...current, ...settings };
+    const applied = await writeProviderPatches({ [providerId]: settings });
+    if (applied.length === 0) throw new ServerError('Route not found', { status: 404, code: 'ROUTE_NOT_FOUND' });
+
+    // No graph row is touched on purpose. These fields are route-owned, so the
+    // connection's `projected` snapshot still describes the record accurately
+    // and the binding must NOT be detached — the reconcile this write triggers
+    // is a documented no-op.
+    console.log(`🔗 Updated route ${providerId} overrides: ${Object.keys(settings).join(', ')}`);
+    return { providerId, settings: next, settingsRevision: routeSettingsRevision(next) };
+  });
+}
+
+// --- creating a backend and a harness on it (#6369) ---------------------------
+//
+// The two writes that ADD to the graph rather than editing it. Both are local
+// I/O only: creating a backend probes nothing, and creating a harness binding
+// mints DISABLED routes — configuration never generates, never launches and
+// never grants execution consent (AGENTS.md "No cold-bootstrap LLM calls").
+
+/**
+ * Create a new backend connection.
+ *
+ * Deliberately NOT deduplicated against the connections already stored. Two
+ * backends that look identical — same vendor, same model names, even the same
+ * URL reached differently — are still two backends until a human says
+ * otherwise, and inferring otherwise is exactly what the identity rules in
+ * `providerConnections.js` exist to forbid. Linking stays an explicit,
+ * previewed act.
+ *
+ * The catalog starts `unknown`, not empty: nothing has been asked yet, and
+ * `[]` would claim a backend with no models. Discovery is the separate,
+ * explicitly requested `POST /connections/:id/refresh-models`.
+ */
+export function createConnection({ kind, label, transports, credentials }) {
+  return serialize(async () => {
+    requireProviderGraph();
+    const blocker = connectionBlocker({ kind, transports });
+    if (blocker) throw new ServerError(blocker.message, { status: 400, code: blocker.code });
+    const graph = await readGraph();
+    const connection = {
+      id: randomUUID(),
+      revision: 1,
+      kind,
+      label,
+      transports,
+      credentials: credentials || {},
+      catalog: { state: 'unknown', models: [] },
+      // Named as a service instance from the start (#7563), so the row is
+      // addressable without waiting for the next reconcile pass.
+      ...serviceColumnsForConnection({ kind }, { taken: takenServiceSlugs(graph.connections) }),
+      enabled: true,
+      credentialVia: 'stored',
+    };
+    await writeGraph({ connections: [connection], bindings: [], routes: [] });
+    console.log(`🔗 Created provider connection ${connection.id} (${kind}, no routes yet)`);
+    return { connection: toConnectionDto(connection) };
+  });
+}
+
+/**
+ * Create a harness binding on an existing backend, plus one executable route
+ * per requested mode.
+ *
+ * This is the create the whole registry work was blocked on: minting a route
+ * needs a per-harness COMMAND RECIPE (`PROVIDER_HARNESSES[].recipe`), because
+ * the graph could previously only classify records it was handed, never
+ * describe how to spawn a fresh one.
+ *
+ * Three guarantees, in the order they are enforced:
+ *
+ *   1. **Refuse before writing.** `bindingBlocker` rejects a harness with no
+ *      recipe, a mode it has no support for, a backend whose transport it does
+ *      not speak, and a backend missing a credential the program requires.
+ *   2. **A minted route must sit on the connection it was minted for.** The
+ *      record is fed straight back through `providerConnectionProfile` and
+ *      checked with `routeBelongsOnConnection` — the SAME containment test
+ *      reconciliation applies, so a create is judged on exactly the terms the
+ *      next pass will judge it by. A route the row does not contain is refused
+ *      rather than stored, because reconciliation would otherwise clone the
+ *      binding onto a connection of its own on the very next pass. Containment
+ *      rather than identity is what lets one route be minted on a backend that
+ *      declares a second protocol for another harness (#6460).
+ *   3. **Nothing is enabled.** The binding and every route arrive disabled with
+ *      no model pins and no transport consent. Enabling stays an explicit act
+ *      on the route editor, which is where granting execution belongs.
+ *
+ * The `projected` snapshot is read back off the records the toolkit actually
+ * wrote, so the graph starts in agreement with `providers.json` and the
+ * reconcile this write triggers is a no-op.
+ */
+export function createBinding({ connectionId, harnessId, modes, label }) {
+  return serialize(async () => {
+    requireProviderGraph();
+    const graph = await readGraph();
+    const connection = requireConnection(graph, connectionId);
+
+    // A backend mid-projection is precisely where the graph and providers.json
+    // disagree about the endpoint and credentials this route would be built
+    // from, so a new route decided against it would be built from values still
+    // in dispute. Same guard every other mutation on a connection applies.
+    requireSettledRoutes(connectionFanout(graph, connection.id).routes);
+
+    const blocker = bindingBlocker({ harnessId, modes, connection });
+    if (blocker) {
+      const badRequest = blocker.code === 'PROVIDER_HARNESS_NOT_CREATABLE'
+        || blocker.code === 'PROVIDER_HARNESS_MODE_UNSUPPORTED';
+      throw new ServerError(blocker.message, { status: badRequest ? 400 : 409, code: blocker.code });
+    }
+
+    const { providers, activeProvider } = await providerService().getAllProviders();
+    const taken = new Set([...providers.map((provider) => provider.id), ...graph.routes.map((route) => route.providerId)]);
+    const ids = mintRouteIds({ harnessId, kind: connection.kind, modes, taken });
+    const harnessLabel = harnessId ? harnessById(harnessId).label : 'Direct API';
+    const name = label || `${harnessLabel} · ${connection.label || connectionKindLabel(connection.kind)}`;
+
+    const records = modes.map((mode) => buildRouteRecord({
+      harnessId,
+      mode,
+      providerId: ids[mode],
+      name: modeSiblingName(name, mode),
+      connection,
+    }));
+    for (const record of records) {
+      if (!routeBelongsOnConnection(providerConnectionProfile(record), connection)) {
+        throw new ServerError(
+          `A ${harnessLabel} route cannot describe this backend as it is configured; adjust the backend's transport or credentials first`,
+          { status: 409, code: 'PROVIDER_GRAPH_CONNECTION_INCOMPATIBLE' });
+      }
+    }
+
+    const bindingId = randomUUID();
+    const binding = {
+      id: bindingId,
+      revision: 1,
+      connectionId: connection.id,
+      harnessId,
+      // `default` when this harness is not already on the backend, a labeled
+      // variant otherwise — two configurations of one program on one backend
+      // are both legitimate and must not collapse into each other.
+      variantKey: allocateVariantKey(graph, connection.id, { id: bindingId, harnessId }),
+      label: name,
+      enabled: false,
+      selectedModels: [],
+    };
+
+    // If a create fails part-way, the records that landed simply have no graph
+    // row yet — the next reconciliation pass imports them as their own fragment
+    // rather than losing them. That is the same path a legacy write takes.
+    await duringProviderWrite(async () => {
+      for (const record of records) await providerService().createProvider(record);
+    });
+
+    const { providers: written, activeProvider: activeAfter } = await providerService().getAllProviders();
+    const byId = new Map(written.map((provider) => [provider.id, provider]));
+    const routes = modes
+      .filter((mode) => byId.has(ids[mode]))
+      .map((mode) => ({
+        providerId: ids[mode],
+        bindingId: binding.id,
+        mode,
+        modelMap: {},
+        modelAliasOverrides: {},
+        projected: connectionOwnedSnapshot(byId.get(ids[mode])),
+        pending: null,
+        pendingRevision: null,
+      }));
+    await writeGraph({ connections: [], bindings: [binding], routes });
+
+    console.log(`🔗 Created ${harnessLabel} binding ${binding.id} on connection ${connection.id}: `
+      + `${routes.map((route) => route.providerId).join(', ')} (disabled)`);
+    return {
+      connectionId: connection.id,
+      bindingId: binding.id,
+      harnessId,
+      variantKey: binding.variantKey,
+      label: binding.label,
+      enabled: false,
+      routeIds: routes.map((route) => route.providerId),
+      // Reported rather than hidden: the toolkit adopts the first route as the
+      // system default on an install that has none, and a disabled route being
+      // named the default grants no execution — but the caller should still be
+      // told its default moved.
+      activeProvider: activeAfter ?? null,
+      activeProviderChanged: (activeAfter ?? null) !== (activeProvider ?? null),
+    };
+  });
+}

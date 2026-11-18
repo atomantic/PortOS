@@ -28,7 +28,7 @@ const shared = vi.hoisted(() => ({
 
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('./aiStatusEvents.js', () => ({ startAIOp: () => ({ update: () => {}, complete: () => {}, error: () => {} }) }));
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: async () => ({ success: true }),
   ensureProviderReadyForExecution: async () => ({ success: true }),
 }));
@@ -37,7 +37,7 @@ vi.mock('./usage.js', async (importOriginal) => ({
   recordSession: shared.recordSession,
   recordRunUsage: shared.recordRunUsage,
 }));
-vi.mock('./providers.js', async (importOriginal) => ({
+vi.mock('./provider/providers.js', async (importOriginal) => ({
   ...await importOriginal(),
   getProviderById: async () => shared.provider,
   getActiveProvider: async () => shared.provider,
@@ -232,7 +232,9 @@ describe('callers of callProviderAISimple leave one run and one usage session pe
     const pending = generateReport('example-app', {
       name: 'Example App', jira: { enabled: true, instanceId: 'example-instance', projectKey: 'EX' },
     });
-    await vi.waitFor(async () => expect(await records()).toHaveLength(1));
+    // A directory exists before createRun has finished publishing it. This
+    // case stops an actual in-flight request; early Stop is covered separately.
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     const [live] = await records();
     expect(await runner.stopRun(live.id)).toBe(true);
     const report = await pending;

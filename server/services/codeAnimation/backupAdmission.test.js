@@ -27,7 +27,7 @@ const store = vi.hoisted(() => ({
 vi.mock('./projectStore.js', () => store);
 const jobs = vi.hoisted(() => ({ saveCodeAnimationJobRecord: vi.fn(), saveCodeAnimationHtml: vi.fn() }));
 vi.mock('./jobStore.js', async importOriginal => ({ ...(await importOriginal()), ...jobs }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-provider', type: 'api', enabled: true })) }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-provider', type: 'api', enabled: true })) }));
 vi.mock('../promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(async () => ({ text: '```html\n<!doctype html><html><canvas></canvas></html>\n```' })),
 }));

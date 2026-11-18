@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
-import { storedForm } from '../lib/cosTaskRows.js';
+import { storedForm } from '../lib/cos/cosTaskRows.js';
 
 const runtime = vi.hoisted(() => ({ dir: null, agents: {}, trusted: true, tip: 'a'.repeat(40), remoteTip: 'a'.repeat(40), prState: 'OPEN', merged: false, closedPr: false }));
 const repoPath = '/synthetic/repository';
@@ -14,8 +14,8 @@ vi.mock('../lib/fileUtils.js', async () => ({
   ...await vi.importActual('../lib/fileUtils.js'),
   PATHS: { root: '/synthetic/repository', data: '/synthetic/data', worktrees: '/synthetic/worktrees', get cos() { return runtime.dir; } },
 }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: runtime.trusted, agents: runtime.agents }) }));
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: runtime.trusted, agents: runtime.agents }) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: async () => [],
   getAgentRecord: async id => runtime.agents[id],
   updateAgent: async (id, patch) => { runtime.agents[id].metadata = { ...runtime.agents[id].metadata, ...patch.metadata }; },
@@ -36,22 +36,22 @@ vi.mock('./github.js', () => ({
   },
   getIssueDispatchHint: async () => ({ status: 'unavailable' }),
 }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: async task => ({ ...storedForm(task, 'user'), taskType: 'internal' }), updateTask: vi.fn() }));
-vi.mock('./cos.js', () => ({ forceSpawnTask: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
-vi.mock('./cosAgentIndex.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: async task => ({ ...storedForm(task, 'user'), taskType: 'internal' }), updateTask: vi.fn() }));
+vi.mock('./cos/cos.js', () => ({ forceSpawnTask: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cos/cosAgentIndex.js', () => ({
   removeDanglingAgentIndexEntries: vi.fn(async ids => ids.length),
   archivedRecordCacheEpoch: () => 0, getCachedArchivedRecord: () => null, cacheArchivedRecord: () => {}, pruneArchivedRecordCache: () => {},
 }));
 vi.mock('./git.js', () => ({ parsePullRequestUrl, getBranches: async () => [{ name: 'feature/handoff', tracking: 'origin/feature/handoff' }], getDefaultBranch: async () => 'main', hasBranchMergeEvidence: async () => runtime.merged }));
 vi.mock('./worktreeManager.js', () => ({ listWorktrees: async () => [], classifyWorktreeDirt: () => ({ hasRealChanges: false, realChangePaths: [] }) }));
 
-import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
+import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
 import { readBranchCompletionHold, readBranchCompletionPolicies, recordBranchCompletionPolicy } from './branchCompletionPolicy.js';
 import { gatherBranchState, classifyBranches, filterActionable, formatInFlightForPrompt } from './branchReconcile.js';
-import { checkReconcileOwnership } from './cosClaimOwnership.js';
-import { removeDanglingAgentIndexEntries } from './cosAgentIndex.js';
+import { checkReconcileOwnership } from './cos/cosClaimOwnership.js';
+import { removeDanglingAgentIndexEntries } from './cos/cosAgentIndex.js';
 
 const task = completion => ({ id: 'task-example', taskType: 'internal', metadata: { prCompletion: completion } });
 function register(id, completion, startedAt = '2026-01-01T00:00:00Z', extra = {}) {

@@ -1,9 +1,9 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { createRun, finalizeRunRecord } from './runner.js';
 import { ensureBackendProvider } from './localLlm.js';
-import { getProviderById } from './providers.js';
-import { markProviderAvailable } from './providerStatus.js';
-import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
+import { getProviderById } from './provider/providers.js';
+import { markProviderAvailable } from './provider/providerStatus.js';
+import { ensureManagedRuntimeReady } from './provider/providerExecutionReadiness.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
 // The SSE read loop lives in `lib/openAiChatStream.js` so the assessments
 // service can measure a bare loopback daemon that has no provider record.

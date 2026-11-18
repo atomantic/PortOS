@@ -6,7 +6,7 @@ Date: 2026-06-06
 
 The creative catalog itself is PostgreSQL-backed today, not file-backed. The surrounding Create section is mixed:
 
-- Catalog scraps, ingredients, source links, refs, ingredient relations, tags, revisions, and catalog media pointers live in PostgreSQL via `server/services/catalogDB.js`, `server/lib/db.js`, and `server/scripts/init-db.sql`.
+- Catalog scraps, ingredients, source links, refs, ingredient relations, tags, revisions, and catalog media pointers live in PostgreSQL via `server/services/catalog/catalogDB.js`, `server/lib/db.js`, and `server/scripts/init-db.sql`.
 - Most native Create workflow state still lives under `data/` as JSON, JSONL, Markdown, and binary media files.
 - Memory can use PostgreSQL, but it still has a file fallback through `MEMORY_BACKEND=file` or auto-detect fallback.
 - User-defined catalog types are still stored in `data/settings.json`, even though the records that use those types live in PostgreSQL.
@@ -31,7 +31,7 @@ Relevant files:
 
 - `server/lib/db.js`
 - `server/scripts/init-db.sql`
-- `server/services/catalogDB.js`
+- `server/services/catalog/catalogDB.js`
 - `server/routes/catalog.js`
 - `server/services/memoryBackend.js`
 - `server/services/memoryDB.js`

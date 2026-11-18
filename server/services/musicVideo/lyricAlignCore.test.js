@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { musicVideoLyricCueSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoLyricCueSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { alignDirectorWords, detectVocalPhrases, phraseWindows, snapLineStarts } from './lyricAlignCore.js';
 

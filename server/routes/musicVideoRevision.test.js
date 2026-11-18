@@ -69,7 +69,7 @@ vi.mock('../services/musicVideo/render.js', async (importOriginal) => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { recoverStuckMusicVideoExcerpts } = await import('../services/musicVideo/excerptRender.js');
-const { captureMusicVideoEvidence } = await import('../lib/musicVideoDependencies.js');
+const { captureMusicVideoEvidence } = await import('../lib/musicVideo/musicVideoDependencies.js');
 const { assertRevisionOpen, assertPerformanceRepairDispatch } = await import('../services/musicVideo/revisionService.js');
 
 const app = express();

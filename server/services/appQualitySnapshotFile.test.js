@@ -782,7 +782,7 @@ const ownedPublicationDeps = ({ agents = {}, trusted = true, worktrees = [], ...
   const ownership = { agents, trusted, worktrees };
   const deps = testDeps({
     checkSnapshotPublicationOwnership: async input => {
-      const { checkSnapshotPublicationOwnership } = await import('./cosClaimOwnership.js');
+      const { checkSnapshotPublicationOwnership } = await import('./cos/cosClaimOwnership.js');
       const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
       return checkSnapshotPublicationOwnership(input, {
         readAgentsStateForSafetyCheck: async () => ({ trusted: ownership.trusted, agents: ownership.agents }),

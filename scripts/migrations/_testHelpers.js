@@ -23,6 +23,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 import { md5, seededProviderTierModels } from './_lib.js';
+import { pathWithin } from '../lib/pathWithin.js';
 
 export { md5 };
 
@@ -30,8 +31,10 @@ export { md5 };
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = join(__dirname, '..', '..');
 
+// pathWithin: each migration test passes its own names, so the test memo keys the
+// shipped prompts tree, and this read may not leave it.
 export const sampleBody = (filename, subdir = 'stages') =>
-  readFileSync(join(repoRoot, 'data.reference', 'prompts', subdir, filename), 'utf-8');
+  readFileSync(pathWithin(join(repoRoot, 'data.reference', 'prompts'), subdir, filename), 'utf-8');
 
 /** Synthetic body that won't match any shipped hash. */
 export const customizedBody = (filename) =>

@@ -6,7 +6,7 @@ import { formatDateShort } from '../../utils/formatters';
 
 // The agent API key lets a Claude Code / Codex session on this computer call
 // the PortOS API without the password: the server keeps a revocable session
-// token in a file only this computer's user can read (server/services/agentKey.js).
+// token in a file only this computer's user can read (server/services/agent/agentKey.js).
 export default function AgentKeyCard() {
   const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(null);

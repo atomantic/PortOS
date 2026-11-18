@@ -28,7 +28,7 @@ vi.mock('../lib/gitRemote.js', async (importOriginal) => ({
   readOriginRemoteUrl: vi.fn(async (repoPath) => (repoPath === '/example/acme-app' ? 'https://github.com/acme/app.git' : null)),
 }));
 vi.mock('./prReviewerSecurity.js', () => ({ listExternalOpenPullRequests: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })), addTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ user: { tasks: [] }, cos: { tasks: [] } })), addTask: vi.fn() }));
 vi.mock('./taskSchedule.js', () => ({ triggerOnDemandTask: vi.fn(), getOnDemandRequests: vi.fn(async () => []) }));
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn(async () => ({})),
@@ -41,7 +41,7 @@ const { getAllApps } = await import('./apps.js');
 const { listExternalOpenPullRequests } = await import('./prReviewerSecurity.js');
 const { triggerOnDemandTask } = await import('./taskSchedule.js');
 const { addNotification } = await import('./notifications.js');
-const { addTask } = await import('./cosTaskStore.js');
+const { addTask } = await import('./cos/cosTaskStore.js');
 const { runUntrustedContentAnalysis } = await import('./untrustedContent.js');
 const { createAccount, listAccounts, updateAccount } = await import('./githubAccounts.js');
 const { __testing: { listAutopilotCandidates, candidateFilter } } = await import('./githubNotificationAutopilot.js');
@@ -52,7 +52,7 @@ const {
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
 const { refreshOpenPullRequestStatus, retriageOpenThreads } = await import('./githubNotificationTriage.js');
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
-const { cosEvents } = await import('./cosEvents.js');
+const { cosEvents } = await import('./cos/cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
 const { AGENT_RULE_ACTIONS, AGENT_RULE_KINDS, KIND_SQL, TRIAGE_RULES_VERSION, autopilotHandoff, threadAgentKind, pullRequestAutomationFilter, pullRequestAutomationRule } = await import('../lib/githubNotificationTriage.js');
 

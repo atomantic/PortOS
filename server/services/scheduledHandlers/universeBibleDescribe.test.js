@@ -18,7 +18,7 @@ vi.mock('../universeCharacterExpand.js', () => ({
 vi.mock('../universeCanonEntryExpand.js', () => ({
   expandUniverseCanonEntry: (...args) => expandUniverseCanonEntry(...args),
 }));
-vi.mock('../providers.js', () => ({ getAllProviders: (...args) => getAllProviders(...args) }));
+vi.mock('../provider/providers.js', () => ({ getAllProviders: (...args) => getAllProviders(...args) }));
 vi.mock('../quotaBurnStore.js', () => ({
   getQuotaBurnInFlight: (...args) => getQuotaBurnInFlight(...args),
   recordQuotaBurnInFlight: (...args) => recordQuotaBurnInFlight(...args),

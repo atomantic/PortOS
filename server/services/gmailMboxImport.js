@@ -25,10 +25,9 @@
  * already-synced mail is a no-op too. Rows live sync wrote before that, under
  * a per-account key with no Message-ID, are matched by thread, subject, sender
  * and time and retired once the whole import is stored (#15320,
- * `retireLegacyGmailDuplicates`). Messages missing a
- * Message-ID (rare — some drafts) fall back to a content hash of
- * (instant + from + subject). No AI-provider calls; parsing is deterministic and
- * LLM-free.
+ * `retireLegacyGmailDuplicates`). Messages missing a Message-ID (rare — some
+ * drafts) fall back to a hash of (instant + from + subject), scoped to the Gmail
+ * thread when known. No AI-provider calls; parsing is deterministic and LLM-free.
  */
 import { createReadStream } from 'fs';
 import { stat, readdir } from 'fs/promises';
@@ -215,15 +214,17 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
   const selfSet = new Set((selfEmails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean));
   const participants = [...fromList, ...toList, ...ccList].filter((p) => p.email && !selfSet.has(p.email));
 
-  // A message with no Message-ID (rare — some drafts) has no stable id, so hash a
-  // content identity that is stable across re-imports of the same export.
-  const dedupeKey = messageId
-    ? `gmail:${messageId}`
+  const apiThreadId = gmailApiThreadIdFromThrid(threadId);
+  const fallbackKey = messageId
+    ? null
     : `gmail:h:${createHash('sha1').update(`${happenedAt}|${fromEmail}|${subject}`).digest('hex').slice(0, 24)}`;
+  const dedupeKey = fallbackKey
+    ? (apiThreadId ? `${fallbackKey}:${apiThreadId}` : fallbackKey)
+    : `gmail:${messageId}`;
 
   // Live sync rows written before #15308 carry no Message-ID, so the only link
   // back to them is the thread key derived from X-GM-THRID (#15320).
-  const liveThreadKey = gmailConversationThreadKey(gmailApiThreadIdFromThrid(threadId));
+  const liveThreadKey = messageId ? gmailConversationThreadKey(apiThreadId) : null;
 
   const summary = direction === 'sent'
     ? (toList.length ? `To: ${toList.map((p) => p.name || p.email).slice(0, 3).join(', ')}` : '')
@@ -237,7 +238,8 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
     summary: shortSummary(summary),
     participants,
     dedupeKey,
-    ...(messageId && liveThreadKey ? { legacyGmailMatch: { threadKey: liveThreadKey, fromEmail } } : {}),
+    ...(fallbackKey && apiThreadId ? { previousGmailFallbackKey: fallbackKey } : {}),
+    ...(liveThreadKey ? { legacyGmailMatch: { threadKey: liveThreadKey, fromEmail } } : {}),
     metadata: {
       messageId: messageId || null,
       threadId,

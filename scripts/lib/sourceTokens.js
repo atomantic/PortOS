@@ -40,12 +40,31 @@ function unescape(ch) {
   return { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' }[ch] ?? ch ?? '';
 }
 
+/**
+ * The escape sequence whose backslash is at `src[at]`: `{ text, length }`.
+ * `\x2e`, `\u002e` and `\u{2e}` decode to their character (a literal that
+ * spells `..` that way is `..`), and a backslash before a line break
+ * continues the line.
+ */
+function readEscape(src, at) {
+  const ch = src[at + 1];
+  const hex = ch === 'x' ? /^[0-9a-fA-F]{2}/.exec(src.slice(at + 2, at + 4))
+    : ch === 'u' ? /^(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]{1,6}\})/.exec(src.slice(at + 2, at + 10)) : null;
+  if (hex) {
+    const code = Number.parseInt(hex[0].replace(/[{}]/g, ''), 16);
+    return { text: code <= 0x10ffff ? String.fromCodePoint(code) : '', length: 2 + hex[0].length };
+  }
+  if (ch === '\r' && src[at + 2] === '\n') return { text: '', length: 3 };
+  if (ch === '\n' || ch === '\r') return { text: '', length: 2 };
+  return { text: unescape(ch), length: 2 };
+}
+
 function readString(src, start) {
   const quote = src[start];
   let text = '';
   for (let i = start + 1; i < src.length; i += 1) {
     const ch = src[i];
-    if (ch === '\\') { text += unescape(src[i + 1]); i += 1; continue; }
+    if (ch === '\\') { const escape = readEscape(src, i); text += escape.text; i += escape.length - 1; continue; }
     if (ch === '\n') return null;
     if (ch === quote) return { text, end: i + 1 };
     text += ch;
@@ -178,7 +197,7 @@ export function tokenize(src, proseBackticks = new Set(), { jsx = true } = {}) {
         for (;;) {
           if (pos >= n) throw Object.assign(new Error('unterminated template literal'), { prose: start });
           const ch = src[pos];
-          if (ch === '\\') { quasi += unescape(src[pos + 1]); pos += 2; continue; }
+          if (ch === '\\') { const escape = readEscape(src, pos); quasi += escape.text; pos += escape.length; continue; }
           if (ch === '`') { pos += 1; break; }
           if (ch === '$' && src[pos + 1] === '{') {
             quasis.push(quasi);

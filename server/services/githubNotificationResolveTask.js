@@ -18,12 +18,12 @@
  * the thread goes back to its old decision with a failed marker for the pill.
  */
 import { query } from '../lib/db.js';
-import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agentOutcome.js';
+import { isQueuedContinuation, isTaskDeliveryComplete } from '../lib/agent/agentOutcome.js';
 import { GENERIC_AGENT_LANE, notificationAgentAccountBinding } from '../lib/githubNotificationTriage.js';
 import { notificationHtmlUrl, repoApiPath } from '../lib/githubNotificationParse.js';
 import { toPgJson } from '../lib/pgJson.js';
-import { addTask } from './cosTaskStore.js';
-import { cosEvents } from './cosEvents.js';
+import { addTask } from './cos/cosTaskStore.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;

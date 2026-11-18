@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { finalApprovalPatch } from '../../../../server/lib/musicVideoFinalApproval.js';
+import { finalApprovalPatch } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 
 const upgradeMusicVideoShots = vi.fn();
 vi.mock('../../services/apiMusicVideo.js', () => ({ upgradeMusicVideoShots: (...args) => upgradeMusicVideoShots(...args) }));

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { preserveUnchangedDescriptionSnapshots, resolveProjectCatalogDescriptions, syncEditedSubjectDescriptions } from './subjectDescriptionSync.js';
-import { changedMusicVideoDescriptionOverLimit } from '../../lib/musicVideoSubjectLimits.js';
+import { changedMusicVideoDescriptionOverLimit } from '../../lib/musicVideo/musicVideoSubjectLimits.js';
 
 const project = (subjects) => ({ id: 'mv-example', concept: { subjects } });
 const object = (description) => ({ id: 'prop', kind: 'object', name: 'Lantern', ingredientId: 'cat-obj-example', description });

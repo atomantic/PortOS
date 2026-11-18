@@ -36,7 +36,7 @@ import { join, isAbsolute, normalize, resolve, dirname } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { pickCliProvider } from '../server/lib/cliProviderRun.js';
-import { restrictedRepairArgs } from '../server/lib/providerVendors.js';
+import { restrictedRepairArgs } from '../server/lib/provider/providerVendors.js';
 import {
   CODE_ANIMATION_BUBBLEWRAP, codeAnimationContainmentMechanism,
 } from '../server/lib/codeAnimationContainment.js';

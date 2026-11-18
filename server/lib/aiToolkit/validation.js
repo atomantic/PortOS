@@ -16,7 +16,7 @@ export const providerRefSchema = z.string().trim().min(1).max(MAX_PROVIDER_REF_L
 // Mirrors the runner's getMimeType keys; anything else is rejected.
 const ALLOWED_SCREENSHOT_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
-// Local mirror (toolkit is self-contained) of server/lib/providerModels.js and client/src/utils/providerModels.js.
+// Local mirror (toolkit is self-contained) of server/lib/provider/providerModels.js and client/src/utils/providerModels.js.
 const PROVIDER_EFFORT_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 const providerEffort = z.preprocess(
@@ -149,7 +149,7 @@ export const providerSchema = z.object({
   ollamaBacked: z.boolean().optional(),
   // Harness wrapper backed by the local LM Studio server. Unlike Ollama its
   // context window is fixed at model LOAD, so PortOS prepares nothing before a
-  // spawn (`localRuntimeNamespace` in ../providerModels.js).
+  // spawn (`localRuntimeNamespace` in ../provider/providerModels.js).
   lmstudioBacked: z.boolean().optional(),
   // OpenCode wrappers for separately started local servers: MTPLX, llama.cpp,
   // vLLM (behind an API key) and SGLang (optional key). Engines, ports and
@@ -203,7 +203,7 @@ export const providerSchema = z.object({
   lowPriorityOnUsageLimit: z.boolean().optional(),
   // PRESET structure: a record with all of `harnessId`, `method` and `serviceId`
   // is a DERIVED preset, re-materialized from its service instance on every save
-  // (`server/lib/providerPresets.js`); without them it is a legacy preset.
+  // (`server/lib/provider/providerPresets.js`); without them it is a legacy preset.
   // Nullable so an editor can clear them. `method` must equal `type`, enforced
   // by the host (a refinement here would not survive `.partial()` / `.extend()`).
   // Slugs, not enums, because the toolkit is self-contained.

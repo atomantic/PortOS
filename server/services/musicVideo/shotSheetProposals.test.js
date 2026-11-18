@@ -7,9 +7,9 @@ const project = {
 };
 vi.mock('./requireProject.js', () => ({ requireProject: vi.fn(async () => project) }));
 const { proposeShotSheet, __setShotSheetDepsForTests } = await import('./shotSheetProposals.js');
-const { shotSheetProposeSchema } = await import('../../lib/musicVideoStoryValidation.js');
-const { mergeShotSheetBackfill } = await import('../../lib/musicVideoShotSheet.js');
-const { FRAME_PROMPT_WRITING, CLIP_PROMPT_WRITING } = await import('../../lib/musicVideoShotPrompt.js');
+const { shotSheetProposeSchema } = await import('../../lib/musicVideo/musicVideoStoryValidation.js');
+const { mergeShotSheetBackfill } = await import('../../lib/musicVideo/musicVideoShotSheet.js');
+const { FRAME_PROMPT_WRITING, CLIP_PROMPT_WRITING } = await import('../../lib/musicVideo/musicVideoShotPrompt.js');
 
 const provider = { id: 'prov', enabled: true, type: 'api' };
 const run = vi.fn();

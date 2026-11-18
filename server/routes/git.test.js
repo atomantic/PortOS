@@ -39,7 +39,7 @@ vi.mock('../services/apps.js', () => ({
   getAppById: vi.fn()
 }));
 
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn().mockResolvedValue([])
 }));
 
@@ -63,7 +63,7 @@ vi.mock('fs', async (importOriginal) => {
 
 import { existsSync, statSync, realpathSync } from 'fs';
 import { isWithinAllowedRoots, outsideAllowedRootsMessage } from '../lib/workspaceRoots.js';
-import * as cosAgentLifecycleService from '../services/cosAgentLifecycle.js';
+import * as cosAgentLifecycleService from '../services/cos/cosAgentLifecycle.js';
 import * as gitService from '../services/git.js';
 import * as gitSubmoduleService from '../services/gitSubmodules.js';
 

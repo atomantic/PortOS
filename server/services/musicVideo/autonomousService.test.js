@@ -289,7 +289,7 @@ describe('startAutonomousVideo', () => {
   });
 
   it('adopts a code-first production run\'s own current final render instead of rendering it again (#10563)', async () => {
-    const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+    const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
     const directory = 'music-video/mv-auto/composition/example';
     // Production rendered `rendered` itself; the project now selects `selected`.
     const seed = (selected) => {
@@ -418,7 +418,7 @@ describe('startAutonomousVideo', () => {
     });
 
     it('adopts the completed run\'s own current final render on resume instead of rendering again (#10563)', async () => {
-      const { captureMusicVideoEvidence } = await import('../../lib/musicVideoDependencies.js');
+      const { captureMusicVideoEvidence } = await import('../../lib/musicVideo/musicVideoDependencies.js');
       await delegated();
       await service.cancelAutonomousVideo('mv-auto');
       const project = store.get('mv-auto');
@@ -1527,7 +1527,7 @@ describe('auto-approve the rest (brief.autoApprove)', () => {
     reviewFixture();
     const { buildTreatmentDraft } = await import('./treatmentDraft.js');
     const { writeCompiledTreatment, applyTreatmentToProject, treatmentBasis } = await import('./treatment.js');
-    const { codeFirstProductionAssets } = await import('../../lib/musicVideoMediumPlan.js');
+    const { codeFirstProductionAssets } = await import('../../lib/musicVideo/musicVideoMediumPlan.js');
     doubles.approveProductionReview.mockImplementation(async (id, input) => {
       let project = clone(store.get(id));
       if (input.stage === 'art' && !project.treatment) {

@@ -8,7 +8,7 @@ import { compareSemver } from '../lib/versionUtils.js';
 import { RELEASE_SYNC_FROZEN_METADATA_KEYS, RELEASE_SYNC_OBLIGATIONS, inlineSynchronizationBranch, isInlineReleaseSynchronization } from '../lib/releaseSynchronization.js';
 import { execGh } from './github.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
-import { getTaskById } from './cosTaskStore.js';
+import { getTaskById } from './cos/cosTaskStore.js';
 import { getAppById } from './apps.js';
 
 const sha = value => /^[a-f0-9]{40}$/.test(value || '');

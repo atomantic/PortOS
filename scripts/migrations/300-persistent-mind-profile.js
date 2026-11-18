@@ -9,7 +9,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
-import { createDefaultPersistentMindProfile } from '../../server/lib/persistentMindProfile.js';
+import { createDefaultPersistentMindProfile } from '../../server/lib/persistent/persistentMindProfile.js';
 
 export default {
   async up({ rootDir }) {

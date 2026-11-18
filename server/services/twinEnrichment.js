@@ -31,7 +31,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import { query, ensureSchema } from '../lib/db.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 
 const DIR = PATHS.digitalTwin;
@@ -217,6 +217,8 @@ const MEETING = 'calendar.event';
 export function chronotypeHistogram(events, timezone) {
   const slots = Array.from({ length: 24 }, (_, hour) => ({ hour, messages: 0, meetings: 0, media: 0, total: 0 }));
   for (const ev of events || []) {
+    // Scraped YouTube watches have a date, but their midnight is a placeholder.
+    if (ev?.kind === MEDIA_WATCH && ev.metadata?.scraped === true) continue;
     const d = new Date(ev?.happenedAt ?? ev?.happened_at);
     if (Number.isNaN(d.getTime())) continue;
     const { hour } = getLocalParts(d, timezone);

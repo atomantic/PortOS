@@ -94,7 +94,7 @@ async function queuedRequestIds() {
  * reader is the one place that coercion lives.
  */
 async function burnTasksByRequestId() {
-  const { getAllTasks } = await import('./cosTaskStore.js');
+  const { getAllTasks } = await import('./cos/cosTaskStore.js');
   return getAllTasks()
     .then(({ user, cos }) => {
       const byRequest = new Map();

@@ -27,7 +27,7 @@ import { readProvidersDoc, writeJsonAtomic } from './_lib.js';
 const AUTO_MODEL = 'openrouter/auto';
 // Namespaced for OpenCode this becomes `openrouter/stealth/ox-alpha` — the
 // gateway's ids are already `vendor/model` and are never stored prefixed
-// (`prefixOpencodeModel` in server/lib/providerModels.js).
+// (`prefixOpencodeModel` in server/lib/provider/providerModels.js).
 const OX_ALPHA = 'stealth/ox-alpha';
 const NEW_MODELS = [AUTO_MODEL, OX_ALPHA];
 

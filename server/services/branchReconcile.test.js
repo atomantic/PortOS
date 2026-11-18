@@ -27,19 +27,24 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn(async () => 'main'),
   resolveForgeForRepo: vi.fn(async () => null),
   hasBranchMergeEvidence: vi.fn(),
+  // Merged work with commits of its own, replayed onto main and unpublished:
+  // what merged retirement retires (#16625). Cases that need another answer set it.
+  readBranchLineage: vi.fn(async () => 'patch'),
+  readBranchPublished: vi.fn(async () => false),
   deleteBranch: vi.fn(async () => ({ branch: 'x', results: { local: 'deleted' } }))
 }));
 vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn(async () => ({ stdout: '', exitCode: 0 }))
 }));
-vi.mock('./cosClaimOwnership.js', async (importOriginal) => ({
+vi.mock('./cos/cosClaimOwnership.js', async (importOriginal) => ({
   ...await importOriginal(), readClaimOwnershipAgents: async () => [],
 }));
 vi.mock('./worktreeManager.js', async () => {
-  const { AGENT_SCRATCH_PATHS, matchesScratchRoot } = await import('../lib/agentScratchPaths.js');
+  const { AGENT_SCRATCH_PATHS, matchesScratchRoot } = await import('../lib/agent/agentScratchPaths.js');
   return {
     listWorktrees: vi.fn(async () => []),
     deleteCompletedLocalBranch: vi.fn(async () => true),
+    readCheckoutPresence: vi.fn(async () => true),
     forceRemoveWorktreeDir: vi.fn(async () => ({ removed: true, warning: null })),
     reapMergedWorktrees: vi.fn(async () => ({ reaped: [], skipped: [] })),
     readWorktreeStatus: async (path) => {
@@ -162,6 +167,8 @@ async function cleanupMerged(repo, target, branches, options) {
 beforeEach(() => {
   vi.clearAllMocks();
   isMergedPrHeadMock.mockReset().mockResolvedValue(false);
+  git.readBranchLineage.mockReset().mockResolvedValue('patch');
+  git.readBranchPublished.mockReset().mockResolvedValue(false);
   hasCompletedCheckoutEvidence.mockReset().mockImplementation(async records => records.some(agent => agent.result?.success === true));
   // Ancient by default, so age-indifferent tests keep their pre-window behavior;
   // a test that pins a specific age must not leak it into the next one.
@@ -577,6 +584,22 @@ describe('cleanupMerged', () => {
     const result = await cleanupMerged('/repo', 'main', [{ branch: 'claim/issue-42' }]);
     expect(result.cleaned).toEqual(['claim/issue-42']);
     expect(execGh.mock.calls.some(([args]) => args[0] === 'issue' && args[1] === 'edit')).toBe(false);
+  });
+
+  // #16625: a merge by ancestry of a /do:next branch also needs its issue released.
+  // The Git page passes no credential overlay; retirement resolves one itself.
+  it.each([
+    ['a closed issue retires the branch', { state: 'CLOSED', labels: [], assignees: [] }, 'cleaned'],
+    ['an assigned open issue holds it', { state: 'OPEN', labels: [], assignees: [{ login: 'someone' }] }, 'claim-issue-reserved'],
+  ])('reads a merged-by-ancestry claim\'s issue reservation without a caller-supplied credential: %s', async (_name, issue, expected) => {
+    git.hasBranchMergeEvidence.mockResolvedValue(true);
+    git.readBranchLineage.mockResolvedValue('ancestry');
+    execGh.mockImplementation(async args => (args[0] === 'issue' && args[1] === 'view' ? JSON.stringify(issue) : '[]'));
+    const result = await cleanupMerged('/repo', 'main', [{ branch: 'next/issue-77' }]);
+    if (expected === 'cleaned') expect(result.cleaned).toEqual(['next/issue-77']);
+    else expect(result.skipped).toEqual([expect.objectContaining({ branch: 'next/issue-77', reason: expected })]);
+    expect(resolveForgeExecOptionsMock).toHaveBeenCalledWith('/repo', { forgeAccount: null });
+    expect(execGh).toHaveBeenCalledWith(['issue', 'view', '77', '--repo', expect.any(String), '--json', 'state,labels,assignees'], undefined, expect.objectContaining({ env: PINNED_ENV }));
   });
 
   it('leaves markers intact for a live owner or a failed branch deletion', async () => {
@@ -1001,14 +1024,14 @@ describe('gatherDivergence', () => {
   it('reports drift counts and the files BOTH sides changed since the merge base', async () => {
     mockGit({
       counts: '101\t1',
-      defaultChanged: 'server/services/agentWorktreeCleanup.js\nserver/lib/prDisposition.js\ndocs/UNRELATED.md',
-      branchChanged: 'server/services/agentWorktreeCleanup.js\nserver/services/prAutoMerge.js'
+      defaultChanged: 'server/services/agent/agentWorktreeCleanup.js\nserver/lib/prDisposition.js\ndocs/UNRELATED.md',
+      branchChanged: 'server/services/agent/agentWorktreeCleanup.js\nserver/services/prAutoMerge.js'
     });
     const d = await gatherDivergence('/repo', 'stale-branch', 'main');
     expect(d.behind).toBe(101);
     expect(d.ahead).toBe(1);
     // Only the shared file — the branch's own new file and main's unrelated doc are not collisions.
-    expect(d.collisionPaths).toEqual(['server/services/agentWorktreeCleanup.js']);
+    expect(d.collisionPaths).toEqual(['server/services/agent/agentWorktreeCleanup.js']);
   });
 
   // An abandoned worktree's branch has NO commits, so its change set lives
@@ -1016,21 +1039,21 @@ describe('gatherDivergence', () => {
   // clean, collision-free branch while the real collision sits uncommitted —
   // exactly the case this whole check exists for.
   it('counts uncommitted paths as part of the branch\'s change set', async () => {
-    mockGit({ defaultChanged: 'server/services/agentWorktreeCleanup.js', branchChanged: '' });
-    const d = await gatherDivergence('/repo', 'abandoned', 'main', ['server/services/agentWorktreeCleanup.js', 'server/services/prAutoMerge.js']);
-    expect(d.collisionPaths).toEqual(['server/services/agentWorktreeCleanup.js']);
+    mockGit({ defaultChanged: 'server/services/agent/agentWorktreeCleanup.js', branchChanged: '' });
+    const d = await gatherDivergence('/repo', 'abandoned', 'main', ['server/services/agent/agentWorktreeCleanup.js', 'server/services/prAutoMerge.js']);
+    expect(d.collisionPaths).toEqual(['server/services/agent/agentWorktreeCleanup.js']);
   });
 
   // Every branch touches the changelog, so alphabetical order would put it first
   // on virtually every entry and bury the source files that actually reveal a
   // reimplementation. It stays listed (it IS a real conflict) but ranks last.
   it('ranks always-churning files (changelog, lockfiles, README) below source files', async () => {
-    const shared = '.changelog/NEXT.md\nserver/lib/README.md\npackage-lock.json\nserver/services/agentWorktreeCleanup.js\nclient/src/components/cos/constants.js';
+    const shared = '.changelog/NEXT.md\nserver/lib/README.md\npackage-lock.json\nserver/services/agent/agentWorktreeCleanup.js\nclient/src/components/cos/constants.js';
     mockGit({ defaultChanged: shared, branchChanged: shared });
     const { collisionPaths } = await gatherDivergence('/repo', 'b', 'main');
     expect(collisionPaths).toEqual([
       'client/src/components/cos/constants.js',
-      'server/services/agentWorktreeCleanup.js',
+      'server/services/agent/agentWorktreeCleanup.js',
       '.changelog/NEXT.md',
       'package-lock.json',
       'server/lib/README.md'
@@ -2279,11 +2302,11 @@ describe('desiredEndState', () => {
   it.each(['ABANDONED_WIP', 'NEEDS_PR', 'CONFLICTED'])('opens the %s instruction with the supersession gate', (state) => {
     const instruction = desiredEndState(state, {}, {
       behind: 101,
-      collisionPaths: ['server/services/agentWorktreeCleanup.js', 'client/src/components/cos/constants.js'],
+      collisionPaths: ['server/services/agent/agentWorktreeCleanup.js', 'client/src/components/cos/constants.js'],
       worktreePath: '/wt/agent-deadbeef'
     });
     expect(instruction).toContain('101 commit(s) behind');
-    expect(instruction).toContain('`server/services/agentWorktreeCleanup.js`');
+    expect(instruction).toContain('`server/services/agent/agentWorktreeCleanup.js`');
     expect(instruction).toContain('SUPERSEDED');
     expect(instruction).toContain('still needed');
     expect(instruction).toMatch(/[\\/]repo[\\/]data[\\/]cos[\\/]branch-reconcile-verdicts\.json/);
@@ -2535,11 +2558,11 @@ describe('formatInFlightForPrompt', () => {
       worktreePath: '/wt/agent-deadbeef',
       behind: 101,
       ahead: 0,
-      collisionPaths: ['server/services/agentWorktreeCleanup.js']
+      collisionPaths: ['server/services/agent/agentWorktreeCleanup.js']
     }], { defaultBranch: 'main', actions: {} });
     expect(block).toContain('- Drift: 101 commit(s) behind `main`, 0 ahead');
     expect(block).toContain('**read these first — they are where supersession shows up**');
-    expect(block).toContain('`server/services/agentWorktreeCleanup.js`');
+    expect(block).toContain('`server/services/agent/agentWorktreeCleanup.js`');
     expect(block).toContain('holds UNCOMMITTED work');
   });
 

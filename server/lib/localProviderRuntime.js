@@ -3,12 +3,12 @@
  * `slotstream`) and which base URL to probe.
  *
  * A provider like `opencode-llama-tui` can spawn its CLI fine while the daemon it points at was never installed or
- * started, which the binary check in `providerRuntimeInstaller.js` cannot see; `services/providerReadiness.js`
+ * started, which the binary check in `providerRuntimeInstaller.js` cannot see; `services/provider/providerReadiness.js`
  * does the probing. Pure and side-effect-free. Endpoint resolution prefers the provider's OWN configuration over
  * any default, or a relocated llama-server would be reported broken.
  */
 
-import { isOpencodeCommand, parseOpencodeConfigContent } from './providerModels.js';
+import { isOpencodeCommand, parseOpencodeConfigContent } from './provider/providerModels.js';
 import { opencodeLocalBaseUrl } from './opencodeConfig.js';
 import { localRuntimeKind, LOCAL_RUNTIME_MANAGE_URLS } from './modelPinMembership.js';
 import { PORTS } from './ports.js';

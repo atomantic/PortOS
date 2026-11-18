@@ -14,8 +14,8 @@ vi.mock('./settings.js', () => ({
 // providerUsage drags in the TUI-scrape/PTY graph. Only `resolveEnabledFamilies`
 // is needed here, and it is the one piece that must know about spawnable
 // providers — the pure identity half (familyForProvider/familyLabel) is
-// imported for real from lib/providerFamilies.js and exercised by these tests.
-vi.mock('./providerUsage.js', () => ({
+// imported for real from lib/provider/providerFamilies.js and exercised by these tests.
+vi.mock('./provider/providerUsage.js', () => ({
   resolveEnabledFamilies: vi.fn((providers) =>
     (providers || []).filter((p) => p.enabled).map((p) => ({ id: p.expectFamily, label: p.expectLabel })))
 }));
@@ -29,7 +29,7 @@ import {
   getSubscriptionSavings
 } from './subscriptionCosts.js';
 
-// Real provider-config shapes, so the family matchers in lib/providerFamilies.js
+// Real provider-config shapes, so the family matchers in lib/provider/providerFamilies.js
 // are the thing under test rather than a stand-in that can't drift with them.
 const providers = [
   { id: 'claude-code', enabled: true, type: 'cli', command: 'claude', expectFamily: 'claude', expectLabel: 'Claude Code' },

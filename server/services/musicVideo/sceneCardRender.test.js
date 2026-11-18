@@ -15,7 +15,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => catalog);
+vi.mock('../catalog/catalogDB.js', () => catalog);
 
 const getProject = vi.fn(async () => null);
 const clipQueue = vi.hoisted(() => ({ submit: vi.fn(async () => ({ jobId: 'synthetic-clip-job' })) }));
@@ -27,9 +27,9 @@ vi.mock('../storyboards/index.js', () => ({ getStoryboard: vi.fn(async () => nul
 
 const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
 const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
-const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
+const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validation.js');
-const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideoValidation.js');
+const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideo/musicVideoValidation.js');
 const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));

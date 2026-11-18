@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { Activity, ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
-import { finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideoFinalApproval.js';
+import { finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
 import { upgradeMusicVideoShots } from '../../services/apiMusicVideo.js';
 import { formatUsd } from '../../utils/formatters.js';
 import toast from '../ui/Toast';

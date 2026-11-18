@@ -7,7 +7,7 @@ const catalogDB = vi.hoisted(() => ({
   unlinkIngredientFromRef: vi.fn(),
   musicVideoRefRoleForType: (type) => ({ character: 'cast', place: 'set', object: 'prop' })[type] || 'mentioned',
 }));
-vi.mock('../catalogDB.js', () => catalogDB);
+vi.mock('../catalog/catalogDB.js', () => catalogDB);
 const getProject = vi.hoisted(() => vi.fn());
 vi.mock('./projects.js', () => ({ getProject }));
 

@@ -1,8 +1,8 @@
 /** One deterministic pacing preview, applied to the same revision under the store's write lock. */
 import { createHash } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
-import { isPreMusicShot } from '../../lib/musicVideoColdOpen.js';
-import { planPacingSplit } from '../../lib/musicVideoShotTiming.js';
+import { isPreMusicShot } from '../../lib/musicVideo/musicVideoColdOpen.js';
+import { planPacingSplit } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { applySceneSplit } from './projectsLogic.js';
 
 const revisionOf = (project) => createHash('sha256').update(JSON.stringify(project)).digest('hex');

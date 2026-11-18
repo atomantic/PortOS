@@ -9,7 +9,7 @@ import { join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, SPEED_LEDGER_FIELDS, PRICING_AS_OF } from '../lib/modelPricing.js';
-import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.js';
+import { familyForProvider, familyForProviderId } from '../lib/provider/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
@@ -481,6 +481,10 @@ function addUsageRecord(day, record) {
   const hadProviderCounts = hasUsageCounts(bucket);
   adjustCounts(bucket, record, 1);
   if (record.source === 'estimate') adjustEstimated(bucket, record, 1);
+  else if (record.nativeUsageUnpersisted) {
+    bucket.unpersisted ??= {};
+    adjustCounts(bucket.unpersisted, record, 1);
+  }
   bucket.source = hadProviderCounts
     ? mergeSource(bucket.source, record.source || 'measured')
     : (record.source || 'measured');
@@ -489,6 +493,10 @@ function addUsageRecord(day, record) {
     const hadCounts = hasUsageCounts(target);
     adjustCounts(target, record, 1);
     if (record.source === 'estimate') adjustEstimated(target, record, 1);
+    else if (record.nativeUsageUnpersisted) {
+      target.unpersisted ??= {};
+      adjustCounts(target.unpersisted, record, 1);
+    }
     target.source = hadCounts
       ? mergeSource(target.source, record.source || 'measured')
       : (record.source || 'measured');
@@ -509,7 +517,7 @@ function addUsageRecord(day, record) {
 
 const isParentCorrectionPending = (correction) => Boolean(correction?.measured)
   && !usageData.reconciledRuns[correction.runId]
-  && Boolean(usageData.dailyActivity?.[correction.day]?.byProvider?.[correction.providerId]);
+  && (correction.unrecorded === true || Boolean(usageData.dailyActivity?.[correction.day]?.byProvider?.[correction.providerId]));
 
 const isSiblingCorrectionPending = (correction) => (correction?.siblings?.length > 0)
   && !usageData.siblingReconciledRuns[correction.runId];
@@ -541,7 +549,7 @@ async function collectEstimateScopes(eligible) {
   const scopes = new Map();
   for (const [index, correction] of eligible.entries()) {
     if (index > 0 && index % BACKFILL_YIELD_INTERVAL === 0) await yieldToEventLoop();
-    if (!isParentCorrectionPending(correction)) continue;
+    if (!isParentCorrectionPending(correction) || correction.unrecorded) continue;
     const providerDay = usageData.dailyActivity[correction.day].byProvider[correction.providerId];
     trackEstimateRemoval(scopes, providerDay, correction.estimate);
     const modelDay = correction.model ? providerDay.byModel?.[correction.model] : null;
@@ -661,6 +669,7 @@ async function applyHistoricalUsageCorrectionsDraft(corrections = [], { interact
   // reads as "no run has had its nested sessions attributed yet".
   usageData.siblingReconciledRuns ??= {};
   const eligible = corrections.filter(isEligibleCorrection);
+  if (eligible.some((correction) => correction.unrecorded)) await refreshDayKeyTimezone();
   const scopes = await collectEstimateScopes(eligible);
   const correctedRunIds = [];
 
@@ -669,11 +678,21 @@ async function applyHistoricalUsageCorrectionsDraft(corrections = [], { interact
     const { runId } = correction;
     const applyParent = isParentCorrectionPending(correction);
     const applySiblings = isSiblingCorrectionPending(correction);
-    const day = correctionDay(correction.day);
+    const day = correctionDay(correction.unrecorded
+      ? todayInTimezone(dayKeyTimezone, new Date(correction.endTime)) : correction.day);
 
     if (applyParent) {
-      const measuredRecords = replaceEstimateWithMeasured(day.byProvider[correction.providerId], correction);
-      applyAllTimeCorrection(correction, measuredRecords);
+      if (correction.unrecorded) {
+        for (const record of correction.measured) addUsageRecord(day, record);
+        if (correction.deferredSession) {
+          const at = new Date(correction.startTime);
+          applySessionCounts(correction.providerId, correction.providerName, correction.model,
+            correctionDay(todayInTimezone(dayKeyTimezone, at)), at);
+        }
+      } else {
+        const measuredRecords = replaceEstimateWithMeasured(day.byProvider[correction.providerId], correction);
+        applyAllTimeCorrection(correction, measuredRecords);
+      }
       usageData.reconciledRuns[runId] = new Date().toISOString();
     }
     if (applySiblings) addSiblingRecords(day, correction.siblings);
@@ -738,6 +757,12 @@ function todayBucket() {
 async function recordSessionDraft(providerId, providerName, rawModel) {
   if (!usageData) await loadUsageDraft();
   await refreshDayKeyTimezone();
+  applySessionCounts(providerId, providerName, rawModel, todayBucket(), new Date());
+  await saveUsage();
+  return usageData.totalSessions;
+}
+
+function applySessionCounts(providerId, providerName, rawModel, day, at) {
   const provider = normalizeProvider(providerId, providerName);
   const model = usageModelKey(rawModel);
 
@@ -758,7 +783,6 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
   }
 
   // Track daily activity (with the per-provider/per-model split)
-  const day = todayBucket();
   day.sessions++;
   const providerDay = providerDayBucket(day, provider.id, provider.name);
   providerDay.sessions++;
@@ -766,15 +790,12 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
 
   // Track hourly activity in the user's configured timezone. The server runs with TZ=UTC,
   // so the host clock would bucket every session by UTC hour.
-  const hour = getLocalParts(new Date(), dayKeyTimezone).hour;
+  const hour = getLocalParts(at, dayKeyTimezone).hour;
   usageData.hourlyActivity[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
   if (!Array.isArray(day.hourlyActivity)) day.hourlyActivity = Array(24).fill(0);
   day.hourlyActivity[hour]++;
-
-  await saveUsage();
-  return usageData.totalSessions;
 }
 
 /**
@@ -845,12 +866,17 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
     for (const field of SPEED_LEDGER_FIELDS) {
       if (speed[field] || bucket[field] != null) bucket[field] = (bucket[field] ?? 0) + speed[field];
     }
-    if (source === 'estimate') {
-      adjustEstimated(bucket, {
+    if (source === 'estimate' || extra.nativeUsageUnpersisted) {
+      const counts = {
         messages: messageCount, tokensIn: inputTokens, tokensOut: outputTokens, cacheReadTokens, cacheWriteTokens,
         longTokensIn, longTokensOut, longCacheReadTokens, longCacheWriteTokens,
         ...speed,
-      }, 1);
+      };
+      if (source === 'estimate') adjustEstimated(bucket, counts, 1);
+      else {
+        bucket.unpersisted ??= {};
+        adjustCounts(bucket.unpersisted, counts, 1);
+      }
     }
     bucket.source = mergeSource(bucket.source, source);
   };
@@ -914,6 +940,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       longCacheReadTokens = 0,
       longCacheWriteTokens = 0,
       source = 'estimate',
+      nativeUsageUnpersisted = false,
       repairIds = null,
     } = entry || {};
     if (Array.isArray(repairIds)) rememberRepairIds(repairIds);
@@ -926,7 +953,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       longCacheReadTokens,
       longCacheWriteTokens,
       ...speedCounts,
-      source
+      source, nativeUsageUnpersisted,
     });
   }
 
@@ -1603,7 +1630,33 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
 
 export async function loadUsage() {
   return queueUsageWrite(async () => {
-    return transactUsage(() => loadUsageDraft());
+    return transactUsage(async () => {
+      await loadUsageDraft();
+      // Only the server loads this ledger. Import bridge-written request
+      // records locally; no transcript scan or provider call runs at boot.
+      const { scanHistoricalUsage } = await import('./usageBackfillWorker.js');
+      const { corrections } = await scanHistoricalUsage({
+        runsDir: PATHS.runs ?? join(DATA_DIR, 'runs'), reportedOnly: true,
+        reconciledRunIds: getReconciledUsageRunIds(),
+      });
+      const { correctedRunIds } = await applyHistoricalUsageCorrectionsDraft(corrections);
+      const corrected = new Set(correctedRunIds);
+      for (const correction of corrections) {
+        if (!corrected.has(correction.runId)) continue;
+        // Counts and their ledger marker committed first. If this secondary
+        // marker fails, the ledger still prevents a duplicate on the next load.
+        try {
+          const metadata = await readJSONFile(correction.metadataPath, null, { strict: true });
+          if (!metadata) continue;
+          await atomicWrite(correction.metadataPath, {
+            ...metadata, usageReconciled: true, usageReconciledAt: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error(`❌ Failed to mark usage for run ${correction.runId}: ${err.message}`);
+        }
+      }
+      return committedUsage;
+    });
   });
 }
 

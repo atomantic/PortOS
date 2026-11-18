@@ -2,7 +2,7 @@
  * Autonomous-job cadence vocabulary (pure): picker rows, cadence → milliseconds resolver,
  * and the "this job has no clock" predicate.
  *
- * Lives in lib so the Zod boundary (`lib/cosValidation.js`) can validate against it without
+ * Lives in lib so the Zod boundary (`lib/cos/cosValidation.js`) can validate against it without
  * a lib → services import; `services/autonomousJobs/constants.js` re-exports it. SEPARATE
  * from the scheduled-task `INTERVAL_TYPES` in `services/taskScheduleConstants.js`; nothing
  * converts between the two.

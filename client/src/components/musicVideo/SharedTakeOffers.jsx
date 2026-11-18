@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { sharedTakeOffers, sharedTakePatches } from '../../../../server/lib/musicVideoSourceTake.js';
+import { sharedTakeOffers, sharedTakePatches } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 
 const BUTTON = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs text-port-text hover:bg-port-border/40 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 

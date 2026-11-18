@@ -10,10 +10,10 @@ vi.mock('../lib/paths.js', async original => makePathsProxy(await original(), {
   dataRoot: () => lazyTempDataRoot('repair-completion-data-'), extraOverrides: { get root() { return facts.repo; } },
 }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, completeAgent: vi.fn(async () => { facts.owner.status = 'completed'; return facts.owner; }), getAgentRecord: vi.fn(async () => facts.owner), getAgents: vi.fn(async () => facts.agents),
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgent: async () => facts.owner, completeAgent: vi.fn(async () => { facts.owner.status = 'completed'; return facts.owner; }), getAgentRecord: vi.fn(async () => facts.owner), getAgents: vi.fn(async () => facts.agents),
   updateAgent: async (id, patch) => { Object.assign(facts.owner.metadata, patch.metadata); return facts.owner; },
 }));
-vi.mock('./cosTaskStore.js', () => ({ updateTask: vi.fn(async (id, patch) => { Object.assign(facts.task, patch); return facts.task; }), getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }), getTaskById: vi.fn(async () => facts.task), addTask: vi.fn(async (data, type, options) => ({ data, type, options })) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async (id, patch) => { Object.assign(facts.task, patch); return facts.task; }), getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }), getTaskById: vi.fn(async () => facts.task), addTask: vi.fn(async (data, type, options) => ({ data, type, options })) }));
 vi.mock('../lib/gitRemote.js', async original => ({ ...(await original()), getOriginInfo: async dir => ({ isGithub: true, host: 'github.com', owner: 'example', fullName: facts.names[dir] || 'example/PortOS' }) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async (args, timeout, { cwd }) => {
   expect(args).not.toContain('--jq'); // gh forbids --slurp together with --jq.
@@ -23,18 +23,18 @@ vi.mock('./github.js', () => ({ execGh: vi.fn(async (args, timeout, { cwd }) => 
   return JSON.stringify([[pr && { state: pr.state, merged_at: pr.merged_at, head: { sha: pr.headSha, repo: { full_name: pr.headRepo } }, base: { ref: pr.base } }].filter(Boolean)]);
 }) }));
 vi.mock('./codeReview.js', async original => ({ ...(await original()), getGoalFidelityConfig: async () => null }));
-vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: async () => null }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: async () => null }));
+vi.mock('./agent/agentCompletion.js', () => ({ processAgentCompletion: async () => null }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: async () => null }));
 vi.mock('../lib/gitCommitProbe.js', () => ({ committedDuringRun: vi.fn(async () => false) }));
 
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
-import { bindCompletionTaskDispatch } from './agentCompletionTaskHandoff.js';
+import { bindCompletionTaskDispatch } from './agent/agentCompletionTaskHandoff.js';
 import { captureRepoRepairContract } from './updateRepoRepairCompletion.js';
 import { checkUpdateRepoReadiness, queueRepoRepairTask } from './updateRepoReadiness.js';
-import { evaluateSuccessCriteria, finalizeAgent } from './agentFinalization.js';
-import { resolveTaskOutcome } from '../lib/agentOutcome.js';
+import { evaluateSuccessCriteria, finalizeAgent } from './agent/agentFinalization.js';
+import { resolveTaskOutcome } from '../lib/agent/agentOutcome.js';
 import { committedDuringRun } from '../lib/gitCommitProbe.js';
-import { getAgents, completeAgent } from './cosAgentLifecycle.js';
+import { getAgents, completeAgent } from './cos/cosAgentLifecycle.js';
 
 const owned = ownTestBodies(vitestIt);
 const it = owned.it;

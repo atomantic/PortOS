@@ -1,6 +1,6 @@
 /**
  * The catalog ingredient type registry as the UI consumes it — the server
- * registry in `server/lib/catalogTypes.js` plus the per-type editor layout.
+ * registry in `server/lib/catalog/catalogTypes.js` plus the per-type editor layout.
  *
  * The registry itself is NOT copied. `CATALOG_TYPES` below is projected from
  * the server entries, so `label` / `badgeColor` / the primary-content key and
@@ -19,9 +19,9 @@
  * below. The Catalog list/picker/inline-form, the detail editor, and the type
  * chips all map over `CATALOG_TYPES`, so it surfaces everywhere at once.
  */
-import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catalogTypes.js';
+import { CATALOG_TYPES as SERVER_CATALOG_TYPES } from '../../../server/lib/catalog/catalogTypes.js';
 
-export { catalogReferenceRole, FAMILY_RELATION_KINDS, isFamilyRelationKind, RELATION_KINDS, USER_TYPE_FIELD_KINDS, canonicalTagKey, getRelationKind, payloadSnippet } from '../../../server/lib/catalogTypes.js';
+export { catalogReferenceRole, FAMILY_RELATION_KINDS, isFamilyRelationKind, RELATION_KINDS, USER_TYPE_FIELD_KINDS, canonicalTagKey, getRelationKind, payloadSnippet } from '../../../server/lib/catalog/catalogTypes.js';
 
 // Per-type detail-editor field list. Each entry is `[key, label, kind]` where
 // `kind` is 'text' (single line) or 'textarea' (multi-line). The light types

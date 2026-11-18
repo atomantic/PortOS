@@ -1,17 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('os', async (importOriginal) => ({ ...await importOriginal(), homedir: () => '/nonexistent-test-home' }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 vi.mock('./memoryRetriever.js', () => ({ getMemorySection: vi.fn().mockResolvedValue(null) }));
 vi.mock('./digital-twin.js', () => ({ getDigitalTwinForPrompt: vi.fn().mockResolvedValue(null) }));
 vi.mock('./tools.js', () => ({ getToolsSummaryForPrompt: vi.fn().mockResolvedValue('') }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: [] }) }));
 
-import { addTask } from './cosTaskStore.js';
-import { buildQueuedTask } from './cosTaskIntake.js';
+import { addTask } from './cos/cosTaskStore.js';
+import { buildQueuedTask } from './cos/cosTaskIntake.js';
 import { queueSecurityFixTask } from './githubSecurityFixTask.js';
 import { queueNotificationResolveTask } from './githubNotificationResolveTask.js';
-import { buildAgentPrompt, buildLightContextPrompt } from './agentPromptBuilder.js';
+import { buildAgentPrompt, buildLightContextPrompt } from './agent/agentPromptBuilder.js';
 
 const account = { id: 'example-account', host: 'github.com', login: 'example-owner' };
 const repo = 'example-owner/example-tool';

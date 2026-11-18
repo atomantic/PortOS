@@ -5,7 +5,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 
 const mock = vi.hoisted(() => ({ buildQueue: vi.fn(), getNotifications: vi.fn(), getPostConfig: vi.fn() }));
 vi.mock('./meatspacePost.js', () => ({ getPostConfig: mock.getPostConfig }));
-vi.mock('./cosState.js', () => ({ getDomainAutonomyMode: vi.fn().mockResolvedValue('execute') }));
+vi.mock('./cos/cosState.js', () => ({ getDomainAutonomyMode: vi.fn().mockResolvedValue('execute') }));
 vi.mock('./domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn().mockResolvedValue({ withinBudget: true }),
   recordDomainUsage: vi.fn().mockResolvedValue(),

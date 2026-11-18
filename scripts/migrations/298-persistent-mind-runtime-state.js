@@ -8,7 +8,7 @@
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { createDefaultPersistentMindState } from '../../server/lib/persistentMind.js';
+import { createDefaultPersistentMindState } from '../../server/lib/persistent/persistentMind.js';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 export default {

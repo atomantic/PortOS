@@ -8,8 +8,8 @@ import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
  * `human_activity_events` Postgres table via `recordEvents()`. The store is:
  *
  * - **Idempotent.** Every event carries a stable `dedupeKey`; the unique
- *   `(source, dedupe_key)` index + `ON CONFLICT DO NOTHING` make re-syncs no-ops.
- *   Same contract as `tribe_touchpoints.dedupe_key`.
+ *   `(source, dedupe_key)` index makes re-syncs no-ops. A YouTube Takeout import
+ *   can refine a day-only watch with the exact time once.
  * - **Privacy-preserving.** Events store metadata + a SHORT summary line only —
  *   full message bodies stay in the per-source caches (`data/messages/cache/`,
  *   chat.db, …). `metadata` carries pointers (threadId / externalId / account) back
@@ -29,6 +29,7 @@ import { getLocalParts, localDayRangeUtc, todayInTimezone, resolveEventInstant, 
 import { getUserTimezone } from './userTimezone.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
+import { gmailApiThreadIdFromThrid } from '../lib/gmailThreadKey.js';
 
 export { localDayRangeUtc };
 
@@ -308,19 +309,30 @@ function rowToEvent(row) {
 }
 
 // Idempotently persist a batch of activity candidates. Returns
-// { recorded, skipped } where `recorded` is the count of newly-inserted rows and
-// `skipped` counts duplicates (already present for this source+dedupeKey) plus
-// any candidate that failed normalization.
+// { recorded, skipped } where `recorded` counts inserts plus any watch refined
+// by a Takeout import, and `skipped` counts duplicates and invalid candidates.
 //
 // A candidate may carry `supersedesDedupeKey`: the key an earlier version of the
 // same ingester wrote for this event (#15308). See `recordRekeyedChunk`.
-export async function recordEvents(candidates = []) {
+export async function recordEvents(candidates = [], { refineYoutubeWatches = false } = {}) {
   const entries = [];
+  // Takeout can contain multiple watches of one video on the same day. Keep
+  // the first candidate for each key: a Postgres upsert may target a row once.
+  const seen = refineYoutubeWatches ? new Set() : null;
   for (const candidate of candidates || []) {
     const row = normalizeCandidate(candidate);
     if (!row) continue;
+    if (seen) {
+      const key = `${row.source}\u0000${row.dedupeKey}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
     const legacyKey = String(candidate.supersedesDedupeKey ?? '').trim();
-    entries.push({ row, legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null });
+    entries.push({
+      row,
+      legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null,
+      previousGmailFallbackKey: candidate.previousGmailFallbackKey,
+    });
   }
   if (entries.length === 0) return { recorded: 0, skipped: (candidates || []).length };
   await ensureReady();
@@ -333,15 +345,41 @@ export async function recordEvents(candidates = []) {
   let recorded = 0;
   for (let start = 0; start < entries.length; start += CHUNK) {
     const chunk = entries.slice(start, start + CHUNK);
-    recorded += chunk.some((e) => e.legacyKey)
-      ? await withTransaction((client) => recordRekeyedChunk(client, chunk))
-      : await insertActivityChunk(chunk.map((e) => e.row));
+    const rekey = chunk.some((e) => e.legacyKey);
+    const checkGmailFallbacks = chunk.some((e) => e.previousGmailFallbackKey);
+    if (rekey || checkGmailFallbacks) {
+      recorded += await withTransaction(async (client) => {
+        const pending = checkGmailFallbacks ? await excludeRecordedGmailFallbacks(client, chunk) : chunk;
+        return rekey
+          ? recordRekeyedChunk(client, pending)
+          : insertActivityChunk(pending.map((e) => e.row), client.query.bind(client), refineYoutubeWatches);
+      });
+    } else {
+      recorded += await insertActivityChunk(chunk.map((e) => e.row), query, refineYoutubeWatches);
+    }
   }
   const skipped = (candidates || []).length - recorded;
   if (recorded > 0) {
     console.log(`🗓️  Recorded ${recorded} activity event(s) (${skipped} skipped as duplicate/invalid)`);
   }
   return { recorded, skipped };
+}
+
+// Keep historical unscoped rows in place. They are evidence of a duplicate
+// only when their saved Takeout header proves the same Gmail thread.
+async function excludeRecordedGmailFallbacks(client, entries) {
+  const { rows } = await client.query(
+    `SELECT dedupe_key, metadata->>'threadId' AS thread_id FROM human_activity_events
+      WHERE source = 'gmail' AND account_id IS NULL AND metadata->>'messageId' IS NULL
+        AND dedupe_key = ANY($1::text[])
+      FOR SHARE`,
+    [entries.map((e) => e.previousGmailFallbackKey)],
+  );
+  const byKey = new Map(rows.map((r) => [r.dedupe_key, gmailApiThreadIdFromThrid(r.thread_id)]));
+  return entries.filter(({ row, previousGmailFallbackKey }) => {
+    const storedThread = byKey.get(previousGmailFallbackKey);
+    return !storedThread || storedThread !== gmailApiThreadIdFromThrid(row.metadata.threadId);
+  });
 }
 
 // Move a chunk's events off their superseded keys inside one transaction, so a
@@ -354,22 +392,47 @@ export async function recordEvents(candidates = []) {
 // the insert, against the holder actually present then.
 async function recordRekeyedChunk(client, entries) {
   const rekeyed = entries.filter((e) => e.legacyKey);
+  const execute = client.query.bind(client);
+  // Insert first so a concurrent import or sync that won the unique key is
+  // visible to the next statement under READ COMMITTED.
+  let inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
   const { rows: holders } = await client.query(
     `SELECT e.source, e.dedupe_key, e.account_id FROM human_activity_events e
-       JOIN unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
-         ON e.source = k.source AND e.dedupe_key = k.dedupe_key`,
-    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey)],
+       JOIN unnest($1::text[], $2::text[], $3::text[]) AS k(source, dedupe_key, account_id)
+         ON e.source = k.source AND e.dedupe_key = k.dedupe_key
+      WHERE e.account_id IS DISTINCT FROM k.account_id
+      ORDER BY e.source, e.dedupe_key FOR UPDATE OF e`,
+    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey), rekeyed.map((e) => e.row.accountId)],
   );
   const holderAccount = new Map(holders.map((h) => [`${h.source}\u0000${h.dedupe_key}`, h.account_id]));
+  const promotions = [];
+  const fallbacks = [];
   for (const e of rekeyed) {
-    const holder = holderAccount.get(`${e.row.source}\u0000${e.row.dedupeKey}`);
-    if (holder != null && holder !== e.row.accountId) {
-      e.row = { ...e.row, dedupeKey: e.legacyKey };
+    const { row } = e;
+    const key = `${row.source}\u0000${row.dedupeKey}`;
+    const holder = holderAccount.get(key);
+    if (holder === null && row.source === 'gmail' && row.accountId && row.dedupeKey === `gmail:${row.metadata.rfcMessageId}`) {
+      promotions.push(row);
+      holderAccount.set(key, row.accountId);
+    } else if (holder != null && holder !== row.accountId) {
+      fallbacks.push({ ...row, dedupeKey: e.legacyKey });
       e.legacyKey = null;
     }
   }
-  const execute = client.query.bind(client);
-  const inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
+  if (promotions.length) {
+    // Keep the Timeline row id while adopting the provider's direction,
+    // timestamp, normalized participants and mailbox-specific thread identity.
+    await client.query(
+      `UPDATE human_activity_events e SET
+         account_id = p."accountId", kind = p.kind, happened_at = p."happenedAt",
+         title = p.title, summary = p.summary, participants = p.participants, metadata = p.metadata
+       FROM jsonb_to_recordset($1::jsonb) AS p("dedupeKey" text, "accountId" text, kind text,
+         "happenedAt" timestamptz, title text, summary text, participants jsonb, metadata jsonb)
+       WHERE e.source = 'gmail' AND e.dedupe_key = p."dedupeKey" AND e.account_id IS NULL`,
+      [toPgJson(promotions)],
+    );
+  }
+  if (fallbacks.length) inserted += await insertActivityChunk(fallbacks, execute);
   const retiring = entries.filter((e) => e.legacyKey);
   if (retiring.length === 0) return inserted;
   const retired = await client.query(
@@ -377,7 +440,7 @@ async function recordRekeyedChunk(client, entries) {
       USING unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS k(source, dedupe_key, legacy_key, account_id),
             human_activity_events n
       WHERE n.source = k.source AND n.dedupe_key = k.dedupe_key
-        AND (n.account_id IS NULL OR n.account_id IS NOT DISTINCT FROM k.account_id)
+        AND n.account_id IS NOT DISTINCT FROM k.account_id
         AND e.source = k.source AND e.dedupe_key = k.legacy_key`,
     [
       retiring.map((e) => e.row.source),
@@ -422,8 +485,9 @@ export async function listLegacyGmailThreadKeys() {
 //   store) with the same kind, title and window whose sender matches or who
 //   lists the sender as a participant, so a second legacy row, a re-keyed live
 //   row or an imported sibling makes it ambiguous;
-// - the imported email's own key is held by an account-less (imported) row, so
-//   a live row for another mailbox never absorbs this mailbox's event;
+// - the imported email's own key is held by an account-less row with a Takeout
+//   thread id matching the candidate, so a live or unrelated import row cannot
+//   absorb this mailbox's event;
 // - seen from the legacy row, the imported email is the only other stored row
 //   that fits it (thread, kind, title, sender, 10 minutes of ITS time), so a
 //   second claimant more than 10 minutes from the first, or a sibling stored
@@ -437,7 +501,9 @@ export async function retireLegacyGmailDuplicates(matches = []) {
   // same key is one claimant, not two.
   const byKey = new Map();
   for (const m of matches || []) {
-    if (m?.dedupeKey && m.kind && m.happenedAt && m.threadKey && !byKey.has(m.dedupeKey)) byKey.set(m.dedupeKey, m);
+    if (m?.dedupeKey && m.kind && m.happenedAt && m.threadKey && !byKey.has(m.dedupeKey) && gmailApiThreadIdFromThrid(m.rawThreadId)) {
+      byKey.set(m.dedupeKey, m);
+    }
   }
   const rows = [...byKey.values()];
   if (rows.length === 0) return { retired: 0 };
@@ -453,7 +519,8 @@ export async function retireLegacyGmailDuplicates(matches = []) {
          FROM k JOIN human_activity_events e
            ON e.source = 'gmail' AND e.kind = k.kind AND e.title = k.title
           AND e.happened_at BETWEEN k.happened_at - INTERVAL '10 minutes' AND k.happened_at + INTERVAL '10 minutes'
-          AND e.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND (e.metadata->>'threadId' = k.thread_key
+               OR (length(e.metadata->>'threadId') <= 20 AND ltrim(e.metadata->>'threadId', '0') = k.raw_thread))
           AND e.dedupe_key <> k.dedupe_key
      ),
      legacy AS (
@@ -470,14 +537,17 @@ export async function retireLegacyGmailDuplicates(matches = []) {
         GROUP BY dedupe_key
      ),
      rivals AS (
-       SELECT t.dedupe_key, count(DISTINCT r.id) AS n, bool_or(r.dedupe_key = t.dedupe_key) AS has_own
+       SELECT t.dedupe_key, count(DISTINCT r.id) AS n,
+              bool_or(r.dedupe_key = t.dedupe_key AND r.account_id IS NULL
+                      AND length(r.metadata->>'threadId') <= 20 AND ltrim(r.metadata->>'threadId', '0') = k.raw_thread) AS has_own
          FROM targets t
          JOIN k ON k.dedupe_key = t.dedupe_key
          JOIN human_activity_events lr ON lr.id = t.target_id
          JOIN human_activity_events r
            ON r.source = 'gmail' AND r.id <> lr.id AND r.kind = lr.kind AND r.title = lr.title
           AND r.happened_at BETWEEN lr.happened_at - INTERVAL '10 minutes' AND lr.happened_at + INTERVAL '10 minutes'
-          AND r.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND (r.metadata->>'threadId' = k.thread_key
+               OR (length(r.metadata->>'threadId') <= 20 AND ltrim(r.metadata->>'threadId', '0') = k.raw_thread))
           AND (k.kind = 'message.sent' OR r.metadata->>'handle' = k.from_email
                OR r.participants @> jsonb_build_array(jsonb_build_object('email', k.from_email)))
         GROUP BY t.dedupe_key
@@ -486,7 +556,6 @@ export async function retireLegacyGmailDuplicates(matches = []) {
        SELECT t.target_id FROM targets t
          JOIN lookalikes l ON l.dedupe_key = t.dedupe_key
          JOIN rivals v ON v.dedupe_key = t.dedupe_key
-         JOIN human_activity_events h ON h.source = 'gmail' AND h.dedupe_key = t.dedupe_key AND h.account_id IS NULL
         WHERE t.n = 1 AND l.n = 1 AND v.n = 1 AND v.has_own
      )
      DELETE FROM human_activity_events e USING picked p WHERE e.id = p.target_id`,
@@ -497,7 +566,7 @@ export async function retireLegacyGmailDuplicates(matches = []) {
       rows.map((m) => (m.title ? shortSummary(m.title, 300) : null)),
       rows.map((m) => new Date(m.happenedAt).toISOString()),
       rows.map((m) => String(m.threadKey)),
-      rows.map((m) => String(m.rawThreadId ?? '')),
+      rows.map((m) => String(m.rawThreadId).trim().replace(/^0+/, '')),
       rows.map((m) => normalizeIdentifier(m.fromEmail)),
     ],
   );
@@ -506,11 +575,12 @@ export async function retireLegacyGmailDuplicates(matches = []) {
   return { retired };
 }
 
-// Insert one chunk of normalized rows; returns the count actually inserted.
+// Write one chunk of normalized rows; returns the count actually changed.
 // 12 bound params per row (created_at is a NOW() literal, not a param);
 // participants and metadata are toPgJson-serialized + ::jsonb-cast (node-pg would
 // otherwise coerce a JS array to a Postgres array literal and fail on jsonb).
-async function insertActivityChunk(rows, execute = query) {
+async function insertActivityChunk(rows, execute, refineYoutubeWatches = false) {
+  if (rows.length === 0) return 0;
   const paramsPerRow = 12;
   const values = [];
   const placeholders = rows.map((r, i) => {
@@ -522,11 +592,22 @@ async function insertActivityChunk(rows, execute = query) {
     );
     return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9}, $${b + 10}::jsonb, $${b + 11}::jsonb, $${b + 12}, NOW())`;
   });
+  // The conflict predicate and update share the insert's row lock. A scrape
+  // replay or another import cannot overwrite a timestamp already refined.
+  const onConflict = refineYoutubeWatches
+    ? `DO UPDATE SET
+         happened_at = EXCLUDED.happened_at, title = EXCLUDED.title,
+         summary = EXCLUDED.summary, url = EXCLUDED.url, metadata = EXCLUDED.metadata
+       WHERE human_activity_events.source = 'youtube'
+         AND human_activity_events.kind = 'media.watch' AND EXCLUDED.kind = 'media.watch'
+         AND human_activity_events.metadata @> '{"scraped": true}'::jsonb
+         AND NOT (EXCLUDED.metadata @> '{"scraped": true}'::jsonb)`
+    : 'DO NOTHING';
   const result = await execute(
     `INSERT INTO human_activity_events
        (id, source, account_id, kind, happened_at, duration_s, title, summary, url, participants, metadata, dedupe_key, created_at)
      VALUES ${placeholders.join(', ')}
-     ON CONFLICT (source, dedupe_key) DO NOTHING
+     ON CONFLICT (source, dedupe_key) ${onConflict}
      RETURNING id`,
     values,
   );

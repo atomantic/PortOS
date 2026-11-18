@@ -87,7 +87,7 @@ export const PATHS = {
   // excluded from backups by default (overridable) since re-fetchable from Beeper while the source network holds the media.
   beeperAttachments: join(INSTALL_ROOT, 'data/beeper/attachments'),
   slashdo: join(CODE_ROOT, 'lib/slashdo'),
-  // Fully-resolved slashdo command bodies for CoS agents to READ on demand instead of pasted into the prompt (#3110). Derived cache, safe to delete; anchored to INSTALL_ROOT (not CODE_ROOT) because the pointer given to an agent must name a path on the running install.
+  // Fully-resolved slashdo command bodies, and the claim prompt's epic phase (#16573), for CoS agents to READ on demand instead of pasted into the prompt (#3110). Derived cache, safe to delete; anchored to INSTALL_ROOT (not CODE_ROOT) because the pointer given to an agent must name a path on the running install.
   slashdoResolved: join(INSTALL_ROOT, 'data/cos/slashdo-resolved')
 };
 

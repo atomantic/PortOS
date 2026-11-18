@@ -3,11 +3,11 @@
  */
 
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { getActiveProvider } from '../providers.js';
+import { getActiveProvider } from '../provider/providers.js';
 import * as jiraService from '../jira.js';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 
-export { getAppWorkspace, getAppDataForTask } from '../agentAppWorkspace.js';
+export { getAppWorkspace, getAppDataForTask } from '../agent/agentAppWorkspace.js';
 
 /**
  * Generate a concise JIRA ticket title from a task description using AI.

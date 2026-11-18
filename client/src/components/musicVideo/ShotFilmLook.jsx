@@ -6,7 +6,7 @@ import TemplateEffectsControls from './TemplateEffectsControls.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook } from '../../lib/filmLook.js';
 import { formatCount } from '../../utils/formatters.js';
-import { shotCamera } from '../../../../server/lib/musicVideoFilmLook.js';
+import { shotCamera } from '../../../../server/lib/musicVideo/musicVideoFilmLook.js';
 
 const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 pointer-fine:sm:min-h-0';
 const presetLabel = (look) => (isFilmLookNeutral(look) ? 'Clean' : FILM_LOOK_PRESETS.find((p) => p.id === look?.preset)?.label || 'Custom');

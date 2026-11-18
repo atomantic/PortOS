@@ -6,7 +6,7 @@ import StatsOutroPanel from './StatsOutroPanel.jsx';
 import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { getMusicVideoOutroStats } from '../../services/apiMusicVideo.js';
 import { formatCount } from '../../utils/formatters.js';
-import { normalizeStatsOutro, statsOutroRows } from '../../../../server/lib/musicVideoStatsOutro.js';
+import { normalizeStatsOutro, statsOutroRows } from '../../../../server/lib/musicVideo/musicVideoStatsOutro.js';
 
 const PREVIEW_FPS = 24;
 

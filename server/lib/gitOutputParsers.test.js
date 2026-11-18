@@ -8,7 +8,7 @@ import {
   extractAgentSummary,
   isBenignConcurrentFetchRefRace
 } from './gitOutputParsers.js';
-import { LIFECYCLE_LINES } from './agentOutputMarkers.js';
+import { LIFECYCLE_LINES } from './agent/agentOutputMarkers.js';
 
 describe('parseStatus', () => {
   it('maps known porcelain codes to labels', () => {

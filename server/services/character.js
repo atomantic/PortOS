@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS, sleep } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
-import { listCompletedTaskSummaries } from './cosTaskRepository.js';
+import { listCompletedTaskSummaries } from './cos/cosTaskRepository.js';
 import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';

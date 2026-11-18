@@ -21,7 +21,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validateRequest.js';
 import { MAX_CONVERGENCE_ROUNDS } from '../../lib/pipelineValidation.js';
-import { EFFORT_LEVELS } from '../../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../../lib/provider/providerModels.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as autopilot from '../../services/pipeline/seriesAutopilot.js';
 import {

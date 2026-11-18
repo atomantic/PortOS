@@ -1,5 +1,5 @@
 // The CoS task queues (user + internal), one row per task. `task` is the task in
-// its stored form (see lib/cosTaskRows.js); the other columns are the projections
+// its stored form (see lib/cos/cosTaskRows.js); the other columns are the projections
 // the queries need: status for the open queue and history paging, priority and
 // position for queue order, completed_at for the recent-completed window.
 // `cos_task_lists.version` bumps on every write so a cached read can tell

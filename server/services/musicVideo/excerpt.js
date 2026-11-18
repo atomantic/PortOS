@@ -22,8 +22,8 @@
  * `mutateProjectRecord`'s write serialization without duplicating validation.
  */
 
-import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { captureMusicVideoEvidence } from '../../lib/musicVideoDependencies.js';
+import { isLipSyncScene, selectedPerformanceInstruction } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { captureMusicVideoEvidence } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';

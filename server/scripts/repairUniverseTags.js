@@ -26,10 +26,10 @@
  */
 
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
-import { friendlifyUniverseTags } from '../lib/catalogUniverseTags.js';
-import { canonicalTagKey } from '../lib/catalogTypes.js';
+import { friendlifyUniverseTags } from '../lib/catalog/catalogUniverseTags.js';
+import { canonicalTagKey } from '../lib/catalog/catalogTypes.js';
 import { listUniverses } from '../services/universeBuilder.js';
-import * as catalogDB from '../services/catalogDB.js';
+import * as catalogDB from '../services/catalog/catalogDB.js';
 
 // v2: v1 shipped a no-op pass (it read `listIngredients()` as a bare array and
 // broke before scanning any row, yet still wrote the v1 marker). Bumping to 2

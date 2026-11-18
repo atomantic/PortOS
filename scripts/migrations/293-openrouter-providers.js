@@ -2,7 +2,7 @@
  * Ship disabled OpenRouter API and OpenCode presets to existing installs.
  *
  * OpenRouter is an OpenAI-compatible gateway, the second row of
- * `server/lib/providerGateways.js` after OrcaRouter (migration 278). The API
+ * `server/lib/provider/providerGateways.js` after OrcaRouter (migration 278). The API
  * provider owns the key; the OpenCode wrappers keep their static config keyless
  * and resolve the sibling API key only when spawning or refreshing models. This
  * migration is additive and never contacts the gateway or changes the active

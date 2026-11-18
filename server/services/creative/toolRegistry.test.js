@@ -35,7 +35,7 @@ vi.mock('../voice/tools.js', () => ({
 }));
 
 // Mock the autonomy config + budget/usage services so gating is deterministic.
-vi.mock('../cosState.js', () => ({ loadState: vi.fn(async () => ({ config: {} })) }));
+vi.mock('../cos/cosState.js', () => ({ loadState: vi.fn(async () => ({ config: {} })) }));
 vi.mock('../domainUsage.js', () => ({
   getDomainBudgetStatus: vi.fn(async () => ({ withinBudget: true, exceeded: null })),
   recordDomainUsage: vi.fn(async () => {}),
@@ -84,10 +84,10 @@ vi.mock('../settings.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
+vi.mock('../catalog/catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
 
-import { loadState } from '../cosState.js';
+import { loadState } from '../cos/cosState.js';
 import { dispatchTool as dispatchVoiceTool } from '../voice/tools.js';
 import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { createSeries } from '../pipeline/series.js';

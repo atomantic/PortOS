@@ -25,7 +25,7 @@ vi.mock('../../lib/fileUtils.js', async original => {
     if (!path.startsWith(root)) state.staged?.(path);
   } };
 });
-vi.mock('../cosState.js', () => ({ AGENTS_DIR: agentsDir }));
+vi.mock('../cos/cosState.js', () => ({ AGENTS_DIR: agentsDir }));
 vi.mock('../instances.js', () => ({ getPeers: async () => [peer] }));
 vi.mock('./peerSyncShared.js', () => ({ findPeerById: async () => peer, FORCE_REVALIDATE_EVERY: 50, peerSyncEvents: new EventEmitter() }));
 vi.mock('./peerSyncAssets.js', () => ({ inflightPulls: new Set(), inflightKey: (...parts) => parts.join(':'), ASSET_PULL_TIMEOUT_MS: 1000,
@@ -37,7 +37,7 @@ vi.mock('./peerSyncAssets.js', () => ({ inflightPulls: new Set(), inflightKey: (
 vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: async () => ({ ok: true }),
   readPeerBody: async () => ({ schemaVersion: 1, manifestHash: state.manifestHash, entries }) }));
 vi.mock('../../lib/databaseMaintenanceJournal.js', () => ({ assertDatabaseAdmission() {} }));
-vi.mock('../cosAgentIndex.js', async original => {
+vi.mock('../cos/cosAgentIndex.js', async original => {
   const actual = await original();
   return { ...actual, addAgentArchivesToIndex: async pairs => {
     if (state.failIndex) throw new Error('Example index unavailable');
@@ -46,7 +46,7 @@ vi.mock('../cosAgentIndex.js', async original => {
 });
 
 const { syncCosHistoryFromPeer } = await import('./peerCosSync.js');
-const { loadAgentIndex } = await import('../cosAgentIndex.js');
+const { loadAgentIndex } = await import('../cos/cosAgentIndex.js');
 const { acquireBackupSnapshotCut } = await import('../../lib/backupSnapshotBoundary.js');
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const turn = () => new Promise(resolve => setImmediate(resolve));

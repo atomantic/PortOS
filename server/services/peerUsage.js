@@ -41,15 +41,15 @@ import { mergeTombstones, normalizeTombstones, recordTombstone, isTombstoned } f
 import { canonicalSnapshotChecksum } from '../lib/snapshotChecksum.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { isFreeProvider } from '../lib/modelPricing.js';
-import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/providerFamilies.js';
+import { familyForProvider, familyLabel, PROVIDER_FAMILY_IDS } from '../lib/provider/providerFamilies.js';
 import { sanitizeQuotaCards } from '../lib/fleetQuotas.js';
 import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 import { buildUsageDigest, buildUsageReport, getUsage, providerVolumeSinceBlock, USAGE_FILE } from './usage.js';
-import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './providerQuotaShare.js';
+import { readLocalQuotaCards, PROVIDER_QUOTAS_FILE } from './provider/providerQuotaShare.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE } from './claudeCodeTranscriptUsage.js';
 import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
-import { getAllProviders } from './providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
 import { readRenderProjectionRows, summarizeRenderReceipts } from './imageRenderUsage.js';
 

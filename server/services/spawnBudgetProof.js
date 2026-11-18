@@ -54,7 +54,7 @@ export async function spawnBudgetHoldReason(task) {
   if (!validSpawnBudgetEpisode(proof) || isTruthyMeta(metadata.spawnBudgetReconciledHold)) return 'Spawn budget history is unverified or held';
   if (!proof.dispatch) return spawnBudgetCount(metadata.totalSpawnCount ?? 0) === spawnBudgetCount(proof.baseline ?? 0)
     ? null : 'Spawn budget history is unverified or held';
-  const { readAgentsStateForSafetyCheck } = await import('./cosState.js');
+  const { readAgentsStateForSafetyCheck } = await import('./cos/cosState.js');
   const state = await readAgentsStateForSafetyCheck().catch(() => null);
   const owner = state?.trusted ? state.agents?.[proof.dispatch.agentId] : null;
   return owner?.status === 'completed' && matchesSpawnBudgetProof(task, owner)

@@ -17,9 +17,9 @@ inputs:
   merge-shards:
     description: >-
       The family's full-run shard count (FULL_SUITE_SHARDS in
-      scripts/ci-test-plan.js), or 0. When set, every full-run shard lineage
-      is restored too and merged in, so related selection sees a memo record
-      for every test, not only the one shard's slice. Up to 3.
+      scripts/ci-test-plan.js), or 0. When set, restore and merge every
+      distinct full-run shard lineage so related selection can use records
+      from all shards. Up to 3.
     required: false
     default: '0'
 
@@ -57,8 +57,8 @@ runs:
     # read-only rule; the merge keeps the newer record per test.
     # A cache version hashes the restore path, so a shard lineage restores only
     # to the path it was saved from (portos-test-memo). Park each restore
-    # (the job's own first, then every shard's) in the shards directory before
-    # the next one reuses that path.
+    # before the next one reuses that path. The actual matched key identifies
+    # the lineage already parked, including a fallback to another shard.
     - name: Park the job's own restore
       if: fromJSON(inputs.merge-shards) >= 1
       shell: bash
@@ -69,7 +69,10 @@ runs:
         fi
 
     - name: Restore full-run shard 1 of the memo
-      if: fromJSON(inputs.merge-shards) >= 1
+      id: restore-shard-1
+      if: >-
+        fromJSON(inputs.merge-shards) >= 1 &&
+        !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-1of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/portos-test-memo
@@ -78,7 +81,7 @@ runs:
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-1of${{ inputs.merge-shards }}-
 
     - name: Park full-run shard 1
-      if: fromJSON(inputs.merge-shards) >= 1
+      if: steps.restore-shard-1.outcome == 'success'
       shell: bash
       run: |
         if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
@@ -87,7 +90,10 @@ runs:
         fi
 
     - name: Restore full-run shard 2 of the memo
-      if: fromJSON(inputs.merge-shards) >= 2
+      id: restore-shard-2
+      if: >-
+        fromJSON(inputs.merge-shards) >= 2 &&
+        !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-2of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/portos-test-memo
@@ -96,7 +102,7 @@ runs:
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-2of${{ inputs.merge-shards }}-
 
     - name: Park full-run shard 2
-      if: fromJSON(inputs.merge-shards) >= 2
+      if: steps.restore-shard-2.outcome == 'success'
       shell: bash
       run: |
         if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then
@@ -105,7 +111,10 @@ runs:
         fi
 
     - name: Restore full-run shard 3 of the memo
-      if: fromJSON(inputs.merge-shards) >= 3
+      id: restore-shard-3
+      if: >-
+        fromJSON(inputs.merge-shards) >= 3 &&
+        !startsWith(steps.restore.outputs.cache-matched-key, format('test-memo-{0}-{1}-{2}-3of{3}-', runner.os, runner.arch, inputs.suite, inputs.merge-shards))
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/portos-test-memo
@@ -114,7 +123,7 @@ runs:
           test-memo-${{ runner.os }}-${{ runner.arch }}-${{ inputs.suite }}-3of${{ inputs.merge-shards }}-
 
     - name: Park full-run shard 3
-      if: fromJSON(inputs.merge-shards) >= 3
+      if: steps.restore-shard-3.outcome == 'success'
       shell: bash
       run: |
         if [ -d "$RUNNER_TEMP/portos-test-memo" ]; then

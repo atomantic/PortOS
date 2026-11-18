@@ -29,7 +29,7 @@ vi.mock('../services/brain.js', () => ({
   captureThought: vi.fn(),
 }));
 
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   addTask: vi.fn(),
 }));
 
@@ -40,7 +40,7 @@ vi.mock('../services/identity.js', () => ({
 const convs = await import('../services/askConversations.js');
 const svc = await import('../services/askService.js');
 const brainService = await import('../services/brain.js');
-const { addTask } = await import('../services/cosTaskStore.js');
+const { addTask } = await import('../services/cos/cosTaskStore.js');
 const identityService = await import('../services/identity.js');
 const { default: routes } = await import('./ask.js');
 

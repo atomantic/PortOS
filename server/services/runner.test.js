@@ -53,7 +53,7 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockResolvedValue('{}'),
 }));
 
-vi.mock('./agentCliSpawning.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
+vi.mock('./agent/agentCliSpawning.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
 vi.mock('./visionCli.js', () => ({ prepareCliVisionRun: vi.fn(async () => ({
   invocation: { command: 'claude', args: ['-p', '-', '--add-dir', '/example/outside'], stdin: 'Read the staged image', cwd: process.cwd() },
   cleanup: async () => {},

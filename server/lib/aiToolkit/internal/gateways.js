@@ -2,10 +2,10 @@
  * Hosted OpenAI-compatible gateways an OpenCode CLI/TUI wrapper can front-end
  * (OrcaRouter, OpenRouter, NVIDIA NIM).
  *
- * A DELIBERATE MIRROR of `server/lib/providerGateways.js`. This directory is
+ * A DELIBERATE MIRROR of `server/lib/provider/providerGateways.js`. This directory is
  * vendored and stays self-contained — no imports out to other PortOS modules
  * (see `aiToolkit/AGENTS.md`) — so the table is duplicated rather than imported.
- * `server/lib/providerGateways.parity.test.js` fails when the two drift.
+ * `server/lib/provider/providerGateways.parity.test.js` fails when the two drift.
  *
  * Lives in `internal/` for the same reason `ollamaBacked.js` does: the
  * model-fetcher table (`internal/modelFetchers.js`) keys a row on it, and an

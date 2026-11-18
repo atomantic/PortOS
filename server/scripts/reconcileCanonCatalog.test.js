@@ -34,7 +34,7 @@ vi.mock('../services/universeBuilder.js', () => ({
   }),
 }));
 
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   getIngredient: vi.fn(async (id) => dbState.rows[id] || null),
   updateIngredientIfFresh: vi.fn(async (id, patch, ctx) => {
     // The locked freshness re-check itself is covered against Postgres in

@@ -7,7 +7,7 @@ import StageSection from './StageSection.jsx';
 import ResearchSeedForm from './ResearchSeedForm.jsx';
 import toast from '../ui/Toast';
 import { formatCount } from '../../utils/formatters.js';
-import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_VARIANTS, musicVideoCameoCoverage } from '../../../../server/lib/musicVideoCameos.js';
+import { MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_VARIANTS, musicVideoCameoCoverage } from '../../../../server/lib/musicVideo/musicVideoCameos.js';
 import { parseCameoLines } from '../../lib/musicVideoCameos.js';
 import {
   addMusicVideoCameoReferences, addMusicVideoCameoVariant, createMusicVideoCameos, deleteMusicVideoCameo,

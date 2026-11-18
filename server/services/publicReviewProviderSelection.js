@@ -19,14 +19,14 @@
  * provider fails closed instead.
  */
 
-import { getAllProviders } from './providers.js';
-import { isProviderAvailable } from './providerStatus.js';
+import { getAllProviders } from './provider/providers.js';
+import { isProviderAvailable } from './provider/providerStatus.js';
 import {
   publicReviewCapableVendorIds,
   publicReviewPostureForProfile,
   supportsPublicReviewPosture,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
-} from '../lib/providerVendors.js';
+} from '../lib/provider/providerVendors.js';
 
 /** The posture a task's execution profile requires, or null for a normal task. */
 export function publicReviewPostureForTask(task) {

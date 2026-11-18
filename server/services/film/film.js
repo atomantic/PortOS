@@ -5,7 +5,7 @@
  * Reads only; assemble.js does the joining.
  */
 import { join } from 'node:path';
-import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideo/musicVideoBlender.js';
 import {
   blenderCompositedHandlePattern, blenderCompositedHandlesDir, blenderFinalsSignature, blenderFramesDir,
   blenderHandleFramePattern, blenderShotVideo, readBlenderRenders,

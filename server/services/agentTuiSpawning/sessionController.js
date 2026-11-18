@@ -31,16 +31,16 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  */
 
 import { readFile } from 'fs/promises';
-import { emitLog } from '../cosEvents.js';
+import { emitLog } from '../cos/cosEvents.js';
 import { HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
-import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agentSentinel.js';
-import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agentOutputMarkers.js';
+import { missingSentinelLogMessage, parseSentinelPayload } from '../../lib/agent/agentSentinel.js';
+import { LIFECYCLE_LINES, SENTINEL_COMPLETION_MARKER } from '../../lib/agent/agentOutputMarkers.js';
 import { resolveMergeGateVerdict, buildMergeGateReprompt } from '../../lib/mergeGateContract.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector, createModelAtCapacityDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
-import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../../lib/provider/providerModels.js';
 import { isFalsyMeta } from '../../lib/metadataFlags.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import { createPasteSubmitDriver } from '../../lib/tuiPasteSubmitDriver.js';

@@ -2,8 +2,8 @@
  * The shared TTL cache in front of `probeOpenAiModels`: `probeOpenAiModelsCached(endpoint, apiKey)` and `resetOpenAiModelsProbeCache()`.
  *
  * 15s TTL, keyed `endpoint\napiKey` (two providers on one authenticated endpoint must not inherit each other's 401) and storing the PROMISE so N providers sharing a daemon share one socket. It lives BELOW its two readers, the Providers page's readiness checklist
- * (`services/providerReadiness.js`) and the pre-dispatch context gate (`services/observedContextWindows.js`), so a page poll and a run starting together cost one listing and can't disagree about a daemon that restarted between them; each clears it through the same reset
- * (`services/providerReadiness.js#resetProviderReadinessCache` for the llama-server lifecycle routes). An unexpected throw drops the entry rather than poisoning it for the TTL; expired entries are swept on every miss.
+ * (`services/provider/providerReadiness.js`) and the pre-dispatch context gate (`services/observedContextWindows.js`), so a page poll and a run starting together cost one listing and can't disagree about a daemon that restarted between them; each clears it through the same reset
+ * (`services/provider/providerReadiness.js#resetProviderReadinessCache` for the llama-server lifecycle routes). An unexpected throw drops the entry rather than poisoning it for the TTL; expired entries are swept on every miss.
  * `GET /v1/models` is a listing, never an LLM call, so it is safe from a settings-page poll and the dispatch path under the no-cold-bootstrap policy in AGENTS.md.
  */
 

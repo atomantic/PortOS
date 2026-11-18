@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './313-persistent-mind-call-history.js';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMind.js';
 
 let rootDir;
 

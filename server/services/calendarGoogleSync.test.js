@@ -23,23 +23,22 @@ const persistedCache = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock('./calendarSync.js', () => ({
   loadCache: vi.fn(),
-  mutateCache: vi.fn(async (id, mutate) => {
+  mutateCache: vi.fn(async (id, mutate, sync) => {
     const cache = await loadCache(id);
     const result = await mutate(cache, await getAccount(id));
     await persistedCache(id, cache);
+    await updateSyncStatus(id, sync.status);
     return result;
   }),
-  logCalendarTouchpoints: vi.fn(async () => {}),
-  recordCalendarActivity: vi.fn(async () => {}),
 }));
 
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { getAccount, updateSyncStatus, updateSubcalendars } from './calendarAccounts.js';
-import { loadCache, logCalendarTouchpoints } from './calendarSync.js';
+import { loadCache, mutateCache } from './calendarSync.js';
 
 const ACCOUNT_ID = '22222222-2222-2222-2222-222222222222';
 const CAL_ID = 'work@example.com';
@@ -230,7 +229,7 @@ describe('MCP transcript extraction', () => {
     expect(persistedCache).not.toHaveBeenCalled();
   });
 
-  it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":[null]}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
+  it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":null}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
     runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text, exitCode: 0 }));
     await expect(mcpSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 502 });
     expect(persistedCache).not.toHaveBeenCalled();
@@ -658,7 +657,7 @@ describe('Google participant snapshot reconciliation (#8838)', () => {
     }]);
     const retained = savedCache().events[0];
     expect(retained.myStatus).toBe('declined');
-    expect(logCalendarTouchpoints.mock.calls.at(-1)[1][0]).toMatchObject({
+    expect(mutateCache.mock.lastCall[2].events[0]).toMatchObject({
       organizer: { name: 'Example Organizer', email: 'alice@example.com' },
       attendees: [{ email: 'alice@example.com', status: 'declined' }], myStatus: 'declined',
     });

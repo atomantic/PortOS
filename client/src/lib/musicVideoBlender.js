@@ -9,13 +9,13 @@
  *
  * The rules the server also applies (setting limits, what a film option
  * accepts, which renders a bulk request takes, when the Shots step is done)
- * are imported from `server/lib/musicVideoBlender.js`, the one definition.
+ * are imported from `server/lib/musicVideo/musicVideoBlender.js`, the one definition.
  */
 import { formatCount, formatTimecode } from '../utils/formatters.js';
 import {
   MUSIC_VIDEO_BLENDER_SETTING_LIMITS, MUSIC_VIDEO_BLENDER_SOURCE_PATH, MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS,
   blenderEffectiveOptions, blenderOptionValueProblem, blenderRenderWanted, blenderShotsReady, summarizeBlenderShots,
-} from '../../../server/lib/musicVideoBlender.js';
+} from '../../../server/lib/musicVideo/musicVideoBlender.js';
 
 export { blenderEffectiveOptions, blenderShotsReady, summarizeBlenderShots };
 export const BLENDER_SOURCE_PATH = MUSIC_VIDEO_BLENDER_SOURCE_PATH;

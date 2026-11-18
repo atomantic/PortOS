@@ -1,5 +1,5 @@
 /** Overflow repairs are proposals until every original source chunk approves. */
-import { chunkRawText } from '../../lib/catalogChunking.js';
+import { chunkRawText } from '../../lib/catalog/catalogChunking.js';
 import { sanitizeCharacter } from '../../lib/storyBible.js';
 import { runStageScopedInlineLLM } from '../stageRunner.js';
 

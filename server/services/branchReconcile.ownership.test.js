@@ -9,12 +9,12 @@
  * permutations there, and a case here only for a new outcome or boundary.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, appendFile, unlink } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, appendFile, unlink, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { execGit } from '../lib/execGit.js';
-import { materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
+import { attachBareOrigin, materializeGitRepo, SKIP_HEAVY_INTEGRATION } from '../lib/gitTestRepo.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { captureCompletedCheckouts } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
@@ -26,7 +26,7 @@ vi.mock('../lib/paths.js', async importOriginal => makePathsProxy(await importOr
 afterAll(cleanupTempDataRoots);
 
 const { injected, freshInjection } = vi.hoisted(() => {
-  const fresh = () => ({ statusPath: null, beforeRemove: new Map(), owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, gitSpawns: [], gitInFlight: new Set() });
+  const fresh = () => ({ statusPath: null, beforeRemove: new Map(), owners: [], policies: [], app: null, schedule: { tasks: {}, executions: {} }, forge: {}, occupied: new Set(), unprobed: new Set(), gitSpawns: [], gitInFlight: new Set() });
   return { injected: fresh(), freshInjection: fresh };
 });
 vi.mock('../lib/execGit.js', async (importOriginal) => {
@@ -62,7 +62,7 @@ vi.mock('./taskScheduleStore.js', async importOriginal => ({
   ...await importOriginal(), loadSchedule: async () => injected.schedule,
   updateSchedule: async mutate => (await mutate(injected.schedule)).result,
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: injected.owners !== null,
     agents: injected.owners && Object.fromEntries(injected.owners.map(agent => [agent.id, agent])) }),
 }));
@@ -86,6 +86,20 @@ vi.mock('./mergedPrEvidence.js', async (importOriginal) => ({
   },
   readMergedPrDelivery: async (repoPath, branch, prUrl) => ({ prUrl, prHead: injected.forge[branch].head }),
 }));
+
+// The same forge fact at the boundary merged retirement asks it: a PR merged
+// at exactly this head.
+vi.mock('./prProbe.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isMergedPrHead: async (repoPath, branch, head) => Boolean(head) && injected.forge[branch]?.head === head,
+}));
+// lsof is absent on some CI hosts and fails closed there; a checkout a process
+// sits in is named per test instead.
+// A checkout in `unprobed` is one the probe cannot see into (Windows, no lsof).
+vi.mock('../lib/processCwdProbe.js', () => {
+  const probe = async dir => (injected.unprobed.has(dir) ? null : injected.occupied.has(dir));
+  return { probeProcessCwdInside: probe, hasProcessCwdInside: async dir => await probe(dir) !== false };
+});
 
 // Keep the run hermetic: the verdict ledger otherwise reads this install's
 // real CoS data directory.
@@ -134,6 +148,35 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
     return path;
   }
+
+  /**
+   * A clean checkout of a branch with one commit of its own that has landed on
+   * main: by a no-ff merge (main contains the head by ancestry), as a
+   * rebase-merge replays it (a patch-equivalent commit, a different SHA), or
+   * squashed into one new commit.
+   */
+  async function addMergedTree(path, branch, how) {
+    await addTree(path, branch);
+    const file = `${branch.replaceAll('/', '-')}.txt`;
+    await writeFile(join(path, file), `${branch} work\n`);
+    await execGit(['add', file], path);
+    await execGit(['commit', '-m', `feat: ${branch}`], path);
+    if (how === 'no-ff') await execGit(['merge', '--no-ff', '-m', `Merge ${branch}`, branch], repo);
+    else if (how === 'squash') {
+      await execGit(['merge', '--squash', branch], repo);
+      await execGit(['commit', '-m', `feat: ${branch} (squash)`], repo);
+    }
+    // -x keeps the replayed SHA distinct even within the same second.
+    else await execGit(['cherry-pick', '-x', (await execGit(['rev-parse', 'HEAD'], path)).stdout.trim()], repo);
+    return path;
+  }
+  /** Backdate the activity branch-reconcile reads (directory, index, HEAD log) past the idle window. */
+  async function idle(path) {
+    const gitDir = (await execGit(['rev-parse', '--absolute-git-dir'], path)).stdout.trim();
+    const then = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    for (const stamp of [join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD'), path]) await utimes(stamp, then, then);
+  }
+  const head = async ref => (await execGit(['rev-parse', ref], repo)).stdout.trim();
 
   const branches = async () => (await execGit(['branch', '--format=%(refname:short)'], repo)).stdout.trim().split('\n');
   // Git expands Windows' short TEMP spelling and emits forward slashes; the
@@ -266,7 +309,9 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
   it('preserves each tree whose new owner, lock or status failure appears before the early reaper fallback', async () => {
     const root = join(repo, '.claude', 'worktrees');
     const trees = {};
-    for (const change of ['owner', 'lock', 'status']) trees[change] = await addTree(join(root, `fallback-${change}`), `fix/fallback-${change}`);
+    // Each branch's own commit was rebase-merged, so the trees are merged work
+    // rather than new branches the reaper would hold before removal (#16625).
+    for (const change of ['owner', 'lock', 'status']) trees[change] = await addMergedTree(join(root, `fallback-${change}`), `fix/fallback-${change}`, 'rebase');
     injected.beforeRemove.set(trees.owner, async () => { injected.owners = [{ id: 'agent-new-owner', status: 'running', workspacePath: trees.owner }]; });
     injected.beforeRemove.set(trees.lock, () => execGit(['worktree', 'lock', trees.lock], repo));
     injected.beforeRemove.set(trees.status, async () => { injected.statusPath = trees.status; });
@@ -314,6 +359,110 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(next.remaining).toContainEqual(recreated);
     expect(next).not.toHaveProperty('retirementObligations');
     expect(existsSync(path)).toBe(true);
+  });
+
+  // A `/do:next` claim: a sibling checkout on a pushed branch that has no
+  // commits yet. Its head equals main, so ancestry alone reads it as merged;
+  // reconcile used to retire it and delete the local branch (#16625).
+  it('holds a fresh published sibling claim checkout that has no commits of its own', async () => {
+    await attachBareOrigin(scratch, repo);
+    const sibling = await addTree(join(scratch, 'next-issue-7'), 'next/issue-7');
+    await execGit(['push', '-u', 'origin', 'next/issue-7'], sibling);
+    const log = vi.spyOn(console, 'log');
+
+    const result = await reconcileWithoutOwners();
+    const kept = log.mock.calls.map(([line]) => String(line)).filter(line => line.includes('next/issue-7'));
+    log.mockRestore();
+
+    expect(result.cleaned).toEqual([]);
+    expect(result.skipped).toContainEqual(expect.objectContaining({ branch: 'next/issue-7', reason: 'branch-has-no-own-commits' }));
+    expect(existsSync(sibling)).toBe(true);
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).toContain(`branch refs/heads/next/issue-7`);
+    expect(await branches()).toContain('next/issue-7');
+    // The hold is named on stdout: a deliberate keep, not a failure.
+    expect(kept).toContainEqual(expect.stringMatching(/^⏭️ branch-reconcile: kept next\/issue-7 and .*next-issue-7: branch-has-no-own-commits$/));
+  });
+
+  it('retires a new published branch once a PR merged exactly its head', async () => {
+    await attachBareOrigin(scratch, repo);
+    const sibling = await addTree(join(scratch, 'next-issue-8'), 'next/issue-8');
+    await execGit(['push', '-u', 'origin', 'next/issue-8'], sibling);
+    injected.forge['next/issue-8'] = { head: await head('next/issue-8'), mergedAt: new Date().toISOString() };
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'next/issue-8' }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: ['next/issue-8'], skipped: [] });
+    expect(existsSync(sibling)).toBe(false);
+    expect(await branches()).not.toContain('next/issue-8');
+  });
+
+  it.each([['rebase', 'feat/rebased'], ['squash', 'feat/squashed']])('retires a %s-merged branch with its own commits from a clean checkout outside the managed roots', async (how, branch) => {
+    const path = await addMergedTree(join(external, how), branch, how);
+    expect(await execGit(['merge-base', '--is-ancestor', branch, 'main'], repo, { ignoreExitCode: true })).toMatchObject({ exitCode: 1 });
+
+    const result = await cleanupMerged(repo, 'main', [{ branch }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: [branch], skipped: [] });
+    expect(existsSync(path)).toBe(false);
+    expect(await branches()).not.toContain(branch);
+  });
+
+  it('retires a no-ff merged branch from an idle checkout outside the managed roots', async () => {
+    const path = await addMergedTree(join(external, 'merged'), 'feat/merged', 'no-ff');
+    await idle(path);
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'feat/merged' }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: ['feat/merged'], skipped: [] });
+    expect(existsSync(path)).toBe(false);
+    expect(await branches()).not.toContain('feat/merged');
+  });
+
+  // A registration whose directory is already gone has no process and no
+  // activity to wait on; holding it would strand the merged branch behind it.
+  it('retires a no-ff merged branch whose checkout directory is already gone', async () => {
+    const path = await addMergedTree(join(external, 'vanished'), 'feat/vanished', 'no-ff');
+    await rm(path, { recursive: true, force: true });
+
+    const result = await cleanupMerged(repo, 'main', [{ branch: 'feat/vanished' }], { activeAgentIds: new Set() });
+
+    expect(result).toMatchObject({ cleaned: ['feat/vanished'], skipped: [] });
+    expect((await execGit(['worktree', 'list', '--porcelain'], repo)).stdout).not.toContain('feat/vanished');
+    expect(await branches()).not.toContain('feat/vanished');
+  });
+
+  // Each of these reads as merged by ancestry, and each would retire without
+  // its one hold: the published branch is rebase-merged work, the others are
+  // idle no-ff merges unless the case says otherwise.
+  it('holds a merged branch that is published, still used, reserved or unreadable', async () => {
+    await attachBareOrigin(scratch, repo);
+    const published = await addMergedTree(join(external, 'published'), 'feat/published', 'rebase');
+    await execGit(['push', '-u', 'origin', 'feat/published'], published);
+    const occupied = await addMergedTree(join(external, 'occupied'), 'feat/occupied', 'no-ff');
+    await idle(occupied);
+    injected.occupied.add(await gitCheckoutPath(occupied));
+    const touched = await addMergedTree(join(external, 'touched'), 'feat/touched', 'no-ff');
+    // Quiet for two hours, but no probe can see into it: a day is required.
+    const unprobed = await addMergedTree(join(external, 'unprobed'), 'feat/unprobed', 'no-ff');
+    await idle(unprobed);
+    injected.unprobed.add(await gitCheckoutPath(unprobed));
+    // The hermetic origin is no GitHub repository, so the issue reservation is unreadable.
+    const claim = await addMergedTree(join(external, 'next-issue-9'), 'next/issue-9', 'no-ff');
+    await idle(claim);
+    const expired = await addMergedTree(join(external, 'expired'), 'feat/expired', 'no-ff');
+    await idle(expired);
+    // `git gc` expires every reflog entry of a branch idle past gc.reflogExpire.
+    await execGit(['reflog', 'expire', '--expire=now', '--expire-unreachable=now', 'refs/heads/feat/expired'], repo);
+    const cases = [['feat/published', 'published-claim-unmerged'], ['feat/occupied', 'checkout-process-active'],
+      ['feat/touched', 'checkout-recently-touched'], ['feat/unprobed', 'checkout-process-unverified'], ['next/issue-9', 'claim-issue-unverified'], ['feat/expired', 'branch-own-commits-unreadable']];
+
+    const result = await cleanupMerged(repo, 'main', cases.map(([branch]) => ({ branch })), { activeAgentIds: new Set() });
+
+    expect(result.cleaned).toEqual([]);
+    expect(result.skipped.map(({ branch, reason }) => [branch, reason])).toEqual(cases);
+    expect(result.skipped.find(row => row.branch === 'feat/touched').retryAt).toEqual(expect.any(String));
+    for (const path of [published, occupied, touched, unprobed, claim, expired]) expect(existsSync(path)).toBe(true);
+    expect(await branches()).toEqual(expect.arrayContaining(cases.map(([branch]) => branch)));
   });
 
   it('preserves a prunable checkout whose missing pointer makes Git report the parent clean', async () => {

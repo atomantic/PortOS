@@ -3,15 +3,15 @@ import { posix } from 'node:path';
 /**
  * The DB-backed test files, relative to the Vitest root (server/). Exported
  * as the single source of truth: the DB config's `include` uses it, and the drift
- * guard in lib/db.guards.test.js imports it to assert no checkHealth()-gated
+ * guard in lib/db.inventory.guard.test.js imports it to assert no checkHealth()-gated
  * suite is left out. `**\/db.test.js` only matches a file named exactly
  * `db.test.js` — a `<name>.db.test.js` suite is NOT auto-included and must be
  * listed explicitly below (the drift guard fails the build if you forget).
  */
 export const DB_TEST_INCLUDE = [
-  'services/catalogDB.merge.db.test.js',
+  'services/catalog/catalogDB.merge.db.test.js',
   'services/catalogIdentity/protocol.db.test.js',
-  'services/catalogDB.identityIntegration.db.test.js',
+  'services/catalog/catalogDB.identityIntegration.db.test.js',
   'services/trackAlbumMembership.db.test.js',
   'services/stackerNews.db.test.js',
   'services/peerExecutionLedger.db.test.js',
@@ -29,17 +29,17 @@ export const DB_TEST_INCLUDE = [
   'services/mediaAssetIndex/galleryCollections.db.test.js',
   'services/dbAdmin.db.test.js',
   'services/backup.db.test.js',
-  'services/catalogDB.test.js',
-  'services/catalogDB.facets.db.test.js',
+  'services/catalog/catalogDB.test.js',
+  'services/catalog/catalogDB.facets.db.test.js',
   'services/catalogDB/listIngredients.db.test.js',
   'services/catalogDB/payloadKey.db.test.js',
-  'services/catalogDB.media.db.test.js',
-  'services/catalogPrimitiveUsage.db.test.js',
-  'services/catalogStories.db.test.js',
-  'services/catalogUniverseFiling.db.test.js',
-  'services/catalogSync.tombstoneRevival.db.test.js',
-  'services/catalogSync.changeClock.db.test.js',
-  'services/catalogSync.pendingParents.db.test.js',
+  'services/catalog/catalogDB.media.db.test.js',
+  'services/catalog/catalogPrimitiveUsage.db.test.js',
+  'services/catalog/catalogStories.db.test.js',
+  'services/catalog/catalogUniverseFiling.db.test.js',
+  'services/catalog/catalogSync.tombstoneRevival.db.test.js',
+  'services/catalog/catalogSync.changeClock.db.test.js',
+  'services/catalog/catalogSync.pendingParents.db.test.js',
   'services/humanActivity.db.test.js',
   'services/gmailActivityIdentity.db.test.js',
   'services/goalScorecard.db.test.js',
@@ -53,9 +53,9 @@ export const DB_TEST_INCLUDE = [
   'services/privacyChanges.db.test.js',
   'services/privacyBrokers.db.test.js',
   'services/privacyOptOut.db.test.js',
-  'services/providerGraphStore.db.test.js',
-  'services/catalogCanonProjection.test.js',
-  'services/catalogRefResolver.test.js',
+  'services/provider/providerGraphStore.db.test.js',
+  'services/catalog/catalogCanonProjection.test.js',
+  'services/catalog/catalogRefResolver.test.js',
   'lib/db/schema/beeper.db.test.js',
   'lib/db/schema/catalogMediaLibrarySeed.db.test.js',
   'lib/db/schema/initDbSql.db.test.js',
@@ -79,10 +79,10 @@ export const DB_TEST_INCLUDE = [
   'scripts/migrateMemoryToPg.db.test.js',
   'lib/db/schema/audit.db.test.js',
   'lib/db/schema/syncFeed.db.test.js',
-  'services/cosTaskRepository.db.test.js',
+  'services/cos/cosTaskRepository.db.test.js',
   'services/releaseSynchronizationStore.db.test.js',
   'scripts/db-migrations/018-cos-tasks-from-files.db.test.js',
-  'services/cosAgentRepository.db.test.js',
+  'services/cos/cosAgentRepository.db.test.js',
   'scripts/db-migrations/020-cos-agents-from-state.db.test.js',
   'scripts/db-migrations/022-unlock-canon-joined-records.db.test.js',
   'scripts/db-migrations/023-owned-records-join-universe-canon.db.test.js',

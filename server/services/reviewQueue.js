@@ -31,7 +31,7 @@ import { randomUUID } from 'node:crypto';
 import * as brain from './brain.js';
 import * as brainStorage from './brainStorage.js';
 import * as askConversations from './askConversations.js';
-import * as cosTaskStore from './cosTaskStore.js';
+import * as cosTaskStore from './cos/cosTaskStore.js';
 import * as messageDrafts from './messageDrafts.js';
 import { HEALTH_RESOLUTION_PREFIX } from './healthAlertResolutions.js';
 import { buildHealthAlertInvestigation } from './healthAlertAgentTask.js';
@@ -439,7 +439,7 @@ const PRODUCERS = [
     drillTo: '/cos/agents?feedback=needs-feedback',
     views: ['today', 'all', 'history'],
     async gather(limit = REVIEW_QUEUE_SOURCE_READ_LIMIT, ctx = {}) {
-      const { getPendingAgentFeedback } = await import('./cosAgentFeedback.js');
+      const { getPendingAgentFeedback } = await import('./cos/cosAgentFeedback.js');
       const pending = await getPendingAgentFeedback({ includeUnavailable: ctx.view === 'history' });
       const items = [
         ...(Array.isArray(pending?.agents) ? pending.agents : []),
@@ -1253,7 +1253,7 @@ const SOURCE_ACTIONS = Object.freeze({
   }),
   feedback: Object.freeze({
     rate: async (id, input) => {
-      const { submitAgentFeedback } = await import('./cosAgentFeedback.js');
+      const { submitAgentFeedback } = await import('./cos/cosAgentFeedback.js');
       return submitAgentFeedback(id, input);
     },
   }),

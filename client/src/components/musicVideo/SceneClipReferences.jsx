@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds, resolvedFramePickIds,
-} from '../../../../server/lib/musicVideoConditioning.js';
+} from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import { formatCount } from '../../utils/formatters.js';
-import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
-import { isPerformanceScene } from '../../../../server/lib/musicVideoShotTiming.js';
+import { localModelTakesSongAudio } from '../../../../server/lib/musicVideo/musicVideoLocalModels.js';
+import { isPerformanceScene } from '../../../../server/lib/musicVideo/musicVideoShotTiming.js';
 
 const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 const nameOf = (ref) => ref.label || ref.role || 'Reference';

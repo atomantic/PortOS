@@ -12,9 +12,9 @@ import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { isOpencodeCommand, prefixOpencodeModel, getOpencodeLocalProviderNamespace } from '../lib/providerModels.js';
+import { isOpencodeCommand, prefixOpencodeModel, getOpencodeLocalProviderNamespace } from '../lib/provider/providerModels.js';
 import { parseAgentLine } from '../lib/opencodeStream.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 
 /**
  * The configured OpenCode TUI provider preset that drives a given local runtime,

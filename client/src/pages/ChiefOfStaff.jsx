@@ -996,7 +996,7 @@ export default function ChiefOfStaff() {
   // would tick Active to 1 while Pending still read 1 until that fetch returned,
   // which is the "1 pending and 1 active" this page is the headline surface for.
   // Same settlement TasksTab makes from the same two arrays, so the header cards
-  // and the task list below them cannot disagree. See lib/cosSpawnWindow.js.
+  // and the task list below them cannot disagree. See lib/cos/cosSpawnWindow.js.
   const runningAgentByTaskId = useMemo(() => runningAgentsByTaskId(agents), [agents]);
   const pendingTaskCount = useMemo(() =>
     needsTasks ? withoutSpawningTasks(tasks.user?.grouped?.pending, runningAgentByTaskId).length

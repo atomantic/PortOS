@@ -23,7 +23,7 @@ vi.mock('./localLlmPlayground.js', () => ({
 // and `listProviders` is the wrapper that unwraps it. Mocked in that shape on
 // purpose: a bare-array mock is exactly what let the matcher ship returning null
 // for every runtime while this suite stayed green.
-vi.mock('./providers.js', () => {
+vi.mock('./provider/providers.js', () => {
   const getAllProviders = vi.fn(async () => ({ activeProvider: null, providers: [] }));
   return {
     getAllProviders,
@@ -56,14 +56,14 @@ vi.mock('../lib/cliChildEnv.js', () => ({ buildCliChildEnv: vi.fn(() => ({ PATH:
 
 const { listRuntimeModels } = await import('./localModelAssessments.js');
 const { runLocalLlmTest, runEndpointLlmTest } = await import('./localLlmPlayground.js');
-const { getAllProviders } = await import('./providers.js');
+const { getAllProviders } = await import('./provider/providers.js');
 const { getModelCapabilities } = await import('./ollamaManager.js');
 const { bufferedSpawn } = await import('../lib/bufferedSpawn.js');
 const { runStreamingCommand } = await import('../lib/streamingSpawn.js');
 const { claimHeavyLocalJob } = await import('../lib/heavyJobClaim.js');
 const {
   getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest,
-  resolveModelCapabilities, SANDBOX_FILES, __resetFixtureCaches,
+  resolveModelCapabilities, SANDBOX_FILES, __resetFixtureCaches, sandboxFixturePath,
 } = await import('./modelCapabilityTests.js');
 const { loadResults, saveResult, deleteResult } = await import('./modelCapabilityTestStore.js');
 const { RHETORIC_REFERENCE_SET } = await import('../lib/postRhetoric.js');
@@ -100,6 +100,14 @@ afterEach(async () => {
 // subdirectories the per-test hooks above clean (#9032).
 afterAll(async () => {
   await rm(TEST_ROOT, { recursive: true, force: true });
+});
+
+describe('sandboxFixturePath', () => {
+  // Joined with pathWithin(): a name that climbs out of the shipped fixture throws instead of being hashed.
+  it('names a shipped sandbox file and refuses a name that climbs out of the fixture', async () => {
+    expect(await readFile(sandboxFixturePath(SANDBOX_FILES.data), 'utf8')).toMatch(/\S/);
+    expect(() => sandboxFixturePath('../../vision/bicycle-bench.svg')).toThrow(RangeError);
+  });
 });
 
 describe('resolveModelCapabilities', () => {

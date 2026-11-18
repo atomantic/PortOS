@@ -29,10 +29,10 @@
  * Nothing here calls a provider: it only reads the provider registry.
  */
 
-import { isTuiProvider } from '../../lib/providerTypes.js';
-import { resolveCliEffort } from '../../lib/providerModels.js';
+import { isTuiProvider } from '../../lib/provider/providerTypes.js';
+import { resolveCliEffort } from '../../lib/provider/providerModels.js';
 import { captureSystemCapabilities, isHardwareCompatible, withProviderHardwareCompatibility } from '../../lib/systemCapabilities.js';
-import { normalizeMusicVideoLlm } from '../../lib/musicVideoAutomation.js';
+import { normalizeMusicVideoLlm } from '../../lib/musicVideo/musicVideoAutomation.js';
 
 const transportOf = (provider) => (provider?.type === 'tui' ? 'tui' : provider?.type === 'cli' ? 'cli' : 'api');
 
@@ -47,7 +47,7 @@ async function launchable(provider) {
  */
 async function preferredTuiProvider() {
   // Lazy: the provider registry (and its toolkit) is only needed when nothing is pinned.
-  const { getActiveProvider, listProviders } = await import('../providers.js');
+  const { getActiveProvider, listProviders } = await import('../provider/providers.js');
   const providers = await listProviders().catch(() => []);
   const capabilities = captureSystemCapabilities();
   const eligible = [];

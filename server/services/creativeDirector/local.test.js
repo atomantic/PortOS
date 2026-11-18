@@ -21,7 +21,7 @@ vi.mock('../mediaCollections.js', () => ({
 // local.js imports catalogDB for the #1808 catalog-seed path; mock it so this
 // dispatcher test doesn't pull in the real Postgres/instances/peer-sync chain
 // (none of these cases pass catalogIngredientIds, so the resolve is a no-op).
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   resolveIngredientsByIds: vi.fn(async () => []),
   linkIngredientsToCreativeDirector: vi.fn(async () => []),
   cdRefRoleForType: (type) => type,

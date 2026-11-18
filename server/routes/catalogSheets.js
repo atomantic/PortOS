@@ -7,11 +7,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { catalogSheetRenderSchema } from '../lib/catalogValidation.js';
-import { getIngredient, listMediaForIngredient } from '../services/catalogDB.js';
+import { catalogSheetRenderSchema } from '../lib/catalog/catalogValidation.js';
+import { getIngredient, listMediaForIngredient } from '../services/catalog/catalogDB.js';
 import { listJobs } from '../services/mediaJobQueue/index.js';
 import { resolveImageInputPath } from '../lib/pathSafety.js';
-import { listCatalogSheetVariantsFor, previewCatalogSheet, removeCatalogPointerSheet, renderCatalogSheet } from '../services/catalogSheet.js';
+import { listCatalogSheetVariantsFor, previewCatalogSheet, removeCatalogPointerSheet, renderCatalogSheet } from '../services/catalog/catalogSheet.js';
 
 const router = Router();
 

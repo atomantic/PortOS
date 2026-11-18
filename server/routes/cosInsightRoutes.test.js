@@ -3,20 +3,20 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import insightRoutes from './cosInsightRoutes.js';
 
-vi.mock('../services/cosTaskStore.js', () => ({
+vi.mock('../services/cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn()
 }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => [])
 }));
-vi.mock('../services/cosHealthMonitor.js', () => ({
+vi.mock('../services/cos/cosHealthMonitor.js', () => ({
   runHealthCheck: vi.fn(),
   getHealthStatus: vi.fn()
 }));
-vi.mock('../services/cosAgentFeedback.js', () => ({
+vi.mock('../services/cos/cosAgentFeedback.js', () => ({
   getPendingAgentFeedbackCount: vi.fn()
 }));
-vi.mock('../services/cosReports.js', () => ({
+vi.mock('../services/cos/cosReports.js', () => ({
   getTodayActivity: vi.fn(),
   getRecentTasks: vi.fn()
 }));
@@ -25,7 +25,7 @@ vi.mock('../services/taskLearning.js', () => ({
   getLearningInsights: vi.fn()
 }));
 
-vi.mock('../services/cosActivityCalendar.js', () => ({
+vi.mock('../services/cos/cosActivityCalendar.js', () => ({
   getActivityCalendar: vi.fn()
 }));
 
@@ -46,13 +46,13 @@ vi.mock('../services/notifications.js', () => ({
   getNotifications: vi.fn().mockResolvedValue([])
 }));
 
-import { getAgents } from '../services/cosAgentLifecycle.js';
-import { getAllTasks } from '../services/cosTaskStore.js';
-import { getHealthStatus, runHealthCheck } from '../services/cosHealthMonitor.js';
-import { getPendingAgentFeedbackCount } from '../services/cosAgentFeedback.js';
-import { getRecentTasks, getTodayActivity } from '../services/cosReports.js';
+import { getAgents } from '../services/cos/cosAgentLifecycle.js';
+import { getAllTasks } from '../services/cos/cosTaskStore.js';
+import { getHealthStatus, runHealthCheck } from '../services/cos/cosHealthMonitor.js';
+import { getPendingAgentFeedbackCount } from '../services/cos/cosAgentFeedback.js';
+import { getRecentTasks, getTodayActivity } from '../services/cos/cosReports.js';
 import * as taskLearning from '../services/taskLearning.js';
-import { getActivityCalendar } from '../services/cosActivityCalendar.js';
+import { getActivityCalendar } from '../services/cos/cosActivityCalendar.js';
 import * as goalProgress from '../services/goalProgress.js';
 import * as decisionLog from '../services/decisionLog.js';
 import * as notifications from '../services/notifications.js';

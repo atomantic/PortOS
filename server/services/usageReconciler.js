@@ -59,9 +59,9 @@ import {
   parseKimiSessionIndex,
   parseKimiWireLog,
   totalTranscriptTokens
-} from '../lib/providerTranscriptUsage.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
-import { commandBasename } from '../lib/providerModels.js';
+} from '../lib/provider/providerTranscriptUsage.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
+import { commandBasename } from '../lib/provider/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getRecentCodexUsageClaims, recordRunUsage } from './usage.js';
 import { grokFastRepairId, grokTurnRepairId } from './grokUsageRepair.js';
@@ -284,7 +284,7 @@ function attributedModel(recordedModel, transcriptModel, singleModel) {
  * service stays reachable from the completion hook without pulling in the
  * provider graph.
  *
- * The ids match `lib/providerFamilies.js`'s family ids on purpose: a sibling
+ * The ids match `lib/provider/providerFamilies.js`'s family ids on purpose: a sibling
  * session found in a run's workspace is mapped back to an enabled provider
  * through `familyForProvider`, so the two vocabularies have to agree — with
  * one exception, documented at `resolveFamilyProvider`: `kimi` has no
@@ -857,7 +857,7 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
   return records;
 }
 
-// `lib/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES
+// `lib/provider/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES
 // (see that file's docblock) because Kimi Code has no subscription plan and no
 // `/usage` panel for `providerUsage.js` to scrape — `familyForProvider` can
 // therefore never return `'kimi'`. This is a TRANSCRIPT family, not a
@@ -901,9 +901,9 @@ export function resolveFamilyProvider(providers, family, measured = null) {
 }
 
 /**
- * True for a run whose usage is entirely its own request: a bounded API
- * completion (`services/apiCompletionRun.js` stamps `selfContainedUsage`). One
- * HTTP request writes no session file and cannot launch a CLI, so no transcript
+ * True for a bounded API completion or an ephemeral subscription text turn
+ * (`selfContainedUsage`). Neither writes a native session or launches nested
+ * agents, so no transcript
  * is read or claimed for it: not its own provider family's (an API record may
  * be called `grok-api`) and no nested one. The stamp does not depend on the
  * provider having reported counts; a run that got none keeps its estimate and
@@ -918,7 +918,7 @@ export const isSelfContainedRun = (run) => run?.selfContainedUsage === true;
  * counted once, as measured. Read from the record rather than passed alongside
  * it, so a later backfill of the same run sees the same numbers.
  */
-function reportedRunUsage(run) {
+export function reportedRunUsage(run) {
   const reported = run?.reportedUsage;
   if (!reported || typeof reported !== 'object' || Array.isArray(reported)) return null;
   const fields = {};
@@ -996,7 +996,8 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
       cacheReadTokens: 0,
       cacheWriteTokens: 0,
       source: estimateSource ?? 'estimate',
-      ...(reported || {})
+      ...(reported || {}),
+      ...(run?.nativeUsageUnpersisted === true ? { nativeUsageUnpersisted: true } : {}),
     };
 
   const siblings = [];
@@ -1027,7 +1028,7 @@ export async function reconcileRunUsage(run, estimate, { home = homedir(), provi
 /**
  * The run-completion usage path, shared by the AI Toolkit hook
  * (`services/bootstrap.js`) and CoS agent runs
- * (`services/agentRunTracking.js`) so both record the same shape from the same
+ * (`services/agent/agentRunTracking.js`) so both record the same shape from the same
  * logic. Estimates tokens the legacy way, upgrades to the provider's measured
  * counts when a transcript can be found, and persists the result.
  *
@@ -1090,7 +1091,7 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   // for it. Its sibling pass is settled by definition, which also keeps the
   // backfill from scanning for it later.
   const selfContained = isSelfContainedRun(metadata);
-  const resolved = selfContained ? null : providers ?? await import('./providers.js')
+  const resolved = selfContained ? null : providers ?? await import('./provider/providers.js')
     .then((module) => module.listProviders())
     .catch(() => null);
   // Same condition `reconcileRunUsage` scans siblings under.

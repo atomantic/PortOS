@@ -4,7 +4,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, listBriefings } from '../services/cosReports.js';
+import { getBriefing, getLatestBriefing, getTodayActivity, getWhileAwayActivity, listBriefings } from '../services/cos/cosReports.js';
 import * as claudeChangelog from '../services/claudeChangelog.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';

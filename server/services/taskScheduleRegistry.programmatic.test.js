@@ -9,7 +9,7 @@ import { SCHEDULED_HANDLER_MODULES } from './scheduledHandlers/index.js';
 import { QUOTA_BURN_JOB_TYPES } from '../lib/quotaBurnConfig.js';
 import { planQuotaBurnStepConversion } from '../lib/quotaBurnLegacyConversion.js';
 import { QUOTA_BURN_JOB_CATALOG } from '../lib/quotaBurnConfig.js';
-import { sanitizeTaskMetadata } from '../lib/cosValidation.js';
+import { sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
 
 // The catalog row Quota Burn renders its job form from, keyed by param.
 const catalogParams = (taskType) => Object.fromEntries(
@@ -97,7 +97,7 @@ describe('programmatic scheduled handlers — shipped params', () => {
   });
 
   it('survives task-metadata sanitization unchanged', () => {
-    // taskMetadata is allow-listed (lib/cosValidation.js). A param the sanitizer
+    // taskMetadata is allow-listed (lib/cos/cosValidation.js). A param the sanitizer
     // doesn't know is silently dropped on the first save, so the shipped default
     // would quietly stop being what the handler runs.
     for (const taskType of PROGRAMMATIC_SCHEDULED_TASK_TYPES) {

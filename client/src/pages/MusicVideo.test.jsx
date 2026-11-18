@@ -4,7 +4,7 @@
  * preview and the attention row. Each step's own wiring is covered beside its
  * container in `components/musicVideo/stages/use*StageWiring.test.jsx`.
  */
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
@@ -27,10 +27,17 @@ import {
 import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 
 installMusicVideoPageHooks();
+beforeAll(async () => {
+  // Keep cold Vite transforms out of interaction waits on a loaded test host.
+  await Promise.all([
+    import('../components/musicVideo/ProjectWorkspace.jsx'),
+    import('../components/musicVideo/stages/ReviewStage.jsx'),
+  ]);
+});
 
 describe('MusicVideo project load recovery (#9761)', () => {
   it.each(['/music-video', '/music-video/mv-2/board'])('keeps failures visible and recovers without changing %s', async (path) => {
@@ -47,7 +54,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
     );
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Connection unavailable');
-    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No projects in progress/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
     expect(screen.getByTestId('loc')).toHaveTextContent(path);
     if (path === '/music-video') {
@@ -66,7 +73,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(screen.getByRole('button', { name: 'Retrying…' })).toBeDisabled();
     fireEvent.click(retry);
     expect(path === '/music-video' ? listMusicVideoProjectSummaries : getMusicVideoProject).toHaveBeenCalledTimes(3);
-    expect(screen.queryByText(/No music video projects yet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No projects in progress/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
 
     await act(async () => resolveRetry([PROJECT_NO_CLIP]));
@@ -82,7 +89,7 @@ describe('MusicVideo project load recovery (#9761)', () => {
   });
 
   it.each([
-    ['/music-video', /No music video projects yet/],
+    ['/music-video', /No projects in progress/],
     ['/music-video/missing-project', /Project not found/],
   ])('shows absence only after a successful read at %s', async (path, message) => {
     listMusicVideoProjects.mockResolvedValue(path === '/music-video' ? [] : [PROJECT_NO_CLIP]);
@@ -90,6 +97,160 @@ describe('MusicVideo project load recovery (#9761)', () => {
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo project status filter', () => {
+  it('batches linked catalog updates, adds an unlisted match and removes a match from a loaded later page', async () => {
+    const first = { ...PROJECT_WITH_CLIP, id: 'mv-first', name: 'First Page' };
+    const second = { ...PROJECT_NO_CLIP, id: 'mv-second', name: 'Second Page', status: 'complete', isCompleted: false };
+    const kept = { ...first, id: 'mv-kept', name: 'Kept Page' };
+    const hidden = { ...second, id: 'mv-hidden', name: 'Previously Completed', isCompleted: true };
+    let projects = [hidden, first, second, kept];
+    listMusicVideoProjectSummaries.mockImplementation(async ({ cursor, statusFilter }) => {
+      const matching = projects.filter(project => !statusFilter || project.isCompleted !== true);
+      const offset = Number(cursor ?? 0);
+      return { items: matching.slice(offset, offset + 1), total: matching.length,
+        nextCursor: offset + 1 < matching.length ? String(offset + 1) : null };
+    });
+    const filteredReads = () => listMusicVideoProjectSummaries.mock.calls.filter(([args]) => args.statusFilter);
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: first.name });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more projects' }));
+    await screen.findByRole('heading', { name: second.name });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more projects' }));
+    await screen.findByRole('heading', { name: kept.name });
+    const reads = filteredReads().length;
+
+    const unrelated = vi.fn(async () => []);
+    getMusicVideoCatalogCompletion.mockImplementationOnce(unrelated);
+    await pushSocket('catalog:assets-changed', { ingredientId: 'cat-unrelated' });
+    await waitFor(() => expect(unrelated).toHaveBeenCalledTimes(1));
+    expect(filteredReads()).toHaveLength(reads);
+
+    const entering = { ...hidden, isCompleted: false };
+    const leaving = { ...second, isCompleted: true };
+    projects = [entering, first, leaving, kept];
+    const completionRead = vi.fn(async () => [entering, leaving]);
+    getMusicVideoCatalogCompletion.mockImplementationOnce(completionRead);
+    await act(async () => {
+      await pushSocket('catalog:assets-changed', { ingredientId: 'cat-first' });
+      await pushSocket('catalog:primitive-changed', { ingredientId: 'cat-first' });
+      await pushSocket('catalog:assets-changed', { ingredientId: 'cat-second' });
+    });
+    expect(await screen.findByRole('heading', { name: entering.name })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: leaving.name })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: kept.name })).toBeInTheDocument();
+    expect(completionRead).toHaveBeenCalledExactlyOnceWith(['cat-first', 'cat-second'], expect.objectContaining({ silent: true }));
+    expect(filteredReads()).toHaveLength(reads + 1);
+    expect(getMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the grid on a failed catalog lookup and retries the same ingredients', async () => {
+    const completed = { ...PROJECT_NO_CLIP, status: 'complete', isCompleted: true };
+    const stale = { ...completed, isCompleted: false };
+    let current = completed;
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = !statusFilter || current.isCompleted === (statusFilter === 'completed') ? [current] : [];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    await screen.findByRole('heading', { name: completed.name });
+    current = stale;
+    getMusicVideoCatalogCompletion.mockRejectedValueOnce(new Error('Catalog temporarily unavailable')).mockResolvedValueOnce([stale]);
+    await pushSocket('catalog:assets-changed', { ingredientId: 'cat-temporary' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog temporarily unavailable');
+    expect(screen.getByRole('heading', { name: completed.name })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+    await screen.findByText('No completed projects.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: completed.name })).not.toBeInTheDocument();
+    expect(getMusicVideoCatalogCompletion.mock.calls.map(([ids]) => ids)).toEqual([['cat-temporary'], ['cat-temporary']]);
+  });
+
+  it('keeps index options available while the unfiltered picker loads', async () => {
+    let resolvePicker;
+    listMusicVideoProjectSummaries.mockImplementation(({ statusFilter }) => statusFilter
+      ? Promise.resolve({ items: [PROJECT_WITH_CLIP], total: 1, nextCursor: null })
+      : new Promise(resolve => { resolvePicker = resolve; }));
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: PROJECT_WITH_CLIP.name });
+    const picker = screen.getByLabelText('Project');
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    fireEvent.focus(picker);
+    expect(within(picker).getByRole('option', { name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+    await act(async () => resolvePicker({ items: [PROJECT_WITH_CLIP, { ...PROJECT_NO_CLIP, status: 'complete' }], total: 2, nextCursor: null }));
+    expect(within(picker).getByRole('option', { name: PROJECT_NO_CLIP.name })).toBeInTheDocument();
+  });
+
+  it('filters before paging, switches accessible controls, and opens the selected project', async () => {
+    const projects = [
+      { ...PROJECT_WITH_CLIP, name: 'Working', status: 'ready' },
+      { ...PROJECT_NO_CLIP, name: 'Finished', status: 'complete' },
+      { ...PROJECT_NO_CLIP, id: 'mv-failed', name: 'Failed', status: 'failed' },
+    ];
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = projects.filter(p => !statusFilter || (p.status === 'complete') === (statusFilter === 'completed'));
+      return { items, total: items.length, nextCursor: null };
+    });
+    getMusicVideoProject.mockImplementation(async id => projects.find(p => p.id === id));
+    render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'In Progress', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Failed' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Finished' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Completed', pressed: true })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Working' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(await screen.findByRole('heading', { name: 'Working' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Finished' })).toBeInTheDocument();
+    fireEvent.click(within(screen.getByTestId('mv-project-card-mv-2')).getByRole('button', { name: 'Open' }));
+    await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent('/music-video/mv-2'));
+    expect(updateMusicVideoProject).not.toHaveBeenCalled();
+  });
+});
+
+describe('MusicVideo name search spans every page (#16651)', () => {
+  const alpha = { ...PROJECT_WITH_CLIP, id: 'mv-alpha', name: 'Alpha', status: 'ready' };
+  const later = { ...PROJECT_NO_CLIP, id: 'mv-later', name: 'Zebra Finale', status: 'ready' };
+  const done = { ...PROJECT_NO_CLIP, id: 'mv-done', name: 'Zebra Archive', status: 'complete' };
+  const mockServer = () => listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter, q }) => {
+    const items = [alpha, later, done]
+      .filter(p => !statusFilter || (p.status === 'complete') === (statusFilter === 'completed'))
+      .filter(p => !q || p.name.toLowerCase().includes(q.toLowerCase()));
+    // Without a query only the first page (Alpha) is loaded; the Zebra projects sit on a later page.
+    const page = q ? items : items.filter(p => p.id === 'mv-alpha' || p.id === 'mv-done');
+    return { items: page, total: items.length, nextCursor: q ? null : (page.length < items.length ? '1' : null) };
+  });
+  const queryCalls = () => listMusicVideoProjectSummaries.mock.calls.map(([args]) => args).filter(args => args.q);
+
+  it('sends the typed query to the server with the status filter and keeps the box focused', async () => {
+    mockServer();
+    render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: 'Alpha' });
+    const box = screen.getByLabelText('Filter projects by name');
+    box.focus();
+    fireEvent.change(box, { target: { value: 'zebra' } });
+    expect(await screen.findByRole('heading', { name: 'Zebra Finale' })).toBeInTheDocument();
+    expect(queryCalls().at(-1)).toMatchObject({ q: 'zebra', statusFilter: 'in-progress' });
+    expect(screen.queryByRole('heading', { name: 'Alpha' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Filter projects by name')).toBe(box);
+    expect(document.activeElement).toBe(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Zebra Archive' })).toBeInTheDocument();
+    expect(queryCalls().at(-1)).toMatchObject({ q: 'zebra', statusFilter: 'completed' });
+  });
+
+  it('opens from a ?q= URL, shows the empty state, and clears back to the full list', async () => {
+    mockServer();
+    render(<MemoryRouter initialEntries={['/music-video?q=nomatch']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByText(/No projects match/)).toBeInTheDocument();
+    expect(queryCalls().every(args => args.q === 'nomatch')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Filter projects by name'), { target: { value: '' } });
+    expect(await screen.findByRole('heading', { name: 'Alpha' })).toBeInTheDocument();
   });
 });
 
@@ -118,7 +279,7 @@ describe('MusicVideo stage-only nav URLs (#10303)', () => {
         {MV_ROUTES}
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/No music video projects yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No projects in progress/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('loc')).toHaveTextContent(/^\/music-video$/));
     expect(screen.queryByText(/Project not found/)).not.toBeInTheDocument();
   });
@@ -871,13 +1032,15 @@ describe('MusicVideo main page project cards', () => {
       vocalStemFilename: 'electric-vocals.wav',
       midiTranscription: 'electric-midi.mid',
     };
-    listMusicVideoProjects.mockResolvedValueOnce([projectWithRender, PROJECT_NO_CLIP]);
+    listMusicVideoProjects.mockResolvedValue([projectWithRender, PROJECT_NO_CLIP]);
     renderMV();
 
     // The header's New project button is the only one (no duplicate card buttons)
     expect(await screen.findByRole('button', { name: /New project/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /New music video/i })).toBeNull();
 
+    // Completed projects are available under All.
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
     // Project cards grid exists below new project card
     const grid = await screen.findByTestId('mv-project-grid');
     expect(grid).toBeInTheDocument();
@@ -977,6 +1140,60 @@ describe('MusicVideo main page project cards', () => {
       fireEvent.click(confirmBtn);
     });
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
+
+  describe('deleting from the project grid keeps the reader in place', () => {
+    const A = { ...PROJECT_WITH_CLIP, id: 'mv-a', name: 'Alpha Video', createdAt: '2026-10-03T00:00:00.000Z' };
+    const B = { ...PROJECT_NO_CLIP, id: 'mv-b', name: 'Bravo Video', createdAt: '2026-10-02T00:00:00.000Z' };
+    const C = { ...PROJECT_WITH_CLIP, id: 'mv-c', name: 'Charlie Video', createdAt: '2026-10-01T00:00:00.000Z' };
+    const confirmDeleteOf = async (project) => {
+      const card = await screen.findByTestId(`mv-project-card-${project.id}`);
+      fireEvent.click(within(card).getByRole('button', { name: `Delete project ${project.name}` }));
+      const confirm = within(card).getByRole('button', { name: `Confirm delete project ${project.name}` });
+      confirm.focus();
+      await act(async () => { fireEvent.click(confirm); });
+    };
+
+    it('collapses the card, then moves focus to the next surviving card without scrolling', async () => {
+      deleteMusicVideoProject.mockResolvedValueOnce({ ok: true });
+      listMusicVideoProjects.mockResolvedValueOnce([A, B, C]);
+      renderMV();
+      const grid = await screen.findByTestId('mv-project-grid');
+      const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus');
+      await confirmDeleteOf(B);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-b')).toBeNull());
+      expect(screen.getByTestId('mv-project-grid')).toBe(grid);
+      const charlie = screen.getByTestId('mv-project-card-mv-c');
+      expect(document.activeElement).toBe(charlie.closest('[tabindex="-1"]'));
+      expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+      focusSpy.mockRestore();
+    });
+
+    it('falls back to the previous card for the last one and to the grid when none remain', async () => {
+      deleteMusicVideoProject.mockResolvedValue({ ok: true });
+      listMusicVideoProjects.mockResolvedValueOnce([A, B]);
+      renderMV();
+      const grid = await screen.findByTestId('mv-project-grid');
+      await confirmDeleteOf(B);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-b')).toBeNull());
+      expect(document.activeElement).toBe(screen.getByTestId('mv-project-card-mv-a').closest('[tabindex="-1"]'));
+      await confirmDeleteOf(A);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-a')).toBeNull());
+      expect(screen.getByTestId('mv-project-grid')).toBe(grid);
+      expect(document.activeElement).toBe(grid);
+    });
+
+    it('keeps the card and its delete action when the delete fails', async () => {
+      deleteMusicVideoProject.mockRejectedValueOnce(new Error('Disk busy'));
+      listMusicVideoProjects.mockResolvedValueOnce([A, B]);
+      renderMV();
+      await confirmDeleteOf(A);
+      await waitFor(() => expect(deleteMusicVideoProject).toHaveBeenCalledTimes(1));
+      const card = screen.getByTestId('mv-project-card-mv-a');
+      expect(card.closest('[inert]')).toBeNull();
+      expect(within(card).getByRole('button', { name: `Delete project ${A.name}` })).toBeInTheDocument();
+      expect(screen.getByTestId('mv-project-card-mv-b')).toBeInTheDocument();
+    });
   });
 
   it('organizes project cards with the newest one first', async () => {

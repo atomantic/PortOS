@@ -33,7 +33,7 @@ import { getUserTimezone } from './userTimezone.js';
 import { localDayKey, forEachEventPage } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { buildMarkers } from '../lib/markedSection.js';
-import { getProviderById, getActiveProvider } from './providers.js';
+import { getProviderById, getActiveProvider } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 
 const GOALS_FILE = join(PATHS.digitalTwin, 'goals.json');

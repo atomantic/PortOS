@@ -61,7 +61,7 @@ need relaunching.
 
 ## Unattended recovery gates
 
-Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Six gates in `server/services/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Five of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.
+Nobody is watching a CoS TUI session, so nothing types into it when the model stops early. Six gates in `server/services/agent/agentTuiSpawning.js` watch the PTY stream and act on one shared 5s poll. Five of them prefer a nudge into the live session over a kill, because the TUI still holds the whole conversation; only the retry stall ends the run, since a request the provider never answers will not answer the next one either. No gate reaps a run on the clock alone — the wall-clock ceiling was removed deliberately, after it killed agents 30 seconds past a merged PR.
 
 | Gate | What it sees | What it does |
 | --- | --- | --- |
@@ -76,7 +76,7 @@ The stall gate is the one with no signal to match on: the model narrates its nex
 
 It stays out of the way of the other four: it is polled last, it waits for the prompt to actually be in, and it skips a run that already wrote its completion sentinel or is mid-`finish()`. Its post-nudge wait is measured from the nudge rather than from output, because a session wedged below its composer never echoes the paste. A session that prints for 30s past a nudge took the hint and gets its full budget back, so a long run that stalls again hours later is not treated as a second strike.
 
-A session that ignores all three nudges is wedged below its composer, and no paste will reach it. Rather than give up silently — leaving a run holding its execution lane with nothing to show for it — the spawner logs the verdict and sets `metadata.phase = 'stalled'`, which the agent card renders as a non-pulsing **Stalled** badge pointing at the Shell tab. The badge clears itself on the session's next byte of output. Prevention lives on the other side of the same problem: `UNATTENDED_RUN_RULE` (`server/services/agentPromptBuilder.js`) tells every agent that naming its next step is not doing it. Constants: `STALL_NUDGE_*` in `server/lib/tuiHandshake.js`.
+A session that ignores all three nudges is wedged below its composer, and no paste will reach it. Rather than give up silently — leaving a run holding its execution lane with nothing to show for it — the spawner logs the verdict and sets `metadata.phase = 'stalled'`, which the agent card renders as a non-pulsing **Stalled** badge pointing at the Shell tab. The badge clears itself on the session's next byte of output. Prevention lives on the other side of the same problem: `UNATTENDED_RUN_RULE` (`server/services/agent/agentPromptBuilder.js`) tells every agent that naming its next step is not doing it. Constants: `STALL_NUDGE_*` in `server/lib/tuiHandshake.js`.
 
 ## Features
 

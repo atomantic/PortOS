@@ -8,7 +8,7 @@ import { DEFAULT_TASK_PROMPTS } from './taskPromptDefaults.js';
 import { buildCiMergeGateSteps } from './promptSections/reviewLifecycle.js';
 import { driveToMerge } from './branchReconcile.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
-import { resolveSwarmBlock } from './cosTaskPreStepBlocks.js';
+import { resolveSwarmBlock } from './cos/cosTaskPreStepBlocks.js';
 
 let sandbox;
 afterEach(async () => {

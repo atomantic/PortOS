@@ -33,20 +33,21 @@ import { existsSync } from 'fs';
 import { dirname, extname, join, relative, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
+import { pathWithin } from '../../../lib/pathWithin.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { isPathInsideDir, isTopLevelEntryName } from '../../lib/pathSafety.js';
 import { readZipArchive, unsafeZipEntryName } from '../../lib/zipArchive.js';
 import { createZip } from '../../lib/zipWriter.js';
-import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideoValidation.js';
+import { MUSIC_VIDEO_DOCUMENT_DIRECTORY, MUSIC_VIDEO_DOCUMENT_TEMPLATES } from '../../lib/musicVideo/musicVideoValidation.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { normalizeComposition } from './composition.js';
-import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
-import { wipeCuts } from '../../lib/musicVideoWipes.js';
-import { documentSceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { imageEffectState, isEndFrameImageEffect, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideo/musicVideoImageEffects.js';
+import { sceneImageEffectGlitchFrames, sceneTransitionSections, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideo/musicVideoTransitions.js';
+import { wipeCuts } from '../../lib/musicVideo/musicVideoWipes.js';
+import { documentSceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { documentRenderClock, documentSongDuration } from './documentTiming.js';
 
 // The composition browser snapshots at most 256 MiB / 4096 files per render,
@@ -214,7 +215,7 @@ async function withSharedImageEffects(files) {
     if (!/\.(?:html?|m?js)$/i.test(file.rel) || (file.size ?? file.data?.length ?? 0) > LYRIC_TYPE_SCAN_MAX) continue;
     const text = file.data ? file.data.toString('utf8') : await readFile(file.abs, 'utf8');
     if (!/\bmusicVideoImageEffects\.js\b/.test(text)) continue;
-    const abs = fileURLToPath(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    const abs = fileURLToPath(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
     return [...files, { rel: 'musicVideoImageEffects.js', abs, size: (await stat(abs)).size }];
   }
   return files;
@@ -387,10 +388,29 @@ export async function importDocumentDirectory(projectId, directory) {
   return storeVersion(projectId, files, { kind: 'directory', name: rel.split(sep).join('/').slice(0, 200) });
 }
 
+/**
+ * A shipped template's directory (documentTemplates/<id>). The callers allow
+ * only `MUSIC_VIDEO_DOCUMENT_TEMPLATES` first; an id that climbs out throws
+ * here all the same (`pathWithin`), which is what lets the test memo key the
+ * templates directory for a read whose id it cannot see.
+ */
+export const documentTemplateDirectory = (templateId) => pathWithin(TEMPLATE_ROOT, templateId);
+
+const SHIPPED_CAMERA_RIG = new URL('../../lib/musicVideo/cameraRig.js', import.meta.url);
+
+async function collectTemplateFiles(templateId) {
+  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
+  if (templateId === 'layered') {
+    // Export and browser preview use the same classic script as the native client.
+    files.push({ rel: 'cameraRig.js', abs: fileURLToPath(SHIPPED_CAMERA_RIG), size: (await stat(SHIPPED_CAMERA_RIG)).size });
+  }
+  return files;
+}
+
 /** Copy a shipped template (documentTemplates/<id>) into the project. */
 export async function importDocumentTemplate(projectId, templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
+  const files = await collectTemplateFiles(templateId);
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
@@ -401,7 +421,7 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
  */
 export async function readTemplateDocumentFiles(templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(join(TEMPLATE_ROOT, templateId), { excludeTests: true });
+  const files = await collectTemplateFiles(templateId);
   return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 
@@ -439,7 +459,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
       { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
     return storeVersion(projectId, staged, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
   }
-  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'), { excludeTests: true });
+  const files = await collectTemplateFiles('layered');
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');
@@ -532,10 +552,10 @@ const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8')
 // The helper files documentPreviewPlayback compares byte for byte, with where the shipped copy lives.
 // The still-effect module only ever grew its exports, so every earlier shipped copy is replaceable.
 const STOCK_HELPERS = [
-  { rel: 'cameraRig.js', source: new URL('./documentTemplates/layered/cameraRig.js', import.meta.url), stale: new Set() },
+  { rel: 'cameraRig.js', source: SHIPPED_CAMERA_RIG, stale: new Set() },
   { rel: 'lyricType.js', source: new URL('./documentTemplates/shared/lyricType.js', import.meta.url), stale: STALE_SHIPPED_LYRIC_TYPE_JS },
   { rel: 'lyricType.css', source: new URL('./documentTemplates/shared/lyricType.css', import.meta.url), stale: new Set() },
-  { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideoImageEffects.js', import.meta.url),
+  { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url),
     stale: new Set([...UPGRADABLE_IMAGE_EFFECT_MODULES, ...COMPATIBLE_IMAGE_EFFECT_MODULES]) },
 ];
 
@@ -614,7 +634,7 @@ export function upgradeDocumentEngine(projectId, directory) {
       throw refuse('The engine was customized or is not a supported shipped version — preserve it and revise it explicitly', 'COMPOSITION_ENGINE_CUSTOM', 409);
     }
     const imageEffects = files.find(file => file.rel === 'musicVideoImageEffects.js');
-    const shippedImageEffects = await readFile(new URL('../../lib/musicVideoImageEffects.js', import.meta.url));
+    const shippedImageEffects = await readFile(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url));
     if (imageEffects && !engineCurrent) {
       const digest = engineDigest(await readFile(imageEffects.abs));
       if (digest !== engineDigest(shippedImageEffects) && !UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest) && !COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest)) {

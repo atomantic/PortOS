@@ -32,6 +32,7 @@ import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlot
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
 import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
 import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { isMusicVideoCompleted } from '../../../server/lib/musicVideo/musicVideoSummary.js';
 
 // The open-project workspace (and, through it, every stage) is its own chunk, so
 // the project list never downloads it (#16565).
@@ -119,23 +120,37 @@ export default function MusicVideo() {
   const selectedId = stageOnlyParam ? null : (routeProjectId || null);
   // Summaries load for the index, or once the header picker is used on a deep link;
   // once wanted they stay loaded (disabling the hook would reset its items).
-  const [summariesWanted, setSummariesWanted] = useState(!selectedId);
-  if (!selectedId && !summariesWanted) setSummariesWanted(true);
+  const [summariesWanted, setSummariesWanted] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('in-progress');
+  // The name query is searched server-side before paging; typing debounces so each keystroke is not a request.
+  const nameQuery = searchParams.get('q') || '';
+  const trimmedQuery = nameQuery.trim();
+  const [serverQuery, setServerQuery] = useState(trimmedQuery);
+  useEffect(() => {
+    const timer = setTimeout(() => setServerQuery(trimmedQuery), 250);
+    return () => clearTimeout(timer);
+  }, [trimmedQuery]);
   const fetchSummariesPage = useCallback(
     ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30 }, { signal, silent: true }),
     [],
   );
-  const summaries = usePagedCollection(fetchSummariesPage, { enabled: summariesWanted });
+  const summaries = usePagedCollection(fetchSummariesPage, { enabled: summariesWanted || !!stageOnlyParam });
+  const fetchIndexPage = useCallback(
+    ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30, statusFilter: statusFilter === 'all' ? undefined : statusFilter, q: serverQuery || undefined }, { signal, silent: true }),
+    [statusFilter, serverQuery],
+  );
+  const indexSummaries = usePagedCollection(fetchIndexPage, { enabled: !selectedId && !stageOnlyParam });
   // Same stickiness for the list: the banner outlives the retry that clears `summaries.error`.
   const [listError, setListError] = useState(null);
   useEffect(() => {
-    if (summaries.error) setListError(summaries.error.message || 'Failed to load music video projects');
-    else if (summaries.loaded) setListError(null);
-  }, [summaries.error, summaries.loaded]);
+    if (indexSummaries.error) setListError(indexSummaries.error.message || 'Failed to load music video projects');
+    else if (indexSummaries.loaded) setListError(null);
+  }, [indexSummaries.error, indexSummaries.loaded]);
   const selectedLoaded = selectedProject?.id === selectedId;
   const fault = selectedFault?.id === selectedId ? selectedFault : null;
-  const loading = selectedId ? !selectedLoaded && (selectedFetching || !fault) : (summaries.loading || !summaries.loaded) && !summaries.error;
-  const projectsError = selectedId ? (fault?.notFound ? null : fault?.message) : listError;
+  const loading = selectedId ? !selectedLoaded && (selectedFetching || !fault) : (stageOnlyParam ? (summaries.loading || !summaries.loaded) && !summaries.error : !indexSummaries.loaded && !indexSummaries.error);
+  const projectsError = selectedId ? (fault?.notFound ? null : fault?.message) : stageOnlyParam ? summaries.error?.message
+    : !indexSummaries.loaded ? (indexSummaries.error?.message || listError) : null;
 
   useEffect(() => {
     if (!selectedId) return undefined;
@@ -164,7 +179,7 @@ export default function MusicVideo() {
 
   const loadProjects = selectedId
     ? () => setSelectedReload((n) => n + 1)
-    : () => { if (!summaries.loading) summaries.refreshFirst(); };
+    : () => { const collection = stageOnlyParam ? summaries : indexSummaries; if (!collection.loading) collection.reload(); };
   const selected = selectedLoaded ? selectedProject : null;
 
   const [cloningId, setCloningId] = useState(null);
@@ -224,10 +239,11 @@ export default function MusicVideo() {
   };
   // The open project leads; summaries fill in the rest of the picker.
   const sortedProjects = useMemo(() => {
-    const byId = new Map(summaries.items.map((p) => [p.id, p]));
+    const pickerItems = !summaries.loaded && !stageOnlyParam ? indexSummaries.items : summaries.items;
+    const byId = new Map(pickerItems.map((p) => [p.id, p]));
     if (selected) byId.set(selected.id, selected);
     return [...byId.values()].sort(compareMusicVideoProjectsNewestFirst);
-  }, [selected, summaries.items]);
+  }, [selected, summaries.items, summaries.loaded, indexSummaries.items, stageOnlyParam]);
   useEffect(() => {
     if (!stageOnlyParam || !summaries.loaded || summaries.error) return;
     const newest = sortedProjects[0];
@@ -276,16 +292,31 @@ export default function MusicVideo() {
 
   // Index: name filter lives in the URL (?q=); the picked fork version per root
   // outlives opening a project; cards patch in place from run events.
-  const nameQuery = searchParams.get('q') || '';
   const setNameQuery = (value) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     if (value) next.set('q', value); else next.delete('q');
     return next;
   }, { replace: true });
+  // Once the index has rendered, a reload (new name or status filter) keeps it mounted so the search box keeps focus.
+  const indexShown = useRef(false);
+  useEffect(() => { if (indexSummaries.loaded) indexShown.current = true; }, [indexSummaries.loaded]);
+  const nameMatches = (project) => !serverQuery || String(project.name || '').toLowerCase().includes(serverQuery.toLowerCase());
   const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
+  const indexRef = useRef(indexSummaries);
+  indexRef.current = indexSummaries;
   useEffect(() => {
     const onRunEvent = (data) => {
-      if (data?.project?.id) replaceProject(data.project);
+      if (!data?.project?.id) return;
+      replaceProject(data.project);
+      if (selectedId || stageOnlyParam) return;
+      const index = indexRef.current;
+      const previous = index.items.find((p) => p.id === data.project.id);
+      if (!previous) return;
+      if ((statusFilter !== 'all' && isMusicVideoCompleted(previous) !== isMusicVideoCompleted(data.project)) || !nameMatches(data.project)) {
+        index.setItems((items) => items.filter((p) => p.id !== data.project.id));
+        index.reconcileFirst();
+      }
+      else index.setItems((items) => items.map((p) => p.id === data.project.id ? data.project : p));
     };
     const events = ['music-video:autonomous', 'music-video:production'];
     events.forEach((e) => socket.on(e, onRunEvent));
@@ -298,7 +329,7 @@ export default function MusicVideo() {
       events.forEach((e) => socket.off(e, onRunEvent));
       socket.off('music-video:render-spend', onRenderSpend);
     };
-  }, []);
+  }, [selectedId, stageOnlyParam, statusFilter, serverQuery]);
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
   const unsavedSceneFields = useRef(new Map());
@@ -389,6 +420,7 @@ export default function MusicVideo() {
   // above ignores every other id, and the first page is newest-created-first, so
   // a blanket refresh cannot update an older card or drop a deleted one.
   useProjectSummarySync({ summaries, selectedId, enabled: summariesWanted });
+  const catalogSync = useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, statusFilter, matches: nameMatches });
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -403,6 +435,7 @@ export default function MusicVideo() {
       toast.error(youtube.switchBlockedMessage);
       return;
     }
+    if (id && !selectedId) setSummariesWanted(true);
     const search = searchParams.toString();
     navigate(id ? `/music-video/${id}${stage ? `/${stage}` : ''}${search ? `?${search}` : ''}` : `/music-video${search ? `?${search}` : ''}`);
   };
@@ -444,6 +477,8 @@ export default function MusicVideo() {
       .finally(() => setCreating(false));
   };
 
+  const pendingDeletes = useRef(new Set());
+  const [removingIds, setRemovingIds] = useState(() => new Set());
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const handleDeleteRequest = (id) => {
@@ -462,12 +497,33 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
+    if (pendingDeletes.current.has(id)) return;
+    pendingDeletes.current.add(id);
     deleteMusicVideoProject(id, { silent: true })
       .then(() => {
-        summaries.setItems((prev) => prev.filter((p) => p.id !== id));
-        if (selectedId === id) navigate('/music-video');
+        // From the index the card collapses first and leaves on exit; the
+        // workspace navigates away, so nothing is left to animate there.
+        if (selectedId === id) finishRemoval(id);
+        else setRemovingIds((prev) => new Set([...prev, id]));
       })
-      .catch((err) => toast.error(err?.message || 'Failed to delete project'));
+      .catch((err) => {
+        pendingDeletes.current.delete(id);
+        toast.error(err?.message || 'Failed to delete project');
+      });
+  };
+
+  const finishRemoval = (id) => {
+    pendingDeletes.current.delete(id);
+    setRemovingIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    summaries.setItems((prev) => prev.filter((p) => p.id !== id));
+    indexSummaries.setItems((prev) => prev.filter((p) => p.id !== id));
+    indexSummaries.reconcileFirst();
+    if (selectedId === id) navigate('/music-video');
   };
 
   // The workspace's Project settings drawer and the index cards share one confirm flow.
@@ -476,6 +532,8 @@ export default function MusicVideo() {
     request: handleDeleteRequest,
     confirm: (id) => confirmDelete(() => handleDelete(id)),
     cancel: cancelDelete,
+    isRemoving: (id) => removingIds.has(id),
+    finishRemoval,
   };
 
   const handleClone = (optionsOrTarget = {}, maybeOptions = {}, songRevision = false) => {
@@ -591,23 +649,27 @@ export default function MusicVideo() {
         )}
         {!selected && (loading || !routeProjectId || !!stageOnlyParam) && (
           <div className="space-y-6">
-            {/* The header already carries New project / Autonomous: keep the hint, not a second pair of buttons. */}
-            <p className="text-sm text-port-text-muted">Pick a project above, start a new one — seed a name, universe and board, choose the tools and a budget, and let autopilot churn — or go fully autonomous from a single prompt.</p>
+            <div role="group" aria-label="Filter projects by status" className="flex flex-wrap gap-2">
+              {[['all', 'All'], ['completed', 'Completed'], ['in-progress', 'In Progress']].map(([value, label]) => (
+                <button key={value} type="button" aria-pressed={statusFilter === value} onClick={() => setStatusFilter(value)}
+                  className={`min-h-[44px] rounded border px-3 py-1.5 text-sm ${statusFilter === value ? 'border-port-accent bg-port-accent text-white' : 'border-port-border hover:bg-port-card'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
 
-            {loading ? (
+            {loading && (stageOnlyParam || !indexShown.current) ? (
               <div className="text-center py-8 text-sm text-port-text-muted">
                 Loading projects…
               </div>
-            ) : projectsError ? null : sortedProjects.length === 0 ? (
-              <div className="text-center py-6 text-sm text-port-text-muted">
-                No music video projects yet. Create your first project above to get started.
-              </div>
-            ) : (
+            ) : projectsError ? null : (
               <ProjectIndex
-                projects={sortedProjects}
+                projects={indexSummaries.items.filter((project) => statusFilter === 'all' || isMusicVideoCompleted(project) === (statusFilter === 'completed'))}
+                statusFilter={statusFilter}
                 nameQuery={nameQuery}
                 onNameQueryChange={setNameQuery}
-                summaries={summaries}
+                summaries={indexSummaries}
+                catalogSync={catalogSync}
                 pickedVersion={pickedVersion}
                 onPickVersion={(rootId, id) => setPickedVersion((prev) => ({ ...prev, [rootId]: id }))}
                 trackName={trackName}

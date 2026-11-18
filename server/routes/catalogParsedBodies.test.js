@@ -30,7 +30,7 @@ const mocks = vi.hoisted(() => ({
   addPrimitiveToUniverse: vi.fn(),
 }));
 
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   createIngredient: mocks.createIngredient,
   getIngredient: mocks.getIngredient,
   getIngredientIdentityIds: mocks.getIngredientIdentityIds,
@@ -42,8 +42,8 @@ vi.mock('../services/catalogDB.js', () => ({
   getScrap: mocks.getScrap,
   commitScrap: mocks.commitScrap,
 }));
-vi.mock('../services/catalogSync.js', () => ({}));
-vi.mock('../services/catalogPrimitives.js', async (io) => ({ ...await io(), addPrimitiveToUniverse: mocks.addPrimitiveToUniverse }));
+vi.mock('../services/catalog/catalogSync.js', () => ({}));
+vi.mock('../services/catalog/catalogPrimitives.js', async (io) => ({ ...await io(), addPrimitiveToUniverse: mocks.addPrimitiveToUniverse }));
 vi.mock('../services/universeBuilder.js', () => ({ updateUniverse: mocks.updateUniverse }));
 vi.mock('../services/embeddings.js', () => ({
   embedIngredient: mocks.embedIngredient,

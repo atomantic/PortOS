@@ -12,8 +12,8 @@ const mocks = vi.hoisted(() => ({
   repairRunRecords: vi.fn(),
 }));
 
-vi.mock('../services/agentRunEventLog.js', () => mocks);
-vi.mock('../services/agentRunReconciler.js', () => mocks);
+vi.mock('../services/agent/agentRunEventLog.js', () => mocks);
+vi.mock('../services/agent/agentRunReconciler.js', () => mocks);
 const activityMocks = vi.hoisted(() => ({
   getRecentActivities: vi.fn(async () => []),
   getActivityTimeline: vi.fn(async () => []),
@@ -22,7 +22,7 @@ const activityMocks = vi.hoisted(() => ({
   cleanupOldActivity: vi.fn(async () => 0),
 }));
 
-vi.mock('../services/agentActivity.js', () => activityMocks);
+vi.mock('../services/agent/agentActivity.js', () => activityMocks);
 
 import agentActivityRoutes from './agentActivity.js';
 

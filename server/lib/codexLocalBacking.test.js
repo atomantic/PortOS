@@ -15,11 +15,11 @@ import {
   CODEX_OSS_MIN_VERSION,
   codexOssLocalProvider,
   codexUnsupportedLocalRuntime,
-} from './providerModels.js';
-import { applyCommandDefaults, buildVendorCliArgs, buildVendorSpawnConfig } from './providerVendors.js';
+} from './provider/providerModels.js';
+import { applyCommandDefaults, buildVendorCliArgs, buildVendorSpawnConfig } from './provider/providerVendors.js';
 import { buildTuiInvocation } from './tuiHandshake.js';
-import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
-import { providerPrerequisites, blocksRouting } from './providerPrerequisites.js';
+import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
+import { providerPrerequisites, blocksRouting } from './provider/providerPrerequisites.js';
 import { isCodexSubscriptionProvider } from './codexAccount.js';
 
 const codexCloud = { id: 'codex', type: 'cli', command: 'codex', args: [] };

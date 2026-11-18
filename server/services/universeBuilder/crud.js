@@ -724,7 +724,7 @@ export async function updateUniverse(id, patchOrMutator = {}, options = {}) {
     // transaction commits so its catalog rows are visible to the projection.
     if (result.projectCanon) {
       try {
-        const { projectToCatalog } = await import('../catalogCanonProjection.js');
+        const { projectToCatalog } = await import('../catalog/catalogCanonProjection.js');
         await projectToCatalog(id, result.merged, { guardToken: canonProjectionGuard, guardIdentityIds: canonProjectionIdentityIds });
       } catch (err) {
         console.error(`🔁 canon→catalog projection failed for ${id}: ${err.message}`);
@@ -912,7 +912,7 @@ export async function deleteUniverse(id) {
     if (!cur) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     if (cur.deleted) throw codedError(`Universe not found: ${id}`, ERR_NOT_FOUND);
     if (!isFileBackend()) {
-      const { assertUniversePrimitivesRemovable } = await import('../catalogPrimitiveUsage.js');
+      const { assertUniversePrimitivesRemovable } = await import('../catalog/catalogPrimitiveUsage.js');
       await assertUniversePrimitivesRemovable(id);
     }
     const now = new Date().toISOString();

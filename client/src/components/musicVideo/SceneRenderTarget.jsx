@@ -10,9 +10,9 @@ import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, coerceRunwayVideoSeconds, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
 } from '../../lib/runwayVideoModels.js';
 import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability, shotRequestSpanSec } from '../../lib/musicVideoShotTiming.js';
-import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
-import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js';
-import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
+import { localMusicVideoModels } from '../../../../server/lib/musicVideo/musicVideoLocalModels.js';
+import { normalizePreMusic } from '../../../../server/lib/musicVideo/musicVideoColdOpen.js';
+import { sceneActiveEndImageId } from '../../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
 import { RenderOnSelect, RenderOptionSelect } from '../media/RenderOnSelect.jsx';

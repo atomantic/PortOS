@@ -20,7 +20,7 @@ export async function startVideoFromStoryboard(boardId, { boardUpdatedAt, projec
   if (plan.problem) throw new ServerError(plan.problem, { status: 400, code: 'STORYBOARD_VIDEO_UNFIT' });
 
   const [{ createProject, deleteProject, setTreatment }, { resolveIngredientsByIds }, { buildCastFromIngredients }] = await Promise.all([
-    import('../creativeDirector/local.js'), import('../catalogDB.js'), import('../creativeDirector/catalogSeed.js'),
+    import('../creativeDirector/local.js'), import('../catalog/catalogDB.js'), import('../creativeDirector/catalogSeed.js'),
   ]);
   // Only ingredients that still exist become sources; a deleted one would block Start.
   const ingredients = await resolveIngredientsByIds(plan.catalogIds);

@@ -30,13 +30,13 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  * instead of clearing them.
  */
 
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 import { claimOnDemandRequest, settleOnDemandRequest, reconcileOnDemandHandoffs } from './onDemandHandoff.js';
 import { getActiveApps } from './apps.js';
-import { loadState, saveState, withStateLock, isImprovementEnabled } from './cosState.js';
+import { loadState, saveState, withStateLock, isImprovementEnabled } from './cos/cosState.js';
 import { markAppReviewCooldown, bindAppReviewAgent } from './appActivity.js';
 import { isManualOnDemandRequest, onDemandRequestMetadata, quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
-import { addTask, reviveBlockedTask } from './cosTaskStore.js';
+import { addTask, reviveBlockedTask } from './cos/cosTaskStore.js';
 import { cardIdForRequest, finishPreflightCard, finishPreflightDispatch, reportPreflightStep, startPreflightCard } from './preflightTaskCard.js';
 import { beginPreflightActivity } from './preflightActivity.js';
 
@@ -137,7 +137,7 @@ export async function drainOnDemandRequests(ctx, adapter) {
     applyOnDemandConsent,
     drainProgrammaticOnDemandRequests,
     emitOnDemandEmpty,
-  } = await import('./cosTaskGenerator.js');
+  } = await import('./cos/cosTaskGenerator.js');
 
   const taskScheduleMod = await import('./taskSchedule.js');
   await reconcileOnDemandHandoffs();

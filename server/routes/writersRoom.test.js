@@ -65,7 +65,7 @@ vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({
 
 // Mock the catalog scan so the draft-save route stays pure (no Postgres pool).
 // Default: the work has no linked cast, so the scan finds nothing.
-vi.mock('../services/catalogExtraction.js', () => ({
+vi.mock('../services/catalog/catalogExtraction.js', () => ({
   scanProseForIngredientRefs: vi.fn(async () => []),
 }));
 
@@ -97,7 +97,7 @@ vi.mock('../services/writersRoom/liveDirector.js', () => ({
 }));
 
 import * as svc from '../services/writersRoom/local.js';
-import * as catalogExtraction from '../services/catalogExtraction.js';
+import * as catalogExtraction from '../services/catalog/catalogExtraction.js';
 import * as charSvc from '../services/writersRoom/characters.js';
 import * as placesSvc from '../services/writersRoom/places.js';
 import * as objectsSvc from '../services/writersRoom/objects.js';

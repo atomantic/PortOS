@@ -10,7 +10,7 @@
  *   multi-line description would corrupt the queue file — `metadata.context` was
  *   the newline-escaped escape hatch that survived serialization.
  *
- *   The two are now separate fields (`server/lib/cosTaskPrompt.js`), and
+ *   The two are now separate fields (`server/lib/cos/cosTaskPrompt.js`), and
  *   `cosTaskStore.addTask` routes new tasks at write time. This migration does
  *   the same for the tasks already queued on this install.
  *
@@ -24,7 +24,7 @@
  *   so a not-yet-upgraded peer skips cos-task sync rather than receiving a
  *   `metadata.prompt` its prompt builder cannot read.
  *
- *   The classification is `isPromptPayload` from `server/lib/cosTaskPrompt.js` —
+ *   The classification is `isPromptPayload` from `server/lib/cos/cosTaskPrompt.js` —
  *   the SAME predicate the store's write path uses, so a task can't be sorted
  *   one way at creation and the other way here. A single-line context is a note
  *   and is left exactly where it is.
@@ -48,7 +48,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { readCosConfig } from './_lib.js';
-import { isPromptPayload, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../server/lib/cosTaskPrompt.js';
+import { isPromptPayload, TASK_PROMPT_KEY, TASK_CONTEXT_KEY } from '../../server/lib/cos/cosTaskPrompt.js';
 
 // The task header line, per `server/lib/legacyTaskMarkdown.js`. Both spellings — with
 // and without the AUTO/APPROVAL flag — since internal tasks carry it and the

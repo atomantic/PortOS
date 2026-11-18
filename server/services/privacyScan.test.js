@@ -11,7 +11,7 @@ vi.mock('./privacyBrokers.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, recordScanVerdict: vi.fn(async (brokerId, verdict, opts) => ({ id: 'case-1', brokerId, state: verdict, ...opts })) };
 });
-vi.mock('./catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
+vi.mock('./catalog/catalogIngestSources.js', () => ({ fetchUrlMainText: vi.fn(async () => null) }));
 vi.mock('./privacyVault.js', () => ({ listScanEligibleValues: vi.fn(async () => []) }));
 // #3658 consent gate — mocked so the pass runs without a DB, and so a test can
 // flip it to the refusing behaviour to prove the guard is engine-enforced.

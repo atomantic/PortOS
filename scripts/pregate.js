@@ -18,6 +18,7 @@ import { dirname, join, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { prepareWindowsSafeSpawn, resolveWindowsExecutable } from '../server/lib/aiToolkit/internal/windowsSafeSpawn.js';
 import { getAlwaysRunTests, FULL_SUITE_SHARDS, structuralTestsFor } from './ci-test-plan.js';
+import { isGuardTest } from './lib/guardScanners.js';
 import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
@@ -326,9 +327,9 @@ export function downgradeFullPlan(plan, trackedFiles, changedFiles = []) {
   const structuralGuards = structuralTestsFor(changedFiles, tracked);
   const serverStructuralGuards = structuralGuards.filter((path) => !path.startsWith('client/'));
   const clientStructuralGuards = structuralGuards.filter((path) => path.startsWith('client/'));
-  // Discover convention guards so new client scanners join the local gate
-  // without a second hand-maintained list (including guards under hooks/).
-  const clientGuards = trackedFiles.filter((path) => /^client\/src\/.*Conventions\.test\.js$/.test(path));
+  // Client tree guards join the local gate by their suffix, the same name the
+  // planner selects them by, so there is no second list (guards under hooks/ included).
+  const clientGuards = trackedFiles.filter((path) => path.startsWith('client/src/') && isGuardTest(path));
   return {
     ...plan,
     full: false,
@@ -894,15 +895,15 @@ function runCiTestPlan(baseSha, changedFiles) {
   return JSON.parse(planned.stdout);
 }
 
-/** Decode the planner's step outputs (JSON-encoded lists) into the plan shape the stages consume. */
+/** Map the planner's printed plan (githubPlanOutput() keys) into the plan shape the stages consume. */
 function pregatePlanFromRaw(raw) {
   return {
     full: raw.full,
     reason: raw.reason,
-    server: { mode: raw.server_mode, files: JSON.parse(raw.server_files), sources: JSON.parse(raw.server_sources) },
-    client: { mode: raw.client_mode, files: JSON.parse(raw.client_files), sources: JSON.parse(raw.client_sources) },
-    lint: { mode: raw.lint_mode, files: JSON.parse(raw.lint_files) },
-    browser: { files: JSON.parse(raw.browser_files ?? '[]') },
+    server: { mode: raw.server_mode, files: raw.server_files, sources: raw.server_sources },
+    client: { mode: raw.client_mode, files: raw.client_files, sources: raw.client_sources },
+    lint: { mode: raw.lint_mode, files: raw.lint_files },
+    browser: { files: raw.browser_files },
     db: raw.db,
     windows: raw.windows,
     build: raw.build,
@@ -912,7 +913,7 @@ function pregatePlanFromRaw(raw) {
     supercolliderLive: raw.supercollider_live,
     dockerContainmentLive: raw.docker_containment_live,
     macosNative: raw.macos_native,
-    suiteReasons: JSON.parse(raw.suite_reasons ?? '{}'),
+    suiteReasons: raw.suite_reasons,
   };
 }
 

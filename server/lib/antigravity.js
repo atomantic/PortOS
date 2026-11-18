@@ -3,7 +3,7 @@
  * `isAntigravityCliProvider` predicates.
  */
 
-import { buildEffortArgs, commandBasename, extractBakedModel, hasModelFlag, resolveCliEffort, resolveCliModel, splitAntigravityModel, stripBrokenModelFlags } from './providerModels.js';
+import { buildEffortArgs, commandBasename, extractBakedModel, hasModelFlag, resolveCliEffort, resolveCliModel, splitAntigravityModel, stripBrokenModelFlags } from './provider/providerModels.js';
 
 export const ANTIGRAVITY_CLI_ID = 'antigravity-cli';
 export const ANTIGRAVITY_TUI_ID = 'antigravity-tui';

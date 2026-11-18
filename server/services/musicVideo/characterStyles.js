@@ -1,5 +1,5 @@
 // Per-install state for the built-in Music Video character styles
-// (server/lib/musicVideoCharacterStyles.js): which gallery image is each
+// (server/lib/musicVideo/musicVideoCharacterStyles.js): which gallery image is each
 // style's character sheet on this install. Stored in settings because gallery
 // images are local to an install and the catalog itself is static code.
 
@@ -7,7 +7,7 @@ import { getSettings, updateSettingsWith } from '../settings.js';
 import {
   MUSIC_VIDEO_CHARACTER_STYLES, getMusicVideoCharacterStyle, musicVideoCharacterSheetPrompt,
   summarizeMusicVideoCharacterStyle,
-} from '../../lib/musicVideoCharacterStyles.js';
+} from '../../lib/musicVideo/musicVideoCharacterStyles.js';
 
 const SETTINGS_KEY = 'musicVideoCharacterStyles';
 

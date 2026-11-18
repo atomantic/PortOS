@@ -1,5 +1,5 @@
 /** Tool-free proposals only. Neither worker nor evaluator output is dispatched. */
-import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { normalizePersistentMindCapabilities } from '../lib/persistent/persistentMindCapabilities.js';
 import {
   SANDBOX_DELEGATION_OUTPUT_CHARS,
   sameSandboxRoute,
@@ -10,8 +10,8 @@ import { applyModelAccessList } from '../lib/aiToolkit/internal/modelAccess.js';
 import { isGenerationModel } from '../lib/localModelHeuristics.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { loadState } from './cosState.js';
-import { getAllProviders, getSelectableProviders } from './providers.js';
+import { loadState } from './cos/cosState.js';
+import { getAllProviders, getSelectableProviders } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 

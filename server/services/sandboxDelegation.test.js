@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mock = vi.hoisted(() => ({ root: null, providers: [], run: vi.fn(), stop: vi.fn() }));
-vi.mock('./cosState.js', () => ({ loadState: async () => mock.root }));
-vi.mock('./providers.js', () => ({
+vi.mock('./cos/cosState.js', () => ({ loadState: async () => mock.root }));
+vi.mock('./provider/providers.js', () => ({
   getAllProviders: async () => ({ providers: mock.providers }),
   getSelectableProviders: async () => ({ providers: mock.providers }),
 }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mock.run(...args) }));
 vi.mock('./runner.js', () => ({ stopRun: (...args) => mock.stop(...args) }));
 import { delegateSandbox, describeSandboxDelegation } from './sandboxDelegation.js';
-import { mergePersistentMindCapabilities, normalizePersistentMindCapabilities, persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
+import { mergePersistentMindCapabilities, normalizePersistentMindCapabilities, persistentMindCapabilitiesSchema } from '../lib/persistent/persistentMindCapabilities.js';
 
 const worker = { providerId: 'free-api', model: 'openrouter/free' };
 const evaluator = { providerId: 'trusted-api', model: 'example-evaluator' };

@@ -38,9 +38,9 @@ const state = {
   settlement: { accepted: 0, refused: 0 },
 };
 
-vi.mock('./cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.sequenceTasks || [] } })) }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: vi.fn(async () => ({ cos: { tasks: state.sequenceTasks || [] } })) }));
 
-vi.mock('./providerUsage.js', () => ({
+vi.mock('./provider/providerUsage.js', () => ({
   getProviderQuotas: vi.fn(async () => state.quotas),
 }));
 
@@ -186,7 +186,7 @@ describe('runQuotaBurnCycle', () => {
     // getProviderQuotas({ refresh: true }) spawns a multi-second TUI scrape per
     // enabled family. With nothing actionable configured it could not produce a
     // dispatch, and it would otherwise run on every tick forever.
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     state.config = plan({ families: { grok: { enabled: true, jobs: [] } } });
     const result = await runQuotaBurnCycle();
     expect(getProviderQuotas).not.toHaveBeenCalled();
@@ -483,7 +483,7 @@ describe('interval clock', () => {
     // that can skip the reset the feature exists to spend.
     state.invokePending = { first: { count: 1 } };
     await runQuotaBurnCycle({ trigger: 'manual' });
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     getProviderQuotas.mockClear();
     // A scheduled tick immediately after must still be due.
     await runQuotaBurnCycle({ trigger: 'scheduled' });
@@ -494,7 +494,7 @@ describe('interval clock', () => {
     // lastRunAt is in-process; on a bare null the first tick after every boot is
     // "due", so a PM2 restart loop paces a 12-hourly plan into minutes — a full
     // TUI scrape per family ~60s after every boot.
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     state.config = plan({ checkIntervalMinutes: 720 });
     state.runs = [{ at: new Date(Date.now() - 60_000).toISOString(), trigger: 'scheduled', dispatched: false }];
     await __tickQuotaBurn();
@@ -511,7 +511,7 @@ describe('interval clock', () => {
   it('ignores manual entries when seeding the clock', async () => {
     // Only a scheduled cycle advances the interval; a manual "Evaluate now"
     // recorded moments ago must not defer the automatic one across a restart.
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     state.config = plan({ checkIntervalMinutes: 720 });
     state.runs = [{ at: new Date().toISOString(), trigger: 'manual', dispatched: false }];
     state.invokePending = { first: { count: 1 } };
@@ -607,7 +607,7 @@ describe('completion continuation', () => {
     // WAIT.FRESH bypasses the cache by design, so each card costs its own
     // multi-second PTY spawn — and every card but this family's is discarded.
     // Unscoped, one burn chain would pay N scrapes per link instead of one.
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     state.invokePending = { first: { count: 1 } };
     await __onBurnAgentCompleted({ metadata: { taskQuotaBurnFamily: 'grok' } });
     expect(getProviderQuotas).toHaveBeenCalledWith(expect.objectContaining({ family: 'grok' }));
@@ -693,7 +693,7 @@ describe('completion continuation', () => {
   });
 
   it('settles the ledger and walks the plan when a stranded pause is retired with no continuation queued (#7469)', async () => {
-    // `retireStrandedPausedAgents` (server/services/agentManagement.js) stamps
+    // `retireStrandedPausedAgents` (server/services/agent/agentManagement.js) stamps
     // `resumed: true` on a pause whose task was deleted or moved on — but with
     // no `resumedTaskId`, because nothing was requeued. Reading that as a
     // handoff (the bare `isAgentHandoff`) made `onBurnAgentCompleted` return
@@ -822,7 +822,7 @@ describe('run-once jobs', () => {
     // The whole point of threading completions into `familyHasRunnableJobs`: a
     // finished plan would otherwise pay for a multi-second TUI scrape every
     // interval, forever, to be told there is nothing to dispatch.
-    const { getProviderQuotas } = await import('./providerUsage.js');
+    const { getProviderQuotas } = await import('./provider/providerUsage.js');
     state.config = oneShotPlan([{ id: 'once', enabled: true, runOnce: true, taskRef: { kind: 'builtin', taskType: 'ux', appId: 'app-1' } }]);
     state.invokePending = { once: { count: 1 } };
     await runQuotaBurnCycle();

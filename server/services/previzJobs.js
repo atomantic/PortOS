@@ -8,7 +8,7 @@
  * RUNNING_STALE_MS. Every change is broadcast as `catalog:previz-jobs` with the whole snapshot.
  */
 import { randomUUID } from 'crypto';
-import { catalogEvents } from './catalogEvents.js';
+import { catalogEvents } from './catalog/catalogEvents.js';
 
 const RECENT_MAX = 20;
 const RECENT_TTL_MS = 30 * 60 * 1000;

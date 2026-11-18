@@ -6,12 +6,31 @@
  * so an edit can present its before and after records from one set of reads (editResult.js).
  */
 
-import { presentMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { musicVideoRenderDependencyState, presentMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { productionReadiness } from './productionReview.js';
 import { presentProjectCastAndSets } from './castAndSetsService.js';
 import { presentProjectAutonomousRun } from './autonomousService.js';
 
 import { withCatalogCheckin } from './catalogCheckin.js';
+
+/** Classify only final render evidence, without projecting historical takes or reading unrelated ledgers. */
+export async function readProjectCompletion(project, { reads, requireCatalog = false } = {}) {
+  const usesCatalog = project.castAndSets?.source === 'catalog'
+    && Array.isArray(project.renderDependencies?.references)
+    && project.renderDependencies.references.some(({ role }) => role === 'clipReferences');
+  const current = usesCatalog ? await withCatalogCheckin(project, { reads }) : project;
+  if (requireCatalog && current.castAndSets?.catalogCheckin?.problems?.some(({ code }) => code === 'CATALOG_UNAVAILABLE')) {
+    const err = new Error('Catalog references are unavailable. Try again.');
+    err.status = 503;
+    throw err;
+  }
+  if (musicVideoRenderDependencyState(current)?.status === 'stale') return false;
+  if (project.composition?.mode === 'blender') {
+    const { blenderFilmReadState } = await import('./blender/renderIndex.js');
+    if ((await blenderFilmReadState(project)).finalStale === true) return false;
+  }
+  return true;
+}
 /**
  * What presentation reads off this machine for a record: a Blender film's shot renders on disk,
  * whether the track's audio was replaced under the timing (#14793), and this install's render

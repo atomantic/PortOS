@@ -36,6 +36,20 @@ function teardown(stream) {
 export function streamAttachment(res, stream, {
   filename, contentType, failure, label, disposition = 'attachment',
 }) {
+  stream.on('error', (err) => {
+    if (res.destroyed || res.writableEnded) return; // Cancellation can emit an error during teardown.
+    console.warn(`⚠️ ${label} stream error: ${err.code || err.message}`);
+    if (res.headersSent) {
+      res.destroy(err);
+      return;
+    }
+    // Drop the download headers so the JSON error body isn't offered to the
+    // browser as an attachment named like a real file.
+    res.removeHeader('Content-Type');
+    res.removeHeader('Content-Disposition');
+    sendErrorResponse(res, failure);
+  });
+
   // The route awaited settings/stat first, so the client may already be gone: 'close' fired before the listener below was installed and nothing would tear the stream down.
   if (res.destroyed || res.writableEnded) {
     teardown(stream);
@@ -48,20 +62,6 @@ export function streamAttachment(res, stream, {
   res.set('Content-Disposition', `${disposition}; filename="${safeName}"`);
   // Attachments are never meant to be sniffed into an executable type.
   res.set('X-Content-Type-Options', 'nosniff');
-
-  stream.on('error', (err) => {
-    if (res.destroyed) return; // our own abort, below — nothing left to report
-    console.warn(`⚠️ ${label} stream error: ${err.code || err.message}`);
-    if (res.headersSent) {
-      res.destroy(err);
-      return;
-    }
-    // Drop the download headers so the JSON error body isn't offered to the
-    // browser as an attachment named like a real file.
-    res.removeHeader('Content-Type');
-    res.removeHeader('Content-Disposition');
-    sendErrorResponse(res, failure);
-  });
 
   onClientDisconnect(null, res, () => teardown(stream));
   stream.pipe(res);

@@ -3,27 +3,27 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execGit } from '../lib/execGit.js';
-import { planListSave } from '../lib/cosTaskRows.js';
-import { parseSentinelPayload } from '../lib/agentSentinel.js';
+import { planListSave } from '../lib/cos/cosTaskRows.js';
+import { parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { cleanupTempDataRoots } from '../lib/mockPathsDataRoot.js';
 const fixture = vi.hoisted(() => ({ agents: {}, forge: null, denyProof: false }));
 vi.mock('../lib/paths.js', async original => {
   const { makePathsProxy, lazyTempDataRoot } = await import('../lib/mockPathsDataRoot.js');
   return makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-investigation-wait-') });
 });
-vi.mock('./cosState.js', async () => ({ loadState: async () => ({ agents: fixture.agents }),
+vi.mock('./cos/cosState.js', async () => ({ loadState: async () => ({ agents: fixture.agents }),
   readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.agents }),
   withStateLock: (await import('../lib/fileWriteQueue.js')).createFileWriteQueue() }));
-vi.mock('./cos.js', () => ({ isRunning: () => false }));
+vi.mock('./cos/cos.js', () => ({ isRunning: () => false }));
 vi.mock('./notifications.js', () => ({ removeByMetadata: async () => 0 }));
 vi.mock('./mergedPrEvidence.js', () => ({ readMergedPrDelivery: async () => {
   if (fixture.denyProof) throw new Error('forge unavailable');
   return fixture.forge;
 } }));
 const { _createInvestigationDependencyWait } = await import('./investigationDependencyWait.js');
-const repository = await import('./cosTaskRepository.js');
-const { getAllTasks, getTaskById, updateTask, __resetTaskCache } = await import('./cosTaskStore.js');
-const { cosEvents } = await import('./cosEvents.js');
+const repository = await import('./cos/cosTaskRepository.js');
+const { getAllTasks, getTaskById, updateTask, __resetTaskCache } = await import('./cos/cosTaskStore.js');
+const { cosEvents } = await import('./cos/cosEvents.js');
 let root, sha, time, tasks, instanceId, owned, pointer;
 const at = '2026-01-01T00:00:00.000Z';
 const tuple = { claimedBy: 'local', claimedAt: at, lastSpawnedAt: at, totalSpawnCount: '2' };

@@ -7,7 +7,7 @@ import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { FILTER_GRAPH_ARG_LIMIT, filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import {
   MUSIC_VIDEO_TRANSITION_STYLES, glitchFrameParams, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionFrameAt, transitionGlitchFrames,
-} from '../../lib/musicVideoTransitions.js';
+} from '../../lib/musicVideo/musicVideoTransitions.js';
 import { buildMusicVideoFfmpegArgs } from './render.js';
 import { applySceneUpdate, varySceneWipes } from './projectsLogic.js';
 

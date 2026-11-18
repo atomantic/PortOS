@@ -1,12 +1,12 @@
 import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { falHearsAudioReference, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
-import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
+import { sceneActiveEndImageId } from '../../../../server/lib/musicVideo/musicVideoEndFrame.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
-import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
-import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity } from '../../../../server/lib/musicVideoConditioning.js';
+import { shotActionContractProblem } from '../../../../server/lib/musicVideo/musicVideoActionContract.js';
+import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideo/musicVideoShotPrompt.js';
+import { localModelTakesSongAudio } from '../../../../server/lib/musicVideo/musicVideoLocalModels.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity } from '../../../../server/lib/musicVideo/musicVideoConditioning.js';
 import { falClipReferenceAddition } from '../../../../server/lib/storyboardGuidance.js';
 import { formatCount } from '../../utils/formatters.js';
 import SentPromptPanel from '../media/SentPromptPanel';
@@ -25,7 +25,7 @@ const clock = (sec) => {
  * the card itself adds (its camera move, its applied shot actions, Grok's
  * approximate phrase timing, the audio-reactive guard) as labeled additions,
  * and which inputs go with it. The composer is the server's own
- * (lib/musicVideoShotPrompt.js): Render sends the director's text and the
+ * (lib/musicVideo/musicVideoShotPrompt.js): Render sends the director's text and the
  * server composes the same prompt (a performance shot's action times shift to
  * its padded song slice). The project's style and bible are not added.
  *

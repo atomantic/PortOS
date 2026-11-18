@@ -34,7 +34,7 @@
 // out to that `.catch` rather than being swallowed.
 
 import { errorEvents } from '../../lib/errorHandler.js';
-import { cosEvents } from '../cosEvents.js';
+import { cosEvents } from '../cos/cosEvents.js';
 import { getNotifications, notificationEvents } from '../notifications.js';
 import { speakProactive as defaultSpeak } from './proactiveSpeech.js';
 import { getVoiceConfig } from './config.js';
@@ -65,7 +65,7 @@ export const DEFAULT_ESCALATE_AFTER_MINUTES = 10;
 // and the FaceTime bridge, and none of that belongs in the module graph of a
 // voice trigger that usually only speaks a sentence.
 const defaultRequestCall = async (input) => {
-  const { requestUserCall } = await import('../persistentMindCallCapability.js');
+  const { requestUserCall } = await import('../persistent/persistentMindCallCapability.js');
   return requestUserCall(input);
 };
 

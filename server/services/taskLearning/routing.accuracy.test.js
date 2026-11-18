@@ -14,8 +14,8 @@ const { makeLearningData } = fx;
 vi.mock('fs/promises', () => fx.fsPromisesFactory());
 vi.mock('fs', () => fx.fsFactory());
 // Mock cos.js to avoid circular dependency
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosEvents.js', () => fx.cosEventsFactory());
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosEvents.js', () => fx.cosEventsFactory());
 vi.mock('../../lib/fileUtils.js', () => fx.fileUtilsFactory());
 
 import { readFile } from 'fs/promises';

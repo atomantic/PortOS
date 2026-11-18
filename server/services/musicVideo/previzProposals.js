@@ -8,18 +8,18 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { promptAddition } from '../../lib/modelInput.js';
-import { toolFreeOneShotRefusal } from '../../lib/providerVendors.js';
-import { previzCutPatchSchema, previzProposalPartSchemas } from '../../lib/musicVideoStoryValidation.js';
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
-import { previzCutTiming, projectPreviz } from '../../lib/musicVideoPreviz.js';
-import { previzTimeline, previzVehicles } from '../../lib/musicVideoPrevizTimeline.js';
+import { toolFreeOneShotRefusal } from '../../lib/provider/providerVendors.js';
+import { previzCutPatchSchema, previzProposalPartSchemas } from '../../lib/musicVideo/musicVideoStoryValidation.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { previzCutTiming, projectPreviz } from '../../lib/musicVideo/musicVideoPreviz.js';
+import { previzTimeline, previzVehicles } from '../../lib/musicVideo/musicVideoPrevizTimeline.js';
 import { placeWorld, worldSetFootprint } from '../../lib/worldMap.js';
-import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLOR_IDS } from '../../lib/musicVideoPrevizLimits.js';
+import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLOR_IDS } from '../../lib/musicVideo/musicVideoPrevizLimits.js';
 import { requireProject } from './requireProject.js';
 import { runPrevizJob } from '../previzJobs.js';
 
 const deps = {
-  getIngredient: async (id) => (await import('../catalogDB.js')).getIngredient(id),
+  getIngredient: async (id) => (await import('../catalog/catalogDB.js')).getIngredient(id),
   resolve: async (args) => (await import('../promptRunner.js')).resolveProviderAndModel(args),
   run: async (args) => (await import('../promptRunner.js')).runPromptThroughProvider(args),
 };

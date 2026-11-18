@@ -1,48 +1,48 @@
-import { previzBuildJobStartSchema, previzBuildJobFinishSchema, catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
+import { previzBuildJobStartSchema, previzBuildJobFinishSchema, catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalog/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
 
 import { Router } from 'express';
 import { isDeepStrictEqual } from 'node:util';
-import * as catalogDB from '../services/catalogDB.js';
-import { catalogEvents } from '../services/catalogEvents.js';
-import * as catalogSync from '../services/catalogSync.js';
-import { resolveRefs } from '../services/catalogRefResolver.js';
-import { projectToCanon } from '../services/catalogCanonProjection.js';
+import * as catalogDB from '../services/catalog/catalogDB.js';
+import { catalogEvents } from '../services/catalog/catalogEvents.js';
+import * as catalogSync from '../services/catalog/catalogSync.js';
+import { resolveRefs } from '../services/catalog/catalogRefResolver.js';
+import { projectToCanon } from '../services/catalog/catalogCanonProjection.js';
 import { withTransaction } from '../lib/db.js';
-import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideoSubjectLimits.js';
+import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../lib/musicVideo/musicVideoSubjectLimits.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, parsePagination } from '../lib/validation.js';
-import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalogValidation.js';
+import { catalogScrapCreateSchema, catalogScrapPatchSchema, catalogIngredientCreateRouteSchema, catalogIngredientPatchSchema, catalogIngredientLinkSchema, catalogRelationLinkSchema, catalogMediaAttachSchema, catalogMediaLibraryPatchSchema, catalogMediaFromMoodBoardSchema, catalogMediaLibraryQuerySchema, catalogMediaDetachSchema, catalogMediaFileUploadSchema, catalogMediaVoiceMemoSchema, catalogPortraitSetSchema, catalogGeneratedImageAttachSchema, catalogIngredientQuerySchema, catalogIngredientDetailQuerySchema, catalogIngredientCardsQuerySchema, catalogIngredientLockSchema, catalogTagQuerySchema, catalogScrapCommitSchema, catalogExtractRequestSchema, catalogPruneRequestSchema, catalogEmbeddingsBackfillSchema, catalogMigrationRerunSchema, catalogMusicVideoImportSchema, catalogBulkImportSchema, catalogBulkEntrySchema, catalogExportQuerySchema, catalogRevisionQuerySchema, catalogRelatedImagesQuerySchema, catalogRevisionRestoreSchema, catalogUrlIngestSchema, catalogFileIngestSchema, catalogVoiceIngestSchema, catalogBrainIngestSchema, catalogUserTypeSchema, catalogUserTypesSettingsSchema, catalogStoryListQuerySchema, catalogStoryParamsSchema, catalogStoryJoinSchema, catalogStoryDraftSchema, catalogVideoSubjectsQuerySchema, catalogVideoSubjectLinksSchema, catalogVideoSubjectSaveSchema, catalogVideoDescriptionRestoreSchema, REF_KINDS, catalogBatchMediaQuerySchema, catalogLookAroundRenderSchema, catalogLookAroundClipParamsSchema, catalogLookAroundFramesSchema, catalogLookAroundAnglesSchema, catalogMergeSchema, catalogMergeHistoryQuerySchema, catalogMergeRecoverSchema, catalogIncludeEmbeddingQuerySchema, catalogTypeDeleteQuerySchema, catalogSyncQuerySchema } from '../lib/catalog/catalogValidation.js';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
-import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalogTypes.js';
+import { getActiveCatalogTypes, setUserCatalogTypes } from '../lib/catalog/catalogTypes.js';
 import { updateUserTypes } from '../services/catalogUserTypes/store.js';
-import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalogBulkParsers.js';
+import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog/catalogBulkParsers.js';
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed, getEmbeddingsConfig } from '../services/embeddings.js';
-import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
+import { extractIngredientsForScrap } from '../services/catalog/catalogExtraction.js';
 import { listPrevizJobs, startPrevizJob, finishPrevizJob } from '../services/previzJobs.js';
-import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalogGreybox.js';
-import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
+import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalog/catalogGreybox.js';
+import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalog/catalogPhotoreal.js';
 import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
-import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalogPhotorealLook.js';
-import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalogIngestSources.js';
-import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalogMedia.js';
+import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalog/catalogPhotorealLook.js';
+import { ingestFromUrl, ingestFromFile, ingestFromVoice, ingestFromBrain } from '../services/catalog/catalogIngestSources.js';
+import { readImageGenerationMetadata, uploadIngredientMediaFile, recordIngredientVoiceMemo } from '../services/catalog/catalogMedia.js';
 import { getBoard as getMoodBoard } from '../services/moodBoard/index.js';
-import { MAX_CAST_GUIDES, filterLibraryMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, filterLibraryMedia, parseLibraryMediaKey, inferAgeFromText } from '../lib/catalog/catalogMediaLibrary.js';
 import { migrateBibleToCatalog } from '../scripts/migrateBibleToCatalog.js';
 import { previewCatalogCastImport, commitCatalogCastImport } from '../services/musicVideo/catalogCast.js';
-import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalogStories.js';
+import { draftStoryMember, joinStory, listCatalogStories } from '../services/catalog/catalogStories.js';
 import { linkVideoSubjects, listVideoSubjectLinks, restoreVideoSubjectDescription, saveVideoSubjectToCatalog } from '../services/musicVideo/catalogCast.js';
-import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalogFamily.js';
+import { catalogFamilyRenderContext, familyImagesAddition } from '../services/catalog/catalogFamily.js';
 import { resolveGalleryImage } from '../lib/pathSafety.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 
 import catalogIdentityRouter from './catalogIdentity.js';
 import catalogPrimitivesRouter from './catalogPrimitives.js';
 
-import { getPrimitiveContext, createOwnedPrimitive, withUserCreatedLock, addPrimitiveToUniverse, removePrimitiveFromUniverse } from '../services/catalogPrimitives.js';
+import { getPrimitiveContext, createOwnedPrimitive, withUserCreatedLock, addPrimitiveToUniverse, removePrimitiveFromUniverse } from '../services/catalog/catalogPrimitives.js';
 const router = Router();
 router.use('/identity', catalogIdentityRouter);
 router.use('/ingredients/:id', catalogPrimitivesRouter);
@@ -117,7 +117,7 @@ router.post('/scraps/:id/prune', asyncHandler(async (req, res) => {
   const scrap = await catalogDB.getScrap(req.params.id);
   if (!scrap) throw new ServerError('Scrap not found', { status: 404 });
   if (scrap.parentScrapId) throw new ServerError('Prune the parent scrap, not a chunk', { status: 400 });
-  const { pruneCatalogBabble } = await import('../services/catalogPrune.js');
+  const { pruneCatalogBabble } = await import('../services/catalog/catalogPrune.js');
   const draft = await pruneCatalogBabble({ rawText: scrap.rawText, ...options });
   res.json({ scrap, draft });
 }));
@@ -355,7 +355,7 @@ router.get('/ingredients/:id/related-images', asyncHandler(async (req, res) => {
   const ingredient = await catalogDB.getIngredient(req.params.id);
   if (!ingredient) throw new ServerError('Ingredient not found', { status: 404 });
   const media = await catalogDB.listMediaForIngredient(ingredient.id);
-  const { listRelatedImages } = await import('../services/catalogRelatedImages.js');
+  const { listRelatedImages } = await import('../services/catalog/catalogRelatedImages.js');
   res.json(await listRelatedImages(ingredient, media, pagination));
 }));
 
@@ -840,13 +840,13 @@ router.get('/ingredients/:id/photoreal/blend', asyncHandler(async (req, res) => 
 // Look around (#16145): one rotating-camera clip of a place's main plate becomes matching angle plates.
 // The render previews its prompt and price (`dryRun`); nothing attaches to the place until angles are kept.
 router.get('/ingredients/:id/look-around', asyncHandler(async (req, res) => {
-  const { getLookAround } = await import('../services/catalogLookAround.js');
+  const { getLookAround } = await import('../services/catalog/catalogLookAround.js');
   res.json(await getLookAround(req.params.id));
 }));
 
 router.post('/ingredients/:id/look-around', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogLookAroundRenderSchema, req.body ?? {});
-  const { startLookAround } = await import('../services/catalogLookAround.js');
+  const { startLookAround } = await import('../services/catalog/catalogLookAround.js');
   res.status(body.dryRun ? 200 : 202).json(await startLookAround(req.params.id, body));
 }));
 
@@ -854,14 +854,14 @@ router.post('/ingredients/:id/look-around', asyncHandler(async (req, res) => {
 router.post('/ingredients/:id/look-around/:clipId/frames', asyncHandler(async (req, res) => {
   const { id, clipId } = validateRequest(catalogLookAroundClipParamsSchema, req.params);
   validateRequest(catalogLookAroundFramesSchema, req.body ?? {});
-  const { scoreLookAroundClip } = await import('../services/catalogLookAround.js');
+  const { scoreLookAroundClip } = await import('../services/catalog/catalogLookAround.js');
   res.json(await scoreLookAroundClip(id, clipId));
 }));
 
 router.post('/ingredients/:id/look-around/:clipId/angles', asyncHandler(async (req, res) => {
   const { id, clipId } = validateRequest(catalogLookAroundClipParamsSchema, req.params);
   const body = validateRequest(catalogLookAroundAnglesSchema, req.body ?? {});
-  const { saveLookAroundAngles } = await import('../services/catalogLookAround.js');
+  const { saveLookAroundAngles } = await import('../services/catalog/catalogLookAround.js');
   const result = await saveLookAroundAngles(id, clipId, body);
   res.status(result.dryRun ? 200 : 201).json(result);
   if (!result.dryRun) catalogEvents.emit('primitive-changed', { ingredientId: id });

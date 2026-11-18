@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { queue, state, store } = vi.hoisted(() => ({ queue: { tasks: [] }, state: { agents: {} }, store: { jobs: [] } }));
 vi.mock('./store.js', () => ({ loadJobs: vi.fn(async () => store), saveJobs: vi.fn(async data => { store.jobs = data.jobs; }) }));
 vi.mock('./scheduler.js', () => ({ getNextDueJob: vi.fn() }));
-vi.mock('../cosTaskStore.js', () => ({ getCosTasks: vi.fn(async () => queue) }));
-vi.mock('../cosState.js', () => ({ loadState: vi.fn(async () => state) }));
+vi.mock('../cos/cosTaskStore.js', () => ({ getCosTasks: vi.fn(async () => queue) }));
+vi.mock('../cos/cosState.js', () => ({ loadState: vi.fn(async () => state) }));
 vi.mock('../apps.js', () => ({ getAppById: vi.fn() }));
 vi.mock('../taskDataInputs.js', () => ({ appendTaskDataInputs: prompt => prompt, resolveTaskDataInputs: vi.fn() }));
 
@@ -17,8 +17,8 @@ beforeEach(async () => {
   queue.tasks = [];
   state.agents = {};
   // Initialize the I/O doubles before exercising concurrent lazy imports.
-  await import('../cosTaskStore.js');
-  await import('../cosState.js');
+  await import('../cos/cosTaskStore.js');
+  await import('../cos/cosState.js');
   audit = await import('./claimWorkflowAudit.js');
   ({ generateTaskFromJob } = await import('./skillTemplates.js'));
 });

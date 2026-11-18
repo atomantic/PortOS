@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { pathWithin } from '../lib/pathWithin.js';
 
 import migration from './167-editorial-world-doctrine-stages.js';
 
@@ -100,7 +101,8 @@ describe('migration 167 — seed editorial worldbuilding-doctrine stages', () =>
     for (const { stageKey, filename } of FILES) {
       expect(refConfig.stages[stageKey], `stage-config missing ${stageKey}`).toBeTruthy();
       expect(refConfig.stages[stageKey].returnsJson).toBe(true);
-      expect(existsSync(join(repoRoot, 'data.reference', 'prompts', 'stages', filename))).toBe(true);
+      // pathWithin: the test memo keys the stages directory for a name it cannot read from this file.
+      expect(existsSync(pathWithin(join(repoRoot, 'data.reference', 'prompts', 'stages'), filename))).toBe(true);
     }
   });
 });

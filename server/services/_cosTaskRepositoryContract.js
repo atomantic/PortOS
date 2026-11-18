@@ -4,7 +4,7 @@
  * so the two cannot drift. Not a test file itself: it only registers cases.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { WORKING_SET_KEEP_COMPLETED, planListSave } from '../lib/cosTaskRows.js';
+import { WORKING_SET_KEEP_COMPLETED, planListSave } from '../lib/cos/cosTaskRows.js';
 
 const DAY = 86_400_000;
 const NOW = Date.now();

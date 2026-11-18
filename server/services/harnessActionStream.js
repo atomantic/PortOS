@@ -39,7 +39,7 @@ import {
   RUNTIME_ACTIONS,
   spawnRuntimeInstaller,
   stopRuntimeInstaller,
-} from './providerRuntimeInstaller.js';
+} from './provider/providerRuntimeInstaller.js';
 
 /**
  * One global CLI action at a time — npm's global prefix and the vendor install

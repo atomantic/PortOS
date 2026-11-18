@@ -180,10 +180,13 @@ describe('gmailMboxImport — mboxMessageToCandidate', () => {
     expect(c.summary).toBe('To: Alice');
   });
 
-  it('falls back to a content hash when Message-ID is absent', () => {
+  it('scopes the fallback hash by thread when Message-ID is absent', () => {
     const noId = headerLines.filter((l) => !l.startsWith('Message-ID'));
     const c = mboxMessageToCandidate(noId, { selfEmails: [] });
-    expect(c.dedupeKey).toMatch(/^gmail:h:[0-9a-f]{24}$/);
+    const unscoped = mboxMessageToCandidate(noId.filter((l) => !l.startsWith('X-GM-THRID')));
+    expect(unscoped.dedupeKey).toMatch(/^gmail:h:[0-9a-f]{24}$/);
+    expect(c.previousGmailFallbackKey).toBe(unscoped.dedupeKey);
+    expect(c.dedupeKey).toBe(`${unscoped.dedupeKey}:5f42a96`);
     expect(c.metadata.messageId).toBeNull();
   });
 

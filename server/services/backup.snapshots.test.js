@@ -1,5 +1,5 @@
 /** Backup service suite: excludes, snapshot listing/deletion/streaming, dumpPostgres status, manifest generation, the subdirFilter guard and backup state persistence. Shared mocks and helpers live in backup.test.fixture.js (#16215). */
-import { testDataRoot, machineHost, fakeProc, flush, overridable, nonOverridable, assertPoolToolSpawn } from './backup.test.fixture.js';
+import { testDataRoot, machineHost, fakeProc, flush, overridable, nonOverridable, assertPoolToolSpawn, COMPLETE_DUMP } from './backup.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createReadStream, existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -755,6 +755,77 @@ describe('openSnapshotStream', () => {
     vi.useRealTimers();
     proc.emit('close', 0);
   });
+
+  it('terminates a silent tar at the wall-time deadline without an idle kill and holds the read lease until close', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = readySnapshot();
+      const stream = await openSnapshotStream('/dest', 'snap-1');
+      const failed = errored(stream);
+
+      // Browser backpressure can leave tar silent well past the 10-minute idle
+      // window; only the 4-hour wall ceiling should terminate the download.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(proc.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000 + 30 * 60 * 1000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Escalate to SIGKILL if the child is wedged on a stalled mount.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
+
+      // Deletion remains blocked until the child actually closes.
+      await expect(deleteSnapshot('/dest', 'snap-1', { source: machineHost }))
+        .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE' });
+
+      proc.emit('close', null, 'SIGKILL');
+      await expect(failed).resolves.toMatchObject({
+        code: 'BACKUP_PROCESS_TIMEOUT',
+        message: expect.stringMatching(/4 hours/),
+      });
+
+      fs.stat.mockResolvedValue({ isDirectory: () => false });
+      await expect(deleteSnapshot('/dest', 'snap-1'))
+        .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the wall-time deadline when tar exits normally, errors, or aborts', async () => {
+    vi.useFakeTimers();
+    try {
+      const normalProc = readySnapshot();
+      const normalStream = await openSnapshotStream('/dest', 'snap-1');
+      const normalDone = ended(normalStream);
+      normalStream.resume();
+      normalProc.emit('close', 0);
+      await expect(normalDone).resolves.toBeUndefined();
+
+      const errorProc = readySnapshot();
+      const errorStream = await openSnapshotStream('/dest', 'snap-1');
+      const errorFailed = errored(errorStream);
+      errorProc.emit('close', 2);
+      await expect(errorFailed).resolves.toMatchObject({ message: 'tar exited with code 2' });
+
+      const abortedProc = readySnapshot();
+      const abortedStream = await openSnapshotStream('/dest', 'snap-1');
+      const abortFailed = errored(abortedStream);
+      abortedStream.abort();
+      await expect(abortFailed).resolves.toMatchObject({ message: 'Snapshot download aborted: snap-1' });
+      abortedProc.kill.mockClear();
+      abortedProc.signalCode = 'SIGTERM';
+      abortedProc.emit('close', null, 'SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000 + 10_000);
+      expect(normalProc.kill).not.toHaveBeenCalled();
+      expect(errorProc.kill).not.toHaveBeenCalled();
+      expect(abortedProc.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('dumpPostgres status classification', () => {
@@ -859,7 +930,7 @@ describe('dumpPostgres status classification', () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096 });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
-    createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE public.memories (id uuid);\n')]));
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const result = dumpPostgres('/tmp/example.sql');
     await flush();
     assertPoolToolSpawn(spawn.mock.calls[0]);
@@ -902,7 +973,7 @@ describe('dumpPostgres status classification', () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     getServerMajorVersion.mockResolvedValue(17);
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
@@ -927,7 +998,7 @@ describe('dumpPostgres status classification', () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     getServerMajorVersion.mockResolvedValue(null);
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
@@ -1008,7 +1079,7 @@ describe('dumpPostgres status classification', () => {
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       let dumpSize = 0;
       vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: dumpSize }));
-      createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE memories (...);\n')]));
+      createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
 
@@ -1030,7 +1101,7 @@ describe('dumpPostgres status classification', () => {
   it('returns failed/empty_dump when exit 0 but file is 0 bytes', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('');
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
@@ -1039,15 +1110,14 @@ describe('dumpPostgres status classification', () => {
     const result = await p;
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('empty_dump');
+    expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
   });
 
   it('returns ok with streamed sizeBytes and tableCount on a good dump', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
     const readFileSpy = vi.spyOn(fs, 'readFile');
-    createReadStream.mockImplementation(() => Readable.from([Buffer.from(
-      'CREATE TABLE public.memories (\n    id uuid\n);\nCREATE TABLE public.memory_links (\n    id uuid\n);\n'
-    )]));
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
@@ -1061,6 +1131,7 @@ describe('dumpPostgres status classification', () => {
   it('settles failed/inspect_error when streaming the dump fails', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
     createReadStream.mockImplementation(() => new Readable({
       read() { this.destroy(Object.assign(new Error('boom'), { code: 'EIO' })); }
     }));
@@ -1070,6 +1141,7 @@ describe('dumpPostgres status classification', () => {
     await flush();
     proc.emit('close', 0);
     await expect(p).resolves.toMatchObject({ status: 'failed', reason: 'inspect_error' });
+    expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
   });
 });
 

@@ -3,7 +3,7 @@ import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
 import { userLocalToday } from './userTimezone.js';
-import { getActiveProvider } from './providers.js';
+import { getActiveProvider } from './provider/providers.js';
 
 function computeExpectedProgress(goal) {
   const start = new Date(goal.createdAt);

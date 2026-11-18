@@ -517,6 +517,35 @@ describe('missed-slot catch-up at boot (#8456)', () => {
     });
   });
 
+  it('records degraded daily and catch-up backups as failures with the backup reason', async () => {
+    const scheduler = await vi.importActual('./eventScheduler.js');
+    vi.setSystemTime(new Date('2026-01-02T12:00:00.000Z'));
+    const error = 'DB dump timed out';
+    getSettings.mockResolvedValue(SETTINGS);
+    parseCronToPrevRun.mockReturnValue(MISSED_SLOT);
+    schedule.mockImplementationOnce(scheduler.schedule);
+    runBackup
+      .mockResolvedValueOnce({ status: 'degraded', error, snapshotId: 'daily-snapshot' })
+      .mockResolvedValueOnce({ status: 'degraded', error, snapshotId: 'catch-up-snapshot' });
+
+    await startBackupScheduler();
+    try {
+      await scheduler.triggerNow('backup-daily');
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      for (const eventId of ['backup-daily', 'backup-missed-slot-catchup']) {
+        expect(scheduler.getEvent(eventId)).toMatchObject({
+          lastRunSucceeded: false, lastRunSkipped: false, lastError: error, consecutiveFailures: 1
+        });
+        expect(scheduler.getHistory({ eventId, limit: 1 })).toMatchObject([
+          { success: false, skipped: false, error }
+        ]);
+      }
+    } finally {
+      stopBackupScheduler();
+    }
+  });
+
   it('does not catch up when a legacy successful run is at the most recent slot', async () => {
     getSettings.mockResolvedValue(SETTINGS);
     parseCronToPrevRun.mockReturnValue(MISSED_SLOT);

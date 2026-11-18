@@ -7,7 +7,7 @@ vi.mock('../../instances.js', () => mockNoPeers());
 vi.mock('../../sharing/peerSync.js', () => mockNoPeerSync());
 
 const addTask = vi.fn(async (task) => ({ id: 'sys-1', ...task }));
-vi.mock('../../cosTaskStore.js', () => ({ addTask: (...a) => addTask(...a) }));
+vi.mock('../../cos/cosTaskStore.js', () => ({ addTask: (...a) => addTask(...a) }));
 
 let budgetStatus = { withinBudget: true, exceeded: null };
 const recordDomainUsage = vi.fn(async () => {});

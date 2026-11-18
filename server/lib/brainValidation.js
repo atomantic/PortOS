@@ -5,7 +5,7 @@
 import { z } from 'zod';
 import { partialWithoutDefaults, optionalBooleanMap } from './zodCompat.js';
 import { REPO_INTAKE_KEYS } from './repoIntakeActions.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { canonicalThreadRefKind } from './threadRefKinds.js';
 import { THREAD_STATUSES, THREAD_PRIORITIES } from './brainThreads.js';
 import { MAX_QUALITY } from './spacedRepetition.js';

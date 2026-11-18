@@ -17,8 +17,8 @@ vi.mock('./repoCleanupObservation.js', async original => {
   return { ...actual, readCheckoutPathPresence: vi.fn(actual.readCheckoutPathPresence), readLocalBranchPresence: vi.fn(actual.readLocalBranchPresence) };
 });
 vi.mock('./apps.js', () => ({ getAppById: getApp }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: owners }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
+vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: owners }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./supersededLedger.js', async importOriginal => ({ ...await importOriginal(), readVerdictLedger: async () => [] }));
 

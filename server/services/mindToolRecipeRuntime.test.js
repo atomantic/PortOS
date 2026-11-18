@@ -1,7 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 const mock = vi.hoisted(() => ({ capabilities: {}, agentContext: {}, recipes: [], dispatch: vi.fn(), runPrompt: vi.fn(), mutations: [] }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: async () => ({
     config: { persistentMindCapabilities: mock.capabilities },
     persistentMind: { toolActivation: { leases: {}, lastAgedTurnId: null } },
@@ -15,22 +15,22 @@ vi.mock('./voice/tools.js', () => ({
   getToolSpecsForIntent: () => ({ specs: [] }),
   dispatchTool: (...args) => mock.dispatch(...args),
 }));
-vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
-vi.mock('./persistentMindTaskCapability.js', () => ({
+vi.mock('./persistent/persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./persistent/persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: vi.fn(async () => []), buildPersistentMindTaskCapabilityPrompt: () => '',
   readPersistentMindTaskCatalog: vi.fn(), readPersistentMindTaskInventory: vi.fn(),
 }));
-vi.mock('./persistentMindContext.js', () => ({
+vi.mock('./persistent/persistentMindContext.js', () => ({
   createPersistentMindMemoryFromCandidate: vi.fn(), readPersistentMindMemories: vi.fn(async () => []), readPersistentMindName: vi.fn(async () => null),
 }));
-vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: vi.fn(async () => ({})), buildPersistentMindVisibilityPrompt: () => '' }));
-vi.mock('./persistentMindUserActions.js', () => ({ readPersistentMindUserActionsPrompt: vi.fn(async () => '') }));
-vi.mock('./persistentMindCallCapability.js', () => ({ buildPersistentMindCallCapabilityPrompt: () => '', executePersistentMindCallRequest: vi.fn(async () => null) }));
+vi.mock('./persistent/persistentMindVisibility.js', () => ({ readPersistentMindVisibility: vi.fn(async () => ({})), buildPersistentMindVisibilityPrompt: () => '' }));
+vi.mock('./persistent/persistentMindUserActions.js', () => ({ readPersistentMindUserActionsPrompt: vi.fn(async () => '') }));
+vi.mock('./persistent/persistentMindCallCapability.js', () => ({ buildPersistentMindCallCapabilityPrompt: () => '', executePersistentMindCallRequest: vi.fn(async () => null) }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mock.runPrompt(...args), assertVisionRunUsedImages: (_, provider) => provider, resolveLocalPromptBudget: async () => null }));
 vi.mock('./runner.js', () => ({ stopRun: vi.fn() }));
 vi.mock('./mindToolRecipes.js', async () => {
   const { validateMindToolRecipe } = await import('../lib/mindToolRecipes.js');
-  const validate = async (candidate) => validateMindToolRecipe(candidate, (await import('./cosToolRegistry.js')).getCosToolCatalog().tools).definition;
+  const validate = async (candidate) => validateMindToolRecipe(candidate, (await import('./cos/cosToolRegistry.js')).getCosToolCatalog().tools).definition;
   return {
     listRecipes: async () => ({ recipes: structuredClone(mock.recipes) }),
     getRecipeByName: async (name) => structuredClone(mock.recipes.find((recipe) => recipe.name === name)),
@@ -51,8 +51,8 @@ vi.mock('./mindToolRecipes.js', async () => {
     },
   };
 });
-import { executeCosToolCall, readCosToolRecipeCatalog, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cosToolRegistry.js';
-import { createPersistentMindTurnAdapter } from './persistentMindAdapter.js';
+import { executeCosToolCall, readCosToolRecipeCatalog, readPersistentMindRecipeCatalog, getCosToolCatalog, __testing } from './cos/cosToolRegistry.js';
+import { createPersistentMindTurnAdapter } from './persistent/persistentMindAdapter.js';
 const definition = (steps = 2) => ({
   schemaVersion: 1, name: 'recipe.project-check', purpose: 'Read a project check-in',
   parameters: { type: 'object', properties: { project: { type: 'string' } }, required: ['project'], additionalProperties: false },

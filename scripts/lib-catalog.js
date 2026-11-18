@@ -23,6 +23,12 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 export const CATALOG_DIRS = Object.freeze([
   'server/lib',
+  'server/lib/agent',
+  'server/lib/catalog',
+  'server/lib/cos',
+  'server/lib/musicVideo',
+  'server/lib/persistent',
+  'server/lib/provider',
   'client/src/lib',
   'client/src/hooks',
   'client/src/utils',

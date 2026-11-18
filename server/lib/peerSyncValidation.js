@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogValidation.js';
+import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalog/catalogValidation.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from './taskParser.js';
 import { peerSyncTombstoneSchema } from './peerSyncEventSchema.js';
 

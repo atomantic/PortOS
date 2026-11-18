@@ -11,7 +11,7 @@ vi.mock('./heldCheckoutRecovery.js', () => ({}));
 const retirementReceiptMock = vi.hoisted(() => vi.fn(async () => null));
 vi.mock('./branchReconcileOutcome.js', () => ({ recordWorkspaceCheckoutRetirement: retirementReceiptMock }));
 const completionOwnersMock = vi.fn(async () => []);
-vi.mock('./cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
+vi.mock('./cos/cosClaimOwnershipState.js', async importOriginal => ({ ...await importOriginal(), readClaimOwnershipAgents: (...args) => completionOwnersMock(...args) }));
 const completionHoldMock = vi.fn(async () => null);
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: (...args) => completionHoldMock(...args) }));
 const execGitMock = vi.fn();
@@ -1248,7 +1248,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
   // of the claim-ownership lock, so a bind racing the removal settles after it.
   it.each(['present', 'missing'])('serializes a bind racing removal of a %s checkout', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
-    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
     const events = [];
     const scripted = execGitMock.getMockImplementation();
     execGitMock.mockImplementation(async (args, ...rest) => {
@@ -1279,7 +1279,7 @@ describe('removeWorktree identity, dirt and branch preservation', () => {
   // cleanup), so a hung fetch could starve every claim bind queued behind the lock.
   it.each(['present', 'missing'])('fetches the merge target with the ownership queue free for a %s checkout', async state => {
     if (state === 'missing') existsSync.mockReturnValue(false);
-    const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+    const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
     const scripted = execGitMock.getMockImplementation();
     const fetches = [];
     execGitMock.mockImplementation(async (args, ...rest) => {

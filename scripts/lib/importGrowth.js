@@ -29,7 +29,7 @@
  * deferrals) had a 23-module closure — on the order of 331×23 of proxy count
  * for that single edge. `lib/editorial/checkRegistry.js` (a #6009 barrel) was
  * 69 modules, and `lib/validation.js` was reached by 224 suites. A new
- * zero-dependency leaf on the widest owner, `lib/providerVendors.js` (376
+ * zero-dependency leaf on the widest owner, `lib/provider/providerVendors.js` (376
  * suites), costs a few hundred. `EXISTING_SUITE_GROWTH_LIMIT` sits above that
  * ordinary band and below half of the smaller heavy regression, so a limit
  * bump large enough to admit a #6156-class edge fails the pin test.

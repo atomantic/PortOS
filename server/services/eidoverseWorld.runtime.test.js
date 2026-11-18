@@ -52,7 +52,7 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
   };
 });
 
-vi.mock('./persistentMindContext.js', () => ({ readPersistentMindName: vi.fn(async () => mocks.mindName) }));
+vi.mock('./persistent/persistentMindContext.js', () => ({ readPersistentMindName: vi.fn(async () => mocks.mindName) }));
 
 vi.mock('./instances.js', () => ({
   getPeers: vi.fn(async () => []),
@@ -89,8 +89,8 @@ vi.mock('./instanceFeatures.js', () => ({
 // unrelated adapters must never reach live instance data. All-schema grants
 // bypass lease bookkeeping for these calls.
 vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [] }), dispatchTool: vi.fn() }));
-vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
-vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./persistent/persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistent/persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
 
 vi.mock('ws', () => {
   class FakeWebSocket {
@@ -233,7 +233,7 @@ const world = new Proxy(rawWorld, {
   },
 });
 const { EIDOVERSE_WORLD_DESIGN_V1 } = await import('../lib/eidoverseWorldDesign.js');
-const { executeCosToolCall, getCosToolCatalog, __testing: semanticTesting } = await import('./cosToolRegistry.js');
+const { executeCosToolCall, getCosToolCatalog, __testing: semanticTesting } = await import('./cos/cosToolRegistry.js');
 const { eidoverseInspectSceneOutputSchema } = await import('../lib/eidoverseSceneInspection.js');
 
 beforeEach(async () => {

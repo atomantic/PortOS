@@ -5,12 +5,12 @@
 
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
 import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
-import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideoRenderTier.js';
-import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
-import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
-import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
-import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
+import { renderTierVideoSettings, sceneRenderTierPlan } from '../../../server/lib/musicVideo/musicVideoRenderTier.js';
+import { shotActionContractProblem } from '../../../server/lib/musicVideo/musicVideoActionContract.js';
+import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideo/musicVideoConditioning.js';
+import { preMusicClipSound } from '../../../server/lib/musicVideo/musicVideoColdOpen.js';
+import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideo/musicVideoEndFrame.js';
+import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideo/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
@@ -22,8 +22,8 @@ import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { shotRequestSpanSec, ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideoShotTiming.js';
-import { sourceClipNeedSec } from '../../../server/lib/musicVideoSourceTake.js';
+import { shotRequestSpanSec, ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideo/musicVideoShotTiming.js';
+import { sourceClipNeedSec } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import {

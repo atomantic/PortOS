@@ -13,7 +13,7 @@ import { isReasoningModel } from './llm.js';
 import {
   getVoiceProvisioner, DEFAULT_VOICE_BACKEND, sortPreferred, sizeOf, FAST_VOICE_MODEL_MAX_B,
 } from './modelProvisioners.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { whichFirst } from '../../lib/processEnv.js';
 import { PORTS } from '../../lib/ports.js';

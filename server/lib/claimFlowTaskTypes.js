@@ -1,9 +1,9 @@
 // The task kinds whose prompts own their own claim/<item> worktree and
 // push/PR/MR/review lifecycle, declared ONCE for both sides of the contract:
 //
-//   - WRITE side (`services/cosTaskGenerator.js`) stamps `metadata.claimFlow`
+//   - WRITE side (`services/cos/cosTaskGenerator.js`) stamps `metadata.claimFlow`
 //     on a queued task.
-//   - READ side (`services/agentPromptBuilder.js` → `isClaimFlowTask`) decides
+//   - READ side (`services/agent/agentPromptBuilder.js` → `isClaimFlowTask`) decides
 //     a run's claim posture (prompt shape, `configClaimFlow`,
 //     `configCodingOnMain`).
 //
@@ -14,7 +14,7 @@
 // `metadata.analysisType`.
 //
 // Pure leaf: shared by prompt selection, registration and resume authority.
-// claimFlowTaskTypes.test.js fails if a local copy of this list reappears.
+// claimFlowTaskTypes.guard.test.js fails if a local copy of this list reappears.
 
 import { isTruthyMeta } from './metadataFlags.js';
 

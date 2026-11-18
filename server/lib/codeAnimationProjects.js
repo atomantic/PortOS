@@ -5,7 +5,7 @@
  * execution authority.
  */
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { codeAnimationManifestSchema } from './codeAnimationPackage.js';
 import { partialWithoutDefaults } from './zodCompat.js';
 

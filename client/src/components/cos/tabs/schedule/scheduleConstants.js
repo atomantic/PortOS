@@ -70,7 +70,7 @@ export function prReviewerStageRole(stage) {
 
 // A stage declares an execution PROFILE; the profile maps to the enforceable
 // POSTURE a provider must have a maintained recipe for. Mirrors
-// `server/lib/agentExecutionProfiles.js` so the picker offers exactly the
+// `server/lib/agent/agentExecutionProfiles.js` so the picker offers exactly the
 // providers the server would accept at spawn time — and so neither side names
 // a vendor. The Security Scan is a managed server-side classifier and has no
 // posture, so it has no provider picker at all.

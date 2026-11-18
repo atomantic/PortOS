@@ -4,7 +4,7 @@ import { mkdir, open, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { join, dirname, extname, resolve } from 'node:path';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { LAUNCH_VIDEO_FORMATS, appLaunchVideoRequestSchema, appLaunchVideoPublishSchema, validateRequest } from '../../lib/validation.js';
-import { pullRequestProviderOverrideSchema } from '../../lib/cosValidation.js';
+import { pullRequestProviderOverrideSchema } from '../../lib/cos/cosValidation.js';
 import { PATHS, detectImageFormat } from '../../lib/fileUtils.js';
 import { copyFileGuarded } from '../../lib/fileCore.js';
 import { PORTOS_API_URL_TOKEN } from '../../lib/portosUrls.js';
@@ -103,8 +103,8 @@ router.post('/:id/launch-videos/publish', loadApp, asyncHandler(async (req, res)
   if (dirname(source) !== root || !(await stat(source).catch(missingVideoSource)).isFile()) {
     throw new ServerError('Launch video source is invalid', { status: 400 });
   }
-  const { isRunning } = await import('../../services/cos.js');
-  const { addTask } = await import('../../services/cosTaskStore.js');
+  const { isRunning } = await import('../../services/cos/cos.js');
+  const { addTask } = await import('../../services/cos/cosTaskStore.js');
   if (!isRunning()) throw new ServerError('Start CoS before publishing a launch video', { status: 409 });
   const { getInstanceId } = await import('../../services/instanceIdentity.js');
   const task = await addTask({
@@ -129,8 +129,8 @@ router.post('/:id/launch-videos', loadApp, asyncHandler(async (req, res) => {
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(app.id) || !app.repoPath || !await pathExists(app.repoPath)) {
     throw new ServerError('App repository is unavailable', { status: 400 });
   }
-  const { isRunning } = await import('../../services/cos.js');
-  const { addTask } = await import('../../services/cosTaskStore.js');
+  const { isRunning } = await import('../../services/cos/cos.js');
+  const { addTask } = await import('../../services/cos/cosTaskStore.js');
   if (!isRunning()) throw new ServerError('Start CoS before making a launch video', { status: 409 });
   if (options.generateMusic && options.musicTrack) throw new ServerError('Choose generated music or a library track, not both', { status: 400 });
   if (options.motionSkills) {

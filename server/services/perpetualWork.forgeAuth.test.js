@@ -1,10 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
 vi.mock('../lib/childProcess.js', async (original) => ({ ...(await original()), spawn: vi.fn() }));
 vi.mock('./forgeAuth.js', () => ({ resolveForgeTokenEnv: vi.fn() }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
 
 import { spawn } from '../lib/childProcess.js';
 import { resolveForgeTokenEnv } from './forgeAuth.js';

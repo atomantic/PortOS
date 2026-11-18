@@ -267,7 +267,7 @@ export const DEFAULT_EXCLUDES = [
   { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: '/cos/initialized-checkout-fixtures/', reason: 'Retired CoS checkout test fixtures — regenerable, removed by migration 461', overridable: false },
   { path: '/autofixer/worktrees/', reason: 'Disposable Autofixer repair worktrees — recreated for each repair', overridable: false },
-  { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies staged for agent prompts — derived from the bundled submodule, regenerated on demand', overridable: false },
+  { path: '/cos/slashdo-resolved/', reason: 'Resolved slashdo command bodies and claim-prompt sections staged for agent prompts — derived from shipped code, regenerated on demand', overridable: false },
   { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
   // `**` (not `*`) so both engines' checkpoint dirs match: the torch trainer
   // writes training-runs/<id>/checkpoints/, mflux writes
@@ -451,8 +451,11 @@ class BackupProcessTimeoutError extends Error {
  * emits no output until it finishes (#7302). Callers that can produce regular
  * output leave the tight default so a genuinely wedged child is still caught
  * quickly.
+ * `wallOnly` disables the idle timer and progress polling so a streaming download
+ * subject to browser backpressure is not killed as stalled, while still
+ * enforcing the 4-hour wall-time ceiling.
  */
-function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } = {}) {
+function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs, wallOnly = false } = {}) {
   // Internal callers only, but a non-positive or non-numeric override would
   // silently disarm (0, NaN) or tighten (-1) the deadline — fall back instead.
   const idleDeadlineMs = Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0
@@ -483,6 +486,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
   };
 
   const armIdleTimer = () => {
+    if (wallOnly) return;
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => startTermination('idle'), idleDeadlineMs);
     idleTimer.unref?.();
@@ -496,7 +500,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
   const wallTimer = setTimeout(() => startTermination('wall'), BACKUP_PROCESS_WALL_TIMEOUT_MS);
   wallTimer.unref?.();
 
-  if (progressPath) {
+  if (!wallOnly && progressPath) {
     progressPoll = setInterval(() => {
       if (finished || timeoutError || progressPollInFlight) return;
       progressPollInFlight = true;
@@ -521,7 +525,7 @@ function watchBackupProcess(proc, { label, progressPath = null, idleTimeoutMs } 
     finish: () => {
       if (finished) return false;
       finished = true;
-      clearTimeout(idleTimer);
+      if (idleTimer) clearTimeout(idleTimer);
       clearTimeout(wallTimer);
       if (progressPoll) clearInterval(progressPoll);
       if (escalationTimer) clearTimeout(escalationTimer);
@@ -900,13 +904,20 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
  */
 const usesFileEscapeHatch = () => process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file';
 
+function missingDumpParts({ complete, missingTables }) {
+  return [
+    ...(complete ? [] : ['the pg_dump completion marker']),
+    ...missingTables.map(name => `table ${name}`),
+  ].join(', ');
+}
+
 /**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish the benign file
  * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
  *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
- *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'inspect_error'|'timeout', error }
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'inspect_error'|'dump_incomplete'|'timeout', error }
  *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
  *      escape hatch — but the DB is down at backup time; version_mismatch means
  *      no installed pg_dump is new enough for the running server)
@@ -948,7 +959,15 @@ export async function dumpPostgres(outputPath) {
     console.warn(`⚠️ No installed pg_dump satisfies server major ${serverMajor} (using ${pgDumpBin})`);
   }
 
-  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
+  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise, rejectPromise) => {
+    // A failed dump must be absent before a degraded snapshot can be
+    // published. If we cannot remove it, leave the snapshot failed instead.
+    const discardDump = (reason, error) => unlink(outputPath)
+      .catch(err => {
+        if (err.code !== 'ENOENT') throw backupFilesystemFailure('dump cleanup', err);
+      })
+      .then(() => resolvePromise({ status: 'failed', reason, error }), rejectPromise);
+
     const proc = spawn(pgDumpBin, [
       '-h', pgHost,
       '-p', pgPort,
@@ -972,40 +991,36 @@ export async function dumpPostgres(outputPath) {
       if (!watchdog.finish()) return;
       const timeoutError = watchdog.getTimeoutError();
       if (timeoutError) {
-        await unlink(outputPath).catch(() => {});
-        resolvePromise({ status: 'failed', reason: 'timeout', error: timeoutError.message });
-        return;
+        return discardDump('timeout', timeoutError.message);
       }
       if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
-        // pg_dump can exit non-zero after writing a partial file (e.g. mid-dump
-        // connection loss). Remove it so a later restore can't trust a truncated
-        // dump on size alone — a failed dump must leave no restorable artifact.
-        await unlink(outputPath).catch(() => {});
         // A version mismatch is a distinct, actionable failure (install a newer
         // pg_dump) — classify it so the UI can point at the fix instead of the
         // generic "is pg_dump installed / is PG reachable" hint.
         const isMismatch = !satisfies || /server version mismatch|aborting because of server version/i.test(stderr);
-        resolvePromise({ status: 'failed', reason: isMismatch ? 'version_mismatch' : 'dump_error', error: stderr.trim() });
-        return;
+        return discardDump(isMismatch ? 'version_mismatch' : 'dump_error', stderr.trim());
       }
       // Verify: a dump that exits 0 but is empty/truncated is still a failure.
       const info = await stat(outputPath).catch(() => null);
       if (!info || info.size === 0) {
         console.warn('⚠️ pg_dump produced an empty dump file');
-        resolvePromise({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
-        return;
+        return discardDump('empty_dump', 'dump file missing or 0 bytes');
       }
-      // Stream the dump for its table count — reading it whole would scale
-      // server heap with database size. Own the rejection here: this is an
-      // event callback, so a throw would leave the outer Promise unsettled.
+      // Stream the dump to check its restore envelope and count tables
+      // without holding it in memory. This callback owns stream failures.
       const inspected = await inspectDatabaseDump(outputPath).catch((err) => {
         console.warn(`⚠️ pg_dump inspection failed: ${err.code || err.message}`);
         return null;
       });
       if (!inspected) {
-        resolvePromise({ status: 'failed', reason: 'inspect_error', error: 'dump could not be read for verification' });
-        return;
+        return discardDump('inspect_error', 'dump could not be read for verification');
+      }
+      const missing = missingDumpParts(inspected);
+      if (missing) {
+        const error = `The database dump is incomplete (missing ${missing})`;
+        console.warn(`⚠️ pg_dump rejected: ${error}`);
+        return discardDump('dump_incomplete', error);
       }
       const tableCount = inspected.tableCount;
       console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
@@ -1028,9 +1043,9 @@ export async function dumpPostgres(outputPath) {
 }
 
 // Filesystem messages contain private paths; only expose the operation and errno.
-function manifestReadFailure(operation, err) {
+function backupFilesystemFailure(operation, err) {
   const code = /^E[A-Z0-9]+$/.test(err?.code) ? err.code : 'UNKNOWN';
-  return new Error(`Backup manifest ${operation} failed (${code})`);
+  return new Error(`Backup ${operation} failed (${code})`);
 }
 
 /**
@@ -1046,7 +1061,7 @@ function manifestReadFailure(operation, err) {
  */
 export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null, { allowMissingDump = false, assetConsistency } = {}) {
   const entries = await readdir(snapshotDataDir, { recursive: true })
-    .catch(err => { throw manifestReadFailure('data readdir', err); });
+    .catch(err => { throw backupFilesystemFailure('manifest data readdir', err); });
   const files = {};
 
   for (const entry of entries) {
@@ -1056,20 +1071,20 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       // excluded. Preserve that compatibility, but never skip a missing entry.
       if (err.code === 'ENOENT') {
         const entryInfo = await lstat(filePath)
-          .catch(entryErr => { throw manifestReadFailure('data lstat', entryErr); });
+          .catch(entryErr => { throw backupFilesystemFailure('manifest data lstat', entryErr); });
         if (entryInfo.isSymbolicLink()) return null;
       }
-      throw manifestReadFailure('data stat', err);
+      throw backupFilesystemFailure('manifest data stat', err);
     });
     if (!info || !info.isFile() || isOsMetadataFile(basename(entry))) continue;
     files[entry] = await sha256File(filePath)
-      .catch(err => { throw manifestReadFailure('data hash', err); });
+      .catch(err => { throw backupFilesystemFailure('manifest data hash', err); });
   }
 
   if (pgDumpPath) {
     const dumpInfo = await stat(pgDumpPath).catch(err => {
       if (allowMissingDump && err.code === 'ENOENT') return null;
-      throw manifestReadFailure('dump stat', err);
+      throw backupFilesystemFailure('manifest dump stat', err);
     });
     if (dumpInfo && !dumpInfo.isFile()) {
       throw new Error('Backup manifest dump stat failed (not a regular file)');
@@ -1079,7 +1094,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       // (alongside it, not inside it). A future manifest-verify must not assume
       // every key resolves under snapshotDataDir.
       files['../portos-db.sql'] = await sha256File(pgDumpPath)
-        .catch(err => { throw manifestReadFailure('dump hash', err); });
+        .catch(err => { throw backupFilesystemFailure('manifest dump hash', err); });
     }
   }
 
@@ -1468,10 +1483,19 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   let stderrTail = '';
   proc.stderr?.on('data', (chunk) => { stderrTail = (stderrTail + chunk).slice(-500); });
 
+  // Arm only the wall-time ceiling: a slow browser backpressuring stdout must
+  // not trigger an idle kill, while a tar wedged on a stalled mount still hits
+  // the 4-hour backstop even when the client stays connected.
+  const watchdog = watchBackupProcess(proc, {
+    label: `snapshot download ${snapshotId}`,
+    wallOnly: true,
+  });
+
   let finished = false;
   const finish = (error = null) => {
     if (finished) return;
     finished = true;
+    watchdog.finish();
     if (error) archive.destroy(error);
     else archive.end();
   };
@@ -1483,6 +1507,12 @@ export async function openSnapshotStream(destPath, snapshotId, { source } = {}) 
   proc.stdout.pipe(archive, { end: false });
   proc.on('error', finish);
   proc.on('close', (code, signal) => {
+    watchdog.finish();
+    const timeoutError = watchdog.getTimeoutError();
+    if (timeoutError) {
+      finish(timeoutError);
+      return;
+    }
     if (code === 0) {
       finish();
       return;
@@ -2226,7 +2256,7 @@ const LIVE_FILE_RESTORE_OWNERS = Object.freeze([
     appliesTo: scope => !scope || COS_RESTORE_SCOPES.includes(scope) || scope.startsWith('cos/agents/'),
     hold: async (inner, { srcDir, scope }) => {
       const snapshotLegacyConfig = await snapshotLegacyCosConfig(srcDir, scope);
-      const { withLiveCosRestore } = await import('./cosState.js');
+      const { withLiveCosRestore } = await import('./cos/cosState.js');
       return withLiveCosRestore(inner, { snapshotLegacyConfig });
     },
   },
@@ -2316,7 +2346,7 @@ const DUMP_UNREADABLE = Object.freeze({ status: 'failed', reason: 'dump_unreadab
  *   { status: 'ok', dryRun, sizeBytes, tableCount }   (dry-run or applied)
  *   { status: 'skipped', reason: 'no_dump' }           (no sql file in snapshot)
  *   { status: 'skipped', reason: 'not_configured' }    (real restore, PG unreachable)
- *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_journal'|'backup_snapshot_busy'|'restore_error'|'timeout', error? }
+ *   { status: 'failed', reason: 'manifest_unreadable'|'manifest_mismatch'|'dump_unreadable'|'dump_incomplete'|'restore_compatibility'|'restore_preflight'|'restore_preflight_unavailable'|'restore_journal'|'backup_snapshot_busy'|'database_restore_busy'|'restore_error'|'timeout', error? }
  *     (nothing changed; a failed replay is reported only once proven rolled back)
  *   { status: 'failed', reason: 'restore_recovery_pending'|'restore_commit_unknown'|'restore_schema_reconciliation'|'restore_catalog_reconciliation'|'restore_sync_resync'|'restore_recovery_release', error, recovery }
  *     (a restore awaits recovery: ordinary database work stays fenced until
@@ -2416,11 +2446,8 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   // The restore resets every application table first, so a dump that parses
   // but stops early (header-only, or truncated between statements) would
   // commit an empty database. ON_ERROR_STOP cannot see that; the envelope can.
-  if (!dump.complete || dump.missingTables.length) {
-    const missing = [
-      ...(dump.complete ? [] : ['the pg_dump completion marker']),
-      ...dump.missingTables.map(name => `table ${name}`),
-    ].join(', ');
+  const missing = missingDumpParts(dump);
+  if (missing) {
     console.error(`❌ restore: incomplete dump for snapshot ${snapshotId} (missing ${missing})`);
     return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
   }
@@ -2450,9 +2477,24 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);
   if (preflightError) {
-    console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
-    const detail = String(preflightError.message || '').replace(/^Restore preflight:\s*/, '');
-    return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
+    const message = String(preflightError.message || '');
+    // Only explicit PL/pgSQL refusals from backupDatabaseReset.js indicate
+    // unexpected schema objects or ownership; connection/query errors (e.g.
+    // 57P01) must report preflight unavailability instead of a schema conflict.
+    const isExplicitPreflightRefusal = /^Restore preflight:\s*/.test(message)
+      && (!preflightError.code || preflightError.code === 'P0001');
+    if (isExplicitPreflightRefusal) {
+      console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
+      const detail = message.replace(/^Restore preflight:\s*/, '');
+      return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
+    }
+    console.error(`❌ restore: preflight unavailable for snapshot ${snapshotId}: ${preflightError.message}`);
+    const detail = message.trim();
+    return {
+      status: 'failed',
+      reason: 'restore_preflight_unavailable',
+      error: `Could not complete the restore preflight check${detail ? ` (${detail})` : ''}. Restore database connectivity and retry preview before restoring. No data was changed.`,
+    };
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 
@@ -2464,7 +2506,7 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
     releaseSnapshotCut = await acquireBackupSnapshotCut();
   } catch (err) {
     if (err.code !== 'BACKUP_SNAPSHOT_BUSY') throw err;
-    console.warn(`⚠️ restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    console.log(`🚫 restore: refused for snapshot ${snapshotId}: ${err.message}`);
     return {
       status: 'failed',
       reason: 'backup_snapshot_busy',
@@ -2473,6 +2515,10 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   }
   try {
     return await replayAdmittedDump({ tableCount, sizeBytes, snapshotId, dump, reset, replayPath });
+  } catch (err) {
+    if (err.code !== 'DATABASE_RESTORE_BUSY') throw err;
+    console.log(`🚫 restore: refused for snapshot ${snapshotId}: ${err.message}`);
+    return { status: 'failed', reason: 'database_restore_busy', error: err.message };
   } finally {
     releaseSnapshotCut();
   }

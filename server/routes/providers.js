@@ -1,12 +1,12 @@
 import { runtimeUpdateEvents } from '../services/runtimeUpdateEvents.js';
 import { freshQuerySchema, runtimeQuerySchema, providerReadinessQuerySchema, providerReadinessSetupQuerySchema, providerServeModelQuerySchema } from '../lib/queryValidation.js';
 import { EXECUTION_OPTION_DEFINITIONS } from '../lib/executionOptions.js';
-import { harnessForProvider } from '../lib/providerHarnesses.js';
+import { harnessForProvider } from '../lib/provider/providerHarnesses.js';
 import { executionOptionSelectionSchema, providerExecutionOptionsQuerySchema } from '../lib/validation.js';
 import { observeModelResource, observeModelMutations } from '../services/modelObservation.js';
 import { providerModeGroups } from '../lib/aiToolkit/internal/providerModes.js';
-import { tuiModeAddition } from '../lib/providerModePairing.js';
-import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/providerGraphPreview.js';
+import { tuiModeAddition } from '../lib/provider/providerModePairing.js';
+import { buildProviderGraphPreview, toManagementPreviewDto } from '../lib/provider/providerGraphPreview.js';
 import {
   createBinding,
   createConnection,
@@ -17,14 +17,14 @@ import {
   updateBindingSettings,
   updateConnectionSettings,
   updateRouteSettings,
-} from '../services/providerGraph.js';
+} from '../services/provider/providerGraph.js';
 import {
   createService,
   getService,
   listServices,
   refreshServiceCatalog,
   updateService,
-} from '../services/providerServices.js';
+} from '../services/provider/providerServices.js';
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
@@ -57,13 +57,13 @@ import {
 import {
   getProviderRuntimeStatus,
   getProviderRuntimeStatuses,
-} from '../services/providerRuntimeInstaller.js';
+} from '../services/provider/providerRuntimeInstaller.js';
 import { harnessCatalogRuntime, refreshHarnessModels } from '../services/harnesses.js';
 import { streamHarnessAction } from '../services/harnessActionStream.js';
-import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/providerReadiness.js';
+import { getProviderReadinessMap, resetProviderReadinessCache, servedModelId } from '../services/provider/providerReadiness.js';
 import { getLlamaServerEndpoint, relaunchLlamaServerWithAlias } from '../services/llamaServerManager.js';
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
-import { getProviderPrerequisiteMap } from '../services/providerPrerequisites.js';
+import { getProviderPrerequisiteMap } from '../services/provider/providerPrerequisites.js';
 import { isCodexSubscriptionProvider } from '../lib/codexAccount.js';
 import {
   cancelCodexChatGptLogin,
@@ -83,11 +83,11 @@ import {
   publicReviewPosturesForProvider,
   PUBLIC_REVIEW_NO_TOOL_POSTURE,
   PUBLIC_REVIEW_ACTIONS_POSTURE,
-} from '../lib/providerVendors.js';
+} from '../lib/provider/providerVendors.js';
 import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { isMaskedEnvVar } from '../lib/credentialEnvVars.js';
-import { presetDerivable, presetKind } from '../lib/providerPresets.js';
-import { isDerivedPreset } from '../lib/providerGraphRecords.js';
+import { presetDerivable, presetKind } from '../lib/provider/providerPresets.js';
+import { isDerivedPreset } from '../lib/provider/providerGraphRecords.js';
 import { canReviewImages } from '../lib/imageReviewProviders.js';
 import {
   captureSystemCapabilities,
@@ -95,7 +95,7 @@ import {
   withProviderHardwareCompatibility,
 } from '../lib/systemCapabilities.js';
 import { SERVICE_DEFINITIONS } from '../lib/serviceDefinitions.js';
-import { presentServiceDefinition } from '../lib/providerServiceInstances.js';
+import { presentServiceDefinition } from '../lib/provider/providerServiceInstances.js';
 
 /**
  * The CoS Agent Runner's exec allowlist, published read-only so the AI
@@ -235,7 +235,7 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
 
 // Deferred: the preset service reaches the graph store and the composite
 // resolver, which every suite that mounts these routes would otherwise pay for.
-const presetService = () => import('../services/providerPresets.js');
+const presetService = () => import('../services/provider/providerPresets.js');
 
 /**
  * Carry a gateway-backed wrapper's RESOLVED model-access policy from the read
@@ -633,7 +633,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
 
   /**
    * Requirements checklist for every provider backed by a LOCAL daemon
-   * (llama.cpp, Ollama, LM Studio, MTPLX) — see `services/providerReadiness.js`.
+   * (llama.cpp, Ollama, LM Studio, MTPLX) — see `services/provider/providerReadiness.js`.
    *
    * `/runtimes` above answers "can PortOS run this CLI?"; this answers "is the
    * daemon that CLI talks to installed, running, and serving the model this
@@ -730,7 +730,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
    */
   router.post('/:id/execution-options/selection', asyncHandler(async (req, res) => {
     const { model, executionOptions } = validateRequest(executionOptionSelectionSchema, req.body ?? {});
-    const { createExecutionOptionSelection } = await import('../services/providerExecutionOptions.js');
+    const { createExecutionOptionSelection } = await import('../services/provider/providerExecutionOptions.js');
     const selection = await createExecutionOptionSelection(req.params.id, model, executionOptions);
     res.json(presentProvider(await providerService.getProviderById(selection.id), await detectSystemCapabilities()));
   }));
@@ -739,7 +739,7 @@ export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } =
     const { model, refresh } = validateRequest(providerExecutionOptionsQuerySchema, req.query);
     const provider = await providerService.getProviderById(req.params.id);
     if (!provider) throw new ServerError('Provider not found', { status: 404 });
-    const { getExecutionOptionCapabilities } = await import('../services/providerExecutionOptions.js');
+    const { getExecutionOptionCapabilities } = await import('../services/provider/providerExecutionOptions.js');
     res.json(await getExecutionOptionCapabilities(provider, model, { fresh: refresh === 'true' }));
   }));
 

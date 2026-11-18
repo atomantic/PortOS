@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as zlib from 'node:zlib';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
-import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
+import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
 
 const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-codex-inventory-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));

@@ -2,8 +2,8 @@
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
-import { PERSISTENT_MIND_ID } from '../../server/lib/persistentMindTrajectory.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMind.js';
+import { PERSISTENT_MIND_ID } from '../../server/lib/persistent/persistentMindTrajectory.js';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
 
 export default {

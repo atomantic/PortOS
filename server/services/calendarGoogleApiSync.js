@@ -1,7 +1,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { getAuthenticatedClient, GOOGLE_API_TIMEOUT_MS } from './googleAuth.js';
 import { getAccount, updateSubcalendars, mergeDiscoveredSubcalendars, updateSyncStatus } from './calendarAccounts.js';
-import { pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
+import { hasGoogleEventId, pushSyncEvents, getSyncDateRange } from './calendarGoogleSync.js';
 
 const apiSyncLocks = new Set();
 
@@ -54,7 +54,8 @@ async function runApiSyncAccount(accountId, io) {
           pageToken
         });
         const items = response.data.items || [];
-        allEvents.push(...items.map(item => ({
+        // Keep a placeholder for each unidentifiable item so shared reconciliation marks the calendar partial.
+        allEvents.push(...items.map(item => hasGoogleEventId(item) ? {
           id: item.id,
           summary: item.summary || '',
           start: item.start,
@@ -83,7 +84,7 @@ async function runApiSyncAccount(accountId, io) {
               }))
             }
             : null
-        })));
+        } : null));
         pageToken = response.data.nextPageToken;
       } while (pageToken);
       return { sc, allEvents };
@@ -113,24 +114,27 @@ async function runApiSyncAccount(accountId, io) {
       totalNew += syncResult.newEvents;
       totalUpdated += syncResult.updated;
       totalPruned += syncResult.pruned;
-      results.push({ calendarId: sc.calendarId, calendarName: sc.name, events: allEvents.length, ...syncResult, status: 'success' });
-      console.log(`📅 Google API: account ${accountId} calendar synced → ${allEvents.length} events`);
+      const eventCount = syncResult.newEvents + syncResult.updated;
+      results.push({ calendarId: sc.calendarId, calendarName: sc.name, events: eventCount, ...syncResult });
+      console.log(`📅 Google API: account ${accountId} calendar sync ${syncResult.status} → ${eventCount} events`);
     }
 
     if (failures.length === enabledCalendars.length) {
-      const reason = summarizeApiFailures(failures);
+      const reason = summarizeApiIssues(failures);
       const error = new ServerError(`Google API sync failed for all calendars: ${reason}`, { status: 502 });
       error.calendars = failures;
       error.cause = fetchResults.find(result => result.status === 'rejected')?.reason;
       throw error;
     }
 
-    const status = failures.length ? 'partial' : 'success';
-    const reason = failures.length ? summarizeApiFailures(failures) : undefined;
+    const issues = results.filter(result => result.status !== 'success');
+    const status = issues.length ? 'partial' : 'success';
+    const reason = issues.length ? summarizeApiIssues(issues) : undefined;
     await updateSyncStatus(accountId, status);
     io?.emit('calendar:sync:completed', {
       accountId, newEvents: totalNew, updated: totalUpdated, pruned: totalPruned, status, method: 'api',
-      ...(failures.length ? { reason, failedCalendars: failures } : {}),
+      ...(reason ? { reason } : {}),
+      ...(failures.length ? { failedCalendars: failures } : {}),
     });
     console.log(`📅 Google API sync ${status} for account ${accountId}: ${totalNew} new, ${totalUpdated} updated, ${totalPruned} pruned`);
 
@@ -144,9 +148,9 @@ async function runApiSyncAccount(accountId, io) {
   }
 }
 
-function summarizeApiFailures(failures) {
-  const shown = failures.slice(0, 3).map(({ calendarName, error }) => `"${calendarName}": ${error}`).join('; ');
-  return failures.length > 3 ? `${shown}; and ${failures.length - 3} more` : shown;
+function summarizeApiIssues(issues) {
+  const shown = issues.slice(0, 3).map(({ calendarName, error, reason }) => `"${calendarName}": ${error ?? reason}`).join('; ');
+  return issues.length > 3 ? `${shown}; and ${issues.length - 3} more` : shown;
 }
 
 export async function apiDiscoverCalendars(accountId) {

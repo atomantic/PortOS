@@ -87,8 +87,8 @@ inventory.
 
 ## Canonical registry entry
 
-The runtime shape is defined by `server/services/cosToolRegistry.js` and
-`server/lib/cosToolContracts.js`:
+The runtime shape is defined by `server/services/cos/cosToolRegistry.js` and
+`server/lib/cos/cosToolContracts.js`:
 
 ```json
 {
@@ -206,8 +206,8 @@ active revision, so revocation, archive, restore, and schema drift fail closed.
 
 ## MCP context tool definitions
 
-These five tools are advertised from `server/lib/agentContextValidation.js`
-and executed by `server/services/agentContextMcp.js`:
+These five tools are advertised from `server/lib/agent/agentContextValidation.js`
+and executed by `server/services/agent/agentContextMcp.js`:
 
 | Tool | Input | Output and requirement |
 |---|---|---|
@@ -339,14 +339,14 @@ exposable merely because they appear in the internal OpenAPI inventory.
 
 Evidence anchors for these findings are the route catalog `stats` served by
 `GET /api/api-docs/catalog.json`,
-`VOICE_ADAPTERS` in `server/services/cosToolRegistry.js`, the catalog query
-schema in `server/lib/cosToolContracts.js`, the async task policy and normalized
-result path in `server/services/cosToolRegistry.js`, and
-`semanticToolsForConfig`/`getManifest` in `server/services/agentContextMcp.js`.
+`VOICE_ADAPTERS` in `server/services/cos/cosToolRegistry.js`, the catalog query
+schema in `server/lib/cos/cosToolContracts.js`, the async task policy and normalized
+result path in `server/services/cos/cosToolRegistry.js`, and
+`semanticToolsForConfig`/`getManifest` in `server/services/agent/agentContextMcp.js`.
 
 ## Validation
 
-- `server/lib/apiRouteGraph.test.js` — source-derived HTTP inventory (at audit
+- `server/lib/apiRouteGraph.guard.test.js` — source-derived HTTP inventory (at audit
   time 2,138 operations / 2,141 declarations / 146 mounts), coverage of every
   declaration under `server/routes/`, and representative-route pins.
 - `server/lib/socketEventInventory.test.js` — source-derived Socket.IO inventory,

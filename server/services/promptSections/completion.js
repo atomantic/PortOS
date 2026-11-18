@@ -6,17 +6,17 @@ import { buildAutoMergeHandoffInstructions } from '../../lib/mergeGateContract.j
 import { DEFAULT_REVIEWER, REVIEW_UNAVAILABLE_REPORTING_NOTE, ZERO_REVIEWER_COVERAGE_NOTE, hasRequiredReviewer, isCliReviewer, isToolFreeReviewer, normalizeReviewUsernames, resolveClaimReviewerConfig, buildReviewerPinNote, buildReviewerEffortNote, buildReviewWithArgs } from '../../lib/reviewerConfig.js';
 import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js';
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js';
 import { canTypeSlashCommands, agentOwnsPrWorkflow, PR_OPENED_BY } from '../../lib/slashdoInvocation.js';
 import { shellQuote } from '../../lib/shellQuote.js';
 import { LOCAL_REVIEW_LIFECYCLE_SCRIPT, LOCAL_REVIEW_LIFECYCLE_GUIDE } from '../../lib/localReviewBridge.js';
-import { COMPLETION_MODES } from '../../lib/agentCompletionMode.js';
+import { COMPLETION_MODES } from '../../lib/agent/agentCompletionMode.js';
 import { PR_COMPLETIONS, leavesPrForHuman, resolvePrCompletion } from '../../lib/prDisposition.js';
 import { LIGHT_CONTEXT_PROVIDER_TYPES, SIMPLIFY_INLINE_REVIEW } from './constants.js';
 import { buildCiMergeGateSteps, buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata, DEFAULT_BRANCH_HEAD_GUIDANCE, LEAVE_PR_OPEN_STEP } from './reviewLifecycle.js';
 
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
-import { agentApiCurl } from '../../lib/agentApiToken.js';
+import { agentApiCurl } from '../../lib/agent/agentApiToken.js';
 
 import { isTruthyMeta } from '../../lib/metadataFlags.js';
 export const NO_CHANGE_AUDIT_GUIDANCE = 'This audit may legitimately conclude that no change is needed. First verify the data this audit owns against authoritative sources. If the audited data is current, leave the worktree clean and do not run the commit, push, PR, or review steps below; write the completion sentinel when this provider uses one, or exit without committing when it does not. If a change is needed, continue through the normal workflow below.';
@@ -48,7 +48,7 @@ const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its f
  * then asks a human an unattended run does not have: an OpenCode MTPLX TUI run
  * stalled exactly there, refusing the sentinel because "the current session is
  * a read-only file-search specialist". (The role itself is pinned away at the
- * spawn site now — `ensureOpencodeAgent` in lib/providerVendors.js — so this
+ * spawn site now — `ensureOpencodeAgent` in lib/provider/providerVendors.js — so this
  * note is the belt, not the fix.) Stating the carve-out is what makes the write
  * reachable when some future host does the same thing.
  *
@@ -650,7 +650,7 @@ const RECORD_REVIEW_HEAD = 'F="$(git rev-parse --git-path portos-review-status)"
 
 /**
  * A GitHub participant may hand its pending CI to the server coordinator, which
- * merges only the recorded head under its own admission (cosMergeHandoff.js).
+ * merges only the recorded head through the forge (cosMergeHandoff.js).
  */
 function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
   const command = agentApiCurl({ apiBase: localApiBaseUrl(), path: '/api/cos/merge-handoff',
@@ -665,7 +665,7 @@ function buildPendingMergeHandoffLines(agentId, { review = true } = {}) {
     ] : []),
     `Once the published head (\`git rev-parse HEAD\` equals the PR head) has passed local validation${review ? ' and every configured review is satisfied or explicitly optional-inconclusive' : ''}, and the PR is ready (not draft), request a handoff only if backlog policy is configured${review ? ' — unless review is `review-blocked`, whose stop rule still applies' : ''}. Replace PR_URL, HEAD_SHA (the full 40-character head) and WORKTREE_PATH (this checkout):`,
     '```bash', command, '```',
-    'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, acquire admission, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue owning delivery through the hosting provider under the repository rules below. A refused optional handoff does not create an additional merge requirement and never expands caller or target authorization.',
+    'Require a parsed JSON response with queued:true and a receipt whose headSha equals HEAD_SHA. Then the receipt is your merge outcome: do not wait for CI, merge, enable auto-merge, close the issue, release a claim, or remove the branch or worktree; the coordinator merges or dispatches recovery (a moved head, failed check or conflict). Report the PR URL, head and receipt id, say the PR is handed to the PortOS pending-merge coordinator with CI pending and is NOT yet merged, write the completion sentinel if this run uses one, and stop. This overrides later CI waits, MERGED-only completion and cleanup instructions, including delegated slashdo workflows. On queued:false with retryable:true, retry up to 3 times 5 seconds apart. Any other refusal, an HTTP/auth/transport error or unreadable JSON means no handoff: continue owning delivery through the hosting provider under the repository rules below. A refused optional handoff does not create an additional merge requirement and never expands caller or target authorization.',
   ];
 }
 
@@ -681,29 +681,32 @@ export const AUTO_MERGE_SECTION = [
   'Auto-merge enabled is pending, not delivered. Keep watching CI on that head until the PR reports MERGED, then finish cleanup and completion as usual. If a check fails, run `gh pr merge <PR_URL> --disable-auto` before pushing a fix so an unreviewed head cannot merge, fix and push as the CI steps describe, repeat any review the new head requires, then enable auto-merge again for the new head. If GitHub refuses auto-merge (disabled for the repository, or no protected checks), merge normally after CI passes. GitLab, leave-open and draft policies ignore this section.',
 ].join('\n');
 
-export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false, mergeHandoff = false } = {}) {
-  const section = buildMergeAdmissionBody(agentId, { review, mergeHandoff });
-  return autoMerge ? `${section}\n\n${AUTO_MERGE_SECTION}` : section;
+export function buildMergeAdmissionSection(agentId, { review = true, autoMerge = false, mergeHandoff = false, swarmClaim = false } = {}) {
+  const section = buildMergeAdmissionBody(agentId, { review, mergeHandoff, swarmClaim });
+  return autoMerge && !swarmClaim ? `${section}\n\n${AUTO_MERGE_SECTION}` : section;
 }
 
-function buildMergeAdmissionBody(agentId, { review, mergeHandoff }) {
+function buildMergeAdmissionBody(agentId, { review, mergeHandoff, swarmClaim }) {
+  const swarmPolicy = 'When Phase A selects multiple issues, only the swarm parent may merge. Follow the serialized Phase C queue. Do not enable native auto-merge or hand pending merges to PortOS for any PR/MR in the batch.';
   if (!agentId) return [
     '## Hosting-provider merge authority',
+    ...(swarmClaim ? [swarmPolicy] : []),
     'Use only your authenticated account and assigned repository/PR; missing authorization or an ambiguous target means stop. Follow the target repository’s documented validation. GitHub/GitLab enforces merge rules: pin the PR head and confirm MERGED (queued/API errors are not success). No second PortOS certificate is required. Preserve active owners and unique local content during supported cleanup.',
   ].join('\n');
   return [
-    ...(mergeHandoff ? [...buildPendingMergeHandoffLines(agentId, { review }), ''] : []),
+    ...(mergeHandoff && !swarmClaim ? [...buildPendingMergeHandoffLines(agentId, { review }), ''] : []),
     '## Hosting-provider merge authority',
     `This run is ${agentId}. Keep the assigned repository, PR/MR, branch and checkout bound to this task; a child or third-party issue/PR cannot expand that authority.`,
     'Use only the authenticated account and exact repository/PR assigned to this task. Missing authorization or an ambiguous target means stop and report it; never invent a parent, borrow another run’s identity, or change repository protection.',
     'GitHub/GitLab repository rules decide merge eligibility. Complete the target repository’s documented validation and requested reviews, then use its normal merge API/CLI pinned to the current PR head (--match-head-commit <sha> on GitHub). Do not use admin/bypass flags or require a second PortOS admission, attestation, preparation turn, configuration switch or merged-tree certificate. An empty provider-required check set is not itself a failure; do not invent expected workflows beyond repository policy.',
     'Main may move continuously. Do not rebase, push, repeat CI or restart review merely because the base advanced. Resolve actual conflicts or an enforced up-to-date requirement; validate substantive changes and retain applicable review evidence.',
-    'Native provider auto-merge is allowed when the API accepts it. Enabled/queued is pending, not MERGED: retain responsibility and observe the provider’s final result. A confirmed MERGED state for the exact repository/PR establishes delivery, including auto-merge; API errors or unreadable state never establish success.',
+    swarmClaim ? swarmPolicy
+      : 'Native provider auto-merge is allowed when the API accepts it. Enabled/queued is pending, not MERGED: retain responsibility and observe the provider’s final result. A confirmed MERGED state for the exact repository/PR establishes delivery, including auto-merge; API errors or unreadable state never establish success.',
     'After confirmed delivery, use the supported cleanup service for the exact local target. Preserve active owners, dirty/untracked/unique content and protected refs. PortOS holds no merge lease for this run. Never infer local removal from a remote branch deletion.',
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false, workflowScope = null, mergeHandoff = false } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, swarmClaim = false, agentId = null, autoMerge = false, workflowScope = null, mergeHandoff = false } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -718,14 +721,17 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
       'For that workflow-scope handoff, write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Grant workflow scope through the supported GitHub authorization flow before delivery resumes"]}. Name the PR and missing scope in reason. A generic blocked/incomplete outcome without this recovery mode is treated as machine-recoverable and wastes automatic retry/spawn budget on the same permission boundary. Never refresh credentials or retry the denied merge yourself.',
       '',
     ] : []),
-    ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen, mergeHandoff }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge, mergeHandoff }), ''] : []),
+    ...(!prStaysOpen ? [
+      ...(!swarmClaim ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen, mergeHandoff }), ''] : []),
+      buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge, mergeHandoff, swarmClaim }), '',
+    ] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [
       'PR completion policy: LEAVE OPEN for further human review. This overrides any merge, auto-merge, issue-close, or merged-branch cleanup instruction in the claim prompt and delegated slashdo commands. Do not pass --merge, enable auto-merge, merge the PR/MR, or close the issue/ticket.',
       'Complete implementation, configured reviews, publication, and CI checks as usual. Once those gates pass, leave the PR/MR open, report its URL and review/CI results, and preserve the claim markers, issue state, branch, and worktree for the human handoff. This is a successful completion; do not wait for a human or require MERGED status. Apply this policy to every child claim in a swarm.',
       '',
     ] : isMergeOnGreen ? [
-      'PR completion policy: MERGE ON GREEN (no code review). This overrides any code review or reviewer requirement in the claim prompt and delegated slashdo commands. Do not invoke external or local code reviewers. Complete implementation, publication, and CI checks as usual. Once CI checks pass, merge the PR/MR, close the issue/ticket, and clean up. Apply this policy to every child claim in a swarm.',
+      `PR completion policy: MERGE ON GREEN (no code review). This overrides any code review or reviewer requirement in the claim prompt and delegated slashdo commands. Do not invoke external or local code reviewers. Complete implementation, publication, and CI checks as usual. ${swarmClaim ? 'In a multi-issue swarm, children stop after publication and the parent owns merge, issue closure, and cleanup through Phase C. If Phase A selects one issue, follow the normal single-issue merge flow.' : 'Once CI checks pass, merge the PR/MR, close the issue/ticket, and clean up.'}`,
       '',
     ] : []),
     'This is a self-managed claim flow. The claim prompt above owns its claim worktree, branch, PR/MR, review, merge or human-handoff, and cleanup. Follow its phase-specific exit conditions — do NOT stop after a code commit or hand the lifecycle back to PortOS.',
@@ -746,10 +752,10 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
   return lines.join('\n');
 }
 
-// `portosMergesBranchOnExit` moved to `lib/agentCompletionMode.js` (it is an
+// `portosMergesBranchOnExit` moved to `lib/agent/agentCompletionMode.js` (it is an
 // input to the one completion-mode decision); re-exported here so the prompt
 // sections that already import it from this module keep working.
-export { portosMergesBranchOnExit } from '../../lib/agentCompletionMode.js';
+export { portosMergesBranchOnExit } from '../../lib/agent/agentCompletionMode.js';
 
 // The one commit-hygiene sentence every manual commit step composes — the
 // slashdo-free TUI workflow, the PR-owning CLI workflow and the auto-merge
@@ -775,7 +781,7 @@ export function buildAutoMergeCommitStep(baseBranch = null) {
  * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
  * branch (review fixes), or hand off to PortOS's post-exit push.
  *
- * `mode` is the resolver's decision (see `lib/agentCompletionMode.js`); by the
+ * `mode` is the resolver's decision (see `lib/agent/agentCompletionMode.js`); by the
  * time the TUI and existing-branch arms above have already returned, `mode`
  * being `WORKTREE_NO_PUSH` / `PORTOS_MERGES` implies a non-TUI host, so
  * `canTypeSlashCommands` alone (no separate `isTui` re-check) tells the two
@@ -1354,7 +1360,7 @@ export function buildInlineReviewLoopSection({
  * to the legacy commit-only block where PortOS handles push+PR on exit.
  *
  * Branches on `mode` first, mirroring the resolver's own rule order
- * (`lib/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
+ * (`lib/agent/agentCompletionMode.js`) rather than re-testing `worktreeInfo` /
  * `willOpenPR` — the caller already resolved those into `mode`.
  */
 export function buildCliCompletionSection({ worktreeInfo, willOpenPR, prCompletion = PR_COMPLETIONS.MERGE_ON_GREEN, mode = null, canTypeSlashCommands = false, rendersInlinePrLifecycle = false, simplifyEnabled = false, humanLandsPr = false, reviewPolicy, forgeCli = 'gh', noChangeSuccess = false, localReviewSection = '', localReviewRequired = true, postPrReview = null, mergeAdmission = false, mergeHandoff = false }) {

@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS = 15000;
  * @param {string[]} args - argv, expected to end in `app-server`.
  * @param {{ envVars?: NodeJS.ProcessEnv }|null} provider - only `envVars` is
  *   read (a toolkit provider record, or `null` for a bare harness probe with
- *   no per-record overrides — `services/providerRuntimeInstaller.js`).
+ *   no per-record overrides — `services/provider/providerRuntimeInstaller.js`).
  * @param {{ timeoutMs?: number, label?: string }} [options]
  * @returns {Promise<string[]>} de-duplicated, non-hidden model ids, followed by
  *   any shipped preset id the CLI's (lagging) catalog does not list yet.

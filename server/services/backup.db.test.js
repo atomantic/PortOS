@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { checkHealth, ensureSchema, query, close, getServerMajorVersion, isTestDatabase, POOL_CONFIG } from '../lib/db.js';
+import pg from 'pg';
+import { checkHealth, ensureSchema, query, close, getServerMajorVersion, isTestDatabase, POOL_CONFIG, databaseRestoreRecovery } from '../lib/db.js';
+import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
+import { REQUIRED_DB_EXTENSIONS } from '../lib/db/extensions.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import { ownTestBodies } from '../lib/mockPathsDataRoot.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -65,9 +68,8 @@ const feedSequenceValues = async () => Object.fromEntries((await query(
   [syncFeedTables.map(syncFeedSequenceName)],
 )).rows.map(({ sequencename, v }) => [sequencename, v]));
 
-const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
 const extensionIds = async () => (await query(
-  'SELECT extname, oid::text AS oid FROM pg_extension WHERE extname = ANY($1::text[]) ORDER BY extname', [REQUIRED_EXTENSIONS],
+  'SELECT extname, oid::text AS oid FROM pg_extension WHERE extname = ANY($1::text[]) ORDER BY extname', [REQUIRED_DB_EXTENSIONS],
 )).rows;
 
 // The application role cannot CREATE EXTENSION (needs a superuser), so a
@@ -113,8 +115,8 @@ $portos_fixture_reset$`;
 // extensions survived the reset by identity (an unchanged oid was not recreated).
 async function resetApplicationObjects() {
   const before = await extensionIds();
-  if (before.length !== REQUIRED_EXTENSIONS.length) {
-    throw new Error(`${REQUIRED_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
+  if (before.length !== REQUIRED_DB_EXTENSIONS.length) {
+    throw new Error(`${REQUIRED_DB_EXTENSIONS.join(' and ')} must be provisioned by an administrator first `
       + `(see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"); found ${before.map(e => e.extname).join(', ') || 'none'}`);
   }
   await query(DROP_APPLICATION_OBJECTS);
@@ -207,8 +209,8 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
   // Prepare the shared snapshot in a hook so setup failures stop dependent
   // cases and the first test's budget measures restore and its assertions.
   // Teardown drains it too: a timed-out hook keeps running like a case does.
-  // The DB config leaves hookTimeout at Vitest's 10 s default, which the schema
-  // rebuild, two migration runs and pg_dump do not fit on a loaded host.
+  // The runner's default hook budget can be too short for the schema rebuild,
+  // two migration runs and pg_dump on a loaded host.
   // fixtureSetup stays the real work so teardown drains it even after the
   // hook has been failed for running over budget.
   beforeAll(() => {
@@ -300,6 +302,41 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     feedBefore = await feedSequenceValues();
   }
 
+  it('refuses restore before writing a journal when an admitted query is blocked by PostgreSQL', async () => {
+    const lockKey = 16694;
+    const holder = new pg.Client(POOL_CONFIG);
+    const begin = vi.spyOn(databaseRestoreRecovery, 'begin');
+    let queryOutcome;
+    let restoreOutcome;
+    let held;
+    let attempted;
+    try {
+      await holder.connect();
+      await holder.query('SELECT pg_advisory_lock($1)', [lockKey]);
+      held = Promise.allSettled([query('SELECT pg_advisory_xact_lock($1)', [lockKey])]).then(([result]) => { queryOutcome = result; });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      attempted = Promise.allSettled([restore()]).then(([result]) => { restoreOutcome = result; });
+      await vi.waitFor(() => expect(query('SELECT 1')).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' }), { timeout: 5000 });
+      await vi.advanceTimersByTimeAsync(120_000);
+      vi.useRealTimers();
+      await vi.waitFor(() => expect(restoreOutcome).toBeDefined(), { timeout: 5000 });
+      expect(restoreOutcome).toMatchObject({
+        status: 'fulfilled',
+        value: { status: 'failed', reason: 'database_restore_busy', error: expect.stringContaining('then retry') },
+      });
+      expect(begin).not.toHaveBeenCalled();
+      expect(databaseRestoreRecovery.read()).toBeNull();
+      await expect(withBackupAssetPublication(async () => (await query('SELECT 1')).rowCount, { timeoutMs: 100 })).resolves.toBe(1);
+      expect(queryOutcome).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      await holder.end();
+      await Promise.allSettled([held, attempted]);
+      begin.mockRestore();
+    }
+    expect(queryOutcome).toMatchObject({ status: 'fulfilled', value: { rowCount: 1 } });
+  });
+
   it('restores a real pre-FK dump, discards newer rows, and runs schema repair and ordered migrations', async () => {
     const { CHANGE_TOKEN_DOMAINS, getChangeToken } = await import('./changeToken.js');
     const beforeTokens = Object.fromEntries(CHANGE_TOKEN_DOMAINS.map((domain) => [domain, getChangeToken(domain)]));
@@ -366,7 +403,6 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
   // with its receipt and ORIGINAL floors, and recovery repairs without replay.
   it('fences a committed replay whose migrations fail, then recovers from the receipt and original floors', async () => {
     const { resumeDatabaseRestore } = await import('./backupRestoreRecovery.js');
-    const { databaseRestoreRecovery } = await import('../lib/db.js');
     await query("SELECT nextval('memories_sync_feed_seq') FROM generate_series(1, 3)");
     const floorBefore = BigInt((await feedSequenceValues()).memories_sync_feed_seq);
     runDbMigrationsFault.next = new Error('injected migration fault');

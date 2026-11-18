@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { __resetPrevizJobsForTests, finishPrevizJob, listPrevizJobs, startPrevizJob } from './previzJobs.js';
-import { catalogEvents } from './catalogEvents.js';
+import { catalogEvents } from './catalog/catalogEvents.js';
 
 beforeEach(() => { __resetPrevizJobsForTests(); vi.useRealTimers(); });
 

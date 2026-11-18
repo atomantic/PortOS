@@ -2,11 +2,11 @@
  * The one translation between the registry's name for a direct API binding
  * (`direct`) and the graph's (`harness_id = NULL`).
  *
- * A DELIBERATE MIRROR of the minimum `server/lib/providerHarnesses.js` the
+ * A DELIBERATE MIRROR of the minimum `server/lib/provider/providerHarnesses.js` the
  * toolkit needs (#7562). This directory is vendored and stays self-contained —
  * no imports out to other PortOS modules (see `aiToolkit/AGENTS.md`) — so the
  * lookups are duplicated rather than imported, exactly as `gateways.js` is.
- * `server/lib/providerHarnesses.parity.test.js` fails when the two drift.
+ * `server/lib/provider/providerHarnesses.parity.test.js` fails when the two drift.
  *
  * Only this translation is mirrored: the id list, bindings, recipes and
  * matchers stay host-side, because the toolkit never materializes a route — it

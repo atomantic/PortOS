@@ -8,7 +8,7 @@ import {
   toBareModelIds,
 } from './opencodeConfig.js';
 import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
-import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from './agentExecutionProfiles.js';
+import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 
 // Spelled out rather than imported from the module under test: these three
 // permissions ARE the contract (OpenCode's own defaults deny them because no

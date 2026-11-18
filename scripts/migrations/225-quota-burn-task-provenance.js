@@ -2,7 +2,7 @@
  * Migration 225 — stamp `quotaBurnFamily` onto burn tasks queued before it existed.
  *
  * A quota-burn dispatch queues an ordinary CoS task (`quotaBurnJobs/agentPrompt.js`) that the spawn scheduler used to subject to the per-app REVIEW COOLDOWN (30 minutes, re-stamped by every completing task on that app),
- * which never lapses on an app with other recurring work, so the burn sat in Pending until its window reset unspent. Burn tasks are now exempt (`isCooldownExemptTask` in `server/services/cosTaskGenerator.js`) and
+ * which never lapses on an app with other recurring work, so the burn sat in Pending until its window reset unspent. Burn tasks are now exempt (`isCooldownExemptTask` in `server/services/cos/cosTaskGenerator.js`) and
  * `quotaBurnRunner.js` advances the family's plan on completion; both recognise a burn by `metadata.quotaBurnFamily`, stamped at queue time, but nothing rewrites tasks already on disk. An unstamped stranded burn also
  * REJECTS its own re-dispatch (`addTask` dedupes on first-line description + app), making that plan job permanently unreachable.
  *

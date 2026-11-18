@@ -12,7 +12,7 @@ import {
   filterSelectableModels,
   isAntigravityProvider,
   isConfiguredDefaultModel,
-} from './providerModels.js';
+} from './provider/providerModels.js';
 
 /**
  * Listed string model ids minus the CLI-default sentinels (a posture, not a model).

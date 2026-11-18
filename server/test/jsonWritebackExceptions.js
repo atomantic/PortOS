@@ -2,11 +2,11 @@
 // module + normalized first argument, never source positions. See JSON_WRITEBACK.md.
 export const JSON_WRITEBACK_EXCEPTIONS = [
   {
-    "key": "agentRunReconciler.js :: path",
+    "key": "agent/agentRunReconciler.js :: path",
     "reason": "No failed-read write-back: repair planning and its final re-read skip null run metadata."
   },
   {
-    "key": "agentRunTracking.js :: metaPath",
+    "key": "agent/agentRunTracking.js :: metaPath",
     "reason": "No failed-read write-back: completion returns on null before metadata or output writes."
   },
   {
@@ -42,7 +42,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Rebuildable status: a lost last-run record only resets the displayed run status; the next sync rewrites it."
   },
   {
-    "key": "cosAgentCompletionIndex.js :: orderFilePath ( )",
+    "key": "cos/cosAgentCompletionIndex.js :: orderFilePath ( )",
     "reason": "Derived projection: an absent or corrupt file reads as empty and is backfilled from the archive metadata."
   },
   {
@@ -95,7 +95,7 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "No non-strict write-back: loadFileTraining defaults strict=true and all mutation callers retain that default; tolerant reads cannot feed persistence."
   },
   {
-    "key": "providerQuotaShare.js :: PROVIDER_QUOTAS_FILE",
+    "key": "provider/providerQuotaShare.js :: PROVIDER_QUOTAS_FILE",
     "reason": "No non-strict write-back: readLocalQuotaCards only projects UI cards; the quota merge writer reads strictly."
   },
   {

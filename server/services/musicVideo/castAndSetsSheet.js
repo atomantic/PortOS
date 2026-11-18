@@ -14,7 +14,7 @@
  * and opened on its own.
  */
 
-import { currentCastSetsInspection } from '../../lib/musicVideoCastSetsInspection.js';
+import { currentCastSetsInspection } from '../../lib/musicVideo/musicVideoCastSetsInspection.js';
 import { plannedTests } from './castAndSetsPlan.js';
 import { renderDefinitionsSection } from './castAndSetsDefinitions.js';
 

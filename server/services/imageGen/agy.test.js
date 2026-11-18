@@ -41,11 +41,11 @@ vi.mock('../../lib/childProcess.js', async (importOriginal) => {
 });
 
 // The install's agy model catalog, which generateImage reads (through a
-// deferred import of services/providers.js) to clamp the effort ladder and to
+// deferred import of services/provider/providers.js) to clamp the effort ladder and to
 // re-point a rotated-out shipped default. Empty = "no catalog", the shape a
 // fresh install / uninitialized toolkit produces.
 const catalog = vi.hoisted(() => ({ models: [] }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: async (id) => (id === 'antigravity-cli' ? { id, models: catalog.models } : null),
 }));
 

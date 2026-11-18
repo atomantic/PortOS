@@ -18,7 +18,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-production-') }));
 afterAll(cleanupTempDataRoots);
 const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => greyboxCatalog);
+vi.mock('../catalog/catalogDB.js', () => greyboxCatalog);
 
 const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));
@@ -37,7 +37,7 @@ vi.mock('../../lib/imageCleanDefaults.js', () => ({ resolveImageCleaners: () => 
 
 const { dispatchProductionStep, dispatchStoryboardStillClip } = await import('./productionDispatch.js');
 const { assertProductionSubmission } = await import('./productionService.js');
-const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
+const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
 
 const project = {
   id: 'mv-example',

@@ -17,7 +17,7 @@ import socket from '../../../services/socket';
 import useMounted from '../../../hooks/useMounted';
 import useUnsavedChangesGuard from '../../../hooks/useUnsavedChangesGuard';
 import { resolveDetailTab } from '../../../lib/creativeLibraries';
-import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../../server/lib/musicVideoSubjectLimits.js';
+import { changedMusicVideoDescriptionOverLimit, MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import { ingredientPayload, sameValue } from './ingredientDraft';
 
 export default function useIngredientEditor({ id, tabParam, library, backPath, navigate }) {
@@ -169,7 +169,13 @@ export default function useIngredientEditor({ id, tabParam, library, backPath, n
       const current = ++request;
       getCatalogIngredientDetails(id, { silent: true, view: detailView }).then(details => {
         if (!active || current !== request || !details?.ingredient) return;
-        setRecord(previous => previous ? { ...previous, sharedIdentity: details.sharedIdentity || null } : previous);
+        setRecord(previous => {
+          if (!previous) return previous;
+          const sharedIdentity = details.sharedIdentity || null;
+          if (details.ingredient.id !== previous.id) return { ...previous, sharedIdentity };
+          return { ...previous, sharedIdentity, coverMedia: details.coverMedia || null,
+            ...(sameValue(previous.refs, details.refs) ? {} : { refs: details.refs, universeContext: details.universeContext }) };
+        });
         if (details.ingredient.id === editSnapshot.current.id && details.ingredient.updatedAt
           && details.ingredient.updatedAt !== editSnapshot.current.updatedAt) {
           if (editSnapshot.current.dirty) setExternalDetails(details);
@@ -181,11 +187,18 @@ export default function useIngredientEditor({ id, tabParam, library, backPath, n
     const changed = event => {
       if ([event?.sourceId, event?.survivorId].includes(id)) refreshIdentity();
     };
-    const primitiveChanged = (event) => { if (event?.ingredientId === editSnapshot.current.id) refreshIdentity(); };
-    socket.on('catalog:primitive-changed', primitiveChanged);
+    const ingredientChanged = (event) => { if (event?.ingredientId === editSnapshot.current.id) refreshIdentity(); };
+    socket.on('catalog:primitive-changed', ingredientChanged);
+    socket.on('catalog:assets-changed', ingredientChanged);
     socket.on('catalog:identity-changed', changed);
     socket.on('connect', refreshIdentity);
-    return () => { active = false; socket.off('catalog:identity-changed', changed); socket.off('catalog:primitive-changed', primitiveChanged); socket.off('connect', refreshIdentity); };
+    return () => {
+      active = false;
+      socket.off('catalog:identity-changed', changed);
+      socket.off('catalog:primitive-changed', ingredientChanged);
+      socket.off('catalog:assets-changed', ingredientChanged);
+      socket.off('connect', refreshIdentity);
+    };
   }, [id, applyDetails, detailView, refreshRevisions]);
 
   // One secondary read supplies attachments and integrity together. Reusing its

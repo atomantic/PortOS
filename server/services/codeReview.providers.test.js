@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { access } from 'node:fs/promises';
-import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cosValidation.js';
+import { codeReviewSettingsSchema, sanitizeTaskMetadata } from '../lib/cos/cosValidation.js';
 import { resolveReviewerConfig, buildReviewWithArgs, isReviewerConfigFault } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
 vi.mock('../lib/aiToolkitState.js', () => ({ getAIToolkitInstance: () => ({}) }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn() }));
 vi.mock('../lib/cliProviderRun.js', () => ({ runCliProviderPrompt: vi.fn() }));
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities: vi.fn() }));
 
-const { getProviderById, listProviders } = await import('./providers.js');
+const { getProviderById, listProviders } = await import('./provider/providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
 const { CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');
@@ -59,7 +59,7 @@ describe('configured provider reviewers', () => {
     expect(task.reviewerModels).toEqual({ [backend]: 'pinned-coder', codex: 'example-cloud-model' });
     expect(task.optionalReviewers).toEqual([backend]);
     expect(task.reviewerMaxRounds).toEqual({ [backend]: 1 });
-    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
+    const { buildLocalReviewerInstructions } = await import('./cos/cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(task.reviewers, task.reviewerModels);
     expect(instructions).toContain(backend);
     expect(instructions).toContain('pinned-coder');
@@ -108,7 +108,7 @@ describe('configured provider reviewers', () => {
     expect(result).toMatchObject({ ok: false, code: 'MALFORMED_REVIEW' });
     expect(isReviewerConfigFault(result.code)).toBe(false);
     expect(result).not.toHaveProperty('findings');
-    const { buildLocalReviewerInstructions } = await import('./cosTaskPrompts.js');
+    const { buildLocalReviewerInstructions } = await import('./cos/cosTaskPrompts.js');
     const instructions = buildLocalReviewerInstructions(config.reviewers);
     expect(instructions).toContain('select(.ok == true and (.verdict == "clean" or .verdict == "findings"))');
     expect(instructions).toContain('For a required local reviewer, record `REVIEW_STATUS=review-blocked`');

@@ -1,7 +1,7 @@
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claimAppOperation, endAppOperation, __resetAppOperations } from './appOperations.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import {
   SYSTEM_ACTIVITY_COALESCE_MS,

@@ -1,20 +1,20 @@
 import { getCudaCapability, getCudaUtilization } from '../lib/cudaCapability.js';
 import { summarizeSystemActivity } from '../lib/systemIdle.js';
-import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cosSpawnWindow.js';
+import { runningAgentsByTaskId, unclaimedTaskIds } from '../lib/cos/cosSpawnWindow.js';
 import { listJobs, getRunningJob, getQueueCapacity } from './mediaJobQueue/index.js';
 import { sanitizeJob } from './mediaJobQueue/sanitizeJob.js';
 import { listGeneratingModelSummaries, getActiveModelOperationCount } from './imageTo3d/models.js';
 import { getLoadedModels, getLastLoadedModelsError } from './ollamaManager.js';
 import { listActiveAppOperations } from './appOperations.js';
-import { readPersistentMindStateForSafetyCheck } from './cosState.js';
+import { readPersistentMindStateForSafetyCheck } from './cos/cosState.js';
 import { isUpdateInProgress } from './updateChecker.js';
 import { listActiveRenders } from './renderActivity.js';
-import { getAgents } from './cosAgentLifecycle.js';
-import { getPendingTaskIds } from './cosTaskStore.js';
-import { getStatus } from './cos.js';
-import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
-import { activeAgents, spawningTasks } from './agentState.js';
-import { isPersistentMindTurnRunning } from './persistentMindSupervisor.js';
+import { getAgents } from './cos/cosAgentLifecycle.js';
+import { getPendingTaskIds } from './cos/cosTaskStore.js';
+import { getStatus } from './cos/cos.js';
+import { getDirectProviderCallCount } from '../lib/provider/providerCallActivity.js';
+import { activeAgents, spawningTasks } from './agent/agentState.js';
+import { isPersistentMindTurnRunning } from './persistent/persistentMindSupervisor.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
@@ -33,7 +33,7 @@ export async function getObservedUpdateActivity() {
     attempt(() => isPersistentMindTurnRunning()),
     attempt(() => importRunner().then(m => m.getActiveRunCount())),
     attempt(() => importBackup().then(m => m.isBackupInProgress())),
-    attempt(() => import('./cosRunnerClient.js').then(m => m.getActiveAgentsFromRunner({ timeoutMs: 1500 }))),
+    attempt(() => import('./cos/cosRunnerClient.js').then(m => m.getActiveAgentsFromRunner({ timeoutMs: 1500 }))),
   ]);
   const agentIds = new Set();
   for (const [id, entry] of activeAgents) {
@@ -121,7 +121,7 @@ function llmRunState(count) {
  * which happens AFTER its agent is registered as running — so a snapshot taken
  * in between would count one task as queued AND active, and the widget read
  * 'N active, N queued' for a queue of N. A task a live agent holds is active —
- * the settlement in lib/cosSpawnWindow.js, shared with every other surface that
+ * the settlement in lib/cos/cosSpawnWindow.js, shared with every other surface that
  * pairs the two lists.
  *
  * When the agent list is readable, BOTH counts come off that one read: taking

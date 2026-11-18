@@ -10,9 +10,9 @@ import { moduleImports } from './lib/sourceTokens.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { CATALOG_DIRS } from './lib-catalog.js';
 import { SERVER_LINT_RE } from './lib/serverLintSurface.js';
-import { writeStepOutput } from './lib/githubOutput.js';
+import { writeStepOutput, writeStepSummary } from './lib/githubOutput.js';
 import { resolveDbTestFiles } from './lib/dbTestFiles.js';
-import { detectTreeGuards } from './lib/guardScanners.js';
+import { guardTestFiles } from './lib/guardScanners.js';
 import { BROWSER_SUITES } from './lib/browserSuites.js';
 import { formatReachSummary, measureRepoImportReach } from './lib/importReach.js';
 
@@ -341,19 +341,24 @@ export const WINDOWS_CONTRACT_TESTS = [
 //      Impact selection is import-graph-driven by construction, so it has no
 //      edge that can reach them: the violating file is some *other* file, in
 //      some other directory, that the guard only ever sees as a path string.
-//      They sat structurally unselectable — `agent-instructions-files.test.js`
+//      They sat structurally unselectable — `agent-instructions-files.guard.test.js`
 //      went red on `main` and stayed there while every PR reported green — and
 //      the always-run list is the only mechanism that can reach them at all.
-//      The planner derives this half from the tree (getTreeGuards, detected by
-//      scripts/lib/guardScanners.js), so a new scanner needs no registration;
-//      repo-scan-guards.test.js pins the detector and the derived set.
+//      This half is selected by filename (#16553): every tracked
+//      `*.guard.test.js` (getGuardTests), so a new scanner registers by being
+//      named. repo-scan-guards.guard.test.js fails a scanner without the suffix.
 //
 // Everything here is deliberately cheap: it reads only prompt data or `git`
 // output, which is affordable on every PR including documentation-only ones,
 // where the alternative is reasoning per-scope about what can reach it. The
 // whole set measured ~23s of a 27s focused pregate (#16086), so each guard has
 // a per-file budget (GUARD_BUDGET_MS in scripts/lib/guardBudget.js) that
-// hosted CI enforces; a behavioural test that no scan needs does not belong here.
+// hosted CI enforces. A behavioural test that no scan needs does not belong
+// here: a suite that mixes the two keeps its scan in a sibling
+// `<name>.guard.test.js`.
+//
+// The explicit list holds only what the suffix does not: guards whose file is
+// not named as one.
 export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // Doc-parity guards: each compares a .md next to it against source it reads
   // rather than imports, so a docs-only PR that documented a removed endpoint
@@ -364,13 +369,6 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   'docs/deps-doc.test.js',
   'docs/features/product-surfaces.test.js',
   'scripts/doc-code-pointers.test.js',
-  // A newly added shared selector has no import edge to its documentation inventory.
-  'server/lib/executionOptions.consumers.test.js',
-  // Base-relative: a rename or deletion of a shipped migration touches no file
-  // the planner would select for it (#16094).
-  'scripts/migrations/migrationFilenames.guard.test.js',
-  // Compares every reference prompt body and shipped-hashes.json against the merge base (#16090).
-  'scripts/migrations/shippedPromptHashes.guard.test.js',
   // Route policy scans depend on independently changed files (#13224).
   'server/lib/apiRouteParity.test.js',
   'server/lib/hostControlRoutes.test.js',
@@ -380,49 +378,30 @@ export const EXPLICIT_ALWAYS_RUN_TESTS = [
   // reached module multiplies across suites this file does not import. Reads CI_BASE_SHA
   // and fails closed when that commit cannot be read; pregate forwards the plan's base.
   'server/lib/importScoping.test.js',
-  // Scans every lib source for upward service imports without importing it.
-  'server/lib/layering.test.js',
-  // Static import-cycle guards (#14327): a PR that closes a cycle never imports them.
-  'server/services/agentImportCycles.test.js',
-  'server/services/meatspacePostImportCycles.test.js',
-  'server/services/serviceImportCycles.test.js',
-  'server/services/twinImportCycles.test.js',
-  // Prompt-upgrade contract and base-relative retired-history guard: JSON edits have no import edge here.
+  // Prompt-upgrade contract: JSON edits have no import edge here.
   'server/services/taskPromptDefaults.test.js',
-  'server/services/taskPromptDefaults/integritySnapshot.guard.test.js',
   // Size ratchet over rendered claim prompts (#16409): growth comes from edits to any prompt
   // fragment the claim composers import, which no scope reliably selects it for.
   'server/services/taskPromptDefaults/claimPromptSize.test.js',
 ];
 
-/**
- * Tree scanners the detector finds (scripts/lib/guardScanners.js) that another
- * selector already reaches, so they must NOT ride every plan. Each entry names
- * that selector.
- */
-export const TREE_GUARDS_SELECTED_ELSEWHERE = new Map([
-  ['scripts/ensure-deps.test.js', 'structuralTestsFor: ENSURE_DEPS_INPUTS (behavioural, #16086)'],
-  // `.ps1` is an unclassified changed file and forces the complete suite.
-  ['scripts/ps1-bom.test.js', 'unclassified-file full-suite trigger: *.ps1'],
-]);
-
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
- * Tracked tree-scanning guards, derived rather than registered (#16085). Lazy
- * and memoized: scanning spawns git, and pregate must not start a subprocess
- * before it has validated its arguments.
+ * Tracked tree guards, selected by the `*.guard.test.js` suffix (#16553). One
+ * `git ls-files`, no test source read. Lazy and memoized: listing spawns git,
+ * and pregate must not start a subprocess before it has validated its arguments.
  */
-let treeGuards;
-export const getTreeGuards = () => (treeGuards ??= detectTreeGuards(REPO_ROOT));
+let guardTests;
+export const getGuardTests = () => (guardTests ??= guardTestFiles(REPO_ROOT));
 
-/** Client scanners are reached by structuralTestsFor on any client/src js(x) change. */
+/** Client guards are reached by structuralTestsFor on any client/src js(x) change. */
 const isClientGuard = (path) => path.startsWith('client/src/');
 
 let alwaysRun;
 export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
   ...EXPLICIT_ALWAYS_RUN_TESTS,
-  ...getTreeGuards().filter((path) => !isClientGuard(path) && !TREE_GUARDS_SELECTED_ELSEWHERE.has(path)),
+  ...getGuardTests().filter((path) => !isClientGuard(path)),
 ])].sort());
 
 const DB_RISK_RULES = [
@@ -640,7 +619,7 @@ export const MACOS_NATIVE_TESTS = [
 export const MACOS_NATIVE_PATH_RE = /^(?:server\/lib\/(?:windowsAgentProcess[^/]*\.js|darwinAgentSupervisor\.py)|server\/vitest\.(?:config|setup)\.js|scripts\/vitestTempRootSetup\.js|scripts\/trusted-rebuilds\.js|server\/(?:package(?:-lock)?\.json|\.npmrc)|\.github\/workflows\/ci\.yml|\.github\/actions\/setup-server\/action\.yml)$/;
 // The `node-minimum` job installs every workspace and runs the runtime gate on
 // the oldest supported Node; only these files can change its answer.
-export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.test\.js|\.github\/workflows\/ci\.yml)$/;
+export const NODE_MINIMUM_PATH_RE = /^(?:(?:server\/|client\/|autofixer\/)?(?:package(?:-lock)?\.json|\.npmrc)|\.nvmrc|scripts\/checkNodeVersion(?:\.test)?\.js|scripts\/lib\/directInvocation\.js|scripts\/node-version-drift\.guard\.test\.js|\.github\/workflows\/ci\.yml)$/;
 
 /**
  * Repository-relative static import closure of `entries` in `cwd`, or null
@@ -808,12 +787,12 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
     if (changedFiles.some((path) => path.startsWith(`${dir}/`))) add(`${dir}/moduleSummaries.test.js`);
   }
   // These guards read the tree rather than importing it, so no import edge
-  // selects them: the route-graph guard catches a route file nothing mounts,
-  // the parity guard a client wrapper stranded by a renamed mount, and the
-  // prompt-stage drift test a stale manifest — which is what a scoped plan
-  // let merge before this rule existed (#5898).
+  // selects them: the parity guard catches a client wrapper stranded by a
+  // renamed mount, and the prompt-stage drift test a stale manifest — which is
+  // what a scoped plan let merge before this rule existed (#5898). The
+  // route-graph guard (a route file nothing mounts) is
+  // server/lib/apiRouteGraph.guard.test.js and rides every plan by its name.
   if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
-    add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');
   }
@@ -848,10 +827,9 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // None of these files has a source sibling or imports an app module, so nothing
   // else selects them — without this entry they only ever run on a full suite.
   if (changedFiles.some((path) => /^client\/src\/.*\.jsx?$/.test(path))) {
-    add('client/src/dashboardWidgetContainerConventions.test.js');
-    // Tree-scanning client guards are derived (scripts/lib/guardScanners.js);
-    // timeouts.test.js scans the TEST files, which this pattern also matches.
-    for (const path of getTreeGuards()) if (path.startsWith('client/src/')) add(path);
+    // Client tree guards are selected by suffix (getGuardTests);
+    // timeouts.guard.test.js scans the TEST files, which this pattern also matches.
+    for (const path of getGuardTests()) if (isClientGuard(path)) add(path);
   }
 
   return selected;
@@ -1445,25 +1423,31 @@ const narrowSharedBasenameHits = (source, hits, index) => {
   return hits.filter((path) => path.startsWith(`${dir}/`) || index.mentions(path, parent));
 };
 
-export function emitGitHubPlan(plan) {
-  if (plan.windows && plan.windowsFiles.length === 0) throw new Error('Windows native contract inventory is empty');
-  if (plan.windows) {
-    const missing = WINDOWS_CONTRACT_TESTS.filter(path => !plan.windowsFiles.includes(path));
-    if (missing.length) throw new Error(`Windows native contract inventory is missing: ${missing.join(', ')}`);
-  }
-  const outputs = {
+/**
+ * The impact job's `plan` output. Jobs read a decision as
+ * `fromJSON(needs.impact.outputs.plan).<key>`, so values keep their JSON types:
+ * booleans are compared bare (`== 'true'` would never match a boolean after
+ * fromJSON) and file lists arrive as arrays, which a step hands to a script
+ * with `toJSON(...)`. scripts/ci-test-plan.test.js fails when ci.yml reads a
+ * key this object does not have.
+ */
+export function githubPlanOutput(plan) {
+  return {
     full: plan.full,
+    // Rendered into the step summary's inline code span.
     reason: plan.reason.replace(/[`<>\r\n]+/g, ' '),
     server_mode: plan.server.mode,
-    server_files: JSON.stringify(plan.server.files),
-    server_sources: JSON.stringify(plan.server.sources),
+    server_files: plan.server.files,
+    server_sources: plan.server.sources,
     client_mode: plan.client.mode,
-    client_files: JSON.stringify(plan.client.files),
-    client_sources: JSON.stringify(plan.client.sources),
-    browser_files: JSON.stringify(plan.browserFiles),
+    client_files: plan.client.files,
+    client_sources: plan.client.sources,
+    // A job-level `if` cannot test an array for emptiness without toJSON.
+    browser: plan.browserFiles.length > 0,
+    browser_files: plan.browserFiles,
     db: plan.db,
     lint_mode: plan.lint.mode,
-    lint_files: JSON.stringify(plan.lint.files),
+    lint_files: plan.lint.files,
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
@@ -1476,18 +1460,61 @@ export function emitGitHubPlan(plan) {
     native_gated: plan.nativeGated,
     windows: plan.windows,
     windows_mode: plan.windowsMode,
-    windows_files: JSON.stringify(plan.windowsFiles),
-    windows_sources: JSON.stringify(plan.windowsSources),
-    server_shards: JSON.stringify(plan.shards.server),
-    client_shards: JSON.stringify(plan.shards.client),
-    windows_shards: JSON.stringify(plan.shards.windows),
-    suite_reasons: JSON.stringify(plan.suiteReasons),
+    windows_files: plan.windowsFiles,
+    windows_sources: plan.windowsSources,
+    suite_reasons: plan.suiteReasons,
   };
+}
 
-  Object.entries(outputs).forEach(([name, value]) => {
-    writeStepOutput(name, value);
-  });
-  console.log(JSON.stringify({ ...outputs, changed_files: plan.changedFiles }, null, 2));
+/** The impact job's step summary for one plan; `gatedBaseSha` is the push's last green base, if any. */
+export function formatPlanSummary(output, shards, gatedBaseSha) {
+  const value = (v) => (typeof v === 'string' ? v : JSON.stringify(v));
+  const code = (v) => `\`${value(v)}\``;
+  return [
+    '### CI impact plan',
+    '',
+    `- Reason: ${code(output.reason)}`,
+    `- Server tests: ${code(output.server_mode)} (shards ${code(shards.server)})`,
+    `- Client tests: ${code(output.client_mode)} (shards ${code(shards.client)})`,
+    `- DB tests: ${code(output.db)}`,
+    `- Cross-workspace browser suites: ${code(output.browser_files)}`,
+    `- Client lint: ${code(output.lint_mode)}`,
+    `- Client build: ${code(output.build)}`,
+    `- Server smoke: ${code(output.smoke)}`,
+    `- Slashdo submodule: ${code(output.slashdo)}`,
+    `- Shipped prompt history: ${code(output.prompt_history)}`,
+    `- Linux worker containment: ${code(output.linux_containment)}`,
+    `- SuperCollider live containment: ${code(output.supercollider_live)}`,
+    `- Docker containment live: ${code(output.docker_containment_live)}`,
+    `- macOS native release-agent supervision: ${code(output.macos_native)}`,
+    `- Node minimum compatibility: ${code(output.node_minimum)}`,
+    `- Windows server tests: ${code(output.windows)} (${code(output.windows_mode)}, shards ${code(shards.windows)})`,
+    `- Native jobs gated against last green main run: ${code(gatedBaseSha || 'none')}`,
+    `- Suite selection reasons: ${code(output.suite_reasons)}`,
+  ].join('\n');
+}
+
+export function emitGitHubPlan(plan, { gatedBaseSha } = {}) {
+  if (plan.windows && plan.windowsFiles.length === 0) throw new Error('Windows native contract inventory is empty');
+  if (plan.windows) {
+    const missing = WINDOWS_CONTRACT_TESTS.filter(path => !plan.windowsFiles.includes(path));
+    if (missing.length) throw new Error(`Windows native contract inventory is missing: ${missing.join(', ')}`);
+  }
+  const output = githubPlanOutput(plan);
+  writeStepOutput('plan', JSON.stringify(output));
+  // Separate outputs because `strategy.matrix` needs a bare JSON array: each
+  // leaf job's matrix is `fromJSON(needs.impact.outputs.<suite>_shards)`.
+  writeStepOutput('server_shards', JSON.stringify(plan.shards.server));
+  writeStepOutput('client_shards', JSON.stringify(plan.shards.client));
+  writeStepOutput('windows_shards', JSON.stringify(plan.shards.windows));
+  writeStepSummary(formatPlanSummary(output, plan.shards, gatedBaseSha));
+  console.log(JSON.stringify({
+    ...output,
+    server_shards: plan.shards.server,
+    client_shards: plan.shards.client,
+    windows_shards: plan.shards.windows,
+    changed_files: plan.changedFiles,
+  }, null, 2));
 }
 
 /**
@@ -1785,6 +1812,7 @@ function main() {
     && (!Array.isArray(changedFilesOverride) || changedFilesOverride.some((path) => typeof path !== 'string'))) {
     throw new Error('CI_CHANGED_FILES must be a JSON array of repository-relative path strings.');
   }
+  const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
     dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
@@ -1795,7 +1823,7 @@ function main() {
     changedFiles: changedFilesOverride,
     // scripts/ci-base-sha.js exports it on a push to main only; a release
     // pull request is forced full by CI_BASE_REF and never gets one.
-    gatedBaseSha: process.env.CI_GATED_BASE_SHA || undefined,
+    gatedBaseSha,
   });
   const plan = buildCiTestPlan(changedFiles, {
     trackedFiles,
@@ -1816,7 +1844,7 @@ function main() {
     gatedChangedFiles,
     gatedDependencyChanges,
   });
-  emitGitHubPlan(plan);
+  emitGitHubPlan(plan, { gatedBaseSha });
 }
 
 if (isDirectlyInvoked(import.meta.url)) main();

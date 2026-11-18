@@ -4,8 +4,8 @@ const state = vi.hoisted(() => ({ app: null, tasks: new Map(), agents: [], pr: n
 const forge = vi.hoisted(() => vi.fn());
 const checkout = vi.hoisted(() => vi.fn());
 vi.mock('./apps.js', () => ({ getAppById: async () => state.app }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => state.tasks.get(id) }));
-vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => state.agents }));
+vi.mock('./cos/cosTaskStore.js', () => ({ getTaskById: async id => state.tasks.get(id) }));
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => state.agents }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ env: { GH_TOKEN: 'fixture-account' } }) }));
 vi.mock('./github.js', () => ({ execGh: (...args) => forge(...args) }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'owner/repo' }) }));

@@ -1,8 +1,8 @@
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
-import { musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
-import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js';
-import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideoConditioning.js';
-import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib/musicVideoCreativeContext.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { musicVideoMediaMode } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
+import { shotActionContractProblem } from '../../lib/musicVideo/musicVideoActionContract.js';
+import { musicVideoStyleBasis, musicVideoStylePrompt } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoCreativeContext, musicVideoSongStyleContext } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 /**
  * Music Video — treatment compiler (#8980).
  *
@@ -34,13 +34,13 @@ import {
   MUSIC_VIDEO_SHOT_ROUTES as SHOT_ROUTES,
   MUSIC_VIDEO_NEGATIVE_SPACE as NEGATIVE_SPACE,
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
-} from '../../lib/musicVideoValidation.js';
-import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
-import { lyricOverlayOff, sheetDirectionOverlay } from '../../lib/musicVideoShotSheet.js';
+} from '../../lib/musicVideo/musicVideoValidation.js';
+import { performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
+import { lyricOverlayOff, sheetDirectionOverlay } from '../../lib/musicVideo/musicVideoShotSheet.js';
 import { validSections } from './shotPlan.js';
-import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
+import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideo/musicVideoShotPrompt.js';
 import { normalizeBrief } from './treatment.js';
-import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, planMusicVideoMedia } from '../../lib/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_MEDIA, normalizeMusicVideoProductionPolicy, planMusicVideoMedia } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 
 // Beyond this many mapped shots the AI prompt would blow its budget; the
 // deterministic draft still covers every shot.

@@ -4,9 +4,9 @@ Autonomous agent manager that works the task queues, spawns sub-agents, and main
 
 ## Architecture
 
-- **Task Store** (`server/services/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cosTaskRepository.js` is the persistence layer
-- **Agent Records** (`server/services/cosAgentRepository.js`): The running and recently finished agents as `cos_agents` rows; `cosState.saveState()` writes only the rows whose record changed
-- **CoS Service** (`server/services/cos.js`): State management, health monitoring, task evaluation
+- **Task Store** (`server/services/cos/cosTaskStore.js`): The user and internal queues as `cos_tasks` rows (working-set cache, row-diff saves); `server/services/cos/cosTaskRepository.js` is the persistence layer
+- **Agent Records** (`server/services/cos/cosAgentRepository.js`): The running and recently finished agents as `cos_agents` rows; `cosState.saveState()` writes only the rows whose record changed
+- **CoS Service** (`server/services/cos/cos.js`): State management, health monitoring, task evaluation
 - **Sub-Agent Spawner** (`server/services/subAgentSpawner.js`): Claude CLI execution with MCP
 - **CoS Routes** (`server/routes/cos.js`): REST API endpoints
 - **CoS UI** (`client/src/pages/ChiefOfStaff.jsx`): Tasks, Agents, Health, Config tabs
@@ -466,7 +466,7 @@ Rollups are sealed prose and memories are flat facts that decay on one clock, so
 - **Untrusted evidence.** Prior entries replayed into the extraction prompt are data, not instructions: every stored statement is quoted so an injected heading or directive cannot forge a prompt section, and the prompt says so in words.
 - **Correcting it.** **Mind → Journal** groups active entries by kind, collapses retired ones behind a toggle showing what replaced each, and lets the user settle or retire an entry the mind got wrong. The `history` cleanup scope clears the journal along with the messages it cites; a context-only clear does not.
 
-Storage, retention and the privacy posture are in the header of [`persistentMindJournal.js`](../../server/services/persistentMindJournal.js).
+Storage, retention and the privacy posture are in the header of [`persistentMindJournal.js`](../../server/services/persistent/persistentMindJournal.js).
 
 ## API Endpoints
 
@@ -501,7 +501,7 @@ Memory search fuses BM25 (`server/lib/bm25.js`, index manager `server/services/m
 
 `server/services/lmStudioManager.js` provides LM Studio discovery, health and model management; the only REST route is `POST /api/lmstudio/unload`, and the rest goes through `/api/local-llm`.
 
-Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
+Failure investigation is unattended by default: an `[Auto] Investigate agent failure` task runs without approval. Approval is reserved for a failure *loop*, where another unattended agent would only repeat what already failed: the same cause investigated again within 24h (`repeat-fingerprint`), or the circuit-breaker hour already one slot from its cap (`failure-storm`). The reason is stamped on the task as `metadata.approvalReason` (`investigation-loop:<signal>`); see `resolveInvestigationApproval` in `server/services/agent/agentErrorAnalysis.js`. Persistent Mind authorities are in [persistent-mind-continuous-play.md](./persistent-mind-continuous-play.md). Tier and model choice is explicit ([MODEL_TIERS.md](../MODEL_TIERS.md)).
 
 ## Related Features
 

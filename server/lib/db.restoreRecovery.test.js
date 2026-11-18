@@ -226,6 +226,40 @@ describe('restore recovery admission', () => {
     expect(await resumeDatabaseRestore(record.id)).toMatchObject({ status: 'ok', outcome: 'repaired' });
   });
 
+  it('retains the pending journal and fence when recovery cannot drain database work', async () => {
+    const settleQuery = Promise.withResolvers();
+    pool.query.mockImplementationOnce(() => settleQuery.promise);
+    let record;
+    let held;
+    await withDatabaseMaintenance(({ adoptRestoreRecovery }) => {
+      record = databaseRestoreRecovery.markCommitted(begin().id);
+      adoptRestoreRecovery(record.id);
+      held = query('SELECT held');
+    });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let outcome;
+    const recovery = Promise.allSettled([resumeDatabaseRestore(record.id)]).then(([result]) => { outcome = result; });
+    try {
+      await vi.waitFor(() => expect(query('SELECT ordinary')).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE' }));
+      await vi.advanceTimersByTimeAsync(120_000);
+      vi.useRealTimers();
+      expect(outcome).toMatchObject({ status: 'rejected', reason: { code: 'DATABASE_RESTORE_BUSY', status: 409 } });
+      expect(databaseRestoreRecovery.read()).toEqual(record);
+      expect(reconcileMediaAssets).not.toHaveBeenCalled();
+      expect(maintenance.operations().filter(op => op.resource === `restore-recovery:${record.id}`)).toEqual([]);
+      await expect(query('SELECT ordinary')).rejects.toMatchObject(FENCED);
+      await expect(withBackupAssetPublication(() => 'published', { timeoutMs: 100 })).resolves.toBe('published');
+    } finally {
+      vi.useRealTimers();
+      settleQuery.resolve({ rows: [] });
+      await Promise.allSettled([held, recovery]);
+    }
+    await expect(resumeDatabaseRestore(record.id)).resolves.toMatchObject({ status: 'ok', outcome: 'repaired' });
+    expect(databaseRestoreRecovery.read()).toBeNull();
+    await expect(query('SELECT ordinary')).resolves.toEqual({ rows: [] });
+  });
+
   it('retains generic admission when execution reconciliation fails and releases only after same-ID retry succeeds', async () => {
     const record = databaseRestoreRecovery.markCommitted(begin().id);
     fixture.executionFault = true;

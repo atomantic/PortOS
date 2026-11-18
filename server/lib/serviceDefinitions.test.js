@@ -17,7 +17,7 @@ import {
   serviceDefinitionForLocalRuntime,
 } from './serviceDefinitions.js';
 import { LOCAL_RUNTIMES } from './localProviderRuntime.js';
-import { PROVIDER_GATEWAYS } from './providerGateways.js';
+import { PROVIDER_GATEWAYS } from './provider/providerGateways.js';
 import { CREDENTIALS } from './credentialRegistry.js';
 
 /** Epic D2, verbatim: the ids the rest of the epic composes from. */

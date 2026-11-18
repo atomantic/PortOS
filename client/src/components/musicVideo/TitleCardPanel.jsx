@@ -3,7 +3,7 @@ import { Clapperboard, Play } from 'lucide-react';
 import { getMusicVideoPublishPlatforms } from '../../services/apiMusicVideo.js';
 import {
   TITLE_CARD_FONT_FACES, TITLE_CARD_LIMITS, TITLE_CARD_MTV_COLORS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardSteadySupported,
-} from '../../../../server/lib/musicVideoTitleCard.js';
+} from '../../../../server/lib/musicVideo/musicVideoTitleCard.js';
 
 const POSITIONS = [['lower-left', 'Bottom left'], ['lower-right', 'Bottom right'], ['upper-left', 'Top left'], ['upper-right', 'Top right'], ['lower-center', 'Bottom centre'], ['center', 'Centre']];
 
@@ -53,7 +53,7 @@ function lyricDuringCard(project, card) {
 }
 
 /**
- * The MTV-style opening title card (lib/musicVideoTitleCard.js): song title,
+ * The MTV-style opening title card (lib/musicVideo/musicVideoTitleCard.js): song title,
  * artist and year in a corner, fading in (optionally sliding in from a side)
  * and out over the opener, outlined like the lyrics or as a classic lower
  * third. Drawn in the docked live preview, the storyboard animatic and the

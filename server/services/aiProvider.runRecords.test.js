@@ -7,10 +7,17 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readdir, readFile, rm } from 'fs/promises';
 import { join } from 'path';
-import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js';
 
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-completion-runs-' });
+// Every test owns a run-store root of its own (allocated in beforeEach, removed
+// in afterEach once its runs have settled), so a late write from one test can
+// never land in, or be deleted from under, another test's store.
+// Module-load reads (before the first beforeEach) need a valid root too.
+const loadRoot = createTempDataRoot('portos-completion-runs-');
+let tempRoot = loadRoot;
+let runsDir = null;
+const makeProxy = actual => makePathsProxy(actual, { dataRoot: () => tempRoot });
 const { statusOp, usage } = vi.hoisted(() => ({
   statusOp: { update: vi.fn(), complete: vi.fn(), error: vi.fn() },
   usage: { recordSession: vi.fn(async () => {}), recordRunUsage: vi.fn(async () => {}) },
@@ -19,7 +26,7 @@ const { statusOp, usage } = vi.hoisted(() => ({
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('./aiStatusEvents.js', () => ({ startAIOp: vi.fn(() => statusOp) }));
 // Readiness is a managed-daemon concern; these providers are plain endpoints.
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: vi.fn(async () => ({ success: true })),
   ensureProviderReadyForExecution: vi.fn(async () => ({ success: true })),
 }));
@@ -37,11 +44,12 @@ const { setAIToolkitInstance } = await import('../lib/aiToolkitState.js');
 const { createRunnerService } = await import('../lib/aiToolkit/runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { recordCompletedRunUsage } = await import('./usageReconciler.js');
-const { getDirectProviderCallCount } = await import('../lib/providerCallActivity.js');
+const { getDirectProviderCallCount } = await import('../lib/provider/providerCallActivity.js');
 const { attachLlmActivityHooks, drainActivityNotesForTests } = await import('./systemActivityNotify.js');
 const { CREATIVE_LATITUDE_CLAUSE, CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 
-const runsDir = join(tempRoot, 'runs');
+const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY, isLocalEndpointBusy } = await import('../lib/localLlmConcurrency.js');
+
 // The same wiring `services/bootstrap.js` gives the toolkit: a usage session on
 // create, the usage ledger on completion, activity notes on every edge.
 const spies = {
@@ -67,7 +75,7 @@ const providerStatusService = {
 let runnerService;
 const loadToolkit = () => {
   runnerService = createRunnerService({ dataDir: tempRoot, providerService, providerStatusService, hooks });
-  setAIToolkit({ services: { runner: runnerService, providerStatus: providerStatusService, errorDetection: { analyzeError } } }, { dataDir: tempRoot, hooks });
+  setAIToolkit({ services: { providers: providerService, runner: runnerService, providerStatus: providerStatusService, errorDetection: { analyzeError } } }, { dataDir: tempRoot, hooks });
 };
 
 const provider = { id: 'example-api', name: 'Example API', type: 'api', endpoint: 'https://api.example.com/v1', enabled: false };
@@ -96,7 +104,8 @@ const sent = (fetch, call = 0) => {
 };
 
 beforeEach(async () => {
-  await rm(runsDir, { recursive: true, force: true });
+  tempRoot = createTempDataRoot('portos-completion-runs-');
+  runsDir = join(tempRoot, 'runs');
   vi.clearAllMocks();
   drainActivityNotesForTests();
   loadToolkit();
@@ -109,12 +118,27 @@ const usageSettled = async () => {
     if (metadata.success === true) expect(metadata.usageReconciled).toBe(true);
   }
 };
+// A cancelled call resolves before its finalizer's hook has run; wait for the
+// run to leave the active set and for every cancelled record's hook to fire
+// before the store is removed.
+const cancellationSettled = async () => {
+  expect(await runnerService.getActiveRunCount()).toBe(0);
+  for (const id of await runIds()) {
+    const metadata = JSON.parse(await readFile(join(runsDir, id, 'metadata.json'), 'utf8'));
+    if (metadata.canceled) expect(spies.onRunCanceled).toHaveBeenCalledWith({ runId: id });
+  }
+};
 afterEach(async () => {
-  await vi.waitFor(usageSettled);
-  vi.unstubAllGlobals();
-  setAIToolkitInstance(null);
+  try {
+    await vi.waitFor(usageSettled);
+    await vi.waitFor(cancellationSettled);
+  } finally {
+    vi.unstubAllGlobals();
+    setAIToolkitInstance(null);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
-afterAll(cleanup);
+afterAll(() => rm(loadRoot, { recursive: true, force: true }));
 
 describe('the request a tracked call sends', () => {
   it.each([
@@ -152,6 +176,72 @@ describe('the request a tracked call sends', () => {
     expect(content.split(CREATIVE_LATITUDE_HEADING)).toHaveLength(2);
     expect(content.endsWith('Write the scene.')).toBe(true);
     expect((await record()).prompt).toBe(content);
+  });
+});
+
+// #16614: `/v1/chat/completions` cannot carry `num_ctx`, so an Ollama daemon
+// would run the call at its default window and drop the prompt's head. A
+// loopback daemon, so a window probe would show up as an extra request.
+describe('an Ollama provider with a context window', () => {
+  const ollama = {
+    id: 'example-ollama', name: 'Example Ollama', type: 'api', endpoint: 'http://127.0.0.1:11434/v1', numCtx: 1000,
+  };
+  const nativeReply = (content) => mockJsonResponse({
+    model: 'model-1', message: { role: 'assistant', content }, done: true, done_reason: 'stop', prompt_eval_count: 12, eval_count: 3,
+  });
+
+  it('sends the call to native /api/chat carrying num_ctx and reads the native reply', async () => {
+    const fetch = respondWith(nativeReply('an answer'));
+
+    const result = await callProviderAISimple(ollama, 'model-1', 'Summarize the week.', { source: 'goal-check-in', temperature: 0.4, max_tokens: 200 });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/api/chat');
+    expect(JSON.parse(sent(fetch).body)).toEqual({
+      model: 'model-1',
+      messages: [{ role: 'user', content: 'Summarize the week.' }],
+      stream: false,
+      options: { num_ctx: 1000, temperature: 0.4, num_predict: 200 },
+    });
+    expect(result).toEqual({ text: 'an answer', finishReason: 'stop', usage: { inputTokens: 12, outputTokens: 3, cacheReadTokens: 0, source: 'measured' } });
+    expect((await record()).metadata).toMatchObject({ success: true, finishReason: 'stop' });
+  });
+
+  it('keeps an Ollama provider without numCtx on the byte-identical /chat/completions request', async () => {
+    const fetch = respondWith(completion('ok'));
+    const { numCtx: _unset, ...plain } = ollama;
+
+    await callProviderAISimple(plain, 'model-1', 'Summarize the week.', { source: 'goal-check-in' });
+
+    expect(sent(fetch).url).toBe('http://127.0.0.1:11434/v1/chat/completions');
+    expect(sent(fetch).body).toBe(JSON.stringify({
+      model: 'model-1', messages: [{ role: 'user', content: 'Summarize the week.' }], temperature: 0.3, max_tokens: 1000,
+    }));
+  });
+
+  it('refuses a prompt larger than the window with both numbers, sending nothing and recording no run', async () => {
+    const fetch = respondWith(nativeReply('never'));
+    // ~4 characters a token: well over the 1000-token window.
+    const prompt = 'word '.repeat(2000);
+
+    const result = await callProviderAISimple(ollama, 'model-1', prompt, { source: 'goal-check-in' });
+
+    expect(result.error).toMatch(/known 1000-token context is below the \d+-token request budget/);
+    expect(Number(result.error.match(/below the (\d+)-token/)[1])).toBeGreaterThan(1000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runIds()).toEqual([]);
+    expect(spies.onRunCreated).not.toHaveBeenCalled();
+    expect(providerStatusService.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('never refuses a provider whose window is unknown, however long the prompt', async () => {
+    const fetch = respondWith(completion('ok'));
+    const prompt = 'word '.repeat(2000);
+
+    const result = await callProviderAISimple(provider, 'model-1', prompt, { source: 'goal-check-in' });
+
+    expect(result.text).toBe('ok');
+    expect(JSON.parse(sent(fetch).body).messages[0].content).toBe(prompt);
   });
 });
 
@@ -223,6 +313,92 @@ describe('run record and usage for one call', () => {
     await pending;
     expect(await runnerService.getActiveRunCount()).toBe(0);
     expect(getDirectProviderCallCount()).toBe(0);
+  });
+});
+
+describe('bounded completion endpoint budget', () => {
+  const local = { ...provider, endpoint: 'http://127.0.0.1:1234/v1' };
+  const call = (target = local, options = {}) => callProviderAISimple(target, 'model-1', 'a prompt', {
+    source: 'goal-check-in', allowModelRecovery: false, ...options,
+  });
+
+  it('caps concurrent bounded transports and keeps one run and session per call', async () => {
+    const releases = [];
+    let active = 0;
+    let peak = 0;
+    const fetch = vi.fn(() => new Promise(resolve => {
+      active += 1;
+      peak = Math.max(peak, active);
+      releases.push(() => { active -= 1; resolve(completion('ok')); });
+    }));
+    vi.stubGlobal('fetch', fetch);
+    const count = LOCAL_LLM_MAX_CONCURRENCY + 2;
+    const pending = Array.from({ length: count }, () => call());
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY));
+    await vi.waitFor(() => expect(usage.recordSession).toHaveBeenCalledTimes(count));
+    expect(fetch).toHaveBeenCalledTimes(LOCAL_LLM_MAX_CONCURRENCY);
+    for (let i = 0; i < count; i += 1) {
+      await vi.waitFor(() => expect(releases[i]).toBeTypeOf('function'));
+      releases[i]();
+    }
+    expect(await Promise.all(pending)).toEqual(Array.from({ length: count }, () => expect.objectContaining({ text: 'ok' })));
+    expect(peak).toBe(LOCAL_LLM_MAX_CONCURRENCY);
+    expect(await runIds()).toHaveLength(count);
+    expect(usage.recordSession).toHaveBeenCalledTimes(count);
+    expect(isLocalEndpointBusy(local.endpoint)).toBe(false);
+  });
+
+  it('does not serialize remote API transports', async () => {
+    const releases = [];
+    const fetch = vi.fn(() => new Promise(resolve => releases.push(() => resolve(completion('ok')))));
+    vi.stubGlobal('fetch', fetch);
+    const pending = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY + 1 }, () => call(provider));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(pending.length));
+    releases.forEach(release => release());
+    await Promise.all(pending);
+  });
+
+  const occupyEndpoint = async () => {
+    const releases = [];
+    const holders = Array.from({ length: LOCAL_LLM_MAX_CONCURRENCY }, () => withLocalConcurrencyGate(local,
+      () => new Promise(resolve => releases.push(resolve))));
+    await vi.waitFor(() => expect(releases).toHaveLength(holders.length));
+    return async () => { releases.forEach(release => release()); await Promise.all(holders); };
+  };
+
+  it.each(['signal', 'stop'])('cancels a queued completion through %s without sending or leaking a slot', async mode => {
+    const release = await occupyEndpoint();
+    const fetch = respondWith(completion('ok'));
+    const caller = new AbortController();
+    const pending = call(local, { signal: caller.signal });
+    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    if (mode === 'signal') caller.abort();
+    else expect(await stopRun((await runIds())[0])).toBe(true);
+    expect(await pending).toEqual({ error: 'Provider request failed: This operation was aborted', canceled: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await record()).metadata).toMatchObject({ canceled: true, completionReason: 'canceled' });
+    expect(usage.recordSession).toHaveBeenCalledTimes(1);
+    await release();
+    expect(isLocalEndpointBusy(local.endpoint)).toBe(false);
+    expect(await call()).toMatchObject({ text: 'ok' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares the streamed gate but starts the request deadline after queueing', async () => {
+    const release = await occupyEndpoint();
+    const fetch = respondWith(completion('ok'));
+    const pending = call({ ...local, timeout: 20 });
+    await vi.waitFor(() => expect(spies.onRunStarted).toHaveBeenCalledTimes(1));
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      await vi.advanceTimersByTimeAsync(40);
+      expect(fetch).not.toHaveBeenCalled();
+      await release();
+      expect(await pending).toMatchObject({ text: 'ok' });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -447,6 +623,19 @@ describe('runPromptThroughProvider completion requests', () => {
     expect(await runIds()).toEqual([]);
   });
 
+  it('refuses a recovery retry whose model has a smaller known window, sending no second request', async () => {
+    const fetch = respondWith(mockTextResponse('model not found', { ok: false, status: 404 }), completion('never'));
+    const target = { ...provider, modelContextWindows: { 'model-1': 100000, 'model-small': 1000 } };
+
+    const failure = await runPromptThroughProvider({
+      provider: target, prompt: 'word '.repeat(2000), source: 'goal-check-in', model: 'model-1',
+      completion: { temperature: 0, maxTokens: 32, recover: async () => 'model-small' },
+    }).catch((err) => err);
+
+    expect(failure.message).toMatch(/^Example API \(model-small\): known 1000-token context is below the \d+-token request budget$/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('resolves with the run id and rejects with the reply detail a caller needs', async () => {
     respondWith(completion('ok'), mockTextResponse('slow down', { ok: false, status: 429 }));
 
@@ -458,5 +647,97 @@ describe('runPromptThroughProvider completion requests', () => {
     expect(failure.message).toBe('Provider returned 429: slow down');
     expect(failure.completionFailure).toEqual({ error: 'Provider returned 429: slow down', status: 429, body: 'slow down', model: 'model-1', retried: false });
     expect(failure.runId).not.toBe(ok.runId);
+  });
+});
+
+
+describe('tracked ChatGPT subscription calls', () => {
+  const subscription = { id: 'codex', name: 'Codex', type: 'cli', command: 'codex', enabled: true,
+    textTransport: 'codex-app-server', textTransportEnabled: true, textTransportReadRiskAcknowledged: true,
+    defaultModel: 'example-codex', effort: 'high' };
+  let transport;
+  beforeEach(async () => {
+    transport = await import('./codexAppServer.js');
+    vi.spyOn(transport, 'getCodexTextTransportBench').mockReturnValue(null);
+    vi.spyOn(transport, 'runCodexTextTurn');
+    vi.spyOn(transport, 'benchCodexTextTransport');
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(['api', 'subscription'])('honors Stop as soon as the %s record is published, before dispatch', async (kind) => {
+    let stopped;
+    spies.onRunCreated.mockImplementationOnce(metadata => {
+      void usage.recordSession(metadata.providerId, metadata.providerName, metadata.model);
+      stopped = stopRun(metadata.id);
+    });
+    const fetch = respondWith(completion('unexpected answer'));
+    transport.runCodexTextTurn.mockImplementation(({ signal }) => {
+      if (signal.aborted) throw Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' });
+      return Promise.resolve({ text: 'unexpected answer' });
+    });
+    const result = await callProviderAISimple(kind === 'api' ? provider : subscription, 'example-model', 'Summarize.');
+    expect(await stopped).toBe(true);
+    expect(result).toMatchObject({ canceled: true });
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await record()).metadata).toMatchObject({ canceled: true, success: false });
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
+  });
+
+  it('records the exact stamped prompt and effective effort, opens one session and bills ephemeral tokens once', async () => {
+    transport.runCodexTextTurn.mockImplementation(async () => {
+      expect(await runnerService.getActiveRunCount()).toBe(1);
+      expect(getDirectProviderCallCount()).toBe(0);
+      return { text: 'subscription answer', model: 'effective-codex', effort: 'medium', effortClamped: true,
+        clampReason: 'example clamp', usage: { inputTokens: 12, cachedInputTokens: 4, outputTokens: 3 } };
+    });
+    const result = await callProviderAISimple(subscription, subscription.defaultModel, 'Describe a landscape.', { source: 'taste-summary' });
+    expect(result).toMatchObject({ text: 'subscription answer', effort: 'medium', effortClamped: true });
+    const run = await record();
+    expect(run.prompt).toBe(transport.runCodexTextTurn.mock.calls[0][0].prompt);
+    expect(run.prompt.split(CREATIVE_LATITUDE_HEADING)).toHaveLength(2);
+    expect(run.output).toBe(result.text);
+    expect(run.metadata).toMatchObject({ success: true, source: 'taste-summary', model: 'effective-codex', effort: 'medium',
+      selfContainedUsage: true, nativeUsageUnpersisted: true, reportedUsage: { tokensIn: 8, tokensOut: 3, cacheReadTokens: 4 } });
+    expect(usage.recordSession).toHaveBeenCalledTimes(1);
+    expect(spies.onRunCompleted).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+    expect(usage.recordRunUsage.mock.calls[0][0]).toMatchObject({ tokensIn: 8, tokensOut: 3, cacheReadTokens: 4, nativeUsageUnpersisted: true, source: 'measured' });
+  });
+
+  it('finalizes a failed subscription attempt before an explicit API fallback opens its own run', async () => {
+    const fallback = { ...provider, enabled: true };
+    providerService.getAllProviders.mockResolvedValueOnce({ providers: [subscription, fallback] });
+    transport.runCodexTextTurn.mockRejectedValue(Object.assign(new Error('Subscription limit reached.'), { code: 'CODEX_TURN_RATE_LIMIT' }));
+    respondWith(completion('fallback answer', { usage: { prompt_tokens: 10, completion_tokens: 2 } }));
+    const result = await callProviderAISimple({ ...subscription, fallbackProvider: fallback.id }, 'example-codex', 'Summarize.', { source: 'goal-check-in' });
+    expect(result).toMatchObject({ text: 'fallback answer' });
+    const ids = await runIds();
+    expect(ids).toHaveLength(2);
+    const records = await Promise.all(ids.map(async id => JSON.parse(await readFile(join(runsDir, id, 'metadata.json'), 'utf8'))));
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ providerId: 'codex', success: false, error: 'Subscription limit reached.' }),
+      expect.objectContaining({ providerId: fallback.id, success: true }),
+    ]));
+    expect(usage.recordSession).toHaveBeenCalledTimes(2);
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(usage.recordRunUsage).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(['Stop', 'caller abort', 'delete'])('interrupts the turn for %s and records cancellation without benching or fallback', async (action) => {
+    const caller = new AbortController();
+    transport.runCodexTextTurn.mockImplementation(({ signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(Object.assign(new Error('The Codex turn was cancelled.'), { code: 'CODEX_TURN_INTERRUPTED' })), { once: true });
+    }));
+    const pending = callProviderAISimple({ ...subscription, fallbackProvider: 'example-api' }, 'example-codex', 'Summarize.', { signal: caller.signal });
+    await vi.waitFor(() => expect(transport.runCodexTextTurn).toHaveBeenCalledTimes(1));
+    const [id] = await runIds();
+    if (action === 'caller abort') caller.abort();
+    else if (action === 'delete') await serializeRunDeletion(runnerService.deleteRun.bind(runnerService))(id);
+    else await stopRun(id);
+    expect(await pending).toEqual({ error: 'The Codex turn was cancelled.', canceled: true });
+    if (action === 'delete') expect(await runIds()).toEqual([]);
+    else expect((await record()).metadata).toMatchObject({ success: false, canceled: true, completionReason: 'canceled', errorCategory: ERROR_CATEGORIES.CANCELED });
+    expect(transport.benchCodexTextTransport).not.toHaveBeenCalled();
+    expect(spies.onRunFailed).not.toHaveBeenCalled();
   });
 });

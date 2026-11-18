@@ -17,7 +17,7 @@ vi.mock('os', async (importOriginal) => {
 vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi.fn(async () => null) }));
 vi.mock('../../lib/processEnv.js', () => ({ whichFirst: vi.fn(async () => null) }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 vi.mock('./llm.js', () => ({ isToolCapable: vi.fn(), isReasoningModel: vi.fn() }));
 

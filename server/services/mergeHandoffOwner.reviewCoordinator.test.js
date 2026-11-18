@@ -1,32 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
-import { storedForm } from '../lib/cosTaskRows.js';
+import { storedForm } from '../lib/cos/cosTaskRows.js';
 import { forkLocalBranch } from '../lib/forkHead.js';
 import { parsePullRequestUrl } from '../lib/gitForge.js';
 
 const f = vi.hoisted(() => ({ state: null, disk: null, tasks: {}, branch: 'feature/fix', workspaceRepo: 'example/repo', originHost: 'github.com', row: null, head: null, upstream: null, remote: null, pushRemote: null, detached: false }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   AGENTS_DIR: '/synthetic/agents',
   withStateLock: createFileWriteQueue(),
   loadState: async () => f.state,
   saveState: async state => { f.state = state; f.disk = structuredClone(state); },
   readMergeAdmissionStateForSafetyCheck: async () => ({ trusted: true, ...structuredClone(f.disk) }),
 }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() }, emitLog: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: async task => { f.tasks[task.id] = { ...storedForm(task, 'user'), taskType: 'internal' }; return task; }, updateTask: vi.fn(),
   getTaskById: async id => f.tasks[id],
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   forceSpawnTask: vi.fn(),
 }));
-vi.mock('./cosAgentLifecycle.js', async importOriginal => ({ ...(await importOriginal()), getAgents: async () => [] }));
+vi.mock('./cos/cosAgentLifecycle.js', async importOriginal => ({ ...(await importOriginal()), getAgents: async () => [] }));
 vi.mock('../lib/gitRemote.js', async importOriginal => ({ ...(await importOriginal()),
   getOriginInfo: async path => ({ host: f.originHost, fullName: path === '/repos/worktree' ? f.workspaceRepo : 'example/repo' }) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => JSON.stringify(f.row)) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({ cwd: '/repos/source', env: {} }) }));
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));
-vi.mock('./agentAppWorkspace.js', () => ({ getAppWorkspace: async () => '/repos/source', getAppDataForTask: async () => null }));
+vi.mock('./agent/agentAppWorkspace.js', () => ({ getAppWorkspace: async () => '/repos/source', getAppDataForTask: async () => null }));
 vi.mock('../lib/spawnCwd.js', async importOriginal => ({ ...(await importOriginal()), resolveSpawnCwd: path => path }));
 vi.mock('./taskConflict.js', () => ({ detectConflicts: vi.fn() }));
 vi.mock('../lib/execGit.js', () => ({ execGit: async args => {
@@ -45,11 +45,11 @@ vi.mock('./worktreeManager.js', () => ({ removeWorktree: vi.fn(), classifyWorktr
   createWorktree: vi.fn(async (_agent, _workspace, _task, options) => ({ worktreePath: '/repos/worktree', branchName: forkLocalBranch(options.existingBranch, options.forkHead),
     ...(f.detached ? { detached: true, headSha: f.head } : {}) })),
 }));
-import { prepareAgentWorkspace } from './agentWorkspacePrep.js';
+import { prepareAgentWorkspace } from './agent/agentWorkspacePrep.js';
 import { createWorktree } from './worktreeManager.js';
-import { spawnReviewLoopFollowUp } from './agentWorktreeCleanup.js';
-import { buildAgentRegistration } from '../lib/agentRegistrationRecord.js';
-import { registerAgent } from './cosAgentLifecycle.js';
+import { spawnReviewLoopFollowUp } from './agent/agentWorktreeCleanup.js';
+import { buildAgentRegistration } from '../lib/agent/agentRegistrationRecord.js';
+import { registerAgent } from './cos/cosAgentLifecycle.js';
 import { resolveMergeHandoffOwner } from './mergeHandoffOwner.js';
 
 const resolveOwner = () => resolveMergeHandoffOwner('review-agent');

@@ -1,4 +1,4 @@
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 
 // Persisted preflight steps survive a restart; only this process-local marker
 // proves that preparation is actually running now.

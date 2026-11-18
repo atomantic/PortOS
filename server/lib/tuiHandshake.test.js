@@ -56,7 +56,7 @@ import {
   screenShowsInFlightChrome,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
-import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
+import { CODEX_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -1495,7 +1495,7 @@ describe('tuiHandshake.isCollapsedPasteChip', () => {
 // rather than hand-transcribing a vendor list, so a newly-seeded vendor that a
 // builder doesn't know about FAILS here instead of diverging in production.
 // Same shape as `server/cos-runner/allowedCommands.test.js` (catalog-derived
-// parity) and `server/lib/cliChildEnv.test.js` (discovery of a hand-rolled
+// parity) and `server/lib/cliChildEnv.guard.test.js` (discovery of a hand-rolled
 // call site). Sibling coverage for the model-injection point lives in
 // `providerModels.test.js#resolveInjectedTuiModel`.
 describe('tuiHandshake — parity with the shipped provider catalog', () => {

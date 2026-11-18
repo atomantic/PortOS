@@ -440,7 +440,7 @@ optional extra line (album, director), fading in over the opener (optionally
 sliding in from one side as it does) and out again in place.
 **Look → Opening title card** (under the docked preview) stores it on the project (`project.titleCard`,
 validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
-`server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
+`server/lib/musicVideo/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
 text). Turning it on fills the song title (the project name without its version
 suffix), the artist named for DistroKid under Where you post, this year, and a
 window that ends half a second before the first sung line. Timing (in, out,
@@ -574,7 +574,7 @@ song frame. The layered template blends the end image using
 `globalThis.__portosMusicVideoGlitch(canvas, params, frame)`. PortOS installs
 that painter in the sandbox when the edit has selected glitches.
 
-A wipe on a cut (`server/lib/musicVideoWipes.js`: shape, pattern and move
+A wipe on a cut (`server/lib/musicVideo/musicVideoWipes.js`: shape, pattern and move
 wipes) arrives on the scene it runs into as `scenes[].wipe = { style, frames,
 lengthSec, cutFrame, fromSceneId, color }`, with `color` as `#rrggbb` or null.
 It adds no time: from `cutFrame` the incoming scene's clock runs as usual, and

@@ -63,7 +63,7 @@ import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDUL
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
-import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { assertMusicVideoMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import {
   isCloudImageJob, isLocalFinishReplay, jobLane, jobSwimlane, laneLimits, laneTotalLimits,
   getEffectiveParallelLimit, getRateLimitCooldown, recordRateLimitCooldown, rateLimitWaitMessage,

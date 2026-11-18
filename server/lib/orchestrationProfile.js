@@ -7,10 +7,10 @@
  *
  * A task normally resolves ONE provider and model for the whole run, so strong planning reasoning also pays that rate for mechanical editing. A profile splits the run into three ROLES (architect plans and writes specs,
  * implementer executes one spec at a time, reviewer checks), each with its own provider/model, plus a per-step reasoning rung the architect names in the spec. Pure vocabulary + normalizer + directive grammar; the Zod surface is
- * `cosValidation.js`, model selection `services/agentModelSelection.js`, doctrine `services/promptSections/orchestrationDoctrine.js`, all reading the definitions HERE. Opt-in: `direct` is the default and every accessor returns null for a profile-less task.
+ * `cosValidation.js`, model selection `services/agent/agentModelSelection.js`, doctrine `services/promptSections/orchestrationDoctrine.js`, all reading the definitions HERE. Opt-in: `direct` is the default and every accessor returns null for a profile-less task.
  */
 
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { isPlainObject } from './objects.js';
 
 /** Execution modes a CoS task can run under. `direct` is today's behavior. */

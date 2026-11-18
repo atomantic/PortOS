@@ -25,7 +25,7 @@
     "@cantoo/pdf-lib": "2.11.1",
     "@googleapis/calendar": "20.2.0",
     "@novnc/novnc": "1.7.0",
-    "better-sqlite3-multiple-ciphers": "13.1.1",
+    "better-sqlite3-multiple-ciphers": "13.2.0",
     "chokidar": "6.0.0",
     "compression": "1.8.2",
     "express": "5.3.0",
@@ -42,7 +42,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7",
+    "@biomejs/biome": "2.6.8",
     "@vitest/coverage-v8": "5.1.0",
     "eslint": "10.15.0",
     "vitest": "5.1.0"
@@ -60,6 +60,6 @@
     "ws": "8.23.0",
     "postcss": "8.5.33",
     "nanoid": "3.3.20",
-    "minimatch": "11.0.8"
+    "minimatch": "11.0.9"
   }
 }

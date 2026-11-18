@@ -28,14 +28,14 @@ vi.mock('../services/updateExecutor.js', () => ({
 // without spawning real processes. spawningTasks is a real Set the tests mutate
 // (hoisted so the mock factory, which is hoisted above imports, can reference it).
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
-vi.mock('../services/agentState.js', () => ({
+vi.mock('../services/agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks
 }));
 // The map ids are filtered through PortOS's durable records before they count.
 // Default the filter to "every tracked id has a live record" so the existing
 // cases keep asserting the counting arithmetic; the stale-entry case overrides it.
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   filterLiveAgentIds: vi.fn(async (ids) => ids)
 }));
 const { mockCosState } = vi.hoisted(() => ({
@@ -43,7 +43,7 @@ const { mockCosState } = vi.hoisted(() => ({
     persistentMind: { queuedMessages: [], activeTurn: null },
   },
 }));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   readPersistentMindStateForSafetyCheck: vi.fn(async () => ({
     trusted: true,
     persistentMind: mockCosState.persistentMind,
@@ -53,9 +53,9 @@ vi.mock('../services/cosState.js', () => ({
 
 import * as updateChecker from '../services/updateChecker.js';
 import { launchUpdate } from '../services/updateExecutor.js';
-import { getActiveAgentIds } from '../services/agentState.js';
-import { readPersistentMindStateForSafetyCheck } from '../services/cosState.js';
-import { filterLiveAgentIds } from '../services/cosAgentLifecycle.js';
+import { getActiveAgentIds } from '../services/agent/agentState.js';
+import { readPersistentMindStateForSafetyCheck } from '../services/cos/cosState.js';
+import { filterLiveAgentIds } from '../services/cos/cosAgentLifecycle.js';
 import updateRoutes from './update.js';
 
 // The execute route streams all progress over `req.app.get('io')`; without one

@@ -7,7 +7,7 @@ import { Router } from 'express';
 import { getWorkflowGraph } from '../services/workflow.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { cosWorkflowQuerySchema } from '../lib/cosValidation.js';
+import { cosWorkflowQuerySchema } from '../lib/cos/cosValidation.js';
 
 const router = Router();
 

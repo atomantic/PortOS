@@ -27,7 +27,7 @@ import dns from 'dns/promises';
 import { Agent, Dispatcher1Wrapper } from 'undici';
 import { ServerError } from './errorHandler.js';
 import { fetchWithTimeout } from './fetchWithTimeout.js';
-import { isSafeIngestUrl, isBlockedIngestHost } from './catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from './catalog/catalogValidation.js';
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_BYTES = 12 * 1024 * 1024; // 12 MB — generous for a single image/feed

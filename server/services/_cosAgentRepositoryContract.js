@@ -4,7 +4,7 @@
  * so the two cannot drift. Not a test file itself: it only registers cases.
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { planAgentSave } from '../lib/cosAgentRows.js';
+import { planAgentSave } from '../lib/cos/cosAgentRows.js';
 
 const id = (n) => `agent-example-${String(n).padStart(4, '0')}`;
 const agent = (n, extra = {}) => ({

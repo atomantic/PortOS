@@ -21,7 +21,7 @@ vi.mock('./apps.js', () => ({ getAppById: vi.fn(), PORTOS_APP_ID: 'portos-defaul
 vi.mock('./brain.js', () => ({ createLinkFromUrl: vi.fn() }));
 vi.mock('./brainStorage.js', () => ({ getLinkByUrl: vi.fn() }));
 vi.mock('./brainJournal.js', () => ({ getSettings: async () => ({ obsidianVaultId: null }) }));
-vi.mock('./cosTaskStore.js', () => ({ addTask: vi.fn() }));
+vi.mock('./cos/cosTaskStore.js', () => ({ addTask: vi.fn() }));
 vi.mock('./humanActivity.js', () => ({ recordEvents: vi.fn() }));
 vi.mock('./videoGen/history.js', () => ({ mutateVideoHistory: vi.fn() }));
 vi.mock('./videoGen/events.js', () => ({ videoGenEvents: { emit: vi.fn() } }));

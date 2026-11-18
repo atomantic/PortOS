@@ -13,10 +13,10 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `spawnBudgetProof.js` | Server-owned retry-episode and latest-dispatch proof validation, including counter round trips. |
 | `spawnBudgetReconciliation.js` | Ownership-fenced monotone correction of a stopped task from its exact latest dispatch receipt; correction remains held. |
 | `explicitSpawnBudgetReset.js` | Resolves a unique stopped orphan and its retained checkout before an explicit reset-and-run action. |
-| `catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
+| `catalog/catalogPrimitives.js` | Explicit creative primitive ownership, safe universe membership, independent forks and durable retry receipts. |
 | `catalogDB/ingredients.js` | Canonical ingredient CRUD/history, atomic flag-only locks and bounded requested-ID card projections with batched cover/ownership/identity context. |
 | `catalogDB/media.js` | Ingredient media associations, metadata-free profile covers (`getIngredientMediaCover`), image-owner lookup by media key (`findMediaOwnersByKeys`) and integrity checks that can reuse already-read media rows. |
-| `catalogPrimitiveUsage.js` | Indexed/derived creative usage aggregation and exact canon-pointer removal guards for FableLoom and local voice profiles. |
+| `catalog/catalogPrimitiveUsage.js` | Indexed/derived creative usage aggregation and exact canon-pointer removal guards for FableLoom and local voice profiles. |
 | `deadOwnerReservations.js` | Boot and orphan-sweep reconcile for reservations whose admitting process died: stamps settled Output publication rows unsettled for receipt recovery, and releases only cli-run or mind-turn residue whose owning record proves completion. |
 | `repoCleanupRecovery.js` | Reserves one bounded exact-owner review or code-repair obligation, rechecks policy and delivery evidence before publication, and never queues a provider for routine holds. |
 | `repoCleanupObservation.js` | Read-only exact-ref presence/absence accounting; malformed, changing or unsupported metadata remains unknown. |
@@ -58,4 +58,4 @@ image-generation paths below are useful entry points when tracing render jobs.
 | `appProcessStatus.js` | PM2-backed managed-app status projections, expected-exit policy, and custom PM2 home resolution. |
 | `forkReviewMergeTarget.js` | Captures a fresh fork review target from the base repository’s live PR; admission verifies the registered target, live task, exact checkout head, fork remote/upstream and live forge identity. |
 
-| `providerExecutionOptions.js` | Explicit source-linked execution selection creation; compatibility exports for capability inspection and dispatch preparation. |
+| `provider/providerExecutionOptions.js` | Explicit source-linked execution selection creation; compatibility exports for capability inspection and dispatch preparation. |

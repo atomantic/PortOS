@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { captureMusicVideoEvidence } from '../lib/musicVideo/musicVideoDependencies.js';
 import { mkdtemp, open, rename, rm, symlink, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -21,6 +22,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectPage: vi.fn(),
+  listProjectCompletion: vi.fn(async () => []),
   getProject: vi.fn(),
   createProject: vi.fn(async (d) => ({ id: 'mv-new', ...d })),
   cloneProject: vi.fn(async (id, options) => ({
@@ -123,7 +125,7 @@ import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
 import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
-import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideoLimits.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../lib/musicVideo/musicVideoLimits.js';
 import { DIRECTOR_STARTED } from '../services/musicVideo/productionReview.js';
 
 describe('musicVideo routes', () => {
@@ -133,8 +135,8 @@ describe('musicVideo routes', () => {
     app.use(express.json());
     app.use('/api/music-video', musicVideoRoutes);
     vi.clearAllMocks();
-    svc.listProjectPage.mockImplementation(async ({ limit, offset, compare }) => {
-      const projects = [...await svc.listProjects()];
+    svc.listProjectPage.mockImplementation(async ({ limit, offset, compare, filter }) => {
+      const projects = [...await svc.listProjects()].filter(filter || (() => true));
       if (compare) projects.sort(compare);
       return { items: projects.slice(offset, offset + limit), total: projects.length, limit, offset };
     });
@@ -278,6 +280,63 @@ describe('musicVideo routes', () => {
     expect(r2.body.nextCursor).toBeNull();
     expect(r2.body.items).toHaveLength(1);
     expect(r2.body.items[0].id).toBe('mv-older');
+  });
+
+  it('filters project status before paging and keeps missing and failed statuses in progress', async () => {
+    svc.listProjects.mockResolvedValue([
+      { id: 'done', status: 'complete', createdAt: '2026-03-01' },
+      { id: 'failed', status: 'failed', createdAt: '2026-02-01' },
+      { id: 'draft', createdAt: '2026-01-01' },
+    ]);
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1');
+    expect(progress.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'failed' }] });
+    const next = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1&cursor=1');
+    expect(next.body).toMatchObject({ total: 2, nextCursor: null, items: [{ id: 'draft' }] });
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'done' }] });
+    expect((await request(app).get('/api/music-video?summary=1&statusFilter=unknown')).status).toBe(400);
+  });
+
+  it('classifies stale render evidence before pagination, preserving legacy completed projects', async () => {
+    const rendered = { status: 'complete', renderHistoryId: 'render-example', uploadedAudioFilename: 'original.wav', scenes: [] };
+    const renderDependencies = captureMusicVideoEvidence(rendered);
+    const stale = { ...rendered, id: 'stale', uploadedAudioFilename: 'new.wav', renderDependencies, createdAt: '2026-03-01' };
+    svc.listProjects.mockResolvedValue([
+      stale, { ...rendered, id: 'legacy', createdAt: '2026-02-01' }, { id: 'draft', createdAt: '2026-01-01' },
+    ]);
+    svc.listProjectCompletion.mockResolvedValue([{ id: 'stale', isCompleted: false }]);
+    const progress = await request(app).get('/api/music-video?summary=1&statusFilter=in-progress&limit=1');
+    expect(progress.body).toMatchObject({ total: 2, nextCursor: '1', items: [{ id: 'stale', isCompleted: false }] });
+    const completed = await request(app).get('/api/music-video?summary=1&statusFilter=completed');
+    expect(completed.body).toMatchObject({ total: 1, items: [{ id: 'legacy', isCompleted: true }] });
+    svc.listProjectCompletion.mockReset();
+  });
+
+  it('looks up catalog completion by deduplicated ingredient IDs and rejects an empty lookup', async () => {
+    svc.listProjectCompletion.mockResolvedValueOnce([{ id: 'mv-linked', name: 'Linked', isCompleted: true }]);
+    const response = await request(app).get('/api/music-video/catalog-completion?ingredientId=cat-linked&ingredientId=cat-linked');
+    expect(response.body).toEqual([{ id: 'mv-linked', name: 'Linked', isCompleted: true }]);
+    expect(svc.listProjectCompletion).toHaveBeenCalledWith({ ingredientIds: ['cat-linked'] });
+    expect((await request(app).get('/api/music-video/catalog-completion')).status).toBe(400);
+  });
+
+  it('searches names across every project before paging, combined with the status filter', async () => {
+    svc.listProjects.mockResolvedValue([
+      { id: 'a', name: 'Alpha Night', status: 'complete', createdAt: '2026-05-01' },
+      { id: 'b', name: 'Beta', createdAt: '2026-04-01' },
+      { id: 'c', name: 'night drive', createdAt: '2026-03-01' },
+      { id: 'd', name: 'Gamma', createdAt: '2026-02-01' },
+      { id: 'e', name: 'Late NIGHT owl', createdAt: '2026-01-01' },
+    ]);
+    const first = await request(app).get('/api/music-video?summary=1&limit=1&q=%20night%20');
+    expect(first.body).toMatchObject({ total: 3, nextCursor: '1', items: [{ id: 'a' }] });
+    const last = await request(app).get('/api/music-video?summary=1&limit=1&q=night&cursor=2');
+    expect(last.body).toMatchObject({ total: 3, nextCursor: null, items: [{ id: 'e' }] });
+    const combined = await request(app).get('/api/music-video?summary=1&q=night&statusFilter=in-progress');
+    expect(combined.body.items.map((item) => item.id)).toEqual(['c', 'e']);
+    const none = await request(app).get('/api/music-video?summary=1&q=zzz');
+    expect(none.body).toMatchObject({ total: 0, items: [], nextCursor: null });
+    expect((await request(app).get(`/api/music-video?summary=1&q=${'x'.repeat(201)}`)).status).toBe(400);
   });
 
   it('presents only the requested summary page, including cursor precedence and an empty page', async () => {

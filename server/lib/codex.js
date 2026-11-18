@@ -16,7 +16,7 @@ import {
   buildCodexStartupArgs,
   codexOssLocalProvider,
   commandBasename,
-} from './providerModels.js';
+} from './provider/providerModels.js';
 
 export const CODEX_COMMAND = 'codex';
 export const CODEX_CLI_ID = 'codex';

@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { withTransaction } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createProjectDbStore } from '../projectDbStore.js';
@@ -32,6 +32,29 @@ const { withLockedProject, rowToProject } = store;
 export const {
   persist, listProjects, listProjectPage, getProject, getProjectsByIds, listProjectIds, listProjectNames,
 } = store;
+
+// Project links live in concept.subjects, including aliases kept by older records.
+// Read IDs first so an unrelated catalog write never pulls any project bodies.
+export async function listCompletionCandidateIds(ingredientIds) {
+  const { rows } = await query(
+    `WITH members AS MATERIALIZED (
+       SELECT id FROM unnest($1::text[]) AS input(id)
+       UNION SELECT unnest(catalog_identity_member_ids(id)) FROM unnest($1::text[]) AS input(id)
+     )
+     SELECT id FROM music_video_projects p
+      WHERE deleted = false AND data->>'status' = 'complete'
+        AND ((NULLIF(data->>'renderHistoryId', '') IS NOT NULL AND jsonb_typeof(data->'renderDependencies') = 'object')
+          OR data#>>'{composition,mode}' = 'blender')
+        AND ($1 IS NULL OR (
+          data#>>'{castAndSets,source}' = 'catalog'
+          AND data#>'{renderDependencies,references}' @> '[{"role":"clipReferences"}]'::jsonb
+          AND EXISTS (SELECT 1 FROM members WHERE p.data#>'{concept,subjects}' @>
+            jsonb_build_array(jsonb_build_object('ingredientId', members.id)))
+        ))`,
+    [ingredientIds ?? null],
+  );
+  return rows.map(({ id }) => id);
+}
 
 async function cloneProjectUnqueued(id, options = {}) {
   return withTransaction(async (client) => {

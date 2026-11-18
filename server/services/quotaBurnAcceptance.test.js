@@ -38,7 +38,7 @@ vi.mock('./taskSchedule.js', () => ({
   }),
 }));
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(async () => {
     if (world.tasksThrow) throw new Error('COS-TASKS.md unreadable');
     return { cos: { tasks: world.tasks }, user: { tasks: [] } };

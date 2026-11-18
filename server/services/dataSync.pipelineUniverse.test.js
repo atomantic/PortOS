@@ -1243,7 +1243,7 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       'peerAssetStamps',
       // Numeric PortOS quality uses its version-validated read-through endpoint, never snapshot writes.
       'appQuality',
-      // catalog → in-process applyRemoteChanges (server/services/catalogSync.js)
+      // catalog → in-process applyRemoteChanges (server/services/catalog/catalogSync.js)
       'catalog',
       // authors → per-record peer-push only (no 60s file-snapshot category).
       // Gated at applyIncomingPush via compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.author.

@@ -260,7 +260,7 @@ describe('test memo through the real runner', () => {
       expect(trusted.status, trusted.stderr).toBe(0);
       expect(trusted.stdout).toContain('recorded 0 green entries for 2 passed files');
       expect(trusted.stdout).toMatch(new RegExp(`🧠   not recorded: ${stuck.replace(/[./]/g, '\\$&')} \\(floor key: [^;]+; recorded key: [^)]+\\)\n`));
-      expect(trusted.stdout).toContain('🧠   not recorded: 1 files never memoized by declaration (always-run guard, TEST_MEMO_NEVER or the test-memo: never marker).');
+      expect(trusted.stdout).toContain('🧠   not recorded: 1 files never memoized by declaration (tree guard or always-run test, TEST_MEMO_NEVER or the test-memo: never marker).');
       expect(trusted.stdout.match(/not recorded:/g)).toHaveLength(2);
       const untrusted = run({ ...unrecorded, GITHUB_EVENT_NAME: 'pull_request' });
       expect(untrusted.status, untrusted.stderr).toBe(0);
@@ -466,7 +466,7 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
       `const depfile = ${JSON.stringify(vitestDependenciesPath(root, 'server'))};`,
       'const seeded = fs.existsSync(depfile) ? Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync(depfile, "utf8")).projects).map(([name, project]) => [name, Object.keys(project.files).sort()])) : null;',
       // Then what Vitest does with a seeded file: merge the modules the run loaded into its record.
-      'if (seeded) fs.writeFileSync(depfile, JSON.stringify({ version: 2, projects: { "": { modules: selection.include,',
+      'if (seeded && args.includes("--experimental.recordDependencies")) fs.writeFileSync(depfile, JSON.stringify({ version: 2, projects: { "": { modules: selection.include,',
       '  files: Object.fromEntries(selection.include.map((file, index) => [file, { at: 1, deps: [index] }])) } } }));',
       'process.stdout.write(JSON.stringify({ args, selection, seeded }) + "\\n");',
     ].join('\n'));
@@ -523,12 +523,22 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     // Vitest records nothing for a name-filtered run unless each file has a record to merge
     // into (#16545): a recording run seeds one per file and project, and no other run does.
     for (const result of Object.values(selections).flat()) expect(result).not.toBeNull();
+    const depfile = vitestDependenciesPath(root, 'server');
+    const staleDepfile = JSON.stringify({ version: 2, projects: { '': { modules: [], files: { 'stale.test.js': { deps: [] } } } } });
+    mkdirSync(dirname(depfile), { recursive: true });
+    writeFileSync(depfile, staleDepfile);
+    const otherDepfile = join(dirname(depfile), '..', 'old-project', 'dependencies.json');
+    mkdirSync(dirname(otherDepfile), { recursive: true });
+    writeFileSync(otherDepfile, staleDepfile);
     const readOnly = run(1, { memo: join(fixture, 'pull-request-memo'), event: 'pull_request' });
     expect(readOnly.status, readOnly.stderr).toBe(0);
-    expect(readOnly.reported.seeded).toBeNull();
+    expect(readOnly.reported.args).not.toContain('--experimental.recordDependencies');
+    expect(readFileSync(depfile, 'utf8')).toBe(staleDepfile);
+    expect(readFileSync(otherDepfile, 'utf8')).toBe(staleDepfile);
     const memo = join(fixture, 'first-shard-memo');
     const seed = run(1, { memo });
     expect(seed.status, seed.stderr).toBe(0);
+    expect(existsSync(otherDepfile)).toBe(false);
     expect(seed.stdout).toMatch(/recorded \d+ green entries/);
     expect(seed.reported.args).toEqual(expect.arrayContaining(['--experimental.recordDependencies', '--testNamePattern=^(?!.*\\[local-performance\\]).*$']));
     expect(seed.reported.seeded).toEqual(Object.fromEntries(VITEST_PROJECT_NAMES.map(name => [name, [...selections.full[0]].sort()])));
@@ -536,7 +546,9 @@ it('partitions complete browser profiles before per-shard memo reuse and preserv
     const records = readdirSync(join(memo, 'records', 'server')).map(name => JSON.parse(readFileSync(join(memo, 'records', 'server', name), 'utf8')));
     expect(records.map(record => record.test).sort()).toEqual(selections.full[0].map(file => `server/${file}`).sort());
     for (const record of records) expect(record).toEqual({ test: record.test, modules: [record.test], recordedAt: expect.any(String) });
+    const recordedDepfile = readFileSync(depfile, 'utf8');
     const reused = run(1, { memo });
+    expect(readFileSync(depfile, 'utf8')).toBe(recordedDepfile);
     expect(reused.status, reused.stderr).toBe(0);
     expect(reused.stdout).toContain(`skipped ${firstCount} of ${firstCount} selected files`);
     expect(reused.reported).toBeNull();
@@ -746,7 +758,7 @@ describe('ci.yml shard wiring', () => {
 
   it('runs the planner-selected browser suites on their own job with prerequisites required (#10312)', () => {
     const body = CI_JOBS.browser;
-    expect(body).toContain("if: needs.impact.outputs.browser_files != '[]'");
+    expect(body).toContain('if: fromJSON(needs.impact.outputs.plan).browser\n');
     const start = body.indexOf('- name: Run cross-workspace browser suites');
     expect(start).toBeGreaterThan(0);
     const step = body.slice(start, body.indexOf('- name:', start + 1));
@@ -757,7 +769,7 @@ describe('ci.yml shard wiring', () => {
     expect(step).toContain('PORTOS_CI_BROWSER_OWNER: browser');
     expect(body).toContain('-browser-${{ matrix.shard }}of${{ strategy.job-total }}');
     expect(body).toContain('name: animatic-capture-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}');
-    expect(step).toContain('CI_TEST_FILES: ${{ needs.impact.outputs.browser_files }}');
+    expect(step).toContain('CI_TEST_FILES: ${{ toJSON(fromJSON(needs.impact.outputs.plan).browser_files) }}');
     expect(step).toContain("PORTOS_REQUIRE_BROWSER_SUITES: '1'");
     // The client workspace must be installed before the suites bundle it.
     expect(body.indexOf('npm ci --prefix client')).toBeGreaterThan(0);
@@ -817,7 +829,7 @@ describe('ci.yml shard wiring', () => {
     expect(jobs.lint).not.toMatch(/matrix\.shard/);
     // A scoped plan emits `client_shards: [1]`, so a later-shard pin would skip
     // lint on every impact-scoped pull request. Its gate is the plan's lint mode.
-    expect(jobs.lint).toContain("if: needs.impact.outputs.lint_mode != 'skip'");
+    expect(jobs.lint).toContain("if: fromJSON(needs.impact.outputs.plan).lint_mode != 'skip'");
     // The aggregate gate is the single required check, so a job it does not
     // observe can fail without blocking a merge.
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINT: ${{ needs.lint.result }}');

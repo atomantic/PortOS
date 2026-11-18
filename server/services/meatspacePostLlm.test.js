@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock providers before importing the module
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn()
 }));
@@ -19,7 +19,7 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
   runPromptThroughProvider: vi.fn()
 }));
 
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import {
   LLM_DRILL_TYPES,

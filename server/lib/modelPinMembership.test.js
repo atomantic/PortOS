@@ -4,7 +4,7 @@ import {
   localRuntimeKind,
   modelPinIsOffered,
 } from './modelPinMembership.js';
-import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
+import { CODEX_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 import { PORTS } from './ports.js';
 
 describe('localRuntimeKind', () => {

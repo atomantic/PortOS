@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
 import { groupMusicVideoProjects } from '../../lib/musicVideoProjectList.js';
-import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideoReviewDraft.js';
+import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideo/musicVideoReviewDraft.js';
 
 /**
  * The project index grid: forks collapse under their root with a per-card
@@ -10,10 +11,19 @@ import { latestMusicVideoReviewDraft } from '../../../../server/lib/musicVideoRe
  * root is held by the page so it survives opening a project and coming back.
  */
 export default function ProjectIndex({
-  projects, nameQuery, onNameQueryChange, summaries, pickedVersion, onPickVersion, trackName,
+  projects, statusFilter, nameQuery, onNameQueryChange, summaries, catalogSync, pickedVersion, onPickVersion, trackName,
   onSelect, onClone, deletion, cloningId, onRename,
 }) {
   const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
+  // A fork group keeps its card when one version goes, so only a group's last
+  // version collapses; otherwise the removal completes at once.
+  const survivingGroupIds = useMemo(
+    () => projectGroups.filter(({ versions }) => versions.length > 1).flatMap(({ versions }) => versions.map((v) => v.id)),
+    [projectGroups],
+  );
+  useEffect(() => {
+    survivingGroupIds.filter((id) => deletion.isRemoving(id)).forEach((id) => deletion.finishRemoval(id));
+  });
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -30,17 +40,26 @@ export default function ProjectIndex({
           className="min-w-0 w-full sm:w-64 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
         />
       </div>
-      {projectGroups.length === 0 && (
-        <p className="text-sm text-port-text-muted">No projects match &ldquo;{nameQuery}&rdquo;.</p>
+      {!summaries.loaded && summaries.loading && <p className="text-sm text-port-text-muted">Searching projects…</p>}
+      {summaries.loaded && projectGroups.length === 0 && (
+        <p className="text-sm text-port-text-muted">{nameQuery.trim()
+          ? <>No projects match &ldquo;{nameQuery}&rdquo;.</>
+          : statusFilter === 'all' ? 'No music video projects yet. Create your first project above to get started.'
+            : statusFilter === 'completed' ? 'No completed projects.' : 'No projects in progress.'}</p>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0 outline-none" tabIndex={-1} data-testid="mv-project-grid">
         {projectGroups.map(({ rootId, versions }) => {
           const picked = versions.findIndex((v) => v.id === pickedVersion[rootId]);
           const versionIndex = picked >= 0 ? picked : 0;
           const project = versions[versionIndex];
           return (
-            <MusicVideoProjectCard
+            <CollapsibleListItem
               key={rootId}
+              removing={versions.length === 1 && deletion.isRemoving(project.id)}
+              onExited={() => deletion.finishRemoval(project.id)}
+              spacing="1rem"
+            >
+            <MusicVideoProjectCard
               project={project}
               trackLabel={trackName(project.trackId)}
               onSelect={() => onSelect(project.id)}
@@ -60,14 +79,15 @@ export default function ProjectIndex({
                 if (target) onPickVersion(rootId, target.id);
               }}
             />
+            </CollapsibleListItem>
           );
         })}
       </div>
       <InfiniteScrollFooter
         hasMore={summaries.hasMore}
         loading={summaries.loading}
-        error={summaries.error}
-        onLoadMore={summaries.loadMore}
+        error={catalogSync?.catalogError || summaries.error}
+        onLoadMore={catalogSync?.catalogError ? catalogSync.retryCatalog : summaries.loadMore}
         label="Load more projects"
       />
     </div>

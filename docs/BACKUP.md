@@ -87,20 +87,18 @@ Additional Exclude Paths is independent: toggling a default never removes custom
 
 ## The Postgres dump is mandatory, not optional
 
-`dumpPostgres()` runs `pg_dump --no-owner --no-acl --clean --if-exists` and returns an explicit status (no silent failure):
+`dumpPostgres()` runs `pg_dump --no-owner --no-acl --clean --if-exists`.
 
 | Result | Meaning | Effect on backup |
 |---|---|---|
-| `{ status: 'ok', sizeBytes, tableCount }` | Dump succeeded and is non-empty | Backup `ok` |
-| `{ status: 'failed', reason: 'pg_unreachable' \| 'pg_dump_missing' \| 'version_mismatch' \| 'dump_error' \| 'empty_dump' }` | Postgres is the active backend but the dump failed | Backup **`degraded`** + warning toast |
+| `{ status: 'ok', sizeBytes, tableCount }` | Dump passed the completeness check | Backup `ok` |
+| `{ status: 'failed', reason: 'pg_unreachable' \| 'pg_dump_missing' \| 'version_mismatch' \| 'dump_error' \| 'empty_dump' \| 'inspect_error' \| 'dump_incomplete' \| 'timeout' }` | Postgres is the active backend but the dump failed | Backup **`degraded`** + warning toast |
 | `{ status: 'skipped', reason: 'not_configured' }` | The explicit file escape hatch is active — `MEMORY_BACKEND=file` or the backend resolved to `file` (dev/test, unsupported for production) | Backup stays `ok` (benign) |
 
-Key behaviors, accurate to the code:
-
-- **A failed dump degrades the whole backup.** `backupStatusForPg()` maps `failed → 'degraded'`; the run persists `pgBackup` into `data/backup/state.json` and emits a `BACKUP_DB_DUMP_FAILED` warning through the error pipeline — **even on unattended scheduled runs** (which pass `io = null`; the service falls back to the module-level `getIo()`).
-- **A skipped dump is still benign** only for the temporary `MEMORY_BACKEND=file` escape hatch (documented as unsupported for production installs). On a normal install where Postgres is active or auto-detected, an unreachable DB returns `failed/pg_unreachable`, not a green "not configured" run.
+- Failed dumps are recorded in `data/backup/state.json` and emit `BACKUP_DB_DUMP_FAILED` on both manual and scheduled runs.
+- An unreachable production database yields `failed/pg_unreachable`.
 - **`--clean --if-exists`** makes the dump replay cleanly into a live, already-initialized PortOS database — the common restore target — instead of erroring on `relation already exists`.
-- A `pg_dump` that exits 0 but produces a 0-byte file is treated as `failed/empty_dump`; a non-zero exit deletes the partial file so a later restore can't trust a truncated dump.
+- After a zero exit, backup checks the same completion marker and core tables as restore. Missing either yields `dump_incomplete`. Backup removes rejected SQL before publishing a degraded snapshot. If removal fails, the snapshot is marked failed.
 - **`version_mismatch`** means no installed `pg_dump` is new enough for the running server (`pg_dump` aborts when older than the server it dumps — the common Homebrew case where an old `postgresql@NN` keg shadows a newer running server in `PATH`). `dumpPostgres()` reads the server's major version (`getServerMajorVersion()` in `lib/db.js`) and auto-selects the closest `pg_dump` whose major is `>=` the server from the installed Homebrew kegs / Postgres.app bundles. Set `PORTOS_PGDUMP=/path/to/pg_dump` to override the auto-discovered binary (e.g. on Linux/Windows where the keg locations don't apply).
 
 ## How restore works
@@ -169,6 +167,7 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 | `{ status: 'failed', reason: 'restore_compatibility', error }` | Target PostgreSQL major cannot be established — repair the version check and retry preview before execution |
 | `{ status: 'failed', reason: 'restore_journal', error }` | The recovery journal could not be written — refused before any reset |
 | `{ status: 'failed', reason: 'backup_snapshot_busy', error }` | A backup cut is active, or admitted asset publications did not drain — refused before the recovery journal or any reset; retry later |
+| `{ status: 'failed', reason: 'database_restore_busy', error }` | Admitted database work did not finish within two minutes. The restore releases the snapshot cut and reopens database admission before returning. Retry after the active queries or transactions finish. |
 | `{ status: 'failed', reason: 'restore_error' \| 'timeout', error }` | `psql` replay failed (stderr captured) and was **proven rolled back** from its receipt (below) |
 | `{ status: 'failed', reason: 'restore_commit_unknown', error, recovery }` | `psql` did not report success and the receipt could not settle whether the replay committed — recovery pending |
 | `{ status: 'failed', reason: 'restore_schema_reconciliation', error, recovery }` | The dump committed, but current schema recovery failed; **not rolled back**, recovery pending |
@@ -182,6 +181,7 @@ Replays the snapshot's `portos-db.sql` into the live database via `psql -v ON_ER
 **Committed-restore recovery (#9725).** A replay that commits but whose repair then fails must neither reopen ordinary writes nor be replayed again — the next sequence value would reuse positions peers already passed, inbound cursors would still skip discarded rows, and a repeated restore would also delete anything accepted after the first replay. So, inside the maintenance window and **before** the destructive replay, the restore publishes a durable journal at `data/database-restore-recovery.json` holding a fresh operation id, the admitted dump's SHA-256, the ORIGINAL feed-sequence positions and the pending stage (`replaying`). The `psql` replay appends one `restore_receipts` row for that operation id after the dump, inside the same transaction, and runs with `application_name = portos-restore-<id>`.
 
 - While the journal exists, every ordinary database operation in the server is refused with `503 DATABASE_RESTORE_RECOVERY` (`server/lib/db.js`); only the maintenance context that owns that operation may inspect or repair. The fence survives restart.
+- A recovery attempt that hits the database drain deadline returns `409 DATABASE_RESTORE_BUSY`. The existing journal and its fence stay in place. Retry **Resume recovery** after active database work finishes.
 - `psql` exit 0 means the replay committed (stage `repairing`). Any other outcome — an SQL error, a timeout kill, a lost connection at `COMMIT` — is settled from the receipt: no live `portos-restore-<id>` session and no receipt is a **proven rollback**, which clears the journal and reopens admission with current rows intact; a receipt is a commit; anything else (a replay session still alive, an unreachable database) stays fenced as `restore_commit_unknown`.
 - Repair runs forced schema upgrades, ordered migrations, feed-sequence flooring at the **recorded** positions (never re-read after the replay) and the inbound cursor rewind. All steps are idempotent. Admission reopens only after every step succeeds, the journal is removed, and its parent directory is synced.
 - If journal unlink fails, the durable record remains pending. If unlink succeeds but directory sync fails, the journal instance retains the operation and original feed positions in memory: status and ordinary database admission stay pending, and same-operation recovery retries finish directory sync. On a fresh process, a surviving journal invokes idempotent repair; if deletion persisted, completed repair needs no destructive replay. This process-local retry cannot provide stronger crash guarantees than the filesystem.

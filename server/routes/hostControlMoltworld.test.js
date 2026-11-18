@@ -21,8 +21,8 @@ const effects = vi.hoisted(() => ({
   recordActivity: vi.fn(), joinWorld: vi.fn(async () => ({})), connect: vi.fn(), getStatus: vi.fn(() => ({})),
 }));
 vi.mock('../services/platformAccounts.js', () => effects);
-vi.mock('../services/agentPersonalities.js', () => ({ getAgentById: vi.fn() }));
-vi.mock('../services/agentActivity.js', () => ({ logActivity: vi.fn() }));
+vi.mock('../services/agent/agentPersonalities.js', () => ({ getAgentById: vi.fn() }));
+vi.mock('../services/agent/agentActivity.js', () => ({ logActivity: vi.fn() }));
 vi.mock('../integrations/moltworld/index.js', () => ({ createMoltworldClient: () => effects }));
 vi.mock('../services/moltworldWs.js', () => effects);
 vi.mock('../services/moltworldQueue.js', () => effects);

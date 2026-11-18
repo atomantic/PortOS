@@ -1,0 +1,1701 @@
+import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { isHostShuttingDown } from '../../lib/hostShutdown.js';
+import { mergePersistentMindMaintainer } from '../../lib/persistent/persistentMindMaintainer.js';
+/**
+ * Chief of Staff (CoS) Service
+ *
+ * Manages the autonomous agent manager that works the task queues,
+ * spawns sub-agents, and orchestrates task completion.
+ *
+ * Decomposed modules:
+ * - cosState.js          — shared state management (loadState, saveState, config, mutex)
+ * - cosAgentLifecycle.js — agent lifecycle (register, update, complete, terminate)
+ * - cosAgentIndex.js     — date-bucket index + on-disk archive layout
+ * - cosAgentFeedback.js  — per-agent feedback capture + task-type classifier
+ * - cosAgentArchive.js   — state-eviction sweeps
+ * - cosReports.js        — reports, briefings, and activity tracking
+ * - cosEvents.js         — event emitter and logging
+ * - cosHealthMonitor.js  — daemon health checks (PM2/memory, auto-restart)
+ */
+
+import { join } from 'path';
+import { getActiveProvider } from '../provider/providers.js';
+import { isInternalTaskId } from '../../lib/taskParser.js';
+import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../../lib/cos/cosSpawnWindow.js';
+import { isRetryHeld, isStaleRetryHold, isDeliveryCleanupHeld } from '../../lib/taskRetryHold.js';
+import { clearStaleActiveAgents } from '../appActivity.js';
+// The single Priority-0 on-demand loop body, shared with the evaluateTasks
+// engine in cosTaskGenerator.js so the two can no longer drift (#6618).
+import { drainOnDemandRequests } from '../onDemandDrain.js';
+import { logCosScheduleUpdate } from '../userActionScheduleLog.js';
+import { schedule as scheduleEvent, cancel as cancelEvent, getEvent } from '../eventScheduler.js';
+import { COMPLETION_RECOVERY_BATCH_SIZE } from '../agent/agentDeliveryActivity.js';
+import { recordJobExecution } from '../autonomousJobs.js';
+import { sleep } from '../../lib/fileUtils.js';
+import { ON_DEMAND_ORIGINS } from '../taskScheduleConstants.js';
+import { currentTaskTypeName } from '../../lib/taskTypeRenames.js';
+import { addNotification, NOTIFICATION_TYPES } from '../notifications.js';
+import { todayInTimezone } from '../../lib/timezone.js';
+import { getUserTimezone } from '../userTimezone.js';
+import { normalizeDomainAutonomy, getDomainMode } from '../../lib/domainAutonomy.js';
+import { normalizeDomainBudgets } from '../../lib/domainBudgets.js';
+import { mergePersistentMindCapabilities } from '../../lib/persistent/persistentMindCapabilities.js';
+import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../../lib/persistent/persistentMindProfile.js';
+import { mergePersistentMindPrompt } from '../../lib/persistent/persistentMindPrompt.js';
+import { mergePersistentMindPlaybook } from '../../lib/persistent/persistentMindPlaybook.js';
+import { mergePersistentMindThinkingPresets } from '../../lib/persistent/persistentMindThinkingPresets.js';
+// Dependency-free leaf holding the shared agent maps + the runner-mode flag,
+// read by `isRunnerHolding` below.
+import { useRunner, spawningTasks, hasActiveTaskOwner } from '../agent/agentState.js';
+
+// Shared state management (extracted to avoid circular deps)
+import { loadState, saveState, withStateLock, loadConfig, saveConfig, withConfigLock, ensureDirectories, isImprovementEnabled, canQueueImprovementTasks, isDaemonRunning, setDaemonRunning } from './cosState.js';
+
+// Events and logging
+import { cosEvents, emitLog } from './cosEvents.js';
+
+import { runHealthCheck } from './cosHealthMonitor.js';
+
+// Task store: CRUD + queue persistence (the `cos_tasks` queues). Callers import
+// these from the declaring modules, not from here. The store
+// emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
+// dequeueNextTask so the spawn-side logic stays here, not in the store.
+import { getPendingTaskIds as readPendingTaskIds, getUserTasks, getCosTasks, getAllTasks, getTaskById, addTask, updateTask, sweepResolvedFailureTasks } from './cosTaskStore.js';
+import { ensureInstanceId } from '../instanceIdentity.js';
+import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner, isLeaseLive } from './cosTaskClaim.js';
+import { retryTasksResolvedByInvestigation } from '../investigationRetry.js';
+import { spawnBudgetHoldReason } from '../spawnBudgetProof.js';
+import { handBackBlockedPrRemediation } from '../blockedPrRemediation.js';
+import { notifyCriticalHealth, clearCriticalHealthIfRecovered } from '../healthCriticalNotifier.js';
+
+const RESUME_DEQUEUE_DELAY_MS = 500;
+// CD recovery normally resolves in <100ms; hold start() at most this long so
+// a stuck recovery doesn't block daemon boot indefinitely.
+const CD_RECOVERY_BOOT_TIMEOUT_MS = 60_000;
+// Initial idle-review queue kicks off after start() — far enough back that
+// a fresh install isn't overwhelmed but close enough to not stall users.
+const POST_STARTUP_QUEUE_DELAY_MS = 30_000;
+// A task whose agent reported completed within this window is treated as
+// "recently completed" and protected from resetOrphanedTasks's reaper.
+const RECENT_COMPLETION_GRACE_MS = 60_000;
+
+// Boot can reach the auto-start path from more than one initializer while the
+// server and runner settle. A boolean check is not sufficient: both callers
+// can observe the daemon as stopped before either one sets the in-memory flag.
+// Share the entire startup promise so recovery, scheduling, and the initial
+// dequeue happen exactly once.
+let daemonStartPromise = null;
+
+// Internal imports for functions used in this module
+import { loadAgentIndex } from './cosAgentIndex.js';
+import { archiveStaleAgents as _archiveStaleAgents } from './cosAgentArchive.js';
+import { initializeAgentFeedback } from './cosAgentFeedback.js';
+import { resolveAgentProviderAndModel } from '../agent/agentProviderResolution.js';
+
+// Task generation + evaluation engine (extracted to cosTaskGenerator.js).
+// `evaluateTasks` and the generators emit `task:ready`; the spawn-side
+// scheduler (dequeueNextTask / tryImmediateSpawn) below reacts to that. Most of
+// these are imported for internal use by the scheduler.
+import {
+  evaluateTasks,
+  queueEligibleImprovementTasks,
+  admitAutoApprovedSystemTasks,
+  admitPendingUserTasks,
+  resolveAutonomyBudget,
+  countRunningAgentsByProject,
+  isWithinProjectLimit,
+  unblockExpiredCooldowns
+} from './cosTaskGenerator.js';
+
+// Autonomous-job + improvement-check timer machinery (extracted to
+// cosJobScheduler.js). Imported for internal use by start()/stop()/init() and
+// the job-lifecycle event handlers below. The improvement-check timer asks for
+// a dequeue via the `cos:dequeue-requested` event (wired in init()), since
+// dequeueNextTask stays here.
+import {
+  registerJobSchedules,
+  unregisterJobSchedules,
+  scheduleNextImprovementCheck,
+  registerSingleJobSchedule,
+  clearSpawningJob,
+  handleJobSpawnFailed
+} from './cosJobScheduler.js';
+
+// Shared capacity and idle-review admission owner. The engines retain their
+// priority ordering and dispatch adapters; cosDequeue owns idle preparation's
+// capacity precheck and its committed handoff.
+import { admitFeatureAgentTasks, admitIdleReviewTask, createDequeueCapacity, countRunningAgentsByLocalEndpoint } from './cosDequeue.js';
+import { buildLocalEndpointSlotContext, localEndpointCapacityError } from './cosLocalEndpointSlots.js';
+import {
+  initializePersistentMindSupervisor,
+  shutdownPersistentMindSupervisor,
+  handlePersistentMindGlobalPause,
+  handlePersistentMindGlobalResume,
+  refreshPersistentMindWakeCadence,
+  registerPersistentMindTurnAdapter,
+  unregisterPersistentMindTurnAdapter,
+} from '../persistent/persistentMindSupervisor.js';
+import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '../preflightTaskCard.js';
+import { cleanupZombieAgents } from './cosAgentLifecycle.js';
+import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
+// `../persistent/persistentMindAdapter.js` is imported lazily where the daemon registers the
+// adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
+// voice tool surface, ask service and image-gen backends — a graph the daemon only
+// executes once it is actually running, but that a static edge instantiated in
+// every suite importing cos.js for an unrelated helper.
+
+/**
+ * Get current CoS status
+ */
+export async function getStatus() {
+  const state = await loadState();
+  const provider = await getActiveProvider();
+  const idx = await loadAgentIndex();
+
+  // Count active agents from state
+  const activeAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const pausedAgents = Object.values(state.agents).filter(a => a.status === 'paused').length;
+
+  // Derive tasksCompleted from union of index (disk) + state completed agents,
+  // since state.stats.tasksCompleted can drift after state resets
+  const stateCompletedIds = Object.keys(state.agents).filter(id => state.agents[id].status === 'completed');
+  const stateOnlyCompleted = stateCompletedIds.filter(id => !idx.has(id)).length;
+  const tasksCompleted = Math.max(state.stats.tasksCompleted, idx.size + stateOnlyCompleted);
+  const recoveryEvent = getEvent('cos-pending-merge-sweep');
+  const recoveryBlocked = !isDaemonRunning() ? 'CoS is stopped' : state.paused ? 'CoS is paused'
+    : getDomainMode(state.config, 'cos') !== 'execute' ? 'CoS auto-run must be in Execute mode'
+      : !recoveryEvent?.active ? 'Completion recovery is not scheduled' : null;
+
+  return {
+    running: isDaemonRunning(),
+    paused: state.paused || false,
+    pausedAt: state.pausedAt,
+    pauseReason: state.pauseReason,
+    config: state.config,
+    stats: { ...state.stats, tasksCompleted },
+    activeAgents,
+    pendingTasks: unclaimedTaskIds(await readPendingTaskIds(), runningAgentsByTaskId(Object.values(state.agents))).length,
+    pausedAgents,
+    completionRecovery: {
+      blockedReason: recoveryBlocked,
+      nextRunAt: recoveryBlocked ? null : recoveryEvent.nextRunAt,
+      intervalMs: recoveryEvent?.intervalMs || null,
+      batchSize: COMPLETION_RECOVERY_BATCH_SIZE,
+    },
+    provider: provider ? { id: provider.id, name: provider.name } : null
+  };
+}
+
+/**
+ * Update configuration
+ */
+export async function updateConfig(updates) {
+  let persistentMindWakeCadenceChanged = false;
+  // Config has its own file and its own tail (#6182) — a settings write no
+  // longer serializes behind the runtime-record writes in state.json.
+  const config = await withConfigLock(async () => {
+    const current = await loadConfig();
+    // domainAutonomy is a partial-friendly map: a PATCH that names only one
+    // domain must merge over the others rather than replace the whole object.
+    // Capture the prior map BEFORE the spread clobbers it, then normalize the
+    // merge so an unknown/invalid stored value resolves to the `execute` default.
+    const priorDomainAutonomy = current.domainAutonomy;
+    // Same for domainBudgets — a PATCH naming one domain (or one cap on one
+    // domain) must merge field-by-field over the rest, not replace the map.
+    const priorDomainBudgets = current.domainBudgets;
+    const priorPersistentMindCapabilities = current.persistentMindCapabilities;
+    const priorPersistentMindProfile = current.persistentMindProfile;
+    const priorPersistentMindPrompt = current.persistentMindPrompt;
+    const priorPersistentMindPlaybook = current.persistentMindPlaybook;
+    const priorPersistentMindThinkingPresets = current.persistentMindThinkingPresets;
+    const next = { ...current, ...updates };
+    if (updates.persistentMindMaintainer !== undefined) {
+      next.persistentMindMaintainer = mergePersistentMindMaintainer(current.persistentMindMaintainer, updates.persistentMindMaintainer);
+    }
+    if (updates.domainAutonomy !== undefined) {
+      next.domainAutonomy = normalizeDomainAutonomy({
+        ...priorDomainAutonomy,
+        ...updates.domainAutonomy
+      });
+    }
+    if (updates.domainBudgets !== undefined) {
+      const mergedBudgets = { ...priorDomainBudgets };
+      for (const [id, caps] of Object.entries(updates.domainBudgets)) {
+        mergedBudgets[id] = { ...(priorDomainBudgets?.[id] || {}), ...caps };
+      }
+      next.domainBudgets = normalizeDomainBudgets(mergedBudgets);
+    }
+    if (updates.persistentMindProfile !== undefined) {
+      const nextPersistentMindProfile = mergePersistentMindProfile(
+        priorPersistentMindProfile,
+        updates.persistentMindProfile,
+      );
+      persistentMindWakeCadenceChanged = nextPersistentMindProfile.wakeIntervalMinutes
+        !== normalizePersistentMindProfile(priorPersistentMindProfile).wakeIntervalMinutes;
+      next.persistentMindProfile = nextPersistentMindProfile;
+    }
+    if (updates.persistentMindCapabilities !== undefined) {
+      next.persistentMindCapabilities = mergePersistentMindCapabilities(
+        priorPersistentMindCapabilities,
+        updates.persistentMindCapabilities,
+      );
+    }
+    if (updates.persistentMindThinkingPresets !== undefined) {
+      next.persistentMindThinkingPresets = mergePersistentMindThinkingPresets(
+        priorPersistentMindThinkingPresets,
+        updates.persistentMindThinkingPresets,
+      );
+    }
+    if (updates.persistentMindCapabilities?.thinkingPresetAllowlist !== undefined) {
+      next.persistentMindCapabilities.thinkingPresetGrants = await approvePersistentMindThinkingPresets(
+        next, next.persistentMindCapabilities.thinkingPresetAllowlist,
+      );
+    }
+    if (updates.persistentMindPrompt !== undefined) {
+      next.persistentMindPrompt = mergePersistentMindPrompt(
+        priorPersistentMindPrompt,
+        updates.persistentMindPrompt,
+      );
+    }
+    if (updates.persistentMindPlaybook !== undefined) {
+      next.persistentMindPlaybook = mergePersistentMindPlaybook(
+        priorPersistentMindPlaybook,
+        updates.persistentMindPlaybook,
+      );
+    }
+    return saveConfig(next);
+  });
+  if (updates.persistentMindCapabilities !== undefined || updates.persistentMindThinkingPresets !== undefined) {
+    await cancelPersistentMindThinkingRequest({ ifRevoked: true });
+  }
+  const improveKeys = ['improvementEnabled', 'selfImprovementEnabled', 'appImprovementEnabled'];
+  const improvePatch = Object.fromEntries(
+    improveKeys.filter((key) => Object.prototype.hasOwnProperty.call(updates, key)).map((key) => [key, updates[key]]),
+  );
+  await logCosScheduleUpdate({
+    target: 'cos-config',
+    patch: improvePatch,
+    source: { service: 'cos', fn: 'updateConfig' },
+  });
+  cosEvents.emit('config:changed', config);
+  if (persistentMindWakeCadenceChanged) {
+    await refreshPersistentMindWakeCadence();
+  }
+  if (isDaemonRunning() && updates.domainAutonomy !== undefined) {
+    const mode = getDomainMode(config, 'cos');
+    if (mode === 'execute') await handlePersistentMindGlobalResume();
+    else await handlePersistentMindGlobalPause(`CoS autonomy changed to ${mode}`);
+  }
+  return config;
+}
+
+/**
+ * Start the CoS daemon
+ */
+export function start() {
+  if (!daemonStartPromise) {
+    daemonStartPromise = runStart().finally(() => {
+      daemonStartPromise = null;
+    });
+  }
+  return daemonStartPromise;
+}
+
+async function runStart() {
+  if (isDaemonRunning()) {
+    emitLog('info', '⏭️ CoS already running');
+    return { success: false, error: 'Already running' };
+  }
+
+  emitLog('info', 'Starting Chief of Staff daemon...');
+
+  const state = await withStateLock(async () => {
+    const s = await loadState();
+    s.running = true;
+    await saveState(s);
+    return s;
+  });
+
+  setDaemonRunning(true);
+
+  try {
+    await bootDaemon(state);
+  } catch (err) {
+    // A failed start must not leave the flag reading "Already running" with
+    // half the timers armed — tear down whatever was scheduled, then rethrow.
+    console.error(`❌ CoS daemon start failed: ${err?.message || err}`);
+    await teardownDaemon().catch(teardownErr =>
+      console.error(`❌ CoS teardown after failed start failed: ${teardownErr?.message || teardownErr}`));
+    throw err;
+  }
+  return { success: true };
+}
+
+async function bootDaemon(state) {
+  // First clean up orphaned agents (agents marked running but no live process)
+  const { cleanupOrphanedAgents } = await import('../agent/agentManagement.js');
+  const cleanedAgents = await cleanupOrphanedAgents();
+  if (cleanedAgents > 0) {
+    emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
+  }
+
+  // Wait for Creative Director boot recovery to finish retiring stale CD
+  // tasks before we reset orphans. Without this gate, resetOrphanedTasks
+  // would respawn stale CD treatment/evaluate tasks before recovery can
+  // mark them `completed`, racing two agents on the same project. The
+  // promise resolves whether recovery ran successfully, was a no-op (no
+  // mid-flight projects), or wasn't called at all (markRecoveryDone is
+  // exposed for that case). 60s ceiling — recovery on a healthy boot
+  // resolves in <100ms, but we'd rather pay a slow-boot tax than reopen
+  // the duplicate-agent race when initMediaJobQueue or earlier startup
+  // steps stall.
+  const { cdRecoveryDone } = await import('../creativeDirector/recovery.js');
+  await Promise.race([
+    cdRecoveryDone,
+    sleep(CD_RECOVERY_BOOT_TIMEOUT_MS),
+  ]);
+
+  // Then reset any orphaned in_progress tasks (no running agent)
+  await resetOrphanedTasks({ bootRecovery: true });
+
+  // Clear stale activeAgentId pointers in app-activity.json. Without this, an
+  // idle-review agent that died across a restart (or a long-stale Feb-era state
+  // file) leaves activeAgentId set forever — isAppOnCooldown treats that as
+  // "agent still working" and queueEligibleImprovementTasks silently skips the
+  // app every cycle. Re-load state since the orphan-cleanup steps above have
+  // already mutated the on-disk agents map.
+  const freshState = await loadState();
+  const liveAgentIds = new Set(Object.keys(freshState.agents || {}));
+  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(err => {
+    console.warn(`⚠️ clearStaleActiveAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { cleared: [] };
+  });
+  if (clearedActiveAgents.length > 0) {
+    emitLog('info', `🧹 Cleared ${clearedActiveAgents.length} stale activeAgentId pointer(s) from app-activity`);
+  }
+
+  // Archive stale completed agents from state.json on startup
+  const { archived } = await _archiveStaleAgents().catch(err => {
+    console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+    return { archived: 0 };
+  });
+  if (archived > 0) {
+    emitLog('info', `📦 Startup: archived ${archived} stale agent(s) from state`);
+  }
+
+  // Lossless raw-recording maintenance; historical records never expire.
+  scheduleEvent({
+    id: 'cos-recording-maintenance', type: 'interval', intervalMs: 3600000,
+    handler: async () => {
+      const { runAutomaticAgentStorage } = await import('./cosAgentStorage.js');
+      await runAutomaticAgentStorage();
+    },
+    metadata: { description: 'Compress old CoS raw recordings; retain run history' }
+  });
+
+  // Health check + orphan cleanup (15 min)
+  scheduleEvent({
+    id: 'cos-health-check',
+    type: 'interval',
+    intervalMs: state.config.healthCheckIntervalMs,
+    handler: async () => {
+      if (!isDaemonRunning()) return;
+      await runHealthCheck();
+      const { runDevelopmentWatchdog } = await import('../developmentWatchdog.js');
+      await runDevelopmentWatchdog().catch(err => console.error(`❌ Development watchdog failed: ${err.message}`));
+      const cleaned = await cleanupOrphanedAgents();
+      if (cleaned > 0) {
+        emitLog('info', `🧹 Periodic cleanup: ${cleaned} orphaned agent(s)`);
+      }
+      await resetOrphanedTasks();
+      const { recoverBlockedSystemTasks } = await import('../blockedSystemInvestigation.js');
+      await recoverBlockedSystemTasks().catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`));
+      // Evaluation is event-driven, so without this cadence a timed pause
+      // (`worktree-busy`, `orphan-cooldown`) whose `cooldownUntil` lapsed would
+      // sit blocked until the next restart or manual evaluate.
+      const revived = await getAllTasks()
+        .then(({ user, cos: internal }) => unblockExpiredCooldowns(user, internal))
+        .catch((err) => {
+          console.warn(`⚠️ unblockExpiredCooldowns failed: ${err?.message || err}`);
+          return 0;
+        });
+      if (revived > 0) scheduleDequeue();
+      const { archived } = await _archiveStaleAgents().catch(err => {
+        console.warn(`⚠️ _archiveStaleAgents failed: ${err?.message || err}`, err?.stack || '');
+        return { archived: 0 };
+      });
+      if (archived > 0) {
+        emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
+      }
+      // Reap resolved failure artifacts (stale failure-blocked tasks +
+      // investigations whose origin is gone/completed) via federation-safe
+      // status flip — never deletion (#2619). Bounded per tick by the store.
+      const swept = await sweepResolvedFailureTasks().catch((err) => {
+        console.warn(`⚠️ sweepResolvedFailureTasks failed: ${err?.message || err}`);
+        return { reaped: 0 };
+      });
+      if (swept.reaped > 0) {
+        emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
+      }
+    },
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
+  });
+
+  // Pending-merge drain (30 min). `evaluateTasks` also sweeps opportunistically,
+  // but evaluation is event-driven — with no periodic evaluation timer that drain
+  // fires roughly once per restart, so a green merge-only PR opened while PortOS
+  // runs would sit at `ticks: 0` forever (#3630). This timer is the cadence
+  // `MAX_PENDING_MERGE_TICKS` is documented against, and it is deliberately NOT
+  // coupled to the `pr-watcher` task type — a disabled watcher must not strand
+  // queued merges. Same autonomy gate as the evaluateTasks call site: merging
+  // writes to a default branch, so it only runs when the user has CoS auto-run
+  // set to `execute` and the daemon is not paused.
+  // The handoff follow-up poll (prWatcher.followUpHandoffReceipt) shares the
+  // gate and is cancelled with the daemon.
+  // Existing retirement journals must recover even when branch-reconcile is
+  // disabled or every agent slot is occupied. The service reuses its exact cut;
+  // it never goes through normal agent/worktree admission.
+  scheduleEvent({
+    id: 'cos-runtime-verification', type: 'interval', intervalMs: 60 * 1000,
+    handler: async () => {
+      if (await pendingMergeSweepBlocked()) return;
+      const { sweepRuntimeVerifications } = await import('../runtimeVerification.js');
+      await sweepRuntimeVerifications().catch(error => console.warn(`⚠️ Runtime verification deferred: ${error.message}`));
+    },
+    metadata: { description: 'Resume runtime verification after a verified boot' },
+  });
+  const { PENDING_MERGE_SWEEP_INTERVAL_MS, setHandoffFollowUpGate } = await import('../prWatcher.js');
+  setHandoffFollowUpGate(pendingMergeSweepBlocked);
+  scheduleEvent({
+    id: 'cos-pending-merge-sweep',
+    type: 'interval',
+    intervalMs: PENDING_MERGE_SWEEP_INTERVAL_MS,
+    handler: async () => {
+      if (await pendingMergeSweepBlocked()) return;
+      const { sweepRepoStateVerifications } = await import('../agent/agentRepoStateVerification.js');
+      await sweepRepoStateVerifications().catch(err => console.warn(`⚠️ Completion recovery sweep deferred: ${err.message}`));
+      const prWatcher = await import('../prWatcher.js');
+      const sweep = await prWatcher.sweepPendingMergePrs().catch((err) => {
+        console.warn(`⚠️ sweepPendingMergePrs failed: ${err?.message || err}`);
+        return null;
+      });
+      if (sweep && (sweep.merged || sweep.escalated || sweep.timedOut)) {
+        emitLog('info', `🤖 Pending merges: ${sweep.merged} merged, ${sweep.escalated} escalated, ${sweep.timedOut} timed out`);
+      }
+
+    },
+    metadata: { description: 'CoS pending merge-only PR drain' }
+  });
+
+  // Register autonomous job schedules (individual timers per job)
+  await registerJobSchedules();
+
+  // Schedule improvement task checks based on next due time
+  await scheduleNextImprovementCheck();
+
+  // Run initial evaluation to pick up existing pending tasks, then health check
+  // Skip improvement task generation on startup to avoid spawning agents on fresh installs
+  emitLog('info', 'Running initial task evaluation...');
+  await evaluateTasks({ initialStartup: true });
+  await runHealthCheck();
+  const { createPersistentMindTurnAdapter } = await import('../persistent/persistentMindAdapter.js');
+  await registerPersistentMindTurnAdapter(createPersistentMindTurnAdapter());
+  await initializePersistentMindSupervisor();
+
+  cosEvents.emit('status', { running: true });
+  emitLog('success', 'CoS daemon started');
+
+  // Recover durable completions from the previous process immediately. The
+  // periodic sweep remains crash fallback, not the first post-restart attempt.
+  void resumeDeferredCompletions().catch(error => emitLog('warn', `Completion recovery deferred after startup: ${error.message}`));
+
+  // Queue due improvement tasks shortly after startup (not during initial eval
+  // to avoid overwhelming fresh installs, but soon enough to not stall)
+  setTimeout(() => {
+    if (!isDaemonRunning()) return;
+    loadState().then(async (state) => {
+      // Gate on the CoS auto-run domain (parity with evaluateTasks and the
+      // cos-improvement-check timer) — see canQueueImprovementTasks.
+      if (!canQueueImprovementTasks(state)) return;
+      const cosTaskData = await getCosTasks();
+      await queueEligibleImprovementTasks(state, cosTaskData);
+      scheduleDequeue();
+    }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
+  }, POST_STARTUP_QUEUE_DELAY_MS);
+}
+
+/** Replay the initial pending snapshot in bounded batches on a lifecycle wake-up.
+ * The verifier already coalesces concurrent callers and retains retry backoff.
+ * This never starts a paused/stopped daemon or grants investigation authority.
+ */
+export async function resumeDeferredCompletions() {
+  if (maintenance.held()) return { checked: 0, skipReason: 'maintenance-held' };
+  const reason = await pendingMergeSweepBlocked();
+  if (reason) return { checked: 0, skipReason: reason };
+  const { resumeDeferredRepoStateVerifications } = await import('../agent/agentRepoStateVerification.js');
+  return resumeDeferredRepoStateVerifications(async () => maintenance.held()
+    ? 'maintenance-held' : pendingMergeSweepBlocked());
+}
+
+// Null when a pending-merge sweep may merge, else the skip reason.
+async function pendingMergeSweepBlocked() {
+  if (!isDaemonRunning()) return 'daemon-stopped';
+  const s = await loadState();
+  if (s.paused) return 'daemon paused';
+  if (getDomainMode(s.config, 'cos') !== 'execute') return 'CoS auto-run is not set to execute';
+  return null;
+}
+
+/**
+ * Stop the CoS daemon
+ */
+export async function stop() {
+  // A Stop issued mid-start would otherwise see the flag already true, cancel
+  // timers that don't exist yet, and then watch the resumed boot arm them all
+  // (#11860). Let the start settle so Stop tears down a fully started daemon.
+  if (daemonStartPromise) await daemonStartPromise.catch(() => {});
+  if (!isDaemonRunning()) {
+    return { success: false, error: 'Not running' };
+  }
+
+  await teardownDaemon();
+  return { success: true };
+}
+
+async function teardownDaemon() {
+  await shutdownPersistentMindSupervisor();
+  unregisterPersistentMindTurnAdapter();
+
+  // Cancel all scheduled events
+  cancelEvent('cos-health-check');
+  cancelEvent('cos-recording-maintenance');
+  cancelEvent('cos-improvement-check');
+  cancelEvent('cos-runtime-verification');
+  cancelEvent('cos-pending-merge-sweep');
+  (await import('../prWatcher.js')).cancelHandoffFollowUps();
+  await unregisterJobSchedules();
+
+  await withStateLock(async () => {
+    const state = await loadState();
+    state.running = false;
+    await saveState(state);
+  });
+
+  setDaemonRunning(false);
+  cosEvents.emit('status', { running: false });
+}
+
+/**
+ * Pause the CoS daemon (for always-on mode)
+ * Daemon stays running but skips evaluations
+ */
+export async function pause(reason = null) {
+  const result = await withStateLock(async () => {
+    const state = await loadState();
+
+    if (state.paused) {
+      return { success: false, error: 'Already paused' };
+    }
+
+    state.paused = true;
+    state.pausedAt = new Date().toISOString();
+    state.pauseReason = reason;
+    await saveState(state);
+
+    emitLog('info', `CoS paused${reason ? `: ${reason}` : ''}`);
+    cosEvents.emit('status:paused', { paused: true, pausedAt: state.pausedAt, reason });
+    return { success: true, pausedAt: state.pausedAt };
+  });
+  if (result.success) await handlePersistentMindGlobalPause(reason || 'Chief of Staff paused');
+  return result;
+}
+
+/**
+ * Resume the CoS daemon from pause
+ */
+export async function resume() {
+  const result = await withStateLock(async () => {
+    const state = await loadState();
+
+    if (!state.paused) {
+      return { success: false, error: 'Not paused' };
+    }
+
+    state.paused = false;
+    state.pausedAt = null;
+    state.pauseReason = null;
+    await saveState(state);
+
+    emitLog('info', 'CoS resumed');
+    cosEvents.emit('status:resumed', { paused: false });
+    return { success: true };
+  });
+
+  // Trigger immediate task dequeue on resume (outside lock to avoid holding it)
+  if (result.success && isDaemonRunning()) {
+    await handlePersistentMindGlobalResume();
+    setTimeout(() => scheduleDequeue(), RESUME_DEQUEUE_DELAY_MS);
+  }
+
+  return result;
+}
+
+/**
+ * Check if CoS is paused
+ */
+export async function isPaused() {
+  const state = await loadState();
+  return state.paused || false;
+}
+
+/**
+ * Force-spawn a pending task by ID, bypassing cooldowns and evaluation intervals.
+ */
+export async function forceSpawnTask(taskId, { resetSpawnBudget = false } = {}) {
+  maintenance.assertOpen();
+  // Before the budget-reset write and the `task:ready` emit: an owner registered
+  // after the shutdown marker snapshot is charged as an orphan next boot (#14170).
+  if (isHostShuttingDown()) return { error: 'PortOS is shutting down — run the task again after it restarts' };
+  let task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found' };
+  if (task.metadata?.preflight?.requestId) return { error: 'Preflight progress cards cannot be spawned' };
+  const resetStopped = resetSpawnBudget && ['in_progress', 'blocked'].includes(task.status);
+  if (task.status !== 'pending' && !resetStopped) return { error: `Task is ${task.status}, not pending` };
+  if (task.approvalRequired) return { error: 'Task requires approval before it can be spawned' };
+
+  const analysis = currentTaskTypeName(task.metadata?.analysisType || task.metadata?.selfImprovementType);
+  if (analysis === 'do-release' || analysis === 'release-sync') {
+    const { releaseTaskDispatchDisposition } = await import('../releaseSynchronization.js');
+    const disposition = await releaseTaskDispatchDisposition(task);
+    if (disposition === 'review-policy-unverified') return { error: 'Release synchronization review policy was not captured; recover from historical delivery evidence (docs/VERSIONING.md).' };
+    if (disposition === 'retired-continuation') return { error: 'This release synchronization was retired by an operator.' };
+    if (disposition === 'delivered-continuation') return { error: 'This release was independently delivered; the historical continuation is retained.' };
+    if (disposition === 'wait-for-synchronization') return { error: 'The previous release synchronization is unfinished.' };
+  }
+
+  if (!isDaemonRunning()) return { error: 'CoS daemon is stopped — start it before force-spawning tasks' };
+
+  const state = await loadState();
+  if (state.paused) return { error: 'CoS daemon is paused — resume before force-spawning tasks' };
+  // Dispatch HOLDS a task while the runner is down rather than failing it —
+  // right for the autonomous queue, wrong for an explicit "Run now", which would
+  // get `{ success: true }` and a "Spawning" toast for a task that quietly stays
+  // pending. Say what is actually wrong instead.
+  if (await isRunnerHolding()) {
+    return { error: 'CoS Runner is not reachable — start the cos-runner app before force-spawning tasks' };
+  }
+  let running = Object.values(state.agents).filter(a => a.status === 'running');
+  // An agent is registered as running BEFORE spawnAgentForTask flips its task off
+  // `pending`, so the status check above still passes for the seconds between
+  // those two writes — an explicit "Run now" landing there would get a bogus
+  // `{ success: true }` and a "Spawning" toast for a second dispatch that
+  // withSpawnDedupGuard then silently drops. Refuse it here instead, where every
+  // caller (UI, voice, API) sees the same honest answer.
+  const runningAgents = runningAgentsByTaskId(running);
+  const holder = runningAgents.get(taskId);
+  if (resetStopped && holder) return { error: `Agent ${holder.id} still owns this task` };
+  if (spawningAgentForTask(taskId, runningAgents)) {
+    return { error: `Agent ${holder.id} is already running this task` };
+  }
+  // Past the spawn window (lib/cos/cosSpawnWindow.js), a `pending` task under a
+  // `running` agent is either a zombie record or a live run whose task write
+  // lagged. Age is not evidence of death, and prepareAgentSpawn refuses every
+  // active owner, so falling through would report a spawn that never happens
+  // (#14039). Settle through the zombie sweep's liveness evidence (pid, runner
+  // listing, in-process handles) — the same sweep GET /agents runs — then
+  // admit only if the shared ownership gate now agrees.
+  let ownerAgents = state.agents;
+  if (holder) {
+    await cleanupZombieAgents();
+    ownerAgents = (await loadState()).agents;
+    running = Object.values(ownerAgents).filter(a => a.status === 'running');
+  }
+  if (hasActiveTaskOwner(taskId, ownerAgents)) {
+    const ownerNote = holder
+      ? `Agent ${holder.id} still owns this task (running for ${Math.round(spawnClaimAgeMs(holder) / 1000)}s) and its process could not be confirmed dead`
+      : 'A finishing agent still owns this task';
+    return {
+      error: `${ownerNote} — stop that agent or wait for it to finish before running the task again`,
+      code: 'TASK_OWNER_HELD',
+    };
+  }
+  if (running.length >= state.config.maxConcurrentAgents) {
+    return { error: `No available agent slots (${running.length}/${state.config.maxConcurrentAgents})` };
+  }
+
+  // Pre-validate provider/model resolution before emitting `task:ready`. The
+  // actual spawn runs asynchronously in a `task:ready` listener, so a
+  // resolution failure there (e.g. a task pinned to an `api`-type provider with
+  // no file-writing harness) would bail silently and leave the task `pending`
+  // — while this call had already returned `{ success: true }` and the UI
+  // toasted "Spawning". Resolving here surfaces the real, actionable error
+  // (which provider to use) synchronously instead of lying to the user.
+  const resolution = await resolveAgentProviderAndModel(task);
+  if (!resolution.ok) {
+    return { error: resolution.error };
+  }
+
+  // Same reason as the resolution pre-check above: the local-endpoint cap
+  // (#4834) is enforced later, inside the `task:ready` listener, so without this
+  // "Run now" would toast "Spawning" for a task the chokepoint immediately holds
+  // as pending. Checked against the RESOLVED provider (post-fallback), so it
+  // never refuses a run that would have swapped to a cloud provider anyway.
+  const localCapacityError = await localEndpointCapacityError(resolution.provider, ownerAgents, taskId);
+  if (localCapacityError) {
+    return { error: localCapacityError };
+  }
+
+  const budgetHold = await spawnBudgetHoldReason(task);
+  if (budgetHold && !resetSpawnBudget) return { error: `${budgetHold}. Inspect dispatch history or explicitly reset the spawn budget before running.` };
+  if (resetSpawnBudget) {
+    if (!budgetHold) return { error: 'Spawn budget is already verified; no reset is needed' };
+    // The store refuses a reset under a live claim lease; say so instead of the
+    // generic "changed" refusal, and when the lease frees up.
+    if (isLeaseLive(task.metadata)) return { error: `A claim lease on this task is live until ${task.metadata.leaseExpiresAt}; reset after it expires` };
+    const orphan = resetStopped ? await import('../explicitSpawnBudgetReset.js')
+      .then(({ prepareExplicitOrphanBudgetReset }) => prepareExplicitOrphanBudgetReset(task)) : null;
+    if (orphan?.error) return { error: orphan.error };
+    const saved = await updateTask(task.id, { ...(resetStopped ? { status: 'pending' } : {}),
+      metadata: { ...orphan?.pointer, totalSpawnCount: undefined } }, task.taskType || 'user', {
+      expectedStatus: task.status, expectedTask: { description: task.description, priority: task.priority, metadata: task.metadata },
+      recoveryOwner: { id: orphan?.owner?.id || 'explicit-spawn-budget-reset', startedAt: orphan?.owner?.startedAt || null, requireInactive: true,
+        ...(orphan?.owner ? { requireRegistered: true, expectedOwnerMetadata: structuredClone(orphan.owner.metadata) } : {}) },
+      spawnBudgetOperation: { kind: 'reset', requireInactive: true }, suppressDequeue: true, preserveRetryBudget: true,
+    });
+    if (saved?.error) return { error: saved.error };
+    if (!saved || saved.statusChanged) return { error: 'Task or ownership changed before spawn budget reset' };
+    task = { ...saved, taskType: task.taskType || 'user' };
+  }
+
+  cosEvents.emit('task:ready', { ...task, taskType: task.taskType || 'internal' });
+  return { success: true, taskId };
+}
+
+/**
+ * Reset orphaned in_progress tasks back to pending
+ * (tasks marked in_progress but no running agent)
+ *
+ * `bootRecovery` says this is the startup pass, where no in-process worktree
+ * cleanup can possibly be running — so a retry hold (#3373) is recovered
+ * immediately instead of waiting out its liveness grace, which on the periodic
+ * pass is what stops the sweep stealing a task mid-cleanup.
+ */
+export async function resetOrphanedTasks({ bootRecovery = false } = {}) {
+  const state = await loadState();
+  const { user: userTaskData, cos: cosTaskData } = await getAllTasks();
+
+  // This machine's federation identity, for the cross-instance lease checks
+  // below (issue #1563). `ensureInstanceId()` resolves the real id on the cold
+  // path so a boot-time orphan-reset never compares against the `unknown`
+  // sentinel.
+  const instanceId = await ensureInstanceId();
+
+  const runningAgentTaskIds = Object.values(state.agents)
+    .filter(a => a.status === 'running')
+    .map(a => a.taskId);
+
+  // The most recent agent per task. Handing it to handleOrphanedTask lets the retry
+  // resume the worktree/branch that run left behind instead of restarting — the
+  // residue this pass catches (an agent that died partway through its own cleanup,
+  // or was archived while its task stayed in_progress) leaves exactly the same
+  // preserved worktree the boot sweep's orphans do. Absent (already archived) just
+  // means no pointer and a clean start, which is the pre-existing behavior.
+  const lastAgentByTask = new Map();
+  for (const agent of Object.values(state.agents)) {
+    if (!agent.taskId) continue;
+    const previous = lastAgentByTask.get(agent.taskId);
+    if (!previous || new Date(agent.startedAt || 0) >= new Date(previous.startedAt || 0)) {
+      lastAgentByTask.set(agent.taskId, agent);
+    }
+  }
+
+  // Also track tasks with recently-completed agents to avoid race condition:
+  // Between completeAgent() and updateTask(), the agent is "completed" but the
+  // task is still "in_progress". Without this check, resetOrphanedTasks treats
+  // such tasks as orphaned and increments orphanRetryCount spuriously.
+  const recentlyCompletedTaskIds = new Set(
+    Object.values(state.agents)
+      .filter(a => a.status === 'completed' && a.completedAt &&
+        (Date.now() - new Date(a.completedAt).getTime()) < RECENT_COMPLETION_GRACE_MS)
+      .map(a => a.taskId)
+  );
+
+  emitLog('debug', `Running agents: ${runningAgentTaskIds.length}, recently completed: ${recentlyCompletedTaskIds.size}`, { taskIds: runningAgentTaskIds });
+
+  // Route orphaned tasks through handleOrphanedTask for consistent retry counting,
+  // cooldown enforcement, and max-spawn limits (prevents runaway respawning)
+  const { handleOrphanedTask } = await import('../agent/agentManagement.js');
+
+  // A programmatic-phase card (services/preflightTaskCard.js) is `in_progress`
+  // with no agent BY DESIGN — it describes deterministic pre-agent work, has no
+  // prompt, and must never be handed to `handleOrphanedTask`, which would flip
+  // it to `pending` and spawn an agent on a task that is only a progress
+  // display. A card stranded by a restart is closed as interrupted instead, and
+  // one still inside its grace window is left alone: a pr-reviewer security
+  // scan is minutes of real work, and reaping a live preflight would make the
+  // card lie in the one direction that matters.
+
+  const processOrphanedTasks = async (tasks) => {
+    for (const task of tasks) {
+      if (isPreflightCard(task)) {
+        if (isStalePreflightCard(task)) {
+          const closed = await closeStalePreflightCard(task).catch(error => {
+            emitLog('warn', `Unable to verify stale preflight ownership: ${error.message}`, { taskId: task.id });
+            return false;
+          });
+          if (closed) emitLog('info', `Closing preflight card ${task.id} — no process is still running its checks`, { taskId: task.id });
+        }
+        continue;
+      }
+      if (runningAgentTaskIds.includes(task.id)) {
+        // A local agent is actively working this task — renew its federation
+        // lease (the heartbeat, issue #1563) so a peer sharing this task list
+        // keeps seeing it as live-claimed across a long run instead of treating
+        // it as orphaned once the original lease window elapses. We can only
+        // hold a lease we own (or freshly claim an unclaimed legacy task); never
+        // steal a lease another instance owns.
+        const owner = getClaimOwner(task.metadata);
+        const renewal = owner === instanceId
+          ? buildRenewal(task.metadata, instanceId)
+          : (owner === null ? buildClaim(instanceId) : null);
+        if (renewal) {
+          const taskType = task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user');
+          // Pass ONLY the renewal claim keys — updateTask merges them over the
+          // CURRENT persisted metadata, so spreading {...task.metadata} (this
+          // scan's possibly-stale copy) is redundant and would risk clobbering a
+          // concurrent content edit. It also keeps the heartbeat a claim-only
+          // patch so it never bumps the updatedAt LWW stamp (#1714).
+          await updateTask(task.id, { metadata: renewal }, taskType).catch(err => {
+            emitLog('warn', `⚠️ Lease renewal failed for task ${task.id}: ${err?.message || err}`, { taskId: task.id, stack: err?.stack || '' });
+          });
+        }
+        continue;
+      }
+      // A failed task held non-spawnable while its worktree cleanup resolves the
+      // resume pointer (#3373). While the hold is fresh some in-process cleanup is
+      // still expected to release it, so leave it alone — requeueing here would
+      // resolve the pointer against a branch mid-merge. Once the hold is stale, or
+      // this is the boot pass (nothing can be mid-cleanup in a process that just
+      // started), the process that armed it is gone and `handleOrphanedTask`
+      // finishes the transition instead of treating the task as a fresh orphan.
+      //
+      // Evaluated BEFORE the recently-completed grace below, which it deliberately
+      // bypasses: the hold is armed AFTER `completeAgent`, so a crash-restart
+      // inside that 60s window would otherwise skip the very task the boot pass
+      // exists to recover and strand it until the 15-minute periodic sweep.
+      if (isDeliveryCleanupHeld(task.metadata)) continue;
+      const held = isRetryHeld(task.metadata);
+      const recoverHold = held && (bootRecovery || isStaleRetryHold(task.metadata));
+      if (held && !recoverHold) {
+        emitLog('debug', `Skipping task ${task.id} — retry held while its worktree cleanup finishes`, { taskId: task.id });
+        continue;
+      }
+      // Skip tasks whose agent just completed — updateTask will set them to
+      // completed shortly; treating them as orphaned causes spurious retries
+      if (!recoverHold && recentlyCompletedTaskIds.has(task.id)) {
+        emitLog('debug', `Skipping task ${task.id} — agent recently completed, awaiting task status update`, { taskId: task.id });
+        continue;
+      }
+      // Only the latest run can settle a missed task update. An older success
+      // must not hide a failed rerun that needs orphan recovery.
+      const lastAgent = lastAgentByTask.get(task.id);
+      const successAgentId = lastAgent?.status === 'completed' && lastAgent.result?.success ? lastAgent.id : null;
+      if (successAgentId) {
+        emitLog('warn', `🔧 Task ${task.id} still in_progress but agent ${successAgentId} completed successfully — completing task now (missed update)`, { taskId: task.id, agentId: successAgentId });
+        await updateTask(task.id, { status: 'completed' }, task.taskType || (isInternalTaskId(task.id) ? 'internal' : 'user'));
+        continue;
+      }
+      // Cross-instance lease guard (issue #1563, acceptance criterion 3): a
+      // federated peer holds a live claim on this task, so it is being worked on
+      // the other machine — not orphaned here. Resetting it to pending would
+      // race a second agent onto work the peer is already doing. Leave it; the
+      // lease expires on its own if the peer actually died.
+      if (isHeldByOther(task.metadata, instanceId)) {
+        emitLog('debug', `Skipping task ${task.id} — live lease held by instance ${getClaimOwner(task.metadata)}`, { taskId: task.id });
+        continue;
+      }
+      emitLog('info', `Found orphaned in_progress task ${task.id}, routing through retry handler`, { taskId: task.id });
+      const deadAgent = lastAgentByTask.get(task.id);
+      await handleOrphanedTask(task.id, deadAgent?.id || 'unknown-reset', getTaskById, { agentMetadata: deadAgent?.metadata, agentStartedAt: deadAgent?.startedAt });
+    }
+  };
+
+  await processOrphanedTasks(userTaskData.grouped.in_progress || []);
+  await processOrphanedTasks(cosTaskData.grouped.in_progress || []);
+}
+
+/**
+ * Check if daemon is running
+ */
+export function isRunning() {
+  return isDaemonRunning();
+}
+
+/**
+ * Is spawning currently held because the CoS Runner is down?
+ *
+ * The single predicate behind the three places that must agree: the dequeue
+ * gate, `tryImmediateSpawn`, and `forceSpawnTask`'s refusal. False in direct
+ * mode, where there is no runner to be down. `cosRunnerClient` is imported
+ * lazily (mirroring cosAgentLifecycle's runner calls) so a static edge doesn't
+ * drag socket.io-client into the graph of every suite that loads this module.
+ */
+async function isRunnerHolding() {
+  if (!useRunner) return false;
+  const { isRunnerReachable } = await import('./cosRunnerClient.js');
+  return !(await isRunnerReachable());
+}
+
+/**
+ * Attempt to immediately spawn a newly added user task if there are available agent slots.
+ * This bypasses the evaluation interval for user-submitted tasks so they start instantly.
+ */
+async function tryImmediateSpawn(task) {
+  if (isHostShuttingDown()) return;
+  if (!isDaemonRunning()) return;
+
+  const paused = await isPaused();
+  if (paused) return;
+
+  if (await isRunnerHolding()) {
+    emitLog('debug', `⏳ Queued task ${task.id} - CoS Runner is down`);
+    return;
+  }
+
+  const state = await loadState();
+  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
+  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
+
+  if (availableSlots <= 0) {
+    emitLog('debug', `⏳ Queued task ${task.id} - no available slots (${runningAgents}/${state.config.maxConcurrentAgents})`);
+    return;
+  }
+
+  // Check per-project limit
+  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
+  const agentsByProject = countRunningAgentsByProject(state.agents);
+  if (!isWithinProjectLimit(task, agentsByProject, perProjectLimit)) {
+    const project = task.metadata?.app || '_self';
+    emitLog('debug', `⏳ Queued task ${task.id} - per-project limit reached for ${project} (${agentsByProject[project] || 0}/${perProjectLimit})`);
+    return;
+  }
+
+  // No local-endpoint check here (#4834). The task is already persisted by
+  // `addTask`, so emitting and letting the chokepoint hold it produces exactly
+  // the state an early return would — still `pending`, marker released, job
+  // reservation freed — and the chokepoint also counts in-flight reservations,
+  // which a snapshot here cannot. A copy would be a weaker duplicate that can
+  // pass a task the chokepoint then holds, for a fourth provider-list fetch.
+
+  emitLog('info', `⚡ Immediate spawn: ${task.id} (${task.priority || 'MEDIUM'})`, {
+    taskId: task.id,
+    availableSlots
+  });
+  cosEvents.emit('task:ready', { ...task, taskType: 'user' });
+}
+
+// ─── dequeueNextTask priority tiers ────────────────────────────────────────
+//
+// dequeueNextTask (below) is a thin orchestrator that threads a shared `ctx`
+// through the five priority tiers in order. Each tier is a focused async helper
+// that reads/mutates the per-cycle spawn capacity via `ctx.capacity` (the pure
+// tracker from cosDequeue.js) and emits `task:ready` for admitted tasks. This
+// mirrors the established `spawnPriorityN(ctx)` decomposition in
+// cosTaskGenerator.js's evaluateTasks (issue #2530). `ctx` is frozen: a tier
+// returns the values a later tier needs and the orchestrator passes them on as
+// named arguments, so tier order cannot silently change what a tier reads.
+
+/**
+ * Priority 0 — on-demand task requests (explicit user "Run"). Runs even while
+ * paused. Drains the on-demand request queue, generating + persisting a task per
+ * request. Returns the schedule it loaded so the orchestrator can hand it to
+ * Priority 2's disabled-analysis-type gate (avoids a second load).
+ */
+async function spawnDequeuePriority0OnDemand(ctx) {
+  const { state, capacity, ignoreTaskId } = ctx;
+
+  const { schedule } = await drainOnDemandRequests({ state }, {
+    capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    projectCapacityExhausted: (appId) =>
+      (capacity.spawnProjectCounts[appId || '_self'] || 0) >= capacity.perProjectLimit,
+    // Priority 0 is a COMMITTED tier — the request is cleared and the app-review
+    // marker bound before this runs, and nothing persists the task on a denial,
+    // so it opts out of the local-endpoint cap (#4834).
+    canSpawn: (task) => capacity.canSpawnCommitted(task),
+    emitSpawn: (task) => {
+      cosEvents.emit('task:ready', task);
+      capacity.trackSpawn(task);
+    },
+    // Forward `ignoreTaskId` so a completion-triggered re-issue is dedup-safe
+    // against the still-in_progress task that triggered it.
+    addTaskOptions: { ignoreTaskId },
+  });
+
+  return { schedule };
+}
+
+/**
+ * Priority 1 — pending user tasks. Returns `hasPendingUserTasks`
+ * for the idle tier below.
+ */
+async function spawnDequeuePriority1UserTasks(ctx) {
+  const { instanceId, capacity } = ctx;
+
+  const userTaskData = await getUserTasks();
+  const pendingUserTasks = userTaskData.grouped?.pending || [];
+
+  await admitPendingUserTasks({ pendingUserTasks, instanceId }, {
+    capacityExhausted: () => capacity.spawned >= capacity.availableSlots,
+    isOwned: (task) => capacity.isTaskOwned(task),
+    canSpawn: (task) => capacity.canSpawn(task),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+
+  return { hasPendingUserTasks: pendingUserTasks.length > 0 };
+}
+
+/**
+ * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
+ * Returns `cosAutonomyMode` and `autonomousSpawnCeiling` (used by the
+ * idle tier) resolved from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * the unattended spawn; `dry-run` logs what execute mode would have run.
+ */
+async function spawnDequeuePriority2AutoApproved(ctx, { taskSchedule }) {
+  const { state, instanceId, capacity } = ctx;
+
+  const cosTaskData = await getCosTasks();
+  const runningAgentEntries = Object.values(state.agents).filter((agent) => agent.status === 'running');
+  const { cosAutonomyMode, autonomousActionsRemaining } = await resolveAutonomyBudget(state, runningAgentEntries);
+  const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
+
+  await admitAutoApprovedSystemTasks({
+    state,
+    cosTaskData,
+    taskSchedule,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+    alreadySpawned: capacity.spawned,
+    perProjectLimit: capacity.perProjectLimit,
+    spawnProjectCounts: capacity.spawnProjectCounts,
+    instanceId,
+  }, {
+    isOwned: (task) => capacity.isTaskOwned(task),
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+    emitSpawn: (task) => {
+      cosEvents.emit('task:ready', task);
+    },
+  });
+
+  return { cosAutonomyMode, autonomousSpawnCeiling };
+}
+
+/**
+ * Priority 3.6 — due feature agents. Same shared admission pass as
+ * evaluateTasks, so an agent that comes due is dispatched by the next
+ * completion/queue event instead of waiting for a batch evaluation.
+ */
+async function spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitFeatureAgentTasks({
+    spawnedCount: () => capacity.spawned,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawn(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+}
+
+/**
+ * Priority 4 — idle review task, only when the daemon is completely idle this
+ * cycle. The shared owner checks eligibility and capacity before preparation,
+ * then performs the committed handoff.
+ */
+async function spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling }) {
+  const { capacity } = ctx;
+  return admitIdleReviewTask({
+    state: ctx.state,
+    alreadySpawned: capacity.spawned,
+    hasPendingUserTasks,
+    cosAutonomyMode,
+    autonomousSlotCeiling: autonomousSpawnCeiling,
+    ignoreTaskId: ctx.ignoreTaskId,
+  }, {
+    canSpawn: (task, ceiling) => capacity.canSpawnCommitted(task, ceiling),
+    emitSpawn: (task) => cosEvents.emit('task:ready', task),
+    trackSpawn: (task) => capacity.trackSpawn(task),
+  });
+}
+
+// Every dequeue below is scheduled from a timer/setImmediate outside the request
+// lifecycle, so a rejection has nowhere to bubble: it escapes as an unhandled
+// rejection, which setupProcessErrorHandlers classifies `critical` and broadcasts
+// `system:critical-error` to every browser, while the open slot it was meant to
+// fill stays empty until an unrelated event fires another cycle. One wrapper so
+// the guard cannot drift between the ~10 call sites.
+const scheduleDequeue = (options = {}) => setImmediate(() => {
+  dequeueNextTask(options).catch(err =>
+    console.error(`❌ CoS dequeue cycle failed: ${err?.message ?? String(err)}`));
+});
+
+/**
+ * Event-driven task dequeue — the primary way tasks get spawned.
+ *
+ * Triggered by: agent:completed, tasks:changed, status:resumed
+ * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
+ * through the priority tiers in order (same tiers/numbering as evaluateTasks;
+ * evaluateTasks' queue-regeneration step is
+ * batch-only and has no event-driven counterpart):
+ *   0. On-demand requests (bypasses pause)
+ *   1. User tasks
+ *   2. Auto-approved system tasks
+ *   3.6. Due feature agents
+ *   4. Idle review task (if idleReviewEnabled)
+ * Returns silently when idle — no log noise.
+ */
+/**
+ * `ignoreTaskId` names a task that just completed but may still read
+ * `pending`/`in_progress` on disk — `agent:completed` fires from `completeAgent`,
+ * before the completion flow's `updateTask` settles it. Generators that count
+ * in-flight work against a spend budget (#3179) must exclude it or they
+ * charge the finished run twice. Only the completion continuation passes it; every
+ * other caller runs outside that window and correctly leaves it null.
+ */
+export async function dequeueNextTask({ ignoreTaskId = null } = {}) {
+  if (maintenance.held()) return;
+  if (!isDaemonRunning()) return;
+  // Same reason as the runner gate below: the tiers' side effects cannot be
+  // taken back, and an agent registered after the shutdown marker snapshot is
+  // charged as a genuine orphan on the next boot (#14170).
+  if (isHostShuttingDown()) return;
+
+  // In runner mode the cos-runner app owns every agent process, so a cycle run
+  // while it is down can only produce holds. Bail before the tiers rather than
+  // after: they drain on-demand requests, advance review cooldowns, bind the
+  // synthetic app-review marker, and spend `capacity` — side effects a hold
+  // downstream cannot take back. Same shape as the `availableSlots <= 0` gate
+  // below; "the runner is off" is the same fact as "there is nowhere to spawn".
+  // `connection:ready` re-runs this the moment the runner returns.
+  if (await isRunnerHolding()) return;
+
+  // A global pause stops scheduled/autonomous spawning, but NOT explicit user
+  // triggers: on-demand requests (Priority 0) are processed even while paused so
+  // a manual "Run" from an app's automation page still fires. The autonomous
+  // tiers (Priority 1+) are skipped below when paused.
+  const paused = await isPaused();
+
+  const state = await loadState();
+
+  // Bail before the provider fetch below. This function fires from ~8 event
+  // sources plus a setImmediate on every completion, and a saturated pool — the
+  // state that makes those fire in bursts — would otherwise pay two awaits and
+  // a full agent scan per trigger for a tracker discarded immediately.
+  if (state.config.maxConcurrentAgents - Object.values(state.agents).filter(a => a.status === 'running').length <= 0) return;
+
+  // Per-local-endpoint agent slots (#4834). A CoS agent runs a vendor CLI that
+  // talks to the local model server directly, so promptRunner's in-flight gate
+  // never sees it; without this, two agents can be dispatched at one GPU and
+  // take an accelerator OOM. Resolved once per cycle and threaded into the
+  // capacity tracker, which enforces it alongside the global/per-project caps.
+  //
+  // Predictive only — it just avoids emitting a task the chokepoint would hold,
+  // so unlike `acquireLocalEndpointSpawnSlot` it does NOT count in-flight
+  // reservations. Erring toward admitting is correct here: the authoritative
+  // gate still refuses, and a hold is cheap.
+  const localSlots = await buildLocalEndpointSlotContext();
+  // One debug line per saturated endpoint per cycle, not one per queued task —
+  // the user/system tiers `continue` past a denial, so a 40-task queue behind
+  // one busy GPU would otherwise emit 40 identical log events, each broadcast
+  // to every CoS-subscribed socket client.
+  const loggedFullEndpoints = new Set();
+  const capacity = createDequeueCapacity(state, {
+    inFlightTaskIds: spawningTasks,
+    agentsByProject: countRunningAgentsByProject(state.agents),
+    localEndpointCounts: countRunningAgentsByLocalEndpoint(state.agents, localSlots.endpointForAgent),
+    localEndpointLimit: localSlots.limit,
+    resolveLocalEndpoint: localSlots.resolveLocalEndpoint,
+    onLocalEndpointHold: (task, endpoint, running) => {
+      if (loggedFullEndpoints.has(endpoint)) return;
+      loggedFullEndpoints.add(endpoint);
+      emitLog('debug', `⏳ Queued task ${task.id} - local endpoint ${endpoint} at capacity (${running}/${localSlots.limit})`, {
+        taskId: task.id,
+        endpoint
+      });
+    }
+  });
+  const availableSlots = capacity.availableSlots;
+
+  if (availableSlots <= 0) return;
+
+  // This instance's federation id, resolved once per cycle so the priority
+  // tiers below can skip tasks a peer holds a live lease on (#1650). Warm path
+  // is the cheap cached read; only the cold boot creates the identity.
+  const instanceId = await ensureInstanceId();
+
+  // Shared spawn context threaded through each priority tier. The tiers mutate
+  // the running spawn total + per-project counts through `capacity` (whose
+  // `canSpawn`/`trackSpawn` close over that state). Frozen: cross-tier values
+  // (schedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling) are
+  // returned by the tier that resolves them and passed on as named arguments.
+  const ctx = Object.freeze({
+    state,
+    instanceId,
+    capacity,
+    ignoreTaskId
+  });
+
+  // Priority 0 (on-demand) runs even when paused — an explicit user "Run"
+  // bypasses the global pause.
+  const { schedule: taskSchedule } = await spawnDequeuePriority0OnDemand(ctx);
+
+  // Global pause stops every autonomous/scheduled/user tier below; only the
+  // on-demand queue above (explicit user "Run") bypasses it.
+  if (paused) return;
+
+  // Priority 1 spends against the global slot cap.
+  const { hasPendingUserTasks } = await spawnDequeuePriority1UserTasks(ctx);
+
+  // Priorities 2, 3.6 and 4 spend against the lower autonomous ceiling that
+  // Priority 2 resolves `autonomousSpawnCeiling` from the daily budget.
+  const { cosAutonomyMode, autonomousSpawnCeiling } = await spawnDequeuePriority2AutoApproved(ctx, { taskSchedule });
+  await spawnDequeuePriority36FeatureAgents(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+  await spawnDequeuePriority4IdleReview(ctx, { hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling });
+
+  if (capacity.spawned > 0) {
+    const ids = capacity.spawnedTaskIds.join(', ');
+    emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s): ${ids}`, {
+      spawned: capacity.spawned,
+      taskIds: capacity.spawnedTaskIds,
+      availableSlots,
+    });
+  }
+}
+
+/**
+ * Pure gate: did the just-completed agent belong to an enabled drain schedule
+ * (e.g. claim-issue)? Perpetual tasks and the detector-driven
+ * reconciliation tasks are documented as draining actionable work back-to-back
+ * (re-queue on completion) (taskSchedule.js), but `dequeueNextTask` above only
+ * drains already-queued tasks — it never regenerates work. Without an explicit
+ * refill on completion the next run waits for the ~hourly
+ * `cos-improvement-check` timer (a "ready" task doesn't even shorten that timer
+ * — cosJobScheduler gates the delay on `status:'scheduled'` tasks only). This
+ * gate lets the completion handler decide whether to refill the drain immediately
+ * instead of idling. Reads the analysis type the same way
+ * `queueEligibleImprovementTasks` / `isDisabledAnalysisType` do, and never throws
+ * on partial inputs.
+ */
+/**
+ * The scheduled task type a completed agent belongs to, if any — the key
+ * `schedule.tasks` and the perpetual-refill gates look up. Reads the same three
+ * projections agentLifecycle stamps onto the agent, newest-name first.
+ */
+function agentScheduledType(agent) {
+  return agent?.metadata?.taskAnalysisType
+    || agent?.metadata?.analysisType
+    || agent?.metadata?.selfImprovementType
+    || null;
+}
+
+/**
+ * The on-demand origins whose completed perpetual run may re-issue itself: a
+ * human Run, and the drain re-issuing itself through the same lane. Everything
+ * else — a quota burn today, whatever is added tomorrow — stops after one unit.
+ */
+const DRAINABLE_ON_DEMAND_ORIGINS = new Set([ON_DEMAND_ORIGINS.USER, ON_DEMAND_ORIGINS.REFILL]);
+
+export function isPerpetualRefillCandidate(agent, schedule) {
+  const analysisType = agentScheduledType(agent);
+  if (!analysisType) return false;
+  const taskDef = schedule?.tasks?.[analysisType];
+  // A manual branch reconciliation owns a bounded sweep even when recurring
+  // dispatch is off. Other task types retain their saved perpetual policy.
+  const manualBranchSweep = analysisType === 'branch-reconcile' && agent?.metadata?.taskOnDemand;
+  return Boolean(taskDef?.enabled) && (taskDef?.perpetual === true || Boolean(manualBranchSweep));
+}
+
+/**
+ * Decide which "lane" a completed drain run must continue in. Pure, so the
+ * branch is unit-testable without a live daemon.
+ *
+ *   - `'skip'`     — not a drain refill candidate (disabled/non-draining/no
+ *                    analysis type); nothing to refill.
+ *   - `'onDemand'` — the completed run was a MANUAL "Run Now" drain, marked by
+ *                    the on-demand spawn engines (`metadata.onDemand`, projected
+ *                    onto the agent as `taskOnDemand`). It continues in the SAME
+ *                    user-initiated lane it started in: re-issue an on-demand
+ *                    request for the exact `taskType` + `appId`, gated only on the
+ *                    master Improve flag — what `RunTaskButton` itself gates on —
+ *                    NOT on `canQueueImprovementTasks`. This is the fix for a
+ *                    manual drain stalling after ONE item whenever CoS auto-run is
+ *                    off/dry-run or idle-review is off: those are exactly the
+ *                    postures in which a user reaches for "Run Now". The manual
+ *                    run is allowed to START (Priority-0 on-demand only checks
+ *                    `isImprovementEnabled`), but the autonomous refill's
+ *                    `canQueueImprovementTasks` gate then refuses to continue it.
+ *                    Re-issuing an on-demand request is scoped to just that
+ *                    type+app, so it can't leak unrelated rotation/idle autonomous
+ *                    work past the auto-run kill switch, and the on-demand path
+ *                    re-runs the work-detector and PARKS when the drain is done —
+ *                    so it converges exactly like the scheduled drain.
+ *   - `'queue'`    — a SCHEDULED perpetual run: the autonomous queue path, gated
+ *                    on `canQueueImprovementTasks` (auto-run = execute).
+ */
+export function perpetualRefillPlan(agent, schedule) {
+  if (!isPerpetualRefillCandidate(agent, schedule)) return { lane: 'skip' };
+  // A run narrowed to ONE pull request is a one-shot the user asked for on a
+  // specific row. A refill carries no target, so continuing the drain here would
+  // silently promote that click into a sweep of every open contributor PR.
+  if (agent?.metadata?.taskTargetPullRequest) return { lane: 'skip' };
+  if (agent?.metadata?.taskOnDemand) {
+    // Which ORIGINS may keep draining in this lane, as an allowlist rather than
+    // a growing list of exclusions — so an automated origin added later fails
+    // CLOSED. A QUOTA BURN invokes exactly ONE unit of its referenced task: the
+    // burn has its own continuation (quotaBurnRunner#onBurnAgentCompleted) behind
+    // the window/reserve/cap ladder, and refilling here as well would walk the
+    // whole backlog outside every one of those gates, on the very subscription
+    // the plan was rationing. An unrecorded origin is a human Run — that is what
+    // a task queued before the field existed is.
+    const origin = agent?.metadata?.taskOnDemandOrigin || ON_DEMAND_ORIGINS.USER;
+    if (!DRAINABLE_ON_DEMAND_ORIGINS.has(origin)) return { lane: 'skip' };
+    // Reconciliation is per-repository: an app-less legacy run would re-issue itself forever.
+    if (agentScheduledType(agent) === 'branch-reconcile' && !agent?.metadata?.taskApp) return { lane: 'skip' };
+    return { lane: 'onDemand', taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null };
+  }
+  return { lane: 'queue' };
+}
+
+/**
+ * When a perpetual-schedule agent finishes, re-queue the next eligible task
+ * right away so the backlog drains back-to-back rather than stalling until the
+ * next improvement-check tick. `perpetualRefillPlan` picks the lane (see there):
+ * a MANUAL drain re-issues an on-demand request; a SCHEDULED drain uses the
+ * auto-run-gated `queueEligibleImprovementTasks` (which already enforces per-app
+ * cooldown, the one-pending-per-app cap, and the work-detector park, so it
+ * converges and can't fan out past the `dequeueNextTask` concurrency limits).
+ */
+async function refillPerpetualForCompletedAgent(agent) {
+  const branchSweep = agentScheduledType(agent) === 'branch-reconcile';
+  const interrupted = async (reason) => {
+    if (!branchSweep) return;
+    const { recordBranchReconcileOutcome } = await import('../branchReconcileOutcome.js');
+    await recordBranchReconcileOutcome(agent?.metadata?.taskApp || null, {
+      status: 'incomplete', reason, nextAction: 'Resolve the interruption, then run branch reconciliation again.',
+    });
+  };
+  if (!isDaemonRunning()) return interrupted('daemon-stopped');
+  // Only a SUCCESSFUL perpetual run drains to the next item immediately. A failed
+  // run (provider/setup/test failure) must NOT refill back-to-back: perpetual
+  // completions skip the per-app cooldown, and the work-detector will usually
+  // still see the same issue as actionable — so an immediate refill would spin
+  // the daemon through repeated failures. On failure, fall back to the task
+  // retry/backoff and the improvement-check recheck cadence (the park IS the
+  // throttle only once work genuinely runs out, not when a run errors).
+  if (!agent?.result?.success) return interrupted('agent-failed');
+  if (await isPaused()) return interrupted('daemon-paused');
+
+  const taskScheduleMod = await import('../taskSchedule.js');
+  const schedule = await taskScheduleMod.loadSchedule();
+  const plan = perpetualRefillPlan(agent, schedule);
+  if (plan.lane === 'skip') return interrupted('continuation-disabled');
+
+  const state = await loadState();
+
+  if (plan.lane === 'onDemand') {
+    // Manual drain: gate on the master Improve flag (what the manual trigger
+    // itself uses), NOT canQueueImprovementTasks, and re-issue an on-demand
+    // request. `emit: false` — the completion handler's subsequent
+    // dequeueNextTask({ ignoreTaskId }) drains the re-issue dedup-safely against
+    // the still-`in_progress` completing task; letting triggerOnDemandTask emit
+    // its event would fire a redundant SECOND dequeue of the same request.
+    if (!isImprovementEnabled(state)) return interrupted('improvement-disabled');
+    // A PARK STOPS A REFILL (#3848). Park elapse used to be read only by the
+    // SCHEDULED lane, so a drain that parked itself (idle detector, no-progress,
+    // drain cap) could still be re-issued here on the very next completion — the
+    // park meant nothing on the one lane that does the re-dispatching, and the
+    // work-detector re-deciding was the only brake left. A human "Run Now" is
+    // unaffected: applyOnDemandRunResets clears the park first for a USER-origin
+    // request, and only a refill reaches this line with the park intact.
+    if (await taskScheduleMod.isPerpetualParkActive(plan.taskType, plan.appId)) {
+      emitLog('debug', `Perpetual refill for ${plan.taskType} skipped: parked until its recheck cadence`, { appId: plan.appId });
+      return;
+    }
+    // `queuePerpetualRefill` stamps the automated `origin: 'refill'` pair — this
+    // re-issue borrows the on-demand LANE but is not a human pressing Run, so
+    // the drain engines must leave the park, convergence signature, and dispatch
+    // counter intact. Without that pair the refill wipes its own convergence
+    // state on every hop and the drain never parks while one actionable item remains.
+    const refill = await taskScheduleMod.queuePerpetualRefill(plan.taskType, plan.appId).catch(async (err) => {
+      await interrupted('refill-failed');
+      throw err;
+    });
+    if (refill?.error) await interrupted('refill-rejected');
+    return;
+  }
+
+  // Scheduled drain — autonomous queue path, gated on CoS auto-run.
+  if (!canQueueImprovementTasks(state)) return interrupted('automatic-dispatch-disabled');
+
+  // `agent:completed` fires from `completeAgent` BEFORE the completion flow's
+  // `updateTask` marks this agent's task done (agentLifecycle.js: completeAgent
+  // emits, THEN updateTask persists). So the just-finished task can still read as
+  // `in_progress` both in this snapshot AND on disk when queueEligible's addTask
+  // re-reads COS-TASKS.md. Pass its id as `ignoreTaskId` so the per-app busy cap,
+  // the per-type dedup set, and addTask's disk-level duplicate scan all treat it
+  // as already done — otherwise a perpetual schedule (claim-issue/claim-work
+  // regenerates an identical first-line per app) is rejected as a duplicate of
+  // the completing task and the drain stalls until the next scheduler tick.
+  const cosTaskData = await getCosTasks();
+  await queueEligibleImprovementTasks(state, cosTaskData, {
+    ignoreTaskId: agent?.taskId,
+    wakeAfterRecord: false,
+    // Continue only this completed drain: its cron slot already initiated it.
+    perpetualContinuation: { taskType: agentScheduledType(agent), appId: agent?.metadata?.taskApp || null }
+  });
+  // NOTE: the caller (the agent:completed handler) runs dequeueNextTask AFTER
+  // this resolves, so the freshly-queued perpetual task is on the queue before
+  // slots are filled. Do not dequeue here — that would re-introduce the ordering
+  // race where generic dequeue claims the freed slot with idle-review work.
+}
+
+/**
+ * Wire event listeners, load state, and auto-start the daemon when configured.
+ * Called once from `server/index.js` during boot.
+ */
+export async function init() {
+  await ensureDirectories();
+  initializeAgentFeedback();
+
+  // When an agent completes, refill perpetual work then dequeue the next task
+  cosEvents.on('agent:completed', (agent) => {
+    // Settle deterministic cleanup even for one-shot/failed runs. Then refill
+    // before dequeue so unrelated idle work cannot take the newly freed slot.
+    // Each phase owns its rejection because this is an event boundary.
+    setImmediate(() => {
+      Promise.resolve()
+        .then(async () => {
+          if (agent?.metadata?.recoveryOrigin?.subsystem === 'repository-cleanup') {
+            const { settleRetirementReviewRun } = await import('../branchReconcileCompletion.js');
+            await settleRetirementReviewRun(agent);
+          }
+          if (agentScheduledType(agent) !== 'branch-reconcile') return;
+          const { settleBranchReconcileRun } = await import('../branchReconcileCompletion.js');
+          await settleBranchReconcileRun(agent);
+        })
+        .catch(err => console.error(`❌ Branch reconciliation completion failed: ${err.message}`))
+        .then(async () => {
+          if (!isDaemonRunning() || !agent?.taskId) return;
+          const { recoverBlockedSystemTask } = await import('../blockedSystemInvestigation.js');
+          await recoverBlockedSystemTask(agent.taskId);
+        })
+        .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`))
+        // A run that finished as the server exits still finalizes, but admits
+        // nothing next (#14170). The hourly improvement check resumes the drain.
+        .then(() => (isHostShuttingDown() ? null : refillPerpetualForCompletedAgent(agent)))
+        .catch(err => console.error(`❌ Perpetual refill after ${agent?.id} failed: ${err.message}`))
+        // Same window as the refill above: this runs before the completing
+        // task's `updateTask` settles it, so the idle tier's generator must
+        // exclude it from any in-flight tally (#3179).
+        .then(() => dequeueNextTask({ ignoreTaskId: agent?.taskId }))
+        .catch(err => console.error(`❌ Dequeue after ${agent?.id} completion failed: ${err.message}`));
+    });
+
+    // Create notification when a daily briefing completes
+    if (agent?.metadata?.jobId === 'job-daily-briefing' && agent?.result?.success) {
+      getUserTimezone()
+        .then(tz => {
+          const today = todayInTimezone(tz);
+          return addNotification({
+            type: NOTIFICATION_TYPES.BRIEFING_READY,
+            title: 'Daily Briefing Ready',
+            description: `Your daily briefing for ${today} is ready for review.`,
+            priority: 'low',
+            link: '/cos/briefing',
+            metadata: { date: today, agentId: agent.id }
+          });
+        })
+        .catch(err => console.error(`❌ Failed to create briefing notification: ${err.message}`));
+    }
+  });
+
+  cosEvents.on('swarm:cleanup-delivery-verified', ({ agentId }) => {
+    import('../swarmCleanupRefill.js').then(({ refillDeliveredCleanupSwarm }) => refillDeliveredCleanupSwarm(agentId, {
+      wake: () => dequeueNextTask(), refillPlan: perpetualRefillPlan,
+    }))
+      .catch(err => console.error(`❌ Swarm cleanup continuation failed: ${err.message}`));
+  });
+
+  // Record autonomous job execution only after the agent actually spawns.
+  // Update lastRun BEFORE clearing the spawning guard to prevent a race where
+  // a pending timer fires between clearSpawningJob and recordJobExecution,
+  // sees no guard and stale lastRun, and spawns a duplicate agent.
+  cosEvents.on('job:spawned', async ({ jobId }) => {
+    await recordJobExecution(jobId).catch(err =>
+      console.error(`❌ Failed to record job execution for ${jobId}: ${err.message}`)
+    );
+    clearSpawningJob(jobId, { spawned: true });
+    // Re-register with updated lastRun so the next timer has the correct delay
+    await registerSingleJobSchedule(jobId).catch(err =>
+      console.error(`❌ Failed to re-register job schedule for ${jobId}: ${err.message}`)
+    );
+  });
+
+  cosEvents.on('job:spawn-failed', ({ jobId, reason }) =>
+    handleJobSpawnFailed(jobId, reason).catch(err =>
+      console.error(`❌ Failed to re-arm job schedule after spawn failure for ${jobId}: ${err.message}`)
+    )
+  );
+
+  // Event-driven triggers: task/file changes → dequeueNextTask.
+  // The task store (cosTaskStore.js) persists tasks and emits this event; the
+  // spawn-side reaction lives here so the store stays free of scheduler logic.
+  // - 'added': fill open slots via dequeueNextTask, and (for user tasks) also
+  //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
+  //   the evaluation interval that's meant for system task generation.
+  // - 'approved': a newly approved task can now spawn — re-run dequeue. Either
+  //   queue: a user row withheld by the #7300 hold is released the same way.
+  // - 'unblocked': a blocked or completed task flipped back to pending (#2614, #12058)
+  //   is newly spawnable exactly like an approval — re-run dequeue.
+  // - 'requeued': an in_progress task flipped back to pending — a failed run's
+  //   retry released from its cleanup hold (#3373) or an orphan sweep requeue.
+  //   Newly spawnable, and long after the completion dequeue ran — re-run dequeue.
+  // - a transition INTO `completed` (any action): if the finished task is an
+  //   INVESTIGATION, revive the failure-blocked task(s) it was diagnosing instead
+  //   of leaving them for a human to un-block by hand.
+  cosEvents.on('tasks:changed', (data) => {
+    if (!isDaemonRunning() || !data?.action) return;
+    if (data.action === 'added') {
+      // An explicit dispatcher (for example a scheduled job's Run now route)
+      // owns the spawn and will call forceSpawnTask after persistence. Skipping
+      // the automatic wake here prevents that dispatcher from racing a normal
+      // internal-task dequeue and reporting a false in-progress failure.
+      if (data.suppressDequeue) return;
+      // Order matters: dequeueNextTask is scheduled before the user-task
+      // tryImmediateSpawn, matching the pre-extraction sequence (addTask emitted
+      // tasks:changed — registering dequeue via this listener — before it called
+      // setImmediate(tryImmediateSpawn)). dequeue fills slots in priority order
+      // first; tryImmediateSpawn then handles the just-added task.
+      scheduleDequeue();
+      if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task)
+        .catch(err => console.error(`❌ Immediate spawn for task ${data.task?.id} failed: ${err?.message ?? String(err)}`)));
+    } else if (data.action === 'approved' || data.action === 'unblocked' || data.action === 'requeued') {
+      if (data.suppressDequeue) return;
+      scheduleDequeue();
+    } else if (data.suppressCompletionWake !== true && data.task?.status === 'completed' && data.previousStatus !== 'completed') {
+      // A finished investigation releases the task(s) its failure was blocking
+      // (see investigationRetry.js). Keyed on the completion rather than on who
+      // wrote it, so it covers BOTH an investigation agent finishing its run and
+      // a human ticking the task off after fixing the cause by hand — and on the
+      // TRANSITION, not the level, so a later edit to an already-completed
+      // investigation can't spend a second auto-retry on a task that re-blocked.
+      // The service no-ops for every other completed task, and each revive emits
+      // its own `unblocked` above, which is what re-runs the dequeue.
+      setImmediate(() => retryTasksResolvedByInvestigation(data.task)
+        .catch(err => console.error(`❌ Auto-retry after investigation ${data.task?.id} failed: ${err.message}`)));
+    }
+  });
+
+  // A delivery follow-up owns a parent continuation, not a new cron obligation.
+  // Replay of the same completed observation is safe: the parent verifier binds
+  // its exact cleanup owner and receipt, and coalesces concurrent wake-ups.
+  const { bindCompletionRetirementEvents } = await import('../agent/agentRepoStateVerification.js');
+  bindCompletionRetirementEvents(cosEvents);
+  const { bindInvestigationDependencyEvents, reconcileInvestigationDependencies } = await import('../investigationDependencyWait.js');
+  bindInvestigationDependencyEvents(cosEvents);
+  await reconcileInvestigationDependencies().catch(error => console.warn(`⚠️ Investigation dependency recovery deferred: ${error.message}`));
+
+  // Contributor remediation retains its forge hand-back when blocked. Ordinary
+  // merge follow-ups stay in automated recovery rather than the human inbox.
+  cosEvents.on('tasks:changed', (data) => {
+    handBackBlockedPrRemediation(data)
+      .catch(err => console.error(`❌ Blocked PR remediation hand-back failed for task ${data?.task?.id}: ${err.message}`));
+    if (isDaemonRunning() && data?.type === 'internal' && data.task?.status === 'blocked') {
+      import('../blockedSystemInvestigation.js').then(({ recoverBlockedSystemTask }) => recoverBlockedSystemTask(data.task.id))
+        .catch(err => console.error(`❌ Blocked-system investigation recovery failed: ${err.message}`));
+    }
+  });
+
+  // A critical health transition reaches the bell even when no CoS view is open.
+  cosEvents.on('health:critical', (issues) => {
+    notifyCriticalHealth(issues)
+      .catch(err => console.error(`❌ Critical-health notification failed: ${err.message}`));
+  });
+  cosEvents.on('health:check', (check) => {
+    clearCriticalHealthIfRecovered(check)
+      .catch(err => console.error(`❌ Critical-health recovery check failed: ${err.message}`));
+  });
+
+  // Changing the investigation override can make an already-queued held task
+  // eligible. Re-run the normal dequeue so autonomy, budgets, leases, and
+  // capacity remain the same as for every other system task.
+  cosEvents.on('config:changed', () => {
+    if (isDaemonRunning()) {
+      scheduleDequeue();
+      // Standing role/grant changes reconcile immediately; the watchdog's
+      // persisted policy fingerprint coalesces unrelated config updates.
+      import('../developmentWatchdog.js').then(({ runDevelopmentWatchdog }) => runDevelopmentWatchdog({ source: 'configuration' }))
+        .catch(err => console.error(`❌ Development watchdog configuration reconciliation failed: ${err.message}`));
+    }
+  });
+
+  cosEvents.on('task:on-demand-requested', () => {
+    if (isDaemonRunning()) scheduleDequeue();
+  });
+
+  // The improvement-check timer (cosJobScheduler.scheduleNextImprovementCheck)
+  // queues eligible improvement tasks then asks for a dequeue via this event,
+  // since dequeueNextTask lives here. Mirrors the pre-extraction direct call.
+  cosEvents.on('cos:dequeue-requested', () => {
+    if (isDaemonRunning()) scheduleDequeue();
+  });
+
+  // Autonomous job lifecycle → re-register/cancel individual job timers
+  cosEvents.on('jobs:toggled', async ({ id }) => {
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on toggle for ${id}: ${err?.message ?? String(err)}`)
+    );
+  });
+
+  cosEvents.on('jobs:updated', async ({ id }) => {
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on update for ${id}: ${err?.message ?? String(err)}`)
+    );
+  });
+
+  cosEvents.on('jobs:created', async ({ id }) => {
+    if (isDaemonRunning()) await registerSingleJobSchedule(id).catch(err =>
+      console.error(`❌ Failed to register job schedule on create for ${id}: ${err?.message ?? String(err)}`)
+    );
+  });
+
+  cosEvents.on('jobs:deleted', async ({ id }) => {
+    cancelEvent(`job:${id}`);
+  });
+
+  // Schedule changes → re-compute next improvement check
+  cosEvents.on('schedule:changed', async () => {
+    if (isDaemonRunning()) await scheduleNextImprovementCheck().catch(err =>
+      console.error(`❌ Failed to schedule next improvement check: ${err?.message ?? String(err)}`)
+    );
+  });
+
+  const state = await loadState();
+
+  // Auto-start when alwaysOn/autoStart is set, OR when the previous process left
+  // `running: true` on disk. The in-memory daemon flag dies with the process, but
+  // initializePersistentMindSupervisor (orphan-turn recovery + watchdog) only
+  // runs inside start(). Without this, a portos-server restart with the mind mid-
+  // turn leaves activeTurn stuck on disk forever — especially once the instance
+  // password is on and keepalive's unauthenticated POST /api/cos/start 401s.
+  if (state.config.alwaysOn || state.config.autoStart || state.running) {
+    const reason = (state.config.alwaysOn || state.config.autoStart)
+      ? 'alwaysOn mode'
+      : 'persisted running=true after restart';
+    console.log(`🚀 CoS auto-starting (${reason})`);
+    await start();
+  }
+}

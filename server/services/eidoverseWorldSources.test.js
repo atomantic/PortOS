@@ -8,8 +8,8 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 
 const dataRoot = () => lazyTempDataRoot('portos-observation-dispatch-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot }));
-vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
-vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./persistent/persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistent/persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
 vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [] }), dispatchTool: vi.fn() }));
 vi.mock('./eidoverseFoundationLedger.js', () => ({ listEidoverseFoundations: async () => ({ foundations: [], counts: {} }) }));
 vi.mock('./eidoverseControllerRuntime.js', () => ({ listEidoverseControllers: async () => ({ installs: [], counts: {} }) }));
@@ -33,16 +33,16 @@ vi.mock('./apps.js', () => ({
 vi.mock('./appProcessStatus.js', () => ({
   getAppStatuses: vi.fn(async () => sources.apps),
 }));
-vi.mock('./cosAgentLifecycle.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({
   getAgents: vi.fn(async () => sources.agents),
 }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getCosTasks: vi.fn(async () => sources.taskState),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   getStatus: vi.fn(async () => sources.cosStatus),
 }));
-vi.mock('./cosReports.js', () => ({
+vi.mock('./cos/cosReports.js', () => ({
   getTodayActivity: vi.fn(async () => sources.todayActivity),
 }));
 vi.mock('./review.js', () => ({ getPendingCounts: vi.fn(async () => sources.review) }));
@@ -62,7 +62,7 @@ vi.mock('../lib/memoryStats.js', () => ({
   getMemoryStats: vi.fn(async () => sources.memory),
 }));
 vi.mock('./identity.js', () => ({ getGoals: vi.fn(async () => sources.goalsData) }));
-vi.mock('./cosActivityCalendar.js', () => ({
+vi.mock('./cos/cosActivityCalendar.js', () => ({
   getActivityCalendar: vi.fn(async () => sources.activityCalendar),
 }));
 vi.mock('./brainGraph.js', () => ({
@@ -243,7 +243,7 @@ describe('Eidoverse world source aggregation', () => {
 
 describe('semantic observation authority and marker workflow', () => {
   it('exposes only evidenced peer failures through observation, with unknown and recovery semantics', async () => {
-    const { executeCosToolCall } = await import('./cosToolRegistry.js');
+    const { executeCosToolCall } = await import('./cos/cosToolRegistry.js');
     const authority = { scope: 'mind', capabilities: { manageEidoverse: true, toolExposureAllSchemas: true } };
     const observe = (requestId) => executeCosToolCall({
       call: { requestId, name: 'eidoverse.observe', arguments: {} }, authority,
@@ -285,7 +285,7 @@ describe('semantic observation authority and marker workflow', () => {
   });
 
   it('delivers fresh bounded collector reasons only to a granted mind and preserves the observation delta', async () => {
-    const { executeCosToolCall } = await import('./cosToolRegistry.js');
+    const { executeCosToolCall } = await import('./cos/cosToolRegistry.js');
     const { observeEidoverseWorld } = await import('./eidoverseObservationLedger.js');
     sources.apps = [
       { overallStatus: 'online', managed: true },

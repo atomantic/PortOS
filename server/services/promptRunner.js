@@ -13,18 +13,18 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
  * caller's model nor provider.defaultModel applies). Log THIS `model`, not the value passed in.
  */
 
-import { LOCAL_LLM_MAX_CONCURRENCY, acquireLocalSlot, releaseLocalSlot } from '../lib/localLlmConcurrency.js';
+import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
-import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
-import { isCompositeProviderId } from '../lib/providerRef.js';
-import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
-// `./tuiPromptRunner.js` (drags node-pty in via `./shell.js`) and `./providerExecutionReadiness.js`
+import { getActiveProvider, getProviderById, getAllProviders } from './provider/providers.js';
+import { isCompositeProviderId } from '../lib/provider/providerRef.js';
+import { peekFallbackChain } from '../lib/provider/providerFallbackChainCache.js';
+// `./tuiPromptRunner.js` (drags node-pty in via `./shell.js`) and `./provider/providerExecutionReadiness.js`
 // are imported lazily on the branches that execute a run: ~160 suites only build or classify runs.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError, isContentRefusalError } from '../lib/aiToolkit/errorDetection.js';
-import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
+import { isSchemaTypeCategory, resolveProviderBench } from '../lib/provider/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
@@ -36,11 +36,11 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
-import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
+import { attachGatewaySiblingKey } from '../lib/provider/providerGateways.js';
 
 // Fallback-lifecycle notifiers live in services/autoFixer.js (which pulls in cos.js); initAutoFixer()
 // registers them through this leaf. Never import autoFixer.js here: `vitest related` follows it (#12285).
-import { getProviderRecoveryHandlers } from './providerRecoveryHooks.js';
+import { getProviderRecoveryHandlers } from './provider/providerRecoveryHooks.js';
 
 // Deferred: `observedContextWindows.js` reaches `lib/localProviderRuntime.js` and the endpoint probe,
 // which ~160 suites never need (see "Import scoping" in server/AGENTS.md).
@@ -89,33 +89,7 @@ export function buildRequestCapabilities({ prompt, screenshots, outputReserveTok
   };
 }
 
-// ── Local-backend concurrency gate ─────────────────────────────────────────
-// A local LLM server (Ollama / LM Studio) runs inference on one GPU; concurrent calls gain nothing
-// and, with OLLAMA_NUM_PARALLEL > 1, load N contexts and can OOM. So cap IN-FLIGHT calls per LOCAL
-// endpoint and queue the rest FIFO (default 1; LOCAL_LLM_MAX_CONCURRENCY lifts it). Local TUI
-// providers share the gate because their readiness hook can start the same daemon. Keyed by endpoint
-// so distinct servers run in parallel.
-//
-// The gate lives HERE so it covers every local execution: the selected provider, a proactive
-// createRun swap, AND a runtime fallback landing on a local backend.
 export const isLocalEndpoint = isLoopbackEndpoint;
-
-export { LOCAL_LLM_MAX_CONCURRENCY };
-
-// Run `fn` under the local-endpoint gate when `provider` is a local API or TUI
-// backend; otherwise run it immediately (cloud / non-local CLI/TUI are
-// unconstrained).
-export async function withLocalConcurrencyGate(provider, fn) {
-  const endpoint = provider?.endpoint;
-  const isLocalProvider = provider?.type === PROVIDER_TYPES.API || provider?.type === PROVIDER_TYPES.TUI;
-  if (!(isLocalProvider && isLocalEndpoint(endpoint))) return fn();
-  await acquireLocalSlot(endpoint);
-  try {
-    return await fn();
-  } finally {
-    releaseLocalSlot(endpoint);
-  }
-}
 
 /**
  * True when the runner+provider pair will honor a per-call `model` override. API providers take
@@ -557,13 +531,15 @@ const COMPLETION_ARGS = new Set([
  * @param {{ temperature?: number, maxTokens?: number, recover?: (failure: object) => Promise<string|null> }}
  *   [args.completion] — ask for a BOUNDED completion instead of a streamed run: one non-streaming
  *   `/chat/completions` request whose body is exactly `{ model, messages, temperature, max_tokens }`
+ *   (native Ollama `/api/chat` with `options.num_ctx` for an Ollama provider that sets `numCtx`)
  *   with the caller's own sampling, `timeout` as a wall-clock deadline, and the provider's reported
  *   token counts recorded as measured usage. API providers only. It is a pinned, routing-free run
  *   (`services/apiCompletionRun.js` lists what it leaves out and why): the provider is executed as
  *   passed, nothing falls back, and `model` goes on the wire verbatim. `recover` may repair a failed
  *   first attempt and name a model for one retry inside the same run. It takes `provider`, `prompt`,
  *   `source`, `model`, `timeout`, `signal`, `cwd`, `onRunCreated` and `onRunSettled`; any other
- *   argument is refused, never silently ignored. Resolves with `usage`,
+ *   argument is refused, never silently ignored. A prompt that provably exceeds the provider's known
+ *   context window is refused before dispatch, as on the streamed path. Resolves with `usage`,
  *   `tokens` and `retried` beside the usual fields; rejects with the reply's own error text and
  *   `completionFailure`, the failed reply itself (`{ error, status?, body?, stallPhase?, model, retried }`,
  *   with `canceled: true` when the run was stopped).
@@ -625,6 +601,11 @@ async function runPromptThroughProviderAdmitted(rawArgs) {
     if (unsupported.length > 0) {
       throw new Error(`runPromptThroughProvider: a completion request does not support ${unsupported.join(', ')}`);
     }
+    // Refused before any run record exists, so an over-window prompt is
+    // neither sent nor recorded as an attempt.
+    const { completionContextRefusal } = await import('./chatCompletionExchange.js');
+    const refusal = completionContextRefusal(args.provider, args.model ?? null, args.prompt);
+    if (refusal) throw new Error(refusal);
     // Lazy: only bounded-completion callers pay for the exchange's closure.
     const { executeApiCompletionRun } = await import('./apiCompletionRun.js');
     // Same precedence the streamed path gives `timeout`, resolved here so the
@@ -1308,7 +1289,7 @@ async function executeProviderRunOnce({
   // defaults so the response value reflects what actually ran.
   let executionAttribution;
   if (Object.keys(executionOptions || {}).length || Object.keys(effectiveProvider.executionOptions || {}).length) {
-    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions, 'run', { cwd: effectiveCwd });
     effectiveProvider = prepared.provider;
     executionAttribution = prepared.attribution;
@@ -1392,7 +1373,7 @@ async function executeProviderRunOnce({
     // providers spawn OpenCode directly, so they need the same hook here or
     // MTPLX remains stopped until after the TUI has already failed its request.
     if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
-      const ready = await import('./providerExecutionReadiness.js')
+      const ready = await import('./provider/providerExecutionReadiness.js')
         .then(({ ensureProviderReadyForExecution }) => ensureProviderReadyForExecution(effectiveProvider))
         .catch((err) => ({
           success: false,

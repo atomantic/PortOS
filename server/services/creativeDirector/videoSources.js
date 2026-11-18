@@ -48,7 +48,7 @@ async function sourceSummary(source, record) {
     return { name: text(record.name, 200), canon: text(renderStoryCanonDigest(record)), style: text(buildVisualStyleClause(record), 2000) };
   }
   if (source.kind === 'catalog') {
-    const { payloadSnippet, getActiveCatalogType } = await import('../../lib/catalogTypes.js');
+    const { payloadSnippet, getActiveCatalogType } = await import('../../lib/catalog/catalogTypes.js');
     return { name: text(record.name, 200), type: record.type, description: payloadSnippet(record.payload, record.type, 6000, getActiveCatalogType) };
   }
   if (source.kind === 'series') {

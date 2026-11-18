@@ -1,11 +1,11 @@
-import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 import { prepareProductionReview, approveProductionReview, reverifyProductionAlignment, addProductionFeedback, closeProductionFeedback, reviseProductionFromFeedback } from './productionReviewService.js';
 import { alignmentBasisMatches, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
 import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
-import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
-import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
+import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideo/musicVideoMediumPlan.js';
+import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideo/musicVideoAutomation.js';
 
 /**
  * Fully-autonomous Music Video — the run orchestrator.
@@ -13,7 +13,7 @@ import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.
  * One prompt drives a whole video: creative brief → lyrics → mood board & style
  * → Suno song (PortOS Browser) → beat analysis → the existing production run
  * (image/video tools) or a code-rendered video. The vocabulary, brief shape and
- * Suno field limits live in `lib/musicVideoAutonomous.js`.
+ * Suno field limits live in `lib/musicVideo/musicVideoAutonomous.js`.
  *
  * The run is an install-local checkpoint on the project (`project.autonomousRun`,
  * wire-local like `productionRuns`: it names this install's providers and the
@@ -69,7 +69,7 @@ import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
-import { getMusicVideoCharacterStyle } from '../../lib/musicVideoCharacterStyles.js';
+import { getMusicVideoCharacterStyle } from '../../lib/musicVideo/musicVideoCharacterStyles.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { IMAGE_GEN_MODE } from '../../lib/generationModes.js';
 import { assertFootageVideoModelsCapable, loadPoolEnv } from './productionPool.js';
@@ -92,15 +92,15 @@ import {
   normalizeSunoOptions,
   SUNO_LIMITS,
   sunoSongFields,
-} from '../../lib/musicVideoAutonomous.js';
+} from '../../lib/musicVideo/musicVideoAutonomous.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getProject, mutateProjectRecord as mutateRecord, createProject, updateProject } from './projects.js';
 import { ensureSceneTakes } from './takes.js';
 import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'orchestrator' });
 import { musicVideoEvents } from './events.js';
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
-import { isPerformanceScene, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
+import { isPerformanceScene, performanceCapability } from '../../lib/musicVideo/musicVideoShotTiming.js';
 import { applyProjectPatch } from './projectsLogic.js';
 import { openAttemptRevisionId } from './autoReview.js';
 import { getTrack } from '../tracks/index.js';

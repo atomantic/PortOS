@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import RenderTab from './RenderTab';
@@ -48,5 +49,50 @@ describe('RenderTab run history', () => {
     renderTab({ runs: [], runsStatus: 'ready', onRetryRuns: vi.fn() });
     expect(screen.getByText('No renders yet.')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('RenderTab batch count', () => {
+  it('explains invalid edits and disables every render target until corrected', () => {
+    const handleRender = vi.fn();
+    const props = {
+      ...baseProps,
+      availableBackends: [{ id: 'local' }],
+      bucketsByKind: { characters: ['heroes'], other: ['concepts'] },
+      draft: {
+        ...baseProps.draft,
+        characters: [{ name: 'Hero', description: 'An example hero' }],
+        categories: {
+          heroes: { variations: [{ label: 'Scout' }] },
+          concepts: { variations: [{ label: 'Color Study' }] },
+        },
+        compositeSheets: [{ label: 'Example board' }],
+      },
+      handleRender,
+      runs: [],
+    };
+    function RenderTabHarness() {
+      const [renderOpts, setRenderOpts] = useState({ batchPerVariation: 1 });
+      return <RenderTab {...props} renderOpts={renderOpts} setRenderOpts={setRenderOpts} />;
+    }
+
+    render(<MemoryRouter><RenderTabHarness /></MemoryRouter>);
+    const input = screen.getByRole('spinbutton', { name: 'Renders per prompt' });
+    for (const value of ['21', '1.5', '']) {
+      fireEvent.change(input, { target: { value } });
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+      expect(screen.getByRole('alert').textContent).toBe('Enter a whole number from 1 to 20.');
+      expect(screen.getAllByRole('button').length).toBeGreaterThan(1);
+      for (const button of screen.getAllByRole('button')) {
+        expect(button.disabled).toBe(true);
+        fireEvent.click(button);
+      }
+    }
+    expect(handleRender).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: '20' } });
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Render everything (80 images)' }));
+    expect(handleRender).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ promptMode: 'all' }));
   });
 });

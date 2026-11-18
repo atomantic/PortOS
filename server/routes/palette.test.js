@@ -33,7 +33,7 @@ vi.mock('../services/feeds.js', () => ({
   getItems: vi.fn(async () => []),
   getFeeds: vi.fn(async () => []),
 }));
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   listIngredients: vi.fn(async () => ({
     items: [
       { id: 'character-1', type: 'character', name: 'Mira', payload: { physicalDescription: 'A tall stoic ranger.' }, tags: [] },

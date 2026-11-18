@@ -14,10 +14,10 @@ import { existsSync, realpathSync } from 'fs';
 import { lstat, readlink, readdir, rm, stat, symlink, unlink } from 'fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { ensureDir, isPathInsideDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
-import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agentSentinel.js';
-import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agentScratchPaths.js';
+import { DONE_SENTINEL_NAME, doneSentinelCandidateNames } from '../lib/agent/agentSentinel.js';
+import { AGENT_SCRATCH_PATHS, matchesScratchRoot } from '../lib/agent/agentScratchPaths.js';
 import { execGit } from '../lib/execGit.js';
-import { hasProcessCwdInside } from '../lib/processCwdProbe.js';
+import { hasProcessCwdInside, probeProcessCwdInside } from '../lib/processCwdProbe.js';
 import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { clearStaleGitLock } from '../lib/gitStaleLock.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -25,7 +25,7 @@ import { enforceSafeBranchUpstream } from '../lib/branchUpstreamGuard.js';
 import { forkRemoteName, normalizeForkHead, forkLocalBranch } from '../lib/forkHead.js';
 import { isHumanClaimWorktree, worktreeAgentId, worktreeOwnershipReason } from '../lib/worktreeOwnership.js';
 import { ensureInstanceId } from './instanceIdentity.js';
-import { decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
+import { MERGED_OWNERSHIP_HOLDS, claimIssueOfBranch, decideForceRemoval, decideCleanPushedDetach, decideIdleNextHolderRelease, decideExternalWorktreeCleanup, decideExternalWorktreeRemoval, decideMergedWorktreeRemoval, decideMergedWorktreeReap, decideWith } from './branchRetirementDecision.js';
 import { provisionWorkspaceNodeModules, removeProvisionedNodeModules } from '../lib/worktreeNodeModules.js';
 import { withGitMutationLifetime } from '../lib/gitMutationLifetime.js';
 
@@ -671,13 +671,17 @@ async function discardLockfileChanges(worktreePath, dirt) {
   if (tracked.length) await execGit(['checkout', '--', ...tracked], worktreePath);
 }
 
+/** Whether a checkout directory exists: false only when proven absent, null when unreadable. */
+export async function readCheckoutPresence(worktreePath) {
+  return lstat(worktreePath).then(() => true, err => (err.code === 'ENOENT' || err.code === 'ENOTDIR' ? false : null));
+}
+
 /** A proven-absent directory is empty; an existing tree must identify itself.
  * Git can otherwise walk out of a broken linked checkout and report its parent
  * clean. null means unknown, including unreadable directories or status errors.
  */
 export async function readWorktreeStatus(worktreePath) {
-  const present = await lstat(worktreePath).then(() => true,
-    err => err.code === 'ENOENT' || err.code === 'ENOTDIR' ? false : null);
+  const present = await readCheckoutPresence(worktreePath);
   if (present === false) return '';
   if (present === null) return null;
   const top = await execGit(['rev-parse', '--show-toplevel'], worktreePath).then(r => r.stdout.trim()).catch(() => null);
@@ -1561,7 +1565,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       warnings: removal.warning ? [removal.warning] : [],
     };
   }
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const ownershipHold = async () => claimCheckoutOwnerReason({
     branchName, holderPath: join(WORKTREES_DIR, agentId), sourceWorkspace,
     agents: await readClaimOwnershipAgents().catch(() => null), ignoreIds: [agentId],
@@ -1578,7 +1582,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
  * without the lock, so removal re-checks them at Git's mutation boundary.
  */
 async function removeWorktreeNow(agentId, sourceWorkspace, branchName, options, ownershipHold) {
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const worktreePath = join(WORKTREES_DIR, agentId);
   const warnings = [];
   let merged = false;
@@ -2135,7 +2139,7 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
   if (!existsSync(WORKTREES_DIR)) return 0;
 
   const readActiveIds = activeIdsReader(getActiveIds);
-  const { readClaimOwnershipAgents } = await import('./cosClaimOwnershipState.js');
+  const { readClaimOwnershipAgents } = await import('./cos/cosClaimOwnershipState.js');
   const readOwners = claimOwnerReader(claimOwners, readClaimOwnershipAgents);
   const worktrees = await listWorktrees(sourceWorkspace).catch(() => []);
   let cleaned = 0;
@@ -2193,6 +2197,9 @@ export async function cleanupOrphanedWorktrees(sourceWorkspace, getActiveIds, { 
  *   1. the working tree is completely clean, and
  *   2. every commit on the branch is already in the default branch — detected via
  *      `hasBranchMergeEvidence`, which covers normal AND squash/rebase merges.
+ * Outside the CoS root, where no run record owns the tree, the branch must also
+ * not be new, published, or still in use (`decideMergedWorktreeReap`, #16625):
+ * ancestry alone reads a branch created at main a minute ago as merged.
  *
  * Because of gate (2) this works regardless of merge strategy, but a true merge
  * commit (see the `--merge`-preferring agent prompts) makes detection bulletproof.
@@ -2232,8 +2239,8 @@ export async function reapMergedWorktrees(sourceWorkspace, {
   includeClaudeTrees = true,
   appId = null
 } = {}) {
-  const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-  const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { getDefaultBranch, hasBranchMergeEvidence, readBranchLineage, readBranchPublished } = await import('./git.js');
+  const { readClaimOwnershipAgents, withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   // Every entry point (scheduled or reconcile) needs a trusted
   // registry. loadState/getAgents may default a corrupt file to empty state.
@@ -2270,10 +2277,18 @@ export async function reapMergedWorktrees(sourceWorkspace, {
       tree: wt, defaultBranch, currentBranch, includeClaudeTrees, activeAgentIds, ...roots, facts,
     }), {
       ...contentReaders,
-      // A merged PR at this exact head makes uncommitted and untracked files disposable.
-      disposableHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
+      // A merged PR at this exact head makes uncommitted and untracked files
+      // disposable, and proves a new or still-used branch shipped (#16625).
+      mergedPrAtHead: async () => (await import('./prProbe.js')).isMergedPrHead(sourceWorkspace, scannedBranch, wt.head),
+      lineage: () => readBranchLineage(sourceWorkspace, scannedBranch, wt.head, target),
+      published: () => readBranchPublished(sourceWorkspace, scannedBranch),
+      claimReserved: async () => (await import('./claimIssueReservation.js')).readRepoClaimIssueReservation(sourceWorkspace, claimIssueOfBranch(scannedBranch)),
+      checkoutPresent: () => readCheckoutPresence(wt.path),
+      checkoutProcess: () => probeProcessCwdInside(wt.path),
+      idleMs: async () => (await import('./branchReconcile.js')).checkoutIdleMs(wt.path),
     });
     if (scan.hold) {
+      if (MERGED_OWNERSHIP_HOLDS.has(scan.hold.reason)) console.log(`⏭️ Kept merged worktree ${wt.path} (branch ${scan.branch}): ${scan.hold.reason}`);
       // Named so a caller can say WHICH branch a hold kept, not just which path.
       skipped.push({ path: wt.path, ...(scan.branch && { branch: scan.branch }), reason: scan.hold.reason });
       continue;
@@ -2333,7 +2348,7 @@ export async function reapMergedWorktrees(sourceWorkspace, {
  */
 async function cleanupExternalRepoWorktrees(readActiveIds, alreadyHandled, readOwners, retainedPaths) {
   const { getDefaultBranch, hasBranchMergeEvidence } = await import('./git.js');
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnershipState.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnershipState.js');
   const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
   const entries = await readdir(WORKTREES_DIR, { withFileTypes: true }).catch(() => []);
   let cleaned = 0;

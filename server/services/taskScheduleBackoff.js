@@ -1,6 +1,6 @@
 /** Consecutive-failure backoff and auto-park state for scheduled task types. */
 
-import { emitLog } from './cosEvents.js';
+import { emitLog } from './cos/cosEvents.js';
 // Resolves a pre-rename task type (TASK_TYPE_RENAMES) to the ledger key the
 // rename migration moved its history to.
 import { taskExecutionKey as executionKey } from '../lib/scheduledTaskTypes.js';

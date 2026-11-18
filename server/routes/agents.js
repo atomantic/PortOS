@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getRunningAgents, killProcess, getProcessInfo } from '../services/agents.js';
+import { getRunningAgents, killProcess, getProcessInfo } from '../services/agent/agents.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 
 const router = Router();

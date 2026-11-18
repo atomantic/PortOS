@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // every runtime while its suite stayed green — the capability matrix said "no
 // OpenCode TUI provider is configured" for models that had one.
 const toolkitProviders = vi.fn();
-vi.mock('./providers.js', async () => {
+vi.mock('./provider/providers.js', async () => {
   const getAllProviders = (...args) => toolkitProviders(...args);
   return {
     getAllProviders,

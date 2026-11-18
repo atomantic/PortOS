@@ -254,7 +254,7 @@ A programmatic scheduled task (no agent). Each run picks the **oldest active Bra
 
 ## Where it lives
 
-`server/lib/musicVideoAutonomous.js` (vocabulary, brief normalizer, Suno limits, idea picker) · `server/services/musicVideo/autonomous{Service,Brief,Board,Suno,LocalSong}.js` · `server/services/musicGeneration.js` · `server/services/scheduledHandlers/musicVideoAutopilot.js` · `client/src/components/musicVideo/Autonomous{StartDrawer,RunPanel}.jsx`.
+`server/lib/musicVideo/musicVideoAutonomous.js` (vocabulary, brief normalizer, Suno limits, idea picker) · `server/services/musicVideo/autonomous{Service,Brief,Board,Suno,LocalSong}.js` · `server/services/musicGeneration.js` · `server/services/scheduledHandlers/musicVideoAutopilot.js` · `client/src/components/musicVideo/Autonomous{StartDrawer,RunPanel}.jsx`.
 
 ## Catalog-only Cast & Sets
 
@@ -277,7 +277,7 @@ catalog mode uses the current live catalog projection. Automated production
 retains its catalog approval gates.
 
 Implementation: `server/services/musicVideo/catalogCheckin.js` resolves and
-validates sources; `server/lib/musicVideoCatalogCheckinValidation.js` validates
+validates sources; `server/lib/musicVideo/musicVideoCatalogCheckinValidation.js` validates
 approval requests. `CatalogLookReferences.jsx` presents live catalog media;
 `useCatalogCastSetsCheckin.js` refreshes approval state on catalog events.
 

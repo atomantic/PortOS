@@ -1,5 +1,5 @@
-import { finalTierCounts } from '../../../../server/lib/musicVideoFinalApproval.js';
-import { scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
+import { finalTierCounts } from '../../../../server/lib/musicVideo/musicVideoFinalApproval.js';
+import { scenePlayableClipId } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 import { shotNumbers } from './ShotStepper.jsx';

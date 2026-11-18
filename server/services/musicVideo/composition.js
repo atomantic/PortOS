@@ -1,4 +1,4 @@
-import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
+import { normalizeMusicVideoGrade } from '../../lib/musicVideo/musicVideoGrade.js';
 /**
  * Music Video — composition manifest + deterministic typography (#8984, part of #8966).
  *
@@ -19,8 +19,8 @@ import { normalizeMusicVideoGrade } from '../../lib/musicVideoGrade.js';
 
 import { randomUUID } from 'crypto';
 import { trimTo } from '../../lib/textUtils.js';
-import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
-import { composedDrawsLyrics } from '../../lib/musicVideoLayers.js';
+import { normalizeTitleCard, titleCardWindows } from '../../lib/musicVideo/musicVideoTitleCard.js';
+import { composedDrawsLyrics } from '../../lib/musicVideo/musicVideoLayers.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 import { filmStyleIdSchema } from '../../lib/filmStyleGrammarValidation.js';
 import {
@@ -36,7 +36,7 @@ import {
   isDeterministicCodeSource,
   musicVideoNarrativeEventSchema,
   musicVideoReactiveSectionSchema,
-} from '../../lib/musicVideoValidation.js';
+} from '../../lib/musicVideo/musicVideoValidation.js';
 
 export const COMPOSITION_VERSION = 1;
 
@@ -238,7 +238,7 @@ export function renderableCues(composition, durationSec) {
 }
 
 /**
- * The opening title card (lib/musicVideoTitleCard.js) as capture windows in a
+ * The opening title card (lib/musicVideo/musicVideoTitleCard.js) as capture windows in a
  * composed render: one cue per window it shows in (the opening, and the end
  * when that is on), with no text of its own; the overlay page draws the
  * `titleCard` with the same runtime the live preview and document renders use.

@@ -21,30 +21,30 @@ import { isHostShuttingDown } from '../lib/hostShutdown.js';
 import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { emitLog, cosEvents } from './cosEvents.js';
-import { updateAgent } from './cosAgentLifecycle.js';
-import { initProviderStatus } from './providerStatus.js';
-import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable, isRunnerReachable } from './cosRunnerClient.js';
+import { emitLog, cosEvents } from './cos/cosEvents.js';
+import { updateAgent } from './cos/cosAgentLifecycle.js';
+import { initProviderStatus } from './provider/providerStatus.js';
+import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable, isRunnerReachable } from './cos/cosRunnerClient.js';
 import { PATHS, rmGuarded } from '../lib/fileUtils.js';
 import { loadSlashdoFile } from '../lib/slashdoLoader.js';
-import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
-import { syncRunnerAgents } from './agentRunnerSync.js';
-import { handleAgentCompletion } from './agentLifecycle.js';
-import { cleanupOrphanedAgents } from './agentManagement.js';
-import { completeAgentRun } from './agentRunTracking.js';
-import { appendRunEvent } from './agentRunEventLog.js';
-import { activeAgents, runnerAgents, setUseRunner, useRunner } from './agentState.js';
+import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agent/agentRunnerOutputBatchers.js';
+import { syncRunnerAgents } from './agent/agentRunnerSync.js';
+import { handleAgentCompletion } from './agent/agentLifecycle.js';
+import { cleanupOrphanedAgents } from './agent/agentManagement.js';
+import { completeAgentRun } from './agent/agentRunTracking.js';
+import { appendRunEvent } from './agent/agentRunEventLog.js';
+import { activeAgents, runnerAgents, setUseRunner, useRunner } from './agent/agentState.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { isUpdateInProgress } from './updateChecker.js';
-import { loadState } from './cosState.js';
-import { acquireLocalEndpointSpawnSlot } from './cosLocalEndpointSlots.js';
-import { forgeSpawnHoldReason } from './cosForgeSpawnGate.js';
+import { loadState } from './cos/cosState.js';
+import { acquireLocalEndpointSpawnSlot } from './cos/cosLocalEndpointSlots.js';
+import { forgeSpawnHoldReason } from './cos/cosForgeSpawnGate.js';
 import { checkoutOwnerHoldReason } from './checkoutOwnership.js';
-import { acquireCosGlobalSlot } from './cosAdmissionReservations.js';
-import { releaseAgentReservation } from './agentMaintenanceReservations.js';
+import { acquireCosGlobalSlot } from './cos/cosAdmissionReservations.js';
+import { releaseAgentReservation } from './agent/agentMaintenanceReservations.js';
 // The three lifecycle transitions this wiring drives come from the facade, not the leaves implementing them.
 // Nothing the facade imports imports this module back, so the edge stays one-directional.
-import { completeAgent, spawnAgentForTask } from './agentOrchestrator.js';
+import { completeAgent, spawnAgentForTask } from './agent/agentOrchestrator.js';
 import { parseRunnerSecurityScanEvidence } from '../lib/securityScanEvidence.js';
 
 const RUNS_DIR = PATHS.runs;
@@ -327,7 +327,7 @@ async function runInitSpawner() {
   });
 
   onCosRunnerEvent('agent:security-scan', async ({ agentId, evidence }) => {
-    const { persistAgentSecurityScan } = await import('./agentSecurityScan.js');
+    const { persistAgentSecurityScan } = await import('./agent/agentSecurityScan.js');
     const observed = parseRunnerSecurityScanEvidence(evidence);
     const refusal = observed?.status === 'refused' ? activeAgents.get(agentId)?.refuseScanner?.() : null;
     await Promise.all([refusal, persistAgentSecurityScan(agentId, evidence)]);

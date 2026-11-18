@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({ get: vi.fn(), media: vi.fn(), holders: vi.fn()
 vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: state.get }));
 vi.mock('../services/catalogDB/media.js', () => ({ listMediaForIngredient: state.media, listMediaHoldersByKey: state.holders }));
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: state.writable }));
-vi.mock('../services/catalogPrimitives.js', () => ({
+vi.mock('../services/catalog/catalogPrimitives.js', () => ({
   getPrimitiveContext: async () => ({ owner: null }), setPrimitiveOwner: vi.fn(), forkPrimitive: vi.fn(),
 }));
 vi.mock('../services/settings.js', () => ({ getSettings: async () => ({ imageGen: {

@@ -48,7 +48,7 @@ vi.mock('./apps.js', () => ({
   getActiveApps: vi.fn(async () => state.apps.map((app) => ({ ...app, taskTypeOverrides: state.appOverrides[app.id] || {} }))),
 }));
 
-vi.mock('./cosJobScheduler.js', () => ({
+vi.mock('./cos/cosJobScheduler.js', () => ({
   isJobFireInFlight: vi.fn((jobId) => state.inFlightJobIds.includes(jobId)),
 }));
 
@@ -66,16 +66,16 @@ vi.mock('./autonomousJobs.js', () => ({
   })),
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => state.providers),
 }));
 
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   loadState: vi.fn(async () => (state.cosStateReadable ? { agents: state.agents } : null)),
   isImprovementEnabled: vi.fn(() => state.improveEnabled),
 }));
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: vi.fn(async (task, taskType, options) => {
     state.added.push({ task, taskType, options });
     return state.addResult ?? { id: 'sys-1', ...task };
@@ -113,7 +113,7 @@ const {
   resolveQuotaBurnStep,
 } = await import('./quotaBurnInvoke.js');
 const { normalizeQuotaBurnJob } = await import('../lib/quotaBurnConfig.js');
-const { addTask } = await import('./cosTaskStore.js');
+const { addTask } = await import('./cos/cosTaskStore.js');
 
 const grok = { id: 'grok', reservePercent: 0, maxDispatchesPerWindow: -1 };
 const candidate = { limitingResetAt: 1700000000000 };
@@ -536,7 +536,7 @@ describe('custom app job invocation', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
     // The absence of a call is only assertable by reading the source. Comments
     // are stripped first, or the module header explaining WHY it must not use
-    // these would defeat the guard — and `./cos.js` is checked too, since it is
+    // these would defeat the guard — and `./cos/cos.js` is checked too, since it is
     // the only module either escalation could come from.
     const code = (await import('fs'))
       .readFileSync(new URL('./quotaBurnInvoke.js', import.meta.url), 'utf8')
@@ -547,7 +547,7 @@ describe('custom app job invocation', () => {
     expect(code).toMatch(/triggerOnDemandTask\s*\(/);
     expect(code).not.toMatch(/forceSpawnTask\s*\(/);
     expect(code).not.toMatch(/reviveBlockedTask\s*\(/);
-    expect(code).not.toContain("'./cos.js'");
+    expect(code).not.toContain("'./cos/cos.js'");
   });
 
   it('declines rather than reviving when a blocked twin already exists', async () => {

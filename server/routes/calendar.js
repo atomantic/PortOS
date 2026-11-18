@@ -92,8 +92,9 @@ router.delete('/accounts/:id', asyncHandler(async (req, res) => {
   if (!UUID_RE.test(req.params.id)) {
     throw new ServerError('Invalid account ID format', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  // Remove metadata first so queued/provider-delayed writes cannot recreate
-  // the cache. Retry cleanup even if an earlier attempt removed the account.
+  // Remove metadata to refuse new sync writes. Deleting the cache drains
+  // admitted syncs before removing their derived rows. Cleanup remains retryable
+  // when an earlier attempt already removed the account.
   await calendarAccounts.deleteAccount(req.params.id);
   await calendarSync.deleteCache(req.params.id);
   // Derived copies (titles, attendees) live in the Timeline and Tribe (#12984).

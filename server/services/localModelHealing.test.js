@@ -8,8 +8,8 @@ const mocks = vi.hoisted(() => ({
   lmStudioAvailable: vi.fn(async () => [])
 }));
 
-vi.mock('./cosEvents.js', () => ({ emitLog: mocks.emitLog }));
-vi.mock('./providers.js', () => ({ updateProvider: mocks.updateProvider }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: mocks.emitLog }));
+vi.mock('./provider/providers.js', () => ({ updateProvider: mocks.updateProvider }));
 vi.mock('./notifications.js', () => ({
   addNotification: mocks.addNotification,
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },

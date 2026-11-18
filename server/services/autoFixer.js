@@ -5,13 +5,13 @@
  * Integrates with error handler and CoS task system
  */
 
-import { isRunning } from './cos.js';
+import { isRunning } from './cos/cos.js';
 import { getBootCommit, getInstallState } from './installState.js';
 import { fileInvestigationTask, __resetInvestigationCircuit } from './investigationTaskProducer.js';
 import { investigationFingerprint } from '../lib/investigationTasks.js';
 import { errorEvents } from '../lib/errorHandler.js';
 import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
-import { registerProviderRecoveryHandlers } from './providerRecoveryHooks.js';
+import { registerProviderRecoveryHandlers } from './provider/providerRecoveryHooks.js';
 
 // Track recent errors to prevent duplicate auto-fix tasks
 const recentErrors = new Map();

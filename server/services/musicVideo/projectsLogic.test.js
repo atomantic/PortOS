@@ -5,7 +5,7 @@ import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
 import { productionReviewBasis } from './productionReview.js';
 import { treatmentBasis } from './treatment.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
-import { musicVideoPrevizSchema, musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoPrevizSchema, musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideo/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 

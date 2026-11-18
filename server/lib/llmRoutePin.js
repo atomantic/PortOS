@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { trimTo } from './textUtils.js';
 
 // Single source for the door check (`llmRoutePinSchema`) and the sanitizer.

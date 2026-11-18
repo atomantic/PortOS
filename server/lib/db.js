@@ -18,6 +18,8 @@ import { normalizePgParams } from './pgJson.js';
 import { DATABASE_MAINTENANCE_SCHEMA_SQL, databaseMaintenanceSchemaHealthy } from './databaseMaintenanceSchema.js';
 
 const { Pool } = pg;
+// The snapshot cut stays closed during these probes, even on a stalled pooled connection.
+const DATABASE_PROBE_TIMEOUT_MS = 10_000;
 
 // DATE (OID 1082) ships from node-pg as a JS `Date` at LOCAL midnight, so a caller
 // that reads it back with `toISOString().slice(0, 10)` (the ubiquitous `isoDate()`
@@ -229,7 +231,9 @@ const GUARDED_CLIENT_HANDLER = {
 // closes admission and drains existing operations (including whole transactions)
 // before touching the schema. Only its async context can run reconciliation.
 const databaseContext = new AsyncLocalStorage();
-const activeOperations = new Set();
+const DATABASE_DRAIN_TIMEOUT_MS = 120_000;
+let activeOperations = 0;
+let resolveDatabaseDrain;
 let maintenanceActive = false;
 // Durable fence for a committed snapshot restore whose repair is pending
 // (#9725). It outlives this process: while the journal exists, only the
@@ -241,6 +245,12 @@ export const databaseRestoreRecovery = restoreRecovery;
 function maintenanceError() {
   return Object.assign(new Error('Database restore in progress; retry after it finishes.'), {
     status: 503, code: 'DATABASE_MAINTENANCE',
+  });
+}
+
+function databaseRestoreBusyError() {
+  return Object.assign(new Error('Timed out waiting for active database work. Wait for active queries and transactions to finish, then retry.'), {
+    status: 409, code: 'DATABASE_RESTORE_BUSY',
   });
 }
 
@@ -258,18 +268,35 @@ async function databaseOperation(fn) {
   const restoreRecoveryId = restoreRecoveryContext(parent);
   if (!restoreRecoveryId) restoreRecovery.assertAdmission();
   const context = { active: true, restoreRecoveryId };
-  const pending = databaseContext.run(context, async () => fn());
-  activeOperations.add(pending);
+  activeOperations += 1;
   try {
-    return await pending;
+    return await databaseContext.run(context, () => fn());
   } finally {
     context.active = false;
-    activeOperations.delete(pending);
+    activeOperations -= 1;
+    if (activeOperations === 0) resolveDatabaseDrain?.();
+  }
+}
+
+async function drainDatabaseOperations() {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  resolveDatabaseDrain = resolve;
+  const deadline = performance.now() + DATABASE_DRAIN_TIMEOUT_MS;
+  const timer = setTimeout(() => reject(databaseRestoreBusyError()), DATABASE_DRAIN_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    await promise;
+    // Promise continuations can run ahead of an overdue timer after a stall.
+    if (performance.now() >= deadline) throw databaseRestoreBusyError();
+  } finally {
+    clearTimeout(timer);
+    resolveDatabaseDrain = undefined;
   }
 }
 
 /**
- * Drain admitted database work and reject new work until restore completes.
+ * Drain admitted database work within one deadline and reject new work until
+ * restore completes or the drain is refused.
  *
  * A pending restore recovery journal refuses entry unless `restoreRecoveryId`
  * names that same operation. `fn` receives `{ adoptRestoreRecovery(id) }`, which
@@ -290,10 +317,9 @@ export async function withDatabaseMaintenance(fn, { restoreRecoveryId } = {}) {
     context.restoreRecoveryId = id;
   };
   try {
-    // An admitted transaction can start nested work while draining. Track it
-    // separately and repeat until that work also settles, even when its parent
-    // did not await it. Async descendants lose admission when their operation ends.
-    while (activeOperations.size) await Promise.allSettled([...activeOperations]);
+    // Each nested operation counts independently, including work that outlives
+    // its admitting transaction. It must settle within the same drain deadline.
+    if (activeOperations > 0) await drainDatabaseOperations();
     return await databaseContext.run(context, () => fn({ adoptRestoreRecovery }));
   } finally {
     context.active = false;
@@ -329,7 +355,10 @@ export async function query(text, params) {
  * @returns {Promise<number|null>} major version, or null if unreachable/unparseable
  */
 export async function getServerMajorVersion() {
-  const result = await query('SHOW server_version_num').catch(() => null);
+  const result = await databaseOperation(() => pool.query({
+    text: 'SHOW server_version_num',
+    query_timeout: DATABASE_PROBE_TIMEOUT_MS,
+  })).catch(() => null);
   const num = parseInt(result?.rows?.[0]?.server_version_num, 10);
   if (!Number.isFinite(num)) return null;
   return Math.floor(num / 10000);
@@ -342,10 +371,28 @@ export async function getServerMajorVersion() {
  * @returns {Promise<T>}
  */
 export async function withTransaction(fn) {
-  return databaseOperation(() => runTransaction(fn));
+  const callbacks = [];
+  const result = await databaseOperation(() => runTransaction(fn, callbacks));
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch (err) {
+      console.error(`❌ Post-commit database notification failed: ${err?.message || err}`);
+    }
+  }
+  return result;
 }
 
-async function runTransaction(fn) {
+const transactionCallbacks = new WeakMap();
+
+/** Register a synchronous notification on the outer transaction that owns a write. */
+export function afterTransactionCommit(client, callback) {
+  const callbacks = transactionCallbacks.get(client);
+  if (!callbacks) throw new Error('Expected an active withTransaction client');
+  callbacks.push(callback);
+}
+
+async function runTransaction(fn, callbacks) {
   const client = await pool.connect();
   client.on('error', logCheckedOutClientError);
   // Guard the client's row writes with the same backstop as query(). The raw
@@ -361,8 +408,12 @@ async function runTransaction(fn) {
   try {
     await client.query('BEGIN');
     began = true;
+    transactionCallbacks.set(guardedClient, callbacks);
     const result = await fn(guardedClient);
-    await client.query('COMMIT');
+    const commit = await client.query('COMMIT');
+    // PostgreSQL reports ROLLBACK if the handler caught a failed SQL statement
+    // but left the transaction aborted.
+    if (commit?.command === 'ROLLBACK') callbacks.length = 0;
     return result;
   } catch (err) {
     // Swallow a secondary ROLLBACK failure (closed socket, statement_timeout
@@ -374,6 +425,7 @@ async function runTransaction(fn) {
     if (began) await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
+    transactionCallbacks.delete(guardedClient);
     client.removeListener('error', logCheckedOutClientError);
     client.release(releaseErr);
   }
@@ -401,14 +453,17 @@ export async function checkHealth() {
     };
   }
   try {
-    const result = await databaseOperation(() => pool.query(`
-      SELECT
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
-        EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
-        EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
-    `));
+    const result = await databaseOperation(() => pool.query({
+      text: `
+        SELECT
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memories') AS has_memories,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'memory_links') AS has_links,
+          EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'memories' AND column_name = 'sync_sequence') AS has_sync,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_ingredients') AS has_catalog,
+          EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name = 'catalog_scraps') AS has_catalog_scraps
+      `,
+      query_timeout: DATABASE_PROBE_TIMEOUT_MS,
+    }));
     const { has_memories, has_links, has_sync, has_catalog, has_catalog_scraps } = result.rows?.[0] ?? {};
     return {
       connected: true,

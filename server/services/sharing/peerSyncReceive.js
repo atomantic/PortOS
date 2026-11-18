@@ -48,7 +48,7 @@ import {
   ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
-import { getLocalIngredientRefOwnership } from '../catalogDB.js';
+import { getLocalIngredientRefOwnership } from '../catalog/catalogDB.js';
 import { mergeReviewFromSync } from '../pipeline/manuscriptReview.js';
 import { mergeOutlineFromSync } from '../pipeline/reverseOutline.js';
 
@@ -69,7 +69,7 @@ async function isPostgresBackend() {
  */
 async function applyCatalogBundle(catalogBundle, portosMeta) {
   if (!(await isPostgresBackend())) return;
-  const { applyRemoteChanges } = await import('../catalogSync.js');
+  const { applyRemoteChanges } = await import('../catalog/catalogSync.js');
   await applyRemoteChanges({
     ingredients: Array.isArray(catalogBundle.ingredients) ? catalogBundle.ingredients : [],
     refs: Array.isArray(catalogBundle.refs) ? catalogBundle.refs : [],

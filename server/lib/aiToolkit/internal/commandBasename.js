@@ -1,7 +1,7 @@
 /**
  * Normalize a provider command to its comparable binary basename.
  *
- * A toolkit-local twin of `commandBasename` in server/lib/providerModels.js —
+ * A toolkit-local twin of `commandBasename` in server/lib/provider/providerModels.js —
  * the vendored toolkit may not import out to sibling PortOS modules (see
  * ../AGENTS.md), and this rule was previously inlined once per vendor predicate
  * inside `internal/`. One copy inside the boundary is unavoidable; two were not.

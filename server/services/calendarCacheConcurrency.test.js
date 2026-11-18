@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import express from 'express';
 import { basename } from 'path';
 
 vi.mock('../lib/fileUtils.js', async importOriginal => ({
@@ -8,15 +9,20 @@ vi.mock('../lib/fileUtils.js', async importOriginal => ({
 vi.mock('fs/promises', () => ({ readdir: vi.fn(), unlink: vi.fn() }));
 vi.mock('./calendarAccounts.js', () => ({
   getAccount: vi.fn(), listAccounts: vi.fn(), updateSyncStatus: vi.fn(async () => {}),
-  updateSubcalendars: vi.fn(), mergeDiscoveredSubcalendars: vi.fn(),
+  updateSubcalendars: vi.fn(), mergeDiscoveredSubcalendars: vi.fn(), deleteAccount: vi.fn(),
 }));
 vi.mock('./calendarApiSync.js', () => ({ syncOutlookCalendarApi: vi.fn() }));
-vi.mock('./humanActivity.js', () => ({
-  calendarActivityCandidates: vi.fn(() => []), recordEvents: vi.fn(),
+vi.mock('../lib/db.js', () => ({}));
+vi.mock('./humanActivity.js', async importOriginal => ({
+  ...await importOriginal(), recordEvents: vi.fn(), deleteEvents: vi.fn(),
 }));
+vi.mock('./tribe.js', () => ({ autoLogTouchpoints: vi.fn(), deleteAutoTouchpoints: vi.fn() }));
+vi.mock('./dailyReview.js', () => ({}));
+vi.mock('./googleOAuthAutoConfig.js', () => ({}));
+vi.mock('./messageTokenExtractor.js', () => ({}));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn() }));
-vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../lib/cliProviderRun.js', () => ({
   pickCliProvider: vi.fn(), runCliProviderPrompt: vi.fn(),
 }));
@@ -24,12 +30,19 @@ vi.mock('./googleAuth.js', () => ({ getAuthenticatedClient: vi.fn(), GOOGLE_API_
 vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { request } from '../lib/testHelper.js';
+import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { readdir, unlink } from 'fs/promises';
-import { getAccount, listAccounts } from './calendarAccounts.js';
+import { calendar } from '@googleapis/calendar';
+import calendarRoutes from '../routes/calendar.js';
+import { deleteAccount, getAccount, listAccounts, updateSyncStatus } from './calendarAccounts.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { deleteCache, getEvent, getEvents, loadCache, purgeDisabledSubcalendars, syncAccount } from './calendarSync.js';
 import { mcpSyncAccount, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount } from './calendarGoogleApiSync.js';
+import { getAuthenticatedClient } from './googleAuth.js';
+import { recordEvents, deleteEvents } from './humanActivity.js';
+import { autoLogTouchpoints, deleteAutoTouchpoints } from './tribe.js';
 
 const ACCOUNT = '11111111-1111-1111-1111-111111111111';
 const OTHER = '22222222-2222-2222-2222-222222222222';
@@ -66,6 +79,8 @@ beforeEach(() => {
   persisted = new Map();
   getAccount.mockImplementation(async id => structuredClone(accounts.get(id) ?? null));
   listAccounts.mockImplementation(async () => structuredClone([...accounts.values()]));
+  deleteAccount.mockImplementation(async id => accounts.delete(id));
+  autoLogTouchpoints.mockResolvedValue({ created: 0, matched: 0 });
   readdir.mockImplementation(async () => [...persisted.keys()].map(id => `${id}.json`));
   readJSONFile.mockImplementation(async (path, fallback) =>
     persisted.has(basename(path, '.json'))
@@ -191,6 +206,195 @@ describe('calendar cache mutation ownership', () => {
     missing.events.push({ id: 'unsaved' });
     expect((await loadCache(OTHER)).events).toEqual([]);
   });
+});
+
+describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => {
+  let app;
+  let timeline;
+  let touchpoints;
+
+  beforeEach(() => {
+    app = express();
+    app.use('/calendar', calendarRoutes);
+    timeline = new Map();
+    touchpoints = new Map();
+    recordEvents.mockImplementation(async rows => {
+      for (const row of rows) timeline.set(row.accountId, row);
+    });
+    autoLogTouchpoints.mockImplementation(async rows => {
+      for (const row of rows) touchpoints.set(row.calendarAccountId, row);
+      return { created: rows.length, matched: rows.length };
+    });
+    deleteEvents.mockImplementation(async ({ accountId }) => timeline.delete(accountId));
+    deleteAutoTouchpoints.mockImplementation(async ({ accountId }) => touchpoints.delete(accountId));
+  });
+
+  function syncFinishedEvent(beforeResponse = async () => {}) {
+    const endTime = new Date(Date.now() - 60_000).toISOString();
+    const startTime = new Date(Date.now() - 120_000).toISOString();
+    const title = 'Finished meeting';
+    const organizer = { email: 'alice@example.com' };
+    if (provider === 'Outlook') {
+      accounts.get(ACCOUNT).type = 'outlook-calendar';
+      syncOutlookCalendarApi.mockImplementationOnce(async () => {
+        await beforeResponse();
+        return { events: [{ externalId: 'finished', title, startTime, endTime, organizer }], status: 'success' };
+      });
+      return syncAccount(ACCOUNT, null);
+    }
+
+    accounts.get(ACCOUNT).subcalendars = [{ calendarId: 'a', enabled: true }];
+    getAuthenticatedClient.mockResolvedValueOnce({});
+    calendar.mockReturnValueOnce({ events: { list: async () => {
+      await beforeResponse();
+      return { data: { items: [{ id: 'finished', summary: title, start: { dateTime: startTime }, end: { dateTime: endTime }, organizer }] } };
+    } } });
+    return apiSyncAccount(ACCOUNT, null);
+  }
+
+  it.each(['Tribe', 'Timeline'])('writes finished events and drains a paused %s write before deletion', async store => {
+    expect(await syncFinishedEvent()).toMatchObject({ status: 'success', newEvents: 1 });
+    expect(timeline.get(ACCOUNT)).toMatchObject({ title: 'Finished meeting' });
+    expect(touchpoints.get(ACCOUNT)).toMatchObject({ summary: 'Finished meeting' });
+
+    const writing = barrier();
+    const resume = barrier();
+    const metadataRemoved = barrier();
+    const record = store === 'Tribe' ? autoLogTouchpoints : recordEvents;
+    const storeRows = record.getMockImplementation();
+    record.mockImplementationOnce(async rows => {
+      writing.release();
+      await resume.promise;
+      return storeRows(rows);
+    });
+    deleteAccount.mockImplementationOnce(async id => {
+      const removed = accounts.delete(id);
+      metadataRemoved.release();
+      return removed;
+    });
+    const syncing = syncFinishedEvent();
+    await writing.promise;
+    const deleting = request(app).delete(`/calendar/accounts/${ACCOUNT}`).then(response => response);
+    await metadataRemoved.promise;
+    // Give the delete route's microtasks a turn to reach the cache queue.
+    await new Promise(resolve => setImmediate(resolve));
+    const unlinkedWhileWriting = unlink.mock.calls.length > 0;
+    resume.release();
+    const [syncResult, deleteResponse] = await Promise.all([syncing, deleting]);
+
+    expect(syncResult.status).toBe('success');
+    expect(deleteResponse.status).toBe(204);
+    expect(unlinkedWhileWriting).toBe(false);
+    expect(accounts.has(ACCOUNT)).toBe(false);
+    expect(persisted.has(ACCOUNT)).toBe(false);
+    expect(timeline.has(ACCOUNT)).toBe(false);
+    expect(touchpoints.has(ACCOUNT)).toBe(false);
+  });
+
+  it('refuses provider results returned after deletion without writing any copies', async () => {
+    const fetching = barrier();
+    const response = barrier();
+    const syncing = syncFinishedEvent(() => {
+      fetching.release();
+      return response.promise;
+    }).catch(error => error);
+    await fetching.promise;
+    const deleted = await request(app).delete(`/calendar/accounts/${ACCOUNT}`);
+    response.release();
+
+    expect(deleted.status).toBe(204);
+    expect(await syncing).toMatchObject({ status: 404 });
+    expect(atomicWrite).not.toHaveBeenCalled();
+    expect(recordEvents).not.toHaveBeenCalled();
+    expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it('keeps sync successful when either derived store fails', async () => {
+    autoLogTouchpoints.mockRejectedValueOnce(new Error('Synthetic Tribe write failure'));
+    expect(await syncFinishedEvent()).toMatchObject({ status: 'success' });
+    expect(timeline.has(ACCOUNT)).toBe(true);
+    expect(touchpoints.has(ACCOUNT)).toBe(false);
+
+    recordEvents.mockRejectedValueOnce(new Error('Synthetic Timeline write failure'));
+    expect(await syncFinishedEvent()).toMatchObject({ status: 'success' });
+    expect(touchpoints.has(ACCOUNT)).toBe(true);
+  });
+});
+
+describe('Google provider event identity', () => {
+  function syncMcp(io, ...pages) {
+    pickCliProvider.mockReturnValueOnce({ provider: { id: 'claude-code' } });
+    runCliProviderPrompt.mockImplementationOnce(async ({ prompt }) => {
+      const [, timeMin, timeMax] = prompt.match(/date range (\S+Z) to (\S+Z)/);
+      return {
+        text: JSON.stringify({
+          calendars: [{ calendarId: 'a', timeMin, timeMax, complete: true, nextPageToken: null, events: pages.flat() }],
+        }),
+        exitCode: 0,
+      };
+    });
+    return mcpSyncAccount(ACCOUNT, io);
+  }
+
+  function syncApi(io, ...pages) {
+    getAuthenticatedClient.mockResolvedValueOnce({});
+    const list = vi.fn();
+    for (const [index, items] of pages.entries()) {
+      list.mockResolvedValueOnce({ data: { items, nextPageToken: index + 1 < pages.length ? `page-${index + 2}` : undefined } });
+    }
+    calendar.mockReturnValueOnce({ events: { list } });
+    return apiSyncAccount(ACCOUNT, io);
+  }
+
+  it.each([['MCP', syncMcp], ['API', syncApi]])(
+    'skips unidentified %s events on every replay and resumes windowed pruning on a clean batch',
+    async (_provider, sync) => {
+      accounts.get(ACCOUNT).subcalendars = [{ calendarId: 'a', name: 'Work', enabled: true }];
+      const io = { emit: vi.fn() };
+      const start = { dateTime: new Date(Date.now() - 120_000).toISOString() };
+      const end = { dateTime: new Date(Date.now() - 60_000).toISOString() };
+      const valid = { id: 'stable', summary: 'Finished meeting', start, end, organizer: { email: 'alice@example.com' } };
+      const malformed = [undefined, '', '  ', 7].map(id => ({ ...valid, id, summary: 'Unidentified meeting' }));
+      malformed.push(null);
+      await pushSyncEvents(ACCOUNT, 'a', 'Work', [
+        { id: 'omitted', start, end },
+        { id: 'outside-window', start: { dateTime: '2000-01-01T10:00:00Z' } },
+      ]);
+      recordEvents.mockClear();
+      autoLogTouchpoints.mockClear();
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await sync(io, malformed)).toMatchObject({
+          status: 'partial', newEvents: 0, pruned: 0, reason: expect.stringContaining('invalid provider event IDs'),
+        });
+      }
+      expect(recordEvents).not.toHaveBeenCalled();
+      expect(autoLogTouchpoints).not.toHaveBeenCalled();
+
+      const mixed = await sync(io, malformed, [valid]);
+      expect(mixed).toMatchObject({
+        status: 'partial', newEvents: 1, pruned: 0,
+        calendars: [{ calendarId: 'a', status: 'partial' }],
+      });
+      expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT, 'partial');
+      expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', expect.objectContaining({
+        status: 'partial', reason: expect.stringContaining('invalid provider event IDs'),
+      }));
+      const cached = persisted.get(ACCOUNT).events;
+      expect(cached.map(event => event.apiId)).toEqual(['omitted', 'outside-window', 'stable']);
+      const { id, externalId } = cached.find(event => event.apiId === valid.id);
+      const [activity] = recordEvents.mock.lastCall;
+      const [touchpoints] = autoLogTouchpoints.mock.lastCall;
+      expect(activity).toMatchObject([{ title: valid.summary, metadata: { externalId } }]);
+      expect(touchpoints).toMatchObject([{ summary: valid.summary, calendarEventId: externalId }]);
+
+      expect(await sync(io, [valid])).toMatchObject({ status: 'success', newEvents: 0, updated: 1, pruned: 1 });
+      expect(persisted.get(ACCOUNT).events.map(event => event.apiId)).toEqual(['outside-window', 'stable']);
+      expect(persisted.get(ACCOUNT).events[1]).toMatchObject({ id, externalId });
+      expect(recordEvents.mock.lastCall[0]).toMatchObject([{ dedupeKey: activity[0].dedupeKey }]);
+      expect(autoLogTouchpoints.mock.lastCall[0]).toMatchObject([{ dedupeKey: touchpoints[0].dedupeKey }]);
+    },
+  );
 });
 
 describe.each([

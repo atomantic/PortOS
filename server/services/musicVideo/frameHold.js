@@ -11,7 +11,7 @@
 import { rename, rm } from 'node:fs/promises';
 import { ServerError } from '../../lib/errorHandler.js';
 import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, findFfmpeg, probeVideoGeometry, runFfmpegProcess } from '../../lib/ffmpeg.js';
-import { steppedHoldPlan } from '../../lib/musicVideoProductionMedium.js';
+import { steppedHoldPlan } from '../../lib/musicVideo/musicVideoProductionMedium.js';
 
 /**
  * The `-filter_complex` graph for `parts` (tiling the file, from

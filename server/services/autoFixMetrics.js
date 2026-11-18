@@ -16,7 +16,7 @@
  * recovery".
  */
 
-import { getTaskDiagnostics } from './cosTaskStore.js';
+import { getTaskDiagnostics } from './cos/cosTaskStore.js';
 import { fixTierMeta } from './autoFixer.js';
 
 // A diagnostics-bearing task is "resolved" once its task reaches the terminal

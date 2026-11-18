@@ -24,8 +24,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { providerConnectionProfile, sameConnectionIdentity } from '../lib/providerConnections.js';
-import { planGraphReconciliation, reconciliationIsNoop } from '../lib/providerGraphRecords.js';
+import { providerConnectionProfile, sameConnectionIdentity } from '../lib/provider/providerConnections.js';
+import { planGraphReconciliation, reconciliationIsNoop } from '../lib/provider/providerGraphRecords.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -39,7 +39,7 @@ const store = {
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
-vi.mock('../services/providerGraphStore.js', () => store);
+vi.mock('../services/provider/providerGraphStore.js', () => store);
 
 const providerService = {
   getAllProviders: vi.fn(),
@@ -52,7 +52,7 @@ vi.mock('../lib/aiToolkitState.js', async (importOriginal) => ({
   requireToolkit: () => ({ services: { providers: providerService } }),
 }));
 
-const graph = await import('../services/providerGraph.js');
+const graph = await import('../services/provider/providerGraph.js');
 const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const OLLAMA_ANTHROPIC = '11111111-1111-4111-8111-111111111111';

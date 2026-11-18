@@ -311,7 +311,7 @@ async function publicationGuard(app, git, defaultBranch, deps) {
     return { reason: 'publish-pr-unreadable' };
   }
   const check = deps.checkSnapshotPublicationOwnership
-    || (await import('./cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
+    || (await import('./cos/cosClaimOwnership.js')).checkSnapshotPublicationOwnership;
   const ownership = await check({ appId: app.id, branch: QUALITY_SNAPSHOT_BRANCH, prUrl: pr.prUrl }).catch(() => null);
   if (ownership?.admitted !== true) return { reason: ownership?.reason || 'ownership-unreadable' };
   const remote = await git.execGit(

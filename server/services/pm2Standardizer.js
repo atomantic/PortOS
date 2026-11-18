@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename, relative } from 'path';
 import { exec, spawn } from '../lib/childProcess.js';
 import { promisify } from 'util';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';

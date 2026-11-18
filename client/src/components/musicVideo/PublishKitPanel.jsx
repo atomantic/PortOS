@@ -1,4 +1,4 @@
-import { publishExportLabel } from '../../../../server/lib/musicVideoPublishExports.js';
+import { publishExportLabel } from '../../../../server/lib/musicVideo/musicVideoPublishExports.js';
 import { useEffect, useRef, useState } from 'react';
 import { Package, Download, Copy, Sparkles, Captions, ListOrdered } from 'lucide-react';
 import useProviderModels from '../../hooks/useProviderModels.js';

@@ -8,7 +8,7 @@
  * deletion removes it. Runs without the version marker are not retroactively failed.
  */
 import { auditFindingsSchema, auditFindingsCheckpointPath, auditFindingsInstructions, parseAuditFindings } from '../lib/auditFindings.js';
-import { doneSentinelPath, parseSentinelPayload } from '../lib/agentSentinel.js';
+import { doneSentinelPath, parseSentinelPayload } from '../lib/agent/agentSentinel.js';
 import { safeJSONParse, tryReadFile } from '../lib/jsonIo.js';
 import { execGit } from '../lib/execGit.js';
 
@@ -69,7 +69,7 @@ export async function buildAuditFindingsPrompt(task, agentId) {
   const instructions = auditFindingsInstructions(agentId);
   const priorId = task.metadata?.resumedFromAgentId;
   if (!priorId) return instructions;
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
   const prior = await getAgentRecord(priorId);
   const report = auditFindingsSchema.safeParse(prior?.metadata?.auditFindings?.report).data;
   if (!report) return `${instructions}\nThe predecessor's findings register is unavailable. Inspect the retained checkpoint and output before declaring disposition complete; do not treat missing evidence as zero findings.`;
@@ -78,7 +78,7 @@ export async function buildAuditFindingsPrompt(task, agentId) {
 
 /** Read checkpoints even on interruption; never file issues or dispatch providers here. */
 export async function settleAuditFindings({ task, agentId, workspacePath }, deps = {}) {
-  const lifecycle = deps.getAgentRecord && deps.updateAgent ? deps : await import('./cosAgentLifecycle.js');
+  const lifecycle = deps.getAgentRecord && deps.updateAgent ? deps : await import('./cos/cosAgentLifecycle.js');
   const { getAgentRecord, updateAgent } = lifecycle;
   const existing = await getAgentRecord(agentId);
   const saved = existing?.metadata?.auditFindings;

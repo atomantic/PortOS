@@ -11,7 +11,7 @@
 // Re-exports the server's stage vocabulary and brief normalizer (a dependency-light leaf) and owns the
 // start form's draft ↔ wire mapping and the run's display helpers.
 
-import { musicVideoMediaMode } from '../../../server/lib/musicVideoMediaPolicy.js';
+import { musicVideoMediaMode } from '../../../server/lib/musicVideo/musicVideoMediaPolicy.js';
 import { llmStagesDraftFrom, llmStagesFromDraft } from './musicVideoAutomation.js';
 
 import {
@@ -19,14 +19,14 @@ import {
   AUTONOMOUS_DEFAULT_LIMITS, AUTONOMOUS_DEFAULT_TOOLS, AUTONOMOUS_LIVE_STATUSES, AUTONOMOUS_SONG_SOURCES, AUTONOMOUS_STAGES,
   ORCHESTRATOR_CHECKPOINTS, SUNO_MODEL_PATTERN,
   normalizeLocalMusicOptions,
-} from '../../../server/lib/musicVideoAutonomous.js';
+} from '../../../server/lib/musicVideo/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_SONG_SOURCE_LABELS = Object.freeze({
   suno: 'Suno (PortOS Browser)',
   local: 'Local engine (Music Studio)',
 });
 
-export { AUTONOMOUS_AUTO_APPROVE_STAGES, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, isOrchestratedRun, AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, LOCAL_MUSIC_CODE_LANGUAGES, LOCAL_MUSIC_CODE_LANGUAGE_LABELS, LOCAL_MUSIC_TYPES, LOCAL_MUSIC_TYPE_LABELS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium, describeAutonomousWait } from '../../../server/lib/musicVideoAutonomous.js';
+export { AUTONOMOUS_AUTO_APPROVE_STAGES, AUTONOMOUS_LIMIT_BOUNDS, ORCHESTRATOR_CHECKPOINTS, isOrchestratedRun, AUTONOMOUS_CHECKPOINT_IDS, AUTONOMOUS_SONG_SOURCES, LOCAL_MUSIC_CODE_LANGUAGES, LOCAL_MUSIC_CODE_LANGUAGE_LABELS, LOCAL_MUSIC_TYPES, LOCAL_MUSIC_TYPE_LABELS, SUNO_LIMITS, SUNO_VOCAL_GENDERS, autonomousMedium, describeAutonomousWait } from '../../../server/lib/musicVideo/musicVideoAutonomous.js';
 
 export const AUTONOMOUS_CHECKPOINT_LABELS = Object.freeze({
   ...Object.fromEntries(AUTONOMOUS_STAGES.map((stage) => [stage.id, stage.label])),

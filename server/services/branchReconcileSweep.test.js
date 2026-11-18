@@ -18,16 +18,16 @@ vi.mock('./branchReconcile.js', async (importOriginal) => ({
   reconcile: vi.fn(),
   formatInFlightForPrompt: vi.fn(async (branches) => branches.map(b => b.branch).join(',')),
 }));
-vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn(async () => []) }));
-vi.mock('./agentState.js', async (importOriginal) => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
+vi.mock('./cos/cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: vi.fn(async () => []) }));
+vi.mock('./agent/agentState.js', async (importOriginal) => ({ ...await importOriginal(), getActiveAgentIds: () => new Set() }));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 vi.mock('./apps.js', () => ({ getAppById: vi.fn(async () => null) }));
 
 import { reconcile } from './branchReconcile.js';
-import { readClaimOwnershipAgents } from './cosClaimOwnership.js';
-import { applyPerpetualDrainCap, resolveBranchReconcileBlock } from './cosTaskPreStepBlocks.js';
+import { readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
+import { applyPerpetualDrainCap, resolveBranchReconcileBlock } from './cos/cosTaskPreStepBlocks.js';
 import * as schedule from './taskSchedule.js';
-import { perpetualRefillPlan } from './cos.js';
+import { perpetualRefillPlan } from './cos/cos.js';
 
 const app = { id: 'example-app', name: 'Example App', repoPath: '/example/repo' };
 const branch = name => ({ branch: name, state: 'NEEDS_PR', head: name });

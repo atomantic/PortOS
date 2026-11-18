@@ -27,12 +27,12 @@
  * route that acts on it, so no `musicVideoProjects` schema bump is needed.
  */
 
-import { captureTakeDependencies, musicVideoDependencyChanges, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
+import { captureTakeDependencies, musicVideoDependencyChanges, musicVideoTakeChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
-import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
+import { normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { ensureSceneTakes, reviewSceneTake, TAKE_SLOT } from './takes.js';
 import { projectExcerpts } from './excerpt.js';
 
@@ -430,7 +430,7 @@ export function startDependencyRepairOnProject(project, impact, { basis }, now =
   if (active?.dependencyBasis === basis) return { project, revision: active, skippedSceneIds: [] };
   if (active) throw revisionError(409, 'REVISION_IN_PROGRESS', 'Finish or cancel the open revision before repairing dependencies', { revisionId: active.id });
   if (basis !== impact.basis) throw revisionError(409, 'DEPENDENCY_PREVIEW_CHANGED', 'Assets changed after the repair preview — review the impact again');
-  if (!impact.shots.length && !impact.evidence.length) throw revisionError(422, 'NOTHING_TO_REVISE', 'All recorded dependencies are current');
+  if (!impact.shots.length && !impact.evidence.length) throw revisionError(422, 'NOTHING_TO_REVISE', 'No recorded dependency changes are available to repair');
   if (codeFirst(project)) {
     assertCodeFirstPlan(project);
     if (impact.shots.some((shot) => mediumFor(project, shot.sceneId) !== 'generated-footage')) {

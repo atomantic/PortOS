@@ -44,6 +44,7 @@ import { cp, readdir, readFile, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';
+import { pathWithin } from '../../lib/pathWithin.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS, ensureDir, sha256File } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
@@ -62,7 +63,7 @@ import {
 import { parseRhetoricJson, scoreRhetoricReference, RHETORIC_REFERENCE_SET } from '../lib/postRhetoric.js';
 import { listRuntimeModels, runtimeEndpoint, runtimeApiKey } from './localModelAssessments.js';
 import { runLocalLlmTest, runEndpointLlmTest } from './localLlmPlayground.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 import { resolveOpencodeTuiProvider, runOpencodeTask } from './opencodeTask.js';
 import { ollamaBadgeCapabilities } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';
@@ -161,10 +162,13 @@ export async function loadVisionFixture() {
   return visionFixtureCache;
 }
 
+/** A file of the shipped sandbox fixture; a name that climbs out of it throws (`pathWithin`). */
+export const sandboxFixturePath = (name) => pathWithin(SANDBOX_FIXTURE, name);
+
 async function sandboxFixtureHashes() {
   if (fixtureHashCache) return fixtureHashCache;
   fixtureHashCache = Object.fromEntries(await Promise.all(
-    Object.entries(SANDBOX_FILES).map(async ([role, name]) => [role, await sha256File(join(SANDBOX_FIXTURE, name))]),
+    Object.entries(SANDBOX_FILES).map(async ([role, name]) => [role, await sha256File(sandboxFixturePath(name))]),
   ));
   return fixtureHashCache;
 }

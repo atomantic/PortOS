@@ -14,10 +14,10 @@ import {
   agentActivityAgentQuerySchema,
   agentActivityStatsQuerySchema,
 } from '../lib/validation.js';
-import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cosValidation.js';
-import * as agentActivity from '../services/agentActivity.js';
-import * as runEventLog from '../services/agentRunEventLog.js';
-import * as runReconciler from '../services/agentRunReconciler.js';
+import { runEventsQuerySchema, runEventProjectionsQuerySchema, runEventProjectionIdSchema, runEventReconcileSchema } from '../lib/cos/cosValidation.js';
+import * as agentActivity from '../services/agent/agentActivity.js';
+import * as runEventLog from '../services/agent/agentRunEventLog.js';
+import * as runReconciler from '../services/agent/agentRunReconciler.js';
 
 const router = Router();
 
@@ -61,7 +61,7 @@ router.get('/agent/:agentId/stats', asyncHandler(async (req, res) => {
 // load-bearing and these can stay at the bottom of the file.
 // Every handler is a pure read: the ledger is append-only and is written from
 // the agent lifecycle, never from HTTP. Payloads were redacted at append time
-// (see `lib/agentRunEvents.js`), so nothing here re-redacts — a route that had
+// (see `lib/agent/agentRunEvents.js`), so nothing here re-redacts — a route that had
 // to redact on read would mean unredacted bytes were already on disk.
 // ---------------------------------------------------------------------------
 

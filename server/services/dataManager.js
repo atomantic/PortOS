@@ -7,7 +7,7 @@ import { execFile } from '../lib/childProcess.js';
 import { promisify } from 'util';
 import { parseFilesystemStats, sha256Text } from '../lib/fileCore.js';
 import { PATHS, ensureDir, isTopLevelEntryName, rmGuarded, writeFileGuarded } from '../lib/fileUtils.js';
-import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistent/persistentMindAttachmentOwnership.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import {
@@ -24,7 +24,7 @@ const DATA_DIR = PATHS.data;
 // A missing entry doesn't just show "Unknown category" on the Data Manager — it
 // also strips the Archive/Purge affordances, so the biggest thing on a cleanup
 // page becomes the one thing the cleanup page refuses to act on (issue #3285).
-// `dataManager.categories.test.js` enumerates the directories the codebase can
+// `dataManager.categories.guard.test.js` enumerates the directories the codebase can
 // emit and fails when one of them is unclassified.
 //
 // Flag semantics — be conservative, the user cannot undo a purge:

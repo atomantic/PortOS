@@ -6,11 +6,11 @@ import {
   cosToolCallParamsSchema,
   cosToolCallSchema,
   cosToolCatalogQuerySchema,
-} from '../lib/cosToolContracts.js';
+} from '../lib/cos/cosToolContracts.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { loadState } from '../services/cosState.js';
+import { loadState } from '../services/cos/cosState.js';
 import { getSettings } from '../services/settings.js';
 import {
   executeCosToolCall,
@@ -18,7 +18,7 @@ import {
   getCosToolCall,
   getCosToolCatalog,
   readCosToolRecipeCatalog,
-} from '../services/cosToolRegistry.js';
+} from '../services/cos/cosToolRegistry.js';
 
 const router = Router();
 
@@ -32,7 +32,7 @@ router.get('/tools', asyncHandler(async (req, res) => {
     : state.config?.persistentMindCapabilities;
   const recipes = await readCosToolRecipeCatalog({ scope: query.scope });
   const reportAccess = query.scope === 'mind'
-    ? await import('../services/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root: state })) : undefined;
+    ? await import('../services/persistent/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root: state })) : undefined;
   const catalog = getCosToolCatalog({
     scope: query.scope,
     intent: query.intent,

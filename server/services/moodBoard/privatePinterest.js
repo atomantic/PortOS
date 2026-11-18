@@ -8,7 +8,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
-import { isBlockedIngestHost } from '../../lib/catalogValidation.js';
+import { isBlockedIngestHost } from '../../lib/catalog/catalogValidation.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { getHealthStatus, navigateToUrlPinned } from '../browserService.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';

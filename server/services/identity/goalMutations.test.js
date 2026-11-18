@@ -28,7 +28,7 @@ vi.mock('../mortalLoomStore.js', () => ({
 vi.mock('../userTimezone.js', () => ({ userLocalToday: async () => '2026-01-01' }));
 vi.mock('../meatspaceCalendar.js', () => ({ getActivities: async () => [] }));
 vi.mock('../genome.js', () => ({ getGenomeSummary: async () => null }));
-vi.mock('../providers.js', () => ({ getActiveProvider: async () => ({ defaultModel: 'example' }), getProviderById: async () => null }));
+vi.mock('../provider/providers.js', () => ({ getActiveProvider: async () => ({ defaultModel: 'example' }), getProviderById: async () => null }));
 vi.mock('../aiProvider.js', () => ({
   parseLLMJSON: JSON.parse,
   callProviderAISimple: async () => {

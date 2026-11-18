@@ -77,8 +77,8 @@ export const CODE_TOOLS = [
       // Dynamic import: cos.js is a large module with its own import graph;
       // importing it lazily keeps tools.js load-time light and dodges any
       // cos → voice cycle.
-      const { addTask, reviveBlockedTask } = await import('../../cosTaskStore.js');
-      const { isRunning } = await import('../../cos.js');
+      const { addTask, reviveBlockedTask } = await import('../../cos/cosTaskStore.js');
+      const { isRunning } = await import('../../cos/cos.js');
       const provider = typeof codeAgent.provider === 'string' ? codeAgent.provider.trim() : '';
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
@@ -93,7 +93,7 @@ export const CODE_TOOLS = [
       // substitute the first enabled CLI/TUI provider, or fail with actionable
       // copy if none exists. A pin that doesn't resolve to a known provider is
       // left as-is (the spawner surfaces the unknown-provider error).
-      const { getActiveProvider, getAllProviders, getProviderById } = await import('../../providers.js');
+      const { getActiveProvider, getAllProviders, getProviderById } = await import('../../provider/providers.js');
       // Same named policy the CoS agent resolver and the fallback chain apply,
       // so "can this route run agent work?" has one answer across all three.
       const isCodeCapable = (p) => isCallerModeEligible(p, 'agent-harness');
@@ -190,9 +190,9 @@ export const CODE_TOOLS = [
       properties: {},
     },
     execute: async () => {
-      const { loadState } = await import('../../cosState.js');
-      const { getAllTasks } = await import('../../cosTaskStore.js');
-      const { isTruthyMeta } = await import('../../agentState.js');
+      const { loadState } = await import('../../cos/cosState.js');
+      const { getAllTasks } = await import('../../cos/cosTaskStore.js');
+      const { isTruthyMeta } = await import('../../agent/agentState.js');
 
       const state = await loadState();
       const runningAgents = Object.values(state?.agents || {}).filter((a) => a?.status === 'running');

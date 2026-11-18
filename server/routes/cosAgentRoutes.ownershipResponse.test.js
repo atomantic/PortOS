@@ -6,21 +6,21 @@ import { startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 const fixture = vi.hoisted(() => ({ state: null, apiBase: '', unreadable: false, stateGate: null, onStateQueued: null }));
-vi.mock('../services/cosAgentArchive.js', () => ({}));
-vi.mock('../services/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cos/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cos/cosAgentFeedback.js', () => ({}));
 // Complete archived-record cache contract (always a miss) so the branch-completion policy lookup runs its normal path.
-vi.mock('../services/cosAgentIndex.js', () => ({
+vi.mock('../services/cos/cosAgentIndex.js', () => ({
   archivedRecordCacheEpoch: () => 0,
   getCachedArchivedRecord: () => undefined,
   cacheArchivedRecord: () => {},
   pruneArchivedRecordCache: () => {},
   invalidateArchivedRecord: () => {},
 }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({}));
-vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cos/cosHealthMonitor.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 vi.mock('../services/apps.js', () => ({ getAppById: async () => ({ repoPath: '/synthetic/repo' }) }));
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   readAgentsStateForSafetyCheck: async () => ({ trusted: !fixture.unreadable, agents: fixture.unreadable ? null : fixture.state.agents }),
   withStateLock: async work => {
     if (fixture.stateGate) { fixture.onStateQueued(); await fixture.stateGate; }
@@ -35,11 +35,11 @@ vi.mock('../services/branchCompletionPolicy.js', async importOriginal => {
     readPolicies: async () => Object.values(fixture.state.agents),
   }) };
 });
-vi.mock('../services/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
-vi.mock('../services/cosAgentLifecycle.js', () => ({
+vi.mock('../services/cos/cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({
   getAgents: async () => fixture.unreadable ? null : Object.values(fixture.state.agents),
 }));
-vi.mock('../services/agentState.js', () => ({ getActiveAgentIds: () => [] }));
+vi.mock('../services/agent/agentState.js', () => ({ getActiveAgentIds: () => [] }));
 vi.mock('../services/worktreeManager.js', async (importOriginal) => ({
   ...await importOriginal(),
   listWorktrees: async () => [{ branch: 'refs/heads/claim/issue-101', path: '/synthetic/repo/worktree' }],
@@ -52,7 +52,7 @@ vi.mock('../lib/networkExposure.js', () => ({ localApiBaseUrl: () => fixture.api
 
 import routes from './cosAgentRoutes.js';
 import { formatInFlightForPrompt } from '../services/branchReconcile.js';
-import { updateClaimOwnership, withClaimOwnershipLock, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } from '../services/cosClaimOwnership.js';
+import { updateClaimOwnership, withClaimOwnershipLock, CLAIM_OWNERSHIP_QUEUE_TIMEOUT_MS } from '../services/cos/cosClaimOwnership.js';
 
 const execute = promisify(execFile);
 const coordinator = 'synthetic-coordinator';

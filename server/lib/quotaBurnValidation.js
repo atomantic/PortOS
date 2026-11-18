@@ -19,7 +19,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { familyForProviderId } from './providerFamilies.js';
+import { familyForProviderId } from './provider/providerFamilies.js';
 import {
   QUOTA_BURN_BOUNDS,
   QUOTA_BURN_FAMILIES,

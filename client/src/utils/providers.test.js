@@ -4,7 +4,10 @@
 // the 69 `utils/providers` importers notices. The declaring modules re-export
 // their shared tables from `server/lib`, so what is pinned here is the
 // client-side behaviour built on top of them.
-import * as serverProviderTypes from '../../../server/lib/providerTypes.js';
+import * as serverProviderTypes from '../../../server/lib/provider/providerTypes.js';
+import { apiGenerationOptions } from '../../../server/lib/aiToolkit/internal/generationOptions.js';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../server/lib/modelPinMembership.js';
+import { PROVIDER_GATEWAY_IDS } from '../../../server/lib/provider/providerGateways.js';
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -101,7 +104,7 @@ import SHIPPED_PROVIDERS from '../../../data.reference/providers.json';
 // dependency-free — it imports nothing outside the vendored aiToolkit.
 import { withRefreshCapabilityList } from '../../../server/lib/aiToolkit/internal/modelFetchers.js';
 import * as providerTypes from './providerTypes.js';
-import * as serverProviderModels from '../../../server/lib/providerModels.js';
+import * as serverProviderModels from '../../../server/lib/provider/providerModels.js';
 import * as serverOllamaBacked from '../../../server/lib/aiToolkit/internal/ollamaBacked.js';
 import * as serverToolkitConstants from '../../../server/lib/aiToolkit/constants.js';
 
@@ -153,7 +156,7 @@ describe('resolveCliEffort', () => {
 });
 
 // These drive the Effort/model pickers in the CoS task + schedule forms. The
-// client helper delegates to server/lib/providerModels.js and adds the
+// client helper delegates to server/lib/provider/providerModels.js and adds the
 // published-field fallback, so pin both sides together here.
 describe('effortLevelsForProvider', () => {
   const CASES = [
@@ -245,6 +248,28 @@ describe('generationControlsFor', () => {
     ['vendor CLI', { id: 'claude-code', type: 'cli', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
     expect(generationControlsFor(provider)).toEqual(expected);
+  });
+});
+
+describe('generation controls match direct API forwarding', () => {
+  const generation = { temperature: 0.73, topP: 0.91, thinking: false };
+  const localBackends = Object.keys(LOCAL_RUNTIME_MANAGE_URLS).map((id) => [id, { [`${id}Backed`]: true }]);
+
+  it.each([
+    ...localBackends,
+    ['ollama (native provider ID)', { id: 'ollama' }],
+    ...PROVIDER_GATEWAY_IDS.map((id) => [id, { id }]),
+  ])('direct API on %s', (_id, identity) => {
+    const provider = { type: 'api', ...identity, ...generation };
+    const options = apiGenerationOptions(provider);
+
+    const controls = {
+      temperature: options.temperature === generation.temperature,
+      topP: options.top_p === generation.topP,
+      thinking: typeof (options.think ?? options.chat_template_kwargs?.enable_thinking) === 'boolean',
+    };
+
+    expect(generationControlsFor(provider)).toEqual(Object.values(controls).some(Boolean) ? controls : null);
   });
 });
 
@@ -1794,7 +1819,7 @@ describe('credentialSource', () => {
     // and authenticates against nothing, so the account is not one of its
     // prerequisites — without this the card claims "No ChatGPT account is signed
     // in" and, worse, parks in UNKNOWN awaiting a read that never matters.
-    // The server's own isCodexSubscriptionProvider (server/lib/providerModels.js),
+    // The server's own isCodexSubscriptionProvider (server/lib/provider/providerModels.js),
     // re-exported — one rule for the card and the prerequisite router.
     const local = SHIPPED_PROVIDERS.providers['codex-ollama'];
     expect(local.ollamaBacked).toBe(true);

@@ -31,7 +31,7 @@ export const AUDIT_TASK_TYPE_BY_PRESET_ID = Object.freeze(Object.fromEntries(
 /** Autonomy a custom job needs for an UNATTENDED burn (`quotaBurnInvoke.js#unattendedApprovalRefusal`); a legacy `agent-prompt` step ran with no approval, so a converted job needing one would silently stop burning. */
 const UNATTENDED_AUTONOMY_LEVEL = 'yolo';
 
-/** Workflow params a recognized preset step may have DIVERGED on, carried as per-invocation overrides. Restricted to keys `sanitizeTaskMetadata` (`lib/cosValidation.js`) accepts, since the generator sanitizes run overrides through that allowlist. */
+/** Workflow params a recognized preset step may have DIVERGED on, carried as per-invocation overrides. Restricted to keys `sanitizeTaskMetadata` (`lib/cos/cosValidation.js`) accepts, since the generator sanitizes run overrides through that allowlist. */
 const MATERIAL_PRESET_PARAMS = Object.freeze(['useWorktree', 'openPR', 'simplify', 'discardWorktree']);
 
 /** Job-id alphabet, matching what `createJob` mints. */

@@ -80,7 +80,7 @@ vi.mock('../services/specDecodeModels.js', () => ({
   cancelSpecDecodeModelDownload: vi.fn(),
   removeSpecDecodeModel: vi.fn(),
 }));
-vi.mock('../services/providerReadiness.js', () => ({
+vi.mock('../services/provider/providerReadiness.js', () => ({
   resetProviderReadinessCache: vi.fn(),
 }));
 vi.mock('../services/huggingFaceCatalog.js', () => ({

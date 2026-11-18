@@ -13,7 +13,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { MIND_TOOL_RECIPE_SCHEMA_VERSION, validateMindToolRecipe } from '../lib/mindToolRecipes.js';
 
 const catalog = async () => {
-  const { getCosToolCatalog } = await import('./cosToolRegistry.js');
+  const { getCosToolCatalog } = await import('./cos/cosToolRegistry.js');
   return getCosToolCatalog({ scope: 'all' }).tools;
 };
 export const validateRecipe = async (definition) => validateMindToolRecipe(definition, await catalog());

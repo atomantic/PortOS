@@ -18,11 +18,19 @@ There is no barrel: import the module that declares what you need.
 
 Modules are named camelCase with a domain prefix (`database*`, `fableLoom*`, `maintenance*`,
 `musicVideo*`, …); search a prefix when a term finds a neighbour but not the exact helper.
+The music-video helpers live in `musicVideo/` (#16561), its own catalog directory: the default
+search covers it, and `--dir server/lib/musicVideo` narrows to it.
 
 ## Subdirectories and generated indexes
 
 | Path | Purpose |
 |---|---|
+| `agent/` | Agent request schemas, execution profiles, run-event helpers, and completion contracts. Orchestration lives in `server/services/agent/`. |
+| `catalog/` | Catalog ingredient types, validation, identity, and projections. Catalog services live in `server/services/catalog/`, `catalogDB/`, and `catalogIdentity/`. |
+| `cos/` | Chief of Staff validation, persistence projections, federation policy, and tool contracts. Orchestration lives in `server/services/cos/`. |
+| `musicVideo/` | Pure Music Video helpers and request schemas (`musicVideo*.js`): shot timing and prompts, cast and conditioning, effects, previz, validation. Orchestration stays in `server/services/musicVideo/`; Music Studio helpers (`musicDuration.js`, `musicDesignerValidation.js`) stay flat. `musicVideo/moduleSummaries.test.js` enforces its headers. |
+| `persistent/` | Persistent Mind capabilities, validation, policy, and runtime data projections. Orchestration lives in `server/services/persistent/`. |
+| `provider/` | Provider models, execution options, harness and gateway registries, and configuration projections. Orchestration lives in `server/services/provider/`. |
 | `editorial/` | Extensible editorial-check registry (#1284) — `EDITORIAL_CHECKS` + fail-fast guards + lookup/state helpers. See `editorial/README.md`. The runner that executes checks lives at `server/services/pipeline/editorial/checkRunner.js`. |
 | `aiToolkit/` | Vendored toolkit (providers + runner + prompts + status). See `aiToolkit/index.js`. `aiToolkit/endpointGuard.js` is the public SSRF / key-exfiltration guard for provider `endpoint` URLs (`evaluateSecretEndpoint` / `assertSecretEndpoint`) — import it from there, not from `internal/`. `aiToolkit/internal/ollamaBacked.js` also declares `clampToRuntimeContextWindow(provider, planned)` — what an Ollama `num_ctx` means to a context window: an upper bound over every planning rung (a typed override included), and the answer when nothing else declared one. The budgeter (`services/stageRunner.js`), the pre-dispatch gate (`aiToolkit/providerStatus.js#knownContextWindow`), the untrusted-content abuse guard (`services/untrustedContent.js`, via `knownContextWindow` — a deep import kept off `stageRunner.js`'s heavier closure since it sits on a request path) and the browser's provider-card meter all import it from there rather than restating it (#7466, #7473). |
 | `promptStageCallSites.generated.json` | Generated `stageKey -> [server source paths]` index of every prompt stage `server/` names by literal key (plus interpolated-prefix stages like `pipeline-panel-${id}`). Regenerate with `node scripts/generate-prompt-stage-call-sites.js`; `scripts/generate-prompt-stage-call-sites.test.js` fails on drift. Never hand-edit. |

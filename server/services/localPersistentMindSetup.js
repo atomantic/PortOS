@@ -16,14 +16,14 @@ import {
   localPersistentMindRecommendation,
   matchesLocalPersistentMindModel,
 } from '../lib/localPersistentMindRecommendation.js';
-import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { normalizePersistentMindProfile } from '../lib/persistent/persistentMindProfile.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { getNavPageForPath } from '../lib/navManifest.js';
-import { getProviderById, updateProvider } from './providers.js';
+import { getProviderById, updateProvider } from './provider/providers.js';
 import { listModels } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';
-import { getConfig } from './cosState.js';
-import { updateConfig } from './cos.js';
+import { getConfig } from './cos/cosState.js';
+import { updateConfig } from './cos/cos.js';
 
 const STEP_IDS = Object.freeze([
   'recommendation',

@@ -131,7 +131,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
   }, [history.removeItem, pendingFeedback.refetch, mounted]);
 
   // ResumeAgentModal builds a NEW task prompt out of `metadata.taskDescription`,
-  // and the listing carries a bounded copy of it (server/lib/cosAgentListProjection.js).
+  // and the listing carries a bounded copy of it (server/lib/cos/cosAgentListProjection.js).
   // Hydrate BEFORE opening, or a long description would be resumed clipped —
   // silently, since the dialog shows exactly what it would send. The await costs
   // nothing for the >90% of runs the listing carried whole (no request is made),

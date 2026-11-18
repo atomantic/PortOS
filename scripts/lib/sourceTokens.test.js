@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { moduleImports } from './sourceTokens.js';
+import { moduleImports, tokenize } from './sourceTokens.js';
 
 describe('no-install module import extraction', () => {
   it('ignores comment prose, quoted fixtures, template text and regex source', () => {
@@ -59,5 +59,18 @@ describe('no-install module import extraction', () => {
     for (const value of ['value', 'value++', 'value--', 'call()', 'value.catch()', 'value?.catch()', 'value.with()', 'value.if()', 'rates.of', 'rates?.of', 'rates.return', 'rates.await']) {
       expect(moduleImports(`const ratio = ${value} / import("./real.js") / divisor;`).deferred).toEqual(['./real.js']);
     }
+  });
+});
+
+describe('string tokens', () => {
+  // The test memo resolves a path from literal text (scripts/lib/testMemo.js): an escape left undecoded
+  // names a different file, so `'\\x2e\\x2e/x'` would be read as a name instead of a climb.
+  it('decodes hex, unicode and line-continuation escapes in strings and templates', () => {
+    const values = (source) => tokenize(source).filter((token) => token.t === 's' || token.t === 'tpl').map((token) => token.v ?? token.quasis.join('|'));
+    expect(values("const a = '\\x2e\\x2e/\\u0066\\u{30}.json';")).toEqual(['../f0.json']);
+    expect(values('const b = `\\x2e\\u002e/${x}\\u{1F600}`;')).toEqual(['../|\u{1F600}']);
+    expect(values("const c = 'a\\\nb\\n\\t\\\\';")).toEqual(['ab\n\t\\']);
+    // Not an escape sequence: the characters stand for themselves.
+    expect(values("const d = '\\xZZ \\u12 \\q';")).toEqual(['xZZ u12 q']);
   });
 });

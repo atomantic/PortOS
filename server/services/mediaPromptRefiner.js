@@ -2,7 +2,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { extractNonPlaceholderJson } from '../lib/jsonExtract.js';
 import { clampToCharLimit, trimTo } from '../lib/textUtils.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { promptAddition } from '../lib/modelInput.js';
 

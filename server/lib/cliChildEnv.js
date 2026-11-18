@@ -22,12 +22,12 @@ import {
   isClaudeCommand,
   parseOpencodeConfigContent,
   opencodeConfigIsLocalOnly,
-} from './providerModels.js';
+} from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';
 import { buildSafeCliBaseEnv, withTorchCompilerCacheEnv } from './processEnv.js';
-import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agentExecutionProfiles.js';
+import { isPublicReviewNoToolProfile, isPublicReviewRestrictedProfile } from './agent/agentExecutionProfiles.js';
 
 // Claude Code defaults to 32K output tokens; thinking-capable local models can
 // exceed that and wedge at an empty composer. Widened only for a Claude harness
@@ -233,7 +233,7 @@ export function buildPublicReviewActionsCliEnv(env = {}) {
  * @param {string|null} [options.model] - see `composeProviderEnv`.
  * @param {string|undefined|null} options.cwd - the directory being handed to
  *   `spawn`/`pty.spawn`; `PWD` is pinned to it (see `withSpawnCwdEnv`). Pass it
- *   whenever the spawn names a cwd; `spawnCwd.test.js` only counts such a call.
+ *   whenever the spawn names a cwd; `spawnCwd.guard.test.js` only counts such a call.
  * @param {object|null} [options.extra] - see `composeProviderEnv`.
  * @param {object|null} [options.bootstrapEnv] - Explicit credential-command output; only recognized auth keys pass, in ordinary runs or an opted-in no-tool review.
  * @param {boolean} [options.guard=false] - prepend the pm2 guard shim onto the

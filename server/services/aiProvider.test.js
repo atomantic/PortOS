@@ -8,7 +8,7 @@ const { statusOp } = vi.hoisted(() => ({
   statusOp: { update: vi.fn(), complete: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('../services/providers.js', () => ({ getAllProviders: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn() }));
 const { recordRunUsage } = vi.hoisted(() => ({ recordRunUsage: vi.fn(async () => {}) }));
 vi.mock('./usage.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -153,6 +153,18 @@ describe('callProviderAISimple completion classification', () => {
     expect(statusOp.complete).not.toHaveBeenCalled();
   });
 
+  // #16614: the untracked leg applies the same refusal as the tracked run.
+  it('refuses an over-window prompt to an Ollama provider with numCtx, sending nothing', async () => {
+    respondWith({ message: { content: 'never' }, done: true });
+    const ollama = { id: 'ollama-remote', name: 'Remote Ollama', type: 'api', endpoint: 'http://ollama.example.com:11434/v1', numCtx: 1000 };
+
+    const result = await callProviderAISimple(ollama, 'model-1', 'word '.repeat(2000), {});
+
+    expect(result.error).toMatch(/^Remote Ollama \(model-1\): known 1000-token context is below the \d+-token request budget$/);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(statusOp.error).toHaveBeenCalledTimes(1);
+  });
+
   it('reports a usable completion as success', async () => {
     respondWith({ choices: [{ message: { content: 'a real answer' } }] });
 
@@ -169,7 +181,7 @@ describe('callProviderAISimple completion classification', () => {
 // Codex ChatGPT subscription as a text transport (#5590)
 // ---------------------------------------------------------------------------
 
-const { getAllProviders } = await import('./providers.js');
+const { getAllProviders } = await import('./provider/providers.js');
 const { startAIOp } = await import('./aiStatusEvents.js');
 const { resolveTextProvider, resolveAPIProvider } = await import('./aiProvider.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
@@ -638,10 +650,10 @@ describe('provider review preparation deadline', () => {
   });
 });
 
-describe('callProviderAISimple xAI usage ledger', () => {
+describe('callProviderAISimple toolkit-less usage', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('records cached and reasoning tokens from a successful xAI completion', async () => {
+  it('returns measured cached and reasoning counts without writing the server ledger', async () => {
     recordRunUsage.mockClear();
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -662,13 +674,6 @@ describe('callProviderAISimple xAI usage ledger', () => {
       'prompt',
     );
     expect(result.usage).toMatchObject({ inputTokens: 26, outputTokens: 103, cacheReadTokens: 6 });
-    await vi.waitFor(() => expect(recordRunUsage).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: 'grok',
-      model: 'grok-4.7',
-      tokensIn: 26,
-      tokensOut: 103,
-      cacheReadTokens: 6,
-      source: 'measured',
-    })));
+    expect(recordRunUsage).not.toHaveBeenCalled();
   });
 });

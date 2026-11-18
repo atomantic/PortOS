@@ -9,7 +9,7 @@ import {
   CURSOR_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS
 } from '../utils/providers';
-import { codexEffortLevelsForModel, effortLevelsForProvider, antigravityModelEffortLevels } from '../../../server/lib/providerModels.js';
+import { codexEffortLevelsForModel, effortLevelsForProvider, antigravityModelEffortLevels } from '../../../server/lib/provider/providerModels.js';
 
 /**
  * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —

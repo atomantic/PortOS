@@ -73,16 +73,24 @@ async function saveCache(accountId, cache) {
   await atomicWrite(filePath, cache);
 }
 
-// One file per account: load, mutate and persist under the same queue. Account
-// deletion removes metadata BEFORE queueing deleteCache; earlier writes drain
-// before unlink, and later/provider-delayed writes reject instead of resurrecting.
-export function mutateCache(accountId, mutate) {
+// Account deletion removes metadata before queueing deleteCache. Keep sync's
+// derived writes in this turn so they drain before deletion of the cache and
+// derived rows. Provider fetches stay outside the queue.
+export function mutateCache(accountId, mutate, sync) {
   return queueCacheWrite(accountId, async () => {
     const account = await getAccount(accountId);
     if (!account) throw new ServerError('Account not found', { status: 404 });
     const cache = await loadCache(accountId);
     const result = await mutate(cache, account);
     await saveCache(accountId, cache);
+    if (sync) {
+      await updateSyncStatus(accountId, sync.status);
+      // Each idempotent side effect is best-effort and runs independently.
+      await logCalendarTouchpoints(accountId, sync.events).catch((err) =>
+        console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+      await recordCalendarActivity(account, sync.events).catch((err) =>
+        console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+    }
     return result;
   });
 }
@@ -283,18 +291,7 @@ async function runAccountSync(accountId, io, options) {
       }
 
       return { newCount: uniqueNew.length, pruned, total: cache.events.length };
-    });
-    await updateSyncStatus(accountId, providerStatus === 'success' ? 'success' : providerStatus);
-
-    // Auto-log Tribe touchpoints from this batch (secondary effect — must not
-    // fail the sync). Idempotent on event id, so re-processing fetched events is safe.
-    await logCalendarTouchpoints(accountId, newEvents).catch((err) =>
-      console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
-
-    // Populate the human-activity timeline (#2150) — secondary effect, must NOT
-    // fail the sync. Idempotent on (source, dedupe_key). Machine-local.
-    await recordCalendarActivity(account, newEvents).catch((err) =>
-      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+    }, { status: providerStatus, events: newEvents });
 
     io?.emit('calendar:sync:completed', { accountId, newEvents: newCount, pruned, status: providerStatus });
     console.log(`📅 Sync complete for account ${accountId}: ${newCount} new, ${pruned} pruned, status=${providerStatus}`);
@@ -317,9 +314,7 @@ async function runAccountSync(accountId, io, options) {
 // (or unique exact name) and one touchpoint per person is logged, idempotent on
 // the event id so re-syncs never double-log. Only events that have already
 // happened (start/end <= now) and weren't declined/cancelled count as contact.
-// Called from both the Outlook (syncAccount) and Google (pushSyncEvents) paths;
-// a no-op when nothing is tracked. Tribe is imported dynamically to avoid a
-// static import cycle (tribe.js → calendarSync.js).
+// Both providers use this hook. Load Tribe only when a batch has candidates.
 export async function logCalendarTouchpoints(accountId, events = []) {
   const now = Date.now();
   const timezone = await getUserTimezone();
@@ -372,7 +367,7 @@ export async function logCalendarTouchpoints(accountId, events = []) {
 // (#2150). Only finished, non-declined/cancelled events count as activity.
 // Idempotent (dedupe on source + event id). humanActivity is imported
 // dynamically to keep this hook lazy (mirrors the tribe auto-log path).
-export async function recordCalendarActivity(account, events = []) {
+async function recordCalendarActivity(account, events) {
   const { calendarActivityCandidates, recordEvents } = await import('./humanActivity.js');
   // The user's configured timezone anchors offset-less values (Google all-day
   // events normalize to "YYYY-MM-DDT00:00:00") so they land on the right local day.

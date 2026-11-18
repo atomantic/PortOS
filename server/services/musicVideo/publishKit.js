@@ -25,8 +25,8 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { kitCutWindows } from './socialCuts.js';
-import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
-import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
+import { musicVideoAspect } from '../../lib/musicVideo/musicVideoAspect.js';
+import { musicVideoDependencyChanges } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
 import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
 import { admittedRenderMap } from '../renderActivity.js';

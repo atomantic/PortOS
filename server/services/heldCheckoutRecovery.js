@@ -27,7 +27,7 @@ import { PROTECTED_BRANCHES } from '../lib/gitArgs.js';
 import { decideHeldCheckoutRetirement, decideInventoriedBranchRetirement, decideMergedCheckoutOwner, decideMergedDelivery, decidePendingMergeReceipt, decideWith } from './branchRetirementDecision.js';
 import { listWorktrees, forceRemoveWorktreeDir, deleteCompletedLocalBranch, classifyWorktreeDirt } from './worktreeManager.js';
 import { getDefaultBranch, getStatusPorcelain, hasBranchMergeEvidence, resolveForgeForRepo } from './git.js';
-import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cosClaimOwnership.js';
+import { withClaimOwnershipLock, readClaimOwnershipAgents } from './cos/cosClaimOwnership.js';
 
 const FULL_OBJECT_ID = /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/;
 const shortBranch = (ref) => (ref ? String(ref).replace(/^refs\/heads\//, '') : null);
@@ -39,7 +39,7 @@ const AUTOMATIC_GATE_REASONS = new Set(['daemon-stopped', 'automatic-retirement-
  */
 export async function assertAutomaticRetirementAllowed() {
   const [{ isDaemonRunning, loadState }, { getDomainMode }] = await Promise.all([
-    import('./cosState.js'), import('../lib/domainAutonomy.js'),
+    import('./cos/cosState.js'), import('../lib/domainAutonomy.js'),
   ]);
   if (!isDaemonRunning()) throw new Error('daemon-stopped');
   const state = await loadState();
@@ -101,7 +101,7 @@ export async function readMergedDelivery(repoPath, { branch, path, head }) {
 /** Readers for `decideMergedCheckoutOwner`'s facts. */
 const ownerReaders = ({ repoPath, branch, readAgents }) => ({
   agents: () => readAgents().catch(() => null),
-  runtimeAgentIds: async () => new Set((await import('./agentState.js')).getActiveAgentIds()),
+  runtimeAgentIds: async () => new Set((await import('./agent/agentState.js')).getActiveAgentIds()),
   completionHold: async () => (await import('./branchCompletionPolicy.js'))
     .readBranchCompletionHold({ repoPath, branch, retirement: true }).catch(() => 'pr-completion-policy-unavailable'),
 });

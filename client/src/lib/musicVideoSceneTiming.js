@@ -4,8 +4,8 @@
  */
 
 import { formatUsd } from '../utils/formatters.js';
-import { planProjectSequenceCoverage } from '../../../server/lib/musicVideoSequenceCoverage.js';
-import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';
+import { planProjectSequenceCoverage } from '../../../server/lib/musicVideo/musicVideoSequenceCoverage.js';
+import { resolveSourceTake } from '../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import {
   grokCoverage, isPerformanceScene, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from './musicVideoShotTiming.js';

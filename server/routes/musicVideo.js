@@ -8,7 +8,7 @@
  * arranged against the beat grid".
  */
 
-import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoSongDraftSchema, musicVideoSongActionSchema, musicVideoSongSelectSchema, musicVideoSongFromTrackSchema, musicVideoSongSceneActionSchema, musicVideoMakingOfSelectionSchema } from '../lib/musicVideo/musicVideoValidation.js';
 import { activeDcp } from '../services/musicVideo/dcp.js';
 import { pipeline } from 'stream/promises';
 import { basename } from 'path';
@@ -18,8 +18,8 @@ import festivalPacketRoutes from './musicVideoFestivalPacket.js';
 import researchSeedRoutes from './musicVideoResearchSeed.js';
 import blenderRoutes from './musicVideoBlender.js';
 import spendRoutes from './musicVideoSpend.js';
-import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema } from '../lib/musicVideoValidation.js';
-import { finishedOutsideBlocker } from '../lib/musicVideoFinishedOutside.js';
+import { musicVideoColdOpenAudioSchema, musicVideoRenderCleanupSchema, musicVideoRenderPreviewSchema, musicVideoSongStyleSunoSchema, musicVideoProjectListQuerySchema, musicVideoFinishedOutsideSchema, musicVideoPoolMarkSchema, musicVideoPoolSearchQuerySchema, musicVideoProjectPatchQuerySchema, musicVideoPoolDeleteSchema, musicVideoPoolImportSchema, musicVideoLibrarySearchQuerySchema, musicVideoPoolAddSchema, musicVideoCatalogCompletionSchema } from '../lib/musicVideo/musicVideoValidation.js';
+import { finishedOutsideBlocker } from '../lib/musicVideo/musicVideoFinishedOutside.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, musicVideoAudioTimingPreviewSchema, musicVideoAudioTimingApplySchema, musicVideoProjectCreateSchema, musicVideoProjectCloneSchema, musicVideoProjectUpdateSchema, musicVideoPacingRecutSchema, musicVideoPlanRequestSchema, musicVideoManualAnalysisSchema, musicVideoSectionsEditSchema, musicVideoTranscribeMidiRequestSchema, musicVideoLyricsImportSchema, musicVideoLyricsImportTrackSchema, musicVideoLyricsAlignSchema, musicVideoLyricsVerifySchema, musicVideoSongPrepareSchema, musicVideoTakeInputSchema, musicVideoHandoffImportSchema, musicVideoTreatmentUpdateSchema, musicVideoTreatmentCompileSchema, musicVideoTreatmentApplySchema, musicVideoTreatmentSyncShotSheetSchema, musicVideoSequenceRenderSchema, musicVideoSequenceTakeSchema, musicVideoTreatmentProofReviewSchema, musicVideoCodeGenerateSchema, isPaginationRequested, parsePagination } from '../lib/validation.js';
 import { recordRenderPinFields } from '../lib/sharedSchemas.js';
@@ -27,7 +27,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { uploadSingle } from '../lib/multipart.js';
 import { isSupportedMusicUpload, MUSIC_UPLOAD_MAX_BYTES } from '../services/pipeline/musicLibrary.js';
 import { attachVocalStem, detachVocalStem } from '../services/musicVideo/vocalStem.js';
-import { listProjects, listProjectNames, listProjectPage, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, setProjectMidiTranscription, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
+import { listProjects, listProjectNames, listProjectPage, listProjectCompletion, getProject, createProject, cloneProject, updateProject, deleteProject, setProjectAnalysis, setProjectSections, previewProjectPacingRecut, recutProjectToPacing, setProjectMidiTranscription, appendTakesAcrossScenes, markMediaPoolAssets, refreshSongStyleFromSuno } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
 import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
@@ -51,7 +51,7 @@ import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import { updateTreatment, compileTreatment, previewTreatmentApply, applyTreatment, syncTreatmentFromShotSheet, reviewProof } from '../services/musicVideo/treatmentService.js';
 import { writeOriginScope } from '../lib/writeOrigin.js';
 import { presentProjectForRead } from '../services/musicVideo/projectPresentation.js';
-import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoSummary.js';
+import { summarizeMusicVideoProject, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideo/musicVideoSummary.js';
 import { takeAssetExists } from '../services/musicVideo/takeAsset.js';
 import sceneRoutes from './musicVideoScenes.js';
 import castAndSetsRoutes from './musicVideoCastAndSets.js';
@@ -95,7 +95,16 @@ router.get('/', asyncHandler(async (req, res) => {
     const cursor = parseInt(query.cursor, 10);
     const paging = parsePagination(summary && Number.isInteger(cursor) && cursor >= 0 ? { ...query, offset: String(cursor) } : query,
       { defaultLimit: 50, maxLimit: 500 });
-    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst } : {}) });
+    const needle = (query.q || '').trim().toLowerCase();
+    const matchesName = needle ? (project) => String(project.name || '').toLowerCase().includes(needle) : null;
+    const stale = summary && query.statusFilter
+      ? new Set((await listProjectCompletion({ matchesName })).filter(({ isCompleted }) => !isCompleted).map(({ id }) => id))
+      : null;
+    const matchesStatus = query.statusFilter
+      ? (project) => (project.status === 'complete' && !stale?.has(project.id)) === (query.statusFilter === 'completed')
+      : null;
+    const filter = matchesStatus || matchesName ? (project) => (!matchesStatus || matchesStatus(project)) && (!matchesName || matchesName(project)) : undefined;
+    const page = await listProjectPage({ ...paging, ...(summary ? { compare: compareMusicVideoProjectsNewestFirst, filter } : {}) });
     const presented = await Promise.all(page.items.map((project) => presentProjectForRead(project)));
     const items = summary ? presented.map(project => summarizeMusicVideoProject(project, project.productionReadiness)) : presented;
     // A deletion between header selection and hydration still consumes its slot.
@@ -104,6 +113,11 @@ router.get('/', asyncHandler(async (req, res) => {
   }
   const presented = await Promise.all((await listProjects()).map((project) => presentProjectForRead(project)));
   res.json(presented.map((project) => summarizeMusicVideoProject(project, project.productionReadiness)));
+}));
+
+router.get('/catalog-completion', asyncHandler(async (req, res) => {
+  const { ingredientId } = validateRequest(musicVideoCatalogCompletionSchema, req.query);
+  res.json(await listProjectCompletion({ ingredientIds: [...new Set(ingredientId)] }));
 }));
 
 // Sidebar sub-nav rows; registered before /:id so "names" is not read as an id.

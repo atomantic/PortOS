@@ -10,12 +10,12 @@ import { ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
 // branches, and `getAllTasks` feeds the shared investigation-approval policy
 // (reached via agentErrorAnalysis) an empty backlog — no prior investigation and
 // no storm, i.e. the ordinary unattended case.
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   addTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
   updateTask: vi.fn().mockResolvedValue(true),
   getAllTasks: vi.fn().mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } }),
 }));
-vi.mock('./cos.js', () => ({
+vi.mock('./cos/cos.js', () => ({
   isRunning: vi.fn().mockReturnValue(true),
 }));
 
@@ -28,8 +28,8 @@ vi.mock('./installState.js', () => ({
 
 const installState = await import('./installState.js');
 
-const { addTask, getAllTasks } = await import('./cosTaskStore.js');
-const { isRunning } = await import('./cos.js');
+const { addTask, getAllTasks } = await import('./cos/cosTaskStore.js');
+const { isRunning } = await import('./cos/cos.js');
 const {
   noteFallbackHandled,
   initAutoFixer,

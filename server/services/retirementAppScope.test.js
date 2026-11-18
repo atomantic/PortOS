@@ -1,6 +1,6 @@
 /** Exact retirement receipts at the Git UI and daily cleanup boundaries (#13405). */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join } from 'path';
@@ -35,8 +35,8 @@ vi.mock('./apps.js', () => ({
   getAllApps: async () => { if (injected.apps instanceof Error) throw injected.apps; return injected.apps ?? (injected.app ? [injected.app] : []); },
   getAppById: async id => injected.app?.id === id ? injected.app : null,
 }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
-vi.mock('./cosAgentRepository.js', () => ({ listStoredAgentStatuses: async () => [] }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: {} }) }));
+vi.mock('./cos/cosAgentRepository.js', () => ({ listStoredAgentStatuses: async () => [] }));
 vi.mock('./autobiography.js', () => ({ checkAndPrompt: vi.fn() }));
 vi.mock('./goalCheckIn.js', () => ({ runGoalCheckIn: vi.fn() }));
 vi.mock('./branchCompletionPolicy.js', () => ({ readBranchCompletionHold: async () => null }));
@@ -90,6 +90,12 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('outside reconciliation retirement recei
     const path = join(PATHS.worktrees, `agent-${basename(scratch)}`);
     await mkdir(dirname(path), { recursive: true });
     await execGit(['worktree', 'add', '-b', branch, path, 'main'], repo);
+    // Merged work of its own (replayed onto main as a rebase merge does), not a
+    // branch created at main, which merged retirement holds as new (#16625).
+    await writeFile(join(path, 'outside.txt'), 'outside cleanup work\n');
+    await execGit(['add', 'outside.txt'], path);
+    await execGit(['commit', '-m', 'feat: outside cleanup work'], path);
+    await execGit(['cherry-pick', '-x', branch], repo);
     const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
     const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null,
       checkoutIdentity: await readRetirementCheckoutIdentity(path) };

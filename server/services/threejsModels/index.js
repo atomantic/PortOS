@@ -22,8 +22,8 @@ import { buildThreejsPenetrationFeedback, evaluateThreejsPenetration } from '../
 import { buildThreejsPhysicalAuditFeedback, evaluateThreejsPhysicalAudit } from '../../lib/threejsModelPhysicalAudit.js';
 import { evaluateThreejsRigReadiness } from '../../lib/threejsModelRig.js';
 import { GENERAL_FAMILY_ID } from '../../lib/threejsModelFamilies.js';
-import { resolveCliEffort } from '../../lib/providerModels.js';
-import { getProviderById } from '../providers.js';
+import { resolveCliEffort } from '../../lib/provider/providerModels.js';
+import { getProviderById } from '../provider/providers.js';
 import { buildThreejsGenerationPrompt } from './prompt.js';
 import * as store from './db.js';
 

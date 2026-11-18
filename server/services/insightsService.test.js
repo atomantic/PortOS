@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock the shared managed-runtime wake (issue #8104) so any code path that
 // touches it runs offline instead of reaching the real Ollama/MTPLX/Slotstream
 // manager modules.
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: vi.fn().mockResolvedValue({ success: true }),
 }));
 // generateThemeAnalysis/refreshCrossDomainNarrative call the shared
@@ -21,7 +21,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, atomicWrite: vi.fn(), ensureDir: vi.fn(), readJSONFile: vi.fn() };
 });
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
@@ -32,7 +32,7 @@ vi.mock('./appleHealthQuery.js', () => ({ getCorrelationData: vi.fn().mockResolv
 
 import { callProviderAISimple } from './aiProvider.js';
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { getActiveProvider } from './providers.js';
+import { getActiveProvider } from './provider/providers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
 import {
   getThemeAnalysis,

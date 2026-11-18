@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import { mkdir, readFile, rename, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
@@ -72,6 +72,33 @@ describe('usage commit failure recovery', () => {
     __resetUsageClaims();
     await loadUsage();
     expect(getUsage()).toEqual(committed);
+  });
+
+  it('imports bridge counts and a deferred session atomically after a failed write, preserving ephemeral measurements', async () => {
+    const dir = join(PATHS.runs, 'bridge-pending');
+    await mkdir(dir, { recursive: true });
+    const metadataPath = join(dir, 'metadata.json');
+    await writeFile(metadataPath, JSON.stringify({ ...run, id: 'bridge-pending', success: true,
+      usageSessionDeferred: true, selfContainedUsage: true, nativeUsageUnpersisted: true,
+      reportedUsage: { tokensIn: 100, tokensOut: 30, cacheReadTokens: 20 } }));
+    try {
+      const before = await disk();
+      failRename();
+      await expect(loadUsage()).rejects.toThrow('synthetic disk write failure');
+      expect(await disk()).toEqual(before);
+      expect(JSON.parse(await readFile(metadataPath, 'utf8')).usageReconciled).toBeUndefined();
+      await loadUsage();
+      const committed = await disk();
+      expect(committed).toMatchObject({ totalSessions: 1, totalMessages: 1, totalTokens: { input: 120, output: 30 } });
+      const providerDay = Object.values(committed.dailyActivity).find(day => day.byProvider?.['codex-cli'])?.byProvider['codex-cli'];
+      expect(providerDay).toMatchObject({ source: 'measured', unpersisted: { tokensIn: 100, tokensOut: 30, cacheReadTokens: 20 },
+        byModel: { [run.model]: { unpersisted: { tokensIn: 100, tokensOut: 30, cacheReadTokens: 20 } } } });
+      expect(JSON.parse(await readFile(metadataPath, 'utf8')).usageReconciled).toBe(true);
+      await loadUsage();
+      expect(await disk()).toEqual(committed);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('does not publish a failed draft or discard a concurrent successful writer', async () => {

@@ -4,13 +4,13 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
 const handoffPendingMerge = vi.hoisted(() => vi.fn(async () => ({ queued: false, reason: 'handoff-owner-unverified', retryable: false })));
-vi.mock('../services/cosMergeHandoff.js', () => ({ handoffPendingMerge }));
-vi.mock('../services/cosAgentArchive.js', () => ({}));
-vi.mock('../services/cosAgentFeedback.js', () => ({}));
-vi.mock('../services/cosAgentIndex.js', () => ({}));
-vi.mock('../services/cosAgentLifecycle.js', () => ({}));
-vi.mock('../services/cosHealthMonitor.js', () => ({}));
-vi.mock('../services/agentOrchestrator.js', () => ({}));
+vi.mock('../services/cos/cosMergeHandoff.js', () => ({ handoffPendingMerge }));
+vi.mock('../services/cos/cosAgentArchive.js', () => ({}));
+vi.mock('../services/cos/cosAgentFeedback.js', () => ({}));
+vi.mock('../services/cos/cosAgentIndex.js', () => ({}));
+vi.mock('../services/cos/cosAgentLifecycle.js', () => ({}));
+vi.mock('../services/cos/cosHealthMonitor.js', () => ({}));
+vi.mock('../services/agent/agentOrchestrator.js', () => ({}));
 
 import routes from './cosAgentRoutes.js';
 

@@ -7,7 +7,7 @@
  * next shot jumps the action forward and can lose what was in frame (a car
  * that had both headlights on screen at the cut kept only one by the clip's
  * end). This extracts the previous shot's on-screen out-frame
- * (lib/musicVideoHandoffFrame.js) into the gallery and selects it as this
+ * (lib/musicVideo/musicVideoHandoffFrame.js) into the gallery and selects it as this
  * scene's start frame. With `keepStillAsEnd`, the scene's current start frame
  * becomes its style-break end frame (#11173), so a fal clip on an end-frame
  * model travels from the handoff to the planned still. A still shot before it
@@ -18,9 +18,9 @@ import { existsSync } from 'fs';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { findFfmpeg, probeVideoGeometry, runFfmpegProcess, safeUnder } from '../../lib/ffmpeg.js';
-import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideoHandoffFrame.js';
-import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { songScenes } from '../../lib/musicVideoColdOpen.js';
+import { previousShot, sceneClipOutFrameSec, shotHandoffSource } from '../../lib/musicVideo/musicVideoHandoffFrame.js';
+import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideo/musicVideoLayers.js';
+import { songScenes } from '../../lib/musicVideo/musicVideoColdOpen.js';
 import { getHistoryItem } from '../videoGen/history.js';
 import { writeLocalImageSidecarIfMissing } from '../imageGen/imageRecords.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';

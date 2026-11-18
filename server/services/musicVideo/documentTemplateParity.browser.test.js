@@ -11,7 +11,7 @@ import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { installTemplateParityDiagnostics } from '../../test/templateParityDiagnostics.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
-import { narrativeFrameState } from '../../lib/musicVideoNarrativeEvents.js';
+import { narrativeFrameState } from '../../lib/musicVideo/musicVideoNarrativeEvents.js';
 import { buildDocumentData, documentRenderClock, documentRenderInitScripts, documentAspect, DOCUMENT_FRAME_SIZES } from './documentRender.js';
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 
@@ -94,7 +94,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
         const name = req.params.file.endsWith('.webm') ? selected?.videoHistoryId === 'uniform' ? 'uniform.webm' : 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : selected?.referenceImageId || 'grid.png';
         res.sendFile(join(dir, name));
       });
-      app.use('/engine', express.static(join(templates, 'layered')), express.static(join(templates, 'shared')), express.static(join(root, 'server/lib')));
+      app.use('/engine', express.static(join(templates, 'layered')), express.static(join(templates, 'shared')), express.static(join(root, 'server/lib/musicVideo')));
       app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: req.params.id === 'uniform' ? 'uniform.webm' : 'clip.webm', fps: 24, width: 240, height: 240, numFrames: 96 }));
       app.get('/api/music-video/:id/lyrics/overlay/preview', async (_req, res, next) => { await buildLyricPlaythroughPreview(current, { overlay: true }).then(value => res.json(value)).catch(next); });
       app.get('/data/images/:file', (req, res) => res.sendFile(join(dir, req.params.file)));

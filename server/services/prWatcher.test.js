@@ -55,7 +55,7 @@ vi.mock('./notifications.js', () => ({
 }));
 
 const spawnReviewLoopFollowUpMock = vi.fn();
-vi.mock('./agentWorktreeCleanup.js', () => ({
+vi.mock('./agent/agentWorktreeCleanup.js', () => ({
   spawnReviewLoopFollowUp: (...args) => spawnReviewLoopFollowUpMock(...args),
 }));
 
@@ -73,11 +73,11 @@ vi.mock('./apps.js', () => ({
 
 const tasksById = vi.hoisted(() => new Map());
 const recoveryAgents = vi.hoisted(() => ({ value: [] }));
-vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => recoveryAgents.value }));
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => recoveryAgents.value }));
 vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async metadata => ({
   reviewers: metadata.reviewers || [], usernames: metadata.usernames || [], optionalReviewers: [], reviewerMaxRounds: {},
 }) }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getTaskById: async (id) => tasksById.get(id) ?? null,
 }));
 

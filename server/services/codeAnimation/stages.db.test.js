@@ -68,7 +68,7 @@ vi.mock('./projectStore.js', async importOriginal => {
 });
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 // Default adapters and real preflight, with only external provider boundaries doubled.
-vi.mock('../providers.js', () => {
+vi.mock('../provider/providers.js', () => {
   const provider = { id: 'example-provider', type: 'api', enabled: true, models: ['example-model'], defaultModel: 'example-model' };
   return { getProviderById: vi.fn(async () => provider), getSelectableProviders: vi.fn(async () => ({ providers: [provider] })) };
 });

@@ -49,7 +49,7 @@ const REALITY_UNIVERSE_ID = 'universe-reality';
 const REALITY_UNIVERSE_NAME = 'Reality';
 // Ingest source kinds that default to the Reality universe rather than the
 // last-used pick — mirrors SCRAP_SOURCE_KINDS' `factual: true` entries
-// (server/lib/catalogSourceKinds.js): brain-bridge and voice-memo capture the
+// (server/lib/catalog/catalogSourceKinds.js): brain-bridge and voice-memo capture the
 // user's own lived material, not invented story text.
 const FACTUAL_INGEST_KINDS = new Set(['brain', 'voice']);
 

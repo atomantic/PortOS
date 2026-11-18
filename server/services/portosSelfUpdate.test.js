@@ -17,12 +17,12 @@ vi.mock('./updateExecutor.js', () => ({
   launchUpdate: vi.fn().mockResolvedValue({ started: true, completion: Promise.resolve({ success: true, version: '1.26.0' }) }),
 }));
 const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
-vi.mock('./agentState.js', () => ({
+vi.mock('./agent/agentState.js', () => ({
   getActiveAgentIds: vi.fn().mockReturnValue([]),
   spawningTasks: mockSpawningTasks,
 }));
-vi.mock('./cosAgentLifecycle.js', () => ({ filterLiveAgentIds: vi.fn(async (ids) => ids) }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ filterLiveAgentIds: vi.fn(async (ids) => ids) }));
+vi.mock('./cos/cosState.js', () => ({
   readPersistentMindStateForSafetyCheck: vi.fn(async () => ({
     trusted: true,
     persistentMind: { queuedMessages: [], activeTurn: null },

@@ -42,7 +42,7 @@ export async function verifyCleanupCompletion(input) {
 }
 
 async function verifyCurrentCleanup(input) {
-  const { getTaskById } = await import('./cosTaskStore.js');
+  const { getTaskById } = await import('./cos/cosTaskStore.js');
   const task = await getTaskById(input.id);
   let target = input.metadata.retirementReview;
   const unverified = reason => ({ status: 'unverified', reason, target });
@@ -50,7 +50,7 @@ async function verifyCurrentCleanup(input) {
     || !isDeepStrictEqual(task.metadata.recoveryOrigin, input.metadata.recoveryOrigin)
     || !isDeepStrictEqual(task.metadata.recoveryMergeTarget, input.metadata.recoveryMergeTarget)) return unverified('cleanup-task-changed');
   if (prHeldForOperator(task)) return unverified('cleanup-human-handoff');
-  const { getAgentRecord } = await import('./cosAgentLifecycle.js');
+  const { getAgentRecord } = await import('./cos/cosAgentLifecycle.js');
   const parentId = task.metadata.recoveryOrigin.parentAgentId;
   const parent = parentId ? await getAgentRecord(parentId) : null;
   if (!parent || parent.id !== parentId || parent.taskId !== task.metadata.recoveryOrigin.parentTaskId) return unverified('cleanup-parent-unavailable');
@@ -93,7 +93,7 @@ async function resolveRecordedCleanupTarget(task, parent) {
 }
 
 export async function recordCleanupCompletion(agent, verdict) {
-  const { recordCleanupOutcome } = await import('./cosAgentLifecycle.js');
+  const { recordCleanupOutcome } = await import('./cos/cosAgentLifecycle.js');
   await recordCleanupOutcome(agent.id, { ...verdict.target?.release,
     status: verdict.status === 'verified' ? 'verified' : 'blocked', reason: verdict.reason });
 }
@@ -102,9 +102,9 @@ export async function recordCleanupCompletion(agent, verdict) {
  * Keep the task-store compare and active-owner fence so edits and live runs win. */
 export async function settleCleanupBeforeSpawn(task) {
   if (!isCleanupOnlyRecovery(task)) return false;
-  const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
+  const { withClaimOwnershipLock } = await import('./cos/cosClaimOwnership.js');
   return withClaimOwnershipLock(async () => {
-    const { getTaskById, updateTask } = await import('./cosTaskStore.js');
+    const { getTaskById, updateTask } = await import('./cos/cosTaskStore.js');
     const fresh = await getTaskById(task.id);
     if (!fresh || !['pending', 'approved'].includes(fresh.status) || !isCleanupOnlyRecovery(fresh)
       || !isDeepStrictEqual(fresh.metadata, task.metadata)) return true;

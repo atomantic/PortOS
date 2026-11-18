@@ -515,7 +515,7 @@ function useGitlabOrigin() {
  * exercises the GitLab→common normalizers.
  *
  * The merged/open split keys off the `--merged` presence flag; open is glab's
- * default. See gitlab.glabFlags.test.js for why there is no `--state` pair.
+ * default. See gitlab.glabFlags.guard.test.js for why there is no `--state` pair.
  */
 function mockGlab({ issues = [], merged = [], open = [] }) {
   execGlabJson.mockImplementation(async (argv) => {
@@ -542,6 +542,51 @@ describe('reconcile (GitLab forge)', () => {
     expect(result.zombies[0].labels).toContain('area:api');
     expect(result.zombies[0].assignees).toEqual(['adam']);
     expect(execGh).not.toHaveBeenCalled();
+  });
+
+  describe('saturated forge lists', () => {
+    const issue = { iid: 42, title: 't', labels: ['in-progress'], assignees: [{ username: 'adam' }], created_at: daysAgo(10) };
+    const fullMerged = (oldest) => Array.from({ length: 100 }, (_, i) => ({
+      iid: 5000 + i, source_branch: 'x', description: 'Refs #42', merged_at: i === 99 ? oldest : daysAgo(1),
+    }));
+
+    it.each(['issues', 'open'])('withholds the whole scan when the %s page is full', async (list) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        mockGlab({
+          issues: [issue], merged: [{ iid: 7, source_branch: 'x', description: 'Refs #42' }],
+          [list]: Array.from({ length: 100 }, (_, i) => list === 'issues'
+            ? { ...issue, iid: 42 + i }
+            : { iid: 1000 + i, source_branch: `b${i}`, description: '' }),
+        });
+        expect(await reconcile('/repo', { now: NOW })).toBeNull();
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('forge lists reached the completeness limit; withholding cleanup'));
+        expect(execGlab).not.toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it.each([daysAgo(30), daysAgo(10)])('accepts a full merged-MR window reaching the oldest claim (%s)', async (oldest) => {
+      mockGlab({ issues: [issue], merged: fullMerged(oldest) });
+      const result = await reconcile('/repo', { now: NOW });
+      expect(result.zombies.map((z) => z.number)).toEqual([42]);
+    });
+
+    it.each([daysAgo(2), undefined, 'invalid'])('withholds a full merged-MR window without proven coverage (%s)', async (oldest) => {
+      mockGlab({ issues: [issue], merged: fullMerged(oldest) });
+      expect(await reconcile('/repo', { now: NOW })).toBeNull();
+    });
+
+    it('withholds a full merged-MR window when issue creation is unreadable', async () => {
+      mockGlab({ issues: [{ ...issue, created_at: undefined }], merged: fullMerged(daysAgo(30)) });
+      expect(await reconcile('/repo', { now: NOW })).toBeNull();
+    });
+
+    it('accepts a full merged-MR window with no in-progress issues', async () => {
+      mockGlab({ merged: fullMerged(daysAgo(30)) });
+      expect((await reconcile('/repo', { now: NOW })).zombies).toEqual([]);
+    });
   });
 
   it('matches the MR by its claim/issue-<iid> source branch (head ref)', async () => {
@@ -1064,17 +1109,15 @@ describe('swarm reservations (in-progress, no assignee)', () => {
       }
     });
 
-    it('holds expired reservations while the open-MR page is full (an unseen MR may own one)', async () => {
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    it('withholds the scan while the open-MR page is full (an unseen MR may own a reservation)', async () => {
+      const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
       try {
         const fullPage = Array.from({ length: 100 }, (_, i) => ({ iid: 1000 + i, source_branch: `b${i}`, description: '' }));
         mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage });
         const result = await reconcile('/repo', { now: NOW });
-        expect(result.abandoned).toEqual([]);
-        expect(result.reserved.map((r) => r.number)).toEqual([42]);
-        expect(await release(result)).toBe(0);
+        expect(result).toBeNull();
         expect(execGlab).not.toHaveBeenCalled();
-        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^⏭️ issue-reconcile: open change list for .* reached the page limit/));
+        expect(log).toHaveBeenCalledWith(expect.stringContaining('forge lists reached the completeness limit; withholding cleanup'));
 
         mockGlab({ issues: [glIssue({ assignees: [], updated_at: daysAgo(30) })], merged: [], open: fullPage.slice(1) });
         expect((await reconcile('/repo', { now: NOW })).abandoned.map((a) => a.number)).toEqual([42]);

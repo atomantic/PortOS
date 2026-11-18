@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './406-cos-agent-completion-order-index.js';
-import { decodeCompletionOrder } from '../../server/lib/cosAgentCompletionOrder.js';
+import { decodeCompletionOrder } from '../../server/lib/cos/cosAgentCompletionOrder.js';
 
 const AGENTS_REL = join('data', 'cos', 'agents');
 

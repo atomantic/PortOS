@@ -9,8 +9,8 @@
  */
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { finalApprovalPatch, finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../lib/musicVideoFinalApproval.js';
-import { sceneRenderTierChoices } from '../../lib/musicVideoRenderTier.js';
+import { finalApprovalPatch, finalTierCounts, sceneClipIsFinal, sceneFinalApproved, selectedVideoTake } from '../../lib/musicVideo/musicVideoFinalApproval.js';
+import { sceneRenderTierChoices } from '../../lib/musicVideo/musicVideoRenderTier.js';
 import { appendSceneTakes, selectSceneTake, updateScene } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { renderSceneClips } from './sceneCardRender.js';

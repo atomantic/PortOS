@@ -4,7 +4,7 @@ import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { applyMusicVideoStory, applyMusicVideoStoryBeats, getMusicVideoStoryContext, proposeMusicVideoStory, saveMusicVideoStorySummary } from '../../services/apiMusicVideo.js';
 import { STORYBOARD_LIMITS, STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS } from '../../../../server/lib/storyboardVocabulary.js';
-import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideoSubjectLimits.js';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../../../../server/lib/musicVideo/musicVideoSubjectLimits.js';
 import { formatCount } from '../../utils/formatters.js';
 
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';

@@ -1,7 +1,7 @@
 /** Current branch/checkout inventory and bounded recent-retirement display history. */
 import { sameRetirementCheckout, sameRetirementObservation, reconcileInventoryRows } from './branchReconcileInventoryPrune.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { getAppById } from './apps.js';
 import { ensureExecutionRecord, loadSchedule, resolveExecutionRecord, updateSchedule } from './taskScheduleStore.js';
 

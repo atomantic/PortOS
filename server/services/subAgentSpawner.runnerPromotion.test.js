@@ -19,7 +19,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 
 const runnerHandlers = new Map();
 
-vi.mock('./cosRunnerClient.js', () => ({
+vi.mock('./cos/cosRunnerClient.js', () => ({
   onCosRunnerEvent: vi.fn((event, handler) => { runnerHandlers.set(event, handler); }),
   initCosRunnerConnection: vi.fn(),
   // The runner is DOWN at boot — the regression's starting condition.
@@ -27,25 +27,25 @@ vi.mock('./cosRunnerClient.js', () => ({
   isRunnerReachable: vi.fn().mockResolvedValue(false),
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   emitLog: vi.fn(),
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
 
-vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
-vi.mock('./cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
-vi.mock('./agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));
-vi.mock('./agentRunnerOutputBatchers.js', () => ({
+vi.mock('./provider/providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./agent/agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
+vi.mock('./agent/agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));
+vi.mock('./agent/agentRunnerOutputBatchers.js', () => ({
   getRunnerOutputBatcher: vi.fn(),
   flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('./agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
-vi.mock('./agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
-vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
+vi.mock('./agent/agentLifecycle.js', () => ({ handleAgentCompletion: vi.fn() }));
+vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./agent/agentRunTracking.js', () => ({ completeAgentRun: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: vi.fn().mockReturnValue(false) }));
-vi.mock('./agentOrchestrator.js', () => ({
+vi.mock('./agent/agentOrchestrator.js', () => ({
   completeAgent: vi.fn(),
   spawnAgentForTask: vi.fn().mockResolvedValue('agent-1'),
 }));
@@ -53,15 +53,15 @@ vi.mock('./agentOrchestrator.js', () => ({
 // real gate reaches the app registry through agentPromptBuilder, whose graph
 // reads files at module load — which this file's `fs` mock breaks. The gate's own
 // behavior is covered in cosForgeSpawnGate.test.js.
-vi.mock('./cosForgeSpawnGate.js', () => ({ forgeSpawnHoldReason: vi.fn().mockResolvedValue(null) }));
+vi.mock('./cos/cosForgeSpawnGate.js', () => ({ forgeSpawnHoldReason: vi.fn().mockResolvedValue(null) }));
 vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 
 import { initSpawner } from './subAgentSpawner.js';
-import { initCosRunnerConnection } from './cosRunnerClient.js';
-import { syncRunnerAgents } from './agentRunnerSync.js';
-import { cosEvents, emitLog } from './cosEvents.js';
-import { persistAgentSecurityScan } from './agentSecurityScan.js';
-import * as agentState from './agentState.js';
+import { initCosRunnerConnection } from './cos/cosRunnerClient.js';
+import { syncRunnerAgents } from './agent/agentRunnerSync.js';
+import { cosEvents, emitLog } from './cos/cosEvents.js';
+import { persistAgentSecurityScan } from './agent/agentSecurityScan.js';
+import * as agentState from './agent/agentState.js';
 
 // Read through the module namespace: `useRunner` is reassigned by `setUseRunner`,
 // and a destructured copy would freeze the value at import time.

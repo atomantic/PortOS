@@ -1,15 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
   reviveBlockedTask: vi.fn().mockResolvedValue({ id: 'ok' }),
   updateTask: vi.fn().mockResolvedValue({ id: 'ok' }),
 }));
-vi.mock('./cosEvents.js', () => ({ emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ emitLog: vi.fn() }));
 const state = vi.hoisted(() => ({ agents: {} }));
-vi.mock('./cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: state.agents })) }));
+vi.mock('./cos/cosState.js', () => ({ readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: true, agents: state.agents })) }));
 
-const { getAllTasks, reviveBlockedTask, updateTask } = await import('./cosTaskStore.js');
+const { getAllTasks, reviveBlockedTask, updateTask } = await import('./cos/cosTaskStore.js');
 const { retryTasksResolvedByInvestigation } = await import('./investigationRetry.js');
 const { newSpawnBudgetEpisode } = await import('./spawnBudgetProof.js');
 

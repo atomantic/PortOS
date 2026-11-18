@@ -29,7 +29,7 @@ import {
   encodeCompletionOrder,
   projectArchivedAgent,
   sameCompletionProjection,
-} from '../../server/lib/cosAgentCompletionOrder.js';
+} from '../../server/lib/cos/cosAgentCompletionOrder.js';
 
 const AGENTS_REL = join('data', 'cos', 'agents');
 const INDEX_FILE = 'index.json';

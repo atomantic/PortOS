@@ -13,7 +13,7 @@ vi.mock('../lib/fileUtils.js', async original => {
   } };
 });
 vi.mock('./runner.js', () => ({ createRun: async () => ({ metadata: { id: 'example-run' }, provider }) }));
-vi.mock('./providers.js', () => ({ getActiveProvider: async () => provider, listSelectableProviders: async () => [provider] }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => provider, listSelectableProviders: async () => [provider] }));
 vi.mock('./promptRunner.js', () => ({
   assertProvider() {}, resolveProviderAndModel: async () => ({ provider }),
   runPromptThroughProvider: async ({ onData }) => {

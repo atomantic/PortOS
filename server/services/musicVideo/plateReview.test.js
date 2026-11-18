@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { reviewPlate, reviewPlateStrip, resolvePlateReviewer } from './plateReview.js';
-import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence, plateRequirements, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 const runner = vi.hoisted(() => ({ runPromptThroughProvider: vi.fn(), assertVisionRunUsedImages: vi.fn(), resolveProviderAndModel: vi.fn(),
   resolveEffectiveModel: (provider, model) => model || provider.defaultModel }));
 const providers = vi.hoisted(() => ({ getAllProviders: vi.fn() }));
 const ollama = vi.hoisted(() => ({ getBaseUrl: vi.fn(() => 'http://localhost:11434'), getModelCapabilities: vi.fn(), getInstalledModels: vi.fn() }));
 const prerequisites = vi.hoisted(() => ({ getProviderPrerequisiteReadinessMap: vi.fn(async (_all, { candidates }) => Object.fromEntries(candidates.map((p) => [p.id, { status: 'ready' }]))) }));
-vi.mock('../providers.js', () => providers);
+vi.mock('../provider/providers.js', () => providers);
 const codexAccount = vi.hoisted(() => ({ getCodexAccountReadiness: vi.fn(async () => ({ status: 'ready' })) }));
-vi.mock('../providerPrerequisites.js', () => prerequisites);
+vi.mock('../provider/providerPrerequisites.js', () => prerequisites);
 vi.mock('../codexAppServer.js', () => codexAccount);
 vi.mock('../promptRunner.js', () => runner);
 vi.mock('../ollamaManager.js', () => ollama);

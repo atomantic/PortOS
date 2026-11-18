@@ -7,14 +7,14 @@
 // `{ next, added, skipped }`; the caller persists `next` via the ordinary visualSpec PATCH. Used by
 // `components/musicVideo/VisualSpecPanel.jsx`. (The style snapshots are derived server-side, #9105.)
 //
-// Pure (aside from minting reference ids) and read-only: the caller persists the result via the ordinary visualSpec PATCH. Mirrors the server's reference cap (server/lib/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull can never produce a spec the server would reject.
+// Pure (aside from minting reference ids) and read-only: the caller persists the result via the ordinary visualSpec PATCH. Mirrors the server's reference cap (server/lib/musicVideo/musicVideoValidation.js musicVideoVisualSpecSchema) so a pull can never produce a spec the server would reject.
 
 import { uuidv4 } from './uuid.js';
 
 export const MUSIC_VIDEO_MAX_REFERENCES = 500;
 export const MUSIC_VIDEO_MAX_SUBJECTS = 500;
 
-// Canon kind → visual-spec reference role (server/lib/musicVideoValidation.js
+// Canon kind → visual-spec reference role (server/lib/musicVideo/musicVideoValidation.js
 // MUSIC_VIDEO_REFERENCE_ROLES). Characters are the obvious "character" role;
 // places and props are the closest existing roles, since the visual spec has
 // no dedicated "place"/"object" bucket.

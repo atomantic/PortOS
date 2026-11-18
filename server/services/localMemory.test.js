@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { setAIToolkit } from './providers.js';
+import { setAIToolkit } from './provider/providers.js';
 
 // Hoisted mock state so the factory closures below can reach it.
 const h = vi.hoisted(() => ({

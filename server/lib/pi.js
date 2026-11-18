@@ -9,7 +9,7 @@
  * Pi's user-owned `models.json`.
  */
 import { fileURLToPath } from 'node:url';
-import { argvHasFlag, commandBasename, hasModelFlag, buildEffortArgs } from './providerModels.js';
+import { argvHasFlag, commandBasename, hasModelFlag, buildEffortArgs } from './provider/providerModels.js';
 
 export const PI_COMMAND = 'pi';
 export const isPiCommand = (command) => commandBasename(command) === PI_COMMAND;

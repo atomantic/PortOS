@@ -6,8 +6,8 @@ import { materializeGitRepo } from '../lib/gitTestRepo.js';
 import { execGit } from '../lib/execGit.js';
 
 const f = vi.hoisted(() => ({ agents: [], active: [], pulls: [], tags: [], runs: {}, fail: false, malformed: false }));
-vi.mock('./cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => f.agents }));
-vi.mock('./agentState.js', () => ({ getActiveAgentIds: () => f.active }));
+vi.mock('./cos/cosClaimOwnershipState.js', () => ({ readClaimOwnershipAgents: async () => f.agents }));
+vi.mock('./agent/agentState.js', () => ({ getActiveAgentIds: () => f.active }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async path => ({ isGithub: true, host: 'github.com', fullName: path.endsWith('other') ? 'example/other' : 'example/repo' }) }));
 vi.mock('./forgeExecOptions.js', () => ({ resolveForgeExecOptions: async () => ({}) }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async args => {

@@ -1,4 +1,4 @@
-import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
+import { assertMusicVideoMediaSelections } from '../../lib/musicVideo/musicVideoMediaPolicy.js';
 /**
  * Music Video — project store backend dispatcher (#1760, Phase 1).
  *
@@ -23,7 +23,7 @@ import { assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy
  */
 
 import { droppedTakeAssets, fileMusicVideoMedia, assertNewMediaSelections, markPoolAssets, projectTakeAssets } from './mediaPool.js';
-import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { presentMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideo/musicVideoDependencies.js';
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
@@ -33,8 +33,8 @@ import { withStyleSnapshots } from './styleSnapshots.js';
 import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 import { labelProjectReferences } from './referenceLabels.js';
 import { musicVideoEvents } from './events.js';
-import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
-import { renumberShotLabels } from '../../lib/musicVideoColdOpen.js';
+import { audioRevisionOf } from '../../lib/musicVideo/musicVideoSongAudio.js';
+import { renumberShotLabels } from '../../lib/musicVideo/musicVideoColdOpen.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -91,6 +91,29 @@ export async function listProjectPage(options = {}) {
   return { ...page, items: await resolveProjectsCatalogDescriptions(page.items) };
 }
 
+export async function listProjectCompletion({ ingredientIds, matchesName } = {}) {
+  const backend = await selectBackend();
+  const ids = await backend.listCompletionCandidateIds(ingredientIds);
+  if (!ids.length) return [];
+  const [{ readProjectCompletion }, { createCatalogReads }] = await Promise.all([
+    import('./projectPresentation.js'),
+    import('./catalogCheckin.js'),
+  ]);
+  const reads = createCatalogReads();
+  const states = [];
+  const batchSize = 30;
+  for (let offset = 0; offset < ids.length; offset += batchSize) {
+    const records = await backend.getProjectsByIds(ids.slice(offset, offset + batchSize));
+    const candidates = records.filter(project => project.status === 'complete' && (!matchesName || matchesName(project)));
+    states.push(...await Promise.all(candidates.map(async (project) => ({
+      id: project.id,
+      name: project.name,
+      isCompleted: await readProjectCompletion(project, { reads, requireCatalog: !!ingredientIds }),
+    }))));
+  }
+  return states;
+}
+
 /** The stored snapshots, used when offering a legacy difference for review. */
 export async function getStoredProject(id, options = {}) {
   return presentMusicVideoDependencies(await (await selectBackend()).getProject(id, options));
@@ -134,7 +157,7 @@ import { parseLyricCues } from './timedText.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { randomUUID } from 'crypto';
 import { setSceneLastFailure, appendSceneTakes as appendTakes, appendTakesAcrossScenes as appendTakesAcross, selectSceneTake as selectTake, rejectUnusedTakes, swapSceneFrames, reviewSceneTake as reviewTake, plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } from './takes.js';
-import { plateFrameRole } from '../../lib/musicVideoPlateEvidence.js';
+import { plateFrameRole } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
@@ -237,7 +260,7 @@ export async function createProject(input) {
 export async function createProjectFromFilm(input, sourceOwner, settings) {
   const backend = await selectBackend();
   const [{ copyBlenderFilm, removeBlenderFilmCopy }, { musicVideoFilmOwner }, { readBlenderManifest, writeBlenderManifest }, { normalizeBlenderRecord }] = await Promise.all([
-    import('../film/fork.js'), import('./blender/owner.js'), import('../film/manifest.js'), import('../../lib/musicVideoBlender.js'),
+    import('../film/fork.js'), import('./blender/owner.js'), import('../film/manifest.js'), import('../../lib/musicVideo/musicVideoBlender.js'),
   ]);
   const seeded = await seedTrackMetadata(await seedVideoBackendDefault(input));
   let target = null;
@@ -289,7 +312,7 @@ export async function cloneProject(id, options = {}) {
     project = await backend.cloneProject(id, { ...cloneOptions, id: film?.id ?? `mv-${randomUUID()}`, blenderFilm: Boolean(film) });
     if (film) {
       // The copied song.json names the source project; publish the fork only after its own is written.
-      const [{ writeBlenderSong }, { normalizeBlenderRecord }] = await Promise.all([import('./blender/song.js'), import('../../lib/musicVideoBlender.js')]);
+      const [{ writeBlenderSong }, { normalizeBlenderRecord }] = await Promise.all([import('./blender/song.js'), import('../../lib/musicVideo/musicVideoBlender.js')]);
       await writeBlenderSong(project, normalizeBlenderRecord(project.blender).settings);
     }
   } catch (error) {

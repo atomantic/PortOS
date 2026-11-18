@@ -23,12 +23,12 @@
  * spawn a process.
  */
 
-import { isCliProvider, isTuiProvider } from './providerTypes.js';
+import { isCliProvider, isTuiProvider } from './provider/providerTypes.js';
 import os from 'os';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } from './providerModels.js';
+import { argvHasFlag, hasModelFlag, commandBasename, GROK_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 
 const NOOP_CLEANUP = () => {};
 

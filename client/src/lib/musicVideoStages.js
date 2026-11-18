@@ -13,17 +13,17 @@ import { formatCount, formatDurationSec, formatTimecode } from '../utils/formatt
 import { isNonBlankStr } from './textUtils';
 import { modeLabel } from './imageGenModes.js';
 import { meteredModelLabel, meteredSceneTake } from './musicVideoShotTiming.js';
-import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
-import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutonomous.js';
-import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
-import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
+import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideo/musicVideoReviewDraft.js';
+import { supersededStillsCheckpoint } from '../../../server/lib/musicVideo/musicVideoAutonomous.js';
+import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideo/musicVideoFinishedOutside.js';
+import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideo/musicVideoColdOpen.js';
 import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
-import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
-import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideoPreviz.js';
-import { blenderShotsReady } from '../../../server/lib/musicVideoBlender.js';
-import { projectSpend as sharedProjectSpend } from '../../../server/lib/musicVideoSpend.js';
+import { shotSheetDoneProgress } from '../../../server/lib/musicVideo/musicVideoShotSheet.js';
+import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideo/musicVideoPreviz.js';
+import { blenderShotsReady } from '../../../server/lib/musicVideo/musicVideoBlender.js';
+import { projectSpend as sharedProjectSpend } from '../../../server/lib/musicVideo/musicVideoSpend.js';
 
-export { SPEND_ADJUSTMENT_LANES, spendLaneLabel } from '../../../server/lib/musicVideoSpend.js';
+export { SPEND_ADJUSTMENT_LANES, spendLaneLabel } from '../../../server/lib/musicVideo/musicVideoSpend.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -108,7 +108,7 @@ export const projectServicesSummary = (project) => [
 ].join(' · ');
 
 /**
- * What the project has spent on paid generation (server/lib/musicVideoSpend.js): production runs,
+ * What the project has spent on paid generation (server/lib/musicVideo/musicVideoSpend.js): production runs,
  * shot takes and, once the server attaches its render ledger (`renderSpend`), every paid render
  * for the project by lane with its unpriced renders counted (#16506). Capped by the live/latest
  * run's cap, else the autopilot brief's budget; `capUsd` is null when nothing caps it.

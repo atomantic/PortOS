@@ -3,14 +3,14 @@ import {
   summarizeCapabilities,
   summarizeSetupCapabilities,
 } from '../lib/capabilityMap.js';
-import { getAllProviders, getProviderById } from './providers.js';
-import { getProviderPrerequisiteReadinessMap } from './providerPrerequisites.js';
-import { getProviderReadinessMap } from './providerReadiness.js';
-import { getAllProviderStatuses } from './providerStatus.js';
+import { getAllProviders, getProviderById } from './provider/providers.js';
+import { getProviderPrerequisiteReadinessMap } from './provider/providerPrerequisites.js';
+import { getProviderReadinessMap } from './provider/providerReadiness.js';
+import { getAllProviderStatuses } from './provider/providerStatus.js';
 import { listAccounts as listCalendarAccounts } from './calendarAccounts.js';
 import { listAccounts as listMessageAccounts } from './messageAccounts.js';
 import { countMemories } from './memoryBackend.js';
-import { getConfig as getCosConfig } from './cosState.js';
+import { getConfig as getCosConfig } from './cos/cosState.js';
 import { getVoiceConfig } from './voice/config.js';
 import { getNetworkExposureSetupStatus } from '../lib/networkExposure.js';
 import { getGenomeSummary } from './genome.js';

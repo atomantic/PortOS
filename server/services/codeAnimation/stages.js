@@ -33,7 +33,7 @@ import { renderBlenderSequence, publishBlenderVideo } from './blenderRender.js';
 import { admittedRenderMap } from '../renderActivity.js';
 import { stopRun } from '../runner.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { extractAnimationHtml } from './prompt.js';
 
 export const STAGE_RUN_KIND = 'production-stages';

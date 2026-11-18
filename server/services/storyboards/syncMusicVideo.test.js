@@ -17,7 +17,7 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 const { default: storyboardRoutes } = await import('../../routes/storyboards.js');
 const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js');
 const projects = await import('../musicVideo/projects.js');
-const { applyMusicVideoEdit } = await import('../../lib/musicVideoEditResult.js');
+const { applyMusicVideoEdit } = await import('../../lib/musicVideo/musicVideoEditResult.js');
 
 const app = express();
 app.use(express.json());

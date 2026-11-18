@@ -12,7 +12,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
  * capability ahead of the spawn.
  */
 
-import { isOllamaBackedProvider } from './providers.js'
+import { isOllamaBackedProvider } from './provider/providers.js'
 // Straight from `internal/`: deliberately not re-exported from providers.js, so
 // the normalization cannot drift.
 import { ollamaBaseFromProvider } from '../lib/aiToolkit/internal/ollamaBacked.js'
@@ -23,7 +23,7 @@ import {
   resolveOllamaContextLength
 } from '../lib/ollamaContext.js'
 import { ensureContextWindow, getBaseUrl, getModelCapabilities, getRuntimeContextLength } from './ollamaManager.js'
-import { LIFECYCLE_LINES } from '../lib/agentOutputMarkers.js'
+import { LIFECYCLE_LINES } from '../lib/agent/agentOutputMarkers.js'
 
 /**
  * Prepare the Ollama daemon for an agent harness run.

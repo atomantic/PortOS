@@ -17,7 +17,7 @@ import {
   getActiveCatalogType,
   currentPayloadSchemaVersion,
   defaultTagsForType,
-} from '../../lib/catalogTypes.js';
+} from '../../lib/catalog/catalogTypes.js';
 import { getInstanceId } from '../instanceIdentity.js';
 import {
   newIngredientId,

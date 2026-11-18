@@ -17,7 +17,7 @@ import { listJobs, listQueueJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJo
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 import { saveMediaPromptExamination, listMediaPromptExaminations, getMediaPromptExamination } from '../services/mediaPromptHistory.js';
 import { promptFromMedia } from '../services/mediaPromptFromMedia.js';
-import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
+import { CODEX_EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { videoSegmentReplayReceiptSchema } from '../services/mediaJobQueue/videoExecution.js';
 import { sanitizeJob } from '../services/mediaJobQueue/sanitizeJob.js';
 import { isRemoteMediaJob } from '../services/mediaJobQueue/remoteMediaJob.js';

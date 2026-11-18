@@ -30,7 +30,7 @@
  * tree-wide import budget (`lib/importScoping.test.js`; server/AGENTS.md "Import scoping").
  */
 
-import { agentApiAuthNote, agentApiCurl } from './agentApiToken.js';
+import { agentApiAuthNote, agentApiCurl } from './agent/agentApiToken.js';
 import { trimTo } from './textUtils.js';
 
 /**
@@ -75,12 +75,12 @@ export const GOAL_FIDELITY_REVIEW_SURFACES = Object.freeze({
   objective: Object.freeze({
     file: 'server/lib/goalFidelity.js',
     symbol: 'taskObjective',
-    describe: 'the OBJECTIVE block — `taskObjective()` in `server/lib/goalFidelity.js`, which composes the task\'s own `description` and `taskContextBlock(task)` (`server/lib/cosTaskPrompt.js`) within `MAX_OBJECTIVE_CHARS`, plus a marker for task screenshots whose separately bounded image content is passed to the local reviewer',
+    describe: 'the OBJECTIVE block — `taskObjective()` in `server/lib/goalFidelity.js`, which composes the task\'s own `description` and `taskContextBlock(task)` (`server/lib/cos/cosTaskPrompt.js`) within `MAX_OBJECTIVE_CHARS`, plus a marker for task screenshots whose separately bounded image content is passed to the local reviewer',
   }),
   diff: Object.freeze({
-    file: 'server/services/agentFinalization.js',
+    file: 'server/services/agent/agentFinalization.js',
     symbol: 'evaluateGoalFidelity',
-    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agentFinalization.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
+    describe: 'the DIFF block — the run-window diff assembled by `evaluateGoalFidelity` in `server/services/agent/agentFinalization.js`, capped at `MAX_FIDELITY_DIFF_CHARS`, which on a retry shares that cap with the change and commit messages an earlier attempt provably merged (`services/goalFidelityPriorDelivery.js`)',
   }),
   rubric: Object.freeze({
     file: 'server/services/codeReview.js',

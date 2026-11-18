@@ -33,19 +33,19 @@
  * Each cycle settles the previous one's requests first.
  */
 
-import { getProviderQuotas } from './providerUsage.js';
+import { getProviderQuotas } from './provider/providerUsage.js';
 import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, recordQuotaBurnDispatch, selectBurnCandidates, withPendingDispatches } from './quotaBurn.js';
 import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quotaBurnAcceptance.js';
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';
 import { getActiveQuotaBurnBlocks, recordBurnAgentCompletion } from './quotaBurnDenials.js';
-import { isQueuedContinuation } from '../lib/agentOutcome.js';
+import { isQueuedContinuation } from '../lib/agent/agentOutcome.js';
 import { getQuotaBurnConfig, getQuotaBurnReservations, getQuotaBurnRuns, quotaBurnReservationKey, recordQuotaBurnRun } from './quotaBurnStore.js';
 import { countQuotaBurnStepPending, getQuotaBurnTaskCatalog, invokeQuotaBurnStep } from './quotaBurnInvoke.js';
 import { familyHasRunnableJobs, familyIsConfigured, jobIsSpent, quotaBurnJobKey } from '../lib/quotaBurnConfig.js';
 import { applyQuotaBurnAvailability } from '../lib/quotaBurnTaskRef.js';
 import { windowLabelOf } from '../lib/quotaWindows.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 import { nextQuotaBurnSequenceJob, completeQuotaBurnSequenceStep, heldForDeepCheckpoint } from './quotaBurnSequence.js';
 import { burnPlanOwnsAgent } from '../lib/quotaBurnOrigin.js';
 import { isHostShuttingDown } from '../lib/hostShutdown.js';

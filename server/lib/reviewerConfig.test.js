@@ -56,12 +56,12 @@ import {
   ZERO_REVIEWER_COVERAGE_NOTE,
   hasReviewerCoverage,
 } from './reviewerConfig.js';
-import { PROVIDER_VENDORS } from './providerVendors.js';
+import { PROVIDER_VENDORS } from './provider/providerVendors.js';
 // The Zod half of the old cosValidation.js — these cases assert that a reviewer
 // pin survives the schema that persists it, so they need both modules.
-import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cosValidation.js';
+import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cos/cosValidation.js';
 import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
-import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './providerModels.js';
+import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './provider/providerModels.js';
 
 describe('reviewerConfig reviewer CLI binaries', () => {
   // The bug this exists to prevent: `antigravity` is the stored, federated

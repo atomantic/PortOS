@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the I/O boundaries; keep catalogSeed + catalogTypes real (pure transforms).
 // The catalogDB mock must still provide cdRefRoleForType because the real
 // catalogSeed imports it for role mapping.
-vi.mock('../catalogDB.js', () => ({
+vi.mock('../catalog/catalogDB.js', () => ({
   hybridSearchIngredients: vi.fn(),
   linkIngredientsToCreativeDirector: vi.fn(async () => []),
   cdRefRoleForType: (type) => ({ character: 'cast', place: 'location', object: 'prop', scene: 'scene' }[type] || 'reference'),
@@ -22,7 +22,7 @@ import {
   applyAutoCastToProject,
   toSuggestionView,
 } from './autoCast.js';
-import { hybridSearchIngredients, linkIngredientsToCreativeDirector } from '../catalogDB.js';
+import { hybridSearchIngredients, linkIngredientsToCreativeDirector } from '../catalog/catalogDB.js';
 import { generateQueryEmbedding } from '../memoryEmbeddings.js';
 import { getProject, updateProject } from './local.js';
 

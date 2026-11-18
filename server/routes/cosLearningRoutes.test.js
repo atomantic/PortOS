@@ -32,7 +32,7 @@ vi.mock('../services/weeklyDigest.js', () => ({
   compareWeeks: vi.fn()
 }));
 
-vi.mock('../services/cosState.js', () => ({
+vi.mock('../services/cos/cosState.js', () => ({
   loadState: vi.fn().mockResolvedValue({ config: { confidenceAutoApproval: {} } })
 }));
 

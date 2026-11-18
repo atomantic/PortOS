@@ -7,7 +7,7 @@ const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36)
 const toSec = (value) => (value === '' ? null : Number(value));
 const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
-// Mirrors the server's composition enums (server/lib/musicVideoValidation.js).
+// Mirrors the server's composition enums (server/lib/musicVideo/musicVideoValidation.js).
 const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop'], ['build', 'Word build']];
 const PLACEMENTS = [['lower', 'Lower'], ['center', 'Center'], ['upper', 'Upper']];
 const EMPHASES = [['subtitle', 'Subtitle'], ['hero', 'Hero']];

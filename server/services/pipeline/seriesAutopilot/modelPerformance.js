@@ -7,7 +7,7 @@
  * effort. No parallel datastore: deleting a run also deletes its evidence.
  */
 
-import { getAllProviders } from '../../providers.js';
+import { getAllProviders } from '../../provider/providers.js';
 import { getRun, listRuns, patchRunMetadata } from '../../runner.js';
 
 const MAX_RUNS = 5_000;

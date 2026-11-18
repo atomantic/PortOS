@@ -81,7 +81,7 @@ function outcomesTrackerSupported(filer) {
 import { resolveAppWorkTracker, resolveRepoForgeTarget } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { resolveAgentProviderPin } from '../appTaskProviderPin.js'
-import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agentSentinel.js'
+import { PROGRAMMATIC_OUTPUT_COMPLETION_HEADING } from '../../lib/agent/agentSentinel.js'
 import { join } from 'path'
 import { ensureForgeReachable } from '../github.js';
 
@@ -437,7 +437,7 @@ export async function buildTaskInput({ app } = {}) {
  */
 async function resolveProposalPlanner(agentId) {
   if (!agentId) return null
-  const { getAgentRecord } = await import('../cosAgentLifecycle.js')
+  const { getAgentRecord } = await import('../cos/cosAgentLifecycle.js')
   const record = await getAgentRecord(agentId).catch(() => null)
   if (!record?.metadata) return null
   return resolvePlannerId({ providerId: record.metadata.providerId, model: record.metadata.model })
@@ -533,7 +533,7 @@ export function isTaskOutputPayload(payload) {
 }
 
 async function defaultEnqueueHandoff(taskData) {
-  const { addTask } = await import('../cosTaskStore.js')
+  const { addTask } = await import('../cos/cosTaskStore.js')
   return addTask(taskData, 'internal')
 }
 

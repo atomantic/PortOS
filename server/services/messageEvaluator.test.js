@@ -6,7 +6,7 @@ const gateResult = ({ decided = [], pending = [], skipped = [] } = {}) => ({
   decided: new Map(decided), pending, skipped, measure: mocks.measure,
 });
 vi.mock('./settings.js', () => ({ getSettings: mocks.settings }));
-vi.mock('./providers.js', () => ({ getProviderById: mocks.provider }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: mocks.provider }));
 vi.mock('./messageTriageRules.js', () => ({ getTriageRules: async () => [{
   senderPattern: 'rule sender instruction', correctedAction: 'review',
   exampleSubject: 'historical subject sentinel', originalAction: 'archive', count: 2,

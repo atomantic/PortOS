@@ -22,7 +22,7 @@ it.each([
   expect(JSON.parse(options.body)).toEqual({ appId: 'example', providerId: 'codex', model: 'example-model', effort: null, ...choices });
 });
 
-// Listing responses bound `metadata.taskDescription` (server/lib/cosAgentListProjection.js).
+// Listing responses bound `metadata.taskDescription` (server/lib/cos/cosAgentListProjection.js).
 // Anything that REUSES that text — Resume, Relaunch — has to get the whole thing.
 const okJson = (body) => vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body });
 

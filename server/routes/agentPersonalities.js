@@ -13,9 +13,9 @@ import {
   agentUpdateSchema,
   agentGenerateSchema,
   agentToggleSchema,
-} from '../lib/agentValidation.js';
-import * as agentPersonalities from '../services/agentPersonalities.js';
-import { generateAgentPersonality } from '../services/agentPersonalityGenerator.js';
+} from '../lib/agent/agentValidation.js';
+import * as agentPersonalities from '../services/agent/agentPersonalities.js';
+import { generateAgentPersonality } from '../services/agent/agentPersonalityGenerator.js';
 import { logAction } from '../services/history.js';
 
 const router = Router();

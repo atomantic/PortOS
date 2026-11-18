@@ -1,13 +1,13 @@
-import { activeMusicVideoSubjects } from '../../lib/musicVideoCastSelection.js';
-import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideoLimits.js';
+import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
+import { MUSIC_VIDEO_MAX_SUBJECTS } from '../../lib/musicVideo/musicVideoLimits.js';
 import { randomUUID } from 'node:crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { extractNonPlaceholderJson } from '../../lib/jsonExtract.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { STORYBOARD_LIMITS, newStoryboardEntityId } from '../../lib/storyboardVocabulary.js';
-import { toolFreeOneShotRefusal } from '../../lib/providerVendors.js';
-import { artGuideProposalSchema, storyProposalSchema } from '../../lib/musicVideoStoryValidation.js';
+import { toolFreeOneShotRefusal } from '../../lib/provider/providerVendors.js';
+import { artGuideProposalSchema, storyProposalSchema } from '../../lib/musicVideo/musicVideoStoryValidation.js';
 import { lyricSheetText } from './castAndSetsDirection.js';
 import { mutateProjectRecord } from './projects.js';
 import { applyProjectPatch } from './projectsLogic.js';

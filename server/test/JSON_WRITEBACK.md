@@ -1,6 +1,6 @@
 # JSON write-back prevention guard
 
-Run from `server/`: `node_modules/.bin/vitest run jsonWritebackConventions.test.js`.
+Run from `server/`: `node_modules/.bin/vitest run jsonWritebackConventions.guard.test.js`.
 The guard parses server modules to discover wrappers, then checks service source; it never imports services, reads runtime
 records, connects to a database, or requires git history to run.
 
@@ -145,7 +145,7 @@ allowlist of modules. Future service pairs are discovered directly at test time.
 | postRunStore.js | <code>SESSIONS_FILE</code> | Reviewed exception (see registry) | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | postRunStore.js | <code>TRAINING_FILE</code> | Reviewed exception (see registry) | [#6981](https://github.com/atomantic/PortOS/pull/6981) |
 | projectFileStore.js | <code>file</code> | Strict read | [#6983](https://github.com/atomantic/PortOS/pull/6983) |
-| providerQuotaShare.js | <code>PROVIDER_QUOTAS_FILE</code> | Reviewed exception (see registry) | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
+| provider/providerQuotaShare.js | <code>PROVIDER_QUOTAS_FILE</code> | Reviewed exception (see registry) | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
 | rounds.js | <code>STATE_PATH</code> | Strict read | [#6980](https://github.com/atomantic/PortOS/pull/6980) |
 | sharing/annotationsSync.js | <code>recordPath</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |
 | sharing/buckets.js | <code>REGISTRY_PATH ( )</code> | Strict read | [#6982](https://github.com/atomantic/PortOS/pull/6982) |

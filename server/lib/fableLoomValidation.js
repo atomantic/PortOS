@@ -33,7 +33,7 @@ import {
   FABLELOOM_PLOT_POINT_KINDS,
 } from './fableLoomOutline.js';
 import { FABLELOOM_PLAYTEST_LIMITS } from './fableLoomPlaytest.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { llmRoutePinSchema } from './llmRoutePin.js';
 import { seriesDesignSchema } from './sharedSchemas.js';

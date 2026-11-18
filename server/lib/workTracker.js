@@ -13,7 +13,7 @@
 // resolveAppWorkTracker is the async wrapper that reads the app's origin URL via
 // readOriginRemoteUrl, extracts the host with hostFromOriginUrl, and checks CLI host
 // maps only when the host-pattern fast path cannot identify a forge. See
-// server/services/cosTaskGenerator.js for the claim-work router that consumes
+// server/services/cos/cosTaskGenerator.js for the claim-work router that consumes
 // trackerToClaimTaskType.
 
 import { readFile } from 'node:fs/promises';

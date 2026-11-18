@@ -14,8 +14,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
-import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideoConditioning.js';
-import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
+import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { MOOD_BOARD_LOOK_LABEL, musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideo/musicVideoCreativeContext.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -26,7 +26,7 @@ const { default: musicVideoRoutes } = await import('../../routes/musicVideo.js')
 const projects = await import('./projects.js');
 const service = await import('./castAndSetsService.js');
 const production = await import('./production.js');
-const { castSetsInspectionInputs } = await import('../../lib/musicVideoCastSetsInspection.js');
+const { castSetsInspectionInputs } = await import('../../lib/musicVideo/musicVideoCastSetsInspection.js');
 const { musicVideoEvents } = await import('./events.js');
 const { hostControlRouteGate } = await import('../authGate.js');
 
@@ -1028,7 +1028,7 @@ describe('Cast & Sets check-in', () => {
       .toMatchObject({ imageId: `${sheet.id}.png`, role: 'character', condition: false });
     expect(done.concept.subjects.find((s) => s.id === 'cs-cast-rico')).toMatchObject({ kind: 'character', name: 'Rico', role: 'supporting' });
     // The planner reads the cast by name and role, so the shots it writes name who they feature.
-    const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+    const { musicVideoDirectionContext } = await import('../../lib/musicVideo/musicVideoCreativeContext.js');
     expect(musicVideoDirectionContext(done.castAndSets.direction)).toContain('Cast Rico (drummer): sweaty, grinning; stubble, brown eyes');
   });
 
@@ -1781,10 +1781,10 @@ it('keeps a catalog-conditioned sheet for every fixed supporting character throu
   expect(done.concept.subjects.filter((s) => !s.id.startsWith('cs-'))).toEqual(project.concept.subjects);
   expect(done.concept.subjects.filter((s) => s.id.startsWith('cs-cast-'))).toEqual([]);
   // The planner is told about all of them, and a shot naming all five stays within the per-shot cap.
-  const { musicVideoDirectionContext } = await import('../../lib/musicVideoCreativeContext.js');
+  const { musicVideoDirectionContext } = await import('../../lib/musicVideo/musicVideoCreativeContext.js');
   const context = musicVideoDirectionContext(done.castAndSets.direction);
   for (const name of FIXED_SUPPORTING) expect(context).toContain(`Cast ${name}`);
-  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideoConditioning.js');
+  const { musicVideoConditioningReferences, musicVideoReferenceCapacity } = await import('../../lib/musicVideo/musicVideoConditioning.js');
   const shot = musicVideoConditioningReferences(done, { sectionIndex: 0, prompt: 'Anika, Boris, Cyrus, Delia and Elio on the quay' }, null, null, { limit: musicVideoReferenceCapacity('codex') });
   expect(shot).toHaveLength(5);
   expect(shot[2].id).toBe('mvr-cs-cast-anika');
@@ -1814,7 +1814,7 @@ it('holds reference room for fixed cast sheets and refuses an approval that cann
   const ours = approved.visualSpec.references.filter((r) => r.id.startsWith('mvr-cs-')).map((r) => r.id);
   expect(ours).toEqual(['mvr-cs-character', ...FIXED_SUPPORTING.map((name) => `mvr-cs-cast-${name.toLowerCase()}`)]);
   // A full list must not make the face images already rendered at approval unusable on a close-up.
-  const { musicVideoConditioningReferences } = await import('../../lib/musicVideoConditioning.js');
+  const { musicVideoConditioningReferences } = await import('../../lib/musicVideo/musicVideoConditioning.js');
   const scene = { prompt: 'Close up of Anika' };
   expect(musicVideoConditioningReferences(approved, scene).map((ref) => ref.id))
     .toEqual(['mvr-cs-character', 'mvr-cs-expressions', 'mvr-cs-cast-anika', 'mvr-cs-face-anika', 'mvr-pull-Anika']);
@@ -2366,7 +2366,7 @@ it('names the Casting changes since the sheet was built, and an image update cle
 describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
   it('inspects standalone images with a verified local vision model instead of a text-only default', async () => {
     const api = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true, defaultModel: 'qwen3-coder:30b' };
-    const providers = await import('../providers.js');
+    const providers = await import('../provider/providers.js');
     const ollama = await import('../ollamaManager.js');
     const runner = await import('../promptRunner.js');
     const { resolvePlateReviewer } = await import('./plateReview.js');
@@ -2395,7 +2395,7 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
 
   it('inspects a re-render without a production run using the API default even when a CLI is active (#14653)', async () => {
     const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
-    const providers = await import('../providers.js');
+    const providers = await import('../provider/providers.js');
     const runner = await import('../promptRunner.js');
     const { resolvePlateReviewer } = await import('./plateReview.js');
     const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');
@@ -2926,7 +2926,7 @@ it('converts legacy check-in to catalog links without recasting, copying media, 
   const db = { getIngredient: async () => ({ id: 'chr-example', type: 'character', name: 'Example', payload: { physicalDescription: 'Catalog description' } }),
     listMediaForIngredient: async () => [{ kind: 'portrait', mediaKey: 'catalog-example.png' }] };
   service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
-  const catalogDB = await import('../catalogDB.js');
+  const catalogDB = await import('../catalog/catalogDB.js');
   const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
   const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
   onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -2986,7 +2986,7 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     };
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
     // Project reads hydrate the check-in from the live catalog module, not the injected one.
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
     const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
     onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -3010,7 +3010,7 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     Object.keys(RECORDS).forEach((id) => onDisk(`${id}.png`));
     // No injected catalog: the stage read and the project read both go to the live catalog module, as in production.
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: null }));
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(async (id) => RECORDS[id] ?? null);
     const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }]);
     onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -3287,7 +3287,7 @@ describe('saved shot references across the switch to catalog links', () => {
       visualSpec: { ...current.visualSpec, references: REFERENCES }, castAndSets: stage } }));
     const db = { getIngredient: async id => ({ id, type: id.startsWith('plc-') ? 'place' : 'character', name: id, payload: {} }), listMediaForIngredient: async id => MEDIA[id] || [] };
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const spies = [vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient), vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient)];
     onTestFinished(() => spies.forEach(spy => spy.mockRestore()));
     return project;

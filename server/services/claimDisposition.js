@@ -4,7 +4,7 @@ import { execGit } from '../lib/execGit.js';
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { expandHome, safeJSONParse } from '../lib/fileUtils.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
-import { getAppDataForTask } from './agentAppWorkspace.js';
+import { getAppDataForTask } from './agent/agentAppWorkspace.js';
 import { listWorktrees } from './worktreeManager.js';
 import { getInstanceId } from './instanceIdentity.js';
 
@@ -35,7 +35,7 @@ async function selectedIssues(task, agent, context) {
   if (number) return [number];
   if (task.metadata?.claimTarget || !agent.metadata?.claimSelection
     || agent.metadata?.claimReleasedBranches?.length) return null;
-  const { claimSelectionIssues } = await import('./cosClaimSelection.js');
+  const { claimSelectionIssues } = await import('./cos/cosClaimSelection.js');
   return claimSelectionIssues(agent, task, { ...context, instanceId: await getInstanceId() });
 }
 

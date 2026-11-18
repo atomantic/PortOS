@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createCatalogReads, resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, dropStaleCatalogPicks } from './catalogCheckin.js';
-import { musicVideoCatalogReferenceId as refId } from '../../lib/musicVideoConditioning.js';
-import { musicVideoReferenceChoices, musicVideoCatalogPickPlans } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCatalogReferenceId as refId } from '../../lib/musicVideo/musicVideoConditioning.js';
+import { musicVideoReferenceChoices, musicVideoCatalogPickPlans } from '../../lib/musicVideo/musicVideoConditioning.js';
 
 const subject = { id: 'subject-example', ingredientId: 'character-example', kind: 'character', name: 'Example actor' };
 const fixture = (extra = {}) => ({ concept: { subjects: [subject] }, castAndSets: { source: 'catalog', status: 'review',

@@ -12,7 +12,7 @@ import { authEvents } from './auth.js';
 import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
-import { providerQuotaEvents } from './providerQuotaEvents.js';
+import { providerQuotaEvents } from './provider/providerQuotaEvents.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Preserve installed once-only listeners across Vitest's per-test mock-call
@@ -32,7 +32,7 @@ vi.mock('./pm2.js', () => ({
   buildEnv: vi.fn((pm2Home) => ({ PATH: '/usr/bin', ...(pm2Home ? { PM2_HOME: pm2Home } : {}) }))
 }));
 vi.mock('./streamingDetect.js', () => ({ streamDetection: vi.fn() }));
-vi.mock('./cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
+vi.mock('./cos/cosEvents.js', () => ({ cosEvents: { on: vi.fn((...args) => queueListeners.cos.push(args)) }, emitLog: vi.fn() }));
 vi.mock('./apps.js', () => ({ appsEvents: { on: vi.fn() }, getAppById: vi.fn(), notifyAppsChanged: vi.fn(), updateApp: vi.fn() }));
 vi.mock('./appProcessStatus.js', () => ({ resolvePm2HomeForProcess: vi.fn() }));
 // logAction appends to the real history file — mock it or this suite writes to data/.
@@ -78,7 +78,7 @@ vi.mock('./shell.js', () => ({
 }));
 // The shell:start provider-launch path resolves a stored provider. Mock the
 // service (not lib/tuiShellLaunch.js) so the REAL command+env resolution runs.
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../lib/socketValidation.js', () => ({
   validateSocketData: vi.fn((schema, data) => data),
   detectStartSchema: {},
@@ -110,7 +110,7 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { audioGenEvents } from './audioGen/events.js';
 import { detachSocketSessions } from './shell.js';
 import * as shellService from './shell.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { updateApp as runAppUpdate } from './appUpdater.js';
 import { analyzeApp, standardizeRefusalFor } from './pm2Standardizer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';

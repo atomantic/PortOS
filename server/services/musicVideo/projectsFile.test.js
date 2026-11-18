@@ -1,5 +1,5 @@
-import { plateReviewEvidence } from '../../lib/musicVideoPlateEvidence.js';
-import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideoPlateEvidence.js';
+import { plateReviewEvidence } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
+import { plateRequirements, selectedPlatePasses } from '../../lib/musicVideo/musicVideoPlateEvidence.js';
 /**
  * Music Video file-backend round-trip (#1760). Runs against a tmpdir in the
  * normal (non-DB) suite — covers create/list/get/update/delete + the scene-board
@@ -50,6 +50,16 @@ describe('projectsFile backend', () => {
     const list = await file.listProjects();
     expect(list).toHaveLength(1);
     expect((await file.getProject(created.id)).name).toBe('MV One');
+  });
+
+  it('filters before slicing a project page', async () => {
+    const first = await file.createProject({ name: 'First' });
+    const done = await file.createProject({ name: 'Done' });
+    const last = await file.createProject({ name: 'Last' });
+    await file.updateProject(done.id, { status: 'complete' });
+    const page = await file.listProjectPage({ limit: 1, offset: 1, filter: project => project.status !== 'complete' });
+    expect(page).toMatchObject({ total: 2, items: [{ id: last.id }] });
+    expect(page.items[0].id).not.toBe(first.id);
   });
 
   it('updates project metadata', async () => {

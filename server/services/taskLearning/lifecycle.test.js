@@ -16,16 +16,16 @@ vi.mock('./store.js', () => ({
   cosEvents: { on: vi.fn() },
   emitLog: vi.fn(),
 }));
-vi.mock('../cos.js', () => ({}));
-vi.mock('../cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agentsStore.list) }));
-vi.mock('../agentChurn.js', () => ({
+vi.mock('../cos/cos.js', () => ({}));
+vi.mock('../cos/cosAgentLifecycle.js', () => ({ getAgents: vi.fn(async () => agentsStore.list) }));
+vi.mock('../agent/agentChurn.js', () => ({
   observeAgentChurn: vi.fn(async () => ({ flagged: false })),
 }));
 
 import { backfillFromHistory, initTaskLearning } from './lifecycle.js';
 import { recordTaskCompletion } from './metrics.js';
 import { cosEvents } from './store.js';
-import { observeAgentChurn } from '../agentChurn.js';
+import { observeAgentChurn } from '../agent/agentChurn.js';
 
 const completed = (taskId, analysisType, validationPassed) => ({
   status: 'completed',

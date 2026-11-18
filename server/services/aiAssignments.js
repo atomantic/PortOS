@@ -1,5 +1,5 @@
 import { getSettings, updateSettings } from './settings.js';
-import { getProviderById, getSelectableProviders, isOllamaBackedProvider, setActiveProvider, updateProvider } from './providers.js';
+import { getProviderById, getSelectableProviders, isOllamaBackedProvider, setActiveProvider, updateProvider } from './provider/providers.js';
 import * as brainService from './brain.js';
 import * as universeService from './universeBuilder.js';
 import * as storyBuilderService from './storyBuilder.js';
@@ -7,12 +7,12 @@ import * as pipelineSeriesService from './pipeline/series.js';
 import * as taskScheduleService from './taskSchedule.js';
 import * as loopsService from './loops.js';
 import * as featureAgentsService from './featureAgents.js';
-import * as agentPersonalitiesService from './agentPersonalities.js';
+import * as agentPersonalitiesService from './agent/agentPersonalities.js';
 import * as autonomousJobsService from './autonomousJobs.js';
 import { getVoiceConfig, updateVoiceConfig } from './voice/config.js';
 import { isPlainObject } from '../lib/objects.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { effortLevelsForProvider } from '../lib/providerModels.js';
+import { effortLevelsForProvider } from '../lib/provider/providerModels.js';
 
 const textProviderTypes = ['api', 'cli', 'tui'];
 const cliProviderTypes = ['cli', 'tui'];

@@ -10,7 +10,7 @@ vi.mock('fs', () => ({
   existsSync: vi.fn(() => true)
 }));
 
-vi.mock('./cosEvents.js', () => ({
+vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn(), on: vi.fn() }
 }));
 
@@ -69,7 +69,7 @@ describe('decisionLog.js', () => {
     vi.doMock('fs', () => ({
       existsSync: vi.fn(() => true)
     }));
-    vi.doMock('./cosEvents.js', () => ({
+    vi.doMock('./cos/cosEvents.js', () => ({
       cosEvents: { emit: vi.fn(), on: vi.fn() }
     }));
     vi.doMock('../lib/fileUtils.js', () => ({

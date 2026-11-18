@@ -1,9 +1,9 @@
 import CreditsOutroCanvas from './CreditsOutroCanvas.jsx';
 import StatsOutroCanvas from './StatsOutroCanvas.jsx';
-import { endingPartAt } from '../../../../server/lib/musicVideoEnding.js';
+import { endingPartAt } from '../../../../server/lib/musicVideo/musicVideoEnding.js';
 
 /**
- * The ending after the song (lib/musicVideoEnding.js) at its own time `t`:
+ * The ending after the song (lib/musicVideo/musicVideoEnding.js) at its own time `t`:
  * the cutting room floor, then the credits, whichever is showing.
  */
 export default function EndingCanvas({ parts, stats, t }) {

@@ -10,7 +10,7 @@ import { isPlainObject } from './objects.js';
 import { isTruthyMeta } from './metadataFlags.js';
 import { parsePullRequestUrl } from './gitForge.js';
 import { PR_COMPLETIONS, explicitPrCompletion } from './prDisposition.js';
-import { processAuditRecoveryOriginSchema } from './persistentMindProcessAudit.js';
+import { processAuditRecoveryOriginSchema } from './persistent/persistentMindProcessAudit.js';
 
 /**
  * The parent pull request a repository-cleanup recovery was filed to land

@@ -16,7 +16,7 @@
  *
  * - `admitted`: holds `withBackupAssetPublication` from its first byte change
  *   through the row that names (or stops naming) those bytes. Every listed
- *   module calls it; `backupAssetOwners.test.js` keeps this list and the code
+ *   module calls it; `backupAssetOwners.guard.test.js` keeps this list and the code
  *   in step in both directions. Where a long producer (a sidecar or child
  *   process) writes the bytes in place, only the row commit takes the lease:
  *   a cut copies files before it dumps rows, so a row that waits out the cut
@@ -251,8 +251,8 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'attachments-and-catalog-media',
     status: 'admitted',
     modules: [
-      'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
-      'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js', 'services/catalogLookAround.js',
+      'services/persistent/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalog/catalogMedia.js',
+      'services/catalog/catalogIngestSources.js', 'services/roundReferenceAudioImport.js', 'services/catalog/catalogLookAround.js',
     ],
   },
   {
@@ -439,7 +439,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // Purge leases its intent manifest and both unlinks (file-primary records).
     id: 'cos-recording-compression-and-purge',
     status: 'admitted',
-    modules: ['services/cosAgentStorage.js'],
+    modules: ['services/cos/cosAgentStorage.js'],
   },
   {
     // Completion, zombie/stale archival and deletion pair moved/removed trees
@@ -447,7 +447,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     // precedes the state lock. Legacy layout migration owns the same pair.
     id: 'cos-agent-archive-and-index-publication',
     status: 'admitted',
-    modules: ['services/cosAgentLifecycle.js', 'services/cosAgentArchive.js', 'services/cosAgentIndex.js'],
+    modules: ['services/cos/cosAgentLifecycle.js', 'services/cos/cosAgentArchive.js', 'services/cos/cosAgentIndex.js'],
   },
   {
     // Versioned manifest plus the compiledManifest/history pointers in the
@@ -471,14 +471,14 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: ['lib/runtimeFilePublication.js', 'services/agentTuiSpawning/outputSpooler.js',
       'services/agentTuiSpawning/sessionController.js', 'cos-runner/index.js', 'cos-runner/tuiExit.js',
-      'services/agentCliSpawning.js', 'services/agentSpawnDispatch.js',
+      'services/agent/agentCliSpawning.js', 'services/agent/agentSpawnDispatch.js',
       'services/subAgentSpawner.js', 'services/featureAgents.js',
       'services/runner.js', 'services/loops.js', 'cos-runner/completion.js'],
   },
   {
     id: 'agent-run-recording-publication',
     status: 'admitted',
-    modules: ['services/agentRunTracking.js'],
+    modules: ['services/agent/agentRunTracking.js'],
   },
   {
     // Downloads remain staged outside admission. Hash-path installation/dedupe

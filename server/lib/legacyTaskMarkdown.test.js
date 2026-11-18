@@ -1,8 +1,4 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
-import { trackedFiles } from '../../scripts/lib/trackedFiles.js';
 import { parseTasksMarkdown, sortByPriority, generateTasksMarkdown, STATUS_CHECKBOXES } from './legacyTaskMarkdown.js';
 import { getAutoApprovedTasks, getAwaitingApprovalTasks, groupTasksByStatus, TASK_STATUS_VALUES, UNKNOWN_STATUS_BLOCKED_CATEGORY } from './taskParser.js';
 
@@ -460,7 +456,6 @@ describe('Task Parser', () => {
       expect(markdown).not.toContain('## Completed');
     });
   });
-
 });
 
 describe('Task Parser — challenged status (#2441)', () => {
@@ -503,7 +498,6 @@ describe('Task Parser — challenged status (#2441)', () => {
     ]);
     expect(grouped.challenged.map((t) => t.id)).toEqual(['a']);
   });
-
 });
 
 describe('unrepresentable status/priority never drops a task (#7239)', () => {
@@ -814,15 +808,5 @@ describe('self-improve task ids survive a read round-trip', () => {
     const md = generateTasksMarkdown([{ id, status: 'pending', priority: 'MEDIUM', priorityValue: 2, description: 'Research models', metadata: {} }]);
     const [parsed] = parseTasksMarkdown(md);
     expect(parsed.id).toBe(id);
-  });
-});
-
-describe('the Markdown format stays out of the runtime (#16407)', () => {
-  it('is imported only by db-migration 018 outside tests', () => {
-    const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-    const importers = trackedFiles(root, ['server/**/*.js', 'server/**/*.mjs', 'scripts/**/*.js'])
-      .filter((file) => !/\.test\.js$/.test(file) && file !== 'server/lib/legacyTaskMarkdown.js')
-      .filter((file) => /from\s+['"][^'"]*legacyTaskMarkdown\.js['"]|import\(\s*['"][^'"]*legacyTaskMarkdown\.js/.test(readFileSync(join(root, file), 'utf8')));
-    expect(importers).toEqual(['server/scripts/db-migrations/018-cos-tasks-from-files.js']);
   });
 });

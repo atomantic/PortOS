@@ -13,14 +13,14 @@ vi.mock('../../services/appPullRequestMerge.js', async (importOriginal) => ({
   ...(await importOriginal()),
   mergeAppPullRequest: vi.fn(),
 }));
-vi.mock('../../services/cos.js', () => ({}));
-vi.mock('../../services/cosTaskStore.js', () => ({
+vi.mock('../../services/cos/cos.js', () => ({}));
+vi.mock('../../services/cos/cosTaskStore.js', () => ({
   getAllTasks: vi.fn(),
 }));
 vi.mock('../../services/codeReview.js', () => ({
   resolveReviewLoopOptions: vi.fn(),
 }));
-vi.mock('../../services/agentWorktreeCleanup.js', () => ({
+vi.mock('../../services/agent/agentWorktreeCleanup.js', () => ({
   spawnReviewLoopFollowUp: vi.fn(),
 }));
 vi.mock('../../services/prReviewerSecurity.js', async (importOriginal) => ({
@@ -40,9 +40,9 @@ vi.mock('../../services/taskSchedule.js', () => ({
 import * as appsService from '../../services/apps.js';
 import { listAppPullRequests } from '../../services/appPullRequests.js';
 import { mergeAppPullRequest } from '../../services/appPullRequestMerge.js';
-import { getAllTasks } from '../../services/cosTaskStore.js';
+import { getAllTasks } from '../../services/cos/cosTaskStore.js';
 import { resolveReviewLoopOptions } from '../../services/codeReview.js';
-import { spawnReviewLoopFollowUp } from '../../services/agentWorktreeCleanup.js';
+import { spawnReviewLoopFollowUp } from '../../services/agent/agentWorktreeCleanup.js';
 import { listExternalOpenPullRequests, resolvePrReviewerTargetScope } from '../../services/prReviewerSecurity.js';
 import { getOnDemandRequests, triggerOnDemandTask } from '../../services/taskSchedule.js';
 import { spawnPrDoReviewTask } from '../../services/prDoReviewTask.js';

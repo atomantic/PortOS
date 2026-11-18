@@ -3,16 +3,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { _createBlockedSystemInvestigationRecovery } from './blockedSystemInvestigation.js';
-import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
+import { resolveUndeliveredTaskUpdate, MAX_TASK_RETRIES } from './agent/agentErrorAnalysis.js';
 import { buildInvestigationFingerprint, couldReleaseBlockedTasks } from '../lib/investigationTasks.js';
 
 const identity = vi.hoisted(() => ({ agent: null, others: [], trusted: true }));
-vi.mock('./cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
+vi.mock('./cos/cosAgentLifecycle.js', () => ({ getAgentRecord: vi.fn(async () => identity.agent) }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
-vi.mock('./cosState.js', async importOriginal => ({ ...(await importOriginal()),
+vi.mock('./cos/cosState.js', async importOriginal => ({ ...(await importOriginal()),
   readAgentsStateForSafetyCheck: vi.fn(async () => ({ trusted: identity.trusted,
     agents: Object.fromEntries([identity.agent, ...identity.others].filter(agent => agent?.id).map(agent => [agent.id, agent])) })) }));
-vi.mock('./agentState.js', async importOriginal => ({ ...(await importOriginal()), activeAgents: new Map(), runnerAgents: new Map() }));
+vi.mock('./agent/agentState.js', async importOriginal => ({ ...(await importOriginal()), activeAgents: new Map(), runnerAgents: new Map() }));
 
 let root, path, time, created, calls, hold, failAfterCreate, race, failLink, analyses;
 const read = async () => JSON.parse(await readFile(path, 'utf8'));

@@ -11,13 +11,13 @@ import sharp from 'sharp';
 
 let dir;
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn(async () => ({
     id: 'lmstudio', type: 'api', endpoint: 'http://127.0.0.1:1234/v1', defaultModel: 'vision-model',
   })),
 }));
 vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn() }));
-vi.mock('./providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(async () => ({ success: true })) }));
+vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(async () => ({ success: true })) }));
 vi.mock('./visionCli.js', () => ({ describeImageViaCli: vi.fn() }));
 vi.mock('../lib/aiToolkit/endpointGuard.js', () => ({
   assertSecretEndpoint: vi.fn(),

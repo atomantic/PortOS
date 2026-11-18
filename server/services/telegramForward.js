@@ -14,7 +14,7 @@
  * `lib/telegramMessage.js`.
  */
 
-import { getDomainAutonomyMode } from './cosState.js';
+import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';
 import { peekMemory } from './memoryBackend.js';
 import { buildNotificationMessage, isMemoryApprovalNotification } from '../lib/telegramMessage.js';

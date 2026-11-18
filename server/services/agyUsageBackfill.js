@@ -10,7 +10,7 @@
 import { copyFile, mkdir, readdir, readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { agyUsageProviderIdFromList } from './agyMediaUsage.js';
 import {
   galleryAgyImageUsageEvent,

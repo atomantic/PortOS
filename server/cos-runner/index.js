@@ -48,9 +48,9 @@ import { createRunnerShutdown, registerRunnerShutdownSignals } from './shutdown.
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { PORTS } from '../lib/ports.js';
 import { setupProcessErrorHandlers } from '../lib/errorHandler.js';
-import { parseSentinelPayload } from '../lib/agentSentinel.js';
-import { createAgentSentinelAccess } from '../services/agentSentinelWatcher.js';
-import { SENTINEL_COMPLETION_MARKER } from '../lib/agentOutputMarkers.js';
+import { parseSentinelPayload } from '../lib/agent/agentSentinel.js';
+import { createAgentSentinelAccess } from '../services/agent/agentSentinelWatcher.js';
+import { SENTINEL_COMPLETION_MARKER } from '../lib/agent/agentOutputMarkers.js';
 
 // Process-level safety net (defense-in-depth, see issue #1878). The main server
 // (server/index.js) already wires this same shared helper via

@@ -22,7 +22,7 @@ vi.mock('../lib/fileUtils.js', async original => {
 vi.mock('./apps.js', () => ({ getAppById: async id => fixture.app?.id === id ? fixture.app : null }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: async () => 'example-instance', UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}), resolveReviewLoopOptions: async metadata => ({ reviewers: metadata.reviewers, reviewerEfforts: metadata.reviewerEfforts }) }));
-vi.mock('./cosTaskStore.js', () => ({
+vi.mock('./cos/cosTaskStore.js', () => ({
   getTaskById: async id => id === 'release-task' ? { id, priority: 'MEDIUM', metadata: { app: 'example-app', reviewers: ['codex'], reviewerEfforts: { codex: 'high' } } } : fixture.tasks.get(id) || null,
   addTask: async (task, type, options) => {
     if (fixture.taskFailure === 'before') throw new Error('synthetic queue failure');
@@ -32,7 +32,7 @@ vi.mock('./cosTaskStore.js', () => ({
     return saved;
   },
 }));
-vi.mock('./cosState.js', () => ({
+vi.mock('./cos/cosState.js', () => ({
   AGENTS_DIR: '/unused-synthetic-agents',
   loadState: async () => fixture.state,
   readAgentsStateForSafetyCheck: async () => ({ trusted: true, agents: fixture.state.agents }),
@@ -52,10 +52,10 @@ vi.mock('./github.js', () => ({ execGh: async args => {
   return JSON.stringify(fixture.replies[path]);
 } }));
 import { verifyAgentReleasePublication } from './releasePublication.js';
-import { registerAgent, updateAgent, completeAgent } from './cosAgentLifecycle.js';
+import { registerAgent, updateAgent, completeAgent } from './cos/cosAgentLifecycle.js';
 import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs } from './releaseSynchronization.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents } from './cos/cosEvents.js';
 
 let repo, root, cutoff, pin, head, tree;
 const merge = 'a'.repeat(40), annotated = 'b'.repeat(40);

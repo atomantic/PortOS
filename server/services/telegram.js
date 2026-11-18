@@ -17,7 +17,7 @@ import { ensureDir, PATHS, readJSONFileStrict, formatDuration, atomicWrite } fro
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createTokenBucket } from '../lib/telegramRateLimit.js';
 import { escapeHtml, CALLBACK_APPROVE, CALLBACK_REJECT } from '../lib/telegramMessage.js';
-import { getActiveAgents } from './agentManagement.js';
+import { getActiveAgents } from './agent/agentManagement.js';
 import { getGoals } from './identity.js';
 
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
