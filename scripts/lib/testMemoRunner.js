@@ -52,7 +52,7 @@ const VIRTUAL_MODULE = /(?:^|\/)@vite\/|^\0|^virtual:/;
  * a tree guard (`*.guard.test.js`) or another always-run test, is named in
  * `TEST_MEMO_NEVER`, or carries the
  * `// test-memo: never` marker itself. Deciding that here is what spares a
- * files-mode plan of tree-wide guards the closure walk (seconds per stage)
+ * full or files plan of tree-wide guards the closure walk (seconds per stage)
  * whose only possible answer is "run it". An unreadable file is not decided
  * here; the analyzer reports it.
  */
@@ -78,14 +78,15 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
  *   unmemoizable: Set<string>, analyze: (test: string, recorded: string[]) => object, verdicts: Map }}
  */
 export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, repoRoot, shard = null, env = process.env, platform, arch, nodeVersion, toolVersion = () => null, caseFilter = [], acceptVerdictsFrom = [], listFiles = listRepositoryFiles, shardSlice = vitestShardSlice, listTests = listWorkspaceTests, readRecord = readMemoRecord, readEntry = readMemoEntry }) {
-  const workspaceTests = listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel));
-  const candidates = mode === 'files' ? uniqueSorted(repoFiles) : uniqueSorted([...workspaceTests, ...repoFiles]);
+  const candidates = mode === 'files' ? uniqueSorted(repoFiles)
+    : uniqueSorted([...listTests(scope, { repoRoot, platform, env }).map((rel) => toRepoPath(scope, rel)), ...repoFiles]);
   // Related reach can differ between sibling shards with different memo records.
   // Partition the complete inventory first so this cannot move a test's owner.
   const owned = shard ? shardSlice(candidates, { repoRoot, scope, ...shard }) : candidates;
-  // Files mode can bypass closure analysis for tests known to be never memoized.
+  // Full and files modes already know what to run without analyzing never-memoized tests.
   const alwaysRun = new Set(getAlwaysRunTests());
-  const unmemoizable = new Set(mode === 'files' ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
+  const unmemoizable = new Set(mode === 'files' || (mode === 'full' && memoDir)
+    ? owned.filter((test) => neverMemoized(test, repoRoot, alwaysRun)) : []);
   const options = { fs: createDiskFs(repoRoot, nodeFs, nodePath), workspaceRel: workspaceOf(scope), env, platform, arch, nodeVersion, toolVersion, caseFilter, acceptVerdictsFrom, listFiles: () => listFiles(repoRoot) };
   // Built on first use: a plan whose candidates are all unmemoizable never pays for the base closure.
   let primary = null;
@@ -294,7 +295,7 @@ export function readVitestDependencies(path, scope) {
 }
 
 /**
- * Remove every depfile under the workspace's Vitest cache before a run, so
+ * Remove every depfile under the workspace's Vitest cache before recording, so
  * the records read afterwards come from this run alone: Vitest merges the
  * file across runs, and CI restores it through a near-miss cache key.
  */
@@ -326,7 +327,7 @@ export function vitestDependenciesPath(repoRoot, scope) {
  * by merging into one it already has (`DependenciesCache.update`): cases the
  * filter skipped may import modules the record would then lack, which matters
  * to Vitest because it reuses the record for unfiltered runs. This runner
- * clears the depfile before every run, so without a seed a filtered run
+ * clears the depfile before recording, so without a seed a filtered run
  * recorded nothing and the real-Chrome suites, whose closures have
  * non-literal imports and therefore no floor key, never got an entry
  * (#16545). The memo does not share Vitest's concern: the filter is in the

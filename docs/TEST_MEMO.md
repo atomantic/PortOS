@@ -15,8 +15,8 @@ gets two content-addressed keys (`scripts/lib/testMemo.js`):
   with literal specifiers);
 - the **recorded** key hashes the modules the file actually loaded in the
   green run that produced its entry (Vitest's
-  `experimental.recordDependencies` depfile, cleared before each run so only
-  this run's records count). A module the test mocks away or never reaches
+  `experimental.recordDependencies` depfile, cleared before a run that
+  records new dependencies so only that run's records count). A module the test mocks away or never reaches
   cannot change its outcome, so a change to the lazily imported server
   cluster invalidates only the suites that loaded it; a new edge still
   invalidates because the importer's own bytes changed. Only plain import

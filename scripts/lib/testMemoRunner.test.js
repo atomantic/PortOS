@@ -518,12 +518,23 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(warm.run).toEqual([guard, listed, marked].sort());
 
     // A plan made only of never-memoized files analyzes nothing and says so.
-    const only = plan({ repoFiles: [guard, marked] });
+    const only = plan({ repoFiles: [guard, marked], listTests: () => { throw new Error('Files mode already has its inventory'); } });
     expect(only.verdicts.size).toBe(0);
     expect(only.run).toEqual([guard, marked].sort());
     expect(memoSummaryLine(only)).toContain('2 never-memoized guards not analyzed.');
-    // Related mode still resolves every closure: the marker only prunes files-mode plans.
-    expect(plan({ mode: 'related', repoFiles: [marked], repoSources: [] }).unanalyzed).toBe(0);
+    const listTests = () => [guard, listed, marked].map(test => test.slice('server/'.length));
+    const full = plan({ mode: 'full', repoFiles: [], listTests, readRecord: () => { throw new Error('Declared never tests have no memo'); } });
+    expect(full.run).toEqual([guard, listed, marked].sort());
+    expect(full.verdicts.size).toBe(0);
+    const recorded = recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: full, passed: full.run, dependencies: null, source: 'ci' });
+    expect(recorded.written).toBe(0);
+    expect(recorded.unrecorded.map(({ test, declared }) => [test, declared])).toEqual(full.run.map(test => [test, true]));
+
+    // Related mode still analyzes workspace tests it discovers to resolve reach.
+    const related = plan({ mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'], listTests: () => ['lib/a.test.js', ...listTests()] });
+    expect(related.selected).toContain('server/lib/a.test.js');
+    expect(related.verdicts.has(marked)).toBe(true);
+    expect(related.unanalyzed).toBe(0);
   });
 
   it('reuses a full-run shard memo in a scoped partition and reruns changed or unseeded files', () => {
