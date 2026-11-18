@@ -2,7 +2,7 @@
  * Skill-template routing and bounded AGENTS.md / CLAUDE.md discovery.
  */
 
-import { join, basename, dirname } from 'path';
+import { join, basename, posix } from 'path';
 import { readdir } from 'fs/promises';
 import { homedir } from 'os';
 import { PATHS, tryReadFile } from '../../lib/fileUtils.js';
@@ -310,7 +310,7 @@ async function findNestedAgentInstructionFiles(workspaceDir) {
  * @param {{ rel: string, content: string }} nested
  */
 const formatNestedPointer = ({ rel, content }) => {
-  const dir = dirname(rel);
+  const dir = posix.dirname(rel); // rel is always '/'-separated
   const heading = content.match(/^#{1,6}\s+(.+?)\s*$/m)?.[1];
   return `- \`${rel}\`${heading ? ` ("${heading}")` : ''}: read this file before editing anything under \`${dir}/\`.`;
 };

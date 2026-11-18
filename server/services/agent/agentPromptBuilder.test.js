@@ -5,7 +5,7 @@ import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.j
 import { buildMergeAdmissionSection } from '../promptSections/completion.js';
 import { buildCliReviewerOutcomeInstructions, REVIEW_VERDICT_RUN_ID_TOKEN } from '../promptSections/reviewerOutcome.js';
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
-import { join, dirname } from 'path';
+import { join, posix } from 'path';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { execFileSync, spawnSync } from 'child_process';
@@ -4829,7 +4829,7 @@ describe('getAgentInstructionsContext — nested pointers (#16819)', () => {
   it("shrinks this repository's section by the nested bodies it no longer carries", async () => {
     const repoRoot = join(import.meta.dirname, '..', '..', '..');
     const nestedFiles = ['client/src', 'client/src/components/dashboard', 'server', 'server/lib/aiToolkit']
-      .map((dir) => join(dir, 'AGENTS.md'));
+      .map((dir) => posix.join(dir, 'AGENTS.md'));
     const nestedBytes = nestedFiles.reduce((sum, rel) => sum + readFileSync(join(repoRoot, rel), 'utf8').trim().length, 0);
 
     const full = await getAgentInstructionsContext(repoRoot);
@@ -4837,7 +4837,7 @@ describe('getAgentInstructionsContext — nested pointers (#16819)', () => {
     for (const rel of nestedFiles) {
       expect(full).toContain(`### Project Instructions (${rel})`);
       expect(pointed).toContain(`- \`${rel}\``);
-      expect(pointed).toContain(`read this file before editing anything under \`${dirname(rel)}/\``);
+      expect(pointed).toContain(`read this file before editing anything under \`${posix.dirname(rel)}/\``);
     }
     expect(Buffer.byteLength(full) - Buffer.byteLength(pointed)).toBeGreaterThan(nestedBytes - 2000);
     expect(pointed).toContain(readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8').trim());
