@@ -23,6 +23,18 @@ describe('Cast & Sets neutral people sheets', () => {
   };
   const sheets = ['character', 'expressions', 'looks', 'form:age-7', 'cast:ben', 'face:ben'];
 
+  it('draws every person on the standard one-face sheet, or five views for a direction that predates it', () => {
+    const people = ['character', 'form:age-7', 'cast:ben'];
+    const standard = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, sheetLayout: 'standard' });
+    const older = buildCastAndSetsImagePlan({ scenes: [] }, direction);
+    for (const key of people) {
+      expect(standard[key].prompt).toContain('with the head absent');
+      expect(standard[key].prompt).toContain('it is the only face on the sheet');
+      expect(standard[key].prompt).not.toContain('Five views');
+      expect(older[key].prompt).toContain('Five views: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up');
+    }
+  });
+
   it('isolates every people plate from scene lighting and grading while keeping scene and era looks', () => {
     const source = structuredClone(direction);
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, direction);

@@ -167,6 +167,19 @@ describe('Cast & Sets direction', () => {
     expect(buildCastAndSetsPrompt(project, { previous: first })).toContain('preserve existing renderingMedium values');
   });
 
+  it('gives a new direction the standard people sheet and leaves an older one on five views until switched', () => {
+    const fresh = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections }).direction;
+    expect(fresh.sheetLayout).toBe('standard');
+    const { sheetLayout: _dropped, ...older } = fresh;
+    const revised = mergeCastAndSetsDirection(older, parseCastAndSetsResponse(JSON.stringify({ logline: 'a revised night' })), { sections }).direction;
+    expect(revised).not.toHaveProperty('sheetLayout');
+    // The provider never picks the layout: only the director's edit does.
+    expect(mergeCastAndSetsDirection(older, parseCastAndSetsResponse(JSON.stringify({ sheetLayout: 'standard' })), { sections }).direction).not.toHaveProperty('sheetLayout');
+    const switched = applyCastAndSetsDirectionEdits(older, { sheetLayout: 'standard' }, { sections });
+    expect(switched.direction.sheetLayout).toBe('standard');
+    expect(switched.changed).toContain('character sheet layout');
+  });
+
   it('refuses a first pass missing the protagonist or enough sets', () => {
     const parsed = parseCastAndSetsResponse(JSON.stringify({ logline: 'x', sets: [{ name: 'A', description: 'a' }] }));
     expect(mergeCastAndSetsDirection(null, parsed, { sections }).missing).toEqual(['protagonist', 'looks', 'sets']);

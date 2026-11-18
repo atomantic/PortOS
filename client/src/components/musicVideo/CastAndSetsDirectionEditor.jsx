@@ -13,8 +13,15 @@ const WORLD_FIELDS = [
   ['layout', 'Layout', 1000, true], ['depth', 'Depth', 500], ['lighting', 'Lighting', 500], ['camera', 'Camera', 500], ['transitions', 'Transitions', 500],
 ];
 
+// castAndSetsPlan.js#sheetViews layouts; a direction without one predates the standard sheet.
+const SHEET_LAYOUTS = [
+  ['standard', 'Standard: one face, headless front, back'],
+  ['five-view', 'Five views: front, 3/4, profile, back, face'],
+];
+
 const draftFrom = (direction) => ({
   renderingMedium: direction.renderingMedium || '',
+  sheetLayout: direction.sheetLayout || 'five-view',
   protagonist: {
     ...Object.fromEntries(PROTAGONIST_FIELDS.map(([key]) => [key, direction.protagonist?.[key] || ''])),
     expressions: (direction.protagonist?.expressions || []).join('\n'),
@@ -35,6 +42,7 @@ function editsFrom(direction, draft) {
   const sets = (direction.sets || []).filter((set) => draft.roles[set.id] !== base.roles[set.id]).map((set) => ({ id: set.id, imageRole: draft.roles[set.id] }));
   return {
     ...(draft.renderingMedium !== base.renderingMedium ? { renderingMedium: draft.renderingMedium } : {}),
+    ...(draft.sheetLayout !== base.sheetLayout ? { sheetLayout: draft.sheetLayout } : {}),
     ...(Object.keys(protagonist).length ? { protagonist } : {}),
     ...(Object.keys(world).length ? { world } : {}),
     ...(sets.length ? { sets } : {}),
@@ -42,7 +50,7 @@ function editsFrom(direction, draft) {
 }
 
 /**
- * Direct edits to the people-sheet rendering medium, or a procedural direction
+ * Direct edits to the people-sheet rendering medium and layout, or a procedural direction
  * (character construction, world rules and set image roles), saved through
  * the check-in's revision path. Only changed fields are sent; the parent keys
  * this by revision so a saved (or regenerated) direction resets the draft.
@@ -86,6 +94,14 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
             onChange={(e) => setDraft((d) => ({ ...d, renderingMedium: e.target.value }))} />
           <p className="text-xs text-port-text-muted">Sent verbatim, separate from scene lighting and grading. Each age can override it in its image editor. Empty uses legacy inference: recognized media from the scene look or project style, otherwise photorealistic editorial photography. Inference cannot recognize every medium; set one here before regenerating.</p>
           {draft.renderingMedium.length > 500 && <p role="alert" className="text-xs text-port-warning">Rendering medium exceeds 500 characters. Shorten it before saving.</p>}
+        </div>}
+        {!procedural && <div className="sm:col-span-2">
+          <label htmlFor={idFor('sheetLayout')} className="text-xs">Character sheet layout</label>
+          <select id={idFor('sheetLayout')} className={inputClass} value={draft.sheetLayout}
+            onChange={(e) => setDraft((d) => ({ ...d, sheetLayout: e.target.value }))}>
+            {SHEET_LAYOUTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          </select>
+          <p className="text-xs text-port-text-muted">Changing it re-renders every character sheet and the images built on them.</p>
         </div>}
         {procedural && PROTAGONIST_FIELDS.map((f) => field('protagonist', f))}
         {procedural && <div className="sm:col-span-2">

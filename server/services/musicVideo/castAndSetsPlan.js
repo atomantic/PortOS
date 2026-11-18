@@ -5,7 +5,8 @@
  * project (visual-spec references + concept subjects).
  *
  * The prompts generalize the hand-made check-in's templates:
- *   - `character`   — the canonical five-view character sheet. First, and every
+ *   - `character`   — the canonical character sheet (one face, a headless front
+ *                     and a back; five views for an older direction). First, and every
  *                     image of the protagonist after it uses it as reference #1.
  *                     Its references are the director's own character
  *                     identity images (`refImages`); mood board images are
@@ -64,6 +65,16 @@ const FLAT_GRAY_SHEET_CLOSE = 'Flat 18% neutral gray color field, uniform corner
 const SQUARE_FRONT = 'FRONT views dead-on orthographic: shoulders and hips square to the lens and level, weight even across both feet, regardless of how the figure stands in the reference';
 const SQUARE_FACE = 'FACE close-ups and FRONT face panels dead-on orthographic and level, eyes level and face square to the lens, regardless of how the face is angled in the reference; keep the other explicitly requested head angles and mood poses';
 const FIVE_VIEWS = `Five views: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up. ${SQUARE_FRONT}. BACK view dead-on orthographic from directly behind, shoulders and hips square and level, weight even across both feet, no glance back, regardless of how the figure stands in the reference. ${SQUARE_FACE}`;
+const SQUARE_BACK = 'BACK view dead-on orthographic from directly behind, shoulders and hips square and level, weight even across both feet, no glance back, regardless of how the figure stands in the reference';
+// The standard people sheet: one half of the catalog comparison sheet
+// (catalogComparisonSheet.js) for a single person. One face only, so a model
+// conditioned on it never mixes several renderings of the head; the headless
+// FRONT and the BACK carry build, wardrobe and height.
+const STANDARD_VIEWS = `Three panels side by side on one sheet, left to right: (1) FACE, one large head-and-shoulders portrait filling the full sheet height, showing the whole head with a little space above the hair, the chin, the full neck and the collar, relaxed natural expression, looking at the camera; it is the only face on the sheet; (2) FRONT, a full-body standing view from the front with the head absent, the figure ending cleanly at the neck inside the collar like a headless display mannequin, with no face and no hair; (3) BACK, a full-body standing view from behind, including the back of the head and hair. Both standing figures share one floor line and one scale, arms relaxed at the sides, the whole body visible to the soles. ${SQUARE_FRONT}. ${SQUARE_BACK}. The FACE portrait dead-on and level, eyes level and face square to the lens, regardless of how the face is angled in the reference. One face only: no extra angles, no expression rows, no other people`;
+// A direction drafted before the standard (no `sheetLayout`) keeps the five-view
+// sheet, so revising an older check-in re-renders only what the revision changed.
+// Layouts: 'standard' | 'five-view' (musicVideoCastAndSetsDirectionEditSchema).
+const sheetViews = (direction) => (direction?.sheetLayout === 'standard' ? STANDARD_VIEWS : FIVE_VIEWS);
 // Select only known rendering media, never rewrite or forward the mixed scene
 // look to identity sheets. Authored look text remains intact on scene frames.
 const SHEET_MEDIA = /\b(?:watercolou?r(?: illustration)?|oil painting|gouache|pencil drawing|charcoal drawing|ink drawing|hand[- ]drawn(?: animation| illustration)?|(?:2d|3d)(?: animation| animated| render(?:ing)?)|cel[- ]shaded(?: animation)?|stop[- ]motion|claymation|anime|cartoon|comic[- ]book(?: illustration)?|pixel art|digital illustration|vector illustration|animation|animated|illustration|illustrated|non[- ]photorealistic|(?:(?!(?:no|not|without|a|an|the|and|or)\b)[a-z][a-z-]*\s+)?(?:painting|drawing|illustration|animation))\b/gi;
@@ -237,6 +248,7 @@ const CAST_FACE_MOODS = '1) open laugh; 2) shy half-smile; 3) startled; 4) conce
 export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = {}, greyboxes = {}, catalogLikeness = {} } = {}) {
   if (direction.medium === 'procedural') return buildProceduralImagePlan(direction, { revisionNotes, greyboxes });
   const p = direction.protagonist || {};
+  const views = sheetViews(direction);
   const looks = direction.looks || [];
   const firstLook = looks[0];
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
@@ -304,7 +316,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       firstLook && `Wearing ${firstLook.description}`,
       rulesLine(p),
       EMPTY_HANDS,
-      FIVE_VIEWS,
+      views,
       peopleMedium,
       FLAT_GRAY_SHEET_CLOSE,
       note('character'),
@@ -407,7 +419,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         rulesLine(p),
         EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
-        FIVE_VIEWS,
+        views,
         form.renderingMedium ? explicitSheetMedium(form.renderingMedium) : direction.renderingMedium ? peopleMedium : sheetMedium(form.look, peopleMedium),
         FLAT_GRAY_SHEET_CLOSE,
         note(key),
@@ -416,7 +428,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   }
 
   // Supporting cast: each recurring person gets their own photographic sheet,
-  // the same five views as the protagonist's, so shots naming them keep them.
+  // the same layout as the protagonist's, so shots naming them keep them.
   for (const c of direction.cast || []) {
     const key = `cast:${c.id}`;
     const castImages = fixedImages(fixedFor('character', c.name));
@@ -436,7 +448,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         c.wardrobe && `Wearing ${c.wardrobe}`,
         EMPTY_HANDS,
         p.name && `A different person from ${p.name}`,
-        FIVE_VIEWS,
+        views,
         peopleMedium,
         FLAT_GRAY_SHEET_CLOSE,
         note(key),
