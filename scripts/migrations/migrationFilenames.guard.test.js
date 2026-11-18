@@ -24,7 +24,58 @@ const MIGRATIONS_DIR = 'scripts/migrations';
 
 // Migrations deliberately retired from the tree. Add an entry only with the
 // retirement rationale in the same change; never add one to silence a rename.
-export const RETIRED_MIGRATIONS = new Set([]);
+// Log-only registration stubs deleted in #16815. Each up() only logged; the
+// work its comment describes runs at boot (ensureSchema or a server backfill) or
+// is additive and absent-tolerant, so no transform is dropped. An applied-list
+// entry naming a missing file is inert: pending = files on disk minus applied.
+export const RETIRED_MIGRATIONS = new Set([
+  '049-catalog-payload-schemaversion.js',
+  '050-catalog-ingredient-relations.js',
+  '051-catalog-tags-table.js',
+  '052-catalog-ingredient-media.js',
+  '053-catalog-friendly-universe-tags.js',
+  '054-catalog-scrap-chunking.js',
+  '055-reconcile-canon-catalog.js',
+  '077-prune-imported-legacy-files.js',
+  '078-song-recording-pitch-analysis.js',
+  '079-song-training-progress.js',
+  '108-mood-boards-table.js',
+  '139-writers-room-folder-exercise-soft-delete.js',
+  '160-privacy-vault-tables.js',
+  '161-human-activity-events-table.js',
+  '162-privacy-orgs-tables.js',
+  '163-tribe-people-phones.js',
+  '176-privacy-broker-tables.js',
+  '178-privacy-change-events-table.js',
+  '194-commission-feedback-federation.js',
+  '207-universe-style-references.js',
+  '212-games-table.js',
+  '217-stacker-news-schema.js',
+  '236-privacy-household-subjects.js',
+  '276-post-runs-db-import.js',
+  '282-cd-project-commission-backpointer.js',
+  '287-fableloom-table.js',
+  '312-fableloom-federation.js',
+  '315-voice-profiles-table.js',
+  '316-fableloom-production-assets.js',
+  '323-fableloom-render-format.js',
+  '326-fableloom-render-preferences.js',
+  '328-user-action-events-table.js',
+  '335-tribe-identities-table.js',
+  '336-beeper-outbox-table.js',
+  '381-mind-tool-recipes.js',
+  '382-beeper-outbox-send-time.js',
+  '386-decks.js',
+  '413-beeper-account-continuation.js',
+  '414-beeper-message-reconciliation.js',
+  '416-voice-studio-library.js',
+  '418-media-prompt-examinations.js',
+  '420-code-animation-production-projects.js',
+  '421-brain-memory-links.js',
+  '434-catalog-media-reference-library.js',
+  '435-storyboards-table.js',
+  '436-storyboard-recipes-table.js',
+]);
 
 // Same selection as `scanMigrationFiles` in scripts/lib/migrationFiles.js.
 export const isShippedMigrationName = (name) => /^\d+-.*\.js$/.test(name) && !name.endsWith('.test.js');

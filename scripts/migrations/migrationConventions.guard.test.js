@@ -28,8 +28,9 @@
  *   4. No log-only registration stub (#16093). Additive DDL is created
  *      idempotently by `ensureSchema` at boot (server/lib/db/schema/), so a
  *      migration whose `up()` only logs costs a number, an applied-list entry
- *      on every install and a boot log line for no effect. Stubs already
- *      shipped stay on `FROZEN_STUBS` — never delete or rename them.
+ *      on every install and a boot log line for no effect. The shipped stubs
+ *      were deleted in #16815; an applied-list entry naming a deleted file is
+ *      inert (pending = files on disk minus applied).
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
@@ -44,12 +45,10 @@ const HERE = resolve(fileURLToPath(import.meta.url), '..');
 // migration below it is retired from the tree — never to exempt a new one.
 export const GUARDED_FROM = 429;
 
-// Log-only stubs shipped before rule 4. Applied on installs already, so they
-// stay as they are; this list only ever shrinks if one is formally retired.
+// No-op migrations kept on purpose. 456 is an empty `up()` retained as the
+// shipped ID: its test pins that the upgrade never rewrites customized style
+// notes, so deleting the file would delete that regression guard too (#16815).
 const FROZEN_STUBS = new Set([
-  '434-catalog-media-reference-library.js',
-  '435-storyboards-table.js',
-  '436-storyboard-recipes-table.js',
   '456-reality-style-snapshot-limit.js',
 ]);
 

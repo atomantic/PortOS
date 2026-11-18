@@ -143,6 +143,19 @@ export default {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  // Migrations deleted from the tree (#16815) stay in old ledgers; an applied
+  // entry with no file must be inert, not an error or a pending item.
+  it('runs cleanly when the applied list names a migration file that was deleted', async () => {
+    writeFileSync(appliedFile, JSON.stringify(['108-mood-boards-table.js']));
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['108-mood-boards-table.js', '001-fixture.js']);
+    expect(corruptSiblings()).toHaveLength(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
   // A pre-2026-05-16 install upgraded by pull-and-restart reaches the boot
   // runner without setup-data.js ever moving its ledger.
   it('adopts a legacy data/migrations/.applied.json instead of re-running what it records', async () => {
