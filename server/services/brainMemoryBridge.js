@@ -733,9 +733,13 @@ export async function flushPendingResync() {
       const batch = [...pendingResync.values()];
       pendingResync.clear();
       for (const { type, id, hardDelete } of batch) {
-        await resyncBrainRecord(type, id, { hardDelete }).catch((err) => {
+        try {
+          await resyncBrainRecord(type, id, { hardDelete });
+        } catch (err) {
+          // Keep the failed entry durable for replay without retrying in this flush.
           console.error(`❌ Brain bridge resync failed for ${type}/${id}: ${err.message}`);
-        });
+          continue;
+        }
         settleDurable(bridgeKey(type, id), type === 'journals' ? id : null);
       }
     }
@@ -762,7 +766,7 @@ export function queueResync(records) {
     // a soft archive, or the dead embedding lingers. Safe to keep sticky because
     // resyncBrainRecord's record-present branch upserts a resurrected record
     // regardless of the flag, so a true intent can never hard-delete a live row.
-    const prevHardDelete = pendingResync.get(key)?.hardDelete;
+    const prevHardDelete = durablePending.get(key)?.hardDelete;
     const entry = { type, id, hardDelete: !!hardDelete || !!prevHardDelete };
     pendingResync.set(key, entry);
     durablePending.set(key, entry);
