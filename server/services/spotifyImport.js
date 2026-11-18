@@ -4,8 +4,8 @@
  *
  * Spotify's privacy download ("Extended streaming history") ships a ZIP whose
  * `Streaming_History_Audio_*.json` files are arrays of per-play records covering
- * the full account lifetime — far more than the 50-track window the Web API
- * exposes (which the live sync in Phase 3 polls). This importer takes that export
+ * the full account lifetime. Live sync only sees the history Spotify makes
+ * available through its recently-played endpoint. This importer takes that export
  * (either the raw ZIP or an individual JSON array) and maps every play into a
  * `media.listen` activity event.
  *

@@ -279,7 +279,7 @@ export function SpotifyTab() {
               className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
             />
             <p className="text-xs text-gray-500 mt-1">
-              Spotify only exposes the last 50 plays — keep this under ~25 min so no listens are missed.
+              Regular syncs capture plays while they are still available from Spotify.
             </p>
           </div>
 
