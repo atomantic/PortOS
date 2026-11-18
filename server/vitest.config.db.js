@@ -1,4 +1,3 @@
-import { ciTestConfig, ciTestRunnerAccess } from '../scripts/ciTestPolicy.js';
 import { defineConfig } from 'vitest/config';
 import { fileURLToPath } from 'node:url';
 import { applyRunnerSelection, vitestRunnerSelection } from '../scripts/vitestCiPool.js';
@@ -46,12 +45,10 @@ export { DB_TEST_INCLUDE } from '../scripts/lib/dbTestFiles.js';
  * checkHealth consumer is left out.
  */
 const config = defineConfig({
-  plugins: ciTestRunnerAccess(),
   server: { watch: VITEST_WATCH_OPTIONS },
   // Anchor to the config, even when --root or the caller cwd differs.
   cacheDir: fileURLToPath(new URL('./.cache/vitest-db', import.meta.url)),
   test: {
-    ...ciTestConfig(),
     // Vitest 5's module cache is separate from Vite cacheDir; dependencies may be shared by worktrees.
     fsModuleCachePath: fileURLToPath(new URL('./.cache/vitest-db/modules', import.meta.url)),
     // Environment teardown also owns collection-only/skipped suite fixtures.
@@ -82,8 +79,6 @@ const config = defineConfig({
       npm_config_logs_max: '0',
       // The runner's selection and memo directory are for THIS Vitest process only.
       PORTOS_CI_TEST_SELECTION: '',
-      PORTOS_CI_COLLECTION: '',
-      PORTOS_CI_TEST_POLICY: '',
       PORTOS_TEST_MEMO_DIR: '',
     },
     include: DB_TEST_INCLUDE,
