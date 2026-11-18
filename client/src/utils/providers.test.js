@@ -5,6 +5,9 @@
 // their shared tables from `server/lib`, so what is pinned here is the
 // client-side behaviour built on top of them.
 import * as serverProviderTypes from '../../../server/lib/providerTypes.js';
+import { apiGenerationOptions } from '../../../server/lib/aiToolkit/internal/generationOptions.js';
+import { LOCAL_RUNTIME_MANAGE_URLS } from '../../../server/lib/modelPinMembership.js';
+import { PROVIDER_GATEWAY_IDS } from '../../../server/lib/providerGateways.js';
 import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
@@ -245,6 +248,28 @@ describe('generationControlsFor', () => {
     ['vendor CLI', { id: 'claude-code', type: 'cli', command: 'claude' }, null],
   ])('%s', (_label, provider, expected) => {
     expect(generationControlsFor(provider)).toEqual(expected);
+  });
+});
+
+describe('generation controls match direct API forwarding', () => {
+  const generation = { temperature: 0.73, topP: 0.91, thinking: false };
+  const localBackends = Object.keys(LOCAL_RUNTIME_MANAGE_URLS).map((id) => [id, { [`${id}Backed`]: true }]);
+
+  it.each([
+    ...localBackends,
+    ['ollama (native provider ID)', { id: 'ollama' }],
+    ...PROVIDER_GATEWAY_IDS.map((id) => [id, { id }]),
+  ])('direct API on %s', (_id, identity) => {
+    const provider = { type: 'api', ...identity, ...generation };
+    const options = apiGenerationOptions(provider);
+
+    const controls = {
+      temperature: options.temperature === generation.temperature,
+      topP: options.top_p === generation.topP,
+      thinking: typeof (options.think ?? options.chat_template_kwargs?.enable_thinking) === 'boolean',
+    };
+
+    expect(generationControlsFor(provider)).toEqual(Object.values(controls).some(Boolean) ? controls : null);
   });
 });
 
