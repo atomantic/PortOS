@@ -309,10 +309,12 @@ export default function MusicVideo() {
       if (!data?.project?.id) return;
       replaceProject(data.project);
       if (selectedId || stageOnlyParam) return;
+      // Run payloads omit read-time Blender state; the index reads the presented record.
+      if (statusFilter !== 'all') return;
       const index = indexRef.current;
       const previous = index.items.find((p) => p.id === data.project.id);
       if (!previous) return;
-      if ((statusFilter !== 'all' && isMusicVideoCompleted(previous) !== isMusicVideoCompleted(data.project)) || !nameMatches(data.project)) {
+      if (!nameMatches(data.project)) {
         index.setItems((items) => items.filter((p) => p.id !== data.project.id));
         index.reconcileFirst();
       }
