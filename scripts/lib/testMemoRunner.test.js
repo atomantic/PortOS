@@ -19,6 +19,7 @@ import { vitestCaptureProjects } from '../vitestCiPool.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry } from './testMemoStore.js';
 import { buildCiTestPlan } from '../ci-test-plan.js';
 import { browserProfileAcceptedVerdicts, browserTestProfileArgs } from './browserTestProfiles.js';
+import { BROWSER_SUITES, browserShardSlice } from './browserSuites.js';
 
 const FILES = {
   'server/vitest.config.js': 'export default {};\n',
@@ -208,6 +209,54 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(plan({ memoDir: null, mode: 'related', repoFiles: [], repoSources: ['server/lib/a.js'] }).selected).toEqual(['server/lib/a.test.js']);
   });
 
+  it.each([
+    { mode: 'full', partition: 'unit' },
+    { mode: 'files', partition: 'unit' },
+    { mode: 'full', partition: 'browser' },
+    { mode: 'files', partition: 'browser' },
+  ])('analyzes only owned files in a $partition $mode plan and still verifies green keys', ({ mode, partition }) => {
+    root = mkdtempSync(join(tmpdir(), 'portos-shard-memo-'));
+    memoDir = mkdtempSync(join(tmpdir(), 'portos-shard-memo-store-'));
+    const candidates = (partition === 'browser' ? BROWSER_SUITES.slice(0, 4) : TESTS.map((test) => `server/${test}`)).sort();
+    const explicit = candidates.at(-1);
+    const listTests = () => candidates.slice(0, -1).map((test) => test.slice('server/'.length));
+    const repoFiles = mode === 'full' ? [explicit] : candidates;
+    writeRepo(root, { ...FILES, ...Object.fromEntries(candidates.map((test) => [test, FILES['server/lib/c.test.js']])) });
+    const shardSlice = partition === 'browser' ? browserShardSlice : vitestShardSlice;
+
+    for (const index of [1, 2]) {
+      const shard = { index, count: 2 };
+      const owned = shardSlice(candidates, { ...shard, repoRoot: root, scope: 'server' });
+      const recordReads = [];
+      const makePlan = () => plan({ mode, repoFiles, listTests, shard, shardSlice, readRecord: (dir, scope, test) => {
+        recordReads.push(test);
+        return readMemoRecord(dir, scope, test);
+      } });
+      const cold = makePlan();
+      expect(cold.selected).toEqual(candidates);
+      expect(recordReads).toEqual(owned);
+      expect([...cold.verdicts.keys()]).toEqual(owned);
+      expect(cold.run).toEqual(owned);
+      expect(cold.skipped).toEqual([]);
+
+      const [green] = owned;
+      const dependencies = new Map([[green, [green]]]);
+      expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: cold, passed: [green], dependencies, source: 'ci' }).written).toBe(2);
+
+      recordReads.length = 0;
+      const warm = makePlan();
+      expect(recordReads).toEqual(owned);
+      expect(warm.run).toEqual(owned.slice(1));
+      expect(warm.skipped).toEqual([{ test: green, via: 'recorded' }]);
+
+      // A changed owned file still cannot be recorded under its pre-run key.
+      for (const test of warm.run) {
+        writeFileSync(join(root, test), `${FILES['server/lib/c.test.js']}// changed during run\n`);
+        expect(recordTestMemo({ scope: 'server', repoRoot: root, memoDir, plan: warm, passed: [test], dependencies: new Map([[test, [test]]]), source: 'ci' }).written).toBe(0);
+      }
+    }
+  });
+
   // The #16424 probe: real Vitest records what each test loaded, the record
   // narrows related selection, and a deliberately broken lazily imported
   // module is still caught by the tests the narrowed plan selects.
@@ -256,6 +305,27 @@ describe('planTestMemo and recordTestMemo', () => {
     expect(narrowed.narrowed).toBeGreaterThanOrEqual(2);
     expect(narrowed.selected).toEqual([user]);
     expect(narrowed.run).toEqual([user]);
+
+    // A restored narrowing record exists only on the bystander's shard.
+    // Its absence on siblings cannot change ownership or drop an explicit file.
+    const candidates = tests.map((test) => `server/${test}`);
+    const count = candidates.length;
+    const siblingPlans = (repoFiles) => Array.from({ length: count }, (_, i) => {
+      const shard = { index: i + 1, count };
+      const owned = vitestShardSlice(candidates, { ...shard, repoRoot: root, scope: 'server' });
+      const reads = [];
+      const result = related({ repoFiles, shard, readRecord: (dir, scope, test) => {
+        reads.push(test);
+        return owned.includes(bystander) ? readMemoRecord(dir, scope, test) : null;
+      } });
+      expect(reads).toEqual(owned);
+      return { owned, result };
+    });
+    expect(siblingPlans([]).flatMap(({ result }) => result.run)).toEqual([user]);
+    for (const { owned, result } of siblingPlans([bystander])) {
+      expect(result.slice).toEqual(owned.filter((test) => test === user || test === bystander));
+    }
+
     const red = vitest(narrowed.run);
     expect(red.status).toBe(1);
     expect(fileResultsFromReport(report)).toEqual([expect.objectContaining({ file: join(root, user), status: 'failed' })]);
