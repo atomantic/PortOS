@@ -40,7 +40,7 @@ describe('CLAIM_FLOW_TASK_TYPES is declared exactly once', () => {
     if (direct) {
       expect(source).toMatch(/import\s*\{[^}]*\bCLAIM_FLOW_TASK_TYPES\b[^}]*\}\s*from\s*'\.\.\/lib\/claimFlowTaskTypes\.js'/);
     } else {
-      expect(source).toMatch(/import\s*\{[^}]*\bisClaimFlowDispatch\b[^}]*\}\s*from\s*'\.\/taskTypeHooks\.js'/);
+      expect(source).toMatch(/import\s*\{[^}]*\bisClaimFlowDispatch\b[^}]*\}\s*from\s*'\.\.\/taskTypeHooks\.js'/);
       // The delegation itself must stay — dropping it would narrow the prompt
       // side back to analysisType-only and split writer from reader again.
       expect(source).toMatch(/isClaimFlowDispatch\(task\)/);
