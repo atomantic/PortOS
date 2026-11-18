@@ -417,6 +417,43 @@ describe('brainJournal', () => {
       expect(revived).toBeUndefined();
     });
 
+    it('preserves another date mirrored during sidecar deletion (#16765)', async () => {
+      await journal.updateSettings({ obsidianVaultId: 'v1', autoSync: false, obsidianFolder: 'Daily Log' });
+      const removed = await journal.appendJournal('2026-04-17', 'remove');
+      const surviving = await journal.appendJournal('2026-04-18', 'keep');
+      obsidian.upsertNote.mockImplementation(async (_vault, path) => path);
+      await journal.syncToObsidian(removed, { force: true });
+
+      const actual = await vi.importActual('../lib/fileUtils.js');
+      let releaseCleanup;
+      let cleanupStarted;
+      const gate = new Promise((resolve) => { releaseCleanup = resolve; });
+      const started = new Promise((resolve) => { cleanupStarted = resolve; });
+      atomicWrite.mockImplementationOnce(async (...args) => {
+        cleanupStarted();
+        await gate;
+        return actual.atomicWrite(...args);
+      });
+      const deletion = journal.deleteJournal(removed.date);
+      await started;
+      let mirrorStarted;
+      const mirrored = new Promise((resolve) => { mirrorStarted = resolve; });
+      obsidian.upsertNote.mockImplementationOnce(async (_vault, path) => {
+        mirrorStarted();
+        return path;
+      });
+      const sync = journal.syncToObsidian(surviving, { force: true });
+      await mirrored;
+      // Let persistence reach the mutex while the deletion write is held.
+      await new Promise((resolve) => setImmediate(resolve));
+      releaseCleanup();
+      await Promise.all([deletion, sync]);
+
+      expect(JSON.parse(readFileSync(join(TEMP_ROOT, 'journal-obsidian-locations.json'), 'utf8'))).toEqual({
+        '2026-04-18': { obsidianPath: 'Daily Log/2026-04-18.md', obsidianVaultId: 'v1' },
+      });
+    });
+
     it('serializes obsidian syncs per date in strict sequential order', async () => {
       const callOrder = [];
       obsidian.upsertNote.mockImplementation(async (vaultId, path, content) => {
