@@ -19,6 +19,7 @@ async function staged() {
   const root = await mkdtemp(join(tmpdir(), 'preview-playback-contract-')); roots.push(root);
   await cp(join(templates, 'layered'), root, { recursive: true });
   await cp(join(templates, 'shared'), root, { recursive: true });
+  await cp(new URL('../../lib/musicVideo/cameraRig.js', import.meta.url), join(root, 'cameraRig.js'));
   await cp(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), join(root, 'musicVideoImageEffects.js'));
   return root;
 }

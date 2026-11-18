@@ -46,15 +46,19 @@ async function uploaded(name, files) {
 }
 
 describe('shared lyric-type assets in composition documents', () => {
-  it('ships lyricType.js, its stylesheet and OFL faces with the layered template', async () => {
+  it('ships the browser helpers, stylesheet and OFL faces with the layered template', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     const { root, files } = await listed((await importDocumentTemplate(id)).document);
     expect(files).toEqual(expect.arrayContaining([
       'lyricType.js', 'lyricType.css', 'fonts/archivo-variable.woff2', 'fonts/ibm-plex-mono-500.woff2',
-      'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html', 'musicVideoImageEffects.js',
+      'fonts/LICENSE-Archivo.txt', 'fonts/LICENSE-IBM-Plex.txt', 'engine.js', 'index.html', 'musicVideoImageEffects.js', 'cameraRig.js',
     ]));
     expect(files.filter((file) => file.endsWith('.test.js'))).toEqual([]);
     expect(await readFile(join(root, 'musicVideoImageEffects.js'), 'utf8')).toBe(await readFile(new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url), 'utf8'));
+    const rig = await readFile(new URL('../../lib/musicVideo/cameraRig.js', import.meta.url));
+    expect(await readFile(join(root, 'cameraRig.js'))).toEqual(rig);
+    const preview = await readTemplateDocumentFiles('layered');
+    expect(await readFile(preview.get('cameraRig.js').abs)).toEqual(rig);
   });
 
   it('adds the module and faces to an uploaded document that imports it, and keeps a document\'s own copy', async () => {
@@ -106,7 +110,7 @@ describe('shared lyric-type assets in composition documents', () => {
     const layeredWithKit = await importDocumentDirectory(id, await uploaded('layered-toon', {
       'index.html': layeredIndex.replace('</body>', '<script type="module" src="toonWorld.js"></script></body>'),
       'engine.js': await readFile(join(layered.root, 'engine.js'), 'utf8'),
-      'cameraRig.js': await readFile(join(layered.root, 'cameraRig.js'), 'utf8'),
+      'cameraRig.js': await readFile(new URL('../../lib/musicVideo/cameraRig.js', import.meta.url), 'utf8'),
     }));
     expect((await listed(layeredWithKit.document)).files).toContain('toonWorld.js');
     expect((await buildDocumentPreview(await projects.getProject(id))).html).toContain('data:text/javascript;base64,');

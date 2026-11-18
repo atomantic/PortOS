@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import '../../../../server/services/musicVideo/documentTemplates/layered/cameraRig.js';
+import '../../../../server/lib/musicVideo/cameraRig.js';
 import { createDocumentTemplateDrawing } from './documentTemplateDrawing.js';
 import { resolveSourceTake } from '../../../../server/lib/musicVideo/musicVideoSourceTake.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';

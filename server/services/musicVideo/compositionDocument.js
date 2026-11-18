@@ -396,10 +396,21 @@ export async function importDocumentDirectory(projectId, directory) {
  */
 export const documentTemplateDirectory = (templateId) => pathWithin(TEMPLATE_ROOT, templateId);
 
+const SHIPPED_CAMERA_RIG = new URL('../../lib/musicVideo/cameraRig.js', import.meta.url);
+
+async function collectTemplateFiles(templateId) {
+  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
+  if (templateId === 'layered') {
+    // Export and browser preview use the same classic script as the native client.
+    files.push({ rel: 'cameraRig.js', abs: fileURLToPath(SHIPPED_CAMERA_RIG), size: (await stat(SHIPPED_CAMERA_RIG)).size });
+  }
+  return files;
+}
+
 /** Copy a shipped template (documentTemplates/<id>) into the project. */
 export async function importDocumentTemplate(projectId, templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
+  const files = await collectTemplateFiles(templateId);
   return storeVersion(projectId, files, { kind: 'template', name: templateId });
 }
 
@@ -410,7 +421,7 @@ export async function importDocumentTemplate(projectId, templateId = 'layered') 
  */
 export async function readTemplateDocumentFiles(templateId = 'layered') {
   if (!MUSIC_VIDEO_DOCUMENT_TEMPLATES.includes(templateId)) throw refuse('Unknown composition template', 'VALIDATION_ERROR', 400);
-  const { files } = await collectTree(documentTemplateDirectory(templateId), { excludeTests: true });
+  const files = await collectTemplateFiles(templateId);
   return new Map((await withSharedImageEffects(await withSharedLyricType(files))).map((file) => [file.rel, { abs: file.abs, size: file.size }]));
 }
 
@@ -448,7 +459,7 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
       { rel: 'dependencies.json', data: Buffer.from(JSON.stringify({ packages: [{ name: 'three', version: pkg.version, files: dependencies }], network: false })) });
     return storeVersion(projectId, staged, { kind: 'generated', name: 'Authored Three.js world' }, { draft: true, verifyCurrent });
   }
-  const { files } = await collectTree(join(TEMPLATE_ROOT, 'layered'), { excludeTests: true });
+  const files = await collectTemplateFiles('layered');
   const index = await readFile(join(TEMPLATE_ROOT, 'layered', 'index.html'), 'utf8');
   const marker = '<script src="engine.js"></script>';
   if (!index.includes(marker)) throw new Error('Layered template has no engine script');
@@ -541,7 +552,7 @@ const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8')
 // The helper files documentPreviewPlayback compares byte for byte, with where the shipped copy lives.
 // The still-effect module only ever grew its exports, so every earlier shipped copy is replaceable.
 const STOCK_HELPERS = [
-  { rel: 'cameraRig.js', source: new URL('./documentTemplates/layered/cameraRig.js', import.meta.url), stale: new Set() },
+  { rel: 'cameraRig.js', source: SHIPPED_CAMERA_RIG, stale: new Set() },
   { rel: 'lyricType.js', source: new URL('./documentTemplates/shared/lyricType.js', import.meta.url), stale: STALE_SHIPPED_LYRIC_TYPE_JS },
   { rel: 'lyricType.css', source: new URL('./documentTemplates/shared/lyricType.css', import.meta.url), stale: new Set() },
   { rel: 'musicVideoImageEffects.js', source: new URL('../../lib/musicVideo/musicVideoImageEffects.js', import.meta.url),

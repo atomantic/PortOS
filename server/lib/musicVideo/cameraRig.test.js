@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
-import { CAMERA_MOVEMENTS, CAMERA_MOVEMENT_VALUES } from '../../../../lib/cameraMovements.js';
+import { CAMERA_MOVEMENTS, CAMERA_MOVEMENT_VALUES } from '../cameraMovements.js';
 
 // cameraRig.js is a classic browser script; load it the way a document does.
 const rigSource = readFileSync(new URL('./cameraRig.js', import.meta.url), 'utf8');

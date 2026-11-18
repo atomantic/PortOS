@@ -33,7 +33,7 @@ async function engineViews(scenes, song, times) {
     PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw() {} }) }, postMessage() {} };
   sandbox.window = sandbox;
   sandbox.globalThis = sandbox;
-  runInNewContext(await readFile(new URL('cameraRig.js', layered), 'utf8'), sandbox);
+  runInNewContext(await readFile(new URL('./cameraRig.js', import.meta.url), 'utf8'), sandbox);
   runInNewContext(await readFile(new URL('engine.js', layered), 'utf8'), sandbox);
   const views = [];
   for (const t of times) {

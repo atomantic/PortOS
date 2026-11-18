@@ -1,124 +1,118 @@
 /**
- * Guard: every `server/lib` module the CLIENT imports stays browser-safe.
+ * Guard: client source and tests can only reach the server through browser-safe
+ * `server/lib` leaves. Walk each leaf's imports and report the first impure edge
+ * on each path so failures name the dependency chain that introduced it.
  *
- * PortOS shares pure logic between the two runtimes by importing the server
- * leaf from the client (`client/src/lib/README.md`), not by copying it. That
- * only works while the imported module — and everything it transitively pulls —
- * reaches no Node built-in and nothing outside `server/lib`. The failure mode is
- * silent at edit time and loud at build time: adding a `crypto` import to a
- * module three edges away from `Layout.jsx` breaks `npm run build --prefix
- * client` for a reason the diff does not name.
- *
- * So this walks the real import graph from every `server/lib` module named by a
- * client import specifier and fails on the first impure edge, pointing at the
- * chain that introduced it. It scans the tracked tree, so nothing imports it and
- * CI's import-graph selection cannot reach it — it rides `ALWAYS_RUN_TESTS`.
+ * This scans the tracked tree. It rides `ALWAYS_RUN_TESTS` because CI's import
+ * graph cannot discover every source file the guard reads.
  */
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, posix } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+import { importSpecifiersFromSource } from './lib/importReach.js';
 import { trackedFiles } from './lib/trackedFiles.js';
-import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'path';
-import { fileURLToPath } from 'url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const SERVER_LIB = join(REPO_ROOT, 'server', 'lib');
 
-/**
- * True when an absolute path sits inside `server/lib`. Asked through `relative`
- * rather than a `startsWith(\`${SERVER_LIB}/\`)` prefix test, which is a
- * separator bug: `resolve` hands back backslashes on Windows, so the prefix
- * never matched there and every in-tree import read as "outside server/lib".
- */
-export const withinServerLib = (target, root = SERVER_LIB) => {
-  const rel = relative(root, target);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+const isWithin = (root, file) => {
+  const rel = posix.relative(root, file);
+  return rel !== '..' && !rel.startsWith('../');
 };
 
-/** Every `from '…'` / `import '…'` specifier in one module's source. */
-const specifiersIn = (source) => [
-  ...source.matchAll(/(?:^|\n)\s*(?:import|export)[^'"\n]*?from\s*['"]([^'"]+)['"]/g),
-  ...source.matchAll(/(?:^|\n)\s*import\s*['"]([^'"]+)['"]/g),
-].map((match) => match[1]);
+const resolveRelative = (file, specifier) => {
+  const path = specifier.replaceAll('\\', '/').split(/[?#]/)[0];
+  return /^\.{1,2}\//.test(path) ? posix.join(posix.dirname(file), path) : null;
+};
 
-/** The `server/lib/*` modules a client source file imports (specifiers only, not prose). */
-export const clientImportedServerLibModules = (source) => [
-  ...source.matchAll(/from\s*['"](?:\.\.\/)+server\/lib\/([\w./-]+\.js)['"]/g),
-].map((match) => match[1]);
-
-const trackedClientSources = trackedFiles(REPO_ROOT, ['client/src/*.js', 'client/src/*.jsx', 'client/src/**/*.js', 'client/src/**/*.jsx']);
-
-const entryModules = [...new Set(trackedClientSources.flatMap((rel) => (
-  clientImportedServerLibModules(readFileSync(join(REPO_ROOT, rel), 'utf8'))
-    .map((mod) => join(SERVER_LIB, mod))
-)))];
-
-/**
- * Walk the graph from `entries`, returning one violation per impure edge:
- * `{ chain, specifier, reason }`. A relative specifier that escapes
- * `server/lib` and any bare specifier (a Node built-in, or an npm package the
- * client bundle has no reason to be handed) both count.
- */
-function impureEdges(entries) {
+function inspectClientImports(clientFiles, readSource) {
   const violations = [];
   const seen = new Set();
-  const queue = entries.map((file) => ({ file, chain: [relative(REPO_ROOT, file)] }));
-  while (queue.length) {
-    const { file, chain } = queue.shift();
-    if (seen.has(file)) continue;
-    seen.add(file);
-    if (!existsSync(file)) {
-      violations.push({ chain, specifier: file, reason: 'module does not exist' });
-      continue;
-    }
-    for (const specifier of specifiersIn(readFileSync(file, 'utf8'))) {
-      if (!specifier.startsWith('.')) {
-        violations.push({ chain, specifier, reason: 'non-relative import (Node built-in or npm package)' });
+  const queue = [];
+  for (const file of clientFiles) {
+    const { static: imports, dynamic } = importSpecifiersFromSource(readSource(file));
+    for (const specifier of [...imports, ...dynamic]) {
+      const target = resolveRelative(file, specifier);
+      if (!target || !isWithin('server', target)) continue;
+      if (!isWithin('server/lib', target) || target === 'server/lib') {
+        violations.push(`${file} imports '${specifier}' → ${target} (resolves outside server/lib)`);
         continue;
       }
-      const target = resolve(dirname(file), specifier);
-      if (!withinServerLib(target)) {
-        violations.push({ chain, specifier, reason: 'resolves outside server/lib' });
-        continue;
-      }
-      queue.push({ file: target, chain: [...chain, relative(REPO_ROOT, target)] });
+      queue.push({ file: target, chain: [file, target] });
     }
   }
-  return violations;
+
+  const entryCount = new Set(queue.map(({ file }) => file)).size;
+  for (const { file, chain } of queue) {
+    if (seen.has(file)) continue;
+    seen.add(file);
+    const source = readSource(file);
+    const trace = chain.join(' → ');
+    if (source == null) {
+      violations.push(`${trace} (module does not exist)`);
+      continue;
+    }
+    const { static: imports, dynamic } = importSpecifiersFromSource(source);
+    for (const specifier of [...imports, ...dynamic]) {
+      const target = resolveRelative(file, specifier);
+      if (!target) {
+        violations.push(`${trace} imports '${specifier}' (non-relative import (Node built-in or npm package))`);
+      } else if (!isWithin('server/lib', target) || target === 'server/lib') {
+        violations.push(`${trace} imports '${specifier}' → ${target} (resolves outside server/lib)`);
+      } else {
+        queue.push({ file: target, chain: [...chain, target] });
+      }
+    }
+  }
+  return { entryCount, violations };
 }
 
-describe('server/lib modules imported by the client stay pure (#6364)', () => {
-  it('finds the client→server import edges to walk', () => {
-    // Fails loudly if the glob or the specifier pattern stops matching, rather
-    // than reporting a vacuous pass over zero entry points.
-    expect(entryModules.length).toBeGreaterThan(10);
+describe('browser-safe server imports from the client (#6364, #16709)', () => {
+  it('walks client imports and rejects direct or transitive edges outside server/lib', () => {
+    const sources = trackedFiles(REPO_ROOT, ['client/src/*.js', 'client/src/*.jsx']);
+    const { entryCount, violations } = inspectClientImports(sources, (file) => {
+      const path = join(REPO_ROOT, file);
+      return existsSync(path) ? readFileSync(path, 'utf8') : null;
+    });
+    // Detect a broken glob or parser producing a vacuous pass.
+    expect(entryCount).toBeGreaterThan(10);
+    expect(violations, 'The client may only import browser-safe server/lib modules. See the '
+      + '"One pure module, one definition" rule in client/src/lib/README.md.').toEqual([]);
   });
 
-  it('detects the shapes it guards, and leaves a pure leaf alone (bypass probe)', () => {
-    expect(clientImportedServerLibModules("import { a } from '../../../server/lib/x.js';")).toEqual(['x.js']);
-    expect(clientImportedServerLibModules("import { a } from '../../../server/lib/editorial/y.js';")).toEqual(['editorial/y.js']);
-    // Prose mentioning the path is not an import.
-    expect(clientImportedServerLibModules('// mirrors server/lib/x.js')).toEqual([]);
-    // Containment is asked with `relative`, so it holds under both separators —
-    // a prefix test on `${SERVER_LIB}/` passed on POSIX and rejected every
-    // in-tree import on Windows, where `resolve` returns backslashes.
-    expect(withinServerLib(join(SERVER_LIB, 'textUtils.js'))).toBe(true);
-    expect(withinServerLib(join(SERVER_LIB, 'editorial', 'shotContinuity.js'))).toBe(true);
-    expect(withinServerLib(join(SERVER_LIB, '..', 'services', 'auth.js'))).toBe(false);
-    expect(withinServerLib(SERVER_LIB)).toBe(false);
-    expect(specifiersIn("import { readFile } from 'fs';")).toEqual(['fs']);
-    expect(specifiersIn("export { a } from './b.js';")).toEqual(['./b.js']);
-    expect(specifiersIn("import './side-effect.js';")).toEqual(['./side-effect.js']);
-    // A comment naming a module is not an import specifier.
-    expect(specifiersIn('// loaded from ./b.js when needed')).toEqual([]);
+  it.each([
+    ['../../../server/services/universeBuilder/compile.js', (path) => `import { compile } from '${path}';`],
+    ['../../../server/lib/../services/universeBuilder/compile.js', (path) => `export {
+      compile,
+    } from '${path}';`],
+    ['../../../server/services/universeBuilder/compile.js?raw', (path) => `const lazy = () => import('${path}');`],
+  ])('names the importing test and resolved edge for %s', (specifier, source) => {
+    const file = 'client/src/lib/count.test.js';
+    expect(inspectClientImports([file], () => source(specifier)).violations).toEqual([
+      `${file} imports '${specifier}' → server/services/universeBuilder/compile.js (resolves outside server/lib)`,
+    ]);
   });
 
-  it('walks every reachable module and finds no Node-only or out-of-tree import', () => {
-    const violations = impureEdges(entryModules);
-    expect(
-      violations.map((v) => `${v.chain.join(' → ')} imports '${v.specifier}' (${v.reason})`),
-      'The client imports these server/lib modules, so they must be browser-safe. Split the '
-      + 'impure part into its own leaf and import the pure half from both sides — see the '
-      + '"One pure module, one definition" rule in client/src/lib/README.md.',
-    ).toEqual([]);
+  it('follows shared leaves and diagnoses impure edges with the import chain', () => {
+    const file = 'client/src/lib/example.js';
+    const modules = new Map([
+      [file, String.raw`export { result } from '..\..\..\server\lib\leaf.js';`],
+      ['server/lib/leaf.js', "import './nested.js';"],
+      ['server/lib/nested.js', 'export const result = 1;'],
+    ]);
+    const inspect = () => inspectClientImports([file], (path) => modules.get(path));
+    expect(inspect()).toEqual({ entryCount: 1, violations: [] });
+    modules.set('server/lib/nested.js', "import 'node:fs';\nexport { helper } from '../services/helper.js';");
+    expect(inspect().violations).toEqual(expect.arrayContaining([
+      `${file} → server/lib/leaf.js → server/lib/nested.js imports 'node:fs' (non-relative import (Node built-in or npm package))`,
+      `${file} → server/lib/leaf.js → server/lib/nested.js imports '../services/helper.js' → server/services/helper.js (resolves outside server/lib)`,
+    ]));
+  });
+
+  it('ignores unrelated paths and comments', () => {
+    const source = `// import '../../../server/index.js';
+import './server/local.js';
+export * from '../../../server-lookalike/index.js';`;
+    expect(inspectClientImports(['client/src/lib/example.js'], () => source)).toEqual({ entryCount: 0, violations: [] });
   });
 });

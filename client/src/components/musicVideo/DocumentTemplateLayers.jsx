@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 // The rig is a plain script the layered document also carries; loading it sets globalThis.PORTOS_CAMERA_RIG.
-import '../../../../server/services/musicVideo/documentTemplates/layered/cameraRig.js';
+import '../../../../server/lib/musicVideo/cameraRig.js';
 import { documentCameraCss, documentCameraView, documentSceneIndexes } from '../../../../server/lib/musicVideo/musicVideoDocumentCamera.js';
 import { templateEffects } from '../../../../server/lib/musicVideo/musicVideoTemplateEffects.js';
 
