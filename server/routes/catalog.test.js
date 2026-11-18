@@ -796,7 +796,7 @@ describe.skipIf(!runDb)('POST /api/catalog/scraps/:id/commit — universe bindin
     // A fresh process has no request cache: it must replay the durable receipt.
     const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', `
       import { commitScrap } from './services/catalogDB/commit.js';
-      import { catalogScrapCommitSchema } from './lib/catalogValidation.js';
+      import { catalogScrapCommitSchema } from './lib/catalog/catalogValidation.js';
       import { close } from './lib/db.js';
       const input = JSON.parse(process.argv[1]);
       const result = await commitScrap({ scrapId: input.scrapId, ...catalogScrapCommitSchema.parse(input.body) });
