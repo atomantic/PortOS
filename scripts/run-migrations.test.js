@@ -227,8 +227,8 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['002-purge.js', '001-fixture.js']);
   });
 
-  it('runs numbered migrations without importing helper, CLI or test modules', async () => {
-    for (const file of ['_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js', '001-fixture.test.js']) {
+  it('runs numbered migrations without importing helper or test modules', async () => {
+    for (const file of ['_lib.js', 'shippedPromptHistory.js', '001-fixture.test.js']) {
       writeFileSync(join(migrationsDir, file), 'throw new Error("Non-migration module was imported");');
     }
 
@@ -826,8 +826,8 @@ describe('listPendingMigrations', () => {
     expect(pending).toEqual([]);
   });
 
-  it('excludes tests and unnumbered helper or CLI modules', async () => {
-    for (const file of ['001-a.test.js', '_lib.js', 'shippedPromptHistory.js', 'check-shipped-prompt-history.js']) {
+  it('excludes tests and unnumbered helper modules', async () => {
+    for (const file of ['001-a.test.js', '_lib.js', 'shippedPromptHistory.js']) {
       writeFileSync(join(migrationsDir, file), 'throw new Error("Pending discovery must not import modules");');
     }
     const pending = await listPendingMigrations({ rootDir, migrationsDir });

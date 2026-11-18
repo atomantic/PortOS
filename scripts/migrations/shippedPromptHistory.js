@@ -1,6 +1,5 @@
 import { execFileSync } from 'child_process';
-import { md5 } from './_lib.js';
-import { PROMPT_HASH_SUBDIRS, readReferencePromptHashes, readShippedHashes } from './shippedPromptHashes.js';
+import { PROMPT_HASH_SUBDIRS } from './shippedPromptHashes.js';
 
 const runGit = (args, cwd, encoding = 'utf8') =>
   execFileSync('git', args, {
@@ -74,57 +73,4 @@ export const historicalPromptBodies = (repoRoot, keys) => {
     histories[object.key].push({ commit: object.commit, body });
   }
   return histories;
-};
-
-const historicalHashes = (repoRoot, keys) => Object.fromEntries(
-  Object.entries(historicalPromptBodies(repoRoot, keys))
-    .map(([key, versions]) => [key, versions.map(({ commit, body }) => ({ commit, hash: md5(body) }))]),
-);
-
-export const findUnacceptedPromptHistory = ({
-  histories,
-  accepted,
-  current,
-}) => {
-  const stranded = [];
-  for (const [file, versions] of Object.entries(histories)) {
-    const covered = new Set([current[file], ...(accepted[file] || [])]);
-    for (const version of versions) {
-      if (!covered.has(version.hash)) {
-        stranded.push({ file, hash: version.hash, commit: version.commit });
-      }
-    }
-  }
-  return stranded;
-};
-
-/** A numbered migration module (not a helper or test) this guard may load. */
-export const isNumberedMigrationFile = (file) =>
-  /^\d.*\.js$/.test(file) && !file.endsWith('.test.js');
-
-/**
- * Whether a migration's source declares shipped prompt hashes. Only the frozen
- * pre-#16090 migrations may: a template edit now retires its hash into
- * shipped-hashes.json instead (`shippedPromptHashes.guard.test.js`).
- */
-export const declaresPromptHashes = (source) =>
-  source.includes('ACCEPTED_OLD_MD5') || source.includes('NEW_SHIPPED_MD5');
-
-/**
- * Every body a managed prompt has shipped with in git history must be its
- * current body or a retired hash in shipped-hashes.json; one that is neither
- * strands every install still holding it (#3817, #12222).
- */
-export const inspectShippedPromptHistory = async ({ repoRoot }) => {
-  if (isShallowRepository(repoRoot))
-    return { skipped: 'requires full git history', stranded: [] };
-
-  const current = await readReferencePromptHashes(repoRoot);
-  const table = await readShippedHashes(repoRoot);
-  const accepted = Object.fromEntries(Object.entries(table).map(([key, entry]) => [key, entry.retired || []]));
-  const histories = historicalHashes(repoRoot, Object.keys(current));
-  return {
-    skipped: null,
-    stranded: findUnacceptedPromptHistory({ histories, accepted, current }),
-  };
 };

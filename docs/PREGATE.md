@@ -30,8 +30,8 @@ receives the environment the matching job sets. A suite the machine cannot run
 as not run — in the summary and in the receipt `.cache/pregate/report.json`,
 which records the plan, stage outcomes and durations, the skipped suites, the
 base and HEAD SHAs, and the hash of the exact working tree validated. The
-shipped prompt-history guard runs locally when selected; the Windows job and
-the Linux worker-containment job are the two suites only CI can prove. The
+Windows job and the Linux worker-containment job are the two suites only CI
+can prove. The
 receipt also records `validationMode` (`focused` or `ci`); focused mode marks
 server/client results as reduced coverage, and either mode is local evidence
 only.
