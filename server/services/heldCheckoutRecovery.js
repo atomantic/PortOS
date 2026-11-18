@@ -1,4 +1,3 @@
-import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 /**
  * Retirement of a checkout that branch reconciliation inventoried but could not
  * clean as an ordinary merged branch (#12002, #16016): one held by a completion
@@ -165,10 +164,10 @@ async function restoreDirectoryLinks(root, removed) {
 /**
  * Remove one merged checkout under a scoped release. Nothing is copied.
  *
- * @param {{ repoPath: string, release: { path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null, checkoutIdentity?: string } }} input
+ * @param {{ repoPath: string, release: { path: string, head: string, branch: string|null, locked: boolean, lockReason: string|null } }} input
  * @param {{ readAgents?: () => Promise<object[]|null>, beforeMutation?: () => Promise<void>, inventoryCurrent?: () => Promise<boolean>, delivery?: 'exact'|'contained' }} [opts]
  *   `delivery` is the readForgeDelivery answer the caller already read for `release.head`.
- * @returns {Promise<{ ok: true, branchDeleted: boolean, checkoutIdentity?: string, branchRetainedReason?: string } | { ok: false, reason: string }>}
+ * @returns {Promise<{ ok: true, branchDeleted: boolean, branchRetainedReason?: string } | { ok: false, reason: string }>}
  */
 async function retireHeldCheckout({ repoPath, release }, opts = {}) {
   const { readAgents = readClaimOwnershipAgents } = opts;
@@ -190,7 +189,6 @@ async function retireHeldCheckout({ repoPath, release }, opts = {}) {
     const step = await decideWith(facts => decideHeldCheckoutRetirement({ repoPath, release, deliveredHead, disposableHead, facts }), {
       trees: () => listWorktrees(repoPath).catch(() => null),
       samePhysical: (_facts, { path }) => samePhysicalCheckout(path, release.path),
-      identity: () => readRetirementCheckoutIdentity(release.path),
       mergeEvidence: () => hasBranchMergeEvidence(repoPath, release.head, defaultBranch).catch(() => false),
       clean: async () => {
         const porcelain = await getStatusPorcelain(release.path).catch(() => null);
@@ -199,9 +197,7 @@ async function retireHeldCheckout({ repoPath, release }, opts = {}) {
       ...ownerReaders({ repoPath, branch, readAgents }),
     });
     if (step.hold) return refuse(step.hold.reason);
-    const { tree, checkoutIdentity } = step.admit;
-    const result = await removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts);
-    return result.ok ? { ...result, checkoutIdentity } : result;
+    return removeHeldCheckout({ repoPath, release, tree: step.admit.tree, branch, defaultBranch, deliveredHead, disposableHead }, opts);
   });
 }
 
@@ -210,7 +206,7 @@ async function retireHeldCheckout({ repoPath, release }, opts = {}) {
  * Agent registration and checkout content change without the ownership lock, so
  * removal re-checks them at Git's mutation boundary.
  */
-async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, checkoutIdentity, deliveredHead, disposableHead }, opts) {
+async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBranch, deliveredHead, disposableHead }, opts) {
   const { readAgents = readClaimOwnershipAgents } = opts;
   if (release.locked) {
     const unlocked = await execGit(['worktree', 'unlock', tree.path], repoPath).then(() => true, () => false);
@@ -218,7 +214,6 @@ async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBran
   }
   const verifyRemoval = async (holder) => {
     if (!holder || holder.head !== tree.head || shortBranch(holder.branch) !== branch) return 'worktree-holder-changed';
-    if (await readRetirementCheckoutIdentity(tree.path) !== checkoutIdentity) return 'checkout-identity-changed';
     if (opts.inventoryCurrent && !await opts.inventoryCurrent()) return 'release-not-in-inventory';
     const [porcelain, merged] = await Promise.all([
       getStatusPorcelain(tree.path).catch(() => null), isMergedHead(repoPath, tree.head, defaultBranch, deliveredHead),
@@ -240,10 +235,9 @@ async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBran
     },
   });
   if (!removal.removed) {
-    // A refused removal may leave the original generation intact. Restore its
-    // links without overwriting anything a concurrent writer created.
-    const linkRestoreFailed = removedLinks.length > 0 && await readRetirementCheckoutIdentity(tree.path) === checkoutIdentity
-      && !await restoreDirectoryLinks(tree.path, removedLinks);
+    // A refused removal may leave the checkout intact. Restore its links without
+    // overwriting anything a concurrent writer created.
+    const linkRestoreFailed = removedLinks.length > 0 && !await restoreDirectoryLinks(tree.path, removedLinks);
     // Hand the lock back exactly as released. A lock someone took in the
     // meantime makes this fail, which is the outcome we want anyway.
     if (release.locked) {
@@ -267,16 +261,14 @@ async function removeHeldCheckout({ repoPath, release, tree, branch, defaultBran
 
 const sameRelease = (entry, release) => entry.path === release.path && entry.head === release.head
   && (entry.branch ?? null) === (release.branch ?? null) && Boolean(entry.locked) === release.locked
-  && (entry.lockReason ?? null) === (release.lockReason ?? null)
-  && (!release.checkoutIdentity || entry.checkoutIdentity === release.checkoutIdentity);
+  && (entry.lockReason ?? null) === (release.lockReason ?? null);
 
-/** Tuple-only clients remain compatible; the persisted observation identity binds the checkout. */
+/** Binds the release to the persisted row it names. A legacy `checkoutIdentity` on either side is ignored. */
 function bindInventoriedRelease(outcome, release) {
   const entry = outcome?.remaining?.find(row => sameRelease(row, release));
   if (!entry) return null;
   return { path: release.path, head: release.head, branch: release.branch ?? null,
-    locked: release.locked, lockReason: release.lockReason ?? null,
-    ...(entry.checkoutIdentity && { checkoutIdentity: entry.checkoutIdentity }) };
+    locked: release.locked, lockReason: release.lockReason ?? null };
 }
 
 /** Finish only the checkout named by a trusted pending-merge receipt. Unlike an
@@ -295,7 +287,7 @@ export async function retirePendingMergeCheckout({ repoPath, release, prUrl, exp
     const { recordWorkspaceCheckoutRetirement } = await import('./branchReconcileOutcome.js');
     await recordWorkspaceCheckoutRetirement(repoPath, {
       path: release.path, branch: release.branch, head: release.head,
-      branchDeleted: result.branchDeleted, checkoutIdentity: result.checkoutIdentity,
+      branchDeleted: result.branchDeleted,
     });
   }
   return result;
@@ -323,7 +315,7 @@ export async function retireInventoriedCheckout({ appId, release }, opts = {}) {
   if (result.ok) {
     await outcomes.recordHeldCheckoutRetirement(appId, {
       path: release.path, branch: release.branch ?? null, head: release.head, branchDeleted: result.branchDeleted,
-      ...(!release.branch && { checkoutOnly: true }), checkoutIdentity: result.checkoutIdentity,
+      ...(!release.branch && { checkoutOnly: true }),
     });
   }
   return result;
@@ -412,7 +404,7 @@ export async function retireCompletedCheckouts(app, result, deps = {}) {
     const delivery = branch.openPr ? undefined : await readDelivery(app.repoPath, branch.branch, tree.head);
     const merged = delivery === 'contained' || branch.isMerged === true;
     if (delivery !== 'exact' && !(merged && !branch.worktreeDirty)) continue;
-    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }), ...(tree.checkoutIdentity && { checkoutIdentity: tree.checkoutIdentity }),
+    const release = { ...(tree.observedAt && { observedAt: tree.observedAt }),
       branch: tree.branch, path: tree.path, head: tree.head, locked: false, lockReason: null };
     // The service re-proves merge evidence, content and ownership under its fence.
     const outcome = await retire({ appId: app.id, release }, { beforeMutation: assertAutomaticRetirementAllowed, ...(delivery !== undefined && { delivery }) })

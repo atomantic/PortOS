@@ -49,7 +49,7 @@ describe('taskSchedule module boundaries', () => {
       expect(scheduler, name).not.toMatch(new RegExp(`function ${name}\\b`));
     }
     for (const dependency of ['branchReconcileOutcome', 'branchReconcileInventoryPrune', 'repoCleanupObservation',
-      'reconcileRetirementEvidence', 'legacyRetirementTransition', 'retirementCheckoutObservation']) {
+      'reconcileRetirementEvidence', 'legacyRetirementTransition']) {
       expect(scheduler, dependency).not.toContain(`/${dependency}.js'`);
     }
     // The ledger shares the persisted record through the store, never through the scheduler.

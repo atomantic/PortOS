@@ -2986,7 +2986,7 @@ describe('describeIdleReconcilePark', () => {
   it('preserves archive capacity and generation evidence in the remaining checkout status', () => {
     const archiveLimit = { scope: 'content', kind: 'total', limitBytes: 250 * 1024 * 1024, observedBytes: 264 * 1024 * 1024 };
     const row = { branch: 'feature/example', reason: 'retirement-archive-limit-exceeded', archiveLimit,
-      createdAt: '2026-10-24T00:00:00Z', checkoutIdentity: 'identity',
+      createdAt: '2026-10-24T00:00:00Z',
       preservationReceipt: { archiveDir: '/archive' }, preservationEvidence: { status: 'unresolved' }, checkoutMissing: true, branchMissing: true };
     const out = describeIdleReconcilePark([row]);
     expect(out.skipCauses).toEqual({ 'retirement-archive-limit-exceeded': 1 });

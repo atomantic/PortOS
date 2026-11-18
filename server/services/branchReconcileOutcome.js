@@ -1,5 +1,5 @@
 /** Current branch/checkout inventory and bounded recent-retirement display history. */
-import { sameRetirementCheckout, sameRetirementObservation, reconcileInventoryRows } from './branchReconcileInventoryPrune.js';
+import { sameRetirementCheckout, reconcileInventoryRows } from './branchReconcileInventoryPrune.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { cosEvents } from './cos/cosEvents.js';
 import { getAppById } from './apps.js';
@@ -73,7 +73,7 @@ export async function recordHeldCheckoutRetirement(appId, receipt) {
     const row = { ...details, ...(branch && { branch }), archiveDir: receipt.archiveDir ?? null, retiredAt };
     record.branchReconcileOutcome = { ...previous, updatedAt: retiredAt,
       remaining: (previous.remaining || []).filter(entry => receipt.branchDeleted !== true && Boolean(receipt.branch)
-        || (!sameRetirementObservation(entry, receipt) && !(!entry.checkoutIdentity && sameRetirementCheckout(entry, receipt)))),
+        || !sameRetirementCheckout(entry, receipt)),
       retired: [row, ...(previous.retired || [])].slice(0, RETIRED_CHECKOUTS_KEPT) };
     return { result: record.branchReconcileOutcome, changed: true };
   });

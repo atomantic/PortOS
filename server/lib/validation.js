@@ -2560,6 +2560,8 @@ export const releaseDeliveryVerificationBodySchema = z.object({ identity: z.stri
   prNumber: z.number().int().positive().safe() }).strict();
 
 // A scoped release names the exact inventory row the operator saw (#12002).
+// `checkoutIdentity` (the retired checkout fingerprint) stays accepted and
+// ignored: persisted rows and older clients still carry it.
 export const heldCheckoutRetireBodySchema = z.object({
   checkoutIdentity: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   observedAt: z.string().datetime({ offset: true }).optional(),

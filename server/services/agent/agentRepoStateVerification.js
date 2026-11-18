@@ -12,7 +12,6 @@ import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SI
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../../lib/persistent/persistentMindProcessAudit.js';
 import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
-import { readRetirementCheckoutIdentity } from '../../lib/retirementCheckoutObservation.js';
 import { resolveRetirementApp } from '../retirementAppScope.js';
 /**
  * Agent Repo-State Verification
@@ -1598,9 +1597,7 @@ async function prepareRecoveryRetirement({ agentId, appId, app: taskApp, sourceW
     return { reason: 'retirement-exact-inventory-unavailable' };
   }
   const tree = matches[0];
-  const checkoutIdentity = await readRetirementCheckoutIdentity(tree.path);
   const release = { branch: branchName, path: worktreePath || tree.path, head: tree.head,
-    ...(checkoutIdentity && { checkoutIdentity, observedAt: new Date().toISOString() }),
     locked: tree.locked === true, lockReason: tree.lockReason ?? null };
   const { recordBranchReconcileOutcome, recordBranchReconcileCheckout } = await import('../branchReconcileOutcome.js');
   const outcome = await recordBranchReconcileCheckout(app.id, release);

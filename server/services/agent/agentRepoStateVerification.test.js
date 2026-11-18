@@ -1,4 +1,4 @@
-import { retirementCheckoutIdentityFromPointer } from '../../lib/retirementCheckoutObservation.js';
+import { createHash } from 'node:crypto';
 vi.mock('../instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'fixture-local'), UNKNOWN_INSTANCE_ID: 'unknown' }));
 vi.mock('../../lib/gitRepositoryIdentity.js', () => ({ readGitCommonDirectory: vi.fn(async () => '/repo/.git') }));
 import { EventEmitter } from 'node:events';
@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readGitCommonDirectory } from '../../lib/gitRepositoryIdentity.js';
+// Legacy receipts (frozen migration 443 input) carry this fingerprint; current code only reads it as an opaque digest.
+const retirementCheckoutIdentityFromPointer = pointer => createHash('sha256').update(JSON.stringify([pointer.dev, pointer.ino, pointer.birthtimeNs])).digest('hex');
 vi.mock('../branchCompletionPolicy.js', async () => ({
   ...await vi.importActual('../branchCompletionPolicy.js'),
   readBranchCompletionPolicies: vi.fn(async () => []),
