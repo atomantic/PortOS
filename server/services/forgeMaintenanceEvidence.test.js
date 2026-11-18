@@ -13,6 +13,7 @@ describe('trusted maintenance discussion boundary', () => {
     const discussion = { body: 'External discussion evidence', user: { login: 'external' } };
     const item = { number: 7, state: 'open', title: 'Example change', user: { login: 'operator' }, head: { sha: 'a'.repeat(40) }, body: 'Trusted change request' };
     const runGh = vi.fn(async args => JSON.stringify(args.at(-1) === 'user' ? { login: 'operator' }
+      : args.at(-1) === 'repos/example/project/collaborators/operator/permission' ? { user: { login: 'operator' }, permission: 'write' }
       : args.at(-1) === 'repos/example/project' ? { default_branch: 'main' }
       : args.at(-1) === 'repos/example/project/pulls/17' ? { number: 17, merged: true, state: 'closed', merge_commit_sha: 'c'.repeat(40), base: { ref: 'main', repo: { full_name: 'example/project' } } }
       : args.includes('--paginate') ? [[discussion]] : item));
