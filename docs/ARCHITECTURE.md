@@ -375,8 +375,8 @@ model catalog and MTPLX. Add reusable raw repo metadata reads here; disk cache
 persistence remains in `huggingFaceRepoCache.js`. Model ranking, GGUF/MLX variant
 selection, fit and installability belong in `huggingFaceCatalog.js`. Consumers
 needing only metadata import its owner directly; the catalog retains its old
-`fetchRepoPublishedDates` export for compatibility. `importScoping.test.js` guards
-this boundary and the catalog workflow test checks shared request coalescing.
+`fetchRepoPublishedDates` export for compatibility. the import-growth guard in `importScoping.test.js` covers
+this boundary against fan-out and the catalog workflow test checks shared request coalescing.
 
 ### Shell Service (`server/services/shell.js`)
 - PTY-based web terminal via node-pty
