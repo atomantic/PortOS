@@ -39,7 +39,8 @@ import { composePersistentMindInstructions, normalizePersistentMindPlaybook, PER
 import { resolvePersistentMindPlaybookPhase } from '../services/persistent/persistentMindPlaybookSignals.js';
 import { publicPersistentMindState } from '../lib/persistent/persistentMindPublic.js';
 import { publicPersistentMindTurnExecutions } from '../lib/persistent/persistentMindTrajectory.js';
-import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema, validateRequest } from '../lib/validation.js';
+import { mindBundleApplySchema, mindBundleExportSchema, mindBundlePreviewSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { readPersistentMindEvents, readPersistentMindHistory } from '../services/agent/agentRunEventLog.js';
 import { loadState } from '../services/cos/cosState.js';
 import {

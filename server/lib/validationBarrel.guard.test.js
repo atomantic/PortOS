@@ -1,14 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url));
-
-// #16559: keep new schemas out of the catch-all barrel. Compatibility
-// re-exports do not raise the ceiling and should not pull its closure into callers.
-describe('validation.js stays a shrinking compatibility barrel', () => {
+// #16559: keep new schemas out of the catch-all. It declares its own schemas only (#16803).
+describe('validation.js stays a shrinking catch-all', () => {
   const barrelPath = fileURLToPath(new URL('./validation.js', import.meta.url));
   const barrelSrc = readFileSync(barrelPath, 'utf8');
   const ownExportCeiling = 266;
@@ -29,7 +24,7 @@ describe('validation.js stays a shrinking compatibility barrel', () => {
       .toBeLessThanOrEqual(ownExportCeiling);
   });
 
-  it('distinguishes own exports from compatibility re-exports', async () => {
+  it('counts only own exports', async () => {
     const validation = await import('./validation.js');
     for (const name of ownNames) expect(validation).toHaveProperty(name);
     expect(ownNames.has('appIconQuerySchema')).toBe(true);
@@ -38,22 +33,10 @@ describe('validation.js stays a shrinking compatibility barrel', () => {
     expect(ownExportNames(`${barrelSrc}\nexport const plantedSchema = z.string();\n`).size).toBe(ownNames.size + 1);
   });
 
-  it('imports re-exports from their declaring modules when the barrel is otherwise unused', () => {
-    const candidates = execFileSync('git', ['grep', '-l', '-z', '-F', 'validation.js', '--', 'server/**/*.js', 'server/**/*.jsx'], {
-      cwd: REPO_ROOT, encoding: 'utf8', windowsHide: true,
-    }).split('\0').filter(Boolean);
-    const offenders = [];
-    for (const file of candidates) {
-      const fullPath = join(REPO_ROOT, file);
-      const src = readFileSync(fullPath, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-      for (const [, bindings, , specifier] of src.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*(['"])([^'"\n]+)\2/g)) {
-        if (!specifier.startsWith('.') || resolve(dirname(fullPath), specifier) !== barrelPath) continue;
-        const names = bindings.split(',').map((part) => part.trim().split(/\s+as\s+/)[0]).filter(Boolean);
-        const validatorOnly = names.length === 1 && names[0] === 'validateRequest';
-        const reExportsOnly = names.length && !names.some((name) => ownNames.has(name));
-        if (validatorOnly || (reExportsOnly && !/\.test\.jsx?$/.test(file))) offenders.push(`${file}: ${names.join(', ')}`);
-      }
-    }
-    expect(offenders, 'Import these names from validateRequest.js or the declaring domain validation module.').toEqual([]);
+  it('re-exports nothing from other modules', () => {
+    // #16803: a re-export gives every importer of a domain file the barrel's whole audience.
+    const code = barrelSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/^\s*export\s*\*/m);
+    expect(code).not.toMatch(/^\s*export\s*(?:\{[^}]*\}|\*\s+as\s+\w+)\s*from\b/m);
   });
 });

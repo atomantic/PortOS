@@ -8,7 +8,8 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, searchQuerySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { searchQuerySchema } from '../lib/validation.js';
 import { fanOutSearch } from '../services/search.js';
 
 const router = Router();

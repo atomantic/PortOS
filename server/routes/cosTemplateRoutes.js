@@ -6,7 +6,8 @@ import { Router } from 'express';
 import * as taskTemplates from '../services/taskTemplates.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { parsePagination } from '../lib/validation.js';
 import {
   createTaskTemplateSchema,
   updateTaskTemplateSchema,

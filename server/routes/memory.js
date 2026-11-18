@@ -11,7 +11,8 @@ import * as memorySync from '../services/memorySync.js';
 import { findRecentRunsUsingMemory } from '../services/memoryRunUsage.js';
 import { checkHealth } from '../lib/db.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { parsePagination } from '../lib/validation.js';
 import {
   memoryCreateSchema,
   memoryUpdateSchema,

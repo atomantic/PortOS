@@ -6,7 +6,8 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, parsePagination, brainJournalAppendBodySchema, brainJournalReplaceBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { parsePagination, brainJournalAppendBodySchema, brainJournalReplaceBodySchema } from '../lib/validation.js';
 import { dailyLogSettingsSchema, activityDigestSettingsSchema, brainDailyLogListQuerySchema } from '../lib/brainValidation.js';
 import * as journal from '../services/brainJournal.js';
 import * as activityDigest from '../services/activityDigest.js';

@@ -15,7 +15,8 @@
 
 import { Router } from 'express';
 import { asyncHandler, failValidation } from '../lib/errorHandler.js';
-import { referenceRepoCreateSchema, referenceRepoUpdateSchema, referenceRepoReviewedBodySchema, validateRequest } from '../lib/validation.js';
+import { referenceRepoCreateSchema, referenceRepoUpdateSchema, referenceRepoReviewedBodySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   listReferenceRepos,
   addReferenceRepo,

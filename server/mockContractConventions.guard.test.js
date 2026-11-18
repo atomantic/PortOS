@@ -30,7 +30,7 @@ describe('vi.mock factory contract conventions', () => {
   it('flags a planted key the real module does not export', () => {
     const probe = join(ROOT, 'server/lib/__probe.test.js');
     const src = [
-      "vi.mock('./validation.js', () => ({ validateRequest: vi.fn(), plantedDeadKey: vi.fn() }));",
+      "vi.mock('./validation.js', () => ({ validate: vi.fn(), plantedDeadKey: vi.fn() }));",
       "// vi.mock('./validation.js', () => ({ commentedDeadKey: vi.fn() }));",
       "vi.mock('./validation.js', async () => ({ ...(await vi.importActual('./validation.js')), spreadKey: vi.fn() }));",
     ].join('\n');

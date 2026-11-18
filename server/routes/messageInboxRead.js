@@ -1,7 +1,8 @@
 // Shared production inbox route, without sync, send, browser or AI endpoints.
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { messageInboxQuerySchema, parsePagination, validateRequest } from '../lib/validation.js';
+import { messageInboxQuerySchema, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { UUID_RE } from '../lib/fileUtils.js';
 import * as messageSync from '../services/messageSync.js';
 

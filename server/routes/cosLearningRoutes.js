@@ -7,14 +7,9 @@ import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import { loadState } from '../services/cos/cosState.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
-import {
-  recordLearningInsightSchema,
-  dismissRecommendationSchema,
-  restoreRecommendationSchema,
-  generateWeeklyDigestSchema,
-  parsePagination,
-  validateRequest,
-} from '../lib/validation.js';
+import { recordLearningInsightSchema, dismissRecommendationSchema, restoreRecommendationSchema, generateWeeklyDigestSchema } from '../lib/cos/cosValidation.js';
+import { parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
 import { cosDigestCompareQuerySchema } from '../lib/cos/cosValidation.js';
 

@@ -1,7 +1,8 @@
 import express from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, logsQuerySchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { logsQuerySchema } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
 import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalog/catalogValidation.js';
 import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';

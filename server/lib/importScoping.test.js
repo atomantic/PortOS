@@ -215,6 +215,12 @@ const NARROWED = [
     'reads MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT from the referenceLimits.js leaf'],
   ['routes/signal.js', 'lib/validation.js',
     'validates through the validateRequest leaf'],
+  ['lib/validation.js', 'lib/musicVideo/musicVideoValidation.js',
+    'declares only its own schemas and re-exports no domain validation file (#16803)'],
+  ['lib/validation.js', 'lib/mediaValidation.js',
+    'declares only its own schemas and re-exports no domain validation file (#16803)'],
+  ['lib/validation.js', 'lib/cos/cosValidation.js',
+    'declares only its own schemas and re-exports no domain validation file (#16803)'],
   ['routes/signal.js', 'lib/musicVideo/musicVideoValidation.js',
     'validates through the validateRequest leaf'],
   ['services/musicVideo/lyricAlign.js', 'services/musicVideo/vocalStem.js',
@@ -270,7 +276,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/installState.js', '../scripts/lib/migrationLedger.js')).toBe(true);
     expect(reaches('../scripts/run-migrations.js', '../scripts/lib/migrationLedger.js')).toBe(true);
     expect(reaches('lib/musicVideo/musicVideoValidation.js', 'lib/referenceLimits.js')).toBe(true);
-    expect(reaches('lib/validation.js', 'lib/musicVideo/musicVideoValidation.js')).toBe(true);
+    expect(reaches('lib/validation.js', 'lib/pipelineValidation.js')).toBe(true);
     expect(reaches('services/musicVideo/vocalStem.js', 'services/musicVideo/projects.js')).toBe(true);
   });
 

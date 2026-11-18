@@ -14,7 +14,7 @@ import { ServerError } from './errorHandler.js';
  *
  * Lives in its own leaf (issue #16096) so ~113 route/service files that need
  * only this function do not pay for the whole validation.js schema graph.
- * validation.js re-exports it for compatibility. Keep this module's imports
+ * Import it from here: validation.js no longer re-exports it. Keep this module's imports
  * limited to ServerError's leaf.
  */
 export function validateRequest(schema, data) {

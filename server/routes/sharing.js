@@ -16,9 +16,7 @@ import { Router } from 'express';
 import { sharingSubscriptionsQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import {
-  bucketCreateSchema, bucketUpdateSchema, sharingExportSchema, subscriptionCreateSchema,
-} from '../lib/validation.js';
+import { bucketCreateSchema, bucketUpdateSchema, sharingExportSchema, subscriptionCreateSchema } from '../lib/validation.js';
 import {
   listBuckets, getBucket, createBucket, updateBucket, deleteBucket, readBucketJson,
 } from '../services/sharing/buckets.js';

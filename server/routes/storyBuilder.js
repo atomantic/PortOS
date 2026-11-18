@@ -1,18 +1,9 @@
 import { Router } from 'express';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
-import {
-  validateRequest,
-  storySessionCreateSchema,
-  storySessionUpdateSchema,
-  storySessionSyncSchema,
-  storyStepGenerateSchema,
-  storyStepRefineSchema,
-  storyIssueLockSchema,
-  storyIssuesGenerateSchema,
-  isPaginationRequested,
-  paginateArray,
-} from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { storySessionCreateSchema, storySessionUpdateSchema, storySessionSyncSchema, storyStepGenerateSchema, storyStepRefineSchema, storyIssueLockSchema, storyIssuesGenerateSchema } from '../lib/storyBuilderValidation.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import { STEPS, isValidStepId } from '../lib/storyBuilderSteps.js';
 import {
   listStorySessions,

@@ -6,7 +6,8 @@
 import { Router } from 'express';
 import * as feedbackService from '../../services/feedbackLoop.js';
 import { asyncHandler } from '../../lib/errorHandler.js';
-import { validateRequest, parsePagination } from '../../lib/validation.js';
+import { validateRequest } from '../../lib/validateRequest.js';
+import { parsePagination } from '../../lib/validation.js';
 import { feedbackInputSchema, feedbackRecentQuerySchema } from '../../lib/digitalTwinValidation.js';
 
 const router = Router();

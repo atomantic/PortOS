@@ -14,7 +14,8 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   privacySubjectCreateSchema,
   privacySubjectUpdateSchema,

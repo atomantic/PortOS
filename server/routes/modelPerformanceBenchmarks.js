@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, modelComparisonDiscoverySchema, modelComparisonBenchmarkRunSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { modelComparisonDiscoverySchema, modelComparisonBenchmarkRunSchema } from '../lib/validation.js';
 import { getPortosModelBenchmarkObservations } from '../services/modelComparison.js';
 import { canRefreshModels } from '../lib/aiToolkit/internal/modelFetchers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/provider/providerModels.js';

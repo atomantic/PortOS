@@ -12,7 +12,8 @@ import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
+import { emptyToUndefined, isPaginationRequested, paginateArray, parsePagination } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import {
   deleteLora,
   getLora,

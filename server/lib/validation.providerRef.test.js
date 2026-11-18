@@ -6,15 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { presetProviderIdSchema, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
-import {
-  appUpdateSchema,
-  providerSchema as hostProviderSchema,
-  credentialBootstrapsSettingsSchema,
-  featureProviderConfigSchema,
-  harnessSettingsSchema,
-  llmSchema,
-  runSchema,
-} from './validation.js';
+import { appUpdateSchema, providerSchema as hostProviderSchema, credentialBootstrapsSettingsSchema, featureProviderConfigSchema, harnessSettingsSchema, llmSchema, runSchema } from './validation.js';
 import { createCosTaskSchema, createTaskTemplateSchema, updateTaskTemplateSchema } from './cos/cosValidation.js';
 import { providerActiveSchema, providerCreateSchema, providerSchema, runSchema as toolkitRunSchema } from './aiToolkit/validation.js';
 

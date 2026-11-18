@@ -10,7 +10,8 @@ import { Router } from 'express';
 import { paginationQuerySchema } from '../lib/queryValidation.js';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   listProjects,
   getProject,

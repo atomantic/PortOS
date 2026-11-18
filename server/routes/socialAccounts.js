@@ -8,7 +8,8 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validate, validateRequest, socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/validation.js';
+import { validate, socialAccountSchema, socialAccountBulkBodySchema, socialAccountUpdateSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
 import * as socialAccounts from '../services/socialAccounts.js';
 
 const router = Router();

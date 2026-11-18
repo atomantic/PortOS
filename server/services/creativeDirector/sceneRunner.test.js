@@ -3,10 +3,7 @@ import {
   resolveImageStrength,
   DEFAULT_CONTINUATION_IMAGE_STRENGTH,
 } from './sceneRunner.js';
-import {
-  creativeDirectorSceneSchema,
-  creativeDirectorSceneUpdateSchema,
-} from '../../lib/validation.js';
+import { creativeDirectorSceneSchema, creativeDirectorSceneUpdateSchema } from '../../lib/creativeDirectorValidation.js';
 
 const baseScene = {
   sceneId: 'scene-1',

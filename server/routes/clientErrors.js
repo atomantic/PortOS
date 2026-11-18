@@ -9,7 +9,8 @@
 
 import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, clientErrorReportSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validateRequest.js';
+import { clientErrorReportSchema } from '../lib/validation.js';
 import { recordClientError } from '../services/clientErrors.js';
 
 const router = Router();
