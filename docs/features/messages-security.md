@@ -7,7 +7,7 @@ PortOS separates screening, constrained analysis and effectful actions. Classifi
 | Task | Scope | Boundary |
 | --- | --- | --- |
 | `issue-watcher` | External issue creation/edits and outside comments, including comments on trusted issues | Complete bounded evidence, abuse screening, API analysis with no tools, exact decision IDs, fresh state checks, deterministic reply/volunteer assignment |
-| `issue-reconcile` | Issues created by the operator, repository owner or write collaborators | Live author permission gate; outside discussions screened separately; screened trusted issue requirements and verified default-branch merge references reach maintenance |
+| `issue-reconcile` | Issues created by the repository owner or verified write collaborators (including the operator when granted access) | Live author permission gate; issue text and outside discussion screened together once, including quoted third-party text, without certifying attachments; verified default-branch merge references and screened requirements reach maintenance |
 | `pr-reviewer` | External PR intake and static review | Security screening, tool-free eligibility, tool-free review; server coordinator owns forge mutations |
 | `pr-watcher` | Operator/owner/write-collaborator PR maintenance | Live author gate, head/update/CI activity tracking, separately screened discussion; failed screening retains the activity for retry |
 
