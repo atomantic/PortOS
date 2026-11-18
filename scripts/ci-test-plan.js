@@ -404,6 +404,36 @@ export const getAlwaysRunTests = () => (alwaysRun ??= [...new Set([
   ...getGuardTests().filter((path) => !isClientGuard(path)),
 ])].sort());
 
+// The gate-tooling suites: tests of the CI/pregate machinery itself. Each spawns git
+// or carries `test-memo: never`, so none can earn a narrowing record, and `related`
+// selection used to fail closed into every plan whatever the diff touched (#16798).
+// The planner now selects them when a diff touches a TOOLING_OWNER_RE path, and
+// `planTestMemo` keeps one from the related walk only when a changed source reaches
+// its closure or inputs. Full plans and every push to main still run all of them.
+// Before adding a file, audit its real-tree reads: each must sit under
+// TOOLING_OWNER_RE or inside the test's module closure. A test that asserts over
+// other tracked files stays out (runCiTestsClientFixture.test.js is that half of
+// run-ci-tests.test.js, split off so the rest can be listed).
+export const TOOLING_TESTS = [
+  'scripts/ciTestPolicy.test.js',
+  'scripts/lib/testMemo.test.js',
+  'scripts/lib/testMemoRunner.test.js',
+  'scripts/pregate.test.js',
+  'scripts/run-ci-tests.test.js',
+  'scripts/vitestCiPool.test.js',
+  'scripts/vitestSiblingSweep.test.js',
+  'scripts/vitestTempRoot.test.js',
+  'scripts/workspaceCaches.test.js',
+];
+
+// Paths whose edit can break a tooling test with no import edge reaching it: the
+// scripts and workflows themselves, every dependency manifest, the Vitest configs,
+// and the Vitest environment modules the real configs load in the fixtures' child runs.
+export const TOOLING_OWNER_RE = /^(?:scripts\/|\.github\/|(?:[^/]+\/)*(?:package(?:-lock)?\.json|\.npmrc)$|(?:server|client)\/vitest[^/]*\.js$|server\/test\/(?:admissionSetup|dbRunExclusivity|mediaRegistryEnvironment|ownedBrowserDiagnostics|runTempRoot)\.js$)/;
+
+const toolingTestsFor = (changedFiles, trackedSet) => (
+  changedFiles.some((path) => TOOLING_OWNER_RE.test(path)) ? TOOLING_TESTS.filter((path) => trackedSet.has(path)) : []);
+
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
   /^scripts\/generate-init-db-sql(?:[.\/]|$)/i,
@@ -1169,6 +1199,7 @@ function buildSuitePlan(changedFiles, {
     ...fixtureTests,
     ...structuralTestsFor(changed, trackedSet),
     ...alwaysRun,
+    ...toolingTestsFor(changed, trackedSet),
     ...Object.entries(clientTestDependencies)
       .filter(([test, dependencies]) => trackedSet.has(test) && runnerForTest(test) === 'client'
         && jsSources.some((source) => isSharedClientDependency(source)
