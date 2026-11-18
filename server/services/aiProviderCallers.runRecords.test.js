@@ -28,7 +28,7 @@ const shared = vi.hoisted(() => ({
 
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('./aiStatusEvents.js', () => ({ startAIOp: () => ({ update: () => {}, complete: () => {}, error: () => {} }) }));
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: async () => ({ success: true }),
   ensureProviderReadyForExecution: async () => ({ success: true }),
 }));
@@ -37,7 +37,7 @@ vi.mock('./usage.js', async (importOriginal) => ({
   recordSession: shared.recordSession,
   recordRunUsage: shared.recordRunUsage,
 }));
-vi.mock('./providers.js', async (importOriginal) => ({
+vi.mock('./provider/providers.js', async (importOriginal) => ({
   ...await importOriginal(),
   getProviderById: async () => shared.provider,
   getActiveProvider: async () => shared.provider,

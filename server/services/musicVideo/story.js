@@ -6,7 +6,7 @@ import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { extractNonPlaceholderJson } from '../../lib/jsonExtract.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
 import { STORYBOARD_LIMITS, newStoryboardEntityId } from '../../lib/storyboardVocabulary.js';
-import { toolFreeOneShotRefusal } from '../../lib/providerVendors.js';
+import { toolFreeOneShotRefusal } from '../../lib/provider/providerVendors.js';
 import { artGuideProposalSchema, storyProposalSchema } from '../../lib/musicVideo/musicVideoStoryValidation.js';
 import { lyricSheetText } from './castAndSetsDirection.js';
 import { mutateProjectRecord } from './projects.js';

@@ -24,7 +24,7 @@ vi.mock('./characterMetrics.js', () => ({ getCharacterMetrics: async () => [] })
 vi.mock('./characterSignals.js', () => ({ createSignalContext: () => () => null }));
 vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
 vi.mock('./jira.js', () => ({}));
-vi.mock('./providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn(), parseLLMJSON: vi.fn() }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ query: async () => ({ rows: [] }), ensureSchema: async () => {} }));

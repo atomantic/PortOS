@@ -6,14 +6,14 @@ import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { extractGrokFinalMessage, grokReviewFinishReason } from '../lib/grok.js';
 
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), settingsEvents: { on: vi.fn() } }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn(), listProviders: vi.fn() }));
 vi.mock('../lib/aiToolkitState.js', () => ({ getAIToolkitInstance: () => ({}) }));
 vi.mock('./aiProvider.js', () => ({ callProviderAISimple: vi.fn() }));
 vi.mock('../lib/cliProviderRun.js', () => ({ runCliProviderPrompt: vi.fn() }));
 vi.mock('./lmStudioManager.js', () => ({ getBaseUrl: vi.fn() }));
 vi.mock('./ollamaManager.js', () => ({ getBaseUrl: vi.fn(), getModelCapabilities: vi.fn() }));
 
-const { getProviderById, listProviders } = await import('./providers.js');
+const { getProviderById, listProviders } = await import('./provider/providers.js');
 const { callProviderAISimple } = await import('./aiProvider.js');
 const { runCliProviderPrompt } = await import('../lib/cliProviderRun.js');
 const { CLI_CODE_REVIEW_INACTIVITY_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_DEFAULT_MS, REMOTE_CODE_REVIEW_TIMEOUT_CEILING_MS, getLocalCodeReviewTimeoutMs, pickCodeReviewDefaults, runLocalCodeReview, runLocalClaimCommentReview, getProviderReviewUnsupported, getReviewerConfigHealth, pickAvailableReviewerGroups } = await import('./codeReview.js');

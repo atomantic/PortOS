@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import {
   GENERAL_FAMILY_ID,
   THREEJS_MODEL_FAMILY_IDS,

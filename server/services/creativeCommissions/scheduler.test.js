@@ -58,7 +58,7 @@ vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-default
 // fire handler). Default: an agent-capable (tui) provider, so a pinned
 // commission fans its override onto both stages. Tests override per-case.
 const getProviderByIdMock = vi.fn(async (id) => ({ id, type: 'tui' }));
-vi.mock('../providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
 vi.mock('../../lib/aiToolkit/constants.js', () => ({ PROVIDER_TYPES: { CLI: 'cli', TUI: 'tui', API: 'api' } }));
 
 const tasteProfileMock = vi.fn(async () => ({ sections: [{ id: 'music', summary: 'Example stated preference' }], lastSessionAt: '2026-08-15T00:00:00.000Z' }));

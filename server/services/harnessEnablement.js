@@ -1,7 +1,7 @@
-import { DIRECT_HARNESS_ID, PROVIDER_HARNESSES, harnessById } from '../lib/providerHarnesses.js';
+import { DIRECT_HARNESS_ID, PROVIDER_HARNESSES, harnessById } from '../lib/provider/providerHarnesses.js';
 import { isPlainObject } from '../lib/objects.js';
 import { harnessSettingsSchema } from '../lib/validation.js';
-import { PROVIDER_RUNTIMES, peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
+import { PROVIDER_RUNTIMES, peekProviderRuntimeStatuses } from './provider/providerRuntimeInstaller.js';
 import { getSettings, settingsEvents, updateSettingsWith } from './settings.js';
 
 /**

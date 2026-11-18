@@ -32,7 +32,7 @@ vi.mock('../services/cos/cosTaskStore.js', () => ({
 vi.mock('../services/cos/cos.js', () => ({
   isRunning: () => true,
 }));
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'example-cli', type: 'cli', enabled: true })),
   getProviderById: vi.fn(), getAllProviders: vi.fn(),
 }));

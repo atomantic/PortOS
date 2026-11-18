@@ -1,4 +1,4 @@
-import { setFallbackChainCache } from '../lib/providerFallbackChainCache.js';
+import { setFallbackChainCache } from '../lib/provider/providerFallbackChainCache.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Usage-limit tests exercise routing, not the install's persisted usage ledger.
@@ -35,7 +35,7 @@ vi.mock('./tuiPromptRunner.js', () => ({
   executeTuiRun: vi.fn(),
 }));
 
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }),
 }));
 
@@ -44,7 +44,7 @@ vi.mock('./providerExecutionReadiness.js', () => ({
 // tests can drive the active/by-id lookups directly. `getAllProviders` is
 // mocked too so the retry-with-fallback path (which enumerates providers to
 // look up the configured fallback) can be driven directly from tests.
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] }),
@@ -79,9 +79,9 @@ vi.mock('./observedContextWindows.js', () => ({
 
 const runner = await import('./runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
-const executionReadiness = await import('./providerExecutionReadiness.js');
-const providers = await import('./providers.js');
-(await import('./providerRecoveryHooks.js')).registerProviderRecoveryHandlers(autoFixer);
+const executionReadiness = await import('./provider/providerExecutionReadiness.js');
+const providers = await import('./provider/providers.js');
+(await import('./provider/providerRecoveryHooks.js')).registerProviderRecoveryHandlers(autoFixer);
 const toolkitState = await import('../lib/aiToolkitState.js');
 const observedWindows = await import('./observedContextWindows.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');

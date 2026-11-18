@@ -13,7 +13,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { limitQuerySchema } from '../lib/queryValidation.js';
 import { sanitizeTaskMetadata, taskDataInputsSchema, validateRequest, parsePagination, cosScheduleTriggerBodySchema, heldCheckoutRetireBodySchema, releaseSynchronizationResetBodySchema, releaseDeliveryVerificationBodySchema } from '../lib/validation.js';
 import { promptSourceSchema, PROMPT_SOURCES, scheduleExecutionFieldsSchema } from '../lib/cos/cosValidation.js';
-import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { INTERVAL_TYPES, decodeIntervalType, isCronExpression, isKnownIntervalType } from '../services/taskScheduleConstants.js';
 import { normalizeSuggestedAfter, SUGGESTED_AFTER_MAX } from '../lib/scheduleRunOrder.js';
 import { findCronExpressionError } from '../lib/cronValidation.js';

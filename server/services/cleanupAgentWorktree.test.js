@@ -83,7 +83,7 @@ vi.mock('./cos/cosRunnerClient.js', () => ({
   getRunnerHealth: vi.fn()
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
   getAllProviders: vi.fn(() => [])
@@ -94,7 +94,7 @@ vi.mock('./usage.js', () => ({
   recordMessages: vi.fn()
 }));
 
-vi.mock('./providerStatus.js', () => ({
+vi.mock('./provider/providerStatus.js', () => ({
   isProviderAvailable: vi.fn(() => true),
   markProviderUsageLimit: vi.fn(),
   markProviderRateLimited: vi.fn(),

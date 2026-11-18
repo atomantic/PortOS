@@ -16,7 +16,7 @@
 
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { describeImageDataUrl } from './visionTest.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { createDocument, updateDocument } from './digital-twin-documents.js';

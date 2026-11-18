@@ -2,7 +2,7 @@
  * Shared TUI invocation + paste-handshake constants.
  */
 
-import { inferTuiCommand, applyCommandDefaults, injectTuiModelAndEffort } from './providerVendors.js';
+import { inferTuiCommand, applyCommandDefaults, injectTuiModelAndEffort } from './provider/providerVendors.js';
 import { detectTuiRetryBanner, describeTuiRetryStall, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────

@@ -5,7 +5,7 @@ import { platform, freemem, totalmem } from 'os';
 import { promisify } from 'util';
 import { getLoadedModels as ollamaLoadedModels, unloadModel as ollamaUnload, getBaseUrl as ollamaBaseUrl } from './ollamaManager.js';
 import { getLoadedModels as lmStudioLoadedModels, unloadModel as lmStudioUnload, getBaseUrl as lmStudioBaseUrl } from './lmStudioManager.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { getCudaCapability } from '../lib/cudaCapability.js';
 import { localRuntimeForProvider, LOCAL_RUNTIMES } from '../lib/localProviderRuntime.js';

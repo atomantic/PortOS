@@ -66,7 +66,7 @@ const installer = vi.hoisted(() => ({
   buildRuntimeActionCommand: vi.fn(),
   RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
-vi.mock('../services/providerRuntimeInstaller.js', () => installer);
+vi.mock('../services/provider/providerRuntimeInstaller.js', () => installer);
 
 import featureAgentsRoutes from './featureAgents.js';
 import loopsRoutes from './loops.js';

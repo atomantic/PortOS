@@ -15,7 +15,7 @@ vi.mock('./store.js', () => ({
 }));
 
 const getProviderByIdMock = vi.fn(async (id) => ({ id, type: 'tui' }));
-vi.mock('../providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
 vi.mock('../../lib/aiToolkit/constants.js', () => ({ PROVIDER_TYPES: { CLI: 'cli', TUI: 'tui', API: 'api' } }));
 
 const listProjectsByCommissionIdMock = vi.fn(async () => []);

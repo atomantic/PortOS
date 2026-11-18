@@ -14,7 +14,7 @@ vi.mock('../services/brain.js', () => ({
   updateMeta: (...args) => mocks.updateMeta(...args),
   getSummary: vi.fn(),
 }));
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   getProviderById: (...args) => mocks.getProviderById(...args),
 }));
 

@@ -199,7 +199,7 @@ vi.mock('../catalog/catalogDB.js', () => ({
 // Default the active provider to a code-capable (tui) one so the inherit path
 // is exercised; individual tests override for the API-default / substitution
 // / no-CLI-provider cases.
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'claude-code', type: 'tui', enabled: true })),
   getAllProviders: vi.fn(async () => ({ activeProvider: 'claude-code', providers: [{ id: 'claude-code', type: 'tui', enabled: true }] })),
   // Default: a pinned provider isn't in the test registry → resolves to null,
@@ -211,7 +211,7 @@ const { dispatchTool, getToolSpecs, getToolSpecsForIntent, classifyIntent } = aw
 const { getVoiceConfig: mockedGetVoiceConfig } = await import('./config.js');
 const { addTask: mockedAddTask } = await import('../cos/cosTaskStore.js');
 const { isRunning: mockedIsRunning } = await import('../cos/cos.js');
-const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../providers.js');
+const { getActiveProvider: mockedGetActiveProvider, getAllProviders: mockedGetAllProviders, getProviderById: mockedGetProviderById } = await import('../provider/providers.js');
 
 describe('getToolSpecs', () => {
   it('returns OpenAI-format function specs', () => {

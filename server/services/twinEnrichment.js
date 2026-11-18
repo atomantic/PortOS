@@ -31,7 +31,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import { query, ensureSchema } from '../lib/db.js';
 import { getLocalParts } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 
 const DIR = PATHS.digitalTwin;

@@ -48,14 +48,14 @@ import { mergeGateOwed } from '../../lib/mergeGateContract.js';
 import { probePrForBranch } from '../prProbe.js';
 import * as git from '../git.js';
 import { spawnTuiSessionViaRunner, classifyRunnerSpawnFailure, RUNNER_SPAWN_REFUSED, RUNNER_SPAWN_AMBIGUOUS } from '../cos/cosRunnerClient.js';
-import { providerSuppliesGithubToken } from '../../lib/providerModels.js';
+import { providerSuppliesGithubToken } from '../../lib/provider/providerModels.js';
 import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { agentGuardEnv } from '../../lib/agentGuard/index.js';
 import { buildCliChildEnv, composeProviderEnv } from '../../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../../lib/processEnv.js';
 import { resolveAgentApiEnv } from './agentApiAuth.js';
 import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
-import { isOllamaBackedProvider } from '../providers.js';
+import { isOllamaBackedProvider } from '../provider/providers.js';
 import { shellHasLiveChild } from '../../lib/shellLivenessProbe.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 

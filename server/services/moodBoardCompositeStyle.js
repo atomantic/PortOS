@@ -10,7 +10,7 @@ import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
  */
 
 import { parseLLMJSON, resolveAPIProvider } from './aiProvider.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { moodBoardStyleSchema } from '../lib/moodBoardValidation.js';

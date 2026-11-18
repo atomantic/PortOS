@@ -8,7 +8,7 @@
 // rejection it is about.
 const listenerGuardState = vi.hoisted(() => ({ loadStateError: null }));
 
-vi.mock('./providerStatus.js', async (importOriginal) => ({
+vi.mock('./provider/providerStatus.js', async (importOriginal) => ({
   ...(await importOriginal()),
   initProviderStatus: vi.fn().mockResolvedValue(undefined),
 }));

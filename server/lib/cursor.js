@@ -10,7 +10,7 @@
  * Dependency-light so the standalone autofixer can import it.
  */
 
-import { argvHasFlag, commandBasename, foldCursorEffortIntoModel, hasModelFlag } from './providerModels.js';
+import { argvHasFlag, commandBasename, foldCursorEffortIntoModel, hasModelFlag } from './provider/providerModels.js';
 
 /** The binary basename. Deliberately NOT `cursor` — that is the GUI editor. */
 export const CURSOR_COMMAND = 'cursor-agent';

@@ -8,7 +8,7 @@
  * to the id `grok` when this install has no Grok provider.
  */
 
-import { familyForProvider } from '../lib/providerFamilies.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import {
   GROK_IMAGINE_IMAGE_MODEL,
   GROK_IMAGINE_VIDEO_MODEL,
@@ -22,7 +22,7 @@ function dayKey(iso) {
 
 async function grokUsageProviderId() {
   try {
-    const { listProviders } = await import('./providers.js');
+    const { listProviders } = await import('./provider/providers.js');
     const list = await listProviders();
     return grokUsageProviderIdFromList(list);
   } catch (err) {

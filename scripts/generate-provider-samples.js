@@ -27,7 +27,7 @@
  * rather than an accident nobody can explain.
  *
  * Most records are `materializeRoute({ harness, method, serviceInstance })`
- * (`server/lib/providerRouteRecipes.js`) — the same writer a live composite
+ * (`server/lib/provider/providerRouteRecipes.js`) — the same writer a live composite
  * provider id resolves through — plus a per-record `overrides` layer for the
  * things a shipped sample pins that a fresh materialization would not know
  * (display name, model catalog/tiers, `enabled`, timeouts, generation
@@ -39,8 +39,8 @@
  * Deliberately NOT stamped: the `harnessId`/`method`/`serviceId` structural
  * keys #7565 added to a LIVE materialized record. Those three keys mark a
  * record as a DERIVED PRESET (`isDerivedPreset`,
- * `server/lib/providerGraphRecords.js`) — on every save, `materializeStoredPreset`
- * (`server/services/providerPresets.js`) re-resolves them through the
+ * `server/lib/provider/providerGraphRecords.js`) — on every save, `materializeStoredPreset`
+ * (`server/services/provider/providerPresets.js`) re-resolves them through the
  * PROVIDER GRAPH's own connection graph (`presetInputs` →
  * `resolveCompositeParts`), which needs a graph `connection` row whose slug
  * equals `serviceId`. A shipped sample was never created through the
@@ -59,7 +59,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
-import { materializeRoute } from '../server/lib/providerRouteRecipes.js';
+import { materializeRoute } from '../server/lib/provider/providerRouteRecipes.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(HERE, '..');
@@ -719,10 +719,10 @@ export const REFERENCE_OVERRIDES = {
  * Structural keys `materializeRoute` stamps on a LIVE composition (#7565) —
  * `harnessId`/`method`/`serviceId`/`servicePlan`. Deliberately dropped from
  * every shipped sample: those three keys mark a record `isDerivedPreset`
- * (`server/lib/providerGraphRecords.js`), and a derived preset re-resolves
+ * (`server/lib/provider/providerGraphRecords.js`), and a derived preset re-resolves
  * itself through the provider GRAPH's own connection graph on every save
  * (`materializeStoredPreset` → `presetInputs` → `resolveCompositeParts`,
- * `server/services/providerPresets.js`). A shipped sample has no graph
+ * `server/services/provider/providerPresets.js`). A shipped sample has no graph
  * connection behind it, so stamping these would make a fresh install's very
  * first save of the record (even flipping `enabled`) 400 with
  * `service-unknown` the moment the provider-graph feature is on — worse than

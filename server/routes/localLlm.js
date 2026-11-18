@@ -61,7 +61,7 @@ import { searchMtplxCatalog, pullMtplxModel, previewMtplxPull, removeMtplxModel 
 import { saveProcessList } from '../services/pm2.js'
 import { getSpecDecodePresetStatus, downloadSpecDecodeModel, previewSpecDecodeDownload, cancelSpecDecodeModelDownload, removeSpecDecodeModel } from '../services/specDecodeModels.js'
 import { SPEC_TYPE_SUGGESTIONS } from '../lib/specDecodePresets.js'
-import { resetProviderReadinessCache } from '../services/providerReadiness.js'
+import { resetProviderReadinessCache } from '../services/provider/providerReadiness.js'
 import { MODEL_ABUSE_GUARD } from '../lib/modelAbuseGuard.js'
 import { JEV_MODEL, jevScoreRequestSchema } from '../lib/jev.js'
 import { jevHeadActionRequestSchema, jevHeadTrainRequestSchema } from '../lib/jevHead.js'

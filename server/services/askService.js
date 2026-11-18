@@ -19,7 +19,7 @@
  * Routes consume this and forward as Server-Sent Events.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { hybridSearchMemories, getMemory } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
 import { hybridSearchIngredients } from './catalog/catalogDB.js';
@@ -31,18 +31,18 @@ import { getCharacter } from './character.js';
 import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
-import { resolveCliModel, prefixOpencodeModel, ensureLeadingSubcommand, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
+import { resolveCliModel, prefixOpencodeModel, ensureLeadingSubcommand, hasModelFlag, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { isKiloCommand, ensureKiloHeadlessArgs } from '../lib/kilo.js';
 import { isOpenchamberCommand, ensureOpenchamberHeadlessArgs } from '../lib/openchamber.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from '../lib/providerVendors.js';
+import { isToolFreeOneShotProvider, toolFreeOneShotArgs, toolFreeOneShotRefusal } from '../lib/provider/providerVendors.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { applyCredentialBootstrap, needsProcessGroup, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
-import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
+import { ensureManagedRuntimeReady } from './provider/providerExecutionReadiness.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
 import { iterateOpenAiChat } from '../lib/openAiChatStream.js';
 

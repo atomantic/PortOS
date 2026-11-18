@@ -18,7 +18,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { localCatalogBenchmarkModels, providerCatalogSlugs } from '../server/lib/comparisonModelScope.js';
-import { filterSelectableModels } from '../server/lib/providerModels.js';
+import { filterSelectableModels } from '../server/lib/provider/providerModels.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');

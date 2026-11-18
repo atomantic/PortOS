@@ -181,7 +181,7 @@ vi.mock('./lmStudioManager.js', () => mocks.lmstudio);
 // being re-implemented here: it decides which providers get refreshed at all, so
 // a hand-mirrored copy would let the service and the suite drift together and
 // assert nothing. Everything with a side effect stays a spy.
-vi.mock('./providers.js', async () => {
+vi.mock('./provider/providers.js', async () => {
   const real = await import('../lib/aiToolkit/providers.js');
   return {
     ...mocks.providers,

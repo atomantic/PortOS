@@ -33,7 +33,7 @@ import { requireProject } from './requireProject.js';
 const mutateProjectRecord = (id, transform) => mutateRecord(id, transform, { source: 'production-run' });
 import { musicVideoEvents } from './events.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import { codeFirstProductionAssets } from '../../lib/musicVideo/musicVideoMediumPlan.js';
 import { isSelfDrawnLayer } from '../../lib/musicVideo/musicVideoLayers.js';
 import { beginNextAttempt } from './autoReview.js';

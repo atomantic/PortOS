@@ -36,7 +36,7 @@ assertProvider: (provider, { message, code, status = 503 } = {}) => {
   resolveProviderAndModel: vi.fn(),
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   listSelectableProviders: vi.fn(),
   getActiveProvider: vi.fn(),
 }));
@@ -44,7 +44,7 @@ vi.mock('./providers.js', () => ({
 import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
 import { createRun, stopRun } from './runner.js';
 import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunner.js';
-import { getActiveProvider, listSelectableProviders } from './providers.js';
+import { getActiveProvider, listSelectableProviders } from './provider/providers.js';
 import {
   createLoop,
   restoreLoops,

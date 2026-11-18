@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
@@ -51,7 +51,7 @@ vi.mock('fs', async (importOriginal) => {
   };
 });
 
-const providers = await import('./providers.js');
+const providers = await import('./provider/providers.js');
 const promptRunner = await import('./promptRunner.js');
 const visionCli = await import('./visionCli.js');
 const fileUtils = await import('../lib/fileUtils.js');

@@ -63,7 +63,7 @@ import {
 import { parseRhetoricJson, scoreRhetoricReference, RHETORIC_REFERENCE_SET } from '../lib/postRhetoric.js';
 import { listRuntimeModels, runtimeEndpoint, runtimeApiKey } from './localModelAssessments.js';
 import { runLocalLlmTest, runEndpointLlmTest } from './localLlmPlayground.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 import { resolveOpencodeTuiProvider, runOpencodeTask } from './opencodeTask.js';
 import { ollamaBadgeCapabilities } from './localLlm.js';
 import * as ollamaManager from './ollamaManager.js';

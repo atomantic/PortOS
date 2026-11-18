@@ -65,7 +65,7 @@ import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmissi
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
 import { attachNodeImage } from '../services/fableLoom/records.js';
-import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { promptAdditionsSchema } from '../lib/modelInput.js';
 
 import { attachGeneratedMedia } from '../services/catalog/catalogDB.js';

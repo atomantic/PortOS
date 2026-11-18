@@ -95,7 +95,7 @@ export const CODEX_ERROR_CODES = Object.freeze({
  * local-runtime-excluding rule. Declared in `providerModels.js`, the pure leaf
  * the browser re-exports, so this module's protocol tables stay server-only.
  */
-export { isCodexSubscriptionProvider } from './providerModels.js';
+export { isCodexSubscriptionProvider } from './provider/providerModels.js';
 
 /**
  * Keys whose VALUES may carry a credential. Matched case-insensitively as a

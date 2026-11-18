@@ -1,14 +1,14 @@
 /**
  * The agent programs PortOS drives, as the browser needs to name them.
  *
- * Read off `PROVIDER_HARNESSES` in `server/lib/providerHarnesses.js` through `harnessById`, so a harness added to the registry is named here without a second edit. Only the label is read: `matches` classifies a provider RECORD (the browser gets a `harnessId`), `modes` is reflected by the routes a binding owns, and `protocol` is a transport decision no picker makes.
+ * Read off `PROVIDER_HARNESSES` in `server/lib/provider/providerHarnesses.js` through `harnessById`, so a harness added to the registry is named here without a second edit. Only the label is read: `matches` classifies a provider RECORD (the browser gets a `harnessId`), `modes` is reflected by the routes a binding owns, and `protocol` is a transport decision no picker makes.
  */
 
 import {
   PROVIDER_HARNESS_IDS,
   harnessById,
   harnessForProvider,
-} from '../../../server/lib/providerHarnesses.js';
+} from '../../../server/lib/provider/providerHarnesses.js';
 
 /**
  * What to call a binding's harness. `null` is the DIRECT API case and has a name of its own (a real binding with a real route, not a missing value); an id this build doesn't know is shown verbatim, so an unmapped harness stays a visible legacy route.

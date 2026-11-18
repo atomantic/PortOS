@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
 vi.mock('../../services/untrustedContent.js', () => ({ runUntrustedContentAnalysis: vi.fn() }));
-vi.mock('../../services/providers.js', () => ({
+vi.mock('../../services/provider/providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
 import { runPromptThroughProvider } from '../../services/promptRunner.js';
 import { runUntrustedContentAnalysis } from '../../services/untrustedContent.js';
-import { getProviderById } from '../../services/providers.js';
+import { getProviderById } from '../../services/provider/providers.js';
 import { solveChallenge } from './challengeSolver.js';
 
 const apiProvider = {

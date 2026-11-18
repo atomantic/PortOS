@@ -134,6 +134,7 @@ export const TEST_MEMO_NEVER = Object.freeze({
   'server/lib/moduleSummaries.test.js': 'reads every server/lib module header',
   'server/lib/catalog/moduleSummaries.test.js': 'reads every server/lib/catalog module header',
   'server/lib/persistent/moduleSummaries.test.js': 'reads every server/lib/persistent module header',
+  'server/lib/provider/moduleSummaries.test.js': 'reads every server/lib/provider module header',
   'server/lib/promptSystemStages.test.js': 'enumerates shipped prompt templates in data.reference',
   'client/src/lib/moduleSummaries.test.js': 'reads every client/src/lib module header',
   'client/src/hooks/moduleSummaries.test.js': 'reads every client/src/hooks module header',

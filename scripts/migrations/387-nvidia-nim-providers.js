@@ -2,7 +2,7 @@
  * Ship disabled NVIDIA NIM API and OpenCode presets to existing installs.
  *
  * NVIDIA NIM (`https://integrate.api.nvidia.com/v1`) is an OpenAI-compatible
- * hosted gateway, the third row of `server/lib/providerGateways.js` after
+ * hosted gateway, the third row of `server/lib/provider/providerGateways.js` after
  * OrcaRouter and OpenRouter. The existing `nvidia-kimi` API record stays a
  * Kimi-only catalog on the same host; these three records are the general
  * free-endpoint catalog (currently Gemma 4 31B IT and Laguna XS 2.1) plus the

@@ -4,7 +4,7 @@ import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
 import { spawn } from '../lib/childProcess.js';
 import { safeChildProcessEnv, safeChildProcessOptions } from '../lib/processEnv.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
-import { getProviderRuntime, spawnRuntimeInstaller } from './providerRuntimeInstaller.js';
+import { getProviderRuntime, spawnRuntimeInstaller } from './provider/providerRuntimeInstaller.js';
 
 const script = fileURLToPath(import.meta.url);
 const MAX_INPUT = 32 * 1024;

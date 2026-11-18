@@ -51,14 +51,14 @@ vi.mock('../services/autonomousJobs/store.js', () => ({
   syncSkillTemplatesFromSample: vi.fn(async () => {}),
 }));
 vi.mock('../services/apps.js', () => ({ getActiveApps: vi.fn() }));
-vi.mock('../services/providers.js', () => ({ listProviders: vi.fn() }));
+vi.mock('../services/provider/providers.js', () => ({ listProviders: vi.fn() }));
 
 import { clearQuotaBurnJobCompletion } from '../services/quotaBurnCompletions.js';
 import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js';
 import { getQuotaBurnConfig, saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listProviders } from '../services/providers.js';
+import { listProviders } from '../services/provider/providers.js';
 import quotaBurnRoutes from './quotaBurn.js';
 
 const buildApp = (address = '127.0.0.1') => {

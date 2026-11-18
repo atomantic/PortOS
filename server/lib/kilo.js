@@ -11,7 +11,7 @@
  * `args`. Dependency-light so it stays importable from the standalone autofixer process.
  */
 
-import { argvHasFlag, commandBasename, ensureLeadingSubcommand, hasModelFlag } from './providerModels.js';
+import { argvHasFlag, commandBasename, ensureLeadingSubcommand, hasModelFlag } from './provider/providerModels.js';
 
 export const KILO_COMMAND = 'kilo';
 

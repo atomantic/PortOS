@@ -13,7 +13,7 @@ vi.mock('./records.js', () => ({
   }),
 }));
 
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async () => ({
     id: 'codex',
     name: 'Codex',
@@ -47,7 +47,7 @@ vi.mock('../tracks/index.js', () => ({
 }));
 
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { requestGameFeedback } from './feedback.js';
 
 describe('requestGameFeedback', () => {

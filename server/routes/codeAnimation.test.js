@@ -63,7 +63,7 @@ vi.mock('../services/socket.js', () => ({
 }));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn() }));
 vi.mock('../services/moodBoard/db.js', () => ({ getBoard: vi.fn() }));
-vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../services/tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('../services/promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
@@ -96,7 +96,7 @@ import { createTrackWithAlbum } from '../services/trackAlbumMembership.js';
 import { PATHS } from '../lib/paths.js';
 import { getUniverse } from '../services/universeBuilder/crud.js';
 import { getBoard } from '../services/moodBoard/db.js';
-import { getProviderById } from '../services/providers.js';
+import { getProviderById } from '../services/provider/providers.js';
 import { getTrack } from '../services/tracks/index.js';
 import { listCodeAnimationJobPage, listCodeAnimationJobRecords, readCodeAnimationHtml, saveCodeAnimationHtml, saveCodeAnimationJobRecord } from '../services/codeAnimation/jobStore.js';
 import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../services/promptRunner.js';

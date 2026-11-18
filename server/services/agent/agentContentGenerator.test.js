@@ -13,12 +13,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../modelAbuseGuard.js', () => ({ runModelAbuseScan: mocks.scan }));
 vi.mock('../settings.js', () => ({ readSettingsStrict: mocks.read }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getAllProviders: mocks.providers,
   getProviderById: mocks.getProviderById,
   getActiveProvider: mocks.getActiveProvider,
 }));
-vi.mock('../providerExecutionReadiness.js', () => ({
+vi.mock('../provider/providerExecutionReadiness.js', () => ({
   ensureProviderReadyForExecution: async () => ({ success: true }),
 }));
 vi.mock('../promptRunner.js', async () => {

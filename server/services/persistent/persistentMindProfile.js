@@ -11,15 +11,15 @@
  * that one explicitly selected message borrows for a single turn.
  */
 
-import { effortLevelsForProvider } from '../../lib/providerModels.js';
+import { effortLevelsForProvider } from '../../lib/provider/providerModels.js';
 import { normalizePersistentMindProfile, persistentMindToolFreeRefusal } from '../../lib/persistent/persistentMindProfile.js';
 import {
   findPersistentMindThinkingPreset,
   normalizePersistentMindThinkingSelection,
   samePersistentMindThinkingSelection,
 } from '../../lib/persistent/persistentMindThinkingPresets.js';
-import { getProviderById } from '../providers.js';
-import { getProviderStatus, isProviderAvailable } from '../providerStatus.js';
+import { getProviderById } from '../provider/providers.js';
+import { getProviderStatus, isProviderAvailable } from '../provider/providerStatus.js';
 
 const providerModelIds = (provider) => (provider?.models || [])
   .map((model) => typeof model === 'string' ? model : model?.id)

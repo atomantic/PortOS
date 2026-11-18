@@ -57,7 +57,7 @@ import {
   correctPersistentMindJournalEvent,
   readPersistentMindJournal,
 } from '../services/persistent/persistentMindJournal.js';
-import { getProviderById } from '../services/providers.js';
+import { getProviderById } from '../services/provider/providers.js';
 import { persistentMindHarnessInfo } from '../services/persistent/persistentMindAdapter.js';
 import { cleanupPersistentMind } from '../services/persistent/persistentMindMaintenance.js';
 import {

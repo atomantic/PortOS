@@ -51,7 +51,7 @@ import {
   CODE_ANIMATION_RESOLUTIONS,
 } from './prompt.js';
 import { assertProvider, assertVisionRunUsedImages, resolveProviderAndModel, runPromptThroughProvider } from '../promptRunner.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { moveToNativeTrash } from '../../lib/nativeTrash.js';
 
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];

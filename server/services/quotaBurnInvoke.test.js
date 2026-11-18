@@ -66,7 +66,7 @@ vi.mock('./autonomousJobs.js', () => ({
   })),
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => state.providers),
 }));
 

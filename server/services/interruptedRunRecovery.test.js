@@ -7,7 +7,7 @@ import { getRunOwner } from '../lib/aiToolkit/internal/runOwnership.js';
 import { finalizeRunRecord, serializeRunDeletion, setAIToolkit } from './runner.js';
 import { recoverInterruptedRuns } from './interruptedRunRecovery.js';
 
-vi.mock('./providers.js', () => ({ isOllamaBackedProvider: () => false }));
+vi.mock('./provider/providers.js', () => ({ isOllamaBackedProvider: () => false }));
 const START = '2026-01-01T00:00:00.000Z';
 const END = Date.parse(START) + 60_000;
 const oldOwner = { id: 'previous-process', pid: 123456, startedAt: START };

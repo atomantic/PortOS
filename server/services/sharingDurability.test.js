@@ -35,7 +35,7 @@ vi.mock('../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn(() => { throw new 
 const backup = await import('./backup.js');
 const dataSync = await import('./dataSync.js');
 const peerUsage = await import('./peerUsage.js');
-const quotas = await import('./providerQuotaShare.js');
+const quotas = await import('./provider/providerQuotaShare.js');
 const sync = await import('./syncOrchestrator.js');
 const buckets = await import('./sharing/buckets.js');
 const subscriptions = await import('./sharing/subscriptions.js');

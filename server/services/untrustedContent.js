@@ -5,7 +5,7 @@ import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { readBodyCapped } from '../lib/safeUrlFetch.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { evaluateSecretEndpoint } from '../lib/aiToolkit/endpointGuard.js';
-import { getAllProviders } from './providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { modelAbuseContentFingerprint } from '../lib/modelAbuseGuard.js';
 import { formatUntrustedContent, isUntrustedContentProvider, resolveUntrustedContentPolicy, selectUntrustedContentProvider, UNTRUSTED_CONTENT_INSTRUCTIONS } from '../lib/untrustedContent.js';
 // Deep imports on purpose (#7473): both leaves are cheap (`ollamaContext.js`
@@ -383,7 +383,7 @@ async function analyzeScreenedContent({ provider, model, content, prompt, source
   }
   const endpointPolicy = selected.apiKey ? evaluateSecretEndpoint(selected.endpoint, { allowCustomEndpoint: selected.allowCustomEndpoint === true }) : { allowed: true };
   if (!endpointPolicy.allowed) return failure('untrusted-content-endpoint-blocked', 'The configured API endpoint cannot receive this provider credential.');
-  const { ensureProviderReadyForExecution } = await import('./providerExecutionReadiness.js');
+  const { ensureProviderReadyForExecution } = await import('./provider/providerExecutionReadiness.js');
   const ready = await ensureProviderReadyForExecution(selected).catch(() => null);
   if (!ready?.success) return failure('untrusted-content-provider-unavailable', 'The selected text API provider is unavailable. Check Models > LLMs > Abuse Guard.');
   // This transport deliberately has no runner failure hooks, run archives,

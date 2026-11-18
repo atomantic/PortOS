@@ -44,7 +44,7 @@ import { usageBackfillEvents } from './usageBackfillEvents.js';
 import { eidoverseWorldEvents } from './eidoverseWorldEvents.js';
 import { jevEvents } from './jevEvents.js';
 import { layaMlxEvents } from './layaMlxEvents.js';
-import { providerQuotaEvents } from './providerQuotaEvents.js';
+import { providerQuotaEvents } from './provider/providerQuotaEvents.js';
 import { wireProactiveTriggers } from './voice/proactiveTriggers.js';
 import { callStateEvents } from './voice/callSession.js';
 import {

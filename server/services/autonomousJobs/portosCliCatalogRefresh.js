@@ -30,7 +30,7 @@ notes, or the provider CLI's model-list command when that command is supported
 (for example, agy models). Treat an installed account-specific list as evidence
 to compare against, not as sufficient proof for the shipped catalog. Do not make
 provider calls during PortOS startup and do not duplicate or bypass the live
-refresh path in server/services/providers.js.
+refresh path in server/services/provider/providers.js.
 
 If a shipped fallback is stale, update only the PortOS static catalog and both
 fresh-install seed snapshots (server/lib/aiToolkit/defaults/providers.sample.json

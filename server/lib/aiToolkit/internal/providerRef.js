@@ -1,7 +1,7 @@
 /**
  * The composite provider-id grammar (`<harness>.<method>@<service-slug>[+<bootstrap-slug>]`):
  * tells a composite reference from a preset record id. A DELIBERATE MIRROR of
- * `server/lib/providerRef.js` (see `aiToolkit/AGENTS.md`), kept honest by
+ * `server/lib/provider/providerRef.js` (see `aiToolkit/AGENTS.md`), kept honest by
  * `providerRef.parity.test.js`. Imports nothing.
  */
 

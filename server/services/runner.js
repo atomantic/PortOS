@@ -10,9 +10,9 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
-import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } from '../lib/providerModels.js';
+import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } from '../lib/provider/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/providerVendors.js';
+import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/provider/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -20,7 +20,7 @@ import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/buff
 import { isHostShuttingDown } from '../lib/hostShutdown.js';
 // `./ollamaAgentContext.js` (and the ollama daemon manager behind it) is imported
 // lazily inside the predicate-gated branch below, NOT here — see that call site.
-import { isOllamaBackedProvider } from './providers.js';
+import { isOllamaBackedProvider } from './provider/providers.js';
 import {
   setAIToolkitInstance,
   getAIToolkitInstance,
@@ -29,7 +29,7 @@ import {
 
 // Re-exported so `server/services/promptRunner.js` can import via the runner
 // (its existing dependency boundary). The canonical home is now
-// `server/lib/providerModels.js` — that's where `server/lib/tuiHandshake.js`
+// `server/lib/provider/providerModels.js` — that's where `server/lib/tuiHandshake.js`
 // imports from directly (lib→lib, no service layer violation).
 export { hasModelFlag, extractBakedModel };
 
@@ -383,7 +383,7 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
 
   const startTime = Date.now();
   if (provider?.executionOptions && !provider.executionOptionAttribution) {
-    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'provider', { cwd: workspacePath });
     provider = prepared.provider;
     await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });

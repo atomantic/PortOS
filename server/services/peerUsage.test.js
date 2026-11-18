@@ -28,7 +28,7 @@ vi.mock('./usage.js', async () => {
 });
 
 const { buildUsageDigest, buildUsageReport } = await import('./usage.js');
-const { familyForProviderId } = await import('../lib/providerFamilies.js');
+const { familyForProviderId } = await import('../lib/provider/providerFamilies.js');
 const {
   getUsageSnapshot,
   getUsageManifest,
@@ -42,7 +42,7 @@ const {
   PEER_USAGE_FILE,
 } = await import('./peerUsage.js');
 const { TRANSCRIPT_USAGE_FILE } = await import('./claudeCodeTranscriptUsage.js');
-const { recordLocalQuotaCards, readLocalQuotaCards, PROVIDER_QUOTAS_FILE } = await import('./providerQuotaShare.js');
+const { recordLocalQuotaCards, readLocalQuotaCards, PROVIDER_QUOTAS_FILE } = await import('./provider/providerQuotaShare.js');
 
 afterAll(cleanup);
 

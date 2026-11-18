@@ -8,7 +8,7 @@
  * to the id `antigravity-cli` when this install has no Antigravity provider.
  */
 
-import { familyForProvider } from '../lib/providerFamilies.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { AGY_IMAGEGEN_IMAGE_MODEL } from '../lib/imageGenCapabilities.js';
 
 function dayKey(iso) {
@@ -19,7 +19,7 @@ function dayKey(iso) {
 
 async function agyUsageProviderId() {
   try {
-    const { listProviders } = await import('./providers.js');
+    const { listProviders } = await import('./provider/providers.js');
     const list = await listProviders();
     return agyUsageProviderIdFromList(list);
   } catch (err) {

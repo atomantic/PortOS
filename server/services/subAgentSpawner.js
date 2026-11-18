@@ -23,7 +23,7 @@ import { readdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cos/cosEvents.js';
 import { updateAgent } from './cos/cosAgentLifecycle.js';
-import { initProviderStatus } from './providerStatus.js';
+import { initProviderStatus } from './provider/providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable, isRunnerReachable } from './cos/cosRunnerClient.js';
 import { PATHS, rmGuarded } from '../lib/fileUtils.js';
 import { loadSlashdoFile } from '../lib/slashdoLoader.js';

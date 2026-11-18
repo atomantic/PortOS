@@ -9,7 +9,7 @@ import { join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, SPEED_LEDGER_FIELDS, PRICING_AS_OF } from '../lib/modelPricing.js';
-import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.js';
+import { familyForProvider, familyForProviderId } from '../lib/provider/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';

@@ -64,11 +64,11 @@ import {
 
 import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
-import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
+import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { loadUsage, recordSession } from './usage.js';
 import { recordCompletedRunUsage } from './usageReconciler.js';
-import { setAIToolkit as setProvidersToolkit } from './providers.js';
-import { setAIToolkit as setProviderStatusToolkit } from './providerStatus.js';
+import { setAIToolkit as setProvidersToolkit } from './provider/providers.js';
+import { setAIToolkit as setProviderStatusToolkit } from './provider/providerStatus.js';
 import { setAIToolkit as setRunnerToolkit, executeCliRun as executeCliRunFixed, serializeRunDeletion } from './runner.js';
 import { reconcileDeadOwnerReservations } from './deadOwnerReservations.js';
 import { startHarnessActionRecovery, stopHarnessActionRecovery } from './harnessActionRecovery.js';
@@ -112,7 +112,7 @@ import { startSignalScheduler } from './signalScheduler.js';
 import { startSpotifyScheduler } from './spotifyScheduler.js';
 import { startYoutubeScheduler } from './youtubeScheduler.js';
 import { reconcileStackerNewsSchedulers } from './stackerNewsScheduler.js';
-import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './providerGraph.js';
+import { onProvidersSaved as onProvidersSavedForGraph, initProviderGraph } from './provider/providerGraph.js';
 import { reportRetiredModelPins } from './modelPinAuditNotifier.js';
 import { startBrainScheduler } from './brainScheduler.js';
 import { startActivityDigestScheduler } from './activityDigestScheduler.js';
@@ -193,9 +193,9 @@ import { backfillProjectCommissionIds } from './creativeCommissions/projectContr
 import { outcomesStore as liOutcomesStore } from './layeredIntelligenceOutcomes.js';
 import * as gameStore from './games/store.js';
 import * as fableLoomStore from './fableLoom/store.js';
-import { prerequisitesMetForRouting } from './providerPrerequisites.js';
-import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
-import { initFallbackChain } from './providerFallbackChain.js';
+import { prerequisitesMetForRouting } from './provider/providerPrerequisites.js';
+import { peekFallbackChain } from '../lib/provider/providerFallbackChainCache.js';
+import { initFallbackChain } from './provider/providerFallbackChain.js';
 import { localCachedModelIds } from './localCachedModels.js';
 import { stopCodexAppServer } from './codexAppServer.js';
 import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLogging.js';

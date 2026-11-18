@@ -35,7 +35,7 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 }));
 
 
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn().mockResolvedValue(undefined),
   markProviderRateLimited: vi.fn().mockResolvedValue(undefined)
 }));
@@ -183,7 +183,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => ({
   PATHS: { root: '/tmp/portos-root', data: '/tmp/portos-root/data' }
 }));
 
-vi.mock('../../lib/providerModels.js', async (importOriginal) => ({
+vi.mock('../../lib/provider/providerModels.js', async (importOriginal) => ({
   // Pull the real module first so pure helpers added later (isClaudeCommand,
   // applyLeanClaudeArgs, leanClaudeAuthEnv, …) don't silently vanish from the
   // mock — only the fns below are stubbed/spied.

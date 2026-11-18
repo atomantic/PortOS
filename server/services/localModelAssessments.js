@@ -71,7 +71,7 @@ import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { isEmbeddingModel } from '../lib/localModelHeuristics.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 import { runEndpointLlmTest, runLocalLlmTest } from './localLlmPlayground.js';
 import {
   captureLlamaServerConfig,

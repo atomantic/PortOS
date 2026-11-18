@@ -29,7 +29,7 @@ import {
 import { csvIdsParam } from '../sharedSchemas.js';
 import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
 import { GENERATION_METADATA_LIMITS } from '../pngMetadata.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 
 import { isTruthyMeta } from '../metadataFlags.js';
 import { LOOK_AROUND_MAX_ANGLES, LOOK_AROUND_MOTION_IDS } from './catalogLookAround.js';

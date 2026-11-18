@@ -25,7 +25,7 @@ const PROVIDERS = [
   { id: 'opencode-tui', type: 'tui', command: 'opencode', enabled: true },
   { id: 'off-tui', type: 'tui', command: 'opencode', enabled: false },
 ];
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn(async (id) => PROVIDERS.find((provider) => provider.id === id) || null),
   getAllProviders: vi.fn(async () => PROVIDERS),
 }));

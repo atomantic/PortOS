@@ -1,15 +1,15 @@
-import { parseProviderRef } from '../lib/providerRef.js';
-import { PROVIDER_HARNESSES, harnessById, isCompatible } from '../lib/providerHarnesses.js';
-import { materializeRouteOutcome } from '../lib/providerRouteRecipes.js';
-import { bootstrapInputFor } from '../lib/providerPresets.js';
-import { applyServicePlanFilter, instanceForConnection } from '../lib/providerServiceInstances.js';
-import { effortLevelsForProvider } from '../lib/providerModels.js';
+import { parseProviderRef } from '../lib/provider/providerRef.js';
+import { PROVIDER_HARNESSES, harnessById, isCompatible } from '../lib/provider/providerHarnesses.js';
+import { materializeRouteOutcome } from '../lib/provider/providerRouteRecipes.js';
+import { bootstrapInputFor } from '../lib/provider/providerPresets.js';
+import { applyServicePlanFilter, instanceForConnection } from '../lib/provider/providerServiceInstances.js';
+import { effortLevelsForProvider } from '../lib/provider/providerModels.js';
 import { listCredentialBootstraps, presentCredentialBootstraps } from './credentialBootstrapApps.js';
 import { harnessEnablementFrom, harnessSettingsRevision, listHarnessEnablement } from './harnessEnablement.js';
-import { findConnectionByRef, providerGraphEnabled } from './providerGraph.js';
-import { readGraph } from './providerGraphStore.js';
-import { listServices } from './providerServices.js';
-import { peekProviderRuntimeStatuses } from './providerRuntimeInstaller.js';
+import { findConnectionByRef, providerGraphEnabled } from './provider/providerGraph.js';
+import { readGraph } from './provider/providerGraphStore.js';
+import { listServices } from './provider/providerServices.js';
+import { peekProviderRuntimeStatuses } from './provider/providerRuntimeInstaller.js';
 import { getSettings } from './settings.js';
 import { createSingleFlight } from '../lib/singleFlight.js';
 

@@ -51,7 +51,7 @@
  * scheduler graph.
  */
 
-import { EFFORT_LEVELS } from '../../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../../lib/provider/providerModels.js';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';

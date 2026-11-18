@@ -8,7 +8,7 @@
 import { ServerError } from '../../lib/errorHandler.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { promptAddition } from '../../lib/modelInput.js';
-import { toolFreeOneShotRefusal } from '../../lib/providerVendors.js';
+import { toolFreeOneShotRefusal } from '../../lib/provider/providerVendors.js';
 import { previzCutPatchSchema, previzProposalPartSchemas } from '../../lib/musicVideo/musicVideoStoryValidation.js';
 import { activeMusicVideoSubjects } from '../../lib/musicVideo/musicVideoCastSelection.js';
 import { previzCutTiming, projectPreviz } from '../../lib/musicVideo/musicVideoPreviz.js';

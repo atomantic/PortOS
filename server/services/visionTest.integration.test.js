@@ -19,7 +19,7 @@ import { existsSync, readdirSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { testVision, checkVisionHealth, runVisionTestSuite } from './visionTest.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

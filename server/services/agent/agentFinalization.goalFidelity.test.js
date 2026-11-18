@@ -53,8 +53,8 @@ vi.mock('../cos/cosAgentIndex.js', () => ({ getAgentsByDate: (...args) => getAge
 
 const updateTaskMock = vi.fn(async () => ({}));
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: (...args) => updateTaskMock(...args) }));
-vi.mock('../providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => null) }));
+vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: vi.fn(async () => null),
   markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: vi.fn(async () => null),

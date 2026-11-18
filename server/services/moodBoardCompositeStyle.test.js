@@ -9,11 +9,11 @@ vi.mock('./promptRunner.js', async (importActual) => {
   return { ...actual, runPromptThroughProvider: vi.fn() };
 });
 
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 
 const aiProvider = await import('./aiProvider.js');
 const promptRunner = await import('./promptRunner.js');
-const providers = await import('./providers.js');
+const providers = await import('./provider/providers.js');
 const { composeBoardPrompt } = await import('./moodBoardCompositeStyle.js');
 
 const apiProvider = { id: 'ollama', type: 'api', defaultModel: 'qwen' };

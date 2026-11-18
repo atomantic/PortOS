@@ -21,7 +21,7 @@ const readinessService = vi.hoisted(() => ({
 // model id it will serve through the REAL `servedModelId`, so a fully-stubbed
 // module would hand it `undefined` and the route would throw before it ever
 // reached the daemon.
-vi.mock('../services/providerReadiness.js', async (importOriginal) => ({ ...(await importOriginal()), ...readinessService }));
+vi.mock('../services/provider/providerReadiness.js', async (importOriginal) => ({ ...(await importOriginal()), ...readinessService }));
 const llamaService = vi.hoisted(() => ({
   relaunchLlamaServerWithAlias: vi.fn(),
   // The route checks that the provider points at the daemon PortOS actually

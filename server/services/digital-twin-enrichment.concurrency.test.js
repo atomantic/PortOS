@@ -15,7 +15,7 @@ vi.mock('../lib/fileUtils.js', async original => {
   return { ...actual, PATHS: { ...actual.PATHS, digitalTwin: root },
     atomicWrite: async (path, data) => { await state.beforeWrite?.(path); return actual.atomicWrite(path, data); } };
 });
-vi.mock('./providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => null, getProviderById: async () => null }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async () => 'example prompt' }));
 vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => '' }));
 vi.mock('./digital-twin-analysis.js', () => ({ generateGapRecommendations: () => [] }));

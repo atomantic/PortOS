@@ -1,18 +1,18 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { join } from 'path';
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }) }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }) }));
 vi.mock('./tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
 vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
 vi.mock('../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: vi.fn() }));
-vi.mock('../lib/providerModels.js', () => ({
+vi.mock('../lib/provider/providerModels.js', () => ({
   isOpencodeCommand: vi.fn(() => true),
   isClaudeCommand: vi.fn((command) => command === 'claude'),
 }));
 
 import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
-import { getProviderById } from './providers.js';
-import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
+import { getProviderById } from './provider/providers.js';
+import { ensureProviderReadyForExecution } from './provider/providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import {
   buildOpenCodeAgentBenchmarkPrompt,

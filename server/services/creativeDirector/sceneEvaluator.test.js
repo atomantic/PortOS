@@ -41,7 +41,7 @@ vi.mock('../promptRunner.js', () => ({
   assertVisionRunUsedImages: mocks.assertVisionRunUsedImages,
 }));
 vi.mock('../settings.js', () => ({ getSettings: mocks.getSettings }));
-vi.mock('../providers.js', () => ({ getProviderById: mocks.getProviderById }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: mocks.getProviderById }));
 vi.mock('../localLlm.js', () => ({ listVisionModels: mocks.listVisionModels }));
 vi.mock('../mediaCollections.js', () => ({ addItem: mocks.addItem }));
 vi.mock('./local.js', () => ({

@@ -40,7 +40,7 @@ import { createStreamingAnsiStripper, stripAnsi } from '../../lib/ansiStrip.js';
 import { createContentRefusalDetector, createClaudeSessionLimitBannerDetector, createImmediateFallbackSignalDetector, createLocalRuntimeOomDetector, createTruncatedResponseDetector, createModelAtCapacityDetector } from '../../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../../lib/antigravity.js';
 import { isCodexCommand } from '../../lib/codex.js';
-import { isClaudeCommand, isOpencodeCommand } from '../../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../../lib/provider/providerModels.js';
 import { isFalsyMeta } from '../../lib/metadataFlags.js';
 import { createCodexModelRejectionGate } from './codexModelRejection.js';
 import { createPasteSubmitDriver } from '../../lib/tuiPasteSubmitDriver.js';

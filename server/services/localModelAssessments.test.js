@@ -40,7 +40,7 @@ vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: (...args) => 
 // `Array.isArray(providers)` guard read as satisfied in tests while never being
 // true in production, so a key-gated vLLM silently got no key.
 const getAllProviders = vi.fn(async () => ({ activeProvider: null, providers: [] }));
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getAllProviders: (...args) => getAllProviders(...args),
   listProviders: async () => {
     const data = await getAllProviders().catch(() => null);

@@ -38,7 +38,7 @@ vi.mock('../lib/vllmQwenProject.js', () => ({ inspectVllmQwenProject: async () =
 vi.mock('../lib/openAiModelsProbe.js', () => ({ probeOpenAiModels: async () => ({ reachable: true, models: ['qwen3.8-27b'] }) }));
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn(async () => ({ success: true })) }));
 vi.mock('./vllmQwenManager.js', () => ({ ensureVllmProjectDir: async () => null, provisionVllmQwenProject: async () => ({ success: true }) }));
-vi.mock('./providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: async () => ({ providers: state.providers }), createProvider: async (record) => state.providers.push(record), updateProvider: async (id, patch) => Object.assign(state.providers.find(p => p.id === id), patch) }));
 vi.mock('./fleetLlmGateway.js', () => ({ createFleetLlmGateway: () => ({ server: { once(_evt, fail) { this.fail = fail; }, on() {}, listen(_port, _host, done) { if (state.listenError) this.fail(state.listenError); else done(); } }, status: () => ({ active: 0, queued: 0 }), close: async () => {} }) }));
 import { configureFleetLlmHost, describeFleetHostError, disableFleetLlmHost, startFleetLlmHost, getFleetLlmHostStatus, getFleetPeerHosts, revealFleetPeerHostKey, stopFleetLlmHost } from './fleetLlmHost.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';

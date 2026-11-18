@@ -60,7 +60,7 @@ import { resolvePersistentMindProfile, resolvePersistentMindThinkingSession } fr
 import { isUpdateInProgress } from '../updateChecker.js';
 import { publicPersistentMindState } from '../../lib/persistent/persistentMindPublic.js';
 import { normalizePersistentMindProfile, persistentMindWakeIntervalMs } from '../../lib/persistent/persistentMindProfile.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import {
   findPersistentMindThinkingPreset,
   normalizePersistentMindThinkingSelection,
@@ -81,7 +81,7 @@ import {
   contextBudgetPauseReasonFrom,
   isContextBudgetFitnessError,
 } from '../../lib/persistent/persistentMindContextBudget.js';
-import { isProviderAvailable, markProviderUsageLimit } from '../providerStatus.js';
+import { isProviderAvailable, markProviderUsageLimit } from '../provider/providerStatus.js';
 import { scrubSecretTokens } from '../../lib/secretText.js';
 
 export const PERSISTENT_MIND_WAKE_EVENT_ID = 'cos-persistent-mind-wake';

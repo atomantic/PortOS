@@ -33,7 +33,7 @@ const TARGET_IDS = ['opencode-ollama', 'opencode-ollama-tui'];
 
 // Strip a leading `ollama/` namespace so a model id keys the config `models`
 // map (which lives under the `ollama` provider — keys are bare ids). Mirrors
-// stripOllamaPrefix in server/lib/providerModels.js.
+// stripOllamaPrefix in server/lib/provider/providerModels.js.
 const stripOllamaPrefix = (id) =>
   typeof id === 'string' && id.startsWith('ollama/') ? id.slice('ollama/'.length) : id;
 

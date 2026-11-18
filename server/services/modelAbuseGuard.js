@@ -45,7 +45,7 @@ import {
 import { findCachedRepoFiles, getHfCacheRoot } from '../lib/hfCache.js';
 import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
+import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/provider/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { detectVenvBasePythonSync, createVenv, installLockedRuntime } from '../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';

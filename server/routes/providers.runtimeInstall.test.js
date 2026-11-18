@@ -27,7 +27,7 @@ const installer = vi.hoisted(() => ({
   RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
 
-vi.mock('../services/providerRuntimeInstaller.js', () => installer);
+vi.mock('../services/provider/providerRuntimeInstaller.js', () => installer);
 const fixture = vi.hoisted(() => ({ root: null, admission: null }));
 vi.mock('../lib/maintenanceAdmission.js', async () => {
   const actual = await vi.importActual('../lib/maintenanceAdmission.js');

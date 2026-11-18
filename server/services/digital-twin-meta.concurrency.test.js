@@ -37,7 +37,7 @@ vi.mock('./digital-twin-helpers.js', async () => {
     },
   };
 });
-vi.mock('./providers.js', () => ({ getProviderById: async () => ({ id: 'p', enabled: true }) }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: async () => ({ id: 'p', enabled: true }) }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async (name) => name }));
 vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => 'identity' }));
 

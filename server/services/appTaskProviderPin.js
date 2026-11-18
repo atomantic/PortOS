@@ -39,7 +39,7 @@ const NOT_AGENT_CAPABLE = 'provider-not-agent-capable';
  */
 export async function resolveAgentProviderPin({ appPin, readSchedulePin, taskType, appName, getProviderType } = {}) {
   const typeOf = getProviderType || (async (id) => {
-    const { getProviderById } = await import('./providers.js');
+    const { getProviderById } = await import('./provider/providers.js');
     const provider = await getProviderById(id).catch(() => null);
     return provider?.type ?? null;
   });

@@ -142,7 +142,7 @@ describe('the preview contacts no AI provider and launches no runtime', () => {
     // The runtime assertion above only proves this request did not call out.
     // This proves the preview modules have no way to: nothing in their static
     // import closure can spawn, pty, or reach an AI provider service.
-    const closure = staticImportClosure(abs('lib/providerGraphPreview.js'));
+    const closure = staticImportClosure(abs('lib/provider/providerGraphPreview.js'));
     const forbidden = ['child_process', 'node:child_process', 'node-pty', 'node:net', 'node:dgram'];
     for (const pkg of closure.packages) {
       expect(forbidden.some((banned) => specifierMatchesPackage(pkg, banned))).toBe(false);
@@ -152,7 +152,7 @@ describe('the preview contacts no AI provider and launches no runtime', () => {
     // Positive control: the walk really does see packages, so a resolver gap
     // cannot make the negative assertions above pass vacuously.
     expect(closure.packages.has('zod')).toBe(true);
-    expect(closure.files.has(abs('lib/providerConnections.js'))).toBe(true);
+    expect(closure.files.has(abs('lib/provider/providerConnections.js'))).toBe(true);
   });
 });
 

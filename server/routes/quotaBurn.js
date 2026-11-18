@@ -14,7 +14,7 @@ import { convertLegacyQuotaBurnPatch } from '../services/quotaBurnConversion.js'
 import { saveQuotaBurnConfig } from '../services/quotaBurnStore.js';
 import { getQuotaBurnStatus, runQuotaBurnCycle } from '../services/quotaBurnRunner.js';
 import { getActiveApps } from '../services/apps.js';
-import { listProviders } from '../services/providers.js';
+import { listProviders } from '../services/provider/providers.js';
 
 const router = Router();
 

@@ -52,7 +52,7 @@ let recordPinsModule = null;
 let taskTemplatesModule = null;
 const loadAppsModule = () => (appsModule ||= import('./apps.js'));
 const loadNotificationsModule = () => (notificationsModule ||= import('./notifications.js'));
-const loadProvidersModule = () => (providersModule ||= import('./providers.js'));
+const loadProvidersModule = () => (providersModule ||= import('./provider/providers.js'));
 const loadTaskScheduleModule = () => (taskScheduleModule ||= import('./taskSchedule.js'));
 const loadRecordPinsModule = () => (recordPinsModule ||= import('./modelPinRecords.js'));
 const loadTaskTemplatesModule = () => (taskTemplatesModule ||= import('./taskTemplates.js'));

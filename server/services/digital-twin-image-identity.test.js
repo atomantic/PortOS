@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // provider/vision/prompt/document deps; safeJSONParse (from fileUtils) runs for
 // real so parseIdentityImage is exercised end-to-end.
 vi.mock('./promptService.js', () => ({ buildPrompt: vi.fn() }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./visionTest.js', () => ({ describeImageDataUrl: vi.fn() }));
 vi.mock('./digital-twin-meta.js', () => ({ loadMeta: vi.fn() }));
 vi.mock('./digital-twin-documents.js', () => ({ createDocument: vi.fn(), updateDocument: vi.fn() }));
@@ -15,7 +15,7 @@ import {
   parseIdentityImage
 } from './digital-twin-image-identity.js';
 import { buildPrompt } from './promptService.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { describeImageDataUrl } from './visionTest.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { createDocument, updateDocument } from './digital-twin-documents.js';

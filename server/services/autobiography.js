@@ -28,7 +28,7 @@ import {
   queueAutobiographyStoriesWrite
 } from './autobiographyFileQueues.js';
 import { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } from './notifications.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 
 // Tiny pub/sub, mirroring meatspacePost.js's postConfigEvents: the reminder

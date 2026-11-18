@@ -12,7 +12,7 @@
  * out of date with nothing in the UI saying so.
  *
  * Every mutating endpoint names a harness *id* from the fixed table in
- * `services/providerRuntimeInstaller.js`; no request value reaches a shell word,
+ * `services/provider/providerRuntimeInstaller.js`; no request value reaches a shell word,
  * and no response carries a resolved filesystem path (a global bin directory
  * embeds the host account name — see the Sensitive Data rules in AGENTS.md).
  */

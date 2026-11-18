@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { fenceBlock } from '../../lib/promptFencing.js';

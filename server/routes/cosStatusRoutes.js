@@ -10,7 +10,7 @@ import { getStatus, pause, resume, start, stop, updateConfig } from '../services
 import { getAllDomainUsageToday } from '../services/domainUsage.js';
 import { reinitialize as reinitializeEmbeddings } from '../services/memoryEmbeddings.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { getProviderById } from '../services/providers.js';
+import { getProviderById } from '../services/provider/providers.js';
 import { validateRequest } from '../lib/validateRequest.js';
 import { z } from 'zod';
 import { DOMAIN_IDS, DOMAIN_MODES } from '../lib/domainAutonomy.js';

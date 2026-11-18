@@ -34,7 +34,7 @@ vi.mock('../digital-twin.js', () => ({
 vi.mock('../tools.js', () => ({
   getToolsSummaryForPrompt: vi.fn().mockResolvedValue(''),
 }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../promptRunner.js', () => ({

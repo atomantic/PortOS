@@ -32,7 +32,7 @@ vi.mock('./cos/cosEvents.js', () => ({
   cosEvents: { emit: vi.fn(), on: vi.fn() },
 }));
 
-vi.mock('./providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./provider/providerStatus.js', () => ({ initProviderStatus: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./agent/agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
 vi.mock('./cos/cosAgentLifecycle.js', () => ({ updateAgent: vi.fn() }));
 vi.mock('./agent/agentSecurityScan.js', () => ({ persistAgentSecurityScan: vi.fn() }));

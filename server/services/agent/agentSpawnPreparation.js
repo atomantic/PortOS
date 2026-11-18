@@ -9,7 +9,7 @@ import { isInternalTaskId } from '../../lib/taskParser.js';
 import { isRetryHeld } from '../../lib/taskRetryHold.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { getAppWorkspace } from './agentPromptBuilder.js';
-import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/providerVendors.js';
+import { publicReviewPostureForProfile, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/provider/providerVendors.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner, getTargetInstance, isTargetedElsewhere } from '../cos/cosTaskClaim.js';
 import { releaseAppReviewMarker } from '../appActivity.js';

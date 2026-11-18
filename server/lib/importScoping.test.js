@@ -144,7 +144,7 @@ const NARROWED = [
     'reads repository ages through shared metadata without catalog selection'],
   ['services/huggingFaceMetadata.js', 'services/pipeline/musicGen.js',
     'owns Hub transport and caching independently of audio rendering'],
-  ['lib/providerFamilies.js', 'lib/grok.js',
+  ['lib/provider/providerFamilies.js', 'lib/grok.js',
     'shares browser-safe family identity without Grok filesystem helpers'],
   ['services/promptSections/instructions.js', 'services/taskScheduleRegistry.js',
     'needs task names, which scheduledTaskTypes.js declares'],
@@ -154,7 +154,7 @@ const NARROWED = [
     'reads workspace metadata without ticket creation'],
   ['services/agent/agentAppWorkspace.js', 'services/agent/agentPromptBuilder.js',
     'owns workspace resolution independently of prompt assembly'],
-  ['services/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
+  ['services/provider/providerRuntimeInstaller.js', 'lib/harnessOutput.js',
     'loads version and catalog parsers only when probing a harness'],
   ['lib/db.js', 'lib/db/schema/index.js',
     'the DDL composer is boot-only — ensureSchemaImpl() imports it lazily'],
@@ -263,7 +263,7 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/appProcessStatus.js', 'services/pm2.js')).toBe(true);
     expect(reaches('services/memoryEmbeddings.js', 'services/memoryConfig.js')).toBe(true);
     expect(reaches('lib/llmRoutePin.js', 'lib/textUtils.js')).toBe(true);
-    expect(reaches('lib/slashdoInvocation.js', 'lib/providerVendors.js')).toBe(true);
+    expect(reaches('lib/slashdoInvocation.js', 'lib/provider/providerVendors.js')).toBe(true);
     expect(reaches('services/voice/tools/pipeline.js', 'lib/pipelineStages.js')).toBe(true);
     expect(reaches('services/instances.js', 'services/instanceIdentity.js')).toBe(true);
     expect(reaches('lib/storyBible.js', 'lib/textUtils.js')).toBe(true);
@@ -361,14 +361,14 @@ const DEFERRED = [
     'loads Homebrew version discovery only for an installed Homebrew harness', '../lib/homebrewPackage.js'],
   ['services/localLlm.js', 'lib/homebrewPackage.js',
     'loads Homebrew discovery only when checking a managed Ollama installation', '../lib/homebrewPackage.js'],
-  ['services/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
-    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../lib/homebrewPackage.js'],
+  ['services/provider/providerRuntimeInstaller.js', 'lib/homebrewPackage.js',
+    'loads Homebrew path classification only when probing a runtime, not when reading installer definitions', '../../lib/homebrewPackage.js'],
   ['lib/homebrewPackage.js', 'lib/safeUrlFetch.js',
     'loads the bounded response reader only for a Homebrew version fetch, not runtime path classification', './safeUrlFetch.js'],
   ['services/ollamaManager.js', 'services/ollamaSafetensorsImport.js',
     'loads staging and child supervision only for a curated Safetensors import', './ollamaSafetensorsImport.js'],
-  ['services/aiProvider.js', 'services/providerExecutionReadiness.js',
-    'loads managed runtime readiness only for an actual inference call', './providerExecutionReadiness.js'],
+  ['services/aiProvider.js', 'services/provider/providerExecutionReadiness.js',
+    'loads managed runtime readiness only for an actual inference call', './provider/providerExecutionReadiness.js'],
   ['services/codeReview.js', 'services/lmStudioManager.js',
     'reads the live endpoint only for a selected LM Studio review', './lmStudioManager.js'],
   ['services/codeReview.js', 'services/ollamaManager.js',
@@ -380,9 +380,9 @@ const DEFERRED = [
   ['services/cos/cos.js', 'services/persistent/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
     '../persistent/persistentMindAdapter.js'],
-  ['services/promptRunner.js', 'services/providerExecutionReadiness.js',
+  ['services/promptRunner.js', 'services/provider/providerExecutionReadiness.js',
     'runs readiness only on the TUI execution branch, not when a run is built or classified',
-    './providerExecutionReadiness.js'],
+    './provider/providerExecutionReadiness.js'],
   ['services/promptRunner.js', 'services/tuiPromptRunner.js',
     'drags node-pty in through services/shell.js for a branch most promptRunner suites never take',
     './tuiPromptRunner.js'],
@@ -432,7 +432,7 @@ describe('deferred imports stay deferred (#6156)', () => {
   // with real graphs, so a resolver gap can't be what makes the negatives pass.
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
-    expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
+    expect(reaches('services/provider/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
     expect(reaches('services/persistent/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });
@@ -474,7 +474,7 @@ describe('CI-selection cuts stay cut (#12285)', () => {
 
   it('the leaves the cut entries import stay import-free', () => {
     expect(importTargets('services/readinessSignal.js')).toEqual([]);
-    expect(importTargets('services/providerRecoveryHooks.js')).toEqual([]);
+    expect(importTargets('services/provider/providerRecoveryHooks.js')).toEqual([]);
   });
 
   // Positive control: the scanner sees the observer's own lazy imports.
@@ -655,10 +655,10 @@ it('keeps Video compilation independent of project storage and execution', () =>
 
 describe('shared provider type leaf', () => {
   it('keeps provider models independent of the type leaf and browser-safe', () => {
-    expect(reaches('lib/providerModels.js', 'lib/providerTypes.js')).toBe(false);
-    const closure = staticImportClosure(abs('lib/providerTypes.js'));
+    expect(reaches('lib/provider/providerModels.js', 'lib/provider/providerTypes.js')).toBe(false);
+    const closure = staticImportClosure(abs('lib/provider/providerTypes.js'));
     expect(closure.packages.size).toBe(0);
-    expect(reaches('lib/providerTypes.js', 'lib/providerModels.js')).toBe(true);
+    expect(reaches('lib/provider/providerTypes.js', 'lib/provider/providerModels.js')).toBe(true);
   });
 });
 

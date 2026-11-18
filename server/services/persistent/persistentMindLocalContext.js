@@ -27,7 +27,7 @@ import {
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { appendMindEvent } from '../agent/agentRunEventLog.js';
 import { loadState, withStateLock } from '../cos/cosState.js';
-import { getProviderById, updateProvider } from '../providers.js';
+import { getProviderById, updateProvider } from '../provider/providers.js';
 import * as ollamaManager from '../ollamaManager.js';
 
 export const persistentMindLocalContextAdjustSchema = z.object({

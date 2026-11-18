@@ -9,7 +9,7 @@ import {
   runPromptThroughProvider,
 } from '../promptRunner.js';
 import { getAppById } from '../apps.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { getRecord as getSpriteRecord } from '../sprites/records.js';
 import { getTrack } from '../tracks/index.js';
 import { GAME_HISTORY_LIMIT, getGame, mutateGame } from './records.js';

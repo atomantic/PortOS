@@ -6,7 +6,7 @@
  */
 
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
-import { aliasServedContextWindows, mergeObservedContextWindows } from '../lib/providerContextWindows.js';
+import { aliasServedContextWindows, mergeObservedContextWindows } from '../lib/provider/providerContextWindows.js';
 import { probeOpenAiModelsCached } from '../lib/openAiModelsProbeCache.js';
 
 /**
@@ -29,7 +29,7 @@ export async function observedContextWindows(provider, deps = {}) {
 /**
  * `provider` with its daemon's live windows merged into `modelContextWindows`
  * (same object when nothing is observed; in-memory only). Ranking lives in
- * `lib/providerContextWindows.js`, shared with the provider card.
+ * `lib/provider/providerContextWindows.js`, shared with the provider card.
  * @param {object} provider
  * @param {{probe?: Function}} [deps]
  * @returns {Promise<object>}

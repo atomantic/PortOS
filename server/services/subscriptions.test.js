@@ -26,7 +26,7 @@ const updateProvider = vi.fn(async (id, patch) => {
   providerRecords = providerRecords.map((p) => (p.id === id ? { ...p, ...patch } : p));
   return providerRecords.find((p) => p.id === id);
 });
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   listProviders: vi.fn(async () => structuredClone(providerRecords)),
   updateProvider: (...args) => updateProvider(...args),
 }));
@@ -50,7 +50,7 @@ import {
   setSubscriptionEnabled,
 } from './subscriptions.js';
 
-// Real provider-config shapes, so the matchers in lib/providerFamilies.js are
+// Real provider-config shapes, so the matchers in lib/provider/providerFamilies.js are
 // what these tests exercise rather than a stand-in that can drift from them.
 const claudeCli = { id: 'claude-code', name: 'Claude Code', enabled: true, type: 'cli', command: 'claude' };
 const claudeAlt = { id: 'claude-code-alt', name: 'Claude (alt)', enabled: false, type: 'cli', command: 'claude' };

@@ -14,7 +14,7 @@
  * twin-document content loader only.
  */
 
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { callProviderAI } from './digital-twin-helpers.js';

@@ -16,7 +16,7 @@ vi.mock('../services/codexAppServer.js', () => ({
   peekCodexModelCatalog: vi.fn(() => ({ models: null, fetchedAt: null, error: null })),
   listCodexModels: vi.fn(),
 }));
-vi.mock('../services/providerRuntimeInstaller.js', async (importOriginal) => ({
+vi.mock('../services/provider/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
   peekProviderRuntimeStatuses: vi.fn(() => ({ codex: { id: 'codex', label: 'Codex CLI', installed: true } })),
 }));

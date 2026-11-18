@@ -26,13 +26,13 @@ vi.mock('../services/harnessEnablement.js', () => enablementService);
 const bootstrapService = vi.hoisted(() => ({ listCredentialBootstraps: vi.fn(), saveCredentialBootstraps: vi.fn() }));
 vi.mock('../services/credentialBootstrapApps.js', () => bootstrapService);
 const readinessService = vi.hoisted(() => ({ getProviderReadinessMap: vi.fn(), resetProviderReadinessCache: vi.fn() }));
-vi.mock('../services/providerReadiness.js', async (importOriginal) => ({ ...(await importOriginal()), ...readinessService }));
+vi.mock('../services/provider/providerReadiness.js', async (importOriginal) => ({ ...(await importOriginal()), ...readinessService }));
 const presetService = vi.hoisted(() => ({
   createPresetFromComposite: vi.fn(), derivePreset: vi.fn(), materializeStoredPreset: vi.fn(), savesAsDerivedPreset: vi.fn(), storableProviderRecord: vi.fn(),
 }));
-vi.mock('../services/providerPresets.js', () => presetService);
+vi.mock('../services/provider/providerPresets.js', () => presetService);
 const graphService = vi.hoisted(() => ({ presetSkipReason: vi.fn(() => null) }));
-vi.mock('../services/providerGraph.js', async (importOriginal) => ({ ...(await importOriginal()), ...graphService }));
+vi.mock('../services/provider/providerGraph.js', async (importOriginal) => ({ ...(await importOriginal()), ...graphService }));
 import { createPortOSProviderRoutes } from './providers.js';
 
 const COMPOSITE = 'pi.tui@nvidia-nim';

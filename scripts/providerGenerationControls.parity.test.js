@@ -3,8 +3,8 @@ import { generationControlsFor } from '../client/src/utils/providers.js';
 import { composeProviderEnv } from '../server/lib/cliChildEnv.js';
 import { LOCAL_RUNTIMES } from '../server/lib/localProviderRuntime.js';
 import { buildAgentGeneration } from '../server/lib/opencodeConfig.js';
-import { PROVIDER_GATEWAYS } from '../server/lib/providerGateways.js';
-import { getOpencodeLocalProviderNamespace } from '../server/lib/providerModels.js';
+import { PROVIDER_GATEWAYS } from '../server/lib/provider/providerGateways.js';
+import { getOpencodeLocalProviderNamespace } from '../server/lib/provider/providerModels.js';
 
 // The CLI forwarding code depends on Node and cannot enter the client import
 // graph. Cross-layer tests live here so both production import boundaries hold.

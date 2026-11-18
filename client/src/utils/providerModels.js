@@ -5,7 +5,7 @@
  * base-model/effort-suffix split, account-aware Codex options, model-list merges,
  * and which generation controls a provider forwards.
  *
- * Sentinels, ladders and the Antigravity split re-export `server/lib/providerModels.js`;
+ * Sentinels, ladders and the Antigravity split re-export `server/lib/provider/providerModels.js`;
  * pin membership is the server's `modelPinIsOffered` (`server/lib/modelPinMembership.js`),
  * never a second rule. Generation-control tables mirror `server/lib/opencodeConfig.js`
  * and `server/lib/aiToolkit/internal/generationOptions.js`. CLIENT-ONLY helpers have
@@ -21,7 +21,7 @@ import {
   filterSelectableModels,
   isConfiguredDefaultModel,
   splitAntigravityModel,
-} from '../../../server/lib/providerModels.js';
+} from '../../../server/lib/provider/providerModels.js';
 // Taken from the browser-safe leaf: `localProviderRuntime.js` reaches `zod` (not a client dependency).
 import { modelPinIsOffered } from '../../../server/lib/modelPinMembership.js';
 
@@ -42,7 +42,7 @@ export {
   splitAntigravityModel,
   antigravityBaseModels,
   antigravityModelEffortLevels,
-} from '../../../server/lib/providerModels.js';
+} from '../../../server/lib/provider/providerModels.js';
 
 /**
  * Alphabetize model options (strings or `{ id, name }`) by displayed name without

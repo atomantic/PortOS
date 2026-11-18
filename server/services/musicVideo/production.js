@@ -51,7 +51,7 @@ import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
 import { assertProductionApproval } from './productionReview.js';
 import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots, stalePilotSlot } from './productionPilot.js';
-import { isTransientProviderError } from '../../lib/providerTransientRetry.js';
+import { isTransientProviderError } from '../../lib/provider/providerTransientRetry.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),

@@ -50,7 +50,7 @@ vi.mock('../services/brain.js', () => ({
   loadMeta: vi.fn(async () => ({ defaultProvider: 'example-cli', defaultModel: 'example-model' })),
   updateMeta: effects.updateBrainMeta,
 }));
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'api', models: [] })),
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
@@ -78,7 +78,7 @@ vi.mock('../services/usage.js', () => ({}));
 vi.mock('../services/claudeCodeUsage.js', () => ({}));
 vi.mock('../services/claudeCodeTranscriptUsage.js', () => ({}));
 vi.mock('../services/nativeUsageHistory.js', () => ({}));
-vi.mock('../services/providerUsage.js', () => ({}));
+vi.mock('../services/provider/providerUsage.js', () => ({}));
 vi.mock('../services/peerUsage.js', () => ({}));
 vi.mock('../services/usageFleetBilling.js', () => ({}));
 vi.mock('../services/subscriptionCosts.js', () => ({}));

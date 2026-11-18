@@ -123,7 +123,7 @@ vi.mock('../../lib/childProcess.js', () => ({
 vi.mock('../ollamaAgentContext.js', () => ({
   ensureOllamaAgentContext: vi.fn(async () => ({ skipped: true })),
 }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   isOllamaBackedProvider: vi.fn(() => false),
 }));
 vi.mock('../../lib/privateSecuritySandbox.js', () => ({
@@ -146,7 +146,7 @@ import { buildCliSpawnConfig, spawnDirectly } from './agentCliSpawning.js';
 import { promptOpensOwnPr } from '../promptSections/completion.js';
 import { runSpawnerCompletionCleanup } from './agentCompletionCleanup.js';
 import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
-import { isOllamaBackedProvider } from '../providers.js';
+import { isOllamaBackedProvider } from '../provider/providers.js';
 // Real module — the flag is a plain process-local boolean, so driving it
 // directly exercises the same code path production does.
 import { markHostShuttingDown, resetHostShutdownFlagForTests } from '../../lib/hostShutdown.js';
@@ -229,7 +229,7 @@ describe('buildCliSpawnConfig', () => {
   // The trailing `--agent build` on every OpenCode argv below pins the
   // tool-enabled agent: OpenCode's role is argv state, so an un-pinned
   // invocation opens in whatever agent the install defaults to (#7405). See
-  // ensureOpencodeAgent in lib/providerVendors.js.
+  // ensureOpencodeAgent in lib/provider/providerVendors.js.
   it('runs `opencode run -m ollama/<model>` for a headless OpenCode Ollama agent', () => {
     const config = buildCliSpawnConfig(
       { id: 'opencode-ollama', command: 'opencode', args: ['run'], ollamaBacked: true },

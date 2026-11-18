@@ -30,7 +30,7 @@ const installer = vi.hoisted(() => ({
   buildRuntimeActionCommand: vi.fn(),
   RUNTIME_ACTIONS: ['install', 'update', 'uninstall'],
 }));
-vi.mock('./providerRuntimeInstaller.js', () => installer);
+vi.mock('./provider/providerRuntimeInstaller.js', () => installer);
 const gate = vi.hoisted(() => ({ status: vi.fn(), active: null, harnessActions: { reserve: vi.fn(), finish: vi.fn(), operation: vi.fn() } }));
 vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: gate }));
 const settlement = vi.hoisted(() => ({ processAbsent: vi.fn() }));

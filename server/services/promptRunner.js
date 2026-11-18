@@ -16,15 +16,15 @@ import { maintenance } from '../lib/maintenanceAdmission.js';
 import { withLocalConcurrencyGate } from '../lib/localLlmConcurrency.js';
 import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata, finalizeRunRecord } from './runner.js';
-import { getActiveProvider, getProviderById, getAllProviders } from './providers.js';
-import { isCompositeProviderId } from '../lib/providerRef.js';
-import { peekFallbackChain } from '../lib/providerFallbackChainCache.js';
-// `./tuiPromptRunner.js` (drags node-pty in via `./shell.js`) and `./providerExecutionReadiness.js`
+import { getActiveProvider, getProviderById, getAllProviders } from './provider/providers.js';
+import { isCompositeProviderId } from '../lib/provider/providerRef.js';
+import { peekFallbackChain } from '../lib/provider/providerFallbackChainCache.js';
+// `./tuiPromptRunner.js` (drags node-pty in via `./shell.js`) and `./provider/providerExecutionReadiness.js`
 // are imported lazily on the branches that execute a run: ~160 suites only build or classify runs.
 import { ServerError } from '../lib/errorHandler.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES, isRunCanceledError, isRuntimeBudgetError, isContentRefusalError } from '../lib/aiToolkit/errorDetection.js';
-import { isSchemaTypeCategory, resolveProviderBench } from '../lib/providerCooldown.js';
+import { isSchemaTypeCategory, resolveProviderBench } from '../lib/provider/providerCooldown.js';
 import { isGenerationModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js';
 import { contextWindowRejection, knownContextWindow } from '../lib/aiToolkit/providerStatus.js';
 import { isOllamaBackedProvider } from '../lib/aiToolkit/internal/ollamaBacked.js';
@@ -36,11 +36,11 @@ import { extractJson } from '../lib/jsonExtract.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { DEFAULT_OUTPUT_RESERVE_TOKENS, estimateTokens, localOutputReserveTokens } from '../lib/contextBudget.js';
 import { allowedModesFor, callerModeRejection } from '../lib/callerModePolicy.js';
-import { attachGatewaySiblingKey } from '../lib/providerGateways.js';
+import { attachGatewaySiblingKey } from '../lib/provider/providerGateways.js';
 
 // Fallback-lifecycle notifiers live in services/autoFixer.js (which pulls in cos.js); initAutoFixer()
 // registers them through this leaf. Never import autoFixer.js here: `vitest related` follows it (#12285).
-import { getProviderRecoveryHandlers } from './providerRecoveryHooks.js';
+import { getProviderRecoveryHandlers } from './provider/providerRecoveryHooks.js';
 
 // Deferred: `observedContextWindows.js` reaches `lib/localProviderRuntime.js` and the endpoint probe,
 // which ~160 suites never need (see "Import scoping" in server/AGENTS.md).
@@ -1289,7 +1289,7 @@ async function executeProviderRunOnce({
   // defaults so the response value reflects what actually ran.
   let executionAttribution;
   if (Object.keys(executionOptions || {}).length || Object.keys(effectiveProvider.executionOptions || {}).length) {
-    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(effectiveProvider, effectiveModel, executionOptions, 'run', { cwd: effectiveCwd });
     effectiveProvider = prepared.provider;
     executionAttribution = prepared.attribution;
@@ -1373,7 +1373,7 @@ async function executeProviderRunOnce({
     // providers spawn OpenCode directly, so they need the same hook here or
     // MTPLX remains stopped until after the TUI has already failed its request.
     if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
-      const ready = await import('./providerExecutionReadiness.js')
+      const ready = await import('./provider/providerExecutionReadiness.js')
         .then(({ ensureProviderReadyForExecution }) => ensureProviderReadyForExecution(effectiveProvider))
         .catch((err) => ({
           success: false,

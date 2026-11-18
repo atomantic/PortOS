@@ -3,7 +3,7 @@ import { realpath, stat, lstat } from 'node:fs/promises';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readBodyCapped } from '../lib/safeUrlFetch.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
-import { getProviderRuntime, getProviderRuntimeStatus } from './providerRuntimeInstaller.js';
+import { getProviderRuntime, getProviderRuntimeStatus } from './provider/providerRuntimeInstaller.js';
 import { getRuntimeUpdateReviewSnapshot } from './runtimeUpdateReview.js';
 
 // Public, direct-package references only. These do not establish what installed

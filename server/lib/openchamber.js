@@ -4,7 +4,7 @@
  * OpenChamber (`@openchamber/web`) is an agentic dev environment built ON TOP of OpenCode, a different SHAPE of harness: **a control plane, not a one-shot binary** (`session create` posts to an already-running runtime whose port the CLI discovers; with none running the CLI errors clearly, and PortOS deliberately does NOT start it: it's a server the user owns with its own port, password and exposure); **CLI only, no TUI** (`modes: ['cli']`; bare `openchamber` starts the SERVER); **prompt and cwd are both argv** (`session create` requires `--dir <path>`, no cwd default since the runtime may not share the child's, and takes the prompt as the VALUE of `--prompt`; `prepareOpenchamberPrompt` supplies both at spawn time). Headless invocation: `openchamber session create --dir <path> --prompt <text> [--model <provider/model>] --wait --last-assistant --quiet`; `--wait` blocks until idle (default 600s, matching every PortOS harness timeout), `--last-assistant` appends the final assistant text, `--quiet` reduces stdout to session id plus that text (closest to `--print`). Dependency-light like `grok.js`/`kimi.js`/`cursor.js`/`pi.js`/`kilo.js`: imports only `providerModels.js` helpers so it stays importable from the standalone autofixer process.
  */
 
-import { argvHasFlag, commandBasename, ensureLeadingSubcommand, hasModelFlag } from './providerModels.js';
+import { argvHasFlag, commandBasename, ensureLeadingSubcommand, hasModelFlag } from './provider/providerModels.js';
 
 export const OPENCHAMBER_COMMAND = 'openchamber';
 

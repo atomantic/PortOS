@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { getTriageRules } from './messageTriageRules.js';
 import { runUntrustedContentAnalysis, jevBatchGate } from './untrustedContent.js';
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';

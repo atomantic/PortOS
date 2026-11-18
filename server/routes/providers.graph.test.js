@@ -20,7 +20,7 @@ const graph = {
   removeConnection: vi.fn(),
   presetSkipReason: vi.fn(() => null),
 };
-vi.mock('../services/providerGraph.js', () => graph);
+vi.mock('../services/provider/providerGraph.js', () => graph);
 
 const { createPortOSProviderRoutes } = await import('./providers.js');
 

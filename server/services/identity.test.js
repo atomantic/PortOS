@@ -1452,7 +1452,7 @@ describe('Integration: organizeGoals', () => {
       }))
     }));
 
-    vi.doMock('./providers.js', () => ({
+    vi.doMock('./provider/providers.js', () => ({
       getActiveProvider: vi.fn(async () => ({
         id: 'mock-provider',
         name: 'Mock AI',
@@ -1528,7 +1528,7 @@ describe('Integration: organizeGoals', () => {
       }))
     }));
 
-    vi.doMock('./providers.js', () => ({
+    vi.doMock('./provider/providers.js', () => ({
       getActiveProvider: vi.fn(async () => null),
       getProviderById: vi.fn(async () => null)
     }));

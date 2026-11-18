@@ -11,8 +11,8 @@
  * (Music Video frame checks, #15576). Pure over the provider record, so the
  * providers route can report it and the Frame check picker can filter on it.
  */
-import { canReadImagesOneShot, isAuthoringOneShotProvider, isToolFreeOneShotProvider } from './providerVendors.js';
-import { isCodexProvider } from './providerModels.js';
+import { canReadImagesOneShot, isAuthoringOneShotProvider, isToolFreeOneShotProvider } from './provider/providerVendors.js';
+import { isCodexProvider } from './provider/providerModels.js';
 import { isCodexSubscriptionProvider } from './codexAccount.js';
 import { isVisionCapableCliProvider } from './localModelHeuristics.js';
 

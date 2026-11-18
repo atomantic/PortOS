@@ -12,7 +12,7 @@ import { listActiveRenders } from './renderActivity.js';
 import { getAgents } from './cos/cosAgentLifecycle.js';
 import { getPendingTaskIds } from './cos/cosTaskStore.js';
 import { getStatus } from './cos/cos.js';
-import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
+import { getDirectProviderCallCount } from '../lib/provider/providerCallActivity.js';
 import { activeAgents, spawningTasks } from './agent/agentState.js';
 import { isPersistentMindTurnRunning } from './persistent/persistentMindSupervisor.js';
 

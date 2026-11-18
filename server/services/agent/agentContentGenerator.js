@@ -11,8 +11,8 @@ import { assertProvider, runPromptThroughProvider } from '../promptRunner.js';
 import { extractJson } from '../../lib/jsonExtract.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isUntrustedContentProvider } from '../../lib/untrustedContent.js';
-import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
-import { getActiveProvider, getProviderById } from '../providers.js';
+import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
+import { getActiveProvider, getProviderById } from '../provider/providers.js';
 import { runUntrustedContentAnalysis } from '../untrustedContent.js';
 
 const commentBodySchema = z.object({

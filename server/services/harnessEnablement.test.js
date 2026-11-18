@@ -29,7 +29,7 @@ const settingsMock = vi.hoisted(() => {
 vi.mock('./settings.js', () => settingsMock);
 
 const runtimeStatuses = vi.hoisted(() => ({ current: {} }));
-vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
+vi.mock('./provider/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
   peekProviderRuntimeStatuses: () => runtimeStatuses.current,
 }));

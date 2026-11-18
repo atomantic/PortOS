@@ -37,13 +37,13 @@ vi.mock('../services/subscriptions.js', () => ({
   setSubscriptionEnabled: vi.fn(async (family, enabled) => ({ family, enabled, applied: true, changed: [] })),
 }));
 
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   // getAllProviders returns the wrapped { activeProvider, providers } shape —
   // the route must unwrap `.providers` before passing to getUsageSummary.
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] })
 }));
 
-vi.mock('../services/providerUsage.js', () => ({
+vi.mock('../services/provider/providerUsage.js', () => ({
   getProviderQuotas: vi.fn()
 }));
 
@@ -57,8 +57,8 @@ vi.mock('../services/usageBackfill.js', () => ({
 }));
 
 import * as usage from '../services/usage.js';
-import { getAllProviders } from '../services/providers.js';
-import { getProviderQuotas } from '../services/providerUsage.js';
+import { getAllProviders } from '../services/provider/providers.js';
+import { getProviderQuotas } from '../services/provider/providerUsage.js';
 import { getHistoricalUsageBackfillStatus, startHistoricalUsageBackfill } from '../services/usageBackfill.js';
 import { getSubscriptionSavings, saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';

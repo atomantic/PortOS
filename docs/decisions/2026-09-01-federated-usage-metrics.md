@@ -236,7 +236,7 @@ its usage digest**, and the cards are unified before they render
 Mechanically, the readings live in an in-memory stale-while-revalidate cache
 (a reading costs a 10-20s CLI/TUI spawn), which cannot be federated: it dies
 with the process, and this category's checksum is invalidated by FILE
-fingerprints. So `services/providerQuotaShare.js` persists them to
+fingerprints. So `services/provider/providerQuotaShare.js` persists them to
 `data/provider-quotas.json` — added to `USAGE_CHECKSUM_PATHS`, and folded into
 the entry's `capturedAt` so a quota refresh with no new AI runs still advances
 the slot a peer pulls. The write is skipped when a card's *claim* is unchanged

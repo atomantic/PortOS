@@ -340,7 +340,7 @@ async function configure({ emit, isCancelled }) {
   if (!loginTask.success) throw new Error('The model started, but Windows login startup could not be configured: ' + loginTask.error);
   await upsertPortosEnvLine(ENABLED_KEY, '1');
   await startFleetLlmHost();
-  const { getAllProviders, createProvider, updateProvider } = await import('./providers.js');
+  const { getAllProviders, createProvider, updateProvider } = await import('./provider/providers.js');
   const { providers } = await getAllProviders();
   const endpoint = `http://127.0.0.1:${PORTS.FLEET_LLM}/v1`;
   const existing = providers.find((provider) => provider.type === 'api' && provider.endpoint === endpoint);

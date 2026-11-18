@@ -17,7 +17,7 @@ vi.mock('./usage.js', () => ({
   getSiblingReconciledUsageRunIds: vi.fn().mockReturnValue(['run-siblings-done'])
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   listProviders: vi.fn().mockResolvedValue([
     { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true, defaultModel: 'example-grok-model' }
   ])

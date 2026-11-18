@@ -4,8 +4,8 @@ import { normalizePersistentMindCapabilities } from '../../lib/persistent/persis
 const mock = vi.hoisted(() => ({ root: null, provider: null, events: [] }));
 vi.mock('../cos/cosState.js', () => ({ loadState: async () => mock.root,
   saveState: async (root) => { mock.root = JSON.parse(JSON.stringify(root)); }, withStateLock: async (fn) => fn() }));
-vi.mock('../providers.js', () => ({ getProviderById: async () => mock.provider }));
-vi.mock('../providerStatus.js', () => ({ isProviderAvailable: () => true, getProviderStatus: () => null }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: async () => mock.provider }));
+vi.mock('../provider/providerStatus.js', () => ({ isProviderAvailable: () => true, getProviderStatus: () => null }));
 vi.mock('../agent/agentRunEventLog.js', () => ({ appendMindEvent: async (event) => { mock.events.push(event); } }));
 import { approvePersistentMindThinkingPresets, getPersistentMindThinkingRequestCatalog,
   requestPersistentMindThinkingPreset, resolvePersistentMindSelfThinkingRequest,

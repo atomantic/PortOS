@@ -1,4 +1,4 @@
-import { isCodexProvider } from '../../lib/providerModels.js';
+import { isCodexProvider } from '../../lib/provider/providerModels.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { localApiBaseUrl } from '../../lib/networkExposure.js';
 import { agentApiCurl } from '../../lib/agent/agentApiToken.js';

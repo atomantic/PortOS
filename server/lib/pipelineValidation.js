@@ -32,7 +32,7 @@ import {
   PSYCHOLOGY_DRIVE_AXES,
 } from './characterFramework.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { CHECK_SCOPES, CHECK_SEVERITIES } from './editorial/checkInfra/taxonomy.js';
 import { SHOT_TYPES, SCREEN_DIRECTIONS } from './shotGrammar.js';
 import { characterEvolutionSchema } from './characterEvolutionValidation.js';

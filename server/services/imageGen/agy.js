@@ -31,7 +31,7 @@ import {
   antigravityCatalogListsModel,
   pickAntigravityRelayModel,
   splitAntigravityModel,
-} from '../../lib/providerModels.js';
+} from '../../lib/provider/providerModels.js';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { atomicWrite, copyFileGuarded, detectImageFormat, ensureDir, PATHS, rmGuarded, sleep, unlinkGuarded } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -247,14 +247,14 @@ Do not create any other files, do not modify any code or workspace content, and 
  * The catalog comes from the install's provider record (cache-fronted by the
  * provider service), NOT from an `agy models` spawn: the render path must not
  * pay a second child process, and a probe failure would stall it behind a
- * timeout. The deferred import keeps `services/providers.js` and the toolkit
+ * timeout. The deferred import keeps `services/provider/providers.js` and the toolkit
  * subtree behind it out of every image-gen suite closure (server suite import
  * budget, `lib/importScoping.test.js`); `.catch` covers the uninitialized
  * toolkit, and no catalog means "leave the caller's model alone".
  */
 async function resolveAgyDriverModel(model, shippedDefault) {
   if (!model || !splitAntigravityModel(model).effort) return { model: model || null, models: null };
-  const models = await import('../providers.js')
+  const models = await import('../provider/providers.js')
     .then(({ getProviderById }) => getProviderById(ANTIGRAVITY_CLI_ID))
     .then((provider) => provider?.models)
     .catch(() => null);

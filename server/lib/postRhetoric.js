@@ -8,7 +8,7 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { extractJson } from './jsonExtract.js';
 
 export const RHETORIC_MODE_IDS = Object.freeze([

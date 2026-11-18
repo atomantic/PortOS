@@ -8,7 +8,7 @@ vi.mock('./usage.js', () => ({
 }));
 
 const mockListProviders = vi.fn(async () => []);
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   listProviders: (...args) => mockListProviders(...args),
 }));
 

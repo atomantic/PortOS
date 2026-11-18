@@ -11,7 +11,7 @@
  * pass (typography, composition layers, procedural frames).
  */
 
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { trimTo } from '../textUtils.js';
 import {
   CLOUD_IMAGE_GEN_MODES, CLOUD_VIDEO_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES, VIDEO_GEN_MODE, VIDEO_GEN_MODES,

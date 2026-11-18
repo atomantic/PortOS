@@ -70,7 +70,7 @@ vi.mock('../apps.js', async (importActual) => ({
 // The harness boundary the pin has to answer to: `api` providers return text with
 // no file-writing tools, so an agent task can never run on one.
 const PROVIDER_TYPES = { 'claude-cli': 'cli', 'opencode-tui': 'tui', ollama: 'api' };
-vi.mock('../providers.js', async (importActual) => ({
+vi.mock('../provider/providers.js', async (importActual) => ({
   ...(await importActual()),
   getProviderById: vi.fn(async (id) => (PROVIDER_TYPES[id] ? { id, type: PROVIDER_TYPES[id] } : null)),
 }));

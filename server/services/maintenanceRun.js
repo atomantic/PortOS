@@ -54,7 +54,7 @@ import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { buildMaintenanceSteps, MAINTENANCE_TASK_ORDER } from '../lib/maintenanceSequence.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
 import { quotaBurnProvenance } from '../lib/quotaBurnOrigin.js';
 import { QUOTA_BURN_UNAVAILABLE } from '../lib/quotaBurnTaskRef.js';
 import { pluralize } from '../lib/textUtils.js';
@@ -182,7 +182,7 @@ async function assertNoRunningRun(appId) {
  */
 export async function startMaintenanceRun({ appId, providerId, model = null, effort = null, executionOptions, mode = 'file-issues', prCompletion = null, claimBetweenAudits = true, claimHandler = null, taskTypes = null, explicitCheck = false, auditDepth = 'quick' }) {
   const [{ getAppById }, { getProviderById }, { resolveBurnProvider }] = await Promise.all([
-    import('./apps.js'), import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
+    import('./apps.js'), import('./provider/providers.js'), import('./scheduledHandlers/providerPick.js'),
   ]);
   const [app, provider] = await Promise.all([getAppById(appId), getProviderById(providerId)]);
   if (!app || app.archived === true) throw new ServerError(`managed app "${appId}" is not available`, { status: 400, code: 'MAINTENANCE_RUN_APP_UNAVAILABLE' });
@@ -280,7 +280,7 @@ export function updateMaintenanceStep(id, stepId, { providerId, model, effort = 
       throw new ServerError('Only pending stages in a running maintenance run can be edited', { status: 409, code: 'MAINTENANCE_STEP_STARTED' });
     }
     const [{ getProviderById }, { resolveBurnProvider }] = await Promise.all([
-      import('./providers.js'), import('./scheduledHandlers/providerPick.js'),
+      import('./provider/providers.js'), import('./scheduledHandlers/providerPick.js'),
     ]);
     const familyId = familyForProvider(await getProviderById(providerId));
     const provider = await resolveBurnProvider({ job: { providerId }, family: manualBurnFamily(familyId) });

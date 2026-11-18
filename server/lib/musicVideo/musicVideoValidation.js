@@ -74,7 +74,7 @@ export const musicVideoSongActionSchema = z.object({ revisionId: z.string().min(
 export const musicVideoSongSelectSchema = z.object({ revisionId: z.string().min(1), songId: z.string().min(1) }).strict();
 // Revise the song from a library track (an imported Suno link): forks a new version on it.
 export const musicVideoSongFromTrackSchema = z.object({ trackId: z.string().min(1).max(128) }).strict();
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { shotActionContractProblem } from './musicVideoActionContract.js';
 import { NARRATIVE_EVENT_KINDS } from './musicVideoNarrativeEvents.js';
 import { MUSIC_VIDEO_MEDIA } from './musicVideoMediumPlan.js';

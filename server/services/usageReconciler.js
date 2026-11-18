@@ -59,9 +59,9 @@ import {
   parseKimiSessionIndex,
   parseKimiWireLog,
   totalTranscriptTokens
-} from '../lib/providerTranscriptUsage.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
-import { commandBasename } from '../lib/providerModels.js';
+} from '../lib/provider/providerTranscriptUsage.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
+import { commandBasename } from '../lib/provider/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getRecentCodexUsageClaims, recordRunUsage } from './usage.js';
 import { grokFastRepairId, grokTurnRepairId } from './grokUsageRepair.js';
@@ -284,7 +284,7 @@ function attributedModel(recordedModel, transcriptModel, singleModel) {
  * service stays reachable from the completion hook without pulling in the
  * provider graph.
  *
- * The ids match `lib/providerFamilies.js`'s family ids on purpose: a sibling
+ * The ids match `lib/provider/providerFamilies.js`'s family ids on purpose: a sibling
  * session found in a run's workspace is mapped back to an enabled provider
  * through `familyForProvider`, so the two vocabularies have to agree — with
  * one exception, documented at `resolveFamilyProvider`: `kimi` has no
@@ -857,7 +857,7 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
   return records;
 }
 
-// `lib/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES
+// `lib/provider/providerFamilies.js` deliberately excludes `kimi` from PROVIDER_FAMILIES
 // (see that file's docblock) because Kimi Code has no subscription plan and no
 // `/usage` panel for `providerUsage.js` to scrape — `familyForProvider` can
 // therefore never return `'kimi'`. This is a TRANSCRIPT family, not a
@@ -1091,7 +1091,7 @@ async function recordCompletedRunUsageUnguarded(metadata, output, { home = homed
   // for it. Its sibling pass is settled by definition, which also keeps the
   // backfill from scanning for it later.
   const selfContained = isSelfContainedRun(metadata);
-  const resolved = selfContained ? null : providers ?? await import('./providers.js')
+  const resolved = selfContained ? null : providers ?? await import('./provider/providers.js')
     .then((module) => module.listProviders())
     .catch(() => null);
   // Same condition `reconcileRunUsage` scans siblings under.

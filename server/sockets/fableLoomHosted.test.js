@@ -16,7 +16,7 @@ import * as weave from '../services/fableLoom/weave.js';
 import * as networkExposure from '../lib/networkExposure.js';
 import * as tts from '../services/voice/tts.js';
 import * as stt from '../services/voice/stt.js';
-import * as providers from '../services/providers.js';
+import * as providers from '../services/provider/providers.js';
 import * as prompts from '../services/promptService.js';
 import * as runner from '../services/runner.js';
 import * as toolkitState from '../lib/aiToolkitState.js';

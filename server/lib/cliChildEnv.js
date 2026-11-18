@@ -22,7 +22,7 @@ import {
   isClaudeCommand,
   parseOpencodeConfigContent,
   opencodeConfigIsLocalOnly,
-} from './providerModels.js';
+} from './provider/providerModels.js';
 import { isLocalInstanceEndpoint } from './localEndpoint.js';
 import { agentGuardEnv } from './agentGuard/index.js';
 import { join, resolve } from 'path';

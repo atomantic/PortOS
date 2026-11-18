@@ -43,7 +43,7 @@ import {
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
 import { resolveAppWorkTracker, trackerToClaimTaskType, resolveAppForgeTarget, forgeCliForTracker, workTrackerLabel as trackerLabel } from '../../lib/workTracker.js';
-import { listProviders } from '../providers.js';
+import { listProviders } from '../provider/providers.js';
 
 // `normalizeClaimReviewers` moved to server/lib/reviewerConfig.js (#4770, #5702): the
 // prompt builder needs the same copilot guard when it re-resolves reviewers off

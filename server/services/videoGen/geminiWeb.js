@@ -17,7 +17,7 @@ import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinal
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { GEMINI_OMNI_WEB_MODEL, geminiWebAspectChoice } from '../../lib/geminiWebVideo.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
-import { formatRetryWait, isTransientProviderError, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS } from '../../lib/providerTransientRetry.js';
+import { formatRetryWait, isTransientProviderError, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS } from '../../lib/provider/providerTransientRetry.js';
 import { videoGenEvents } from './events.js';
 import { CLOUD_RENDER_PHASE, discardUnpublishedVideo, emitCloudRenderStatus, finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';

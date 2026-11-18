@@ -62,7 +62,7 @@ export async function commissionStagePin(commissionId) {
   const providerId = commission?.assignment?.providerId;
   if (!providerId) return null;
   const [{ getProviderById }, { PROVIDER_TYPES }] = await Promise.all([
-    import('../providers.js'),
+    import('../provider/providers.js'),
     import('../../lib/aiToolkit/constants.js'),
   ]);
   const provider = await getProviderById(providerId).catch(() => null);

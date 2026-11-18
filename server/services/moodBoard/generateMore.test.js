@@ -24,7 +24,7 @@ vi.mock('./db.js', () => ({
   },
 }));
 vi.mock('../settings.js', () => ({ getSettings: async () => mocks.settings }));
-vi.mock('../providers.js', () => ({ getProviderById: (...args) => mocks.provider(...args) }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: (...args) => mocks.provider(...args) }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mocks.run(...args) }));
 vi.mock('../aiProvider.js', () => ({ parseLLMJSON: JSON.parse }));
 vi.mock('../socket.js', () => ({ getIo: () => ({ emit: mocks.emit }) }));

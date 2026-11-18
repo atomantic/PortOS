@@ -99,7 +99,7 @@ vi.mock('./persistentMindProfile.js', () => ({
     effort: 'high',
   })),
 }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-cloud', type: 'api' })) }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn(async () => ({ id: 'example-cloud', type: 'api' })) }));
 vi.mock('./persistentMindImageCapability.js', () => ({
   resolvePersistentMindImageCapability: vi.fn(async () => mocks.imageCapability),
   imageCapabilityAllowsAttempt: (capability, provider) => capability?.status === 'supported'

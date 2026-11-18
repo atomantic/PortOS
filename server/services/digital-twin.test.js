@@ -22,7 +22,7 @@ vi.mock('../lib/uuid.js', () => ({
   v4: () => `test-uuid-${++uuidCounter}`
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn()
 }));
@@ -93,7 +93,7 @@ vi.mock('./promptRunner.js', () => ({
 
 import { readFile, writeFile, unlink, readdir, mkdir, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { getProviderById, getActiveProvider } from './providers.js';
+import { getProviderById, getActiveProvider } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { safeJSONParse, atomicWrite, tryReadFileStrict } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from './promptRunner.js';

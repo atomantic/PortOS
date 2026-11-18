@@ -52,7 +52,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJ
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { codexDriverReportedTokens, recordCodexRender } from '../imageRenderUsage.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
-import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/providerModels.js';
+import { buildCodexStartupArgs, buildEffortArgs, resolveCliEffort } from '../../lib/provider/providerModels.js';
 import {
   IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT,
   describeFidelity, visualReferenceRole,

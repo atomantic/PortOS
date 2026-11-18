@@ -59,7 +59,7 @@ vi.mock('../services/persistent/persistentMindJournal.js', () => ({
   correctPersistentMindJournalEvent: mocks.correctPersistentMindJournalEvent,
 }));
 vi.mock('../services/persistent/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true }) }));
-vi.mock('../services/providers.js', () => ({ getProviderById: mocks.getProviderById }));
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: mocks.getProviderById }));
 vi.mock('../services/persistent/persistentMindAdapter.js', () => ({
   persistentMindHarnessInfo: (provider) => ({
     type: provider?.type || null,
