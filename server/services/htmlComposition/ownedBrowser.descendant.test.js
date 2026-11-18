@@ -35,7 +35,10 @@ vi.mock('../../lib/childProcess.js', async original => ({
       const { spawn } = require('node:child_process');
       const [helper, profile, control] = process.argv.slice(1);
       const child = spawn(process.execPath, ['-e', helper, profile, control], { stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
-      child.once('message', () => process.stderr.write('DevTools listening on ws://127.0.0.1:12345/devtools/browser/synthetic\\n'));
+      child.once('message', () => {
+        const input = require('node:fs').createReadStream(null, { fd: 3 });
+        input.once('data', () => require('node:fs').writeSync(4, JSON.stringify({ id: 0, result: {} }) + '\\0'));
+      });
       process.on('SIGTERM', () => process.exit(0));
     `;
     fixture.child = spawn(process.execPath, ['-e', parent, helper, fixture.profile, fixture.control], options);
