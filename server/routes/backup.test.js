@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { EventEmitter } from 'node:events';
+import { get } from 'node:http';
 import { PassThrough } from 'stream';
-import { request } from '../lib/testHelper.js';
+import { closeLoopbackServer, request, startLoopbackServer } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/backup.js', () => ({
@@ -223,6 +224,60 @@ describe('backup routes', () => {
       expect(res.headers['content-disposition']).toBe('attachment; filename="portos-snapshot-snap-1.tar.gz"');
       expect(res.body.toString()).toBe('tarball');
       expect(backup.openSnapshotStream).toHaveBeenCalledWith('/dest', 'snap-1');
+    });
+
+    it('aborts a snapshot opened after the client disconnects and serves the next request', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.listSnapshots.mockResolvedValue([]);
+      const opened = Promise.withResolvers();
+      const responseClosed = Promise.withResolvers();
+      const streamClosed = Promise.withResolvers();
+      const archive = new PassThrough();
+      archive.abort = vi.fn(() => archive.destroy(new Error('Snapshot download aborted')));
+      archive.once('close', streamClosed.resolve);
+      backup.openSnapshotStream.mockImplementationOnce(() => {
+        opened.resolve();
+        return responseClosed.promise.then(() => archive);
+      });
+
+      const app = express();
+      app.use((req, res, next) => {
+        if (req.path.endsWith('/download')) res.once('close', responseClosed.resolve);
+        next();
+      });
+      app.use(buildApp());
+      const server = await startLoopbackServer(app);
+      const baseUrl = `http://127.0.0.1:${server.address().port}/api/backup/snapshots`;
+      const client = get(`${baseUrl}/snap-1/download`);
+      client.on('error', () => {}); // Closing the socket can emit ECONNRESET on the client.
+      try {
+        await opened.promise;
+        client.destroy();
+        await streamClosed.promise;
+
+        expect(archive.abort).toHaveBeenCalledOnce();
+        const nextResponse = await fetch(baseUrl);
+        expect(nextResponse.status).toBe(200);
+        expect(await nextResponse.json()).toEqual([]);
+      } finally {
+        client.destroy();
+        await closeLoopbackServer(server);
+      }
+    });
+
+    it('returns a structured error when the active archive fails before streaming', async () => {
+      getSettings.mockResolvedValue({ backup: { destPath: '/dest' } });
+      backup.openSnapshotStream.mockImplementationOnce(async () => {
+        const archive = new PassThrough();
+        setImmediate(() => archive.destroy(new Error('Tar failed')));
+        return archive;
+      });
+
+      const res = await request(buildApp()).get('/api/backup/snapshots/snap-1/download');
+
+      expect(res.status).toBe(500);
+      expect(res.headers['content-disposition']).toBeUndefined();
+      expect(res.body.code).toBe('BACKUP_DOWNLOAD_FAILED');
     });
 
     it('validates and forwards the selected snapshot source', async () => {
