@@ -28,20 +28,24 @@ export function buildPlannerAttributionSection({ providerId = null, model = null
 
 const collapseWhitespace = (text) => String(text || '').replace(/\s+/g, ' ');
 const EMBEDDED_CONTRACT = collapseWhitespace(MANDATORY_DISPATCH_HINT_GUIDANCE);
+const EMBEDDED_GITLAB_CONTRACT = collapseWhitespace(mandatoryDispatchHintGuidance({ cli: 'glab' }));
 
 /**
  * Runtime contract for stored/custom tasks and follow-ups, skipped when the task body
  * already embeds it (templates keep their embed so the prompt editor shows a complete
  * prompt). Whitespace-collapsed match: an indented copy matches, a paraphrase does not.
  * Attribution is always emitted: a task cannot name its own model. The templates embed the
- * GitHub form, so a `glab` run whose body embeds it still gets the GitLab separator paragraph.
+ * GitHub form (the GitLab claim template embeds the GitLab form), so a `glab` run whose body
+ * embeds only the GitHub form still gets the GitLab separator paragraph.
  * @param {string[]} [options.taskBody] - rendered task parts (description, context)
  * @param {object} [options]
  */
 export function buildIssueFilingSection({ taskBody = [], ...options } = {}) {
   const attribution = buildPlannerAttributionSection(options);
   const glab = options.forgeCli === 'glab';
-  const embedded = taskBody.some((part) => collapseWhitespace(part).includes(EMBEDDED_CONTRACT));
+  const parts = taskBody.map(collapseWhitespace);
+  if (glab && parts.some((part) => part.includes(EMBEDDED_GITLAB_CONTRACT))) return attribution;
+  const embedded = parts.some((part) => part.includes(EMBEDDED_CONTRACT));
   if (embedded && !glab) return attribution;
   const contract = embedded ? GITLAB_DISPATCH_SEPARATOR_GUIDANCE : mandatoryDispatchHintGuidance({ cli: glab ? 'glab' : 'gh' });
   return `## Issue Filing Labels\n\n${contract}${attribution ? `\n\n${attribution}` : ''}`;
