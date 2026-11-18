@@ -14,7 +14,6 @@ import { mockBranchCompletionPolicy, mockExecGit, mockPaths, mockTaskScheduleSto
 import { appendFile, lstat, mkdir, readlink, symlink, writeFile, readFile, utimes } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
-import { readRetirementCheckoutIdentity, isCurrentRetirementCheckout } from '../lib/retirementCheckoutObservation.js';
 import { execGit } from '../lib/execGit.js';
 import { PATHS } from '../lib/paths.js';
 
@@ -67,7 +66,7 @@ describeHeldCheckoutRecovery(() => {
     expect(existsSync(release.path)).toBe(false);
     expect(await registered(release.path)).toBe(false);
     expect((await getBranchReconcileOutcome('app-1')).retired).toContainEqual(expect.objectContaining({ path: release.path, branch,
-      head, branchDeleted: true, archiveDir: null, checkoutIdentity: expect.any(String) }));
+      head, branchDeleted: true, archiveDir: null }));
   });
 
   it('settles a checkout the early reaper retired before the next scan', async () => {
@@ -85,8 +84,7 @@ describeHeldCheckoutRecovery(() => {
     for (const stamp of [join(gitDir, 'index'), join(gitDir, 'logs', 'HEAD'), path]) await utimes(stamp, then, then);
     const holder = (await (await import('./worktreeManager.js')).listWorktrees(repo)).find(tree => tree.branch === `refs/heads/${branch}`);
     const release = { branch, path: holder.path, head: holder.head, locked: false, lockReason: null };
-    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release,
-      checkoutIdentity: await readRetirementCheckoutIdentity(path), reason: 'checkout-retained' }] });
+    await recordBranchReconcileOutcome('app-1', { status: 'incomplete', remaining: [{ ...release, reason: 'checkout-retained' }] });
     const result = await (await import('./worktreeManager.js')).reapMergedWorktrees(repo, {
       appId: 'app-1', activeAgentIds: new Set(), claimOwners: { agents: [], readAgents: noOwners },
     });
@@ -132,31 +130,27 @@ describeHeldCheckoutRecovery(() => {
       await execGit(['merge', '--squash', 'feature/held'], repo);
       await execGit(['commit', '-m', 'feat: synthetic feature (squash)'], repo);
     } });
-    const checkoutIdentity = await readRetirementCheckoutIdentity(path);
-    const delayed = { ...release, checkoutIdentity, observedAt: new Date().toISOString(), reason: 'retirement-pending' };
+    // A row persisted before the fingerprint was retired still carries it; it is read-compat only.
+    const delayed = { ...release, checkoutIdentity: 'a'.repeat(64), observedAt: new Date().toISOString(), reason: 'retirement-pending' };
     await recordBranchReconcileOutcome('app-1', {
       status: 'incomplete', reason: 'holds-remaining', nextAction: 'Recover held checkouts.',
       remaining: [{ ...delayed, managed: false, reason: 'worktree-locked' }, { branch: 'other', reason: 'actionable' }],
     });
-    expect(await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { readAgents: noOwners }))
-      .toEqual({ ok: false, reason: 'release-not-in-inventory' });
-    expect(await isCurrentRetirementCheckout(delayed)).toBe(true);
     await makeClean(path);
-    const result = await retireInventoriedCheckout({ appId: 'app-1', release }, { readAgents: noOwners });
-    expect(result, JSON.stringify(result)).toEqual({ ok: true, branchDeleted: true, checkoutIdentity });
+    // The release may carry a legacy fingerprint (even one that differs from the stored row's); it is accepted and ignored.
+    const result = await retireInventoriedCheckout({ appId: 'app-1', release: { ...release, checkoutIdentity: '0'.repeat(64) } }, { readAgents: noOwners });
+    expect(result, JSON.stringify(result)).toEqual({ ok: true, branchDeleted: true });
     expect(existsSync(path)).toBe(false);
     expect((await execGit(['branch', '--list', 'feature/held'], repo)).stdout.trim()).toBe('');
     const outcome = await getBranchReconcileOutcome('app-1');
     expect(outcome.remaining).toEqual([{ branch: 'other', reason: 'actionable' }]);
-    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: null, checkoutIdentity });
+    expect(outcome.retired[0]).toMatchObject({ path: release.path, branch: 'feature/held', branchDeleted: true, archiveDir: null });
+    expect(outcome.retired[0]).not.toHaveProperty('checkoutIdentity');
     await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
     expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([]);
     await execGit(['worktree', 'add', '-b', release.branch, path, release.head], repo);
-    const recreated = { ...delayed, checkoutIdentity: await readRetirementCheckoutIdentity(path), observedAt: new Date().toISOString() };
-    expect(recreated.checkoutIdentity).not.toBe(checkoutIdentity);
-    expect(await isCurrentRetirementCheckout(delayed)).toBe(false);
-    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [recreated] });
-    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([recreated]);
+    await recordBranchReconcileOutcome('app-1', { status: 'running', remaining: [delayed] });
+    expect((await getBranchReconcileInventory('app-1')).remaining).toEqual([delayed]);
   });
 
   it('treats a changed lock since the inventory as an ownership change', async () => {
@@ -249,8 +243,10 @@ describe('automatic retirement of completed local work', () => {
 
   unitIt('retires a clean checkout whose commits are all on the default branch, binding the observed row', async () => {
     const d = deps();
-    const observation = { observedAt: '2026-10-23T00:00:00Z', checkoutIdentity: 'original-checkout' };
-    expect(await retireCompletedCheckouts(app, scan({ isMerged: true }, observation), d)).toEqual({ held: [], retired: [{ ...observation, ...release }] });
+    const observation = { observedAt: '2026-10-23T00:00:00Z' };
+    // A fingerprint persisted by an older version is not carried into the release.
+    expect(await retireCompletedCheckouts(app, scan({ isMerged: true }, { ...observation, checkoutIdentity: 'legacy-checkout' }), d))
+      .toEqual({ held: [], retired: [{ ...observation, ...release }] });
     // The forge answer read for the pass is handed on, so the service does not ask again.
     expect(d.retire).toHaveBeenCalledWith({ appId: app.id, release: { ...observation, ...release } }, { beforeMutation: expect.any(Function), delivery: 'none' });
   });

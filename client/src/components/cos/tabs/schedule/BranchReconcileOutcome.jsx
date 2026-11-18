@@ -6,8 +6,8 @@ import { isHttpUrl } from '../../../../utils/urlNormalize';
 
 const STATUS_LABELS = { drained: 'No remaining work in last scan', incomplete: 'Incomplete', running: 'Sweep running' };
 
-// Only a post-cleanup inventory row carries the exact checkout identity a
-// scoped release must name; branch-only holds have nothing to release.
+// Only a post-cleanup inventory row carries the exact checkout (path, HEAD and
+// lock) a scoped release must name; branch-only holds have nothing to release.
 const isInventoriedCheckout = entry => Boolean(!entry.checkoutMissing && entry.path && entry.head && typeof entry.locked === 'boolean');
 const checkoutKey = (appId, entry) => `${appId}\0${entry.path}\0${entry.head}`;
 const NONE = new Set();

@@ -295,7 +295,7 @@ the coordinator removes that exact merged
 clean checkout and local branch without copying either one. A cleanup refusal
 remains on the receipt as `cleanup.status` and `reason`; transient failures
 retry every 30 minutes, at most 12 times.
-Locks, initialized submodules, changed checkout identity and supersession need
+Locks, initialized submodules, a changed checkout head, branch or lock, and supersession need
 explicit recovery and remain held. No worker waits for this cleanup, no lock is
 silently released, and no initialized submodule is discarded. Older receipts
 without a checkout binding retain the existing branch-reconciliation fallback.

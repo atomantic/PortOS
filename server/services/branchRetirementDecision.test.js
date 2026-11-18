@@ -396,7 +396,7 @@ describe('decideHeldCheckoutRetirement', () => {
     const listed = { path: r.path, branch: r.branch ? `refs/heads/${r.branch}` : null, head: r.head, locked: r.locked, lockReason: r.lockReason, ...tree };
     return drive(decideHeldCheckoutRetirement, { repoPath: REPO, release: r, ...input }, {
       trees: [{ path: REPO, branch: 'refs/heads/main', head: MAIN_HEAD }, listed],
-      samePhysical: true, identity: 'checkout-1', mergeEvidence: true, clean: true, ...owners, ...facts,
+      samePhysical: true, mergeEvidence: true, clean: true, ...owners, ...facts,
     });
   };
   const exact = { deliveredHead: HEAD, disposableHead: HEAD };
@@ -426,8 +426,8 @@ describe('decideHeldCheckoutRetirement', () => {
     ['an unreadable worktree list', { facts: { trees: null } }, 'worktree-ownership-unreadable'],
     ['the primary checkout', { release: { path: REPO }, facts: { trees: [{ path: REPO, branch: 'refs/heads/feature/held', head: HEAD, locked: true, lockReason: LOCK }] } }, 'checkout-primary'],
     ['a prunable registration', { tree: { prunable: true } }, 'worktree-prunable'],
-    ['an unreadable checkout identity', { facts: { identity: null } }, 'checkout-identity-changed'],
-    ['a recreated checkout at the inventoried path', { release: { checkoutIdentity: 'checkout-0' } }, 'checkout-identity-changed'],
+    // A stored row's legacy fingerprint is read-compat only: it neither admits nor holds.
+    ['a legacy checkoutIdentity on the release', { release: { checkoutIdentity: 'a'.repeat(64) } }, 'retire'],
     ['a manual completion handoff', { facts: { completionHold: 'pr-completion-human-handoff' } }, 'pr-completion-human-handoff'],
     ['unreadable completion policy', { facts: { completionHold: 'pr-completion-policy-unavailable' } }, 'pr-completion-policy-unavailable'],
     ['an unreadable owner registry', { facts: { agents: null } }, 'claim-ownership-unreadable'],
@@ -438,22 +438,22 @@ describe('decideHeldCheckoutRetirement', () => {
     expect(verdict(held(overrides))).toBe(expected);
   });
 
-  it('admits the listed registration under the release spelling with the identity it read', () => {
+  it('admits the listed registration under the release spelling', () => {
     expect(held({ release: { path: `${HELD}/.` }, tree: { path: HELD } }).admit).toEqual({
-      tree: { path: `${HELD}/.`, branch: 'refs/heads/feature/held', head: HEAD, locked: true, lockReason: LOCK }, checkoutIdentity: 'checkout-1',
+      tree: { path: `${HELD}/.`, branch: 'refs/heads/feature/held', head: HEAD, locked: true, lockReason: LOCK },
     });
   });
 
   it('reads facts lazily: a registration change reads nothing else, dirt reads no owner, delivery skips local merge evidence', () => {
     expect(held({ tree: { head: 'e'.repeat(40) } }).asked).toEqual(['trees']);
-    expect(held({ facts: { clean: false } }).asked).toEqual(['trees', 'identity', 'mergeEvidence', 'clean']);
-    expect(held(exact).asked).toEqual(['trees', 'identity', 'clean', 'agents', 'runtimeAgentIds', 'completionHold']);
+    expect(held({ facts: { clean: false } }).asked).toEqual(['trees', 'mergeEvidence', 'clean']);
+    expect(held(exact).asked).toEqual(['trees', 'clean', 'agents', 'runtimeAgentIds', 'completionHold']);
     // The physical check runs only for a different spelling; a detached checkout has no policy to read.
     expect(held({ release: { path: `${HELD}/.` }, tree: { path: HELD } }).asked.slice(0, 2)).toEqual(['trees', 'samePhysical']);
     expect(held({ release: { branch: null } }).asked.at(-1)).toBe('runtimeAgentIds');
   });
 
-  it('asks for the physical identity of the listed spelling', () => {
+  it('asks whether the listed spelling is the same physical checkout', () => {
     const step = decideHeldCheckoutRetirement({ repoPath: REPO, release: { path: `${HELD}/.`, head: HEAD, branch: null, locked: false, lockReason: null },
       facts: { trees: [{ path: REPO }, { path: HELD, head: HEAD, branch: null }] } });
     expect(step).toEqual({ need: 'samePhysical', path: HELD });
@@ -820,7 +820,7 @@ describe('decideIdleNextHolderRelease', () => {
 describe('decideForceRemoval', () => {
   const reg = (extra = {}) => ({ holder: { locked: false, branch: 'refs/heads/b', head: 'h1', ...extra } });
   const force = ({ guarded = true, facts = {} } = {}) => drive(decideForceRemoval, { guarded }, {
-    listing: reg(), identity: 'inc-1', guardReason: false, fresh: reg(), identityAfter: 'inc-1', ...facts,
+    listing: reg(), guardReason: false, fresh: reg(), ...facts,
   });
 
   it.each([
@@ -836,8 +836,6 @@ describe('decideForceRemoval', () => {
     ['a head moved during the guard', { facts: { fresh: reg({ head: 'h2' }) } }, 'worktree-holder-changed'],
     ['a branch switched during the guard', { facts: { fresh: reg({ branch: 'refs/heads/c' }) } }, 'worktree-holder-changed'],
     ['a registration that vanished during the guard', { facts: { fresh: { holder: null } } }, 'worktree-holder-changed'],
-    ['a checkout recreated at the same path and head', { facts: { identityAfter: 'inc-2' } }, 'worktree-holder-changed'],
-    ['a recreated checkout without a guard (nothing captured)', { guarded: false, facts: { identityAfter: 'inc-2' } }, 'retire'],
   ])('%s', (_name, overrides, expected) => {
     expect(verdict(force(overrides))).toBe(expected);
   });
@@ -845,8 +843,8 @@ describe('decideForceRemoval', () => {
   it('asks nothing further once a lock, an unreadable registry or a declining guard holds', () => {
     expect(force({ facts: { listing: reg({ locked: true }) } }).asked).toEqual(['listing']);
     expect(force({ facts: { listing: null } }).asked).toEqual(['listing']);
-    expect(force({ facts: { guardReason: 'x' } }).asked).toEqual(['listing', 'identity', 'guardReason']);
-    expect(force().asked).toEqual(['listing', 'identity', 'guardReason', 'fresh', 'identityAfter']);
+    expect(force({ facts: { guardReason: 'x' } }).asked).toEqual(['listing', 'guardReason']);
+    expect(force().asked).toEqual(['listing', 'guardReason', 'fresh']);
     expect(force({ guarded: false }).asked).toEqual(['listing', 'fresh']);
   });
 });
