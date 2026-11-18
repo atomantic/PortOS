@@ -5,19 +5,17 @@
  *
  * Design constraints (docs/plans/2026-07-04-human-activity-tracking.md):
  *
- * - **50-track window ⇒ cadence must beat it.** `GET /v1/me/player/recently-played`
- *   only exposes the last 50 plays, so the scheduler polls every ~25 min (see
- *   spotifyScheduler.js) to avoid gaps. An incremental `after` cursor (the newest
- *   `played_at` seen) keeps each poll to just the new plays.
+ * - **Incremental pagination.** Spotify returns up to 50 plays per page.
+ *   Each sync drains the available pages above the saved `after` cursor.
  * - **Machine-local + idempotent.** The cursor lives in a `data/spotify/` JSON
  *   file (per-machine, unsynced). Each event carries a stable
  *   `spotify:<played_at>:<trackId>` dedupe key, so re-polls are no-ops.
  * - **LLM-free.** Track/artist/genre metadata is stored verbatim for later twin
  *   enrichment (Phase 7); no AI-provider calls happen on this path.
- * - **Raw-response cache.** The latest API payload is cached under
+ * - **Raw-response cache.** The first (most recent) API page is cached under
  *   `data/spotify/cache/` (local, unsynced) for debugging / re-derivation.
  *
- * The pure mappers (candidate mapping, dedupe keys, cursor advance) are exported
+ * The pure mappers (candidate mapping and dedupe keys) are exported
  * and unit-tested with fixture payloads — no network or DB required.
  */
 import { dataPath, ensureDir, atomicWrite } from '../lib/fileUtils.js';
@@ -30,10 +28,10 @@ import { getAccessToken, getAuthStatus } from './spotifyAuth.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-const RECENTLY_PLAYED_URL = 'https://api.spotify.com/v1/me/player/recently-played';
+const RECENTLY_PLAYED_URL = new URL('https://api.spotify.com/v1/me/player/recently-played');
 const RECENTLY_PLAYED_TIMEOUT_MS = 15_000;
 
-// The API caps this at 50; the cursor + fast cadence keep us from missing plays.
+// The API caps each page at 50.
 const SCAN_LIMIT = 50;
 
 const STATE_FILE = 'sync-state.json';
@@ -80,7 +78,7 @@ export function spotifyListenCandidate(item) {
     url: track.external_urls?.spotify || null,
     // Whole-second key: the history export's `ts` has no milliseconds, so a ms key
     // would never meet the imported copy of this play (#15309). The `after` cursor
-    // stays full-precision (maxPlayedAtMs).
+    // stays full-precision.
     dedupeKey: `spotify:${new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString()}:${track.id}`,
     metadata: {
       trackId: track.id,
@@ -101,19 +99,18 @@ export function spotifyListenCandidates(items = []) {
   return (items || []).map(spotifyListenCandidate).filter(Boolean);
 }
 
-/**
- * Advance the `after` cursor to the newest `played_at` (epoch ms) across a batch,
- * never regressing below the current cursor. Spotify's `after` param is a Unix-ms
- * timestamp that returns plays strictly AFTER it, so the max seen is the next
- * cursor. Ignores items with an unparseable `played_at`.
- */
-export function maxPlayedAtMs(items = [], current = 0) {
-  let max = Number.isFinite(current) ? current : 0;
-  for (const item of items || []) {
-    const t = new Date(item?.played_at).getTime();
-    if (Number.isFinite(t) && t > max) max = t;
-  }
-  return max;
+// Only the history endpoint can receive the bearer token from this sync.
+function parseContinuation(next) {
+  const url = typeof next === 'string' ? URL.parse(next) : null;
+  if (url?.origin !== RECENTLY_PLAYED_URL.origin || url.pathname !== RECENTLY_PLAYED_URL.pathname
+    || url.username || url.password || url.hash) return null;
+  return url;
+}
+
+function pageKey(url) {
+  const params = new URLSearchParams(url.search);
+  params.sort();
+  return params.toString();
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +169,8 @@ async function doRunSync() {
   const state = await readSyncState();
   const started = Date.now();
 
-  const fail = async (lastResult) => {
+  const fail = async (failure) => {
+    const lastResult = { ok: false, failedAt: new Date().toISOString(), ...failure };
     await writeSyncState({
       cursorAfter: state.cursorAfter,
       lastRunAt: state.lastRunAt,
@@ -192,102 +190,112 @@ async function doRunSync() {
       || (typeof reason === 'string' && reason.toLowerCase().includes('invalid_grant'))
       || (typeof reason === 'string' && reason.includes('Spotify rejected the saved authorization'));
     return fail({
-      ok: false,
       needsAuth: isInvalidGrant,
       error: isInvalidGrant
         ? 'Spotify rejected the saved authorization — reconnect Spotify.'
         : `Spotify auth failed: ${reason}`,
-      failedAt: new Date().toISOString(),
     });
   }
 
   if (!accessToken) {
     return fail({
-      ok: false,
       needsAuth: true,
       error: 'Spotify not connected — authorize in Brain → Spotify.',
-      failedAt: new Date().toISOString(),
     });
   }
 
-  const url = new URL(RECENTLY_PLAYED_URL);
+  let url = new URL(RECENTLY_PLAYED_URL);
   url.searchParams.set('limit', String(SCAN_LIMIT));
   if (state.cursorAfter) url.searchParams.set('after', String(state.cursorAfter));
 
-  let res;
-  try {
-    res = await fetchWithTimeout(
-      url,
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-      RECENTLY_PLAYED_TIMEOUT_MS,
-    );
-  } catch (err) {
-    const reason = err?.message || String(err);
-    console.error(`❌ Spotify recently-played fetch failed: ${reason}`);
-    return fail({
-      ok: false,
-      needsAuth: false,
-      error: `Spotify API request failed: ${reason}`,
-      failedAt: new Date().toISOString(),
-    });
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    console.error(`❌ Spotify recently-played fetch failed: ${res.status} ${body.slice(0, 200)}`);
-    return fail({
-      ok: false,
-      status: res.status,
-      error: `Spotify API returned ${res.status}`,
-      failedAt: new Date().toISOString(),
-    });
-  }
-  const payload = await res.json().catch(() => null);
-  const items = Array.isArray(payload?.items) ? payload.items : [];
-  await writeRawCache(payload).catch((err) => console.error(`⚠️ Spotify raw-cache write failed: ${err?.message || err}`));
+  const failHistory = (error, details = {}) => {
+    console.error(`❌ Spotify recently-played sync failed: ${error}`);
+    return fail({ error, ...details });
+  };
 
-  const candidates = spotifyListenCandidates(items);
+  const candidates = [];
+  const visitedPages = new Set();
+  let scanned = 0;
+  let nextCursor = state.cursorAfter;
+  while (url) {
+    const key = pageKey(url);
+    if (visitedPages.has(key)) return failHistory('Spotify repeated a recently-played page URL.');
+    visitedPages.add(key);
 
-  // Persistence failures must NOT advance the cursor: the dedupe keys make a
-  // re-poll a no-op, but the recently-played window scrolls, so skipping past
-  // unpersisted plays loses them permanently. Hold the cursor on failure.
-  let persistFailed = false;
+    let res;
+    try {
+      res = await fetchWithTimeout(
+        url,
+        { headers: { Authorization: `Bearer ${accessToken}` }, redirect: 'error' },
+        RECENTLY_PLAYED_TIMEOUT_MS,
+      );
+    } catch (err) {
+      return failHistory(`Spotify API request failed: ${err?.message || err}`, { needsAuth: false });
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => {});
+      return failHistory(`Spotify API returned ${res.status}`, { status: res.status });
+    }
+
+    const payload = await res.json().catch(() => null);
+    if (!Array.isArray(payload?.items)) return failHistory('Spotify returned an invalid recently-played page.');
+    const { items, next } = payload;
+    if (visitedPages.size === 1) {
+      await writeRawCache(payload).catch((err) => console.error(`⚠️ Spotify raw-cache write failed: ${err?.message || err}`));
+    }
+
+    // A continuation may change cursor direction. Keep the original exclusive
+    // floor for every page and only checkpoint plays mapped for persistence.
+    scanned += items.length;
+    for (const candidate of spotifyListenCandidates(items)) {
+      const playedAt = Date.parse(candidate.happenedAt);
+      if (playedAt <= state.cursorAfter) continue;
+      candidates.push(candidate);
+      nextCursor = Math.max(nextCursor, playedAt);
+    }
+
+    if (next == null) break;
+    url = parseContinuation(next);
+    if (!url || items.length === 0) return failHistory('Spotify returned an invalid recently-played continuation.');
+  }
+
+  // Commit the cursor only after the continuation was exhausted and every write
+  // succeeded. Activity writes are idempotent if a partial batch must replay.
   const { recordEvents } = await import('./humanActivity.js');
-  const recordResult = await recordEvents(candidates).catch((err) => {
+  let recordResult;
+  try {
+    recordResult = await recordEvents(candidates);
+  } catch (err) {
     console.error(`❌ Spotify activity record failed: ${err?.message || err}`);
-    persistFailed = true;
-    return { recorded: 0, skipped: candidates.length };
-  });
+    return fail({
+      error: 'Persistence failed — cursor held so the batch retries next sync',
+      cursorAfter: state.cursorAfter,
+      scanned,
+      recorded: 0,
+      skipped: candidates.length,
+      hasMore: false,
+      durationMs: Date.now() - started,
+    });
+  }
 
   // Incrementally refresh observed twin evidence when new listens landed (#2156).
-  // LLM-free + self-guarded — never blocks or fails the sync.
-  if (!persistFailed && recordResult.recorded > 0) {
+  // LLM-free + self-guarded — never fails the sync.
+  if (recordResult.recorded > 0) {
     const { refreshTwinEvidenceAfterSync } = await import('./twinEnrichment.js');
     await refreshTwinEvidenceAfterSync();
   }
 
-  // Prefer the response's own `cursors.after` (Spotify's canonical next cursor),
-  // falling back to the computed max — but never regress below the stored cursor.
-  const responseCursor = Number(payload?.cursors?.after);
-  const computed = maxPlayedAtMs(items, state.cursorAfter);
-  const advanced = Number.isFinite(responseCursor) && responseCursor > (state.cursorAfter || 0)
-    ? responseCursor
-    : computed;
-  const nextCursor = persistFailed ? state.cursorAfter : advanced;
-
   const result = {
-    ok: !persistFailed,
-    ...(persistFailed ? { error: 'Persistence failed — cursor held so the batch retries next sync' } : {}),
-    scanned: items.length,
+    ok: true,
+    scanned,
     recorded: recordResult.recorded,
     skipped: recordResult.skipped,
     cursorAfter: nextCursor,
-    // A full 50-item batch means older plays may remain beyond this pass — the
-    // caller (UI toast / next scheduler tick) should run again to keep draining.
-    hasMore: items.length === SCAN_LIMIT,
+    hasMore: false,
     durationMs: Date.now() - started,
   };
   await writeSyncState({ cursorAfter: nextCursor, lastRunAt: new Date().toISOString(), lastResult: result });
-  console.log(`🎧 Spotify sync: scanned ${result.scanned}, recorded ${result.recorded} listen(s), cursor→${result.cursorAfter}${result.hasMore ? ' (more remaining)' : ''}${persistFailed ? ' — PERSIST FAILED, cursor held' : ''} in ${result.durationMs}ms`);
+  console.log(`🎧 Spotify sync: scanned ${result.scanned}, recorded ${result.recorded} listen(s), cursor→${result.cursorAfter} in ${result.durationMs}ms`);
   return result;
 }
 

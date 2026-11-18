@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
   getAccessToken: vi.fn(),
   getAuthStatus: vi.fn(),
   getSettings: vi.fn(),
-  tryReadFile: vi.fn(),
+  recordEvents: vi.fn(),
+  refreshTwinEvidenceAfterSync: vi.fn(),
   atomicWrite: vi.fn(),
   ensureDir: vi.fn(),
   readSyncCursorState: vi.fn(),
@@ -21,28 +22,25 @@ vi.mock('./spotifyAuth.js', () => ({
   getAuthStatus: (...args) => mocks.getAuthStatus(...args),
 }));
 vi.mock('./settings.js', () => ({ getSettings: (...args) => mocks.getSettings(...args) }));
+vi.mock('./humanActivity.js', () => ({ recordEvents: (...args) => mocks.recordEvents(...args) }));
+vi.mock('./twinEnrichment.js', () => ({ refreshTwinEvidenceAfterSync: () => mocks.refreshTwinEvidenceAfterSync() }));
 vi.mock('../lib/fileUtils.js', () => ({
   dataPath: (...parts) => `/tmp/${parts.join('/')}`,
   ensureDir: (...args) => mocks.ensureDir(...args),
   atomicWrite: (...args) => mocks.atomicWrite(...args),
-  tryReadFile: (...args) => mocks.tryReadFile(...args),
-  safeJSONParse: (raw, fallback) => {
-    try { return JSON.parse(raw); } catch { return fallback; }
-  },
 }));
 
 import {
   spotifyListenCandidate,
   spotifyListenCandidates,
-  maxPlayedAtMs,
   runSync,
 } from './spotifySync.js';
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   mocks.getAccessToken.mockResolvedValue('access-token');
   mocks.getSettings.mockResolvedValue({});
-  mocks.tryReadFile.mockResolvedValue(null);
+  mocks.recordEvents.mockImplementation(async (events) => ({ recorded: events.length, skipped: 0 }));
   mocks.readSyncCursorState.mockResolvedValue({ cursorAfter: 0, lastRunAt: null, lastResult: null });
 });
 
@@ -144,37 +142,157 @@ describe('spotifySync pure helpers', () => {
       expect(list).toHaveLength(1);
     });
 
-    it('returns an empty array for non-array input', () => {
+    it('returns an empty array for absent input', () => {
       expect(spotifyListenCandidates(null)).toEqual([]);
       expect(spotifyListenCandidates(undefined)).toEqual([]);
     });
   });
+});
 
-  describe('maxPlayedAtMs (cursor advance)', () => {
-    it('returns the newest played_at across the batch', () => {
-      const items = [
-        { played_at: '2024-03-10T10:00:00.000Z' },
-        { played_at: '2024-03-10T12:00:00.000Z' },
-        { played_at: '2024-03-10T11:00:00.000Z' },
-      ];
-      expect(maxPlayedAtMs(items, 0)).toBe(new Date('2024-03-10T12:00:00.000Z').getTime());
+const spotifyEndpoint = 'https://api.spotify.com/v1/me/player/recently-played';
+const floor = Date.parse('2024-03-10T15:30:00.123Z');
+const newest = floor + 51_000;
+const olderPageUrl = `${spotifyEndpoint}?before=${floor + 2_000}&limit=50`;
+const firstPageUrl = `${spotifyEndpoint}?limit=50&after=${floor}`;
+const lastRunAt = '2024-03-10T15:30:00.123Z';
+
+const itemAt = (time, overrides) => makeItem({ played_at: new Date(time).toISOString(), ...overrides });
+const firstPageItems = Array.from({ length: 50 }, (_, index) => itemAt(newest - index * 1_000));
+const page = (items, next = null) => Response.json({ items, next, cursors: { after: String(newest + 10_000) } });
+
+function savedState() {
+  return JSON.parse(mocks.atomicWrite.mock.calls.findLast(([path]) => path.endsWith('sync-state.json'))[1]);
+}
+
+describe('runSync recently-played pagination', () => {
+  beforeEach(() => mocks.readSyncCursorState.mockResolvedValue({ cursorAfter: floor, lastRunAt }));
+
+  it('drains a 51-play backlog above the original floor before saving the newest accepted play', async () => {
+    const oldestEligible = itemAt(floor + 1_000);
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(page([oldestEligible, itemAt(floor), itemAt(floor - 1)]));
+
+    await expect(runSync()).resolves.toMatchObject({
+      ok: true, scanned: 53, recorded: 51, skipped: 0, cursorAfter: newest, hasMore: false,
     });
 
-    it('never regresses below the current cursor', () => {
-      const cursor = new Date('2024-03-11T00:00:00.000Z').getTime();
-      const items = [{ played_at: '2024-03-10T12:00:00.000Z' }];
-      expect(maxPlayedAtMs(items, cursor)).toBe(cursor);
-    });
+    expect(mocks.fetchWithTimeout.mock.calls.map(([url]) => url.href)).toEqual([firstPageUrl, olderPageUrl]);
+    const [events] = mocks.recordEvents.mock.calls[0];
+    expect(events.map(({ happenedAt }) => happenedAt)).toEqual(
+      [...firstPageItems, oldestEligible].map(({ played_at }) => played_at),
+    );
+    expect(savedState()).toMatchObject({ cursorAfter: newest, lastResult: { ok: true, recorded: 51 } });
+    expect(mocks.refreshTwinEvidenceAfterSync).toHaveBeenCalledTimes(1);
+  });
 
-    it('ignores items with an unparseable played_at', () => {
-      const items = [{ played_at: 'garbage' }, { played_at: '2024-03-10T12:00:00.000Z' }];
-      expect(maxPlayedAtMs(items, 0)).toBe(new Date('2024-03-10T12:00:00.000Z').getTime());
+  it('keeps the checkpoint on a failed continuation, then retries the same window without duplicate rows', async () => {
+    const storedKeys = new Set([spotifyListenCandidate(firstPageItems[0]).dedupeKey]);
+    mocks.recordEvents.mockImplementation(async (events) => {
+      const previousSize = storedKeys.size;
+      for (const { dedupeKey } of events) storedKeys.add(dedupeKey);
+      const recorded = storedKeys.size - previousSize;
+      return { recorded, skipped: events.length - recorded };
     });
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }));
 
-    it('returns the current cursor for an empty batch', () => {
-      expect(maxPlayedAtMs([], 42)).toBe(42);
-      expect(maxPlayedAtMs(null, 42)).toBe(42);
-    });
+    await expect(runSync()).resolves.toMatchObject({ ok: false, status: 503 });
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt, lastResult: { ok: false, status: 503 } });
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+
+    mocks.readSyncCursorState.mockResolvedValue(savedState());
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(page([itemAt(floor + 1_000)]));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: true, recorded: 50, skipped: 1, cursorAfter: newest });
+    expect(mocks.fetchWithTimeout.mock.calls.map(([url]) => url.href)).toEqual([
+      firstPageUrl, olderPageUrl, firstPageUrl, olderPageUrl,
+    ]);
+    expect(storedKeys.size).toBe(51);
+  });
+
+  it('makes one request for a full terminal page and keeps the cursor independent of response cursors', async () => {
+    mocks.fetchWithTimeout.mockResolvedValueOnce(page(firstPageItems));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: true, recorded: 50, cursorAfter: newest, hasMore: false });
+
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes newer eligible plays from a later page when choosing the checkpoint', async () => {
+    const later = newest + 1_000;
+    const newerPageUrl = `${spotifyEndpoint}?after=${newest}&limit=50`;
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, newerPageUrl))
+      .mockResolvedValueOnce(page([itemAt(later), itemAt(later + 1_000, { track: null })]));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: true, recorded: 51, cursorAfter: later });
+
+    expect(savedState()).toMatchObject({ cursorAfter: later });
+  });
+
+  it('does not advance the cursor when the activity write fails after pagination', async () => {
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(page([itemAt(floor + 1_000)]));
+    mocks.recordEvents.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: false, error: expect.stringContaining('Persistence failed') });
+
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt, lastResult: { ok: false } });
+    expect(mocks.refreshTwinEvidenceAfterSync).not.toHaveBeenCalled();
+  });
+
+  it('stops a repeated page even if its query parameters are reordered', async () => {
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(page([itemAt(floor + 1_000)], `${spotifyEndpoint}?limit=50&before=${floor + 2_000}`));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: false, error: expect.stringContaining('repeated') });
+
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(2);
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt });
+  });
+
+  it.each([
+    'https://example.com/v1/me/player/recently-played?before=1',
+    'https://api.spotify.com/v1/me?before=1',
+    'http://api.spotify.com/v1/me/player/recently-played?before=1',
+    'https://api.spotify.com:444/v1/me/player/recently-played?before=1',
+    '/v1/me/player/recently-played?before=1',
+    {},
+  ])('rejects an invalid continuation (%s) without issuing a credentialed request', async (next) => {
+    mocks.fetchWithTimeout.mockResolvedValueOnce(page(firstPageItems, next));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: false, error: expect.stringContaining('invalid') });
+
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt });
+  });
+
+  it('holds the checkpoint on a malformed continuation page', async () => {
+    mocks.fetchWithTimeout
+      .mockResolvedValueOnce(page(firstPageItems, olderPageUrl))
+      .mockResolvedValueOnce(Response.json({ next: null }));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: false, error: expect.stringContaining('invalid') });
+
+    expect(mocks.recordEvents).not.toHaveBeenCalled();
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt });
+  });
+
+  it('does not advance past an empty page that still points to a continuation', async () => {
+    mocks.fetchWithTimeout.mockResolvedValueOnce(page([], olderPageUrl));
+
+    await expect(runSync()).resolves.toMatchObject({ ok: false, error: expect.stringContaining('invalid') });
+
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledTimes(1);
+    expect(savedState()).toMatchObject({ cursorAfter: floor, lastRunAt });
   });
 });
 
@@ -192,7 +310,7 @@ describe('runSync failure persistence and error handling', () => {
 
     expect(mocks.fetchWithTimeout).toHaveBeenCalledWith(
       expect.any(URL),
-      { headers: { Authorization: 'Bearer access-token' } },
+      { headers: { Authorization: 'Bearer access-token' }, redirect: 'error' },
       15_000,
     );
     expect(result).toMatchObject({
