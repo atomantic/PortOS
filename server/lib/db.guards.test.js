@@ -33,9 +33,17 @@
  *                         `portos` DB unguarded under VITEST until this was added.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
-import { isTestDatabase, checkHealth, query, assertWriteAllowed } from './db.js';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { isTestDatabase, checkHealth, getServerMajorVersion, query, assertWriteAllowed } from './db.js';
 import { isTestRunner } from './runtimeEnv.js';
+
+const poolQuery = vi.hoisted(() => vi.fn(async () => ({ rows: [] })));
+vi.mock('pg', async (importOriginal) => ({
+  default: {
+    ...(await importOriginal()).default,
+    Pool: function Pool() { return { query: poolQuery, on: vi.fn() }; },
+  },
+}));
 
 // NODE_ENV is 'test' throughout (vitest default); we vary PGDATABASE / TEST_DB_OK.
 const saved = {};
@@ -134,6 +142,25 @@ describe('checkHealth test-runner gate', () => {
   });
 });
 
+describe('bounded database probes', () => {
+  it('passes a per-query deadline to PostgreSQL and reports a timed-out health probe as disconnected', async () => {
+    setEnv('PGDATABASE', 'portos_test');
+    poolQuery.mockRejectedValueOnce(new Error('Query read timeout'));
+    await expect(checkHealth()).resolves.toEqual({
+      connected: false, hasSchema: false, hasCatalogSchema: false, error: 'Query read timeout',
+    });
+    expect(poolQuery).toHaveBeenLastCalledWith({
+      text: expect.stringContaining('information_schema.tables'), query_timeout: 10_000,
+    });
+  });
+
+  it('passes a per-query deadline to PostgreSQL and leaves the version unknown on timeout', async () => {
+    poolQuery.mockRejectedValueOnce(new Error('Query read timeout'));
+    await expect(getServerMajorVersion()).resolves.toBeNull();
+    expect(poolQuery).toHaveBeenLastCalledWith({ text: 'SHOW server_version_num', query_timeout: 10_000 });
+  });
+});
+
 describe('query row-write backstop', () => {
   // These all run with a non-test DB so the guard is active. The throw happens
   // BEFORE pool.query, so no live database is needed.
@@ -186,9 +213,7 @@ describe('query row-write backstop', () => {
   it('does NOT block reads via the guard', async () => {
     setEnv('PGDATABASE', 'portos');
     setEnv('TEST_DB_OK', undefined);
-    // A SELECT is not a row write — the guard lets it through to pool.query. We
-    // only assert the guard's own error is NOT thrown; any connection error
-    // from pool.query (no DB in CI) is fine and distinct.
+    // A SELECT is not a row write, so the guard lets it through to pool.query.
     await query('SELECT 1').then(
       () => {},
       (err) => expect(err.message).not.toMatch(/Refusing to mutate/i),
