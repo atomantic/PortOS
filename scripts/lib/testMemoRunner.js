@@ -9,7 +9,10 @@
  * could not all be resolved. A test with a version 2 memo record (per-module
  * digests) is narrowed: lazy `import()` edges count only where the record
  * cannot vouch for them (`recordedReach`), so a hub's lazy fan-out no longer
- * selects every suite. The planner's explicit files are always added.
+ * selects every suite. The planner's explicit files are always added. A
+ * gate-tooling test (`TOOLING_TESTS`) can never earn a record, so it is kept
+ * from the walk only when a changed source reaches its closure; otherwise the
+ * planner selects it through the tooling owner paths.
  * Vitest then receives the exact list through a selection file
  * (`vitestRunnerSelection` in `scripts/vitestCiPool.js`).
  *
@@ -38,7 +41,7 @@ import { tmpdir } from 'node:os';
 import * as nodePath from 'node:path';
 import { join, relative, sep } from 'node:path';
 import { resolveTestChrome } from './testChrome.js';
-import { getAlwaysRunTests } from '../ci-test-plan.js';
+import { TOOLING_TESTS, getAlwaysRunTests } from '../ci-test-plan.js';
 import { isGuardTest } from './guardScanners.js';
 import { NEVER_MARKER, TEST_MEMO_NEVER, WORKSPACE_BASE_INPUTS, WORKSPACE_SETUP_ENTRIES, createDiskFs, createTestMemoAnalyzer, relatedTests } from './testMemo.js';
 import { readMemoEntry, readMemoRecord, writeMemoEntry, writeMemoRecord } from './testMemoStore.js';
@@ -60,6 +63,9 @@ const neverMemoized = (test, repoRoot, alwaysRun) => {
   if (alwaysRun.has(test) || isGuardTest(test) || TEST_MEMO_NEVER[test]) return true;
   try { return NEVER_MARKER.test(readFileSync(join(repoRoot, ...test.split('/')), 'utf8')); } catch { return false; }
 };
+
+/** True when a changed source is a member or a non-module input of the verdict's closure. */
+const reachesClosure = (info, sources) => sources.some((rel) => info.closure.has(rel) || info.inputs.has(rel));
 
 /**
  * The runner's selection and memo verdicts for one workspace. Verdicts cover
@@ -128,7 +134,12 @@ export function planTestMemo({ scope, mode, repoFiles, repoSources, memoDir, rep
   if (mode === 'related') {
     const ownedTests = new Set(owned);
     const explicit = repoFiles.filter((test) => ownedTests.has(test));
-    selected = uniqueSorted([...relatedTests(verdicts, repoSources), ...explicit]);
+    // A gate-tooling test never earns a narrowing record, so the walk would select it on any
+    // diff (an unresolved edge or open read fails closed). It stays only when a changed
+    // source is in its closure or inputs; otherwise the planner's explicit files carry it.
+    const reached = relatedTests(verdicts, repoSources)
+      .filter((test) => !TOOLING_TESTS.includes(test) || reachesClosure(verdicts.get(test), repoSources));
+    selected = uniqueSorted([...reached, ...explicit]);
   }
   const slice = mode === 'related' ? selected : owned;
 
