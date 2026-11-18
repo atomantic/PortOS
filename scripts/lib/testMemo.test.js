@@ -1384,6 +1384,46 @@ describe('closure-based related selection', () => {
       options({ ...TREE, 'server/lib/plain.test.js': "import { it } from 'vitest';\nconst m = await import(process.env.MODULE);\nit('x', () => {});\n" }));
     expect(relatedTests(unresolved, ['server/lib/nothing.js'])).toEqual(['server/lib/plain.test.js']);
   });
+
+  it.each([false, true])('selects a test for a file outside its guessed read prefix (transitive: %s)', (transitive) => {
+    const test = 'server/lib/a.test.js';
+    const changed = 'client/src/limits.js';
+    const reader = [
+      "import { readFileSync } from 'node:fs';",
+      "import { join } from 'node:path';",
+      'const HERE = import.meta.dirname;',
+      'const read = (name) => readFileSync(join(HERE, name));',
+      "const pick = () => '../../client/src/limits.js';",
+      'read(pick());',
+    ].join('\n');
+    const files = {
+      ...TREE,
+      [changed]: 'export const limit = 1;',
+      [test]: transitive ? "import './reader.js';" : reader,
+      ...(transitive ? { 'server/lib/reader.js': reader } : {}),
+    };
+    const keys = computeTestMemoKeys([test, 'server/lib/plain.test.js'], options(files));
+    expect(keys.get(test).floor.reason).toContain('reads a path through read() that the analyzer cannot resolve');
+    expect(relatedTests(keys, [changed])).toEqual([test]);
+  });
+
+  it('only selects a test with a contained read when its input changes', () => {
+    const test = 'server/lib/a.test.js';
+    const files = {
+      ...TREE,
+      'lib/pathWithin.js': 'export const pathWithin = (dir, ...segments) => join(dir, ...segments);',
+      'server/lib/fixtures/fixture.txt': 'fixture',
+      [test]: [
+        "import { readFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "import { pathWithin } from '../../lib/pathWithin.js';",
+        "readFileSync(pathWithin(join(import.meta.dirname, 'fixtures'), process.argv[2]));",
+      ].join('\n'),
+    };
+    const keys = computeTestMemoKeys([test], options(files));
+    expect(relatedTests(keys, ['server/lib/fixtures/fixture.txt'])).toEqual([test]);
+    expect(relatedTests(keys, ['server/lib/unrelated.js'])).toEqual([]);
+  });
 });
 
 describe('record-aware related selection (#16424)', () => {

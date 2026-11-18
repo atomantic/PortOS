@@ -584,8 +584,9 @@ async function main() {
   }
 
   // The selection is closure-based (scripts/lib/testMemo.js): in related
-  // mode a test runs when a changed source is in its module closure or when
-  // its edges cannot all be resolved, plus the planner's explicit files.
+  // mode a test is selected when a changed source is in its module closure
+  // or inputs, or that walk fails closed on an unresolved edge or unbounded
+  // read. The selection also includes the planner's explicit files.
   // Vitest used to resolve `related` itself from CI_TEST_SOURCES; computing
   // the set here is what lets the memo subtract the files a trusted green
   // run already verified, and the list reaches Vitest as a file because a
