@@ -22,7 +22,11 @@ function md5(str) {
   return createHash('md5').update(str).digest('hex').slice(0, 12);
 }
 
-export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
+export function hasGoogleEventId(event) {
+  return typeof event?.id === 'string' && event.id.trim() !== '';
+}
+
+function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
   const startDateTime = event.start?.dateTime;
   const startDate = event.start?.date;
   const endDateTime = event.end?.dateTime;
@@ -43,8 +47,8 @@ export function normalizeGoogleEvent(event, subcalendarId, subcalendarName) {
 
   return {
     id: uuidv4(),
-    externalId: `gcal-${md5(event.id || uuidv4())}`,
-    apiId: event.id || '',
+    externalId: `gcal-${md5(event.id)}`,
+    apiId: event.id,
     title: event.summary || '(No title)',
     description: event.description || '',
     location: event.location || '',
@@ -88,7 +92,10 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
  * (a CLI that exited non-zero mid-stream, or a source that still had event
  * pages left) must pass `prune: false`, or the
  * missing tail reads as "these events were deleted upstream" and destroys real
- * calendar data. `options.status` labels the resulting sync for the UI.
+ * calendar data. `options.status` labels the resulting sync for the UI. Events
+ * without provider IDs are skipped and make the batch partial regardless of
+ * these options. `options.authoritativeMcpMetadata` treats omitted metadata as
+ * explicit clears only for complete MCP snapshots.
  *
  * `options.dateRange` ({ pastDate, futureDate }) declares that `rawEvents` only
  * covers that window: pruning is then limited to cached events overlapping it,
@@ -96,10 +103,18 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
  * upstream deletions.
  */
 export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io, options = {}) {
-  const { prune: shouldPrune = true, status = 'success', dateRange = null } = options;
+  const { prune = true, status: requestedStatus = 'success', dateRange = null, authoritativeMcpMetadata = false } = options;
   if (!await getAccount(accountId)) throw new ServerError('Account not found', { status: 404 });
 
-  const normalized = rawEvents.map(e => normalizeGoogleEvent(e, calendarId, calendarName));
+  const identifiedEvents = rawEvents.filter(hasGoogleEventId);
+  const hasInvalidIds = identifiedEvents.length !== rawEvents.length;
+  const reason = hasInvalidIds ? 'the event list contained invalid provider event IDs' : undefined;
+  const status = hasInvalidIds ? 'partial' : requestedStatus;
+  const shouldPrune = prune && !hasInvalidIds;
+  const events = shouldPrune && authoritativeMcpMetadata
+    ? identifiedEvents.map(withExplicitConferenceFields)
+    : identifiedEvents;
+  const normalized = events.map(event => normalizeGoogleEvent(event, calendarId, calendarName));
 
   const { newCount, updatedCount, pruned, total } = await mutateCache(accountId, (cache, currentAccount) => {
     const subcalendar = currentAccount.subcalendars?.find(sc => sc.calendarId === calendarId);
@@ -178,11 +193,12 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     newEvents: newCount,
     updated: updatedCount,
     pruned,
-    status
+    status,
+    ...(reason ? { reason } : {}),
   });
 
   console.log(`📅 Google push sync for account ${accountId}: ${newCount} new, ${updatedCount} updated, ${pruned} pruned${shouldPrune ? '' : ' (prune skipped — partial payload)'}`);
-  return { newEvents: newCount, updated: updatedCount, pruned, total, status };
+  return { newEvents: newCount, updated: updatedCount, pruned, total, status, ...(reason ? { reason } : {}) };
 }
 
 /**
@@ -197,9 +213,9 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
  * what a complete Google response actually means, matching what the direct-API
  * mapper emits for the same reason.
  *
- * Only a COMPLETE calendar earns this (see `incompleteReason`). A partial one —
- * the CLI died mid-stream, or the source still had event pages — is relayed
- * untouched, so a truncated event that lost its conference fields reads as
+ * Only a COMPLETE calendar earns this. A partial calendar, including one with
+ * invalid event IDs or unread pages, preserves omitted fields so a truncated
+ * event that lost its conference fields reads as
  * "unknown" rather than "cleared", the same rule that stops it from driving a
  * prune. Clearing a link is destructive too.
  */
@@ -288,21 +304,27 @@ Include the full events arrays as returned by gcal_list_events, with every field
     for (const cal of parsed.calendars) {
       if (!cal.calendarId || !Array.isArray(cal.events)) continue;
       const calendarName = cal.calendarName || cal.calendarId;
-      const why = cliPartial ? 'the CLI did not exit cleanly' : incompleteReason(cal, context);
-      if (why && !cliPartial) incompleteReasons.push(`"${calendarName}": ${why}`);
-      const complete = !why;
+      const incomplete = cliPartial ? 'the CLI did not exit cleanly' : incompleteReason(cal, context);
       const syncResult = await pushSyncEvents(
         accountId,
         cal.calendarId,
         calendarName,
-        complete ? cal.events.map(withExplicitConferenceFields) : cal.events,
+        cal.events,
         null,
-        { prune: complete, status: complete ? 'success' : 'partial', dateRange: { pastDate, futureDate } },
+        {
+          prune: !incomplete, status: incomplete ? 'partial' : 'success',
+          dateRange: { pastDate, futureDate }, authoritativeMcpMetadata: true,
+        },
       );
+      const why = incomplete || syncResult.reason;
+      if (why && !cliPartial) incompleteReasons.push(`"${calendarName}": ${why}`);
       totalNew += syncResult.newEvents;
       totalUpdated += syncResult.updated;
       totalPruned += syncResult.pruned;
-      results.push({ calendarId: cal.calendarId, calendarName: cal.calendarName, complete, ...(why ? { reason: why } : {}), ...syncResult });
+      results.push({
+        calendarId: cal.calendarId, calendarName: cal.calendarName,
+        ...syncResult, complete: syncResult.status === 'success', ...(why ? { reason: why } : {}),
+      });
     }
 
     // A requested calendar the response never described was not reconciled at all.
@@ -375,9 +397,9 @@ function summarizeReasons(reasons) {
   return reasons.length > 3 ? `${shown}; and ${reasons.length - 3} more` : shown;
 }
 
+// Validate the envelope here. Individual unidentifiable events degrade only their own calendar.
 const isCalendarPayload = value => Array.isArray(value?.calendars) && value.calendars.every(cal =>
-  typeof cal?.calendarId === 'string' && cal.calendarId.trim() && Array.isArray(cal.events)
-  && cal.events.every(event => event !== null && typeof event === 'object' && !Array.isArray(event)));
+  typeof cal?.calendarId === 'string' && cal.calendarId.trim() && Array.isArray(cal.events));
 
 function parseCalendarJson(output) {
   const { value } = extractJson(output, { shapePredicate: isCalendarPayload, skipInnerFence: true });

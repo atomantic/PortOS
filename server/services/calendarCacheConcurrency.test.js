@@ -21,8 +21,8 @@ vi.mock('./dailyReview.js', () => ({}));
 vi.mock('./googleOAuthAutoConfig.js', () => ({}));
 vi.mock('./messageTokenExtractor.js', () => ({}));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn() }));
-vi.mock('./settings.js', () => ({ getSettings: vi.fn() }));
+vi.mock('./providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
+vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../lib/cliProviderRun.js', () => ({
   pickCliProvider: vi.fn(), runCliProviderPrompt: vi.fn(),
 }));
@@ -31,10 +31,11 @@ vi.mock('@googleapis/calendar', () => ({ calendar: vi.fn() }));
 
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { request } from '../lib/testHelper.js';
+import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { readdir, unlink } from 'fs/promises';
 import { calendar } from '@googleapis/calendar';
 import calendarRoutes from '../routes/calendar.js';
-import { deleteAccount, getAccount, listAccounts } from './calendarAccounts.js';
+import { deleteAccount, getAccount, listAccounts, updateSyncStatus } from './calendarAccounts.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { deleteCache, getEvent, getEvents, loadCache, purgeDisabledSubcalendars, syncAccount } from './calendarSync.js';
 import { mcpSyncAccount, pushSyncEvents } from './calendarGoogleSync.js';
@@ -318,6 +319,82 @@ describe.each(['Google', 'Outlook'])('%s derived calendar records', provider => 
     expect(await syncFinishedEvent()).toMatchObject({ status: 'success' });
     expect(touchpoints.has(ACCOUNT)).toBe(true);
   });
+});
+
+describe('Google provider event identity', () => {
+  function syncMcp(io, ...pages) {
+    pickCliProvider.mockReturnValueOnce({ provider: { id: 'claude-code' } });
+    runCliProviderPrompt.mockImplementationOnce(async ({ prompt }) => {
+      const [, timeMin, timeMax] = prompt.match(/date range (\S+Z) to (\S+Z)/);
+      return {
+        text: JSON.stringify({
+          calendars: [{ calendarId: 'a', timeMin, timeMax, complete: true, nextPageToken: null, events: pages.flat() }],
+        }),
+        exitCode: 0,
+      };
+    });
+    return mcpSyncAccount(ACCOUNT, io);
+  }
+
+  function syncApi(io, ...pages) {
+    getAuthenticatedClient.mockResolvedValueOnce({});
+    const list = vi.fn();
+    for (const [index, items] of pages.entries()) {
+      list.mockResolvedValueOnce({ data: { items, nextPageToken: index + 1 < pages.length ? `page-${index + 2}` : undefined } });
+    }
+    calendar.mockReturnValueOnce({ events: { list } });
+    return apiSyncAccount(ACCOUNT, io);
+  }
+
+  it.each([['MCP', syncMcp], ['API', syncApi]])(
+    'skips unidentified %s events on every replay and resumes windowed pruning on a clean batch',
+    async (_provider, sync) => {
+      accounts.get(ACCOUNT).subcalendars = [{ calendarId: 'a', name: 'Work', enabled: true }];
+      const io = { emit: vi.fn() };
+      const start = { dateTime: new Date(Date.now() - 120_000).toISOString() };
+      const end = { dateTime: new Date(Date.now() - 60_000).toISOString() };
+      const valid = { id: 'stable', summary: 'Finished meeting', start, end, organizer: { email: 'alice@example.com' } };
+      const malformed = [undefined, '', '  ', 7].map(id => ({ ...valid, id, summary: 'Unidentified meeting' }));
+      malformed.push(null);
+      await pushSyncEvents(ACCOUNT, 'a', 'Work', [
+        { id: 'omitted', start, end },
+        { id: 'outside-window', start: { dateTime: '2000-01-01T10:00:00Z' } },
+      ]);
+      recordEvents.mockClear();
+      autoLogTouchpoints.mockClear();
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        expect(await sync(io, malformed)).toMatchObject({
+          status: 'partial', newEvents: 0, pruned: 0, reason: expect.stringContaining('invalid provider event IDs'),
+        });
+      }
+      expect(recordEvents).not.toHaveBeenCalled();
+      expect(autoLogTouchpoints).not.toHaveBeenCalled();
+
+      const mixed = await sync(io, malformed, [valid]);
+      expect(mixed).toMatchObject({
+        status: 'partial', newEvents: 1, pruned: 0,
+        calendars: [{ calendarId: 'a', status: 'partial' }],
+      });
+      expect(updateSyncStatus).toHaveBeenLastCalledWith(ACCOUNT, 'partial');
+      expect(io.emit).toHaveBeenCalledWith('calendar:sync:completed', expect.objectContaining({
+        status: 'partial', reason: expect.stringContaining('invalid provider event IDs'),
+      }));
+      const cached = persisted.get(ACCOUNT).events;
+      expect(cached.map(event => event.apiId)).toEqual(['omitted', 'outside-window', 'stable']);
+      const { id, externalId } = cached.find(event => event.apiId === valid.id);
+      const [activity] = recordEvents.mock.lastCall;
+      const [touchpoints] = autoLogTouchpoints.mock.lastCall;
+      expect(activity).toMatchObject([{ title: valid.summary, metadata: { externalId } }]);
+      expect(touchpoints).toMatchObject([{ summary: valid.summary, calendarEventId: externalId }]);
+
+      expect(await sync(io, [valid])).toMatchObject({ status: 'success', newEvents: 0, updated: 1, pruned: 1 });
+      expect(persisted.get(ACCOUNT).events.map(event => event.apiId)).toEqual(['outside-window', 'stable']);
+      expect(persisted.get(ACCOUNT).events[1]).toMatchObject({ id, externalId });
+      expect(recordEvents.mock.lastCall[0]).toMatchObject([{ dedupeKey: activity[0].dedupeKey }]);
+      expect(autoLogTouchpoints.mock.lastCall[0]).toMatchObject([{ dedupeKey: touchpoints[0].dedupeKey }]);
+    },
+  );
 });
 
 describe.each([

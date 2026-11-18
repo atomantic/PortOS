@@ -229,7 +229,7 @@ describe('MCP transcript extraction', () => {
     expect(persistedCache).not.toHaveBeenCalled();
   });
 
-  it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":[null]}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
+  it.each(['{"calendars":{}}', '{"calendars":[{"calendarId":"example","events":null}]}', 'not JSON', 'prompt only'])('rejects invalid sync payload %s before touching events', async text => {
     runCliProviderPrompt.mockImplementation(async ({ prompt }) => ({ text: text === 'prompt only' ? `${prompt}\n${prompt}` : text, exitCode: 0 }));
     await expect(mcpSyncAccount(ACCOUNT_ID, null)).rejects.toMatchObject({ status: 502 });
     expect(persistedCache).not.toHaveBeenCalled();
