@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
-import { mutateCache, logCalendarTouchpoints, recordCalendarActivity } from './calendarSync.js';
+import { mutateCache } from './calendarSync.js';
 import { getAllProviders } from './providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
@@ -97,8 +97,7 @@ export function getSyncDateRange(pastDays = 7, futureDays = 30) {
  */
 export async function pushSyncEvents(accountId, calendarId, calendarName, rawEvents, io, options = {}) {
   const { prune: shouldPrune = true, status = 'success', dateRange = null } = options;
-  const account = await getAccount(accountId);
-  if (!account) throw new ServerError('Account not found', { status: 404 });
+  if (!await getAccount(accountId)) throw new ServerError('Account not found', { status: 404 });
 
   const normalized = rawEvents.map(e => normalizeGoogleEvent(e, calendarId, calendarName));
 
@@ -170,20 +169,7 @@ export async function pushSyncEvents(accountId, calendarId, calendarName, rawEve
     }
 
     return { newCount, updatedCount, pruned, total: cache.events.length };
-  });
-  await updateSyncStatus(accountId, status);
-
-  // Auto-log Tribe touchpoints from this subcalendar batch (#2033) — secondary
-  // effect, must not fail the sync; idempotent on event id.
-  await logCalendarTouchpoints(accountId, normalized).catch((err) =>
-    console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
-
-  // Populate the human-activity timeline (#2150) — secondary effect, must NOT
-  // fail the sync. Google calendars sync through this push path (not
-  // calendarSync.syncAccount), so the activity hook is wired here too, mirroring
-  // the touchpoint call above. Idempotent on (source, dedupe_key). Machine-local.
-  await recordCalendarActivity(account, normalized).catch((err) =>
-    console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+  }, { status, events: normalized });
 
   io?.emit('calendar:sync:completed', {
     accountId,

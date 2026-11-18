@@ -55,8 +55,6 @@ vi.mock('../services/calendarSync.js', async (importOriginal) => ({
   ...await importOriginal(),
   mutateCache: vi.fn(async (_id, mutate) => mutate({ events: [] }, fixture.account)),
   purgeDisabledSubcalendars: vi.fn(async () => {}),
-  logCalendarTouchpoints: vi.fn(async () => {}),
-  recordCalendarActivity: vi.fn(async () => {}),
 }));
 // Service graphs the router imports; their handlers are not reached.
 vi.mock('../services/calendarGoogleApiSync.js', () => ({}));

@@ -16,13 +16,8 @@ vi.mock('./userTimezone.js', () => ({
   getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles'),
 }));
 
-vi.mock('./calendarSync.js', () => ({
-  getEvent: vi.fn(),
-}));
-
 import { query, withTransaction } from '../lib/db.js';
 import { getUserTimezone } from './userTimezone.js';
-import { getEvent } from './calendarSync.js';
 import {
   deleteAutoTouchpoints,
   listPeople,
