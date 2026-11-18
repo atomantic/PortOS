@@ -3,7 +3,7 @@
  *
  * Every `catalog_ingredients` row carries `payload.schemaVersion` (stamped at
  * create time by `catalogDB.createIngredient`). When a TYPE's payload shape
- * evolves, the registry (`server/lib/catalogTypes.js`) bumps that type's
+ * evolves, the registry (`server/lib/catalog/catalogTypes.js`) bumps that type's
  * `payloadSchemaVersion` and registers `payloadUpgraders` keyed by FROM
  * version. This script walks every row whose stored `payload.schemaVersion`
  * is below the registry-current for its type and applies the upgrader chain,
@@ -29,7 +29,7 @@
 
 import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
-import { CATALOG_TYPES, currentPayloadSchemaVersion, upgradePayload } from '../lib/catalogTypes.js';
+import { CATALOG_TYPES, currentPayloadSchemaVersion, upgradePayload } from '../lib/catalog/catalogTypes.js';
 import { toPgJson } from '../lib/pgJson.js';
 
 const MARKER_FILENAME = 'catalog-payload.applied.json';

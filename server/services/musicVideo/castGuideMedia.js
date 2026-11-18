@@ -13,7 +13,7 @@ import { musicVideoSceneCastIds } from '../../lib/musicVideo/musicVideoCondition
 export async function loadSceneCastMedia(scene, { listMedia = null, project = null } = {}) {
   const ids = musicVideoSceneCastIds(project, scene);
   if (!ids.length) return null;
-  const list = listMedia || (await import('../catalogDB.js')).listMediaForIngredient;
+  const list = listMedia || (await import('../catalog/catalogDB.js')).listMediaForIngredient;
   const loaded = await Promise.all(ids.map((id) => Promise.resolve().then(() => list(id)).catch((err) => {
     console.warn(`⚠️ Cast guides for ${id} unavailable, conditioning on project references: ${err.message}`);
     return null;

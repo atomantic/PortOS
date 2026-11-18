@@ -84,7 +84,7 @@ vi.mock('../settings.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
+vi.mock('../catalog/catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
 
 import { loadState } from '../cos/cosState.js';

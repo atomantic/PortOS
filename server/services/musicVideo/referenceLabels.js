@@ -26,7 +26,7 @@ function labelReferences(references, owners, subjects = []) {
 
 async function findCatalogOwners(keys, options) {
   if (isFileBackend()) return new Map();
-  const { findMediaOwnersByKeys } = await import('../catalogDB.js');
+  const { findMediaOwnersByKeys } = await import('../catalog/catalogDB.js');
   return findMediaOwnersByKeys(keys, options);
 }
 

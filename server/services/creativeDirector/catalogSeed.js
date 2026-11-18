@@ -3,8 +3,8 @@
  * Ingredients are also linked via catalog_ingredient_refs (ref_kind='creative-director'); see linkIngredientsToCreativeDirector in catalogDB.js.
  */
 
-import { cdRefRoleForType } from '../catalogDB.js';
-import { getActiveCatalogType, payloadSnippet } from '../../lib/catalogTypes.js';
+import { cdRefRoleForType } from '../catalog/catalogDB.js';
+import { getActiveCatalogType, payloadSnippet } from '../../lib/catalog/catalogTypes.js';
 
 const CAST_SUMMARY_CHARS = 200;
 // Mirrors the catalogIngredientIds cap on the create schema — a CD treatment

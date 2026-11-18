@@ -22,8 +22,8 @@
 import { getActiveProvider, getProviderById } from './providers.js';
 import { hybridSearchMemories, getMemory } from './memoryBackend.js';
 import { generateQueryEmbedding } from './memoryEmbeddings.js';
-import { hybridSearchIngredients } from './catalogDB.js';
-import { getCatalogType } from '../lib/catalogTypes.js';
+import { hybridSearchIngredients } from './catalog/catalogDB.js';
+import { getCatalogType } from '../lib/catalog/catalogTypes.js';
 import { getInboxLog, getProjects, getIdeas } from './brainStorage.js';
 import { getStories } from './autobiography.js';
 import { getGoals } from './identity.js';

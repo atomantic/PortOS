@@ -5,8 +5,8 @@
 // gate is extended at classify time for user-defined nouns (see
 // matchesCustomCatalogNoun) since the static regex only knows the six built-ins.
 
-import { listIngredients as listCatalogIngredients, listRefsForIngredient } from '../../catalogDB.js';
-import { getActiveCatalogTypes, isActiveType } from '../../../lib/catalogTypes.js';
+import { listIngredients as listCatalogIngredients, listRefsForIngredient } from '../../catalog/catalogDB.js';
+import { getActiveCatalogTypes, isActiveType } from '../../../lib/catalog/catalogTypes.js';
 import { clampLimit } from './shared.js';
 import { escapeRegExp } from '../../../lib/textUtils.js';
 

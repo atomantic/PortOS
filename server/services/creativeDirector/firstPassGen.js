@@ -26,9 +26,9 @@ import { resolveRenderTargetConfig } from '../imageGen/cloudProviderConfig.js';
 import { resolveLocalImageModel } from '../imageGen/prepareParams.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
+import { getIngredient, listMediaForIngredient } from '../catalog/catalogDB.js';
 import { resolveAspectDimensions } from '../../lib/creativeDirectorPresets.js';
-import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
+import { payloadSnippet, getActiveCatalogType } from '../../lib/catalog/catalogTypes.js';
 
 // Keep the derived portrait prompt bounded: enough to render on-model, a touch wider than
 // catalogSeed's CAST_SUMMARY_CHARS (200) since this is the actual render prompt.

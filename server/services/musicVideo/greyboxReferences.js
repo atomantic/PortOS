@@ -8,7 +8,7 @@ export async function loadMusicVideoGreybox(project, scene, deps = {}) {
   const subject = project?.concept?.subjects?.find((s) => s.id === scene.setReference.subjectId && s.kind === 'place');
   const places = {};
   if (subject?.ingredientId) {
-    const catalog = deps.catalog || await import('../catalogDB.js');
+    const catalog = deps.catalog || await import('../catalog/catalogDB.js');
     const [ingredient, media] = await Promise.all([catalog.getIngredient(subject.ingredientId), catalog.listMediaForIngredient(subject.ingredientId)]);
     places[subject.ingredientId] = { ingredient, media };
   }

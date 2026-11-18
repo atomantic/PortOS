@@ -8,7 +8,7 @@
  * `crypto` + `fileUtils`) so `catalogTypes.js` and the browser bundle can read the numbers alone.
  *
  * A pure leaf on purpose: `server/lib/storyBible.js` (which owns the
- * sanitizers) pulls `crypto` and `fileUtils`, and `server/lib/catalogTypes.js`
+ * sanitizers) pulls `crypto` and `fileUtils`, and `server/lib/catalog/catalogTypes.js`
  * plus the browser bundle need only the numbers. Keeping the table here lets
  * both import it without dragging Node built-ins into the client build —
  * `client/src/lib/bibleLimits.js` re-exports it. Import no Node built-in here.
@@ -199,7 +199,7 @@ export const BIBLE_LIMITS = Object.freeze({
   TAGS_PER_ENTRY_MAX: 12,
   SOURCE_SERIES_ID_MAX: 64,
   // Catalog backlink: when an embedded bible entry is promoted to the
-  // creative-ingredients catalog (server/services/catalogDB.js), this carries
+  // creative-ingredients catalog (server/services/catalog/catalogDB.js), this carries
   // the catalog row id so edits stay synchronized. Cap matches the catalog's
   // own id format ('cat-<prefix>-<uuid>') — generous so future id schemes fit.
   INGREDIENT_ID_MAX: 64,

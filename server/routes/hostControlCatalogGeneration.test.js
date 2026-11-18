@@ -20,15 +20,15 @@ vi.mock('../services/auth.js', async (importOriginal) => ({
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../services/catalogDB.js', () => ({
+vi.mock('../services/catalog/catalogDB.js', () => ({
   getScrap: vi.fn(async () => ({ id: 'example-scrap', rawText: 'Example text', parentScrapId: null })),
 }));
-vi.mock('../services/catalogExtraction.js', () => ({ extractIngredientsForScrap: effects.extract }));
+vi.mock('../services/catalog/catalogExtraction.js', () => ({ extractIngredientsForScrap: effects.extract }));
 // Service graphs the router imports; their handlers are not reached.
-vi.mock('../services/catalogPrune.js', () => ({}));
-vi.mock('../services/catalogGreybox.js', () => ({}));
-vi.mock('../services/catalogMediaRefinement.js', () => ({}));
-vi.mock('../services/catalogIngestSources.js', () => ({}));
+vi.mock('../services/catalog/catalogPrune.js', () => ({}));
+vi.mock('../services/catalog/catalogGreybox.js', () => ({}));
+vi.mock('../services/catalog/catalogMediaRefinement.js', () => ({}));
+vi.mock('../services/catalog/catalogIngestSources.js', () => ({}));
 
 const mounts = [['/api/catalog', (await import('./catalog.js')).default]];
 

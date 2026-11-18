@@ -25,7 +25,7 @@ export const THREAD_REF_KINDS = Object.freeze({
     contextSegment: 'catalogType',
   },
 
-  // ─── App-native creative records ─── the vocabulary `catalog_ingredient_refs` stores (server/services/catalogRefResolver.js REF_TARGET_TABLES); routes moved here from client/src/pages/CatalogIngredient.jsx so there is one kind→route table.
+  // ─── App-native creative records ─── the vocabulary `catalog_ingredient_refs` stores (server/services/catalog/catalogRefResolver.js REF_TARGET_TABLES); routes moved here from client/src/pages/CatalogIngredient.jsx so there is one kind→route table.
   universe: { label: 'Universes', external: false, navPath: '/universes', segment: true },
   series: { label: 'Series', external: false, navPath: '/pipeline', basePath: '/pipeline/series', segment: true },
   issue: { label: 'Issues', external: false, navPath: '/pipeline', basePath: '/pipeline/issues', segment: true, suffix: '/concept' },

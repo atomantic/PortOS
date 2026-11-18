@@ -18,7 +18,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-greybox-production-') }));
 afterAll(cleanupTempDataRoots);
 const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => greyboxCatalog);
+vi.mock('../catalog/catalogDB.js', () => greyboxCatalog);
 
 const enqueueJob = vi.fn(async () => ({ jobId: 'job-image' }));
 const submitVideoGenJob = vi.fn(async () => ({ jobId: 'job-video' }));

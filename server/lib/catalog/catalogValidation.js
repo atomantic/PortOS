@@ -1,0 +1,1096 @@
+/**
+ * Zod validation schemas for the Creative Ingredients Catalog routes.
+ *
+ * Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions,
+ * sync envelope).
+ *
+ * Domain-namespaced (imported as `catalogValidation.X` from the lib barrel)
+ * so cross-domain identifier collisions never bite. The route handler in
+ * server/routes/catalog.js uses `validateRequest(schema, body)` against these.
+ *
+ * Payload shapes for character/place/object intentionally accept the
+ * server/lib/storyBible.js field set verbatim — backfilled and freshly
+ * ingested records produce identical rows on the wire.
+ */
+
+import { z } from 'zod';
+import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from '../musicVideo/musicVideoSubjectLimits.js';
+import { universeVisualProfileSchema } from '../universeVisualProfileValidation.js';
+import { BIBLE_LIMITS, FORM_ID_PATTERN } from '../storyBible.js';
+import { REFERENCE_REVIEW_STATUSES, REFERENCE_REVIEW_WRITE_STATUSES, REFERENCE_FEEDBACK_MAX } from './catalogMediaLibrary.js';
+import {
+  INGREDIENT_TYPE_IDS,
+  RELATION_KIND_IDS,
+  MEDIA_KIND_IDS,
+  USER_TYPE_FIELD_KINDS,
+  isActiveType,
+  getActiveCatalogType,
+} from './catalogTypes.js';
+import { csvIdsParam } from '../sharedSchemas.js';
+import { SCRAP_SOURCE_KIND_IDS } from './catalogSourceKinds.js';
+import { GENERATION_METADATA_LIMITS } from '../pngMetadata.js';
+import { EFFORT_LEVELS } from '../providerModels.js';
+
+import { isTruthyMeta } from '../metadataFlags.js';
+import { LOOK_AROUND_MAX_ANGLES, LOOK_AROUND_MOTION_IDS } from './catalogLookAround.js';
+import { STORY_DRAFT_LIMITS } from './catalogStoryDraft.js';
+import { BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_LINE_MAX, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, DESIGN_NOTE_MAX } from './catalogDesign.js';
+// Derived from the shared type registry (`catalogTypes.js`) — adding a SYSTEM
+// type there flows through to consumers automatically. Kept as a frozen
+// re-export so existing `import { INGREDIENT_TYPES }` callers are unaffected.
+// NOTE: this is the SYSTEM list only — the local-create `type` gate below uses
+// the runtime `isActiveType` refinement so user-defined types validate too.
+export const INGREDIENT_TYPES = INGREDIENT_TYPE_IDS;
+
+// Local ingredient `type` gate. Was a frozen `z.enum(INGREDIENT_TYPES)`; now a
+// runtime refinement against the active registry (system + user-defined types)
+// so a user-typed create/query passes. The cross-instance SYNC path stays loose
+// (`z.string().max(32)` below) — a peer ingredient may arrive before its type
+// row applies, and the version gate already covers true shape skew.
+const ingredientTypeGate = z.string().trim().min(1).max(32)
+  .refine(isActiveType, 'unknown ingredient type');
+
+// Query-string booleans arrive as the strings 'true'/'false'. Coerce to a real
+// boolean; anything else (including absent) collapses to undefined so an
+// `.optional()` field reads cleanly as "not set" rather than truthy-by-presence.
+const booleanish = z.preprocess((v) => {
+  if (isTruthyMeta(v)) return true;
+  if (v === false || v === 'false') return false;
+  return undefined;
+}, z.boolean());
+
+export const REF_KINDS = Object.freeze([
+  'universe',
+  'series',
+  'issue',
+  'work',
+  'creative-director',
+  'music-video',
+  'storyboard',
+]);
+
+// Relation kinds derived from the shared registry (`catalogTypes.js`) — adding
+// a kind there flows through to the Zod enum below.
+export const RELATION_KINDS = RELATION_KIND_IDS;
+
+// Media-attachment kinds derived from the shared registry — same pattern.
+export const MEDIA_KINDS = MEDIA_KIND_IDS;
+
+const tag = z.string().trim().min(1).max(BIBLE_LIMITS.TAG_MAX);
+const tags = z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional();
+
+// `payload` is a JSONB blob — the route accepts arbitrary content because the
+// six ingredient types have very different shapes. We cap the round-tripped
+// size at the JSON.stringify length to keep a single user accident from
+// landing a 50-MB blob in the catalog. The extraction service is responsible
+// for shape correctness; the schema only enforces the boundary.
+export const CATALOG_PAYLOAD_MAX_CHARS = 200_000;
+const payload = z.record(z.string(), z.unknown())
+  .refine((p) => JSON.stringify(p).length <= CATALOG_PAYLOAD_MAX_CHARS, {
+    message: 'payload exceeds 200KB JSON size cap',
+  })
+  .optional();
+
+// Scrap source kinds. The DB column is a free VARCHAR(32) so peers running a
+// newer build can push kinds an older build doesn't enumerate (the sync-apply
+// path uses the looser `z.string().max(32)` below, NOT this enum). This enum
+// gates the LOCAL ingest routes only — every id here is one a local ingest
+// path actually produces. The registry itself (ids, labels, and the extraction
+// lens each path implies) lives in the leaf `catalogSourceKinds.js`, so the
+// extractor can read the lens without pulling zod in behind it.
+
+// --- User-defined catalog types (PostgreSQL `catalog_user_types`, #1001) --
+// A user type is a DB-persisted (formerly settings.json), federated definition
+// that merges into the active type registry at boot/runtime as a `system:false`
+// entry. The schemas below still validate the slice/entry SHAPE — which is
+// storage-independent — at the route + sync boundaries. The
+// shape is intentionally minimal: an id (the stored `type` discriminator), a
+// label, a primary content key, and a flat list of typed fields the generic
+// editor renders. There is NO per-type React file — the renderer is generic.
+const userTypeIdentifier = z.string().trim().regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, 'must be a slug/identifier').max(64);
+const userTypeField = z.object({
+  key: userTypeIdentifier,
+  label: z.string().trim().min(1).max(80),
+  kind: z.enum(USER_TYPE_FIELD_KINDS),
+  maxLength: z.number().int().min(1).max(20_000).optional(),
+}).strict();
+
+export const catalogUserTypeSchema = z.object({
+  // The type id is also the `cat-<prefix>-<uuid>` discriminator stored in the
+  // DB — slug-only, ≤32 so it stays a tidy column value.
+  id: z.string().trim().regex(/^[a-z][a-z0-9-]*$/, 'id must be a lowercase slug').max(32),
+  label: z.string().trim().min(1).max(80),
+  primaryContentKey: userTypeIdentifier,
+  fields: z.array(userTypeField).max(40),
+  // Mutation timestamp — drives the cross-peer LWW merge (a newer mutation
+  // wins). Stamped server-side on every create/edit; clients don't send it.
+  updatedAt: z.string().datetime().optional(),
+  // Soft-delete tombstone. A deleted user type is KEPT in the slice with
+  // `deletedAt` set rather than physically removed, so the deletion FEDERATES
+  // to peers instead of a peer resurrecting it on the next sync. Filtered out
+  // of the active registry. LWW compares the later of {updatedAt, deletedAt}:
+  // a delete newer than a peer's edit wins, and an edit newer than the delete
+  // revives the type.
+  deletedAt: z.string().datetime().nullable().optional(),
+}).strict();
+
+// The whole user-type slice: ≤64 user types, unique ids, and no id colliding
+// with a built-in system type. (Prefix-collision is resolved deterministically
+// at merge time in `normalizeUserType`, so it's not gated here — two user types
+// with prefix-deriving-to-the-same base just get `name2`.) The name retains the
+// `Settings` suffix for back-compat with the many importers; the slice now lives
+// in `catalog_user_types`, not settings.json.
+export const catalogUserTypesSettingsSchema = z.array(catalogUserTypeSchema).max(64)
+  .refine((list) => new Set(list.map((t) => t.id)).size === list.length, {
+    message: 'duplicate catalog user-type id',
+  })
+  .refine((list) => list.every((t) => !INGREDIENT_TYPE_IDS.includes(t.id)), {
+    message: 'catalog user-type id collides with a built-in type',
+  });
+
+export const catalogScrapCreateSchema = z.object({
+  title: z.string().trim().max(300).optional().nullable(),
+  rawText: z.string().min(1).max(2_000_000),
+  sourceKind: z.enum(SCRAP_SOURCE_KIND_IDS).optional(),
+  metadata: payload,
+}).strict();
+
+export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
+
+// --- Source-kind ingest routes (url / file / voice) ---------------------
+// Each ingest route creates a scrap with the matching `sourceKind`, then runs
+// the same extraction pipeline the paste→extract→commit flow uses, so the
+// client lands on the identical review phase. `providerOverride` mirrors
+// catalogExtractRequestSchema below.
+
+// A host (bracket-stripped, lowercased) that the URL ingest must refuse:
+// loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
+// the named cloud-metadata endpoints that hide inside allowed private ranges
+// (Alibaba 100.100.100.200, AWS IPv6 IMDS fd00:ec2::254 — see inline note),
+// and the unspecified address — in plain IPv4, IPv6, IPv4-mapped-IPv6
+// (`::ffff:127.0.0.1` → WHATWG-hex `::ffff:7f00:1`), AND the deprecated
+// IPv4-compatible-IPv6 form (`::127.0.0.1` → `::7f00:1`), so the guard can't be
+// bypassed by embedding a blocked v4 address inside an IPv6 literal. A trailing
+// FQDN dot (`localhost.`, `127.0.0.1.`) is stripped first since resolvers treat
+// it as equivalent. NOTE: decimal / hex / octal / shorthand IPv4 (`2130706433`,
+// `0x7f000001`, `127.1`) need no special handling — `new URL()` already
+// normalizes them to canonical dotted-quad in `.hostname` before this runs. We
+// deliberately ALLOW other private/LAN hosts (incl. IPv6 ULA `fd00::/8`):
+// reaching a Tailscale peer or home-network wiki is a legit use of this
+// single-user tool. This is a host-literal guard, not a DNS-resolution or
+// post-redirect check — a hostname that RESOLVES to loopback, or a redirect to
+// a blocked host, is not caught here.
+export const isBlockedIngestHost = (host) => {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
+  if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
+  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // Named cloud-metadata endpoints that live INSIDE otherwise-allowed private
+  // ranges, so the "allow LAN" posture would leak them without an explicit
+  // literal block: Alibaba ECS metadata `100.100.100.200` sits in the CGNAT
+  // 100.64/10 block (which Tailscale also uses), and AWS's IPv6 IMDS
+  // `fd00:ec2::254` sits in IPv6 ULA fd00::/8. Both WHATWG-normalize to these
+  // exact canonical forms (and dns.lookup returns them canonical too), so an
+  // exact match catches both the URL-literal and DNS-resolved paths. Blocking
+  // these two exact IPs does NOT meaningfully shrink the Tailscale/ULA space a
+  // real peer could occupy (a peer landing on exactly 100.100.100.200 is a
+  // 1-in-4M collision), and a PortOS install has no reason to fetch cloud IMDS.
+  if (h === '100.100.100.200' || h === 'fd00:ec2::254') return true;
+  // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
+  if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
+  const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return v4Blocked(h);
+  // A blocked v4 address embedded in an IPv6 literal — either IPv4-mapped
+  // (`::ffff:…`) or the deprecated IPv4-compatible (`::…`) form. WHATWG
+  // normalizes the trailing v4 to a pair of hex hextets (`7f00:1`), or keeps it
+  // dotted in older inputs; handle both. A `::ffff:`-less match also catches the
+  // compatible form; the real `::1` / `::` cases were already returned above.
+  const embedded = /^::(?:ffff:)?(.+)$/i.exec(h);
+  if (embedded) {
+    const tail = embedded[1];
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(tail)) return v4Blocked(tail);
+    const parts = tail.split(':');
+    if (parts.length === 2 && parts.every((p) => /^[0-9a-f]{1,4}$/.test(p))) {
+      const hi = parseInt(parts[0], 16), lo = parseInt(parts[1], 16);
+      return v4Blocked(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+    }
+  }
+  return false;
+};
+
+// Block schemes and hosts that would turn "fetch this page" into local-file
+// exfiltration or cloud-metadata SSRF: non-http(s) schemes (file:/chrome:/
+// javascript:/ftp:) and the blocked hosts above.
+export const isSafeIngestUrl = (raw) => {
+  let u;
+  try { u = new URL(raw); } catch { return false; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  return !isBlockedIngestHost(u.hostname);
+};
+
+export const catalogUrlIngestSchema = z.object({
+  url: z.string().trim().max(4_000).url()
+    .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed'),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Text-bearing file ingest. The client reads .txt/.md text locally and posts
+// it here with the original filename + mime so the scrap metadata records
+// provenance without the server needing an upload/parse dependency.
+export const catalogFileIngestSchema = z.object({
+  text: z.string().min(1).max(2_000_000),
+  filename: z.string().trim().min(1).max(300),
+  mime: z.string().trim().min(1).max(120).optional(),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Voice-memo ingest. `audioBase64` is a base64-encoded WAV the client records
+// via MediaRecorder (matching the voice agent's STT path). The server decodes
+// it, transcribes via Whisper, persists the audio under data/audio to mint a
+// `media_key`, then ingests the transcript with that key in scrap metadata.
+// 8 MB base64 ≈ 6 MB raw ≈ several minutes of 16 kHz mono WAV.
+export const catalogVoiceIngestSchema = z.object({
+  audioBase64: z.string().min(1).max(8_000_000),
+  mimeType: z.string().trim().min(1).max(64).optional(),
+  title: z.string().trim().max(300).optional(),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+// Brain-bridge ingest. Instead of pasted/fetched text, the source is an existing
+// brain record (an idea, journal memory, project, admin item, or person). The
+// route resolves the record by `{ brainType, brainId }`, folds its prose into
+// one rawText block, and runs the SAME extraction pipeline — so a captured
+// thought becomes typed catalog ingredients (characters/scenes/ideas/…) the
+// user reviews and commits. This is the "make the catalog the universal sink"
+// ingestion bridge: brain entries finally flow into the catalog the way
+// paste/url/file/voice already do. The supported types mirror
+// `BRAIN_INGEST_GETTERS` in catalogIngestSources.js (keep the two in lockstep).
+export const CATALOG_BRAIN_INGEST_TYPES = Object.freeze(['ideas', 'memories', 'projects', 'admin', 'people']);
+export const catalogBrainIngestSchema = z.object({
+  brainType: z.enum(CATALOG_BRAIN_INGEST_TYPES),
+  brainId: z.string().trim().min(1).max(200),
+  providerOverride: z.string().trim().min(1).max(120).optional(),
+}).strict();
+
+export const catalogIngredientCreateSchema = z.object({
+  type: ingredientTypeGate,
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),
+  payload,
+  tags,
+  universeId: z.string().trim().min(1).max(120).optional(),
+  operationKey: z.string().uuid().optional(),
+}).strict();
+
+// Relations a new record starts with (Casting's Family picker): `kind` reads
+// "the new record is <kind> <toId>".
+const initialRelations = z.array(z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KIND_IDS),
+}).strict()).max(20);
+
+export const catalogIngredientCreateRouteSchema = catalogIngredientCreateSchema.extend({
+  relations: initialRelations.optional(),
+}).strict();
+
+// Casting / Environments / Objects story filters and New from prompt.
+const storyKind = z.enum(['storyboard', 'music-video', 'series']);
+// `?includeEmbedding=true` on the ingredient detail read; any other value keeps the embedding stripped.
+export const catalogIncludeEmbeddingQuerySchema = z.object({ includeEmbedding: z.string().optional() });
+
+// `?force=true` on a user-type delete. Unknown keys are stripped, never rejected.
+export const catalogTypeDeleteQuerySchema = z.object({ force: z.string().optional() });
+
+// Sync pull cursor. `since` is a count string or the `since[kind]=N` bracket form, which the
+// handler reconstructs itself, so only `limit` is shaped here; the `since` shapes stay lenient
+// (a malformed cursor degrades to '0' in the handler, not a 400).
+export const catalogSyncQuerySchema = z.object({ limit: z.string().optional(), since: z.unknown().optional() });
+
+export const catalogStoryListQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
+export const catalogStoryJoinSchema = z.object({ ingredientId: z.string().trim().min(1).max(128) }).strict();
+export const catalogStoryParamsSchema = z.object({ kind: storyKind, id: z.string().trim().min(1).max(120) }).strict();
+export const catalogVideoSubjectsQuerySchema = z.object({ type: z.enum(['character', 'place', 'object']).optional() }).strict();
+export const catalogVideoSubjectLinksSchema = z.object({
+  links: z.array(z.object({
+    subjectId: z.string().trim().min(1).max(64),
+    ingredientId: z.string().trim().min(1).max(128).nullable(),
+    formId: z.string().regex(FORM_ID_PATTERN).optional(),
+    // Replace the subject's description with the catalog's appearance text.
+    useCatalogText: z.boolean().optional(),
+  }).strict()).min(1).max(24),
+}).strict();
+export const catalogVideoSubjectSaveSchema = z.object({ subjectId: z.string().trim().min(1).max(64) }).strict();
+export const catalogVideoDescriptionRestoreSchema = z.object({
+  subjectId: z.string().trim().min(1).max(64),
+  ingredientId: z.string().trim().min(1).max(128),
+  formId: z.string().regex(FORM_ID_PATTERN).optional(),
+  videoDescription: z.string().max(MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX),
+  catalogDescription: z.string().max(16000),
+}).strict();
+export const catalogStoryDraftSchema = z.object({
+  type: z.enum(['character', 'place', 'object']),
+  universeId: z.string().trim().max(120).optional().default(''),
+  storyKind: storyKind.optional(),
+  storyId: z.string().trim().min(1).max(120).optional(),
+  prompt: z.string().trim().min(1).max(STORY_DRAFT_LIMITS.prompt),
+  providerId: z.string().trim().max(80).optional().default(''),
+  model: z.string().trim().max(200).optional().default(''),
+  effort: z.string().trim().max(32).optional().default(''),
+  relations: initialRelations.optional().default([]),
+}).strict()
+  .refine((v) => (v.storyKind == null) === (v.storyId == null), { message: 'storyKind and storyId must be supplied together', path: ['storyId'] });
+
+// Revision-history sources, mirrored from the catalog_ingredient_revisions
+// DB CHECK constraint. The PATCH route accepts an optional `source`/`actor` so
+// AI-driven callers (story-builder refine) can label their edits; a manual
+// detail-page save omits them and the DB layer defaults to 'user'.
+export const REVISION_SOURCES = Object.freeze(['user', 'extract', 'refine', 'sync']);
+const revisionSource = z.enum(REVISION_SOURCES).optional();
+const revisionActor = z.string().trim().min(1).max(120).optional();
+
+export const catalogIngredientPatchSchema = z.object({
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
+  payload,
+  tags,
+  source: revisionSource,
+  actor: revisionActor,
+}).strict();
+
+export const catalogPrimitiveOwnerSchema = z.object({
+  universeId: z.string().trim().min(1).max(120),
+}).strict();
+
+export const catalogPrimitiveForkSchema = catalogPrimitiveOwnerSchema.extend({
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX).optional(),
+  copyImages: z.boolean().default(false),
+  // Seed images picked from the source's portraits/references (media keys). Set
+  // = only these are reused, keeping their age/look tags; overrides copyImages.
+  seedImages: z.array(z.string().trim().min(1).max(512)).max(200).optional(),
+  // Redesign assistant proposal saved onto the fork (keys checked per type).
+  fields: z.record(z.string().min(1).max(64), z.string().max(20_000)).optional(),
+  operationKey: z.string().uuid(),
+}).strict();
+
+// /ingredients/:id/revisions — paginated history list. Newest first.
+export const catalogRevisionQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).strict();
+
+export const catalogRelatedImagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(24),
+  offset: z.coerce.number().int().min(0).max(1000000).default(0),
+}).strict();
+
+// /ingredients/:id/revisions/:revisionId/restore — re-applies a prior
+// revision's name/payload/tags. Optional `source`/`actor` label the NEW
+// revision the restore itself produces (defaults to 'user').
+export const catalogRevisionRestoreSchema = z.object({
+  source: revisionSource,
+  actor: revisionActor,
+}).strict();
+
+export const catalogIngredientQuerySchema = z.object({
+  // Batch-fetch by id — the shared CSV param (see sharedSchemas.csvIdsParam),
+  // trimmed and empties-dropped into a ≤50 string[]. An empty/all-blank CSV
+  // reads as absent (the route/service then falls through to the type/tag/q
+  // filters); when present, `ids` takes precedence over type/tag/q in
+  // `listIngredients`. `truncate` keeps this route's long-standing "silently
+  // slice at 50" contract rather than 400ing an over-cap batch.
+  ids: csvIdsParam({ max: 50, truncate: true }),
+  type: ingredientTypeGate.optional(),
+  tag: tag.optional(),
+  q: z.string().trim().max(500).optional(),
+  // Album/facet filters (#1762). `refKind`+`refId` list ingredients linked to a
+  // universe/series; `unlinked` = the "Raw" album (no universe/series ref at
+  // all); `orphaned` = the "Orphaned" album (has a ref, none resolve live). The
+  // wire form sends booleans as `?unlinked=true`, so coerce the string here.
+  refKind: z.enum(REF_KINDS).optional(),
+  refId: z.string().trim().min(1).max(120).optional(),
+  unlinked: booleanish.optional(),
+  orphaned: booleanish.optional(),
+  // Source-scrap filter (#7617): "everything extracted from this piece" — a
+  // provenance dimension, orthogonal to the universe/series homing album
+  // filters above, so it composes with them instead of joining their
+  // mutual-exclusivity refinement below.
+  scrapId: z.string().trim().min(1).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+}).strict()
+  // refKind/refId are a pair — one without the other is a malformed query.
+  .refine((v) => (v.refKind == null) === (v.refId == null), {
+    message: 'refKind and refId must be supplied together',
+    path: ['refId'],
+  })
+  // The three album filters are mutually exclusive — combining them is ambiguous
+  // (a ref-filtered row is by definition linked, so it can never be unlinked/
+  // orphaned). Reject rather than silently letting one win in the service.
+  .refine((v) => [v.refKind != null, v.unlinked === true, v.orphaned === true].filter(Boolean).length <= 1, {
+    message: 'refKind/refId, unlinked, and orphaned are mutually exclusive',
+    path: ['unlinked'],
+  });
+
+// Tag-autocomplete query — `q` is an optional prefix/substring filter, absent
+// returns the most-recently-created tags. Drives the tag-picker autocomplete on
+// the catalog ingredient editor + the Quick Idea widget.
+export const catalogTagQuerySchema = z.object({
+  q: z.string().trim().max(BIBLE_LIMITS.TAG_MAX).optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+}).strict();
+
+export const catalogIngredientLinkSchema = z.object({
+  refKind: z.enum(REF_KINDS),
+  refId: z.string().trim().min(1).max(120),
+  role: z.string().trim().min(1).max(64),
+}).strict();
+
+// Ingredient↔ingredient relation link/unlink body. `toId` is the OTHER end of
+// the directed edge (the route's `:id` is the `fromId`). `kind` is gated to the
+// shared relation registry. The route rejects self-edges (`fromId === toId`) at
+// the DB layer; the schema can't see the path param, so that check stays
+// server-side in `linkIngredientRelation`.
+export const catalogRelationLinkSchema = z.object({
+  toId: z.string().trim().min(1).max(80),
+  kind: z.enum(RELATION_KINDS),
+}).strict();
+
+// Media attach body. `mediaKey` is a REFERENCE into the media library (a
+// gallery filename / history sidecar key), not the bytes — capped at a generous
+// 512 to allow nested paths but reject blobs. `kind` is gated to the shared
+// media registry; `role`/`caption` are optional metadata. The route validates
+// that the key resolves against the local library before persisting.
+export const catalogMediaAttachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Casting reference library patch (#casting-reference-library). Identifies a
+// live media row by (mediaKey, kind) and merges any of variant/tags/guide/likeness.
+export const catalogMediaLibraryVariantSchema = z.object({
+  age: z.number().int().min(0).max(150).optional(),
+  era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
+  label: z.string().trim().max(120).optional(),
+}).strict();
+export const catalogMediaLibraryPatchSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
+  variant: catalogMediaLibraryVariantSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  guide: z.boolean().optional(),
+  likeness: z.boolean().optional(),
+  review: z.object({
+    status: z.enum(REFERENCE_REVIEW_WRITE_STATUSES),
+    feedback: z.string().max(REFERENCE_FEEDBACK_MAX).optional(),
+  }).strict().optional(),
+}).strict();
+
+export const catalogMediaRefineSchema = z.object({
+  mediaKey: z.string().min(1).max(512),
+  kind: z.enum(['portrait', 'reference']),
+  feedback: z.string().min(1).max(REFERENCE_FEEDBACK_MAX)
+    .refine(value => value.trim().length > 0 && !value.includes('\0'), 'Describe what should change without NUL characters'),
+}).strict();
+// Attach mood-board items to a cast member as references, optionally tagging
+// them all with one variant (e.g. every age-7 sheet) and tags.
+export const catalogMediaFromMoodBoardSchema = z.object({
+  boardId: z.string().trim().min(1).max(64),
+  itemIds: z.array(z.string().trim().min(1).max(64)).min(1).max(100),
+  variant: catalogMediaLibraryVariantSchema.optional(),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  inferAge: z.boolean().optional(),
+}).strict();
+// ids=a,b,c — the batched media read a music-video board makes for its cast (#16076).
+export const catalogBatchMediaQuerySchema = z.object({
+  ids: z.string().trim().min(1).transform((v) => [...new Set(v.split(',').map((id) => id.trim()).filter(Boolean))])
+    .pipe(z.array(z.string().min(1).max(200)).min(1).max(100)),
+});
+
+export const catalogMediaLibraryQuerySchema = z.object({
+  age: z.coerce.number().int().min(0).max(150).optional(),
+  era: z.enum(['child', 'teen', 'adult', 'elder']).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
+  tag: z.string().trim().min(1).max(40).optional(),
+  kind: z.enum(MEDIA_KINDS).optional(),
+  guide: z.enum(['true', 'false']).optional(),
+  review: z.enum(REFERENCE_REVIEW_STATUSES).optional(),
+}).strip();
+
+// Set-portrait body — same as attach minus `kind` (the route forces 'portrait').
+export const catalogPortraitSetSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Generated-image attach body: the server chooses portrait vs reference under
+// the ingredient lock and leaves an already-attached render untouched.
+export const catalogGeneratedImageAttachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+}).strict();
+
+// Place look-around (#16145). The prompt override is the director's own text, sent as typed (#11317).
+export const catalogLookAroundRenderSchema = z.object({
+  sourceImage: z.string().trim().min(1).max(512).optional(),
+  motion: z.enum(LOOK_AROUND_MOTION_IDS).optional(),
+  modelId: z.string().trim().min(1).max(200).optional(),
+  seconds: z.number().finite().positive().max(60).optional(),
+  resolution: z.string().trim().min(1).max(16).optional(),
+  prompt: z.string().max(20_000).refine((v) => v.trim().length > 0, { message: 'The prompt cannot be empty' }).optional(),
+  dryRun: z.boolean().optional(),
+}).strict();
+
+export const catalogLookAroundClipParamsSchema = z.object({
+  id: z.string().min(1).max(80),
+  clipId: z.string().regex(/^[A-Za-z0-9-]{1,80}$/),
+}).strict();
+
+export const catalogLookAroundFramesSchema = z.object({}).strict();
+
+export const catalogLookAroundAnglesSchema = z.object({
+  angles: z.array(z.object({
+    atSec: z.number().finite().min(0).max(3600),
+    bearingDeg: z.number().finite().min(0).max(360).optional(),
+    name: z.string().trim().max(80).optional(),
+  }).strict()).min(1).max(LOOK_AROUND_MAX_ANGLES),
+  cleanup: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+}).strict();
+
+// Reference-sheet render/preview body. The prompt overrides are the user's own
+// words and are sent exactly as typed — no trim (#11317).
+// `wardrobeId` picks the outfit a `look` render dresses the character in: it
+// is required for `look` and refused for every other variant, so a stray id
+// never silently renders a plain sheet. 59 = the 64-char media role cap minus
+// the `look:` prefix the render tags its image with.
+// `formId` renders the sheet for one of the record's alternate forms (another
+// age, era or look/style); absent renders the canonical present-story form.
+export const CATALOG_LOOK_VARIANT_ID = 'look';
+export const CATALOG_COMPARISON_VARIANT_ID = 'comparison';
+export const catalogSheetRenderSchema = z.object({
+  visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
+  variant: z.string().trim().min(1).max(48).optional(),
+  wardrobeId: z.string().trim().min(1).max(59).optional(),
+  formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
+  // The other character on a `comparison` sheet (a catalog ingredient id).
+  partnerId: z.string().trim().min(1).max(128).optional(),
+  overridePrompt: z.string().max(8000).optional(),
+  overrideNegativePrompt: z.string().max(2000).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  universeId: z.string().max(128).optional(),
+  // Absent follows the selected universe's linked board; '' explicitly opts out.
+  moodBoardId: z.string().max(128).optional(),
+  visualDirection: z.object({
+    style: z.string().max(1200).optional(),
+    camera: z.string().max(1200).optional(),
+    lighting: z.string().max(1200).optional(),
+    environment: z.string().max(1200).optional(),
+  }).strict().optional(),
+}).strict().superRefine((body, ctx) => {
+  const isLook = body.variant === CATALOG_LOOK_VARIANT_ID;
+  if (isLook && !body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is required for a look render' });
+  } else if (!isLook && body.wardrobeId) {
+    ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is only accepted for a look render' });
+  }
+  const isComparison = body.variant === CATALOG_COMPARISON_VARIANT_ID;
+  if (isComparison && !body.partnerId) {
+    ctx.addIssue({ code: 'custom', path: ['partnerId'], message: 'Choose the other character for a comparison sheet' });
+  } else if (!isComparison && body.partnerId) {
+    ctx.addIssue({ code: 'custom', path: ['partnerId'], message: 'partnerId is only accepted for a comparison sheet' });
+  }
+  if (isComparison && body.formId) {
+    ctx.addIssue({ code: 'custom', path: ['formId'], message: 'A comparison sheet shows each character in their canonical form' });
+  }
+  if (isLook && body.formId) {
+    ctx.addIssue({ code: 'custom', path: ['formId'], message: 'formId is not accepted for a look render' });
+  }
+  if (!isLook && ['universeId', 'moodBoardId', 'visualDirection'].some((key) => body[key] !== undefined)) {
+    ctx.addIssue({ code: 'custom', message: 'Visual direction options are only accepted for a look render' });
+  }
+  if (isLook && body.overridePrompt !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['overridePrompt'], message: 'Use visualDirection for a look so its world and photography direction remain in the sent prompt' });
+  }
+});
+
+// Media detach body — identifies the tuple to soft-delete.
+export const catalogMediaDetachSchema = z.object({
+  mediaKey: z.string().trim().min(1).max(512),
+  kind: z.enum(MEDIA_KINDS),
+}).strict();
+
+// File-upload attach body: raw base64 bytes + the browser-reported MIME. The
+// server decides the media `kind` (image→reference, audio, video, model) from the MIME
+// and persists into the matching federating library dir before attaching — the
+// client never picks the storage kind. 32 MB base64 (~24 MB raw) upper-bounds a
+// runaway paste; per-category size is re-checked server-side.
+export const catalogMediaFileUploadSchema = z.object({
+  dataBase64: z.string().min(1).max(32 * 1024 * 1024),
+  mimeType: z.string().trim().min(1).max(128),
+  filename: z.string().trim().max(300).optional().nullable(),
+  role: z.string().trim().max(64).optional().nullable(),
+  caption: z.string().trim().max(2_000).optional().nullable(),
+}).strict();
+
+// Voice-memo body: a recorded WAV (16 kHz mono, base64) the server transcribes
+// via Whisper and attaches as a `kind:'audio'` media row with the transcript in
+// `caption`. 16 MB base64 (~12 MB raw) fits several minutes of 16 kHz mono WAV.
+export const catalogMediaVoiceMemoSchema = z.object({
+  audioBase64: z.string().min(1).max(16 * 1024 * 1024),
+  mimeType: z.string().trim().max(64).optional(),
+  role: z.string().trim().max(64).optional().nullable(),
+}).strict();
+
+// The extraction and commit boundaries share the same graph-edge wire limits.
+export const catalogDraftRelationshipSchema = z.object({
+  fromDraftId: z.string().trim().min(1).max(120),
+  toDraftId: z.string().trim().min(1).max(120),
+  kind: z.enum(RELATION_KINDS),
+  evidence: z.string().trim().min(1).max(400),
+}).strict();
+
+// `universeRef` (+ optional `role`) mirrors catalogBulkImportSchema.defaults
+// below — same field name, same shape — so the two ingest paths (bulk-import,
+// scrap-commit) cannot drift (#7615). Omitting `universeRef` reproduces
+// today's behavior exactly: source link only, no homing ref.
+export const catalogScrapCommitSchema = z.object({
+  operationKey: z.string().uuid().optional(),
+  accepted: z.array(catalogIngredientCreateSchema.extend({
+    // Extraction-local identity, never an ingredient ID or payload field.
+    draftId: z.string().trim().min(1).max(120).optional(),
+    // Optional source-span hint (server forwards as-is to linkIngredientToSource).
+    span: z.record(z.string(), z.unknown()).optional(),
+  })).min(0).max(200),
+  // Omitted preserves legacy clustering; [] explicitly means no edges.
+  relationships: z.array(catalogDraftRelationshipSchema).max(1000).optional(),
+  universeRef: z.string().trim().min(1).max(120).optional(),
+  role: z.string().trim().min(1).max(64).optional(),
+  // Brain creative-inbox notes this scrap was built from. The commit itself
+  // stamps them consumed (#9943), so a reload between the commit and a
+  // follow-up client call cannot leave them re-sendable. The ids ride the
+  // request rather than the fingerprint: they are bookkeeping about the source
+  // notes, not part of the reviewed submission's identity.
+  creativeNoteIds: z.array(z.string().guid()).min(1).max(200).optional(),
+}).strict().superRefine((body, ctx) => {
+  if (body.relationships === undefined) return;
+  const ids = new Set();
+  body.accepted.forEach((entry, index) => {
+    if (!entry.draftId || ids.has(entry.draftId)) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'draftId'], message: 'Explicit graphs require unique draft IDs on every accepted entry' });
+    }
+    ids.add(entry.draftId);
+  });
+  body.relationships.forEach((edge, index) => {
+    if (!ids.has(edge.fromDraftId) || !ids.has(edge.toDraftId)) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Relationship endpoints must be accepted draft IDs' });
+    }
+    if (edge.fromDraftId === edge.toDraftId) {
+      ctx.addIssue({ code: 'custom', path: ['relationships', index], message: 'Self relationships are not allowed' });
+    }
+  });
+}).transform((body, ctx) => {
+  if (body.relationships === undefined) return body;
+  // One database edge per directed tuple, retaining each distinct evidence
+  // passage in the source payload's EXISTING evidence field. No draft IDs or
+  // new payload shape travel to older peers.
+  const entries = new Map(body.accepted.map(entry => [entry.draftId, entry]));
+  const edges = new Map();
+  const evidenceById = new Map();
+  for (const edge of body.relationships) {
+    const key = JSON.stringify([edge.fromDraftId, edge.toDraftId, edge.kind]);
+    if (!edges.has(key)) edges.set(key, edge);
+    const line = `${edge.kind} → ${entries.get(edge.toDraftId).name}: ${edge.evidence}`.replace(/\s+/g, ' ');
+    if (!evidenceById.has(edge.fromDraftId)) evidenceById.set(edge.fromDraftId, new Set());
+    evidenceById.get(edge.fromDraftId).add(line);
+  }
+  const accepted = body.accepted.map((entry, index) => {
+    const added = evidenceById.get(entry.draftId);
+    if (!added) return entry;
+    const original = entry.payload?.evidence;
+    const bible = getActiveCatalogType(entry.type)?.extractionShape === 'bible';
+    const existing = Array.isArray(original) ? original : typeof original === 'string' && original ? (bible ? [original] : original.split('\n')) : [];
+    const evidence = [...new Set([...existing, ...added])];
+    if (bible && (evidence.length > BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX ||
+        evidence.some(line => typeof line !== 'string' || line.length > BIBLE_LIMITS.EVIDENCE_ITEM_MAX))) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload', 'evidence'], message: 'Grounded evidence exceeds the bible evidence capacity; shorten evidence or accept fewer links' });
+      return z.NEVER;
+    }
+    const enriched = { ...entry.payload, evidence: bible || Array.isArray(original) ? evidence : evidence.join('\n') };
+    if (JSON.stringify(enriched).length > 200_000) {
+      ctx.addIssue({ code: 'custom', path: ['accepted', index, 'payload'], message: 'Grounded payload exceeds 200KB JSON size cap' });
+      return z.NEVER;
+    }
+    return { ...entry, payload: enriched };
+  });
+  return { ...body, accepted, relationships: [...edges.values()] };
+});
+
+// /scraps/:id/extract — optional provider/model override (e.g., a Brain
+// handoff carrying the user's selected local route). Empty body is valid.
+export const catalogExtractRequestSchema = z.object({
+  providerOverride: z.string().trim().min(1).max(64).optional(),
+  modelOverride: z.string().trim().min(1).max(200).optional(),
+}).strict();
+
+// Babble is deliberately bounded to one provider call; never silently truncate it.
+export const catalogPruneRequestSchema = z.object({
+  providerId: z.string().trim().min(1).max(120),
+  model: z.string().trim().min(1).max(200),
+  effort: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']).optional(),
+}).strict();
+
+// /embeddings/backfill — re-embed up to `limit` rows. By default only fills
+// rows where embedding IS NULL; pass `includeStale: true` to also re-embed
+// rows whose stored `embedding_model` differs from the current settings
+// model (used after a provider/model switch to refresh the vector space).
+export const catalogEmbeddingsBackfillSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  includeStale: z.boolean().optional(),
+}).strict();
+
+// Music video cast import commit (Casting › Import from music videos): one
+// reviewed decision per subject. `local` keeps the subject in its video only.
+export const catalogMusicVideoImportSchema = z.object({
+  selections: z.array(z.object({
+    projectId: z.string().min(1).max(128),
+    subjectId: z.string().min(1).max(64),
+    action: z.enum(['create', 'link', 'local']),
+    ingredientId: z.string().min(1).max(128).optional(),
+    // The linked record's age or look the subject shows, from the preview.
+    formId: z.string().min(1).max(128).optional(),
+  }).strict().refine((s) => s.action !== 'link' || s.ingredientId, { message: 'link needs an ingredientId' })).min(1).max(2000),
+}).strict();
+
+// /migration/rerun — pass `force: true` to ignore the marker file.
+export const catalogMigrationRerunSchema = z.object({
+  force: z.boolean().optional(),
+}).strict();
+
+// Export rows carry identity and provenance in addition to create fields.
+// Strip export-only timestamps and source/media row bookkeeping.
+export const catalogBulkEntrySchema = catalogIngredientCreateSchema.extend({
+  id: z.string().trim().min(1).max(80).optional(),
+  scraps: z.array(z.object({
+    id: z.string().trim().min(1).max(80).optional(),
+    title: z.string().max(300).nullable().optional(),
+    rawText: z.string().min(1).max(2_000_000),
+    sourceKind: z.string().trim().min(1).max(32).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })).optional(),
+  media: z.array(catalogMediaAttachSchema.strip().extend({
+    metadata: z.record(z.string(), z.unknown()).optional(),
+  })).optional(),
+}).strict();
+
+// /bulk-import — accept a structured payload in one of three formats. The
+// route parses `payload` into a list of ingredient drafts (per the format),
+// then validates each entry against catalogIngredientCreateSchema before
+// insert. `defaults.tags` are merged onto every row; `defaults.*Ref` (if any)
+// creates a catalog_ingredient_refs row in the same transaction.
+//
+// Payload is capped at 2MB (same ceiling as scrap rawText) so a single
+// import can't blow the request body limit. Per-entry shape is validated
+// after parse, not here.
+export const catalogBulkImportSchema = z.object({
+  format: z.enum(['json', 'csv', 'markdown']),
+  payload: z.string().min(1).max(2_000_000),
+  defaults: z.object({
+    universeRef: z.string().trim().min(1).max(120).optional(),
+    seriesRef: z.string().trim().min(1).max(120).optional(),
+    workRef: z.string().trim().min(1).max(120).optional(),
+    issueRef: z.string().trim().min(1).max(120).optional(),
+    role: z.string().trim().min(1).max(64).optional(),
+    tags: z.array(tag).max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX).optional(),
+  }).strict().optional(),
+}).strict();
+
+// /export — query params for the export endpoint. Returns the bundle in
+// the requested serialization; the response is `Content-Disposition:
+// attachment` so the browser saves it directly.
+export const catalogExportQuerySchema = z.object({
+  refKind: z.enum(REF_KINDS),
+  refId: z.string().trim().min(1).max(120),
+  format: z.enum(['json', 'markdown', 'yaml']).optional(),
+}).strict();
+
+// Catalog sync envelope shape. Receivers apply pulled changes in-process
+// via catalogSync.applyRemoteChanges. Each kind is optional so
+// callers can apply a partial envelope (e.g. ingredients-only).
+//
+// Read-path caps MIRROR the create-path caps above: rawText 2MB, payload
+// 200KB JSON-stringified, name ≤ NAME_MAX, tags count/length. The create
+// path can't be the only line of defense — a peer running an older / forked
+// PortOS that skipped its own validation could otherwise push an unbounded
+// blob through here. The receiver enforces its own size contract.
+const isoDate = z.string().min(1);
+const syncEmbedding = z.array(z.number()).max(4096).optional().nullable();
+const syncPayload = z.unknown().optional().refine(
+  (p) => p === undefined || p === null || (typeof p === 'object' && JSON.stringify(p).length <= 200_000),
+  { message: 'payload exceeds 200KB JSON size cap' },
+);
+const syncMetadata = syncPayload;
+const syncTags = z.array(z.string().max(BIBLE_LIMITS.TAG_MAX))
+  .max(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX)
+  .optional();
+
+export const catalogSyncScrapSchema = z.object({
+  id: z.string().min(1).max(80),
+  title: z.string().max(300).nullable().optional(),
+  rawText: z.string().max(2_000_000),
+  sourceKind: z.string().max(32).optional(),
+  metadata: syncMetadata,
+  embedding: syncEmbedding,
+  embeddingModel: z.string().max(100).nullable().optional(),
+  originInstanceId: z.string().max(64).nullable().optional(),
+  // Scrap chunking (catalog v7). Optional so a ≤v6 peer's scrap rows (which
+  // carry neither field) still validate: chunkIndex defaults to 0 and
+  // parentScrapId to null on the receiver — a plain non-chunked scrap.
+  chunkIndex: z.number().int().min(0).optional(),
+  parentScrapId: z.string().max(80).nullable().optional(),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+export const catalogSyncIngredientSchema = z.object({
+  id: z.string().min(1).max(80),
+  // Loose on the wire (NOT the active-type refinement): a peer ingredient may
+  // arrive before its user-type row applies, so a not-yet-known type stores
+  // harmlessly. The version gate covers true cross-instance shape skew.
+  type: z.string().max(32),
+  name: z.string().max(BIBLE_LIMITS.NAME_MAX),
+  payload: syncPayload,
+  tags: syncTags,
+  embedding: syncEmbedding,
+  embeddingModel: z.string().max(100).nullable().optional(),
+  originInstanceId: z.string().max(64).nullable().optional(),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+export const catalogSyncSourceSchema = z.object({
+  ingredientId: z.string().max(80),
+  scrapId: z.string().max(80),
+  // span shape isn't strictly typed (`{ start, end }` today, may grow); cap
+  // its JSON size so a peer can't push a 50MB "span" blob.
+  span: z.unknown().optional().refine(
+    (p) => p === undefined || p === null || JSON.stringify(p).length <= 10_000,
+    { message: 'span exceeds 10KB JSON size cap' },
+  ),
+  extractedAt: isoDate,
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// Ref rows carry tombstone fields (soft-delete from day one) plus, since
+// #8347, an `updatedAt` tombstone/revival change-clock — see
+// `upsertRefFromPeer` in catalogDB/sync.js for the LWW revival-guard
+// rationale. Both are optional on the wire (absent = "peer has no opinion" /
+// pre-#8347 sender) and preserved regardless via `.passthrough()`.
+export const catalogSyncRefSchema = z.object({
+  ingredientId: z.string().max(80),
+  refKind: z.string().max(32),
+  refId: z.string().max(120),
+  role: z.string().max(64),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// Relation rows carry tombstone fields (soft-delete from day one) + the same
+// #8347 `updatedAt` revival-guard clock as refs. `kind` is a freeform string
+// on the wire (not the strict enum) so a peer running a newer PortOS with an
+// additional relation kind doesn't get its whole envelope rejected by an
+// older receiver — the version gate already covers true shape skew, and an
+// unknown-kind row stores harmlessly.
+export const catalogSyncRelationSchema = z.object({
+  fromId: z.string().max(80),
+  toId: z.string().max(80),
+  kind: z.string().max(32),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// Receiver may receive `portosMeta.schemaVersions.catalog` for the version
+// gate; the rest of portosMeta is informational. We accept arbitrary keys
+// inside portosMeta with passthrough but cap its size at 4KB to deny a peer
+// stuffing junk through the metadata escape hatch.
+const portosMeta = z.object({
+  portosVersion: z.string().max(64).optional(),
+  schemaVersions: z.record(z.string(), z.number().int()).optional(),
+}).passthrough().refine(
+  (m) => JSON.stringify(m).length <= 4_000,
+  { message: 'portosMeta exceeds 4KB size cap' },
+).optional();
+
+// Canonical tag rows on the wire. `label` carries the first-seen casing; the
+// mutable fields (description/color/parentId) round-trip via LWW on updatedAt.
+// `parentId` is freeform (the receiver's parent-less retry tolerates a parent
+// that hasn't arrived yet), so no enum/FK gate here.
+export const catalogSyncTagSchema = z.object({
+  id: z.string().min(1).max(120),
+  label: z.string().max(BIBLE_LIMITS.TAG_MAX),
+  description: z.string().max(2_000).nullable().optional(),
+  color: z.string().max(32).nullable().optional(),
+  parentId: z.string().max(120).nullable().optional(),
+  createdAt: isoDate,
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// Media rows carry tombstone fields + editable attachment metadata
+// (role/caption) and a bounded generation-provenance projection.
+// `kind` is freeform on the wire (not the strict enum) for the same forward-
+// compat reason as relations: a newer peer's extra media kind stores
+// harmlessly rather than 400-ing the whole envelope. `mediaKey` is a reference,
+// not bytes — the receiver matches it against its own library on apply.
+export const catalogMediaMetadataSchema = z.object({
+  format: z.string().max(GENERATION_METADATA_LIMITS.format).optional(),
+  parameters: z.string().max(GENERATION_METADATA_LIMITS.parameters).optional(),
+  prompt: z.string().max(GENERATION_METADATA_LIMITS.prompt).optional(),
+  negativePrompt: z.string().max(GENERATION_METADATA_LIMITS.negativePrompt).optional(),
+  steps: z.number().int().min(0).max(GENERATION_METADATA_LIMITS.steps).optional(),
+  sampler: z.string().max(GENERATION_METADATA_LIMITS.sampler).optional(),
+  cfgScale: z.number().finite().min(0).max(GENERATION_METADATA_LIMITS.cfgScale).optional(),
+  seed: z.union([z.number().int(), z.string().max(GENERATION_METADATA_LIMITS.seed)]).optional(),
+  width: z.number().int().positive().max(GENERATION_METADATA_LIMITS.width).optional(),
+  height: z.number().int().positive().max(GENERATION_METADATA_LIMITS.height).optional(),
+  modelHash: z.string().max(GENERATION_METADATA_LIMITS.modelHash).optional(),
+  model: z.string().max(GENERATION_METADATA_LIMITS.model).optional(),
+}).passthrough().refine(
+  (metadata) => JSON.stringify(metadata).length <= GENERATION_METADATA_LIMITS.jsonChars,
+  { message: 'media metadata exceeds 96KB JSON size cap' },
+);
+
+export const catalogSyncMediaSchema = z.object({
+  ingredientId: z.string().max(80),
+  mediaKey: z.string().max(512),
+  kind: z.string().max(32),
+  role: z.string().max(64).nullable().optional(),
+  caption: z.string().max(2_000).nullable().optional(),
+  metadata: catalogMediaMetadataSchema.optional(),
+  // catalog v12: Casting reference library (variant/tags/guide); normalized on apply.
+  library: z.object({}).passthrough().refine((v) => JSON.stringify(v).length <= 4096, { message: 'media library exceeds 4KB' }).optional(),
+  createdAt: isoDate,
+  deleted: z.boolean().optional(),
+  deletedAt: z.string().nullable().optional(),
+  // #8347 revival-guard clock — see catalogSyncRefSchema above.
+  updatedAt: isoDate.optional(),
+  syncSequence: z.string().optional(),
+}).passthrough();
+
+// User-defined type DEFINITIONS on the wire (catalog v8). LWW-merged on the
+// receiver into its own user-type store (`catalog_user_types` as of #1001; the
+// `settings.json` `catalogUserTypes` slice before that). Loose-shaped
+// (passthrough, no field-kind enum) so a forked peer's extra field shape still
+// stores — the active-registry merge re-normalizes on apply, and a malformed
+// entry is dropped there rather than 400-ing the whole envelope. `updatedAt`
+// drives the LWW window; absent → treated as createdAt for the comparison.
+export const catalogSyncUserTypeSchema = z.object({
+  id: z.string().min(1).max(32),
+  label: z.string().max(80).optional(),  // a pure tombstone may omit label
+  primaryContentKey: z.string().max(64).optional(),
+  fields: z.array(z.unknown()).max(40).optional(),
+  updatedAt: z.string().optional(),
+  // A deletion tombstone rides the wire so a delete federates instead of a
+  // peer resurrecting the type. Null/absent = live.
+  deletedAt: z.string().nullable().optional(),
+}).passthrough();
+
+export const catalogSyncEnvelopeSchema = z.object({
+  scraps: z.array(catalogSyncScrapSchema).max(5_000).optional(),
+  ingredients: z.array(catalogSyncIngredientSchema).max(5_000).optional(),
+  sources: z.array(catalogSyncSourceSchema).max(20_000).optional(),
+  refs: z.array(catalogSyncRefSchema).max(20_000).optional(),
+  relations: z.array(catalogSyncRelationSchema).max(20_000).optional(),
+  tags: z.array(catalogSyncTagSchema).max(20_000).optional(),
+  media: z.array(catalogSyncMediaSchema).max(20_000).optional(),
+  // Additive catalog v8 block — user-defined type definitions. Optional so a
+  // ≤v7 peer's envelope (no `catalogTypes`) still validates. Media provenance
+  // is the separate additive v9 field on each `media` row above.
+  catalogTypes: z.array(catalogSyncUserTypeSchema).max(64).optional(),
+  portosMeta,
+}).passthrough();
+
+export const catalogMergeSchema = z.object({
+  sourceId: z.string().min(1).max(200),
+  survivorId: z.string().min(1).max(200),
+  dryRun: z.boolean().default(true),
+  previewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  fieldChoices: z.record(z.string(), z.enum(['source', 'survivor'])).default({}),
+}).strict();
+export const catalogMergeRecoverSchema = z.object({}).strict();
+
+export const catalogMergeHistoryQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(10),
+  offset: z.coerce.number().int().min(0).default(0),
+}).strict();
+
+// Full detail remains the compatibility default; profile and media are purpose-specific projections.
+export const catalogIngredientDetailQuerySchema = z.object({
+  view: z.enum(['full', 'profile', 'media']).default('full'),
+  includeEmbedding: z.enum(['true', 'false']).optional(),
+}).strip();
+
+export const catalogIngredientCardsQuerySchema = z.object({
+  ids: csvIdsParam({ max: 50, maxIdLength: 80 }),
+}).strict().refine(query => Array.isArray(query.ids) && query.ids.length > 0, { path: ['ids'], message: 'Ingredient ids are required' });
+
+export const catalogIngredientLockSchema = z.object({ locked: z.boolean() }).strict();
+export const catalogRefinementSchema = z.object({
+  draft: z.record(z.string(), z.string().max(12000)).refine(value => Object.keys(value).length > 0 && Object.keys(value).length <= 8),
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(16000) }).strict()).min(1).max(40),
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+
+// Casting > Design rounds. Image files are gallery/record filenames resolved
+// server-side through resolveImageInputPath.
+const designText = (max) => z.string().trim().min(1).max(max)
+  .refine(value => !value.includes('\0'), 'Text cannot contain NUL characters');
+const designImageFile = z.string().trim().min(1).max(512);
+const designFormId = z.string().trim().regex(FORM_ID_PATTERN).optional();
+export const catalogDesignSpreadSchema = z.object({
+  idea: designText(DESIGN_NOTE_MAX),
+  count: z.number().int().min(2).max(DESIGN_MAX_TAKES),
+  formId: designFormId,
+  providerId: z.string().min(1).max(200),
+  model: z.string().max(200).optional(),
+  effort: z.enum(EFFORT_LEVELS).optional(),
+}).strict();
+export const catalogDesignRenderSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('open'), note: designText(DESIGN_NOTE_MAX).optional(),
+    lines: z.array(z.string().trim().max(DESIGN_LINE_MAX)).min(1).max(DESIGN_MAX_TAKES),
+    seedImageFiles: z.array(designImageFile).max(3).optional(),
+    framing: z.enum(Object.keys(DESIGN_FRAMINGS)).default(DEFAULT_DESIGN_FRAMING), formId: designFormId }).strict()
+    .refine(v => v.note || v.lines.every(Boolean), 'Write an idea or a variation for every take'),
+  z.object({ mode: z.literal('refine'), note: designText(DESIGN_NOTE_MAX), baseImageFile: designImageFile,
+    count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: designFormId }).strict(),
+  z.object({ mode: z.literal('feature'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    feature: z.enum(Object.keys(DESIGN_FEATURES)), formId: designFormId }).strict(),
+  // `blendImageFile` (a single face) is the older shape a cached
+  // client may still send; the service folds it into `blendImageFiles`. `count`
+  // applies only with a `strength`; without one the round spreads over BLEND_STEPS.
+  z.object({ mode: z.literal('blend'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    blendImageFile: designImageFile.optional(), blendImageFiles: z.array(designImageFile).min(1).max(DESIGN_MAX_BLEND_REFS).optional(),
+    features: z.array(z.enum(Object.keys(DESIGN_FEATURES))).max(10).default([]),
+    strength: z.number().int().min(5).max(100).optional(),
+    count: z.number().int().min(1).max(BLEND_MAX_STRENGTH_TAKES).default(2),
+    formId: designFormId }).strict()
+    .refine(v => !(v.blendImageFile && v.blendImageFiles), 'Send blendImageFiles only')
+    .refine(v => v.blendImageFile || v.blendImageFiles, 'Pick a face to blend toward'),
+  z.object({ mode: z.literal('age'), note: designText(DESIGN_NOTE_MAX).optional(), baseImageFile: designImageFile,
+    count: z.number().int().min(1).max(DESIGN_MAX_TAKES).default(4), formId: z.string().trim().regex(FORM_ID_PATTERN) }).strict(),
+]);

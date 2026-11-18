@@ -5,9 +5,9 @@ import sharp from 'sharp';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { falVideoClipQuote } from '../lib/falVideoModels.js';
-import { composeLookAroundPrompt, DEFAULT_LOOK_AROUND_MODEL } from '../lib/catalogLookAround.js';
+import { composeLookAroundPrompt, DEFAULT_LOOK_AROUND_MODEL } from '../lib/catalog/catalogLookAround.js';
 
-const { __setLookAroundDepsForTests, LOOK_AROUND_CLEANUP_ADDITION } = await import('../services/catalogLookAround.js');
+const { __setLookAroundDepsForTests, LOOK_AROUND_CLEANUP_ADDITION } = await import('../services/catalog/catalogLookAround.js');
 const router = (await import('./catalog.js')).default;
 const app = express();
 app.use(express.json());

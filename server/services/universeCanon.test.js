@@ -59,7 +59,7 @@ vi.mock('./catalogDB/ingredients.js', async (io) => ({ ...await io(),
   getIngredientTimestamps: async () => new Map(),
 }));
 vi.mock('./catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: vi.fn(async () => {}), assertCatalogAssociationRemovable: vi.fn(async () => {}) }));
-vi.mock('./catalogPrimitiveUsage.js', () => ({ assertCanonRemovable: vi.fn(async () => {}) }));
+vi.mock('./catalog/catalogPrimitiveUsage.js', () => ({ assertCanonRemovable: vi.fn(async () => {}) }));
 const unlinkIngredientFromRefMock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('./catalogDB/refs.js', async (io) => ({ ...await io(), unlinkIngredientFromRef: unlinkIngredientFromRefMock }));
 

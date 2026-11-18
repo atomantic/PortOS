@@ -51,7 +51,7 @@ import {
   ENVELOPE_PENDING_KEYS,
 } from './peerSyncShared.js';
 import { isStr, isNonBlankStr } from '../../lib/textUtils.js';
-import { getCatalogBundleForRef } from '../catalogDB.js';
+import { getCatalogBundleForRef } from '../catalog/catalogDB.js';
 import { getReview } from '../pipeline/manuscriptReview.js';
 import { getStoredOutline } from '../pipeline/reverseOutline.js';
 

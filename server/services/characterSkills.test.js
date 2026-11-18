@@ -56,7 +56,7 @@ const fail = (name) => () => Promise.reject(new Error(`${name} unavailable`));
 
 vi.mock('./universeBuilder.js', () => ({ countUniverses: vi.fn(async () => stats.universes) }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => stats.works) }));
-vi.mock('./catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => stats.catalog) }));
+vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => stats.catalog) }));
 vi.mock('./meatspacePost.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
 vi.mock('./meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => stats.training) }));
 vi.mock('./meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => stats.logging) }));
@@ -69,7 +69,7 @@ vi.mock('./instanceFeatures.js', () => ({
 
 import { getCharacterSkills, levelFromValue, SKILLS, MAX_SKILL_LEVEL } from './characterSkills.js';
 import { countUniverses } from './universeBuilder.js';
-import { getCatalogStats } from './catalogDB.js';
+import { getCatalogStats } from './catalog/catalogDB.js';
 import { getLoggingStats } from './meatspaceLoggingStats.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';

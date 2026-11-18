@@ -25,7 +25,7 @@ PostgreSQL is a **required** install/runtime dependency (see [Backup & Restore](
 
 **When to use.** The record participates in relationships (`series.universeId`, `issue.seriesId`, catalog refs), needs cross-record queries ("everything related to this universe"), needs full-text or vector search, or needs per-table sequence cursors for peer sync.
 
-**Where it lives.** PostgreSQL via `server/lib/db.js` + `server/scripts/init-db.sql`. Service modules own the storage adapter (e.g. `server/services/catalogDB.js`, `server/services/memoryDB.js`).
+**Where it lives.** PostgreSQL via `server/lib/db.js` + `server/scripts/init-db.sql`. Service modules own the storage adapter (e.g. `server/services/catalog/catalogDB.js`, `server/services/memoryDB.js`).
 
 
 **Postgres-First target.** Pipeline series/issues, Story Builder sessions, and searchable media metadata are still `db-primary` targets where they remain in `data/` JSON; the Create-domain schema is designed in [`docs/plans/2026-06-07-create-relational-schema-design.md`](./plans/2026-06-07-create-relational-schema-design.md).

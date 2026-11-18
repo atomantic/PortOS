@@ -22,7 +22,7 @@ import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as brainReconcile from './brainReconcile.js';
 import * as memorySync from './memorySync.js';
-import * as catalogSync from './catalogSync.js';
+import * as catalogSync from './catalog/catalogSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';

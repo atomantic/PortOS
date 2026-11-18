@@ -18,7 +18,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 vi.mock('../instances.js', () => mockNoPeers());
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 vi.mock('./stageRunner.js', () => ({ runStagedLLM: vi.fn(), extractJson: (raw) => JSON.parse(raw) }));
-vi.mock('./catalogDB.js', () => ({
+vi.mock('./catalog/catalogDB.js', () => ({
   listIngredients: vi.fn().mockResolvedValue({ items: [] }),
   linkIngredientsToSeries: vi.fn().mockResolvedValue([]),
   resolveIngredientsByIds: vi.fn().mockResolvedValue([]),

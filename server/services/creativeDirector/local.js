@@ -26,7 +26,7 @@
 
 import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
-import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalogDB.js';
+import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalog/catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
 import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 

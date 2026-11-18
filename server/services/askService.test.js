@@ -60,7 +60,7 @@ vi.mock('./calendarSync.js', () => ({
 
 // catalogDB is mocked so the catalog retriever never touches Postgres; the real
 // catalogTypes lib (getCatalogType) stays unmocked — it's pure.
-vi.mock('./catalogDB.js', () => ({
+vi.mock('./catalog/catalogDB.js', () => ({
   hybridSearchIngredients: vi.fn(),
 }));
 
@@ -71,7 +71,7 @@ const { spawn } = await import('../lib/childProcess.js');
 // itself is pinned with an injected platform in credentialBootstrap.test.js;
 // these assert only that each site plumbs the decision through.
 const EXPECT_GROUP = process.platform !== 'win32';
-const catalogDB = await import('./catalogDB.js');
+const catalogDB = await import('./catalog/catalogDB.js');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');
 const brainStorage = await import('./brainStorage.js');

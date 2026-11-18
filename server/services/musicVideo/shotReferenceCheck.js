@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { activeMusicVideoSubjects, musicVideoReferenceSubjectIds } from '../../lib/musicVideo/musicVideoCastSelection.js';
-import { listPickableImages } from '../../lib/catalogMediaLibrary.js';
+import { listPickableImages } from '../../lib/catalog/catalogMediaLibrary.js';
 import {
   musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoConditioningReferences,
   musicVideoNameInText, musicVideoPanelArtReferences, musicVideoReferenceChoices, sceneCatalogSubjectIds,

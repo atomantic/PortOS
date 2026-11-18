@@ -10,7 +10,7 @@ vi.mock('./universeBuilder.js', () => ({
   countUniverses: vi.fn(async () => { calls.universes += 1; return 3; }),
 }));
 vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => 1) }));
-vi.mock('./catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => ({ total: 2, scraps: 1 })) }));
+vi.mock('./catalog/catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => ({ total: 2, scraps: 1 })) }));
 vi.mock('./meatspacePost.js', () => ({
   getPostSessions: vi.fn(async () => { calls.sessions += 1; return [{ date: '2026-07-17' }]; }),
 }));

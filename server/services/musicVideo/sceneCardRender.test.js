@@ -15,7 +15,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => catalog);
+vi.mock('../catalog/catalogDB.js', () => catalog);
 
 const getProject = vi.fn(async () => null);
 const clipQueue = vi.hoisted(() => ({ submit: vi.fn(async () => ({ jobId: 'synthetic-clip-job' })) }));

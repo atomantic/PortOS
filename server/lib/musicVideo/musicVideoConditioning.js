@@ -9,7 +9,7 @@
  */
 
 import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
-import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from '../catalogMediaLibrary.js';
+import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from '../catalog/catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from '../imageGenCapabilities.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from '../referenceLimits.js';
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';

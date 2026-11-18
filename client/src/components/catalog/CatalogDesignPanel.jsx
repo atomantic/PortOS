@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router';
 import { Anchor, Check, Wand2 } from 'lucide-react';
 import {
   BLEND_MAX_STRENGTH_TAKES, DESIGN_FEATURES, DESIGN_FRAMINGS, DEFAULT_DESIGN_FRAMING, DESIGN_MAX_BLEND_REFS, DESIGN_MAX_TAKES, designRoundId, designTakeIndex, featureLines, blendLines,
-} from '../../../../server/lib/catalogDesign.js';
+} from '../../../../server/lib/catalog/catalogDesign.js';
 import { listMoodBoardNames } from '../../services/api';
 import { getCatalogIngredientDetails, renderCatalogDesign, spreadCatalogDesign, updateCatalogIngredientMediaLibrary } from '../../services/apiCatalog';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';

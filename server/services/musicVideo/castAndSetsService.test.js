@@ -2926,7 +2926,7 @@ it('converts legacy check-in to catalog links without recasting, copying media, 
   const db = { getIngredient: async () => ({ id: 'chr-example', type: 'character', name: 'Example', payload: { physicalDescription: 'Catalog description' } }),
     listMediaForIngredient: async () => [{ kind: 'portrait', mediaKey: 'catalog-example.png' }] };
   service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
-  const catalogDB = await import('../catalogDB.js');
+  const catalogDB = await import('../catalog/catalogDB.js');
   const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
   const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
   onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -2986,7 +2986,7 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     };
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
     // Project reads hydrate the check-in from the live catalog module, not the injected one.
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient);
     const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient);
     onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -3010,7 +3010,7 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     Object.keys(RECORDS).forEach((id) => onDisk(`${id}.png`));
     // No injected catalog: the stage read and the project read both go to the live catalog module, as in production.
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: null }));
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const recordSpy = vi.spyOn(catalogDB, 'getIngredient').mockImplementation(async (id) => RECORDS[id] ?? null);
     const mediaSpy = vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(async (id) => [{ kind: 'portrait', mediaKey: `${id}.png` }]);
     onTestFinished(() => { recordSpy.mockRestore(); mediaSpy.mockRestore(); });
@@ -3287,7 +3287,7 @@ describe('saved shot references across the switch to catalog links', () => {
       visualSpec: { ...current.visualSpec, references: REFERENCES }, castAndSets: stage } }));
     const db = { getIngredient: async id => ({ id, type: id.startsWith('plc-') ? 'place' : 'character', name: id, payload: {} }), listMediaForIngredient: async id => MEDIA[id] || [] };
     service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
-    const catalogDB = await import('../catalogDB.js');
+    const catalogDB = await import('../catalog/catalogDB.js');
     const spies = [vi.spyOn(catalogDB, 'getIngredient').mockImplementation(db.getIngredient), vi.spyOn(catalogDB, 'listMediaForIngredient').mockImplementation(db.listMediaForIngredient)];
     onTestFinished(() => spies.forEach(spy => spy.mockRestore()));
     return project;

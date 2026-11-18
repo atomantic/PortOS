@@ -50,7 +50,7 @@ vi.mock('../services/writersRoom/places.js', () => ({}));
 vi.mock('../services/writersRoom/objects.js', () => ({}));
 vi.mock('../services/writersRoom/syncedReview.js', () => ({}));
 vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({}));
-vi.mock('../services/catalogExtraction.js', () => ({}));
+vi.mock('../services/catalog/catalogExtraction.js', () => ({}));
 
 import writersRoomRoutes from './writersRoom.js';
 import cosScheduleRoutes from './cosScheduleRoutes.js';

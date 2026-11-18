@@ -11,7 +11,7 @@
 import { query, withTransaction } from '../../lib/db.js';
 import { resolveImageInputPath } from '../../lib/fileUtils.js';
 import { announceAssetsChanged, rowToMedia } from './shared.js';
-import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalogMediaLibrary.js';
+import { MAX_CAST_GUIDES, normalizeLibrary } from '../../lib/catalog/catalogMediaLibrary.js';
 import { assertCatalogIdentityWritable, assertCatalogAssociationRemovable } from './identityAccess.js';
 import { toPgJson } from '../../lib/pgJson.js';
 

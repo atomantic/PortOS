@@ -59,7 +59,7 @@ const catalogMocks = vi.hoisted(() => {
     }),
   };
 });
-vi.mock('./catalogDB.js', () => catalogMocks);
+vi.mock('./catalog/catalogDB.js', () => catalogMocks);
 
 const sb = await import('./storyBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');

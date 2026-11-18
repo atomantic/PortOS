@@ -335,11 +335,11 @@ async function commitCatalogCast(projectId, decisions, deps) {
 
 async function defaultDeps() {
   const [catalogDB, projects, { getUniverse }, { queueProjectCatalogLinkSync }, { createOwnedPrimitive }] = await Promise.all([
-    import('../catalogDB.js'),
+    import('../catalog/catalogDB.js'),
     import('./projects.js'),
     import('../universeBuilder.js'),
     import('./catalogLinks.js'),
-    import('../catalogPrimitives.js'),
+    import('../catalog/catalogPrimitives.js'),
   ]);
   return { catalogDB, getUniverse, createOwnedPrimitive, getProject: projects.getProject, getStoredProject: projects.getStoredProject, listProjects: projects.listProjects, mutateProjectRecord: projects.mutateProjectRecord, queueProjectCatalogLinkSync };
 }

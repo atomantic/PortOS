@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import { canonicalStringify } from '../../lib/objects.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { catalogScrapCommitSchema } from '../../lib/catalogValidation.js';
+import { catalogScrapCommitSchema } from '../../lib/catalog/catalogValidation.js';
 import { query, withTransaction } from '../../lib/db.js';
 import { createIngredient, getIngredient } from './ingredients.js';
 import { linkIngredientToSource, linkIngredientToRef, linkIngredientRelation, universeRefRoleForType } from './refs.js';
@@ -64,7 +64,7 @@ async function withScrapCanon({ universeRef, role, accepted = [] }, produce) {
   const eligible = (type) => CANON_FIELD[type] && (!role || role === `canon-${type}`);
   if (!universeRef || !accepted.some((draft) => eligible(draft.type))) return withTransaction(produce);
   const { updateUniverse } = await import('../universeBuilder.js');
-  const { canonEntryFor } = await import('../catalogPrimitives.js');
+  const { canonEntryFor } = await import('../catalog/catalogPrimitives.js');
   let ingredients;
   await updateUniverse(universeRef, async (current, { client }) => {
     ingredients = await produce(client);

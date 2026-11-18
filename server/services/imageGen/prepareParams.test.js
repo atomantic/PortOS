@@ -20,7 +20,7 @@ vi.mock('../../lib/paths.js', async (importOriginal) =>
 afterAll(cleanupTempDataRoots);
 
 const greyboxCatalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => greyboxCatalog);
+vi.mock('../catalog/catalogDB.js', () => greyboxCatalog);
 
 const getSettings = vi.fn(async () => ({}));
 vi.mock('../settings.js', () => ({ getSettings: (...a) => getSettings(...a) }));

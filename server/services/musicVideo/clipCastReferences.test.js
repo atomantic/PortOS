@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredient: vi.fn() }));
-vi.mock('../catalogDB.js', () => catalog);
+vi.mock('../catalog/catalogDB.js', () => catalog);
 const getProject = vi.fn();
 const loadSceneCastMedia = vi.fn();
 vi.mock('./projects.js', () => ({ getProject: (...args) => getProject(...args) }));

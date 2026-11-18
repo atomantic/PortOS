@@ -4,10 +4,10 @@ Tracking: #13609.
 
 ## Existing contracts
 
-- `server/lib/catalogTypes.js` owns character, place (Environments), object,
+- `server/lib/catalog/catalogTypes.js` owns character, place (Environments), object,
   idea, scene, concept and custom catalog types. Do not introduce parallel
   Cast/Environment stores.
-- `server/services/catalogCanonProjection.js` treats catalog rows as canonical
+- `server/services/catalog/catalogCanonProjection.js` treats catalog rows as canonical
   identity and embedded universe canon as a compatibility projection. Preserve
   embedded entry IDs: series, image jobs, voice profiles and FableLoom address
   those IDs rather than catalog IDs.

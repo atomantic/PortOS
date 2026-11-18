@@ -46,7 +46,7 @@ import { signalDetachedGroups } from '../lib/credentialBootstrap.js';
 import { createHttpDrain } from '../lib/httpDrain.js';
 import { createEventLoopLagProbe } from '../lib/eventLoopLagProbe.js';
 import { quiesce as quiesceScheduledEvents, drain as drainScheduledEvents } from './eventScheduler.js';
-import { setUserCatalogTypes } from '../lib/catalogTypes.js';
+import { setUserCatalogTypes } from '../lib/catalog/catalogTypes.js';
 import { runMigrations } from '../../scripts/run-migrations.js';
 
 import {
@@ -154,8 +154,8 @@ import { initLoraTraining } from './loraTraining/index.js';
 import { initSharing, quiesceSharingForExit, drainPeerSyncOperations } from './sharing/index.js';
 import { initMortalLoomStore } from './mortalLoomStore.js';
 import { initUniverseBuilderCollectionHook } from './universeBuilderCollectionHook.js';
-import { initCatalogImageAttachHook } from './catalogImageAttachHook.js';
-import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalogUniverseFiling.js';
+import { initCatalogImageAttachHook } from './catalog/catalogImageAttachHook.js';
+import { initCatalogUniverseFiling, flushCatalogUniverseFiling } from './catalog/catalogUniverseFiling.js';
 import { initWritersRoomSceneImageHook } from './writersRoomSceneImageHook.js';
 import { startHostedSessionSweep, stopHostedSessionSweep } from './fableLoom/hostedSession.js';
 import { initFableLoomSceneImageHook } from './fableLoomSceneImageHook.js';

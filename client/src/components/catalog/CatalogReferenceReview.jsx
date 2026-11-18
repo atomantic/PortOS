@@ -4,7 +4,7 @@ import { useModelInputPreview } from '../../hooks/useModelInputPreview';
 import useMounted from '../../hooks/useMounted';
 import ModelInputPreview from '../media/ModelInputPreview';
 import MediaJobThumb from '../pipeline/MediaJobThumb';
-import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus } from '../../../../server/lib/catalogMediaLibrary.js';
+import { REFERENCE_REVIEW_WRITE_STATUSES, referenceReviewStatus } from '../../../../server/lib/catalog/catalogMediaLibrary.js';
 
 export default function CatalogReferenceReview({ ingredientId, media, readOnly, saving, onSave, onChanged, revision, blockedReason }) {
   const id = useId();

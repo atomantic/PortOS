@@ -9,7 +9,7 @@ vi.mock('../services/promptRunner.js', () => ({
   assertProvider: vi.fn(), runPromptThroughProvider: state.run,
 }));
 vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: state.get }));
-vi.mock('../services/catalogPrimitives.js', () => ({
+vi.mock('../services/catalog/catalogPrimitives.js', () => ({
   getPrimitiveContext: async () => ({ owner: { refId: 'world' } }), setPrimitiveOwner: vi.fn(), forkPrimitive: vi.fn(),
 }));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: async () => ({ name: 'World', styleNotes: 'Watercolor' }) }));
