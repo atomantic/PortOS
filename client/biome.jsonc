@@ -153,6 +153,8 @@
         "noDangerouslySetInnerHtmlWithChildren": "error"
       },
       "suspicious": {
+        // Use inline confirmations or toasts for browser interactions.
+        "noAlert": "error",
         // eslint: no-async-promise-executor
         "noAsyncPromiseExecutor": "error",
         // eslint: no-ex-assign

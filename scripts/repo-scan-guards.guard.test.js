@@ -83,7 +83,7 @@ describe('tree guards are selected by filename (#5055, #16085, #16553)', () => {
     expect(getGuardTests()).toEqual(trackedTests.filter(isGuardTest).sort());
     expect(getGuardTests()).toContain('scripts/agent-instructions-files.guard.test.js');
     expect(getGuardTests()).toContain('scripts/tailnet-identity-leak.guard.test.js');
-    expect(getGuardTests()).toContain('server/lib/textUtils.guard.test.js');
+    expect(getGuardTests()).toContain('server/logLevelConventions.guard.test.js');
     expect(getGuardTests().length).toBeGreaterThanOrEqual(8);
   });
 
