@@ -417,9 +417,9 @@ Filing carries a **required** label contract for quota-burn audits,
 `effort:` label on every issue, chosen as independent axes from the code the
 agent just read (`MANDATORY_DISPATCH_HINT_GUIDANCE` in
 `server/lib/dispatchLabels.js`). Contributor labels (`good first issue`, `help
-wanted`) stay optional, missing labels are created lazily, category labels
-(`plan`, `ux`, `bug`, `tests`, `area:*`, …) are preserved, and the agent reads
-each new issue's labels back to repair any that did not stick.
+wanted`) stay optional, a label is created only if the forge rejects it as
+missing, and category labels (`plan`, `ux`, `bug`, `tests`, `area:*`, …) are
+preserved. The rendered contract is capped at 3,000 bytes.
 
 ### The "lands no code" postures
 
