@@ -8,7 +8,7 @@ import { isFilmLookNeutral } from '../filmLook.js';
 import { musicVideoOverscan } from './musicVideoFilmLook.js';
 import { activeShotColorMatch } from '../shotColorMatch.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
+import { isCatalogMediaReferenceId, isLegacyCatalogReference, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoPanelArtReferences, musicVideoSceneCastIds, musicVideoShotSheetCastIds } from './musicVideoConditioning.js';
 import { presentCharacterReferenceStates } from './musicVideoCharacterReferenceAge.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
@@ -58,8 +58,9 @@ const snapshot = (references) => ({ version: MUSIC_VIDEO_DEPENDENCY_VERSION, ref
 
 // Keep the project's selected clip guides with the take, so an in-flight clip
 // cannot fill an empty slot after the director changes those selections.
-export function captureClipReferenceDependency(project, scene) {
+function clipReferenceDependency(project, scene, catalogUnavailable = false) {
   const ids = Array.isArray(scene?.clipReferenceIds) ? scene.clipReferenceIds : null;
+  const characterVariant = scene.characterVariant || null;
   const choices = musicVideoClipReferenceChoices(project, scene);
   const selected = ids ? ids.map((id) => choices.find((ref) => ref.id === id) || { id })
     : musicVideoClipConditioningReferences(project, scene, null, { limit: 8 });
@@ -67,8 +68,29 @@ export function captureClipReferenceDependency(project, scene) {
   // project snapshot cannot tell if those external guide files later changed.
   // Such a take must be explicitly reviewed before filling an empty slot.
   const untrackedCastGuides = ids ? ids.some((id) => !choices.some((ref) => ref.id === id)) : !!scene.characterVariant;
-  return { role: 'clipReferences', sceneId: scene.sceneId, assetId: scene.sceneId,
-    untrackedCastGuides, revision: checksum({ ids, selected, characterVariant: scene.characterVariant || null }) };
+  // A saved local image can be a legacy sheet that only becomes selectable
+  // when the catalog offers the same file. Exclude that case from local proof.
+  const { catalogCheckin: _resolved, ...storedStage } = project?.castAndSets || {};
+  const stored = { castAndSets: storedStage, visualSpec: project?.visualSpec };
+  const isLocal = (ref) => ref.imageId && !String(ref.id).startsWith('mvr-catalog-')
+    && !isCatalogMediaReferenceId(ref.id) && !isLegacyCatalogReference(stored, ref);
+  const dependency = { role: 'clipReferences', sceneId: scene.sceneId, assetId: scene.sceneId, untrackedCastGuides,
+    revision: checksum({ ids, selected, characterVariant }),
+    // Keep the original hash and role readable by older installs.
+    localSelectionRevision: checksum({ ids, characterVariant, selected: ids ? selected.filter(isLocal) : [] }),
+  };
+  if (!catalogUnavailable) return dependency;
+  // Auto can inherit an explicit frame list. With no such list, the catalog
+  // can supply or displace references in the automatic set.
+  const picks = ids ?? scene.frameReferenceIds;
+  const candidates = ids ? selected : [...choices, ...musicVideoPanelArtReferences(scene)];
+  if (Array.isArray(picks) && picks.every((id) => candidates.some((ref) => ref.id === id && isLocal(ref)))) return dependency;
+  return { ...dependency, catalogUnavailable: true,
+    legacyEmptyRevision: checksum({ ids: [], selected: [], characterVariant }) };
+}
+
+export function captureClipReferenceDependency(project, scene) {
+  return clipReferenceDependency(project, scene);
 }
 
 // Frame provenance stays BESIDE `dependencies`. New roles inside
@@ -197,7 +219,7 @@ function frameDependencyChanges(project, scene, dependencies) {
   return changes;
 }
 
-function frameStatus(changes) {
+function dependencyStateFromChanges(changes) {
   if (!changes.length) return { status: 'current', reasons: [] };
   const reasons = [...new Set(changes.map((change) => change.reason))];
   return { status: changes.some((change) => change.role !== 'unknown') ? 'stale' : 'unknown', reasons };
@@ -219,7 +241,7 @@ function legacyFrameState(scene, take) {
 /** Selected-frame validity for one image or end-frame take. Null for any other kind. */
 function imageFrameDependencyState(project, scene, take) {
   if (take?.kind !== 'image' && take?.kind !== 'endImage') return null;
-  if (take.frameDependencies) return frameStatus(frameDependencyChanges(project, scene, take.frameDependencies));
+  if (take.frameDependencies) return dependencyStateFromChanges(frameDependencyChanges(project, scene, take.frameDependencies));
   return legacyFrameState(scene, take);
 }
 
@@ -330,6 +352,7 @@ export function captureMusicVideoEvidence(project, { sceneIds = null, startSec =
 // project. Share current references only within that synchronous read: project
 // objects can be mutated in place between reads, including before a save.
 function createDependencyReader(project) {
+  const catalogUnavailable = project.castAndSets?.catalogCheckin?.problems?.some((problem) => problem.code === 'CATALOG_UNAVAILABLE');
   let song;
   let finish;
   let scenesById;
@@ -361,7 +384,7 @@ function createDependencyReader(project) {
     if (!references.has(ref.role)) references.set(ref.role, slots[ref.role] ? assetRef(scene, ref.role)
       : ref.role === 'layer' ? layerRef(scene)
         : ref.role === 'colorMatch' ? colorMatchRef(project, scene)
-        : ref.role === 'clipReferences' ? captureClipReferenceDependency(project, scene) : null);
+        : ref.role === 'clipReferences' ? clipReferenceDependency(project, scene, catalogUnavailable) : null);
     return references.get(ref.role);
   };
 }
@@ -374,7 +397,18 @@ function dependencyChanges(dependencies, readCurrent) {
     ? [{ role: 'song', reason: 'Song dependency evidence was not recorded; review again' }] : [];
   for (const ref of dependencies.references) {
     const current = readCurrent(ref);
-    if (!current || current.assetId !== ref.assetId || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
+    const sameAsset = current?.assetId === ref.assetId;
+    if (sameAsset && current?.catalogUnavailable) {
+      // A legacy hash can prove an empty selection with the same stored variant,
+      // but cannot isolate local changes in an old mixed selection.
+      const localChanged = ref.localSelectionRevision
+        ? ref.localSelectionRevision !== current.localSelectionRevision : ref.revision === current.legacyEmptyRevision;
+      if (!localChanged) {
+        changes.push({ role: 'unknown', catalogUnavailable: true, reason: 'Catalog references could not be read; review again' });
+        continue;
+      }
+    }
+    if (!current || !sameAsset || current.catalogUnavailable || (current.revision !== ref.revision && current.legacyRevision !== ref.revision)) {
       changes.push({ ...ref, reason: `${ref.role === 'song' ? 'Master audio, lyrics or alignment' : ref.role === 'plate' ? 'Selected plate or its crop/mask inputs' : ref.role === 'endPlate' ? 'Selected end frame' : ref.role === 'clip' ? 'Selected clip' : ref.role === 'clipReferences' ? 'Selected clip references' : ref.role === 'layer' ? 'Shot timing or composition layer' : ref.role === 'colorMatch' ? 'Shot color match' : ref.role === 'finish' ? 'Video finish settings (film look, title card, credits, cameras, overscan, sound bed or lyric overlay)' : 'Composition'} changed` });
     }
   }
@@ -432,7 +466,8 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   for (const scene of project.scenes || []) {
     const take = selectedTake(scene, 'clip') || (!scene.videoHistoryId
       ? (scene.takes || []).findLast((entry) => entry.kind === 'video' && entry.status === 'rejected') : null);
-    const changes = take ? takeChanges(project, scene, take, readCurrent) : [];
+    // A transient outage cannot justify rejecting a selected take for regeneration.
+    const changes = take ? takeChanges(project, scene, take, readCurrent).filter((change) => !change.catalogUnavailable) : [];
     const audio = performanceChanges.filter((entry) => entry.sceneId === scene.sceneId);
     const unfinished = !scene.videoHistoryId && (project.revisions || []).some((revision) => revision.type === 'dependencies'
       && revision.sections?.some((section) => section.sceneId === scene.sceneId && section.verdict === 'rejected'));
@@ -443,7 +478,7 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   const affected = new Set(shots.map((shot) => shot.sceneId));
   const evidence = [];
   const check = (kind, id, dependencies, scope = {}) => {
-    const changes = dependencyChanges(dependencies, readCurrent);
+    const changes = dependencyChanges(dependencies, readCurrent).filter((change) => !change.catalogUnavailable);
     const transitive = (dependencies?.references || []).some((ref) => affected.has(ref.sceneId));
     if (changes.length || transitive) evidence.push({ kind, id, reasons: [...new Set([
       ...changes.map((entry) => entry.reason), ...(transitive ? ['Derived clip is stale'] : []),
@@ -475,11 +510,7 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
 export function presentMusicVideoDependencies(project) {
   if (!project) return project;
   const readCurrent = createDependencyReader(project);
-  const state = (dependencies) => {
-    const changes = dependencyChanges(dependencies, readCurrent);
-    return { status: changes.length ? (changes[0].role === 'unknown' ? 'unknown' : 'stale') : 'current',
-      reasons: [...new Set(changes.map((change) => change.reason))] };
-  };
+  const state = (dependencies) => dependencyStateFromChanges(dependencyChanges(dependencies, readCurrent));
   return presentCharacterReferenceStates({ ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
     ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),

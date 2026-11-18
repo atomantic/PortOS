@@ -383,6 +383,93 @@ describe('take decisions', () => {
     expect(states(sceneOf(selected.edit))).toEqual(states((await projects.getProject(p.id)).scenes[0]));
     withCatalogCheckin.mockImplementation(actual);
   });
+
+  it.each(['legacy', 'new'])('reads %s clip evidence through a catalog outage and recovery', async (version) => {
+    const { captureClipReferenceDependency } = await import('../../lib/musicVideo/musicVideoDependencies.js');
+    const { musicVideoCatalogReferenceId } = await import('../../lib/musicVideo/musicVideoConditioning.js');
+    const { getDependencyImpact } = await import('./revisionService.js');
+    await import('./catalogCheckin.js');
+    const catalogId = musicVideoCatalogReferenceId('lead', 'catalog.png');
+    const local = { id: 'local', imageId: 'local.png', label: 'Local guide', role: 'character', condition: true };
+    const replaced = { ...local, id: 'replaced', imageId: 'before.png' };
+    const subject = { id: 'lead', kind: 'character', name: 'Ada', ingredientId: 'cat-lead' };
+    const item = { subjectId: subject.id, ingredientId: subject.ingredientId, kind: subject.kind, name: subject.name, images: ['catalog.png'] };
+    const checkin = { items: [item], problems: [] };
+    const p = await projects.createProject({ name: 'Catalog outage' });
+    const addShot = async (clipReferenceIds) => {
+      const { sceneId } = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'Ada' });
+      return { sceneId, clipReferenceIds };
+    };
+    const catalog = await addShot([catalogId]);
+    const localOnly = await addShot([local.id]);
+    const changed = await addShot([catalogId]);
+    const auto = await addShot(null);
+    const mixed = await addShot([catalogId, replaced.id]);
+    const shots = new Map([catalog, localOnly, changed, auto, mixed].map(shot => [shot.sceneId, shot]));
+    const project = { concept: { subjects: [subject] }, visualSpec: { references: [local, replaced] },
+      castAndSets: { source: 'catalog', catalogCheckin: checkin } };
+    const record = (scene) => {
+      const ref = captureClipReferenceDependency(project, scene);
+      if (version === 'new') return ref;
+      const { role, sceneId, assetId, revision, untrackedCastGuides } = ref;
+      return { role, sceneId, assetId, revision, untrackedCastGuides };
+    };
+    const catalogRef = record(catalog);
+    const localRef = record(localOnly);
+    const changedRef = record({ ...changed, clipReferenceIds: [] });
+    const autoRef = record({ ...auto, frameReferenceIds: [local.id] });
+    const mixedRef = record(mixed);
+    const refs = new Map([catalogRef, localRef, changedRef, autoRef, mixedRef].map(ref => [ref.sceneId, ref]));
+    await projects.mutateProjectRecord(p.id, current => ({
+      project: {
+        ...current, concept: project.concept, castAndSets: { source: 'catalog' },
+        visualSpec: { references: [local, { ...replaced, imageId: 'after.png' }] },
+        renderHistoryId: 'render-1',
+        renderDependencies: { version: 1, references: [catalogRef, changedRef] },
+        scenes: current.scenes.map(scene => ({
+          ...scene, ...shots.get(scene.sceneId),
+          ...(scene.sceneId === auto.sceneId ? { frameReferenceIds: [local.id] } : {}),
+          videoHistoryId: 'clip-1',
+          takes: [{ takeId: 'take', kind: 'video', assetId: 'clip-1', source: 'generated', status: 'candidate',
+            dependencies: { version: 1, references: [refs.get(scene.sceneId)] } }],
+        })),
+      },
+    }), { sceneOnly: true, presentProject: false });
+
+    const actual = withCatalogCheckin.getMockImplementation();
+    let currentCheckin = checkin;
+    withCatalogCheckin.mockImplementation(async stored => ({
+      ...stored, castAndSets: { ...stored.castAndSets, catalogCheckin: currentCheckin },
+    }));
+    const statuses = result => Object.fromEntries(result.scenes.map(scene => [scene.sceneId, scene.takes[0].dependencyState.status]));
+    try {
+      const before = await projects.getProject(p.id);
+      expect(statuses(before)).toEqual({
+        [catalog.sceneId]: 'current', [localOnly.sceneId]: 'current', [changed.sceneId]: 'stale', [auto.sceneId]: 'current', [mixed.sceneId]: 'stale',
+      });
+
+      currentCheckin = { items: [{ ...item, images: [] }], problems: [{ code: 'CATALOG_UNAVAILABLE', subjectId: subject.id }] };
+      const during = await projects.getProject(p.id);
+      expect(statuses(during)).toEqual({
+        [catalog.sceneId]: 'unknown', [localOnly.sceneId]: 'current', [changed.sceneId]: 'stale', [auto.sceneId]: 'current',
+        [mixed.sceneId]: version === 'legacy' ? 'unknown' : 'stale',
+      });
+      expect(during.renderDependencyState).toEqual({ status: 'stale',
+        reasons: ['Catalog references could not be read; review again', 'Selected clip references changed'] });
+      const impact = await getDependencyImpact(p.id);
+      expect(new Set(impact.shots.map(shot => shot.sceneId))).toEqual(new Set(
+        version === 'legacy' ? [changed.sceneId] : [changed.sceneId, mixed.sceneId],
+      ));
+
+      currentCheckin = checkin;
+      const restored = await projects.getProject(p.id);
+      expect(statuses(restored)).toEqual(statuses(before));
+      expect(restored.renderDependencyState).toEqual({ status: 'stale', reasons: ['Selected clip references changed'] });
+      expect(restored.scenes.flatMap(scene => scene.takes[0].dependencies.references)).toEqual(restored.scenes.map(scene => refs.get(scene.sceneId)));
+    } finally {
+      withCatalogCheckin.mockImplementation(actual);
+    }
+  });
 });
 
 // Hold a public mutation immediately before the real backend acquires its write
