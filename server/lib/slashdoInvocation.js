@@ -15,8 +15,8 @@
  * regardless of a global install; pinned reviewer choices prune unreachable variants.
  */
 import { isTruthyMeta } from './metadataFlags.js';
-import { isClaudeProvider, isOpencodeProvider } from './providerModels.js';
-import { inferTuiCommand } from './providerVendors.js';
+import { isClaudeProvider, isOpencodeProvider } from './provider/providerModels.js';
+import { inferTuiCommand } from './provider/providerVendors.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 
 /** slashdo's command namespace — `commands/do/<cmd>.md` in the submodule. */

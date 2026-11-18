@@ -14,7 +14,7 @@ vi.mock('fs/promises', async original => {
   const actual = await original();
   return { ...actual, unlink: async path => { await state.beforeUnlink?.(path); return actual.unlink(path); } };
 });
-vi.mock('./providers.js', () => ({ getActiveProvider: async () => state.provider, getProviderById: async () => state.provider }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: async () => state.provider, getProviderById: async () => state.provider }));
 vi.mock('./promptService.js', () => ({ buildPrompt: async () => 'example prompt' }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => state.runProvider(...args) }));
 vi.mock('./digital-twin-context.js', () => ({ getDigitalTwinForPrompt: async () => '' }));

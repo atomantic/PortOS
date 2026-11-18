@@ -17,7 +17,7 @@ vi.mock('./brainJournal.js', () => ({
   upsertAutoSection: vi.fn(async () => {}),
 }));
 vi.mock('./tribe.js', () => ({ getPerson: vi.fn(async () => null) }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn(async () => state.provider) }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn(async () => state.provider) }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: vi.fn(async () => ({ text: 'A quiet day.' })) }));
 
 import { runPromptThroughProvider } from './promptRunner.js';

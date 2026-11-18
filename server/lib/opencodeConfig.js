@@ -10,7 +10,7 @@
  *     {"name":"UnknownError","data":{"message":"Unexpected server error…"}}
  *
  * which reads like a broken provider. Two OTHER failures share the "spawns, ~12s, no
- * output" shape: `model '<id>' not found` (daemon lacks it; `services/providerReadiness.js`
+ * output" shape: `model '<id>' not found` (daemon lacks it; `services/provider/providerReadiness.js`
  * reports it) and `<id> does not support tools` (filtered by `_fetchOllamaToolCapableModels`).
  */
 
@@ -22,8 +22,8 @@ import {
   parseOpencodeConfigContent,
   OPENCODE_BUILD_AGENT,
   OPENCODE_PUBLIC_REVIEW_AGENT,
-} from './providerModels.js';
-import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './providerGateways.js';
+} from './provider/providerModels.js';
+import { PROVIDER_GATEWAYS, PROVIDER_GATEWAY_IDS, gatewayById, isGatewayNamespace } from './provider/providerGateways.js';
 import { isPublicReviewNoToolProfile } from './agent/agentExecutionProfiles.js';
 import { isPlainObject } from './objects.js';
 import { PORTS } from './ports.js';

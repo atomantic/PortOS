@@ -10,7 +10,7 @@ import {
   resolveCallerModePolicy,
 } from './callerModePolicy.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
-import { ROUTE_MODES } from './providerHarnesses.js';
+import { ROUTE_MODES } from './provider/providerHarnesses.js';
 
 const cli = { id: 'claude-code', type: 'cli' };
 const tui = { id: 'claude-code-tui', type: 'tui' };

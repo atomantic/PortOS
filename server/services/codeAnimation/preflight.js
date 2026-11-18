@@ -1,10 +1,10 @@
 /** Data-only preview. No provider invocation, tool probe, or execution grant. */
 import { getProductionProject } from './projects.js';
-import { getProviderById, getSelectableProviders } from '../providers.js';
+import { getProviderById, getSelectableProviders } from '../provider/providers.js';
 import { applyModelAccess } from '../../lib/aiToolkit/internal/modelAccess.js';
-import { harnessForProvider, providerRouteMode } from '../../lib/providerHarnesses.js';
-import { effortLevelsForProvider, hasEffortFlag, isConfiguredDefaultModel, antigravityBaseModels } from '../../lib/providerModels.js';
-import { isCompositeProviderId } from '../../lib/providerRef.js';
+import { harnessForProvider, providerRouteMode } from '../../lib/provider/providerHarnesses.js';
+import { effortLevelsForProvider, hasEffortFlag, isConfiguredDefaultModel, antigravityBaseModels } from '../../lib/provider/providerModels.js';
+import { isCompositeProviderId } from '../../lib/provider/providerRef.js';
 import { isVisionCapableCliProvider } from '../../lib/localModelHeuristics.js';
 import { isVisionCapableCodexTuiProvider } from '../../lib/codex.js';
 import { ServerError } from '../../lib/errorHandler.js';

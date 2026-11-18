@@ -7,7 +7,7 @@
  * and outcome in the mind trajectory, and only then queues an internal task.
  */
 
-import { isProcessProvider } from '../../lib/providerTypes.js';
+import { isProcessProvider } from '../../lib/provider/providerTypes.js';
 import {
   PERSISTENT_MIND_TASK_LIMITS,
   isPersistentMindTaskModelAllowed,
@@ -16,7 +16,7 @@ import {
 } from '../../lib/persistent/persistentMindCapabilities.js';
 import { PERSISTENT_MIND_ID } from '../../lib/persistent/persistentMindTrajectory.js';
 import { boundedByJsonChars, canonicalStringify } from '../../lib/objects.js';
-import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../../lib/providerModels.js';
+import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../../lib/provider/providerModels.js';
 import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
 import { sha256Text } from '../../lib/fileUtils.js';
 import { boundedErrorMessage } from '../../lib/errorHandler.js';
@@ -27,13 +27,13 @@ import { getActiveApps, getAppWorkTracker } from '../apps.js';
 import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
 import { loadState } from '../cos/cosState.js';
 import { addTask, firstLine, getCosTasks, getTaskById } from '../cos/cosTaskStore.js';
-import { getProviderPrerequisiteReadinessMap } from '../providerPrerequisites.js';
+import { getProviderPrerequisiteReadinessMap } from '../provider/providerPrerequisites.js';
 import { listManagedBackendModels } from '../localLlm.js';
 // listSelectableProviders, not listProviders: both reads below OFFER models
 // — the task catalog's per-provider allowlist and the choice validator that
 // accepts or refuses a submitted model — so they must see the install's
 // entitlement, not the vendor's whole advertised catalog (docs/MODEL_ACCESS.md).
-import { listSelectableProviders } from '../providers.js';
+import { listSelectableProviders } from '../provider/providers.js';
 import {
   assessPersistentMindWorkspaceReadiness,
   readPersistentMindWorkspacePreflight,

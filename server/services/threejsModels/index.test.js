@@ -12,7 +12,7 @@ vi.mock('../promptRunner.js', () => ({
   runPromptThroughProvider: vi.fn(),
 }));
 
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
@@ -26,7 +26,7 @@ vi.mock('./db.js', () => ({
 }));
 
 import { runPromptThroughProvider } from '../promptRunner.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import * as store from './db.js';
 import { createModel, startGeneration } from './index.js';
 

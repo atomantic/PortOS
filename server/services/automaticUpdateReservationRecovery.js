@@ -72,7 +72,7 @@ export async function checkActivity(update, operations) {
     updatePid: update.ownerPid,
     loadAgent: async id => agents[agentOps.findIndex(op => op.resource === id)]
       ?? owners[runnerOps.findIndex(op => op.resource === id)] ?? null,
-    loadProvider: async id => (await import('./providers.js')).getProviderById(id),
+    loadProvider: async id => (await import('./provider/providers.js')).getProviderById(id),
     loadApp: async id => (await import('./apps.js')).getAppById(id) });
   if (runnerScopeUnavailable) limitations.push('runner-cwd-unavailable');
   return { pids: [...owners.filter((_, index) => ordinaryRunners.includes(runnerOps[index])),

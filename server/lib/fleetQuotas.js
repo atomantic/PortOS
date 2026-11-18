@@ -9,7 +9,7 @@
  * them would multiply one allowance) and SUMMING activity counts (those are per-machine, which is why
  * the provider captions them "does not include other devices"); `fleetNote` writes the caption naming
  * what was combined. `metrics[]` is left local — its values are prose, not addends. Fed by
- * `services/providerQuotaShare.js` (this machine's readings, persisted) and `services/peerUsage.js`
+ * `services/provider/providerQuotaShare.js` (this machine's readings, persisted) and `services/peerUsage.js`
  * (the `usage` sync category that carries them).
  *
  * A PortOS user commonly runs several federated installs against the SAME

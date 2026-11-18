@@ -7,7 +7,7 @@ import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
 import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
 import { isPlainObject as isObject } from '../lib/objects.js';
-import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
+import { parseCodexRollout } from '../lib/provider/providerTranscriptUsage.js';
 import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
 
 // Verified metadata only, never records: path -> { revision, source }. Oldest

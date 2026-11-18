@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, PROVIDER_REF_MESSAGE, parseProviderRef } from './providerRef.js';
+import { MAX_PROVIDER_REF_LENGTH, PRESET_ID_RE, PRESET_ONLY_MESSAGE, PROVIDER_REF_MESSAGE, parseProviderRef } from './provider/providerRef.js';
 
 function stripDefault(schema) {
   const type = schema?.def?.type;

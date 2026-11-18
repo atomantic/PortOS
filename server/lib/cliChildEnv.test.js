@@ -4,7 +4,7 @@ import { posixPath } from './testHelper.js';
 import { buildCliChildEnv, buildPublicReviewCliEnv, composeProviderEnv } from './cliChildEnv.js';
 import { PUBLIC_REVIEW_ACTIONS_EXECUTION_PROFILE, PUBLIC_REVIEW_EXECUTION_PROFILE } from './agent/agentExecutionProfiles.js';
 import { cliProviderAuthDescriptor } from './processEnv.js';
-import { supportsPublicReviewProvider } from './providerVendors.js';
+import { supportsPublicReviewProvider } from './provider/providerVendors.js';
 import { AGENT_GUARD_BIN } from './agentGuard/index.js';
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';

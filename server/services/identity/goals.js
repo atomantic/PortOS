@@ -19,7 +19,7 @@ import {
 } from './store.js';
 import { applyFreshTimeHorizons, deriveLongevity } from './longevity.js';
 import { tombstoneGoal } from './goalTombstones.js';
-import { getActiveProvider, getProviderById } from '../providers.js';
+import { getActiveProvider, getProviderById } from '../provider/providers.js';
 
 /**
  * Read the longevity snapshot with `timeHorizons` re-derived against today (#4122).

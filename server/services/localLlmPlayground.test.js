@@ -2,14 +2,14 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./runner.js', () => ({ createRun: vi.fn(), finalizeRunRecord: vi.fn() }));
 vi.mock('./localLlm.js', () => ({ ensureBackendProvider: vi.fn(() => Promise.resolve()) }));
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
-vi.mock('./providerStatus.js', () => ({ markProviderAvailable: vi.fn(() => Promise.resolve()) }));
-vi.mock('./providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })) }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providerStatus.js', () => ({ markProviderAvailable: vi.fn(() => Promise.resolve()) }));
+vi.mock('./provider/providerExecutionReadiness.js', () => ({ ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })) }));
 
 import { buildPrompt, summarizeTimings, runLocalLlmTest } from './localLlmPlayground.js';
 import { __resetUsageSupport } from '../lib/openAiChatStream.js';
 import { createRun, finalizeRunRecord } from './runner.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 
 describe('buildPrompt', () => {
   it('returns the bare prompt when no system instructions', () => {

@@ -2,10 +2,10 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest, modelComparisonImportSchema } from '../lib/validation.js';
 import { getPublicModelComparison, importModelComparison } from '../services/modelComparison.js';
-import { getSelectableProviders } from '../services/providers.js';
-import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels, isAntigravityProvider } from '../lib/providerModels.js';
+import { getSelectableProviders } from '../services/provider/providers.js';
+import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels, isAntigravityProvider } from '../lib/provider/providerModels.js';
 import { localRuntimeKind } from '../lib/modelPinMembership.js';
-import { gatewayIdForProvider } from '../lib/providerGateways.js';
+import { gatewayIdForProvider } from '../lib/provider/providerGateways.js';
 import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
 
 export function createModelComparisonRoutes(providerService = { getSelectableProviders }) {

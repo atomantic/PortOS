@@ -33,7 +33,7 @@ import { extractJson } from '../../lib/jsonExtract.js';
 import { runPromptThroughProvider, assertVisionRunUsedImages } from '../promptRunner.js';
 import { buildEvaluateVisionPrompt, CD_MAX_SCENE_RETRIES } from '../creativeDirectorPrompts.js';
 import { getSettings } from '../settings.js';
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { listVisionModels } from '../localLlm.js';
 import { addItem } from '../mediaCollections.js';
 import { updateScene, recordRun, updateRun, getProject } from './local.js';

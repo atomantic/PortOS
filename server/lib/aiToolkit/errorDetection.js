@@ -705,7 +705,7 @@ export function createLocalRuntimeOomDetector({ maxBuffer = 512 } = {}) {
 // category's entire downstream policy — the SCHEMA_TYPE fix tier with its
 // compaction hints, and no provider bench (a provider that truncates one
 // over-long response serves every other prompt fine; see
-// isRequestSpecificCategory in lib/providerCooldown.js).
+// isRequestSpecificCategory in lib/provider/providerCooldown.js).
 const TRUNCATED_RESPONSE_PATTERN = /response\s+was\s+truncated\s+before\s+completion/i;
 
 export function detectTruncatedResponse(text) {

@@ -358,7 +358,7 @@ const FALLBACK_RATES = { rateModel: null, inputPer1M: 3.0, outputPer1M: 15.0 };
  *     (PortOS records no cache duration to price it against).
  *
  * The default matches Anthropic/OpenAI; Claude Code and Codex are the only CLIs
- * that write per-message cache counts (`lib/providerTranscriptUsage.js`), so other
+ * that write per-message cache counts (`lib/provider/providerTranscriptUsage.js`), so other
  * families' multipliers apply to counts that are currently 0.
  *
  * Fable 5.1 cut cache reads to 0.025x while write stayed 1.25x; the override is

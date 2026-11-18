@@ -6,10 +6,10 @@ const mocks = vi.hoisted(() => ({
   status: { message: 'offline' },
 }));
 
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async () => mocks.provider),
 }));
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providerStatus.js', () => ({
   isProviderAvailable: vi.fn(() => mocks.available),
   getProviderStatus: vi.fn(() => mocks.status),
 }));

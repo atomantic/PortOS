@@ -9,7 +9,7 @@
  * - pun-wordplay: creative wordplay and pun generation
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import {

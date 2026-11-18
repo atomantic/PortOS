@@ -1,7 +1,7 @@
 import { getSettings, updateSettingsWith } from './settings.js';
-import { listProviders, updateProvider } from './providers.js';
+import { listProviders, updateProvider } from './provider/providers.js';
 import { normalizeSubscriptionCosts } from './subscriptionCosts.js';
-import { PROVIDER_FAMILIES, familyForProvider, familyLabel } from '../lib/providerFamilies.js';
+import { PROVIDER_FAMILIES, familyForProvider, familyLabel } from '../lib/provider/providerFamilies.js';
 import { normalizePlanTier } from '../lib/subscriptionPlanTiers.js';
 import { mergeFamilyMap, normalizeFamilyMap } from '../lib/familySettingsMap.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';

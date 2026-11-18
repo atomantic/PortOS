@@ -92,7 +92,7 @@ program on one backend.
 | Policy rules (normalize, match, scope) | `server/lib/aiToolkit/internal/modelAccess.js` |
 | Storage + gateway inheritance | `server/lib/aiToolkit/providers.js` (`withGatewayModelAccess`) |
 | Schema | `server/lib/aiToolkit/validation.js` (`providerSchema.modelAccess`) |
-| The selecting-vs-executing seam | `server/services/providers.js` (`getSelectableProviders` / `listSelectableProviders`) |
+| The selecting-vs-executing seam | `server/services/provider/providers.js` (`getSelectableProviders` / `listSelectableProviders`) |
 | Applied to provider payloads | `server/routes/providers.js` (`presentProvider`) and `server/lib/aiToolkit/routes/providers.js` |
 | Applied to provider discovery and PortOS benchmark runs | `server/routes/modelPerformanceBenchmarks.js` |
 | Editor | `client/src/components/providers/ProviderModelAccess.jsx` |

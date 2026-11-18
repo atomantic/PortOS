@@ -5,7 +5,7 @@ const loadMeta = vi.fn();
 const readArchivedConversation = vi.fn();
 const runPromptThroughProvider = vi.fn();
 
-vi.mock('./providers.js', () => ({ getProviderById }));
+vi.mock('./provider/providers.js', () => ({ getProviderById }));
 vi.mock('./brainStorage.js', () => ({ loadMeta }));
 vi.mock('./chatgptImport.js', () => ({ readArchivedConversation }));
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider }));

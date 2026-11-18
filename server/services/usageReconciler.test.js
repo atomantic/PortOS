@@ -1567,7 +1567,7 @@ describe('resolveFamilyProvider', () => {
   });
 
   it('resolves a kimi provider by command, even though it has no subscription-quota family', () => {
-    // `lib/providerFamilies.js` deliberately has no `kimi` entry (no plan to
+    // `lib/provider/providerFamilies.js` deliberately has no `kimi` entry (no plan to
     // meter) — this must not make it unresolvable as a sibling-billing target.
     expect(resolveFamilyProvider([KIMI_PROVIDER], 'kimi')?.id).toBe('kimi-cli');
     expect(resolveFamilyProvider([{ ...KIMI_PROVIDER, enabled: false }], 'kimi')).toBeNull();

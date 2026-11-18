@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as zlib from 'node:zlib';
 import { assertCodexInventoryComplete, previewCodexUsage, readCodexAccountingSources } from '../server/services/codexUsageSources.js';
-import { parseCodexRollout } from '../server/lib/providerTranscriptUsage.js';
+import { parseCodexRollout } from '../server/lib/provider/providerTranscriptUsage.js';
 
 const exec = promisify(execFile);
 const script = resolve(import.meta.dirname, 'preview-codex-usage.js');

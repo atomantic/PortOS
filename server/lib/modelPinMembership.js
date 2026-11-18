@@ -3,7 +3,7 @@
  * that provider may still be handed.
  */
 
-import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antigravityCatalogListsModel, filterSelectableModels } from './providerModels.js';
+import { localRuntimeNamespace, isAntigravityProvider, isOpencodeProvider, antigravityCatalogListsModel, filterSelectableModels } from './provider/providerModels.js';
 import { PORTS } from './ports.js';
 import { isLocalInstanceHost, localEndpointPort } from './localEndpoint.js';
 

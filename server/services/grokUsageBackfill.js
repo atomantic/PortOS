@@ -16,8 +16,8 @@ import { copyFile, mkdir, readdir, readFile, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
-import { familyForProvider } from '../lib/providerFamilies.js';
-import { parseGrokTurns } from '../lib/providerTranscriptUsage.js';
+import { familyForProvider } from '../lib/provider/providerFamilies.js';
+import { parseGrokTurns } from '../lib/provider/providerTranscriptUsage.js';
 import { grokUsageProviderIdFromList } from './grokMediaUsage.js';
 import {
   galleryImageUsageEvent,

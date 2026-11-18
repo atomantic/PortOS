@@ -21,7 +21,7 @@ import {
 import { resolveUntrustedContentPolicy } from '../lib/untrustedContent.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { execGh } from './github.js';
-import { getAllProviders } from './providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { readSettingsStrict } from './settings.js';
 import { runUntrustedContentAnalysis } from './untrustedContent.js';
 

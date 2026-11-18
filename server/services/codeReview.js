@@ -15,7 +15,7 @@ import { EXECUTION_OPTIONS_ERROR } from '../lib/executionOptions.js';
 
 import { CODE_REVIEW_BATCH_BYTES, CODE_REVIEW_MAX_BATCHES, runCodeReviewBatches, takeCodeReviewCallBudget, isReviewContextCapacityFailure, reviewContextCapacityFailure } from '../lib/codeReviewBatches.js'
 import { withAbortTimeout, awaitWithAbort } from '../lib/abortTimeout.js'
-import { effortLevelsForProvider } from '../lib/providerModels.js'
+import { effortLevelsForProvider } from '../lib/provider/providerModels.js'
 import { DEFAULT_TIMEOUT as PROVIDER_DEFAULT_TIMEOUT_MS } from '../lib/aiToolkit/constants.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
@@ -61,7 +61,7 @@ import {
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
 import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
-import { getAllProviders, listProviders, getProviderById } from './providers.js'
+import { getAllProviders, listProviders, getProviderById } from './provider/providers.js'
 import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
 import { safeJSONLParse } from '../lib/jsonIo.js';
 import { PUBLIC_REVIEW_GATE_EXECUTION_PROFILE } from '../lib/agent/agentExecutionProfiles.js';
@@ -180,11 +180,11 @@ export async function reportReviewerFailure(reviewer, error, now = Date.now()) {
   if (isProvider) {
     const providerId = reviewer.slice('provider:'.length)
     if (isQuota) {
-      import('./providerStatus.js')
+      import('./provider/providerStatus.js')
         .then(({ markProviderUsageLimit }) => markProviderUsageLimit(providerId, { message }))
         .catch(() => {})
     } else if (shouldPause) {
-      import('./providerStatus.js')
+      import('./provider/providerStatus.js')
         .then(({ markProviderUnavailable }) => markProviderUnavailable(providerId, { reason: pauseReason, message, waitTimeMs: REVIEWER_PAUSE_MS }))
         .catch(() => {})
     }
@@ -904,7 +904,7 @@ export async function resolveProviderReviewTransport(provider, { allowUnconfined
   const { isCodexTextTransportEnabled } = await import('../lib/codexTurn.js')
   if (provider.type === 'api' || isCodexTextTransportEnabled(provider)) return { transport: 'api' }
   if (!provider.command) return { transport: null, code: 'REVIEWER_UNSUPPORTED', error: 'Reviewer provider has no command configured.' }
-  const { codeReviewTier } = await import('../lib/providerVendors.js')
+  const { codeReviewTier } = await import('../lib/provider/providerVendors.js')
   const tier = codeReviewTier(provider) || (allowUnconfined ? 'unconfined' : null)
   if (tier) return { transport: 'cli', tier }
   return {

@@ -22,7 +22,7 @@ import { existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { extname, join } from 'path';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { resolveCliModel, isCodexProvider, buildCodexStartupArgs, buildEffortArgs } from '../lib/providerModels.js';
+import { resolveCliModel, isCodexProvider, buildCodexStartupArgs, buildEffortArgs } from '../lib/provider/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, guardChildStdin, deliverChildStdin } from '../lib/bufferedSpawn.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';

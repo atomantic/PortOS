@@ -7,7 +7,7 @@
  * grammar (#7566): distinguishes a preset id from a
  * `<harness>.<method>@<service-slug>[+<bootstrap-slug>]` composite so `useProviderCatalog`'s
  * `resolveRef` and `ProviderComposePopover` recognize the same strings the server does. Re-exported
- * from the pure leaf `server/lib/providerRef.js`, never copied.
+ * from the pure leaf `server/lib/provider/providerRef.js`, never copied.
  */
 
 /**
@@ -20,6 +20,6 @@
  * `ProviderComposePopover` emits when the user composes rather than picks a
  * preset. Re-exported from the pure server leaf (never copied) so the browser
  * recognizes exactly the same strings the server does — see
- * `server/lib/providerRef.js` for the full grammar rationale.
+ * `server/lib/provider/providerRef.js` for the full grammar rationale.
  */
-export { parseProviderRef, isCompositeProviderId, isPresetProviderId, formatCompositeId, PRESET_ID_RE, COMPOSITE_ID_RE } from '../../../server/lib/providerRef.js';
+export { parseProviderRef, isCompositeProviderId, isPresetProviderId, formatCompositeId, PRESET_ID_RE, COMPOSITE_ID_RE } from '../../../server/lib/provider/providerRef.js';

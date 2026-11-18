@@ -36,8 +36,8 @@ import { prepareCliPrompt } from '../../lib/cliProviderArgs.js';
 // buildCliSpawnConfig's per-vendor argv construction dispatches through the
 // PROVIDER_VENDORS registry (#3618) instead of a hand-rolled per-vendor
 // if-chain — see providerVendors.js for the vendor rows.
-import { buildVendorSpawnConfig } from '../../lib/providerVendors.js';
-import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../../lib/providerModels.js';
+import { buildVendorSpawnConfig } from '../../lib/provider/providerVendors.js';
+import { resolveCliModel, providerSuppliesGithubToken, isOllamaClaudeProvider } from '../../lib/provider/providerModels.js';
 import { resolveForgeTokenEnv } from '../forgeAuth.js';
 import { createTranscriptWriteReporter } from '../agentTuiSpawning/outputSpooler.js';
 import { resolveAgentCliCwd } from '../../lib/spawnCwd.js';
@@ -48,7 +48,7 @@ import { resolvePrOwnership } from '../../lib/slashdoInvocation.js';
 import { doneSentinelPath } from '../../lib/agent/agentSentinel.js';
 import { isHostShuttingDown, HOST_SHUTDOWN_REASON } from '../../lib/hostShutdown.js';
 import { ensureOllamaAgentContext } from '../ollamaAgentContext.js';
-import { isOllamaBackedProvider } from '../providers.js';
+import { isOllamaBackedProvider } from '../provider/providers.js';
 import { isPublicReviewRestrictedProfile } from '../../lib/agent/agentExecutionProfiles.js';
 import { createStreamJsonParser, summarizeToolInput, safeParse } from '../../lib/streamJsonParser.js';
 
@@ -102,7 +102,7 @@ export const isClaudeCliProvider = (provider) =>
  * Antigravity, etc. that run in a PTY). Used by callers that need to branch
  * between headless CLI/API runs and TUI shell sessions.
  */
-export { isTuiProvider } from '../../lib/providerTypes.js';
+export { isTuiProvider } from '../../lib/provider/providerTypes.js';
 
 /**
  * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.

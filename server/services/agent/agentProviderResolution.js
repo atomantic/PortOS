@@ -1,9 +1,9 @@
 import { isForgeMaintenanceTask, hasCurrentForgeMaintenanceEvidence, LEGACY_FORGE_MAINTENANCE_REASON } from '../../lib/forgeMaintenanceTasks.js';
-import { isProcessProvider } from '../../lib/providerTypes.js';
-import { isCompositeProviderId } from '../../lib/providerRef.js';
-import { peekFallbackChain } from '../../lib/providerFallbackChainCache.js';
+import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { isCompositeProviderId } from '../../lib/provider/providerRef.js';
+import { peekFallbackChain } from '../../lib/provider/providerFallbackChainCache.js';
 import { isPrivateSecurityTask, PRIVATE_SECURITY_DELIVERY } from '../../lib/privateSecurityPolicy.js';
-import { supportsPublicReviewProvider } from '../../lib/providerVendors.js';
+import { supportsPublicReviewProvider } from '../../lib/provider/providerVendors.js';
 /**
  * Agent Provider Resolution
  *
@@ -22,12 +22,12 @@ import { supportsPublicReviewProvider } from '../../lib/providerVendors.js';
 import { MODEL_TIERS } from '../../lib/aiToolkit/constants.js';
 import { emitLog } from '../cos/cosEvents.js';
 import { isPublicReviewNoToolProfile } from '../../lib/agent/agentExecutionProfiles.js';
-import { getActiveProvider, getAllProviders, getProviderById } from '../providers.js';
-import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../providerStatus.js';
+import { getActiveProvider, getAllProviders, getProviderById } from '../provider/providers.js';
+import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../provider/providerStatus.js';
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
 import { modelPinIsOffered } from '../../lib/localProviderRuntime.js';
 import { allowedModesFor, callerModeRejection } from '../../lib/callerModePolicy.js';
-import { attachGatewaySiblingKey } from '../../lib/providerGateways.js';
+import { attachGatewaySiblingKey } from '../../lib/provider/providerGateways.js';
 import { PRIMARY_ORCHESTRATION_ROLE, roleAssignment } from '../../lib/orchestrationProfile.js';
 import { publicReviewPostureForTask, resolvePublicReviewProvider } from '../publicReviewProviderSelection.js';
 

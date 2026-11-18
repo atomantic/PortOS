@@ -7,7 +7,7 @@
  * Uses the 'cos-task-enhance' prompt stage for provider/model configuration.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { getStage, buildPrompt } from './promptService.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { resolveModel } from './stageRunner.js';

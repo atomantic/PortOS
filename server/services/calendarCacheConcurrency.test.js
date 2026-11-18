@@ -21,7 +21,7 @@ vi.mock('./dailyReview.js', () => ({}));
 vi.mock('./googleOAuthAutoConfig.js', () => ({}));
 vi.mock('./messageTokenExtractor.js', () => ({}));
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') }));
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../lib/cliProviderRun.js', () => ({
   pickCliProvider: vi.fn(), runCliProviderPrompt: vi.fn(),

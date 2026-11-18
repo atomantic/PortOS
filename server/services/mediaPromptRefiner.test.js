@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
@@ -20,7 +20,7 @@ vi.mock('./runner.js', async (importOriginal) => {
   };
 });
 
-const providers = await import('./providers.js');
+const providers = await import('./provider/providers.js');
 const runner = await import('./runner.js');
 const { buildMediaPromptRefinePrompt, refineMediaPrompt } = await import('./mediaPromptRefiner.js');
 const { REACTOR_MAX_PROMPT_LENGTH } = await import('../lib/reactorVideoClip.js');

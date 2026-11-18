@@ -42,7 +42,7 @@ import { PATHS, sleep, tryReadFile } from '../../lib/fileUtils.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { appendRunEvent } from './agentRunEventLog.js';
 import { committedDuringRun, toEpochMs } from '../../lib/gitCommitProbe.js';
-import { providerSuppliesGithubToken } from '../../lib/providerModels.js';
+import { providerSuppliesGithubToken } from '../../lib/provider/providerModels.js';
 import { canTypeSlashCommands } from '../../lib/slashdoInvocation.js';
 import { composeProviderEnv } from '../../lib/cliChildEnv.js';
 import { cliProviderAuthDescriptor } from '../../lib/processEnv.js';

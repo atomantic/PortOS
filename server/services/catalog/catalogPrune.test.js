@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { runPromptThroughProvider } from '../promptRunner.js';
 import { pruneCatalogBabble } from './catalogPrune.js';
 import { catalogScrapCommitSchema } from '../../lib/catalog/catalogValidation.js';

@@ -15,7 +15,7 @@ vi.mock('../../lib/databaseMaintenanceJournal.js', async importOriginal => ({
 vi.mock('../socket.js', () => ({ emitCodeAnimationChanged: vi.fn() }));
 const jobs = vi.hoisted(() => ({ saveCodeAnimationJobRecord: vi.fn(async job => job), saveCodeAnimationHtml: vi.fn() }));
 vi.mock('./jobStore.js', async importOriginal => ({ ...(await importOriginal()), ...jobs }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getProviderById: vi.fn(async () => ({ id: 'example-tui', type: 'tui', enabled: true, timeout: 300000 })),
 }));
 const runner = vi.hoisted(() => ({

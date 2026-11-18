@@ -9,8 +9,8 @@ import {
   isAntigravityProvider,
   isCursorProvider,
   isKimiProvider,
-} from './providerModels.js';
-import { isGrokBuildCli, isProcessProvider } from './providerTypes.js';
+} from './provider/providerModels.js';
+import { isGrokBuildCli, isProcessProvider } from './provider/providerTypes.js';
 import { isKiloProvider } from './kilo.js';
 import { dedupeByKey } from './arrayUtils.js';
 

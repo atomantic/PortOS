@@ -16,7 +16,7 @@ vi.mock('../pm2.js', () => ({ execPm2: vi.fn(async () => ({})), getAppStatus: vi
 vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: vi.fn(async () => ({})) }));
 vi.mock('net', () => ({ createServer: vi.fn(() => ({})) }));
 vi.mock('./llm.js', () => ({ isToolCapable: vi.fn(() => false), isReasoningModel: vi.fn(() => false) }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn() }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(), updateSettings: vi.fn() }));
 vi.mock('../ollamaManager.js', () => ({

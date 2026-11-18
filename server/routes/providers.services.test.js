@@ -21,7 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { REDACTED_CREDENTIAL } from '../lib/providerConnections.js';
+import { REDACTED_CREDENTIAL } from '../lib/provider/providerConnections.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -35,7 +35,7 @@ const store = {
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
-vi.mock('../services/providerGraphStore.js', () => store);
+vi.mock('../services/provider/providerGraphStore.js', () => store);
 
 const providerService = {
   getAllProviders: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('../services/credentialInventory.js', async (importOriginal) => ({
   loadInstallEnvFile: async () => new Map([['CEREBRAS_API_KEY', 'example-env-file-key']]),
 }));
 
-const graph = await import('../services/providerGraph.js');
+const graph = await import('../services/provider/providerGraph.js');
 const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const ZEN_FREE = '11111111-1111-4111-8111-111111111111';

@@ -2,7 +2,7 @@
  * Codex constants and command helpers for the aiToolkit.
  *
  * `CODEX_COMMAND` and `isCodexCommand` are duplicated from
- * server/lib/codexAccount.js / server/lib/providerModels.js so the toolkit
+ * server/lib/codexAccount.js / server/lib/provider/providerModels.js so the toolkit
  * stays self-contained (no imports out to sibling PortOS modules — see
  * ../AGENTS.md); keep in sync with upstream.
  */

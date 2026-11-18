@@ -56,7 +56,7 @@ import {
   screenShowsInFlightChrome,
 } from './tuiHandshake.js';
 import { detectImmediateFallbackSignal } from './aiToolkit/errorDetection.js';
-import { CODEX_CONFIGURED_DEFAULT } from './providerModels.js';
+import { CODEX_CONFIGURED_DEFAULT } from './provider/providerModels.js';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';

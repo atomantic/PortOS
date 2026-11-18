@@ -33,7 +33,7 @@ import { normalizeEligibilityFacts } from './modelAbuseGuard.js';
 import { issuePrerequisiteWaived, linkedIssueIntentFingerprint } from '../lib/modelAbuseGuard.js';
 import { screenedPullRequestFingerprintMatches } from '../lib/prReviewContent.js';
 import { trimTo } from '../lib/textUtils.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 
 const IN_PROGRESS_LABEL_SPEC = dispatchLabelSpec(IN_PROGRESS_LABEL);
 

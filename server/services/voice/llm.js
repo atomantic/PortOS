@@ -6,7 +6,7 @@
 // not offered. Falls back to the legacy env-based LM Studio default when the
 // provider is missing, not API-type, or the toolkit hasn't warmed yet.
 
-import { getProviderById } from '../providers.js';
+import { getProviderById } from '../provider/providers.js';
 import { DEFAULT_VOICE_BACKEND } from './config.js';
 import { managedOllamaBaseUrl } from '../../lib/ollamaContext.js';
 import { normalizeOpenAiBaseUrl } from '../../lib/localProviderRuntime.js';

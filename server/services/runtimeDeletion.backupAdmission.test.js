@@ -9,7 +9,7 @@ vi.mock('../lib/fileUtils.js', async original => {
   return { ...makeProxy(actual), rmGuarded: async (...args) => { await seam.beforeRemove?.(args[0]); return actual.rmGuarded(...args); } };
 });
 vi.mock('./apps.js', () => ({ getAppById: async () => null }));
-vi.mock('./providerStatus.js', () => ({ initProviderStatus: async () => {} }));
+vi.mock('./provider/providerStatus.js', () => ({ initProviderStatus: async () => {} }));
 vi.mock('./cos/cosRunnerClient.js', () => ({ isRunnerAvailable: async () => false, isRunnerReachable: async () => false,
   initCosRunnerConnection() {}, onCosRunnerEvent() {} }));
 vi.mock('./agent/agentManagement.js', () => ({ cleanupOrphanedAgents: async () => {} }));

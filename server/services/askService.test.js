@@ -6,7 +6,7 @@ import { GROK_NO_TOOL_ARGS } from '../lib/grok.js';
 // orchestration logic itself: parallel retrieval, ranking, prompt assembly,
 // and stream-event shape.
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
@@ -18,7 +18,7 @@ vi.mock('./providers.js', () => ({
 // gate for any provider and never sends the chat request when it fails —
 // without depending on the real MTPLX/Slotstream/Ollama manager modules,
 // which are covered on their own terms in providerExecutionReadiness.test.js.
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: vi.fn(),
 }));
 
@@ -79,8 +79,8 @@ const autobiography = await import('./autobiography.js');
 const identity = await import('./identity.js');
 const character = await import('./character.js');
 const calendarSync = await import('./calendarSync.js');
-const providers = await import('./providers.js');
-const providerExecutionReadiness = await import('./providerExecutionReadiness.js');
+const providers = await import('./provider/providers.js');
+const providerExecutionReadiness = await import('./provider/providerExecutionReadiness.js');
 
 const askService = await import('./askService.js');
 

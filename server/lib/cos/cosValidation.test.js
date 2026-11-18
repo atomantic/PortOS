@@ -7,7 +7,7 @@ import {
   sanitizeTaskMetadata,
   taskTemplateSettingsSchema,
 } from './cosValidation.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { JOB_INTERVAL_VALUES, ON_DEMAND_INTERVAL } from '../autonomousJobIntervals.js';
 import { TASK_STATUS_VALUES, TASK_PRIORITY_VALUES } from '../taskParser.js';
 

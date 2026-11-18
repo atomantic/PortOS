@@ -22,8 +22,8 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
 }));
 
 // Short waits so the busy-retry tests run in milliseconds; the classifier and loop are the real ones.
-vi.mock('../../lib/providerTransientRetry.js', async () => {
-  const actual = await vi.importActual('../../lib/providerTransientRetry.js');
+vi.mock('../../lib/provider/providerTransientRetry.js', async () => {
+  const actual = await vi.importActual('../../lib/provider/providerTransientRetry.js');
   const delaysMs = [20, 20];
   return {
     ...actual,

@@ -33,7 +33,7 @@ import {
 } from '../../lib/investigationTasks.js';
 import { investigationCircuitOpen, noteInvestigationFiled, readAllTasksFlat, recentInvestigationCreations } from '../investigationTaskProducer.js';
 import { PRIMARY_CHECKOUT_MUTATED_CATEGORY, PRIMARY_CHECKOUT_MUTATED_ESCALATION, PRIMARY_CHECKOUT_MUTATED_REASON } from '../../lib/primaryCheckoutGuard.js';
-import { isPortosSuppliedConfigKey } from '../../lib/providerModels.js';
+import { isPortosSuppliedConfigKey } from '../../lib/provider/providerModels.js';
 import { getConfig } from '../cos/cosState.js';
 
 // Max retries before blocking a task
@@ -159,11 +159,11 @@ export const ERROR_PATTERNS = [
       const accepts = expected ? ` This CLI version expects ${expected}.` : '';
       // A rejection alone cannot identify the source of conditional speed overrides.
       const source = !key
-        ? `Look first in the CLI's own config file — for codex that is \`~/.codex/config.toml\` — then in the \`-c <key>=<value>\` overrides PortOS builds in server/lib/providerModels.js.`
+        ? `Look first in the CLI's own config file — for codex that is \`~/.codex/config.toml\` — then in the \`-c <key>=<value>\` overrides PortOS builds in server/lib/provider/providerModels.js.`
         : ['service_tier', 'features.fast_mode'].includes(key)
           ? `${keyRef} can come from an explicit PortOS execution-speed selection or the CLI configuration. Clear an unsupported speed selection or upgrade Codex; if no speed was selected, inspect provider args and \`~/.codex/config.toml\`. The rejection alone does not prove which source supplied it.`
         : isPortosSuppliedConfigKey(key)
-          ? `PortOS supplies ${keyRef} itself as a \`-c <key>=<value>\` override, so the accepted values belong in that provider's ladder in server/lib/providerModels.js — editing the CLI config file will not help.`
+          ? `PortOS supplies ${keyRef} itself as a \`-c <key>=<value>\` override, so the accepted values belong in that provider's ladder in server/lib/provider/providerModels.js — editing the CLI config file will not help.`
           : `PortOS never supplies ${keyRef}, so it is already in the CLI's own config file — for codex that is \`~/.codex/config.toml\`. Edit or delete that line, or upgrade this CLI to a version that accepts the value; a second, newer install of the same CLI sharing one config file is the usual source.`;
       return {
         message: `Provider CLI rejected its config: unknown ${kind} "${value}"${key ? ` for ${key}` : ''}`,
@@ -206,13 +206,13 @@ export const ERROR_PATTERNS = [
     category: 'cli-config-invalid',
     actionable: true,
     origin: 'runner', // fully structured — the CLI's own argv rejection
-    escalation: 'Correct the flag set PortOS builds for this provider/posture in server/lib/providerVendors.js, then approve the retry.',
+    escalation: 'Correct the flag set PortOS builds for this provider/posture in server/lib/provider/providerVendors.js, then approve the retry.',
     extract: (match) => {
       const flag = match[1];
       const requires = redactFailureSnippet(match[2] || '').replace(/[.,;]+$/, '').slice(0, CONFIG_EXPECTED_MAX_CHARS);
       return {
         message: `Provider CLI rejected the flag ${flag}`,
-        suggestedFix: `The CLI exited while parsing its arguments, before the prompt was delivered, so every retry fails identically.${requires ? ` It reports that \`${flag}\` only works with ${requires}.` : ''} PortOS builds this argv itself — fix the posture/vendor recipe in server/lib/providerVendors.js (an attachable \`tuiSpawnArgs\` recipe must drop every flag that requires \`--print\`), not the provider record.`,
+        suggestedFix: `The CLI exited while parsing its arguments, before the prompt was delivered, so every retry fails identically.${requires ? ` It reports that \`${flag}\` only works with ${requires}.` : ''} PortOS builds this argv itself — fix the posture/vendor recipe in server/lib/provider/providerVendors.js (an attachable \`tuiSpawnArgs\` recipe must drop every flag that requires \`--print\`), not the provider record.`,
         rejectedCliFlag: flag
       };
     }

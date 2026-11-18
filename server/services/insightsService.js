@@ -17,7 +17,7 @@ import { getGenomeSummary } from './genome.js';
 import { getBloodTests } from './meatspaceHealth.js';
 import { MARKER_CATEGORIES, CURATED_MARKERS } from '../lib/curatedGenomeMarkers.js';
 import { getTasteProfile } from './taste-questionnaire.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { getCorrelationData } from './appleHealthQuery.js';
 import { stripCodeFences, parseLLMJSON, callProviderAISimple } from './aiProvider.js';
 

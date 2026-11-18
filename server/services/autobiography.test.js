@@ -31,7 +31,7 @@ vi.mock('../lib/uuid.js', () => ({
 // Mock providers + AI provider (LLM calls in generateFollowUps / weaveChainNarrative)
 const mockGetActiveProvider = vi.fn();
 const mockGetProviderById = vi.fn();
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: (...args) => mockGetActiveProvider(...args),
   getProviderById: (...args) => mockGetProviderById(...args)
 }));

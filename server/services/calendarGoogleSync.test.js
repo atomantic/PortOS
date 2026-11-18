@@ -32,7 +32,7 @@ vi.mock('./calendarSync.js', () => ({
   }),
 }));
 
-vi.mock('./providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn(async () => ({ providers: {} })) }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';

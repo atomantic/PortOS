@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const getAllProviders = vi.fn();
 const isProviderAvailable = vi.fn(() => true);
 
-vi.mock('./providers.js', () => ({ getAllProviders }));
-vi.mock('./providerStatus.js', () => ({ isProviderAvailable }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders }));
+vi.mock('./provider/providerStatus.js', () => ({ isProviderAvailable }));
 
 const {
   eligiblePublicReviewProviders,

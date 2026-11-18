@@ -40,7 +40,7 @@ const providers = vi.hoisted(() => ({
   getAllProviders: vi.fn(async () => ({ activeProvider: null, providers: [] })),
   updateProvider: vi.fn(async () => ({})),
 }));
-vi.mock('./providers.js', () => providers);
+vi.mock('./provider/providers.js', () => providers);
 
 import { provisionVllmQwenProject, readVllmQwenSetupState, startVllmQwenProject, VLLM_UPSTREAM_REPO } from './vllmQwenManager.js';
 

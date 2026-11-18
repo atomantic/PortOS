@@ -35,19 +35,19 @@ const settingsMock = vi.hoisted(() => {
 });
 vi.mock('./settings.js', () => settingsMock);
 const store = vi.hoisted(() => ({ readGraph: vi.fn(async () => structuredClone(graphState.current)) }));
-vi.mock('./providerGraphStore.js', () => store);
-vi.mock('./providerGraph.js', async (importOriginal) => ({
+vi.mock('./provider/providerGraphStore.js', () => store);
+vi.mock('./provider/providerGraph.js', async (importOriginal) => ({
   ...(await importOriginal()),
   providerGraphEnabled: () => graphState.enabled,
 }));
-vi.mock('./providerRuntimeInstaller.js', async (importOriginal) => ({
+vi.mock('./provider/providerRuntimeInstaller.js', async (importOriginal) => ({
   ...(await importOriginal()),
   peekProviderRuntimeStatuses: () => runtimeState.current,
 }));
-vi.mock('./providerServices.js', () => ({ listServices: vi.fn(async () => ({ services: [{ slug: 'nvidia-nim' }] })) }));
+vi.mock('./provider/providerServices.js', () => ({ listServices: vi.fn(async () => ({ services: [{ slug: 'nvidia-nim' }] })) }));
 
 const composite = await import('./compositeProviders.js');
-const { instanceForConnection } = await import('../lib/providerServiceInstances.js');
+const { instanceForConnection } = await import('../lib/provider/providerServiceInstances.js');
 const { buildCliArgs } = await import('../lib/cliProviderArgs.js');
 const { buildTuiInvocation } = await import('../lib/tuiHandshake.js');
 const { buildTuiShellLaunch } = await import('../lib/tuiShellLaunch.js');
@@ -215,7 +215,7 @@ describe('materializeComposite — the run paths', () => {
   });
 
   it('carries the harness by name into the effort ladder, so a bootstrap-wrapped spawn still offers its rungs', async () => {
-    const { effortLevelsForProvider } = await import('../lib/providerModels.js');
+    const { effortLevelsForProvider } = await import('../lib/provider/providerModels.js');
     expect(effortLevelsForProvider(record('claude.cli@anthropic+corp-auth'))).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     expect(effortLevelsForProvider(record('pi.tui@nvidia-nim'))).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
     expect(effortLevelsForProvider(record('direct.api@nvidia-nim'))).toBeNull();

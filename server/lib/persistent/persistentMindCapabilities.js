@@ -12,7 +12,7 @@
 
 import { z } from 'zod';
 import { normalizeSandboxDelegationConfig, sandboxDelegationConfigSchema } from '../sandboxDelegation.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { PR_COMPLETION_VALUES } from '../prDisposition.js';
 import {
   normalizePortosSemanticToolGrants,

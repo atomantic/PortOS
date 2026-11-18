@@ -260,7 +260,7 @@ const errorInfoTag = (error) => {
  * shared cooldown/fallback policy already understands.
  *
  * Returning a category rather than a bench duration keeps the policy in
- * `lib/providerCooldown.js` — one table, so a quota exhaustion benches for the
+ * `lib/provider/providerCooldown.js` — one table, so a quota exhaustion benches for the
  * same window whichever path noticed it.
  */
 export const classifyCodexTurnError = (error) => {

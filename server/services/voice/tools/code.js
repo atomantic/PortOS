@@ -93,7 +93,7 @@ export const CODE_TOOLS = [
       // substitute the first enabled CLI/TUI provider, or fail with actionable
       // copy if none exists. A pin that doesn't resolve to a known provider is
       // left as-is (the spawner surfaces the unknown-provider error).
-      const { getActiveProvider, getAllProviders, getProviderById } = await import('../../providers.js');
+      const { getActiveProvider, getAllProviders, getProviderById } = await import('../../provider/providers.js');
       // Same named policy the CoS agent resolver and the fallback chain apply,
       // so "can this route run agent work?" has one answer across all three.
       const isCodeCapable = (p) => isCallerModeEligible(p, 'agent-harness');

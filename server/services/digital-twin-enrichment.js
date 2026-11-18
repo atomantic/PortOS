@@ -3,7 +3,7 @@ import { atomicWrite } from '../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../lib/backupSnapshotBoundary.js';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { ENRICHMENT_CATEGORIES, SCALE_QUESTIONS, SCALE_WEIGHT, CONFIDENCE_BOOST } from './digital-twin-constants.js';

@@ -126,7 +126,7 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
   // `codex exec -c model_reasoning_effort=max -`. Classifying it (not falling
   // through to `unknown`) is what keeps it a Tier 1 config fix instead of an
   // escalated investigation. `resolveCliEffort` is what stops PortOS emitting
-  // the bad value in the first place (server/lib/providerModels.js).
+  // the bad value in the first place (server/lib/provider/providerModels.js).
   it('classifies a codex -c override rejection (no file path in the message)', () => {
     const line = 'Error loading config.toml: unknown variant `max`, expected one of `none`, `minimal`, `low`, `medium`, `high`, `xhigh`\n    in `model_reasoning_effort`';
     const analysis = analyzeAgentFailure(withLead(line), { id: 't' }, 'gpt-5.6-sol');

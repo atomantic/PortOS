@@ -3,7 +3,7 @@
 // Codex and vision API providers. The read posture keeps exactly one read tool.
 import { describe, expect, it } from 'vitest';
 import { canReviewImages } from './imageReviewProviders.js';
-import { canReadImagesOneShot, imageReadOneShotArgs } from './providerVendors.js';
+import { canReadImagesOneShot, imageReadOneShotArgs } from './provider/providerVendors.js';
 import { GROK_BUILTIN_TOOLS } from './grok.js';
 
 const cli = (id, command, extra = {}) => ({ id, type: 'cli', command, enabled: true, ...extra });

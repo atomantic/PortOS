@@ -42,7 +42,7 @@ vi.mock('./musicVideo/plateReview.js', () => ({
   })),
 }));
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => ({
     providers: [
       { id: 'antigravity-cli', name: 'Antigravity CLI', enabled: true, models: ['antigravity-configured-default', 'gemini-4-argon-medium', 'gemini-4-argon-high'] },

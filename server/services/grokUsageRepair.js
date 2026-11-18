@@ -14,7 +14,7 @@
  * omitted so a gallery job is not billed twice.
  */
 
-import { parseJsonLines } from '../lib/providerTranscriptUsage.js';
+import { parseJsonLines } from '../lib/provider/providerTranscriptUsage.js';
 import { grokVideoBillableUnits } from '../lib/grokVideoClip.js';
 import {
   GROK_IMAGINE_IMAGE_MODEL,

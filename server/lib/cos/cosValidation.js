@@ -26,7 +26,7 @@ import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchem
 import { isPlainObject } from '../objects.js';
 import { isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors } from '../selfManagedPrAuthors.js';
 import { MIN_INTERVAL_MS, MAX_INTERVAL_MS, isValidLoopInterval } from '../loopInterval.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { isValidSlashdoCommand } from '../slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from '../prDisposition.js';
 import { QUEUEABLE_IMAGE_MODES } from '../generationModes.js';

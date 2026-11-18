@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { isPiCommand, ensurePiHeadlessArgs, PI_ENDPOINT_EXTENSION_PATH, PI_ENDPOINT_PROVIDER } from './pi.js';
 import portosEndpointExtension from './pi/portosEndpointExtension.js';
 import { composeProviderEnv } from './cliChildEnv.js';
-import { applyCommandDefaults, PROVIDER_VENDORS, inferTuiCommand, publicReviewRecipe, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from './providerVendors.js';
+import { applyCommandDefaults, PROVIDER_VENDORS, inferTuiCommand, publicReviewRecipe, PUBLIC_REVIEW_NO_TOOL_POSTURE, PUBLIC_REVIEW_ACTIONS_POSTURE } from './provider/providerVendors.js';
 import { parseHarnessModels } from './harnessOutput.js';
 import { reviewerEffortArgs } from './reviewerConfig.js';
 

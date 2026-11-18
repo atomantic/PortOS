@@ -2366,7 +2366,7 @@ it('names the Casting changes since the sheet was built, and an image update cle
 describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
   it('inspects standalone images with a verified local vision model instead of a text-only default', async () => {
     const api = { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', enabled: true, defaultModel: 'qwen3-coder:30b' };
-    const providers = await import('../providers.js');
+    const providers = await import('../provider/providers.js');
     const ollama = await import('../ollamaManager.js');
     const runner = await import('../promptRunner.js');
     const { resolvePlateReviewer } = await import('./plateReview.js');
@@ -2395,7 +2395,7 @@ describe('Cast & Sets saved-prompt vision admission (#14609)', () => {
 
   it('inspects a re-render without a production run using the API default even when a CLI is active (#14653)', async () => {
     const api = { id: 'vision-api', type: 'api', enabled: true, defaultModel: 'vision-example' };
-    const providers = await import('../providers.js');
+    const providers = await import('../provider/providers.js');
     const runner = await import('../promptRunner.js');
     const { resolvePlateReviewer } = await import('./plateReview.js');
     const { reviewCastSetsImage } = await import('./castAndSetsInspection.js');

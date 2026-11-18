@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { testVision, runVisionTestSuite, checkVisionHealth, describeImageDataUrlDetailed } from './visionTest.js';
 
 // Mock the providers module
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
@@ -15,7 +15,7 @@ vi.mock('./visionCli.js', () => ({
 // Mock the shared managed-runtime wake (issue #8104) so this suite's fixtures
 // never depend on the real MTPLX/Slotstream/Ollama manager modules (and the
 // heavier deps they in turn statically import, e.g. `sleep` from fileUtils.js).
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: vi.fn(() => Promise.resolve({ success: true })),
 }));
 
@@ -35,11 +35,11 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 // Import mocked modules
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { describeImageViaCli } from './visionCli.js';
 import { readFile, readdir } from 'fs/promises';
 import { resolveScreenshot } from '../lib/fileUtils.js';
-import { ensureManagedRuntimeReady } from './providerExecutionReadiness.js';
+import { ensureManagedRuntimeReady } from './provider/providerExecutionReadiness.js';
 
 describe('Vision Test Service', () => {
   const mockProvider = {

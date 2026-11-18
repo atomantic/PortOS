@@ -23,7 +23,7 @@ vi.mock('../services/memorySync.js', () => ({}));
 vi.mock('../services/memoryRunUsage.js', () => ({ findRecentRunsUsingMemory: vi.fn() }));
 vi.mock('../lib/db.js', () => ({ checkHealth: vi.fn() }));
 vi.mock('../services/cos/cosState.js', () => ({ getConfig: vi.fn() }));
-vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('../services/brainStorage.js', () => ({ loadMeta: vi.fn() }));
 vi.mock('../services/chatgptImport.js', () => ({ readArchivedConversation: vi.fn() }));
 vi.mock('../services/promptRunner.js', () => ({ runPromptThroughProvider: vi.fn() }));
@@ -34,7 +34,7 @@ import { isAuthEnabled } from '../services/auth.js';
 import { createMemory } from '../services/memoryBackend.js';
 import { reinitialize } from '../services/memoryEmbeddings.js';
 import { getConfig } from '../services/cos/cosState.js';
-import { getProviderById } from '../services/providers.js';
+import { getProviderById } from '../services/provider/providers.js';
 import { loadMeta } from '../services/brainStorage.js';
 import { runPromptThroughProvider } from '../services/promptRunner.js';
 

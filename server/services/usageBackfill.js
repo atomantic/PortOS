@@ -11,7 +11,7 @@ import {
   getReconciledUsageRunIds,
   getSiblingReconciledUsageRunIds
 } from './usage.js';
-import { listProviders } from './providers.js';
+import { listProviders } from './provider/providers.js';
 import { mergeUsageClaims, snapshotUsageClaims } from './usageReconciler.js';
 
 const idleJob = () => ({

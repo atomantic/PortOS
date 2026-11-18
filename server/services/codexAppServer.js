@@ -722,7 +722,7 @@ export function getCodexTextTransportBench() {
  * Bench the text transport for `waitMs`.
  *
  * The DURATION is the caller's, resolved from the shared cooldown policy in
- * `lib/providerCooldown.js`, so a quota exhaustion waits the same window here
+ * `lib/provider/providerCooldown.js`, so a quota exhaustion waits the same window here
  * as it does on every other path. A longer bench never shortens an existing
  * one.
  */

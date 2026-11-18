@@ -12,12 +12,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../cos/cosEvents.js', () => ({ emitLog: vi.fn(), cosEvents: { emit: vi.fn() } }));
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getAllProviders: vi.fn(),
   getProviderById: vi.fn(),
 }));
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providerStatus.js', () => ({
   isProviderAvailable: vi.fn(),
   getFallbackProvider: vi.fn(),
   getProviderStatus: vi.fn(),
@@ -27,8 +27,8 @@ vi.mock('./agentModelSelection.js', () => ({ selectModelForTask: vi.fn(), select
 import { storedForm } from '../../lib/cos/cosTaskRows.js';
 import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 import { emitLog } from '../cos/cosEvents.js';
-import { getActiveProvider, getAllProviders, getProviderById } from '../providers.js';
-import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../providerStatus.js';
+import { getActiveProvider, getAllProviders, getProviderById } from '../provider/providers.js';
+import { isProviderAvailable, getFallbackProvider, getProviderStatus } from '../provider/providerStatus.js';
 import { selectModelForRole, selectModelForTask } from './agentModelSelection.js';
 
 const TASK = { id: 'task-1', metadata: {} };

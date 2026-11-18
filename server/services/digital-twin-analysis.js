@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { DIGITAL_TWIN_DIR, callProviderAI, now } from './digital-twin-helpers.js';

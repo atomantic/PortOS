@@ -9,7 +9,7 @@ import { GREYBOX_LIMITS, greyboxSceneSchema } from '../greyboxScene.js';
 import { GREYBOX_INSTRUCTION_MAX, GREYBOX_SHOT_ID_MAX } from '../greyboxVocabulary.js';
 import { PHOTOREAL_ENGINES, PHOTOREAL_FLYTHROUGH_SECONDS, PHOTOREAL_MAX_SAMPLES } from '../greyboxBlender.js';
 import { PHOTOREAL_TEXTURE_ID, PHOTOREAL_TEXTURED_PRESETS, photorealLookSchema } from '../photorealLook.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 import { worldMapSchema } from '../worldMapValidation.js';
 import { emptyToNull } from '../zodCompat.js';
 import { REVISION_SOURCES } from './catalogValidation.js';

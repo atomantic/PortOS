@@ -4,9 +4,9 @@
  * (`agentPrompt.js` pulls the CoS task store and managed-app store).
  */
 
-import { isProcessProvider } from '../../lib/providerTypes.js';
-import { getAllProviders } from '../providers.js';
-import { commandBasename } from '../../lib/providerModels.js';
+import { isProcessProvider } from '../../lib/provider/providerTypes.js';
+import { getAllProviders } from '../provider/providers.js';
+import { commandBasename } from '../../lib/provider/providerModels.js';
 
 /**
  * Is this the "no subscription family" identity? A MANUAL maintenance run

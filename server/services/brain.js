@@ -11,12 +11,12 @@
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
 import { getInstanceId, ensureInstanceId, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { runPromptThroughProvider } from './promptRunner.js';
-import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
+import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getDomainAutonomyMode } from './cos/cosState.js';
 import { getDomainBudgetStatus, recordDomainUsage } from './domainUsage.js';

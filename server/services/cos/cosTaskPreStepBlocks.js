@@ -48,7 +48,7 @@ import {
 import { resolveAppWorkTracker, githubApiHost } from '../../lib/workTracker.js';
 import { getOriginInfo } from '../../lib/gitRemote.js';
 import { isMergeHandoffEnabled } from '../../lib/mergeGateContract.js';
-import { listProviders } from '../providers.js';
+import { listProviders } from '../provider/providers.js';
 
 // gh api defaults to github.com, so collaborator identity and member probes
 // must carry the host parsed from this checkout's origin for GitHub Enterprise.

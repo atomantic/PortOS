@@ -31,7 +31,7 @@ import { promisify } from 'util';
 import { ServerError } from '../../lib/errorHandler.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { isToolFreeOneShotProvider } from '../../lib/provider/providerVendors.js';
 import { PATHS, ensureDir } from '../../lib/fileUtils.js';
 import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';

@@ -9,7 +9,7 @@
  * Re-exported by `./providers.js` for existing `utils/providers` imports.
  */
 
-import { isTuiProvider, isApiProvider, isProcessProvider } from '../../../server/lib/providerTypes.js';
+import { isTuiProvider, isApiProvider, isProcessProvider } from '../../../server/lib/provider/providerTypes.js';
 import { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 
 export { PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
@@ -26,7 +26,7 @@ export {
   isKimiProvider,
   isOpencodeLocalProvider,
   localRuntimeNamespace,
-} from '../../../server/lib/providerModels.js';
+} from '../../../server/lib/provider/providerModels.js';
 
 export {
   isCliProvider,
@@ -37,7 +37,7 @@ export {
   isClaudeHarnessProvider as isClaudeCommandProvider,
   // The Grok Build CLI/TUI predicate lives in the server leaf (#7339): the reviewer -> provider matcher table keys on it and a browser copy is the drift that table removes.
   isGrokBuildCli,
-} from '../../../server/lib/providerTypes.js';
+} from '../../../server/lib/provider/providerTypes.js';
 
 /**
  * Can a human launch this provider at a shell prompt? Only TUI has an interactive form (`cli` args are headless, `api` has no binary). `tuiCommandLine` is the server's own resolution of the launch

@@ -38,7 +38,7 @@ vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
 
 const llmCalls = [];
 
-vi.mock('../providers.js', () => ({
+vi.mock('../provider/providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({
     id: 'mock-provider',
     name: 'Mock',
@@ -755,7 +755,7 @@ describe('pipeline text stage generator', () => {
     // A small (but non-degenerate) window: after the fixed output reserve the
     // usable input budget is tight enough that the 25% continuity slice is well
     // under the ~2000-char prose tail, so the budgeter must trim it.
-    const providers = await import('../providers.js');
+    const providers = await import('../provider/providers.js');
     providers.getActiveProvider.mockResolvedValueOnce({
       id: 'small-local', name: 'Small', type: 'api', enabled: true,
       defaultModel: 'small-model', endpoint: 'http://localhost:1234/v1', contextWindow: 10_000,

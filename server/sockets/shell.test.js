@@ -14,9 +14,9 @@ vi.mock('../services/shell.js', () => ({
   detachSocketSessions: vi.fn()
 }));
 vi.mock('../lib/aiToolkit/internal/codexModelListProbe.js', () => ({ probeCodexModelsViaAppServer: vi.fn() }));
-vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
 
-const { getProviderById } = await import('../services/providers.js');
+const { getProviderById } = await import('../services/provider/providers.js');
 const { probeCodexModelsViaAppServer } = await import('../lib/aiToolkit/internal/codexModelListProbe.js');
 const { registerShellHandlers } = await import('./shell.js');
 

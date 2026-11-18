@@ -16,7 +16,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { MAX_INTERVAL_MS, MIN_INTERVAL_MS, isValidLoopInterval, parseInterval } from '../lib/loopInterval.js';
 import { createRun, stopRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
-import { listSelectableProviders, getActiveProvider } from './providers.js';
+import { listSelectableProviders, getActiveProvider } from './provider/providers.js';
 
 export const loopEvents = new EventEmitter();
 

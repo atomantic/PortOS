@@ -14,12 +14,12 @@ import { isAuditTaskType } from '../../lib/auditCatalog.js';
 import { resolveTaskHookType } from '../taskTypeHooks.js';
 import { capturePrimaryCheckoutState } from '../../lib/primaryCheckoutGuard.js';
 import { buildAgentPrompt, getAppWorkspace, isClaimFlowTask, promptOpensOwnPr } from './agentPromptBuilder.js';
-import { isOllamaClaudeProvider, isClaudeCommand, isCodexProvider } from '../../lib/providerModels.js';
+import { isOllamaClaudeProvider, isClaudeCommand, isCodexProvider } from '../../lib/provider/providerModels.js';
 import { PROVIDER_TYPES } from '../../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { dropUnsupportedOllamaThinking } from '../ollamaAgentContext.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
-import { publicReviewPostureForProfile, supportsTuiPublicReviewActionsProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/providerVendors.js';
+import { publicReviewPostureForProfile, supportsTuiPublicReviewActionsProvider, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../../lib/provider/providerVendors.js';
 import { checkPublicReviewSpawnPreconditions } from '../../lib/publicReviewSpawnGate.js';
 import { buildAgentRegistration, resolveExecutionMode } from '../../lib/agent/agentRegistrationRecord.js';
 import { hasCredentialBootstrap } from '../../lib/credentialBootstrap.js';
@@ -206,7 +206,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     let requestedProvider = applyTaskGenerationOverrides(provider, { ...task.metadata, executionOptions });
     let executionAttribution;
     if (requestedProvider.executionOptions && Object.keys(requestedProvider.executionOptions).length) {
-      const { prepareExecutionOptions } = await import('../../lib/providerExecutionOptions.js');
+      const { prepareExecutionOptions } = await import('../../lib/provider/providerExecutionOptions.js');
       const prepared = await prepareExecutionOptions(provider, selectedModel, executionOptions, 'task', { cwd: workspacePath });
       requestedProvider.executionOptions = prepared.provider.executionOptions;
       requestedProvider.executionOptionSupport = prepared.provider.executionOptionSupport;

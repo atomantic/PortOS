@@ -48,11 +48,11 @@ vi.mock('../cos/cosAgentLifecycle.js', () => ({
 vi.mock('../cos/cosTaskStore.js', () => ({ updateTask: vi.fn(async () => ({})) }));
 
 const getActiveProviderMock = vi.fn(async () => null);
-vi.mock('../providers.js', () => ({ getActiveProvider: (...a) => getActiveProviderMock(...a) }));
+vi.mock('../provider/providers.js', () => ({ getActiveProvider: (...a) => getActiveProviderMock(...a) }));
 
 const markProviderUnavailableMock = vi.fn(async () => null);
 const markProviderUsageLimitMock = vi.fn(async () => null);
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providerStatus.js', () => ({
   markProviderUsageLimit: (...a) => markProviderUsageLimitMock(...a),
   markProviderRateLimited: vi.fn(async () => null),
   markProviderUnavailable: (...a) => markProviderUnavailableMock(...a),
@@ -88,7 +88,7 @@ import { finalizeAgent } from './agentFinalization.js';
 // the window, so the assertions below can't drift from what actually ships.
 import { detectImmediateFallbackSignal } from '../../lib/aiToolkit/errorDetection.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
-import { COOLDOWN_MS_BY_CATEGORY } from '../../lib/providerCooldown.js';
+import { COOLDOWN_MS_BY_CATEGORY } from '../../lib/provider/providerCooldown.js';
 import { processAgentCompletion } from './agentCompletion.js';
 
 const failedRun = (errorAnalysis, providerId = 'antigravity-tui') => finalizeAgent({

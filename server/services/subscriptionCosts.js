@@ -1,6 +1,6 @@
 import { getSettings, updateSettingsWith } from './settings.js';
-import { resolveEnabledFamilies } from './providerUsage.js';
-import { familyLabel } from '../lib/providerFamilies.js';
+import { resolveEnabledFamilies } from './provider/providerUsage.js';
+import { familyLabel } from '../lib/provider/providerFamilies.js';
 import {
   attributeReportCostToFamilies,
   buildSubscriptionSavings,

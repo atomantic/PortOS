@@ -6,7 +6,7 @@
  */
 
 import { basename } from 'path';
-import { PROVIDER_VENDORS, EXTRA_ALLOWED_COMMANDS } from '../lib/providerVendors.js';
+import { PROVIDER_VENDORS, EXTRA_ALLOWED_COMMANDS } from '../lib/provider/providerVendors.js';
 
 /**
  * Every `command` of a shipped provider (`data.reference/providers.json`, the toolkit's

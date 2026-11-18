@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createHash } from 'crypto';
 import { getAccount, updateSyncStatus, updateSubcalendars, mergeDiscoveredSubcalendars } from './calendarAccounts.js';
 import { mutateCache } from './calendarSync.js';
-import { getAllProviders } from './providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { getSettings } from './settings.js';
 import { pickCliProvider, runCliProviderPrompt } from '../lib/cliProviderRun.js';
 import { extractJson } from '../lib/jsonExtract.js';

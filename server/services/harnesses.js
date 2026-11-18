@@ -25,20 +25,20 @@ import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { hasCredentialBootstrap, resolveCliSpawn } from '../lib/credentialBootstrap.js';
 import { commandOutput } from '../lib/commandExists.js';
 import { compareHarnessVersions, parseHarnessModels, parseNpmLatestVersion } from '../lib/harnessOutput.js';
-import { isDerivedPreset } from '../lib/providerGraphRecords.js';
+import { isDerivedPreset } from '../lib/provider/providerGraphRecords.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { primeOpencodeCatalogCache } from '../lib/opencodeCatalogCache.js';
-import { getOpencodeLocalProviderNamespace, isConfiguredDefaultModel } from '../lib/providerModels.js';
-import { providerRuntimeKey } from '../lib/providerPrerequisites.js';
+import { getOpencodeLocalProviderNamespace, isConfiguredDefaultModel } from '../lib/provider/providerModels.js';
+import { providerRuntimeKey } from '../lib/provider/providerPrerequisites.js';
 import { createStaleWhileRevalidate } from '../lib/staleWhileRevalidate.js';
-import * as providerService from './providers.js';
-import { providerGraphEnabled } from './providerGraph.js';
+import * as providerService from './provider/providers.js';
+import { providerGraphEnabled } from './provider/providerGraph.js';
 import {
   PROVIDER_RUNTIMES,
   getProviderRuntime,
   getProviderRuntimeStatuses,
   getProviderRuntimeStatus,
-} from './providerRuntimeInstaller.js';
+} from './provider/providerRuntimeInstaller.js';
 
 /** A vendor `models` subcommand can reach the vendor's catalog API: bounded above the local `--version` probe but far below an agent run. */
 const MODELS_PROBE_TIMEOUT_MS = 45_000;
@@ -276,7 +276,7 @@ async function applyHarnessCatalog(runtime, models, targets) {
   }
   if (derivedProviderIdsByService.size > 0) {
     // Deferred so this file doesn't drag the provider-graph module into every caller.
-    const { refreshServiceCatalog } = await import('./providerServices.js');
+    const { refreshServiceCatalog } = await import('./provider/providerServices.js');
     const alreadyListed = async () => ({ ok: true, models });
     for (const [serviceId, providerIds] of derivedProviderIdsByService) {
       const outcome = await refreshServiceCatalog(serviceId, { harnessModels: alreadyListed }).catch((err) => {

@@ -11,7 +11,7 @@ import { isGenerationModel } from '../lib/localModelHeuristics.js';
 import { parseLLMJSON } from '../lib/llmText.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { loadState } from './cos/cosState.js';
-import { getAllProviders, getSelectableProviders } from './providers.js';
+import { getAllProviders, getSelectableProviders } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
 import { stopRun } from './runner.js';
 

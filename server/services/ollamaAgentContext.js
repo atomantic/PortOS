@@ -12,7 +12,7 @@ import { isTruthyMeta } from '../lib/metadataFlags.js';
  * capability ahead of the spawn.
  */
 
-import { isOllamaBackedProvider } from './providers.js'
+import { isOllamaBackedProvider } from './provider/providers.js'
 // Straight from `internal/`: deliberately not re-exported from providers.js, so
 // the normalization cannot drift.
 import { ollamaBaseFromProvider } from '../lib/aiToolkit/internal/ollamaBacked.js'

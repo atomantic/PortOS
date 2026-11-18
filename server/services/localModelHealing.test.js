@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./cos/cosEvents.js', () => ({ emitLog: mocks.emitLog }));
-vi.mock('./providers.js', () => ({ updateProvider: mocks.updateProvider }));
+vi.mock('./provider/providers.js', () => ({ updateProvider: mocks.updateProvider }));
 vi.mock('./notifications.js', () => ({
   addNotification: mocks.addNotification,
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },

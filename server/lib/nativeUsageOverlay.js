@@ -7,7 +7,7 @@
  * counts more, after its last refresh the ledger stands. Fed by `services/nativeUsageHistory.js`.
  */
 
-import { familyForProvider, familyLabel } from './providerFamilies.js';
+import { familyForProvider, familyLabel } from './provider/providerFamilies.js';
 
 /**
  * Put each provider app's own usage history in place of the PortOS ledger's

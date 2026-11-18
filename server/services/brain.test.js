@@ -115,7 +115,7 @@ vi.mock('./chatgptImport.js', () => ({
 }));
 
 // Mock providers
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn()
 }));
@@ -180,7 +180,7 @@ import { recordDomainUsage } from './domainUsage.js';
 import * as repoCloner from './repoCloner.js';
 import * as storage from './brainStorage.js';
 import { deleteMemoryAssets } from './chatgptImport.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { BRAIN_DIGEST_ECHO_FIXTURE } from '../test/fixtures/brainDigestEcho.js';
 import {
   captureThought,

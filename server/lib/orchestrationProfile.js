@@ -10,7 +10,7 @@
  * `cosValidation.js`, model selection `services/agent/agentModelSelection.js`, doctrine `services/promptSections/orchestrationDoctrine.js`, all reading the definitions HERE. Opt-in: `direct` is the default and every accessor returns null for a profile-less task.
  */
 
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { isPlainObject } from './objects.js';
 
 /** Execution modes a CoS task can run under. `direct` is today's behavior. */

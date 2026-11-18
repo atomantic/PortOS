@@ -6,7 +6,7 @@ vi.mock('../lib/systemCapabilities.js', () => ({
 vi.mock('../lib/processEnv.js', () => ({
   findCommandOnPath: vi.fn(),
 }));
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getProviderById: vi.fn(),
   updateProvider: vi.fn(),
 }));
@@ -25,7 +25,7 @@ vi.mock('./cos/cos.js', () => ({
 
 const { detectSystemCapabilities } = await import('../lib/systemCapabilities.js');
 const { findCommandOnPath } = await import('../lib/processEnv.js');
-const { getProviderById, updateProvider } = await import('./providers.js');
+const { getProviderById, updateProvider } = await import('./provider/providers.js');
 const { listModels } = await import('./localLlm.js');
 const ollamaManager = await import('./ollamaManager.js');
 const { getConfig } = await import('./cos/cosState.js');

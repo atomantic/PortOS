@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { ServerError } from '../../lib/errorHandler.js';
 import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
-import { isAuthoringOneShotProvider } from '../../lib/providerVendors.js';
+import { isAuthoringOneShotProvider } from '../../lib/provider/providerVendors.js';
 import { getBoard, addBoardItem } from './index.js';
 import { prepareBoardRenderParams, renderBoardItem } from './renderItem.js';
 import { CREATIVE_LATITUDE_ADDITION, withCreativeLatitude } from '../../lib/creativeLatitude.js';
@@ -44,7 +44,7 @@ function update(job, patch) {
 
 async function writePrompts(board, input) {
   const [{ getProviderById }, { runPromptThroughProvider }, { parseLLMJSON }] = await Promise.all([
-    import('../providers.js'), import('../promptRunner.js'), import('../aiProvider.js'),
+    import('../provider/providers.js'), import('../promptRunner.js'), import('../aiProvider.js'),
   ]);
   const provider = await getProviderById(input.providerId);
   if (!provider || provider.enabled === false || !isAuthoringOneShotProvider(provider)) {

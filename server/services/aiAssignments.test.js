@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('./settings.js', () => ({ getSettings: mocks.getSettings, updateSettings: mocks.updateSettings }));
-vi.mock('./providers.js', async () => ({
+vi.mock('./provider/providers.js', async () => ({
   getSelectableProviders: mocks.getSelectableProviders,
   getProviderById: mocks.getProviderById,
   setActiveProvider: mocks.setActiveProvider,

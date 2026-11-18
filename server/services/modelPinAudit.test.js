@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./providers.js', () => ({ listProviders: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ listProviders: vi.fn() }));
 vi.mock('./notifications.js', () => ({ removeByMetadata: vi.fn() }));
 vi.mock('./settings.js', () => ({ getSettings: vi.fn(), updateSettingsWith: vi.fn() }));
 vi.mock('./taskSchedule.js', () => ({ loadSchedule: vi.fn(), updateTaskInterval: vi.fn() }));
@@ -15,7 +15,7 @@ vi.mock('./apps.js', () => ({
 vi.mock('./modelPinRecords.js', () => ({ collectRecordPins: vi.fn(), clearRecordPin: vi.fn() }));
 vi.mock('./taskTemplates.js', () => ({ getAllTemplates: vi.fn(), updateTemplate: vi.fn() }));
 
-const { listProviders } = await import('./providers.js');
+const { listProviders } = await import('./provider/providers.js');
 const { removeByMetadata } = await import('./notifications.js');
 const { getSettings, updateSettingsWith } = await import('./settings.js');
 const { loadSchedule, updateTaskInterval } = await import('./taskSchedule.js');

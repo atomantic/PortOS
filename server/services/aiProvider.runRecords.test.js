@@ -26,7 +26,7 @@ const { statusOp, usage } = vi.hoisted(() => ({
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
 vi.mock('./aiStatusEvents.js', () => ({ startAIOp: vi.fn(() => statusOp) }));
 // Readiness is a managed-daemon concern; these providers are plain endpoints.
-vi.mock('./providerExecutionReadiness.js', () => ({
+vi.mock('./provider/providerExecutionReadiness.js', () => ({
   ensureManagedRuntimeReady: vi.fn(async () => ({ success: true })),
   ensureProviderReadyForExecution: vi.fn(async () => ({ success: true })),
 }));
@@ -44,7 +44,7 @@ const { setAIToolkitInstance } = await import('../lib/aiToolkitState.js');
 const { createRunnerService } = await import('../lib/aiToolkit/runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { recordCompletedRunUsage } = await import('./usageReconciler.js');
-const { getDirectProviderCallCount } = await import('../lib/providerCallActivity.js');
+const { getDirectProviderCallCount } = await import('../lib/provider/providerCallActivity.js');
 const { attachLlmActivityHooks, drainActivityNotesForTests } = await import('./systemActivityNotify.js');
 const { CREATIVE_LATITUDE_CLAUSE, CREATIVE_LATITUDE_HEADING } = await import('../lib/creativeLatitude.js');
 

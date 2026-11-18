@@ -113,7 +113,7 @@ export function normalizeResetAt(limit, { now = Date.now(), timeZone } = {}) {
 
 /**
  * Has this window already rolled over as of `now`? Once the stated reset has passed, the percentage describes a SPENT window; one whose reset can't be resolved counts as live.
- * One definition for three surfaces: the retained Codex card (`unexpiredLimits` in services/providerUsage.js), the federated merge (`lib/fleetQuotas.js`), and the Codex log parser (`codexWindowExpired`).
+ * One definition for three surfaces: the retained Codex card (`unexpiredLimits` in services/provider/providerUsage.js), the federated merge (`lib/fleetQuotas.js`), and the Codex log parser (`codexWindowExpired`).
  * Goes through `normalizeResetAt`, not a bare `Date.parse`, so an older peer's zone-less wall-clock reset is judged.
  */
 export function limitWindowExpired(limit, opts = {}) {

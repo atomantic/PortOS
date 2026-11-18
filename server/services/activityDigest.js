@@ -27,9 +27,9 @@ import { getUserTimezone } from './userTimezone.js';
 import { getDaySummary } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { getPerson } from './tribe.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { runPromptThroughProvider } from './promptRunner.js';
-import { isToolFreeOneShotProvider } from '../lib/providerVendors.js';
+import { isToolFreeOneShotProvider } from '../lib/provider/providerVendors.js';
 
 const SETTINGS_FILE = join(PATHS.brain, 'activity-digest-settings.json');
 

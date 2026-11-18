@@ -29,7 +29,7 @@ import {
   resolveEffectiveModel,
   runPromptThroughProvider,
 } from './promptRunner.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { loadHistory } from './videoGen/history.js';
 import { describeImagesFromPaths } from './visionCli.js';
 

@@ -19,7 +19,7 @@ import { mergePersistentMindMaintainer } from '../../lib/persistent/persistentMi
  */
 
 import { join } from 'path';
-import { getActiveProvider } from '../providers.js';
+import { getActiveProvider } from '../provider/providers.js';
 import { isInternalTaskId } from '../../lib/taskParser.js';
 import { unclaimedTaskIds, runningAgentsByTaskId, spawningAgentForTask, spawnClaimAgeMs } from '../../lib/cos/cosSpawnWindow.js';
 import { isRetryHeld, isStaleRetryHold, isDeliveryCleanupHeld } from '../../lib/taskRetryHold.js';

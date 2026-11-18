@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { recurrenceRuleSchema } from './recurrenceValidation.js';
 import {
   COMMISSION_BRIEF_TAG_MAX, COMMISSION_INTENT_MAX, COMMISSION_NAME_MAX, COMMISSION_STYLE_SPEC_MAX,

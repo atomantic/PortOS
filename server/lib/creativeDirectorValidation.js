@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES, PLAN_STEP_STATUSES, VIDEO_REVIEW_CHECKPOINTS } from './creativeDirectorPresets.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 import { BIBLE_LIMITS } from './storyBible.js';

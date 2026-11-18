@@ -11,8 +11,8 @@
  */
 
 import { z } from 'zod';
-import { EFFORT_LEVELS } from '../providerModels.js';
-import { isToolFreeOneShotProvider } from '../providerVendors.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
+import { isToolFreeOneShotProvider } from '../provider/providerVendors.js';
 import { trimTo } from '../textUtils.js';
 
 export const PERSISTENT_MIND_PROFILE_SCHEMA_VERSION = 1;

@@ -33,7 +33,7 @@
  * Each cycle settles the previous one's requests first.
  */
 
-import { getProviderQuotas } from './providerUsage.js';
+import { getProviderQuotas } from './provider/providerUsage.js';
 import { getQuotaBurnDispatches, evaluateFamilies, PLAN_COMPLETE_SKIP_REASON, recordQuotaBurnDispatch, selectBurnCandidates, withPendingDispatches } from './quotaBurn.js';
 import { reconcileQuotaBurnReservations, reserveQuotaBurnDispatch } from './quotaBurnAcceptance.js';
 import { getQuotaBurnCompletions, recordQuotaBurnJobCompletion } from './quotaBurnCompletions.js';

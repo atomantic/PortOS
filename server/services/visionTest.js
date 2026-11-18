@@ -7,7 +7,7 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { extname } from 'path';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { PATHS, resolveScreenshot } from '../lib/fileUtils.js';
 import { describeFrameStats, isDegenerateFrame } from '../lib/imageFrameStats.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
@@ -93,7 +93,7 @@ async function callVisionAPI({ provider, endpoint, apiKey, allowCustomEndpoint, 
   // See root AGENTS.md's #8104 pattern: every inference entry point routes
   // through this one managed-runtime wake instead of hand-rolling Ollama-only
   // dispatch.
-  const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
+  const { ensureManagedRuntimeReady } = await import('./provider/providerExecutionReadiness.js');
   const ready = await ensureManagedRuntimeReady(provider || { endpoint });
   if (!ready.success) throw new Error(ready.error);
 

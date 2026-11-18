@@ -30,7 +30,7 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
   getSettings: vi.fn(async () => ({ calendarSync: { providerId: fixture.provider.id, model: 'example-model' } })),
 }));
-vi.mock('../services/providers.js', () => ({
+vi.mock('../services/provider/providers.js', () => ({
   getAllProviders: vi.fn(async () => ({ providers: {
     'claude-code': { id: 'claude-code', type: 'cli', command: 'claude', enabled: true },
     [fixture.provider.id]: fixture.provider,

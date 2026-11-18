@@ -8,7 +8,7 @@
 
 import { analyzeEpisodeShots } from './fableLoomShots.js';
 import { computeGraphLayers } from './fableLoomGraph.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { validateAudioOccupancy } from './fableLoomPlayback.js';
 import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { isNonBlankStr } from './textUtils.js';

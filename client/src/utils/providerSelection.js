@@ -86,7 +86,7 @@ export const toolFreeOneShotSelectionPolicy = Object.freeze({ provider: supports
 
 /** Strictly tool-free: a direct API or a server-verified tool-free CLI, never a
  * read-only-sandboxed authoring CLI. Mirrors `isToolFreeOneShotProvider` in
- * server/lib/providerVendors.js, for pickers whose server refuses the rest.
+ * server/lib/provider/providerVendors.js, for pickers whose server refuses the rest.
  */
 export const supportsStrictToolFreeOneShot = (provider) => provider?.enabled !== false
   && (provider?.type === 'api' || provider?.type === 'cli' && provider.toolFreeOneShot === true);

@@ -5,7 +5,7 @@ vi.mock('./systemHealthSnapshot.js', () => ({ getSystemHealthSnapshot: vi.fn() }
 vi.mock('./capabilitiesSnapshot.js', () => ({ getCapabilitiesSnapshot: vi.fn() }));
 vi.mock('./settings.js', () => ({ settingsEvents: new EventEmitter() }));
 vi.mock('./apps.js', () => ({ appsEvents: new EventEmitter() }));
-vi.mock('./providerStatus.js', () => ({ providerStatusEvents: new EventEmitter() }));
+vi.mock('./provider/providerStatus.js', () => ({ providerStatusEvents: new EventEmitter() }));
 vi.mock('./cos/cosEvents.js', () => ({ cosEvents: new EventEmitter() }));
 vi.mock('./mediaJobQueue/index.js', () => ({ mediaJobEvents: new EventEmitter() }));
 import { getSystemHealthSnapshot } from './systemHealthSnapshot.js';

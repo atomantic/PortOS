@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validateRequest.js';
-import { EFFORT_LEVELS } from '../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../lib/provider/providerModels.js';
 import { onClientDisconnect } from '../lib/sseDownload.js';
 import { stopRun } from '../services/runner.js';
 import { getSystemResourceReport, getTrackedModelInventory, triageSystemResources } from '../services/systemResources.js';

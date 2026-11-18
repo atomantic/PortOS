@@ -3,9 +3,9 @@
  * from runner.js so out-of-process callers (autofixer) can import it.
  */
 
-import { resolveCliModel, stripBrokenModelFlags } from './providerModels.js';
+import { resolveCliModel, stripBrokenModelFlags } from './provider/providerModels.js';
 // Must stay dependency-light: importable from the standalone autofixer process.
-import { buildVendorCliArgs, prepareCliPrompt, toolFreeOneShotArgs } from './providerVendors.js';
+import { buildVendorCliArgs, prepareCliPrompt, toolFreeOneShotArgs } from './provider/providerVendors.js';
 
 /**
  * Build CLI args by provider type. `provider.defaultModel` and `provider.effort`

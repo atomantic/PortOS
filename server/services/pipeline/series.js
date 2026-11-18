@@ -27,7 +27,7 @@ import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
-import { EFFORT_LEVELS } from '../../lib/providerModels.js';
+import { EFFORT_LEVELS } from '../../lib/provider/providerModels.js';
 import { DIAGNOSIS_MAX_FILED } from './seriesAutopilot/diagnosisCore.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,

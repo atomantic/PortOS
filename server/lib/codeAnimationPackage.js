@@ -8,7 +8,7 @@
 import { createHash } from 'crypto';
 import { z } from 'zod';
 import { canonicalStringify } from './objects.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 
 export const CODE_ANIMATION_PACKAGE_LIMITS = Object.freeze({
   files: 64,

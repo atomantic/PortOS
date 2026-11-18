@@ -106,7 +106,7 @@ import { isTruthyMeta, isFalsyMeta } from '../../lib/metadataFlags.js';
 import { finishPreflightCard, finishPreflightDispatch, cardIdForRequest, reportPreflightStep, recordPreflightOutcome, preflightReporter } from '../preflightTaskCard.js';
 import { checkGhHealth } from '../github.js';
 import { detectActionableWork } from '../perpetualWork.js';
-import { listProviders } from '../providers.js';
+import { listProviders } from '../provider/providers.js';
 /**
  * Persist a `blocked` status on a task that has hit the max-total-spawns
  * ceiling. Unconditional: the caller has already established `exceedsMaxSpawns`.

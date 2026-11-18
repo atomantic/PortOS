@@ -92,8 +92,8 @@ vi.mock('./persistentMindProfile.js', async (importOriginal) => ({
     ? (await importOriginal()).resolvePersistentMindThinkingSession(input)
     : mock.thinkingSession),
 }));
-vi.mock('../providers.js', () => ({ getProviderById: vi.fn(async () => mock.providerOverride || mock.profile.provider) }));
-vi.mock('../providerStatus.js', () => ({
+vi.mock('../provider/providers.js', () => ({ getProviderById: vi.fn(async () => mock.providerOverride || mock.profile.provider) }));
+vi.mock('../provider/providerStatus.js', () => ({
   isProviderAvailable: () => mock.providerAvailable,
   getProviderStatus: () => ({ message: 'Endpoint is temporarily unavailable' }),
   markProviderUsageLimit: vi.fn(async () => {

@@ -4,7 +4,7 @@
  */
 
 import { isProviderReviewer } from './reviewerPins';
-import { EFFORT_LEVELS } from '../../../server/lib/providerModels.js';
+import { EFFORT_LEVELS } from '../../../server/lib/provider/providerModels.js';
 import {
   MODEL_SELECTABLE_REVIEWERS,
   MAX_REVIEWER_MODEL_LENGTH,

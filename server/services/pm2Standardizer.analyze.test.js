@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-vi.mock('./providers.js', () => ({
+vi.mock('./provider/providers.js', () => ({
   getActiveProvider: vi.fn().mockResolvedValue({ id: 'p1', name: 'Test Provider', type: 'cli', enabled: true }),
   getProviderById: vi.fn(),
 }));

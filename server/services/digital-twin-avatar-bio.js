@@ -19,7 +19,7 @@ import { DIGITAL_TWIN_DIR, callProviderAI } from './digital-twin-helpers.js';
 import { loadMeta } from './digital-twin-meta.js';
 import { getTraits } from './digital-twin-analysis.js';
 import { getGoals } from './identity/goals.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { estimateTokens, trimContextToBudget } from '../lib/contextBudget.js';
 import { tryReadFile } from '../lib/fileUtils.js';
 import { escapeRegExp } from '../lib/textUtils.js';

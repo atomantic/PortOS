@@ -16,7 +16,7 @@ import { executionOptionsSchema } from '../aiToolkit/internal/executionOptionsVa
  */
 import { z } from 'zod';
 import { partialWithoutDefaults } from '../zodCompat.js';
-import { EFFORT_LEVELS } from '../providerModels.js';
+import { EFFORT_LEVELS } from '../provider/providerModels.js';
 
 // Query schemas for the agent routes. Unknown keys are stripped (older clients keep working).
 export const agentPersonalitiesListQuerySchema = z.object({ userId: z.string().optional() });

@@ -79,7 +79,7 @@ import {
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { createPasteSubmitDriver } from '../lib/tuiPasteSubmitDriver.js';
 import { isCodexCommand } from '../lib/codex.js';
-import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
+import { isClaudeCommand, isOpencodeCommand } from '../lib/provider/providerModels.js';
 import { applyCredentialBootstrap, needsProcessGroup, processGroupKillable } from '../lib/credentialBootstrap.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -187,7 +187,7 @@ async function executeAdmittedTuiRun({ runId, provider, prompt, screenshots = []
   }
 
   if (provider.executionOptions && !provider.executionOptionAttribution) {
-    const { prepareExecutionOptions } = await import('../lib/providerExecutionOptions.js');
+    const { prepareExecutionOptions } = await import('../lib/provider/providerExecutionOptions.js');
     const prepared = await prepareExecutionOptions(provider, provider.defaultModel, undefined, 'provider', { cwd: workspacePath });
     provider = prepared.provider;
     await patchRunMetadata(runId, { executionOptions: prepared.attribution, model: prepared.provider.defaultModel });

@@ -23,19 +23,19 @@ const providerService = vi.hoisted(() => ({
   listProviders: vi.fn(),
   updateProvider: vi.fn(async () => ({})),
 }));
-vi.mock('./providers.js', () => providerService);
+vi.mock('./provider/providers.js', () => providerService);
 
 // Defaults to `false` so every existing test (none of which seeds a
 // structurally-derived-preset record) keeps exercising the plain write path.
 const providerGraph = vi.hoisted(() => ({ providerGraphEnabled: vi.fn(() => false) }));
-vi.mock('./providerGraph.js', () => providerGraph);
+vi.mock('./provider/providerGraph.js', () => providerGraph);
 
 // Dynamically imported only on the derived-preset path (`applyHarnessCatalog`)
-// — see `services/providerGraph.js` "Import scoping" precedent.
+// — see `services/provider/providerGraph.js` "Import scoping" precedent.
 const providerServices = vi.hoisted(() => ({
   refreshServiceCatalog: vi.fn(async () => ({ service: { catalog: { state: 'known', models: [] } } })),
 }));
-vi.mock('./providerServices.js', () => providerServices);
+vi.mock('./provider/providerServices.js', () => providerServices);
 
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import {
@@ -46,7 +46,7 @@ import {
   refreshHarnessModels,
   usesHarnessCatalog,
 } from './harnesses.js';
-import { __resetRuntimeStatusCache } from './providerRuntimeInstaller.js';
+import { __resetRuntimeStatusCache } from './provider/providerRuntimeInstaller.js';
 
 const OPENCODE_MODELS = 'opencode/big-pickle\nopencode/mimo-v2.5-free\n';
 

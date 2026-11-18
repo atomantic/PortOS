@@ -66,7 +66,7 @@ export async function getVerificationProfile(id) {
  */
 async function resolveVisionReviewer(reviewerInput = null) {
   const { resolvePlateReviewer } = await import('./musicVideo/plateReview.js');
-  const { getAllProviders } = await import('./providers.js');
+  const { getAllProviders } = await import('./provider/providers.js');
 
   const reviewer = typeof reviewerInput === 'string'
     ? { model: reviewerInput }
@@ -133,7 +133,7 @@ async function resolveVisionReviewer(reviewerInput = null) {
 
   // If a provider was resolved (or explicitly provided)
   if (reviewer.providerId) {
-    const { getProviderById } = await import('./providers.js');
+    const { getProviderById } = await import('./provider/providers.js');
     const { resolveEffectiveModel } = await import('./promptRunner.js');
     let provider = await getProviderById(reviewer.providerId).catch(() => null);
     if (!provider) {
@@ -195,7 +195,7 @@ export async function verifyImage({
 
   const reviewer = await resolveVisionReviewer(reviewerInput || profile.reviewer || settings.reviewer);
   const { runPromptThroughProvider, assertVisionRunUsedImages } = await import('./promptRunner.js');
-  const { isToolFreeOneShotProvider } = await import('../lib/providerVendors.js');
+  const { isToolFreeOneShotProvider } = await import('../lib/provider/providerVendors.js');
 
   const toolFree = isToolFreeOneShotProvider(reviewer.provider);
 

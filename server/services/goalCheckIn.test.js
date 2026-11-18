@@ -31,7 +31,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => getTempRoot() }));
 
 const provider = { id: 'p1', defaultModel: 'test-model' };
-vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => provider) }));
+vi.mock('./provider/providers.js', () => ({ getActiveProvider: vi.fn(async () => provider) }));
 
 vi.mock('./aiProvider.js', () => ({
   callProviderAISimple: vi.fn(async () => ({ text: '{"assessment":"ok","recommendations":["keep going"]}' })),

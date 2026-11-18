@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express, { Router } from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
-import { modelAliasRevision } from '../lib/providerModelAliases.js';
+import { modelAliasRevision } from '../lib/provider/providerModelAliases.js';
 
 const store = {
   readGraph: vi.fn(),
@@ -33,7 +33,7 @@ const store = {
   saveConnectionSettings: vi.fn().mockResolvedValue(2),
   saveBindingSettings: vi.fn().mockResolvedValue(2),
 };
-vi.mock('../services/providerGraphStore.js', () => store);
+vi.mock('../services/provider/providerGraphStore.js', () => store);
 
 const providerService = {
   getAllProviders: vi.fn(),
@@ -41,13 +41,13 @@ const providerService = {
   refreshProviderModelsBatch: vi.fn(),
 };
 // Partial: the routes module pulls the whole toolkit-state surface in through
-// `services/providers.js`, so only `requireToolkit` is doubled.
+// `services/provider/providers.js`, so only `requireToolkit` is doubled.
 vi.mock('../lib/aiToolkitState.js', async (importOriginal) => ({
   ...(await importOriginal()),
   requireToolkit: () => ({ services: { providers: providerService } }),
 }));
 
-const graph = await import('../services/providerGraph.js');
+const graph = await import('../services/provider/providerGraph.js');
 const { createPortOSProviderRoutes } = await import('./providers.js');
 
 const CONNECTION = '11111111-1111-4111-8111-111111111111';

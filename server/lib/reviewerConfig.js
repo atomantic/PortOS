@@ -4,7 +4,7 @@
  */
 import { isPlainObject } from './objects.js';
 import { isTruthyMeta } from './metadataFlags.js';
-import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel, antigravityModelEffortLevels } from './providerModels.js';
+import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel, antigravityModelEffortLevels } from './provider/providerModels.js';
 import { providersForReviewer } from './reviewerProviderMatchers.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';

@@ -1,7 +1,7 @@
 vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn(async () => ({ epic: false })) }));
 import { prepareAppIssueClaim } from '../services/appIssues.js';
-vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
-import { getProviderById } from '../services/providers.js';
+vi.mock('../services/provider/providers.js', () => ({ getProviderById: vi.fn() }));
+import { getProviderById } from '../services/provider/providers.js';
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
 import { rmSync } from 'node:fs';

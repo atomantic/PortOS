@@ -8,7 +8,7 @@ const { statusOp } = vi.hoisted(() => ({
   statusOp: { update: vi.fn(), complete: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock('../services/providers.js', () => ({ getAllProviders: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getAllProviders: vi.fn() }));
 const { recordRunUsage } = vi.hoisted(() => ({ recordRunUsage: vi.fn(async () => {}) }));
 vi.mock('./usage.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -181,7 +181,7 @@ describe('callProviderAISimple completion classification', () => {
 // Codex ChatGPT subscription as a text transport (#5590)
 // ---------------------------------------------------------------------------
 
-const { getAllProviders } = await import('./providers.js');
+const { getAllProviders } = await import('./provider/providers.js');
 const { startAIOp } = await import('./aiStatusEvents.js');
 const { resolveTextProvider, resolveAPIProvider } = await import('./aiProvider.js');
 const { ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');

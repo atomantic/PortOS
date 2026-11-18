@@ -32,7 +32,7 @@ vi.mock('../services/settings.js', () => ({
   settingsEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
   getSettings: vi.fn(async () => ({})),
 }));
-vi.mock('../services/providers.js', async (importOriginal) => ({
+vi.mock('../services/provider/providers.js', async (importOriginal) => ({
   ...await importOriginal(),
   getProviderById: vi.fn(async (providerId) => (providerId === cliProvider.id ? cliProvider : null)),
   getActiveProvider: vi.fn(async () => cliProvider),

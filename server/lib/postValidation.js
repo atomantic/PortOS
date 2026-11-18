@@ -9,7 +9,7 @@ import { validateCognitivePair } from './postCognitiveConfig.js';
 import { TOPIC_IDS } from './postTopics.js';
 import { HHMM_STRICT_RE } from './timezone.js';
 import { POST_LLM_MAX_SEMANTIC_CANDIDATES, postLlmEvaluationSchema } from './postLlmContracts.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { RHETORIC_DRILL_TYPES, RHETORIC_MODE_IDS, rhetoricEvaluationSchema } from './postRhetoric.js';
 import { POLLUTING_KEYS } from './objects.js';
 

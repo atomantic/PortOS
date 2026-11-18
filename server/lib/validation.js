@@ -23,7 +23,7 @@ import { PM2_PROCESS_NAME_MAX, PM2_PROCESS_NAME_RE } from '../../lib/pm2ProcessN
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull, optionalBooleanMap, presetProviderIdSchema, providerRefSchema } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { LAYERED_INTELLIGENCE_SOURCE_KEYS } from './layeredIntelligenceSourceKeys.js';
-import { PROVIDER_FAMILY_IDS } from './providerFamilies.js';
+import { PROVIDER_FAMILY_IDS } from './provider/providerFamilies.js';
 import { APP_FEATURE_IDS, INSTANCE_FEATURE_IDS, INSTANCE_FEATURE_GROUP_IDS } from './instanceFeatureRegistry.js';
 import { MAX_MONTHLY_COST } from './subscriptionSavings.js';
 import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
@@ -41,10 +41,10 @@ import {
   AUTO_UPDATE_CHANNELS, AUTO_UPDATE_MIN_INTERVAL_HOURS_MIN, AUTO_UPDATE_MIN_INTERVAL_HOURS_MAX,
 } from './sharedSchemas.js';
 import { PR_COMPLETION_VALUES } from './prDisposition.js';
-import { EFFORT_LEVELS } from './providerModels.js';
+import { EFFORT_LEVELS } from './provider/providerModels.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
-import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './providerHarnesses.js';
-import { parseProviderRef } from './providerRef.js';
+import { PROVIDER_HARNESS_IDS, ROUTE_MODES } from './provider/providerHarnesses.js';
+import { parseProviderRef } from './provider/providerRef.js';
 import { SERVICE_CREDENTIAL_VIAS, SERVICE_PLANS, SERVICE_SLUG_RE } from './serviceDefinitions.js';
 import { MAX_TIMEOUT as AI_RUN_TIMEOUT_MAX_MS, MIN_TIMEOUT as AI_RUN_TIMEOUT_MIN_MS } from './aiToolkit/constants.js';
 import { isValidCronExpression, isCronShaped } from './cronValidation.js';
@@ -567,7 +567,7 @@ export const providerSchema = z.object({
   // container (Qwen3.8-27B on a Hopper/Blackwell card).
   sglangBacked: z.boolean().optional(),
   // Marks an OpenCode CLI/TUI wrapper for a hosted OpenAI-compatible gateway
-  // ('orcarouter', 'openrouter', 'nvidia-nim' — see server/lib/providerGateways.js). The
+  // ('orcarouter', 'openrouter', 'nvidia-nim' — see server/lib/provider/providerGateways.js). The
   // sibling API record whose id equals this value owns the key.
   gatewayBacked: z.string().optional(),
   // Legacy per-gateway marker, superseded by `gatewayBacked`. Still accepted and

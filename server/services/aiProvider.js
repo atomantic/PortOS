@@ -5,7 +5,7 @@ import { awaitWithAbort } from '../lib/abortTimeout.js';
  * Used by insightsService, identity, goalCheckIn, taste-questionnaire, etc.
  */
 
-import { getAllProviders } from './providers.js';
+import { getAllProviders } from './provider/providers.js';
 import { startAIOp } from './aiStatusEvents.js';
 // localModelHealing is lazy-imported at its (rare, error-recovery) call site
 // below — a static import here pulls its notifications/providers deps (which
@@ -16,11 +16,11 @@ import { startAIOp } from './aiStatusEvents.js';
 // consumer of this module never pulls a child-process graph it will not use —
 // and suites that partial-mock this file's deps keep working.
 import { classifyCodexTransportError, isCodexTextTransportEnabled } from '../lib/codexTurn.js';
-import { resolveBenchWaitMs, resolveProviderBench } from '../lib/providerCooldown.js';
+import { resolveBenchWaitMs, resolveProviderBench } from '../lib/provider/providerCooldown.js';
 import { ERROR_CATEGORIES, isRunCanceledError } from '../lib/aiToolkit/errorDetection.js';
 import { isCreativeRunSource, withCreativeLatitude } from '../lib/creativeLatitude.js';
 import { randomUUID } from 'node:crypto';
-import { beginDirectProviderCall } from '../lib/providerCallActivity.js';
+import { beginDirectProviderCall } from '../lib/provider/providerCallActivity.js';
 import { getAIToolkitInstance } from '../lib/aiToolkitState.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
 
@@ -573,7 +573,7 @@ async function callProviderAISimpleImpl(provider, model, prompt, options) {
   // run that takes an hour still counts as use throughout, and the next call
   // doesn't get a bare connection refusal.
   // Provider selection and parsing need none of the managed daemon graph.
-  const { ensureManagedRuntimeReady } = await import('./providerExecutionReadiness.js');
+  const { ensureManagedRuntimeReady } = await import('./provider/providerExecutionReadiness.js');
   const ready = await asDirectProviderCall(() => awaitWithAbort(ensureManagedRuntimeReady(provider, {
     onStarting: (label) => statusOp.update('provider:starting', `Starting ${label} if needed…`, { providerId: provider.id }),
   }), signal)).catch(() => ({ success: false, error: 'Provider readiness cancelled.' }));

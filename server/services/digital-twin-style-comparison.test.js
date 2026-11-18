@@ -3,13 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks — declared before importing the module under test. We mock only the
 // LLM/provider/document deps; safeJSONParse (from fileUtils) runs for real so
 // parseStyleComparison is exercised end-to-end.
-vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
+vi.mock('./provider/providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./promptService.js', () => ({ buildPrompt: vi.fn() }));
 vi.mock('./digital-twin-helpers.js', () => ({ callProviderAI: vi.fn() }));
 vi.mock('./digital-twin-analysis.js', () => ({ getAllTwinContent: vi.fn() }));
 
 import { compareSpokenWrittenStyle, parseStyleComparison } from './digital-twin-style-comparison.js';
-import { getProviderById } from './providers.js';
+import { getProviderById } from './provider/providers.js';
 import { buildPrompt } from './promptService.js';
 import { callProviderAI } from './digital-twin-helpers.js';
 import { getAllTwinContent } from './digital-twin-analysis.js';

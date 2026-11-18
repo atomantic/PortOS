@@ -48,7 +48,7 @@ const RELEASE_FLOW_GUIDANCE = 'Follow the bundled release workflow through its f
  * then asks a human an unattended run does not have: an OpenCode MTPLX TUI run
  * stalled exactly there, refusing the sentinel because "the current session is
  * a read-only file-search specialist". (The role itself is pinned away at the
- * spawn site now — `ensureOpencodeAgent` in lib/providerVendors.js — so this
+ * spawn site now — `ensureOpencodeAgent` in lib/provider/providerVendors.js — so this
  * note is the belt, not the fix.) Stating the carve-out is what makes the write
  * reachable when some future host does the same thing.
  *
