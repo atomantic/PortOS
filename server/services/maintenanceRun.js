@@ -398,8 +398,8 @@ async function holdForOutstandingWork(id, run, ignoreTaskId) {
  * DELETE route and a queue save that drops the row remove one), or flipped to
  * `completed` by the 14-day failure reaper (`resolution: 'auto-expired'`).
  * Neither is a success the run has yet to record: an audit success writes the
- * ledger and clears `active` in one turn, and the reaper only touches blocked
- * tasks. Falling through would re-dispatch the same step, turning "clear this
+ * ledger and clears `active` in one turn, and the reaper only expires failure
+ * leftovers. Falling through would re-dispatch the same step, turning "clear this
  * failed check" into "run it again" once per dismissal for as long as the run
  * lives. The task is read by id because a completed one may have aged out of
  * the working set `getAllTasks` returns; only absence everywhere is a delete.

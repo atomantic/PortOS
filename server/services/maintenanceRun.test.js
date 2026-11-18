@@ -268,6 +268,17 @@ describe('manual maintenance run', () => {
     expect(state.invoked).toHaveLength(2);
   });
 
+  // Before any agent spawns, only the accepted handoff names the step's task.
+  it('stops when the accepted step task is deleted before an agent ever picked it up', async () => {
+    const { getOnDemandHandoffs } = await import('./onDemandHandoff.js');
+    const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
+    getOnDemandHandoffs.mockResolvedValue({ 'demand-1': { request: { id: 'demand-1', burn: { maintenanceRunId: run.id } }, status: 'accepted', taskId: 'task-0', claimedAt: new Date().toISOString() } });
+    await __retryMaintenanceRuns();
+    expect(await getMaintenanceRun(run.id)).toMatchObject({ status: 'stopped', reason: expect.stringContaining('copy task task-0 was deleted') });
+    expect(state.invoked).toHaveLength(1);
+    getOnDemandHandoffs.mockResolvedValue({});
+  });
+
   it('does not mistake a step task that aged out of the working set for a deleted one', async () => {
     const { run } = await startMaintenanceRun({ appId: 'app-1', providerId: 'codex', model: 'gpt-5', taskTypes: ['copy'], explicitCheck: true });
     await __onMaintenanceAgentSpawned(agentFor(run, 0));
