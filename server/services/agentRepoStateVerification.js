@@ -1644,7 +1644,7 @@ export const REPO_STATE_REMEDIATIONS = Object.freeze({
   // recovery agent cannot run. Its non-gh caveats still apply on either forge —
   // merge from the repo ROOT and preserve all checkout/ref evidence.
   [REPO_STATE_ISSUES.PR_UNMERGED]: ({ prUrl, prNumber, forgeCli, mergeHandoff }) => (forgeCli === 'glab'
-    ? `Finish the merge request${prUrl ? ` ${prUrl}` : ''}: fix failing pipeline jobs and resolve review threads, retain delivery ownership until required checks and reviews pass, revalidate its exact reviewed head under merge admission, then merge from the repo ROOT with "glab mr merge ${prNumber ?? '<iid>'} --yes" while preserving source branches and checkouts. Confirm MERGED and release admission; never request source-branch deletion during merge.`
+    ? `Finish the merge request${prUrl ? ` ${prUrl}` : ''}: fix failing pipeline jobs and resolve review threads, retain delivery ownership until required checks and reviews pass, recheck CI, applicable reviews and forge merge eligibility for the same full head SHA, then merge from the repo ROOT with "glab mr merge ${prNumber ?? '<iid>'} --yes --sha <ci-verified-sha>" using that verified SHA while preserving source branches and checkouts until delivery is confirmed. Independently confirm the forge reports this exact merge request as MERGED; never request source-branch deletion during merge.`
     : `Finish the pull request${prUrl ? ` ${prUrl}` : ''}. ${driveToMerge(prUrl || '<num>', { mergeHandoff })}`),
 });
 
@@ -1665,7 +1665,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
   const ctx = { branchName, base, prUrl: observed.prUrl, prNumber: observed.prNumber, worktreePath, forgeCli: observed.forgeCli,
     mergeHandoff: isMergeHandoffEnabled(ownerApp?.mergeHandoffMinQueuedRuns) };
 
-  const retirementInstructions = `After confirming MERGED and releasing admission, request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until branch-reconcile removes it with ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
+  const retirementInstructions = `Only after independently confirming delivery through the forge (this exact PR/MR reports MERGED), request branch-reconcile through POST /api/cos/schedule/trigger with ${JSON.stringify({ taskType: 'branch-reconcile', appId })} using authenticated PortOS transport. Keep checkout and refs for its exact inventory and retirement: a merged checkout is removed with its branch. Report cleanup pending until branch-reconcile removes it with ok:true and branchDeleted:true. Do not copy the checkout into an archive.`;
   const context = [
     'An agent finished successfully but the repository did not end up in the expected state.',
     '',
@@ -1712,7 +1712,7 @@ async function fileRepoStateRecoveryTask({ agentId, task, branchName, sourceWork
     return null;
   }
 
-  // The PR this recovery may land under merge admission (#12251): the forge's
+  // The PR this recovery may land through the forge: its
   // own answer for this branch, never the agent's report or the task prose.
   const mergeTarget = issues.some(issue => issue.code === REPO_STATE_ISSUES.PR_UNMERGED) && parsePullRequestUrl(observed.prUrl)
     ? { url: observed.prUrl, branch: branchName } : null;

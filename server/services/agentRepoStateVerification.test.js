@@ -1787,6 +1787,36 @@ describe('verifyAgentRepoState — divergent runs', () => {
     if (!mergeHandoff) expect(REPO_STATE_REMEDIATIONS[REPO_STATE_ISSUES.PR_UNMERGED]({ prUrl: 'https://github.com/example/repo/pull/1', forgeCli: 'gh' })).toContain('handoff off');
   });
 
+  it('pins GitLab recovery merges to the CI-verified head without a PortOS lease', () => {
+    const text = REPO_STATE_REMEDIATIONS[REPO_STATE_ISSUES.PR_UNMERGED]({
+      prUrl: 'https://gitlab.example.com/example/repo/-/merge_requests/4', prNumber: 4, forgeCli: 'glab',
+    });
+    expect(text).toContain('glab mr merge 4 --yes --sha <ci-verified-sha>');
+    expect(text).toContain('CI, applicable reviews and forge merge eligibility for the same full head SHA');
+    expect(text).toContain('preserving source branches and checkouts until delivery is confirmed');
+    expect(text).toContain('Independently confirm the forge reports this exact merge request as MERGED');
+    expect(text).not.toMatch(/admission|lease/);
+  });
+
+  it.each(['gh', 'glab'])('requires independently confirmed delivery before retirement on %s', async forgeCli => {
+    existsSync.mockReturnValue(true);
+    localBranch(true);
+    listWorktrees.mockResolvedValue([{ ...RELEASE, branch: `refs/heads/${BRANCH}` }]);
+    resolveForgeForRepo.mockResolvedValue({ cli: forgeCli, env: null });
+    const found = { status: 'found', url: forgeCli === 'gh'
+      ? 'https://github.com/example/repo/pull/1'
+      : 'https://gitlab.example.com/example/repo/-/merge_requests/4', detail: 'MERGED' };
+    findPullRequestForBranch.mockResolvedValue(found);
+    findMergeRequestForBranch.mockResolvedValue(found);
+
+    await run();
+
+    const context = addTask.mock.calls[0][0].context;
+    expect(context).toContain('Only after independently confirming delivery through the forge (this exact PR/MR reports MERGED), request branch-reconcile');
+    expect(context).toContain('/api/cos/schedule/trigger');
+    expect(context).not.toMatch(/merge admission|releasing admission|release admission/);
+  });
+
   it('files ONE recovery task for a leftover worktree and branch after a merged PR', async () => {
     // The PR merged (branch gone on the forge), but the surviving local branch
     // and worktree are not a merged delivery, so their work is not discarded.
