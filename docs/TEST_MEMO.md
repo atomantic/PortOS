@@ -382,8 +382,10 @@ memoizable (the gate the record was written under) is now selected through
   when the reader has a non-literal import that could evaluate it.
 
 A test with no record, a version 1 record, a record naming a deleted module,
-or a record the recorded key rejects is selected exactly as before, through
-its full static and dynamic closure. Selection never trusts a record further
+or a record the recorded key rejects is selected through its full static and
+dynamic closure and tracked inputs. An unresolved edge or an unbounded read
+anywhere in that closure selects the test for every changed source, since it
+could reach outside the known inputs. Selection never trusts a record further
 than the memo already does to skip the test outright, and it is stricter about
 staleness. The full suite on every push to `main` still runs everything, so a
 miss is caught by the next completed run.

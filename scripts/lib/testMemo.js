@@ -2395,8 +2395,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const oversizedData = [];
     for (const name of raw.scopedNames) for (const target of filesNamed(name)) addFile(target);
     const addDir = (dirRel, walk, guessed = false, open = false, via = null) => {
-      // Wherever the prefix is, the read may land outside it, which refuses every test that
-      // reaches this file (`gather`). The prefix tree is still added below for related selection.
+      // An open read may land outside the prefix. `gather` carries that fact into keying and selection.
       if (open) resolved.openReads.add(openReadReason(dirRel, via));
       if (localState(dirRel)) { resolved.localReads.push(dirRel); return; }
       if (ignoredInput(dirRel)) return;
@@ -2545,6 +2544,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const trusting = []; // members whose contained paths rely on one
     const namedTrusts = [];
     const mocked = new Set(replacedBySetup().modules);
+    let hasOpenReads = false;
     let never = false;
     let git = false;
     while (stack.length) {
@@ -2578,6 +2578,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       // guess, whichever member reads it: a library module's read lands wherever its caller or its
       // own data says, which no key line follows (#16660). Unlike the two rules above, no caller
       // proves it: such a module resolves the name, or joins it with `pathWithin()`.
+      if (f.openReads.size > 0) hasOpenReads = true;
       for (const reason of f.openReads) unresolvedInputs.push(`${rel}: ${reason}`);
       // A library's explicit guard is part of the read proof. Keep the existing scope for
       // directory-listing and UUID inference, including recorded dynamic imports.
@@ -2636,7 +2637,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
       }
     }
     for (const [name, version] of dataPackages) if (!packageVersions.has(name)) packageVersions.set(name, version);
-    return { members, inputs, absent, packages: packageVersions, tools, trees, unresolvedEdges, unresolvedInputs, never, git };
+    return { members, inputs, absent, packages: packageVersions, tools, trees, unresolvedEdges, unresolvedInputs, hasOpenReads, never, git };
   };
 
   const closureOf = (entry, testRel = entry, stop = null, { followMockOnly = true } = {}) => gather([entry], { walk: true, testRel, stop, followMockOnly });
@@ -2820,7 +2821,7 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
    * gate the record was written under, so selection never trusts a record
    * the memo itself would not.
    *
-   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, edgesResolved: boolean, narrowed: object|null }}
+   * @returns {{ floor: Verdict, recorded: Verdict|null, closure: Set<string>, inputs: Set<string>, edgesResolved: boolean, hasOpenReads: boolean, narrowed: object|null }}
    */
   const analyzeTest = (testRel, { baseClosure, recorded = null, digests = null }) => {
     const closure = closureOf(testRel);
@@ -2842,7 +2843,15 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
     const narrowed = recordedVerdict?.memoizable && Array.isArray(digests) && digests.length === recorded.length
       ? recordedReach(testRel, { modules: recorded, digests })
       : null;
-    return { floor, recorded: recordedVerdict, closure: closure.members, inputs: closure.inputs, edgesResolved: closure.unresolvedEdges.length === 0, narrowed };
+    return {
+      floor,
+      recorded: recordedVerdict,
+      closure: closure.members,
+      inputs: closure.inputs,
+      edgesResolved: closure.unresolvedEdges.length === 0,
+      hasOpenReads: closure.hasOpenReads,
+      narrowed,
+    };
   };
 
   return { analyzeTest, closureOf, fileHash, moduleDigest, workspaceBase, factsFor };
@@ -2853,8 +2862,6 @@ export function createTestMemoAnalyzer({ fs, workspaceRel, env = {}, platform = 
  * `records` maps a test to the module list its last green run loaded.
  * `digests` maps a test to that record's per-module digests (a v2 record),
  * which lets related selection narrow it.
- *
- * @returns {Map<string, { floor, recorded, closure: Set<string>, edgesResolved: boolean }>}
  */
 export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles, records = new Map(), digests = new Map() }) {
   const analyzer = createTestMemoAnalyzer({ fs, workspaceRel: workspace, env, platform, arch, nodeVersion, toolVersion, caseFilter, listFiles });
@@ -2870,7 +2877,7 @@ export function computeTestMemoKeys(testFiles, { fs, workspace, env, platform, a
  * in its `recordedReach`, or when that walk failed closed. Any other test is
  * related when a source is in its static+dynamic module closure or among the
  * non-JS inputs it reaches (a JSON or CSS import, a fixture), or when its
- * edges could not all be resolved (fail closed: it may reach anything).
+ * closure has unresolved edges or unbounded reads (it may reach anything).
  */
 export function relatedTests(keys, sources) {
   const changed = new Set(sources);
@@ -2878,7 +2885,7 @@ export function relatedTests(keys, sources) {
   return [...keys.entries()]
     .filter(([, info]) => (info.narrowed
       ? info.narrowed.failClosed !== null || reaches(info.narrowed.reach)
-      : !info.edgesResolved || reaches(info.closure) || reaches(info.inputs)))
+      : !info.edgesResolved || info.hasOpenReads || reaches(info.closure) || reaches(info.inputs)))
     .map(([test]) => test);
 }
 
