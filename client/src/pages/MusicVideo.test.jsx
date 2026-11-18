@@ -4,7 +4,7 @@
  * preview and the attention row. Each step's own wiring is covered beside its
  * container in `components/musicVideo/stages/use*StageWiring.test.jsx`.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
@@ -1065,6 +1065,60 @@ describe('MusicVideo main page project cards', () => {
       fireEvent.click(confirmBtn);
     });
     expect(deleteMusicVideoProject).toHaveBeenCalledWith(PROJECT_WITH_CLIP.id, { silent: true });
+  });
+
+  describe('deleting from the project grid keeps the reader in place', () => {
+    const A = { ...PROJECT_WITH_CLIP, id: 'mv-a', name: 'Alpha Video', createdAt: '2026-10-03T00:00:00.000Z' };
+    const B = { ...PROJECT_NO_CLIP, id: 'mv-b', name: 'Bravo Video', createdAt: '2026-10-02T00:00:00.000Z' };
+    const C = { ...PROJECT_WITH_CLIP, id: 'mv-c', name: 'Charlie Video', createdAt: '2026-10-01T00:00:00.000Z' };
+    const confirmDeleteOf = async (project) => {
+      const card = await screen.findByTestId(`mv-project-card-${project.id}`);
+      fireEvent.click(within(card).getByRole('button', { name: `Delete project ${project.name}` }));
+      const confirm = within(card).getByRole('button', { name: `Confirm delete project ${project.name}` });
+      confirm.focus();
+      await act(async () => { fireEvent.click(confirm); });
+    };
+
+    it('collapses the card, then moves focus to the next surviving card without scrolling', async () => {
+      deleteMusicVideoProject.mockResolvedValueOnce({ ok: true });
+      listMusicVideoProjects.mockResolvedValueOnce([A, B, C]);
+      renderMV();
+      const grid = await screen.findByTestId('mv-project-grid');
+      const focusSpy = vi.spyOn(HTMLElement.prototype, 'focus');
+      await confirmDeleteOf(B);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-b')).toBeNull());
+      expect(screen.getByTestId('mv-project-grid')).toBe(grid);
+      const charlie = screen.getByTestId('mv-project-card-mv-c');
+      expect(document.activeElement).toBe(charlie.closest('[tabindex="-1"]'));
+      expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+      focusSpy.mockRestore();
+    });
+
+    it('falls back to the previous card for the last one and to the grid when none remain', async () => {
+      deleteMusicVideoProject.mockResolvedValue({ ok: true });
+      listMusicVideoProjects.mockResolvedValueOnce([A, B]);
+      renderMV();
+      const grid = await screen.findByTestId('mv-project-grid');
+      await confirmDeleteOf(B);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-b')).toBeNull());
+      expect(document.activeElement).toBe(screen.getByTestId('mv-project-card-mv-a').closest('[tabindex="-1"]'));
+      await confirmDeleteOf(A);
+      await waitFor(() => expect(screen.queryByTestId('mv-project-card-mv-a')).toBeNull());
+      expect(screen.getByTestId('mv-project-grid')).toBe(grid);
+      expect(document.activeElement).toBe(grid);
+    });
+
+    it('keeps the card and its delete action when the delete fails', async () => {
+      deleteMusicVideoProject.mockRejectedValueOnce(new Error('Disk busy'));
+      listMusicVideoProjects.mockResolvedValueOnce([A, B]);
+      renderMV();
+      await confirmDeleteOf(A);
+      await waitFor(() => expect(deleteMusicVideoProject).toHaveBeenCalledTimes(1));
+      const card = screen.getByTestId('mv-project-card-mv-a');
+      expect(card.closest('[inert]')).toBeNull();
+      expect(within(card).getByRole('button', { name: `Delete project ${A.name}` })).toBeInTheDocument();
+      expect(screen.getByTestId('mv-project-card-mv-b')).toBeInTheDocument();
+    });
   });
 
   it('organizes project cards with the newest one first', async () => {

@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import CollapsibleListItem from '../ui/CollapsibleListItem';
 import InfiniteScrollFooter from '../ui/InfiniteScrollFooter';
 import MusicVideoProjectCard from './MusicVideoProjectCard.jsx';
 import { groupMusicVideoProjects } from '../../lib/musicVideoProjectList.js';
@@ -14,6 +15,15 @@ export default function ProjectIndex({
   onSelect, onClone, deletion, cloningId, onRename,
 }) {
   const projectGroups = useMemo(() => groupMusicVideoProjects(projects, nameQuery), [projects, nameQuery]);
+  // A fork group keeps its card when one version goes, so only a group's last
+  // version collapses; otherwise the removal completes at once.
+  const survivingGroupIds = useMemo(
+    () => projectGroups.filter(({ versions }) => versions.length > 1).flatMap(({ versions }) => versions.map((v) => v.id)),
+    [projectGroups],
+  );
+  useEffect(() => {
+    survivingGroupIds.filter((id) => deletion.isRemoving(id)).forEach((id) => deletion.finishRemoval(id));
+  });
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -37,14 +47,19 @@ export default function ProjectIndex({
           : statusFilter === 'all' ? 'No music video projects yet. Create your first project above to get started.'
             : statusFilter === 'completed' ? 'No completed projects.' : 'No projects in progress.'}</p>
       )}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" data-testid="mv-project-grid">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-0 outline-none" tabIndex={-1} data-testid="mv-project-grid">
         {projectGroups.map(({ rootId, versions }) => {
           const picked = versions.findIndex((v) => v.id === pickedVersion[rootId]);
           const versionIndex = picked >= 0 ? picked : 0;
           const project = versions[versionIndex];
           return (
-            <MusicVideoProjectCard
+            <CollapsibleListItem
               key={rootId}
+              removing={versions.length === 1 && deletion.isRemoving(project.id)}
+              onExited={() => deletion.finishRemoval(project.id)}
+              spacing="1rem"
+            >
+            <MusicVideoProjectCard
               project={project}
               trackLabel={trackName(project.trackId)}
               onSelect={() => onSelect(project.id)}
@@ -64,6 +79,7 @@ export default function ProjectIndex({
                 if (target) onPickVersion(rootId, target.id);
               }}
             />
+            </CollapsibleListItem>
           );
         })}
       </div>

@@ -475,6 +475,8 @@ export default function MusicVideo() {
       .finally(() => setCreating(false));
   };
 
+  const pendingDeletes = useRef(new Set());
+  const [removingIds, setRemovingIds] = useState(() => new Set());
   const { isConfirming: isConfirmingDelete, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const handleDeleteRequest = (id) => {
@@ -493,14 +495,33 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress audio import before deleting this project');
       return;
     }
+    if (pendingDeletes.current.has(id)) return;
+    pendingDeletes.current.add(id);
     deleteMusicVideoProject(id, { silent: true })
       .then(() => {
-        summaries.setItems((prev) => prev.filter((p) => p.id !== id));
-        indexSummaries.setItems((prev) => prev.filter((p) => p.id !== id));
-        indexSummaries.reconcileFirst();
-        if (selectedId === id) navigate('/music-video');
+        // From the index the card collapses first and leaves on exit; the
+        // workspace navigates away, so nothing is left to animate there.
+        if (selectedId === id) finishRemoval(id);
+        else setRemovingIds((prev) => new Set([...prev, id]));
       })
-      .catch((err) => toast.error(err?.message || 'Failed to delete project'));
+      .catch((err) => {
+        pendingDeletes.current.delete(id);
+        toast.error(err?.message || 'Failed to delete project');
+      });
+  };
+
+  const finishRemoval = (id) => {
+    pendingDeletes.current.delete(id);
+    setRemovingIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    summaries.setItems((prev) => prev.filter((p) => p.id !== id));
+    indexSummaries.setItems((prev) => prev.filter((p) => p.id !== id));
+    indexSummaries.reconcileFirst();
+    if (selectedId === id) navigate('/music-video');
   };
 
   // The workspace's Project settings drawer and the index cards share one confirm flow.
@@ -509,6 +530,8 @@ export default function MusicVideo() {
     request: handleDeleteRequest,
     confirm: (id) => confirmDelete(() => handleDelete(id)),
     cancel: cancelDelete,
+    isRemoving: (id) => removingIds.has(id),
+    finishRemoval,
   };
 
   const handleClone = (optionsOrTarget = {}, maybeOptions = {}, songRevision = false) => {
