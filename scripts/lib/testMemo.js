@@ -687,10 +687,9 @@ const isGuardModule = (fileRel, spec) => spec.startsWith('.') && PATH_WITHIN_MOD
 function guardedJoin(args) {
   const [dir, ...segments] = args;
   if (dir?.k !== 'path') return UNKNOWN;
-  const unfollowed = segments.find((segment) => segment.unfollowed);
-  if (unfollowed) return unfollowed;
   if (dir.partial) return dir; // inside the real directory, which is wherever the partial path says it is
   // `maybeSelf`: with an empty segment the result is the directory itself, so text glued onto it names a sibling.
+  // A segment with an unfollowed transform (such as slash normalization) is re-bounded to `dir` here.
   if (!segments.every((segment) => segment.k === 'str')) return { ...partialPath({ ...dir, isDir: true }, dir.v, { open: false, trust: ['guard'] }), maybeSelf: true };
   // `join()` semantics: a leading separator is a plain segment.
   return segments.reduce((path, segment) => joinPath(path, str(segment.v.replace(/^\/+/, ''))), dir);
@@ -745,7 +744,10 @@ function pathMemberIdentity(value, tokens, match, name, open, call) {
   if (name === 'toString') return close === open + 1;
   if (name === 'normalize') return close === open + 1 && (value.partial || value.v.normalize() === value.v);
   // A literal backslash can spell a separator on Windows or be part of a filename on POSIX.
-  if (!value.partial && value.v.includes('\\')) return false;
+  // A partial path can also carry an unproven backslash in its dynamic segment; only a path
+  // whose variable parts still expand to concrete literals (`vars !== null`) can be checked again.
+  if (value.v.includes('\\')) return false;
+  if (value.partial && !(value.open && value.vars !== null)) return false;
   const first = tokens[open + 1];
   const second = tokens[open + 3];
   if (close !== open + 4 || tokens[open + 2].v !== ',' || second.t !== 's' || second.v !== '/') return false;

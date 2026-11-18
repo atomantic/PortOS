@@ -487,6 +487,30 @@ describe('a read whose variable segment can leave the directory the source names
     }
   });
 
+  it('refuses slash normalization of a guarded dynamic path unless a later guard re-bounds the normalized value', () => {
+    const makeName = "const makeName = () => ['foo', '..', '..', 'outside.json'].join('\\\\');";
+    for (const [operation, method] of [
+      [String.raw`.replaceAll('\\', '/')`, '.replaceAll()'],
+      [String.raw`.replace(/\\/g, '/')`, '.replace()'],
+    ]) {
+      expect(refusal(`${makeName}\nreadFileSync(pathWithin(FIXTURES, makeName())${operation});`), method)
+        .toBe(`${test}: reads a path the analyzer cannot follow through ${method}`);
+    }
+    expect(refusal(String.raw`readFileSync(join(FIXTURES, readdirSync(FIXTURES)[0]).replaceAll('\\', '/'));`))
+      .toBe(`${test}: reads a path the analyzer cannot follow through .replaceAll()`);
+    // A guard on the pre-normalized path or using the normalized path as the base does not re-bound it.
+    expect(refusal(`${makeName}\nconst raw = pathWithin(FIXTURES, makeName());\nconst norm = raw.replaceAll('\\\\', '/');\npathWithin(FIXTURES, raw);\nreadFileSync(norm);`))
+      .toBe(`${test}: reads a path the analyzer cannot follow through .replaceAll()`);
+    expect(refusal(`${makeName}\nconst norm = pathWithin(FIXTURES, makeName()).replaceAll('\\\\', '/');\nreadFileSync(pathWithin(norm, 'f0.json'));`))
+      .toBe(`${test}: reads a path the analyzer cannot follow through .replaceAll()`);
+
+    // Canonical literals, resolvable literal loops, and guards applied after normalization keep working.
+    expect(keyedOn(String.raw`readFileSync(pathWithin(FIXTURES, 'f0.json').replaceAll('\\', '/'));`, 'server/lib/fixtures/f0.json')).toBe(true);
+    expect(keyedOn(String.raw`for (const name of ['f0.json', 'f1.json']) readFileSync(join(FIXTURES, name).replaceAll('\\', '/'));`, 'server/lib/fixtures/f0.json')).toBe(true);
+    expect(floorOf(`${makeName}\nreadFileSync(pathWithin(FIXTURES, makeName().replaceAll('\\\\', '/')));`).memoizable).toBe(true);
+    expect(floorOf(`${makeName}\nconst norm = pathWithin(FIXTURES, makeName()).replaceAll('\\\\', '/');\nreadFileSync(pathWithin(FIXTURES, norm));`).memoizable).toBe(true);
+  });
+
   it('refuses an environment-derived segment under an anchor but keeps genuinely external paths', () => {
     for (const expr of ['process.env.FIXTURE', 'process.env[envKey]', 'process.env.HOME']) {
       expect(refusal(`readFileSync(join(FIXTURES, ${expr}));`), expr).toBe(leaves('server/lib/fixtures'));
