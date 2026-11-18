@@ -693,6 +693,10 @@ function evaluatePrimary(tokens, match, start, ctx, depth) {
       if (ctx.shared.scopes.shadowed(token.v) || (token.v === 'pathWithin' && ctx.replaced.guard)) {
         return { value: token.v === 'pathWithin' && args[0]?.k === 'path' ? partialPath(args[0], args[0].v, UNBOUNDED) : UNKNOWN, end };
       }
+      // A guard call is a path this file has the guard's word for, literal segments included: a
+      // replaced guard returns what it likes. A UUID counts only where a read is contained by it
+      // (`trusts`): a lock file named with one is no read.
+      if (token.v === 'pathWithin') ctx.shared.trusted.guard = true;
       // A UUID is 36 characters of hex and dashes: a name, wherever it is joined.
       return { value: token.v === 'pathWithin' ? guardedJoin(args) : GENERATED_NAME, end };
     }
@@ -725,6 +729,13 @@ const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises'])
 const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
 /** Keywords an operand follows, so the token after one continues the expression. */
 const OPERAND_KEYWORDS = new Set(['await', 'typeof', 'new', 'yield', 'void', 'delete', 'async', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof', 'function', 'class', 'extends']);
+/** Keywords a parenthesized operand follows: `delete (x[0])`. After any other name, `(` opens a call, a head or a parameter list. */
+const BEFORE_GROUPING = new Set(['await', 'typeof', 'yield', 'void', 'delete', 'return', 'throw', 'case', 'else', 'do', 'in', 'of', 'instanceof']);
+/** True when the `(` at `open` only groups an expression. */
+const groupsAt = (tokens, open) => {
+  const before = tokens[open - 1];
+  return isPunct(tokens[open], '(') && !isPunct(before, ')', ']') && before?.t !== 'tpl' && (before?.t !== 'id' || BEFORE_GROUPING.has(before.v));
+};
 /** Keywords after which `function` starts an expression, or an exported declaration other modules can call. */
 const BEFORE_FUNCTION_EXPRESSION = new Set([...OPERAND_KEYWORDS, 'export', 'default']);
 /** The elements of an array are directory-entry names (`LISTED_NAME`); a finite set is a `string[]`. */
@@ -1010,12 +1021,23 @@ function createScopes(ctx) {
     return fsNamespaces.has(arr[head].v) && READDIR_CALLEES.has(arr[callee].v) && (callee === head + 2 || (callee === head + 4 && arr[head + 2].v === 'promises'));
   };
 
+  /** `arr[from..to]` with the grouping parentheses around it: `((p))`. */
+  const grouped = (arr, m, from, to) => {
+    let [a, b] = [from, to];
+    while (m[a - 1] === b + 1 && groupsAt(arr, a - 1)) { a -= 1; b += 1; }
+    return [a, b];
+  };
+  /** `x++`, `--(x)`, `delete x[0]`, `(x.length) = 5`: the operand `arr[from..to]` is changed where it stands. */
+  const changes = (arr, m, from, to) => {
+    const [a, b] = grouped(arr, m, from, to);
+    return isPunct(arr[b + 1], '++', '--') || isPunct(arr[a - 1], '++', '--') || isWord(arr[a - 1], 'delete') || assignsAt(arr, b + 1);
+  };
   /** True when `arr[at]` is written: assigned, updated, or a target of a destructuring assignment. */
   const writesTo = (arr, m, at) => {
     if (isPunct(arr[at - 1], '.', '?.')) return false; // a property of that name
     let after = at + 1;
     while (isPunct(arr[after], ')')) after += 1; // `(p) = other`
-    if (assignsAt(arr, after) || isPunct(arr[at + 1], '++', '--') || isPunct(arr[at - 1], '++', '--')) return true;
+    if (assignsAt(arr, after) || changes(arr, m, at, at)) return true;
     // `for (p of rows)`, `for ((p) of rows)`: the head assigns on every turn.
     if (isWord(arr[after], 'of', 'in') && !isWord(arr[at - 1], 'const', 'let', 'var') && inForHead(arr, m, at)) return true;
     // `({ p } = other)`, `[p] = other`: the pattern closes before the `=`.
@@ -1050,7 +1072,8 @@ function createScopes(ctx) {
     } else if (isPunct(head, '[') && m[i] !== undefined && m[i] < to) {
       domain = [];
       for (const [a, b] of listRanges(arr, m, i)) {
-        if (a === b) continue;
+        // `['f0', , 'f1']`: the empty slot is `undefined` to whatever iterates the array.
+        if (a === b) return null;
         const { value, end } = evaluate(arr, m, a, ctx);
         if (value.k !== 'str' || end !== b) return null;
         domain.push(value.v);
@@ -1111,7 +1134,10 @@ function createScopes(ctx) {
   };
   /** True when `arr[at]` sits in a pattern that is assigned to: `[a, names[0]] = pair`, `for ({ p } of rows)`. */
   const inAssignedPattern = (arr, m, at) => {
-    for (let open = enclosingOpen(arr, m, at); open !== null && isPunct(arr[open], '{', '['); open = enclosingOpen(arr, m, open)) {
+    for (let open = enclosingOpen(arr, m, at); open !== null; open = enclosingOpen(arr, m, open)) {
+      // `[(p)] = pair`: a target may stand in grouping parentheses.
+      if (groupsAt(arr, open)) continue;
+      if (!isPunct(arr[open], '{', '[')) return false;
       if (assignsAt(arr, m[open] + 1)) return true;
       if (isWord(arr[m[open] + 1], 'of', 'in') && !isWord(arr[open - 1], 'const', 'let', 'var') && inForHead(arr, m, open)) return true;
     }
@@ -1170,8 +1196,9 @@ function createScopes(ctx) {
     if (isPunct(prev, '...') || isWord(prev, 'of')) return true;
     if (isPunct(next, '.', '?.')) {
       const method = arr[at + 2];
-      // A method that only reads, and is not replaced (`NAMES.map = other`).
-      if (method?.t !== 'id' || !ARRAY_READS.has(method.v) || assignsAt(arr, at + 3)) return false;
+      // A method that only reads, and is not replaced (`NAMES.map = other`). `NAMES.length++`,
+      // `++(NAMES.length)` and `(NAMES.length) = 5` add empty slots.
+      if (method?.t !== 'id' || !ARRAY_READS.has(method.v) || changes(arr, m, at, at + 2)) return false;
       const open = isPunct(arr[at + 3], '?.') ? at + 4 : at + 3; // `NAMES.forEach?.(cb)`
       if (!ARRAY_ITERATORS.has(method.v) || !isPunct(arr[open], '(') || m[open] === undefined) return true;
       // `names.forEach((name, i, all) => all.push(x))`: the callback is handed the array.
@@ -1179,11 +1206,10 @@ function createScopes(ctx) {
     }
     if (isPunct(next, '[') && m[at + 1] !== undefined) {
       // One element, read: not called (`NAMES['push'](x)`), not written (`NAMES[0] = x`, `NAMES[0] += x`,
-      // `[NAMES[0]] = pair`, `for (NAMES[0] of xs)`). `NAMES[0] === x` is a read.
-      let after = m[at + 1] + 1;
-      if (isPunct(arr[after], '(', '?.')) return false;
-      while (isPunct(arr[after], ')')) after += 1; // `(NAMES[1]) = x`
-      return !isPunct(arr[after], '++', '--') && !isPunct(prev, '++', '--') && !isWord(arr[after], 'of', 'in') && !assignsAt(arr, after);
+      // `[NAMES[0]] = pair`, `for (NAMES[0] of xs)`), not removed (`delete NAMES[0]`, which leaves an
+      // empty slot). `NAMES[0] === x` is a read.
+      if (isPunct(arr[m[at + 1] + 1], '(', '?.') || changes(arr, m, at, m[at + 1])) return false;
+      return !isWord(arr[grouped(arr, m, at, m[at + 1])[1] + 1], 'of', 'in');
     }
     if (isPunct(prev, '(', ',') && isPunct(next, ')', ',')) {
       // Handed to something that only reads it: `expect(NAMES)`, `new Set(NAMES)`, `Array.from(NAMES)`,
@@ -1496,9 +1522,9 @@ export function extractFileFacts(src, { fileRel, cwdRel, replaced = null }) {
   ctx.src = src;
   ctx.uuid = !ctx.replaced.crypto && importsNamed(tokens, match, 'randomUUID', isCryptoModule);
   // One holder for every copy of the context (`valuesAt` evaluates under a copy): the scope analysis is per file.
-  ctx.shared = { root: ctx, scopes: undefined };
-  // The sources a contained read of this file relies on, for a mock registered by another member (`gather`).
+  // The sources a read of this file relies on, for a mock registered by another member (`gather`).
   facts.trusted = { fs: false, crypto: false, guard: false };
+  ctx.shared = { root: ctx, scopes: undefined, trusted: facts.trusted };
   const trusts = (value) => { if (value.partial && !value.open) for (const source of value.trust ?? []) facts.trusted[source] = true; };
   for (const spec of staticEdges(tokens, match)) facts.edges.push({ spec, kind: 'static' });
   // `const load = createRequire(import.meta.url)` makes `load(...)` a native require;
