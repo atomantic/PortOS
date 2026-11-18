@@ -7,18 +7,23 @@ vi.mock('../services/socket', async () => {
   return { default: new EventEmitter() };
 });
 
-vi.mock('../services/api', () => ({
+// Dashboard imports each domain module directly, not the api barrel (#16813).
+vi.mock('../services/apiDashboard.js', () => ({
   getDashboardLayouts: vi.fn(),
   setActiveDashboardLayout: vi.fn(() => Promise.resolve({})),
-  getApps: vi.fn(() => Promise.resolve([])),
-  getSystemHealth: vi.fn(() => Promise.resolve({ ok: true })),
-  getTribeCareSummary: vi.fn(() => Promise.resolve({ hasPeople: true })),
-  getFeedStats: vi.fn(() => Promise.resolve(null)),
-  getMeatspaceLoggingStats: vi.fn(() => Promise.resolve(null)),
-  getCalendarAgenda: vi.fn(() => Promise.resolve(null)),
-  getBrainOnThisDay: vi.fn(() => Promise.resolve(null)),
   getDailyDriverState: vi.fn(() => Promise.resolve(null)),
 }));
+vi.mock('../services/apiApps.js', () => ({ getApps: vi.fn(() => Promise.resolve([])) }));
+vi.mock('../services/apiSystem.js', () => ({ getSystemHealth: vi.fn(() => Promise.resolve({ ok: true })) }));
+vi.mock('../services/apiTribe.js', () => ({
+  getTribeCareSummary: vi.fn(() => Promise.resolve({ hasPeople: true })),
+}));
+vi.mock('../services/apiMessages.js', () => ({ getFeedStats: vi.fn(() => Promise.resolve(null)) }));
+vi.mock('../services/apiMeatspace.js', () => ({
+  getMeatspaceLoggingStats: vi.fn(() => Promise.resolve(null)),
+}));
+vi.mock('../services/apiCalendar.js', () => ({ getCalendarAgenda: vi.fn(() => Promise.resolve(null)) }));
+vi.mock('../services/apiBrain.js', () => ({ getBrainOnThisDay: vi.fn(() => Promise.resolve(null)) }));
 
 vi.mock('../hooks/useInstanceFeatures.js', () => ({ useInstanceFeatures: () => ({ features: [] }) }));
 vi.mock('../components/onboarding/FirstRunCard.jsx', () => ({ default: () => null }));
@@ -28,7 +33,17 @@ vi.mock('../components/TribeCareWidget', () => ({
   default: ({ dashboardState }) => <div>Tribe body {dashboardState?.tribeCare ? 'loaded' : 'pending'}</div>,
 }));
 
-import * as api from '../services/api';
+import * as apiApps from '../services/apiApps.js';
+import * as apiDashboard from '../services/apiDashboard.js';
+import * as apiSystem from '../services/apiSystem.js';
+import * as apiTribe from '../services/apiTribe.js';
+import * as apiMessages from '../services/apiMessages.js';
+import * as apiMeatspace from '../services/apiMeatspace.js';
+import * as apiCalendar from '../services/apiCalendar.js';
+import * as apiBrain from '../services/apiBrain.js';
+
+// The page's own calls, merged so the assertions below read as they did against the barrel.
+const api = { ...apiApps, ...apiDashboard, ...apiSystem, ...apiTribe, ...apiMessages, ...apiMeatspace, ...apiCalendar, ...apiBrain };
 import Dashboard from './Dashboard';
 import { LAYOUT_CACHE_KEY } from '../components/dashboard/dashboardBoot.js';
 

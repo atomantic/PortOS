@@ -16,6 +16,9 @@ const { socket, api } = vi.hoisted(() => {
 });
 vi.mock('../services/socket', () => ({ default: socket }));
 vi.mock('../services/api', () => api);
+// OpenThreadsWidget and AutoFixMetricsWidget import their domain module directly, not the barrel (#16813).
+vi.mock('../services/apiBrainThreads.js', () => ({ listThreads: api.listThreads, updateThread: vi.fn() }));
+vi.mock('../services/apiAgents.js', () => ({ getAutoFixMetrics: api.getAutoFixMetrics }));
 vi.mock('./ui/Toast', () => ({ default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn() }) }));
 import GoalProgressWidget from './GoalProgressWidget';
 import UpcomingTasksWidget from './UpcomingTasksWidget';

@@ -19,7 +19,7 @@ import {
   shouldShowFirstRunCard,
 } from '../../lib/firstRunMissions.js';
 import { safeReadSession, safeWriteSession } from '../../lib/safeStorage.js';
-import * as api from '../../services/api';
+import { getSettings, updateInstanceFeature, updateSettings } from '../../services/apiSystem.js';
 
 const MISSION_ICONS = { Brain, Clapperboard, ListChecks, Monitor };
 
@@ -39,7 +39,7 @@ export default function FirstRunCard() {
 
   useEffect(() => {
     let active = true;
-    api.getSettings({ silent: true })
+    getSettings({ silent: true })
       .then((settings) => {
         if (!active) return;
         setHideSetting(settings?.[FIRST_RUN_HIDE_SETTING] === true);
@@ -68,7 +68,7 @@ export default function FirstRunCard() {
   }, []);
 
   const persistChoice = useCallback(() => (
-    api.updateSettings({ [FIRST_RUN_HIDE_SETTING]: true }, { silent: true })
+    updateSettings({ [FIRST_RUN_HIDE_SETTING]: true }, { silent: true })
       .then(() => setHideSetting(true))
   ), []);
 
@@ -79,7 +79,7 @@ export default function FirstRunCard() {
     setBusy(true);
     const ids = featuresToEnable(mission, features);
     ids.reduce(
-      (chain, id) => chain.then(() => api.updateInstanceFeature(id, true, { silent: true })),
+      (chain, id) => chain.then(() => updateInstanceFeature(id, true, { silent: true })),
       Promise.resolve(null),
     )
       .then((result) => {

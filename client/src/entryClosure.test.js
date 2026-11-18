@@ -15,7 +15,7 @@
 // helpers) on demand.
 
 import { describe, it, expect } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { stripComments } from './test/stripComments.js';
@@ -30,6 +30,15 @@ const VOICE_STACK_MODULES = [
   'services/domIndex.js',
   'lib/audioRecorder.js',
   'lib/audioContext.js',
+];
+// The landing Dashboard page and its widgets are in the same first-paint path as the
+// shell, so they follow the same barrel rule (#16813). Each is a separate root: the
+// walk from every one must stay clear of the api barrel.
+const DASHBOARD_ROOTS = [
+  'pages/Dashboard.jsx',
+  ...readdirSync(resolve(SRC, 'components/dashboard'), { recursive: true })
+    .filter((file) => /\.jsx$/.test(file) && !/\.test\.jsx$/.test(file))
+    .map((file) => `components/dashboard/${file}`),
 ];
 const CODE_EXT = /\.(?:jsx?|mjs|tsx?)$/;
 const RESOLVE_SUFFIXES = ['', '.js', '.jsx', '.ts', '.tsx', '/index.js', '/index.jsx'];
@@ -88,6 +97,14 @@ describe('cold-load entry closure (#16562)', () => {
       chainFromEntry(module),
       'shell code reads voice state from components/voice/VoiceWidgetGate.jsx; anything that needs this module loads it lazily',
     ).toBeNull();
+  });
+
+  it.each(DASHBOARD_ROOTS)('%s never statically reaches the api barrel (#16813)', (root) => {
+    const chain = findStaticPath(resolve(SRC, root), resolve(SRC, 'services/api.js'));
+    expect(
+      chain && chain.map((file) => file.slice(SRC.length + 1)).join(' -> '),
+      'import the specific services/apiX.js module the component uses, not the barrel',
+    ).toBeFalsy();
   });
 
   it('still reaches the gate that loads the voice stack on demand', () => {
