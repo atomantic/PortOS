@@ -755,6 +755,77 @@ describe('openSnapshotStream', () => {
     vi.useRealTimers();
     proc.emit('close', 0);
   });
+
+  it('terminates a silent tar at the wall-time deadline without an idle kill and holds the read lease until close', async () => {
+    vi.useFakeTimers();
+    try {
+      const proc = readySnapshot();
+      const stream = await openSnapshotStream('/dest', 'snap-1');
+      const failed = errored(stream);
+
+      // Browser backpressure can leave tar silent well past the 10-minute idle
+      // window; only the 4-hour wall ceiling should terminate the download.
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      expect(proc.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000 + 30 * 60 * 1000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Escalate to SIGKILL if the child is wedged on a stalled mount.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(proc.kill).toHaveBeenCalledWith('SIGKILL');
+
+      // Deletion remains blocked until the child actually closes.
+      await expect(deleteSnapshot('/dest', 'snap-1', { source: machineHost }))
+        .rejects.toMatchObject({ status: 409, code: 'SNAPSHOT_IN_USE' });
+
+      proc.emit('close', null, 'SIGKILL');
+      await expect(failed).resolves.toMatchObject({
+        code: 'BACKUP_PROCESS_TIMEOUT',
+        message: expect.stringMatching(/4 hours/),
+      });
+
+      fs.stat.mockResolvedValue({ isDirectory: () => false });
+      await expect(deleteSnapshot('/dest', 'snap-1'))
+        .rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the wall-time deadline when tar exits normally, errors, or aborts', async () => {
+    vi.useFakeTimers();
+    try {
+      const normalProc = readySnapshot();
+      const normalStream = await openSnapshotStream('/dest', 'snap-1');
+      const normalDone = ended(normalStream);
+      normalStream.resume();
+      normalProc.emit('close', 0);
+      await expect(normalDone).resolves.toBeUndefined();
+
+      const errorProc = readySnapshot();
+      const errorStream = await openSnapshotStream('/dest', 'snap-1');
+      const errorFailed = errored(errorStream);
+      errorProc.emit('close', 2);
+      await expect(errorFailed).resolves.toMatchObject({ message: 'tar exited with code 2' });
+
+      const abortedProc = readySnapshot();
+      const abortedStream = await openSnapshotStream('/dest', 'snap-1');
+      const abortFailed = errored(abortedStream);
+      abortedStream.abort();
+      await expect(abortFailed).resolves.toMatchObject({ message: 'Snapshot download aborted: snap-1' });
+      abortedProc.kill.mockClear();
+      abortedProc.signalCode = 'SIGTERM';
+      abortedProc.emit('close', null, 'SIGTERM');
+
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000 + 10_000);
+      expect(normalProc.kill).not.toHaveBeenCalled();
+      expect(errorProc.kill).not.toHaveBeenCalled();
+      expect(abortedProc.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('dumpPostgres status classification', () => {
