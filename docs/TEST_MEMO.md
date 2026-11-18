@@ -144,8 +144,11 @@ A variable segment is now one of three things:
   again is not a literal); or it is the callback parameter or `for…of`
   variable of a literal array, an `it.each` table of strings, or a `const`
   array nothing in the file can add to (no method that adds an element or
-  returns the array itself, no element assignment, no iteration callback that
-  takes the array, not handed to unknown code, declared once). The path is evaluated once per
+  returns the array itself, no element or `length` assigned, updated or
+  deleted, in parentheses or not, no iteration callback that takes the array,
+  not handed to unknown code, declared once). An array literal with an empty
+  slot (`['a', , 'b']`) is not resolved: the slot is `undefined` to the loop.
+  The path is evaluated once per
   value (up to 64 combinations) and each file is an ordinary input. No
   directory is keyed, and a helper nothing calls contributes nothing. A
   parameter or loop variable shadows a module-level binding of the same name.
@@ -183,7 +186,10 @@ imported from that module. A file that mocks `fs`, `crypto` or `pathWithin.js`
 call through it), or that imports a helper or runs under a workspace setup
 file that does, decides what they return, and a parameter or
 local named `readdirSync`, `randomUUID` or `pathWithin` is not the import, so
-nothing is inferred from them there.
+nothing is inferred from them there. A mock counts against a read that relies
+on it: every `pathWithin()` call (literal segments included), a listing or a
+generated id only where a read is contained by it. It counts only from a
+member that runs: a test file another member reads as text registers nothing.
 
 The analysis reads tokens, not scopes, so it resolves a name only where no
 other reading is possible: a text constant that another scope declares, binds

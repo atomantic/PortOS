@@ -594,6 +594,26 @@ describe('a read whose variable segment can leave the directory the source names
       'a table with a computed row': ["for (const name of ['f0.json', pick()]) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'an array that gains an element': ["const NAMES = ['f0.json'];\nNAMES.push(process.argv[2]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'an array with an element assigned': ["const NAMES = ['f0.json'];\nNAMES[0] = process.argv[2];\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
+      'an array literal with an empty slot': ["for (const name of ['f0', , 'f1']) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'a const array with an empty slot': ["const NAMES = ['f0', , 'f1'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'a const array with a leading empty slot': ["const NAMES = [, 'f1'];\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'a frozen array with an empty slot': ["const NAMES = Object.freeze(['f0', , 'f1']);\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'a table with an empty slot': ["it.each(['f0', , 'f1'])('x', (name) => { readFileSync(join(FIXTURES, `${name}.json`)); });", leaves('server/lib/fixtures')],
+      'an array with an element deleted': ["const NAMES = ['f0', 'f1'];\ndelete NAMES[1];\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array with an element deleted in parentheses': ["const NAMES = ['f0', 'f1'];\ndelete (NAMES[1]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array with an element deleted for its value': ["const NAMES = ['f0', 'f1'];\nvoid delete NAMES[0];\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array with an element incremented in parentheses': ["const NAMES = ['f0', 'f1'];\n++(NAMES[5]);\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array lengthened by an update': ["const NAMES = ['f0', 'f1'];\nNAMES.length++;\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array lengthened by a prefix update': ["const NAMES = ['f0', 'f1'];\n++NAMES.length;\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array lengthened in parentheses': ["const NAMES = ['f0', 'f1'];\n++(NAMES.length);\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array whose length is assigned in parentheses': ["const NAMES = ['f0', 'f1'];\n(NAMES.length) = 5;\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array element assigned by a loop head': ["const NAMES = ['f0', 'f1'];\nfor (NAMES[0] of other) {}\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array element assigned by a loop head in parentheses': ["const NAMES = ['f0', 'f1'];\nfor ((NAMES[0]) of other) {}\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'an array element assigned through a parenthesized pattern': ["const NAMES = ['f0', 'f1'];\n[(NAMES[0])] = pair;\nfor (const name of NAMES) readFileSync(join(FIXTURES, `${name}.json`));", leaves('server/lib/fixtures')],
+      'a parameter updated in parentheses': ["const read = (p) => { (p)++; return readFileSync(join(FIXTURES, `${p}.json`)); };\nread('f0');", through('read', 'server/lib/fixtures')],
+      'a parameter updated by a prefix in parentheses': ["const read = (p) => { ++(p); return readFileSync(join(FIXTURES, `${p}.json`)); };\nread('f0');", through('read', 'server/lib/fixtures')],
+      'a parameter assigned through a parenthesized pattern': ["const read = (p) => { [(p)] = ['zz']; return readFileSync(join(FIXTURES, `${p}.json`)); };\nread('f0');", through('read', 'server/lib/fixtures')],
+      'a parameter assigned through a parenthesized property': ["const read = (p) => { ({ a: (p) } = { a: 'zz' }); return readFileSync(join(FIXTURES, `${p}.json`)); };\nread('f0');", through('read', 'server/lib/fixtures')],
       'an array whose iteration callback takes every argument': ["const NAMES = ['f0.json'];\nNAMES.forEach((...all) => all[2].push(process.argv[2]));\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'an array whose iteration callback takes the array': ["const NAMES = ['f0.json'];\nNAMES.forEach((name, i, all) => all.push(process.argv[2]));\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
       'an array iterated by a function with its own arguments': ["const NAMES = ['f0.json'];\nNAMES.forEach(function () { arguments[2].push(process.argv[2]); });\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));", leaves('server/lib/fixtures')],
@@ -732,6 +752,32 @@ describe('a read whose variable segment can leave the directory the source names
     expect(floorOf(`import './mocks.js';\n${generated}`, { 'server/lib/mocks.js': mock }))
       .toMatchObject({ memoizable: false, reason: `${test}: relies on randomUUID(), which server/lib/mocks.js mocks` });
     expect(floorOf(`import './mocks.js';\n${generated}`, { 'server/lib/mocks.js': 'export const unrelated = 1;\n' }).memoizable).toBe(true);
+    // A replaced guard returns what it likes, whatever it is handed: literal segments, a listed
+    // directory, a result that is joined on. Each is a path this file only has the guard's word for.
+    const guardMock = "vi.mock('../../scripts/lib/pathWithin.js', () => ({ pathWithin: () => '/elsewhere/a.js' }));\n";
+    for (const read of [
+      "readFileSync(pathWithin(FIXTURES, 'f0.json'));",
+      "readFileSync(join(pathWithin(HERE, 'fixtures'), 'f0.json'));",
+      'for (const d of readdirSync(HERE)) readFileSync(pathWithin(join(HERE, d), process.argv[2]));',
+      'readFileSync(pathWithin(FIXTURES, process.argv[2]));',
+    ]) {
+      expect(floorOf(`import './mocks.js';\n${read}`, { 'server/lib/mocks.js': guardMock }), read)
+        .toMatchObject({ memoizable: false, reason: `${test}: relies on pathWithin(), which server/lib/mocks.js mocks` });
+      expect(floorOf(`import './mocks.js';\n${read}`, { 'server/lib/mocks.js': 'export const unrelated = 1;\n' }).memoizable, read).toBe(true);
+    }
+  });
+
+  it('counts a mock only against a read that relies on it, from a member that runs', () => {
+    const generated = "const probe = existsSync(join(FIXTURES, `${randomUUID()}.json`));";
+    const mock = "vi.mock('node:crypto', () => ({ randomUUID: () => '../../a' }));\n";
+    // A script that names a lock file with a UUID reads nothing by it: the mock of a helper beside it takes no proof away.
+    const tool = { 'scripts/tool.js': "import { randomUUID } from 'node:crypto';\nimport { renameSync } from 'node:fs';\nexport function retire(lockDir) {\n  const retired = `${lockDir}.retired-${randomUUID()}`;\n  renameSync(lockDir, retired);\n  return randomUUID();\n}\n" };
+    expect(floorOf("import './mocks.js';\nimport { retire } from '../../scripts/tool.js';", { ...tool, 'server/lib/mocks.js': mock }).memoizable).toBe(true);
+    // A test file this one only reads as text never runs here, so its mock is registered for nobody.
+    const sibling = { 'server/lib/sibling.test.js': `import { vi } from 'vitest';\n${mock}` };
+    expect(floorOf(`const text = readFileSync(join(HERE, 'sibling.test.js'), 'utf8');\n${generated}`, sibling).memoizable).toBe(true);
+    expect(floorOf(`import './sibling.test.js';\n${generated}`, sibling))
+      .toMatchObject({ memoizable: false, reason: `${test}: relies on randomUUID(), which server/lib/sibling.test.js mocks` });
   });
 
   it('refuses the recorded key too, and a script the test imports, but not a product module', () => {
