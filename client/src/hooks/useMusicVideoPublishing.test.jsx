@@ -105,6 +105,18 @@ describe('music-video publishing project boundary', () => {
     expect(within(row('YouTube')).queryByText(/Waiting for X thread/)).toBeNull();
   });
 
+  it('keeps the earlier draft on the card when a replacement fails', async () => {
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({
+      drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }],
+    });
+    api.prepareMusicVideoPublishDraft.mockRejectedValueOnce(new Error('Could not open a tab'));
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(within(row('YouTube')).getByRole('button', { name: 'Fill again' })); });
+    expect(screen.getByText('Could not open a tab')).toBeInTheDocument();
+    expect(screen.getByText('Example A')).toBeInTheDocument();
+  });
+
   it('ignores a late old-project preparation without clearing the current preparation', async () => {
     const first = deferred();
     const second = deferred();

@@ -120,7 +120,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     setFor('errors', target, null);
     return prepareMusicVideoPublishDraft(projectId, target, options, { silent: true })
       .then((draft) => { setFor('drafts', target, draft); return draft; })
-      .catch((err) => { setFor('drafts', target, null); fail(target, err); return null; })
+      .catch((err) => { fail(target, err); return null; })
       .finally(() => { setFor('busy', target, null); setFor('progress', target, null); });
   };
 
