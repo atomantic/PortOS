@@ -11,14 +11,16 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 
 // Scans the working tree, so it is derived into the always-run set (#10312).
 describe('cross-workspace browser suite registry', () => {
-  it('lists exactly the suites that guard canRun with the browser suite gate', () => {
+  it('lists exactly the suites that gate on real Chrome (browserSuiteCanRun or resolveTestChrome)', () => {
     // Real browser contracts also use legacy .test.js names. Discover every
     // gated fixture, excluding only the gate's own unit tests.
     // Pregate includes untracked sources; a new registered suite must not look
     // missing merely because it has not been staged yet. NULs preserve paths.
     const paths = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '--deduplicate', '-z', '--', 'server/**/*.test.js', ':!server/lib/browserSuiteGate*.test.js'], { cwd: root, encoding: 'utf8' })
       .split('\0').filter(Boolean);
-    const gated = existingPaths(root, paths).filter((file) => readFileSync(join(root, file), 'utf8').includes('browserSuiteCanRun(')).sort();
+    // A bare resolveTestChrome( with skipIf runs unguarded in the unit job (#16799).
+    // `.db.test.js` suites are owned by the DB job (scripts/lib/dbTestFiles.js), not this registry.
+    const gated = existingPaths(root, paths).filter((file) => { const source = readFileSync(join(root, file), 'utf8'); return source.includes('browserSuiteCanRun(') || (!file.endsWith('.db.test.js') && source.includes('resolveTestChrome(')); }).sort();
     expect(gated).toEqual([...BROWSER_SUITES].sort());
   });
 

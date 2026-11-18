@@ -568,7 +568,8 @@ The selected work is split across parallel jobs:
   `BROWSER_SUITES` registry in `scripts/lib/browserSuites.js` owns these tests.
   Server unit runs exclude that registry whenever `PORTOS_CI_BROWSER_OWNER=unit`
   is exported (Linux server shards, and `npm run pregate` on every platform);
-  other browser files, including `overlayTextService`, keep their existing owner.
+  a server test that calls `resolveTestChrome(` must be registered (the registry
+  guard discovers it), and gates on `browserSuiteCanRun(` so a missing Chrome fails there.
   The planner selects affected registered files and the browser job requires
   Chrome, FFmpeg and bundler prerequisites instead of silently skipping them.
   Ordinary PRs run the `smoke` profile: all existing assertions except the
