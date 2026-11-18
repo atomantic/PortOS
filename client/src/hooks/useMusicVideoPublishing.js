@@ -95,6 +95,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // director, in which case the server has already recorded the post's link).
   // `draftsError` is scoped to the project so a failure never shows under another one.
   const [draftsError, setDraftsError] = useState(null);
+  const draftsErrorRef = useRef(null);
   const [draftsAttempt, setDraftsAttempt] = useState(0);
   const retryDrafts = useCallback(() => setDraftsAttempt((n) => n + 1), []);
   useEffect(() => {
@@ -102,13 +103,19 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     let cancelled = false;
     const isCurrent = () => !cancelled && selection.current === scope;
     let readNumber = 0;
+    const updateDraftsError = (next) => {
+      // A successful read with no prior error has no error state to update.
+      if (next === draftsErrorRef.current) return;
+      draftsErrorRef.current = next;
+      setDraftsError(next);
+    };
     const readDrafts = (opened) => {
       const snapshot = opened ? null : new Map(scope.latestDraftIds);
       const read = ++readNumber;
       return getMusicVideoPublishDrafts(projectId, { silent: true }).then((res) => {
         if (!isCurrent()) return;
         // The error clears only on success, so a slow retry never reads as "no drafts".
-        if (read === readNumber) setDraftsError(null);
+        if (read === readNumber) updateDraftsError(null);
         for (const draft of res?.drafts || []) {
           const currentId = scope.latestDraftIds.get(draft.target);
           if (opened) {
@@ -120,7 +127,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
           presentDraft(draft.target, draft);
         }
       }).catch((err) => {
-        if (isCurrent() && read === readNumber) setDraftsError({ scope, error: err || new Error('Failed') });
+        if (isCurrent() && read === readNumber) updateDraftsError({ scope, error: err || new Error('Failed') });
       });
     };
     const onDraft = (e) => {
