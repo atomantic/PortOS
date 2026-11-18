@@ -1034,6 +1034,8 @@ function createScopes(ctx) {
     const [a, b] = grouped(arr, m, from, to);
     return isPunct(arr[b + 1], '++', '--') || isPunct(arr[a - 1], '++', '--') || isWord(arr[a - 1], 'delete') || assignsAt(arr, b + 1);
   };
+  /** `for (x[0] of rows)`, `for ((x.length) in sizes)`: the head assigns the operand `arr[from..to]` on every turn. */
+  const loopAssigns = (arr, m, from, to) => isWord(arr[grouped(arr, m, from, to)[1] + 1], 'of', 'in');
   /** True when `arr[at]` is written: assigned, updated, or a target of a destructuring assignment. */
   const writesTo = (arr, m, at) => {
     if (isPunct(arr[at - 1], '.', '?.')) return false; // a property of that name
@@ -1200,7 +1202,7 @@ function createScopes(ctx) {
       const method = arr[at + 2];
       // A method that only reads, and is not replaced (`NAMES.map = other`). `NAMES.length++`,
       // `++(NAMES.length)` and `(NAMES.length) = 5` add empty slots.
-      if (method?.t !== 'id' || !ARRAY_READS.has(method.v) || changes(arr, m, at, at + 2)) return false;
+      if (method?.t !== 'id' || !ARRAY_READS.has(method.v) || changes(arr, m, at, at + 2) || loopAssigns(arr, m, at, at + 2)) return false;
       const open = isPunct(arr[at + 3], '?.') ? at + 4 : at + 3; // `NAMES.forEach?.(cb)`
       if (!ARRAY_ITERATORS.has(method.v) || !isPunct(arr[open], '(') || m[open] === undefined) return true;
       // `names.forEach((name, i, all) => all.push(x))`: the callback is handed the array.
@@ -1211,7 +1213,7 @@ function createScopes(ctx) {
       // `[NAMES[0]] = pair`, `for (NAMES[0] of xs)`), not removed (`delete NAMES[0]`, which leaves an
       // empty slot). `NAMES[0] === x` is a read.
       if (isPunct(arr[m[at + 1] + 1], '(', '?.') || changes(arr, m, at, m[at + 1])) return false;
-      return !isWord(arr[grouped(arr, m, at, m[at + 1])[1] + 1], 'of', 'in');
+      return !loopAssigns(arr, m, at, m[at + 1]);
     }
     if (isPunct(prev, '(', ',') && isPunct(next, ')', ',')) {
       // Handed to something that only reads it: `expect(NAMES)`, `new Set(NAMES)`, `Array.from(NAMES)`,
