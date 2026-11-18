@@ -45,8 +45,8 @@ vi.mock('./upscaleFfmpeg.js', () => ({
 }));
 const { PATHS } = await import('../../lib/fileUtils.js');
 const { quoteTopaz } = await import('./topazQuote.js');
-const { topazPreparedPath, registerStaging, releaseTopazStaging, cleanupTopazStaging, cleanupOrphanTopazStaging } = await import('./topazStaging.js');
-const { enqueueTopazUpscale, runVideoUpscale, cancel, recoverTopazResult, reconcileTopazStatus } = await import('./topazJob.js');
+const { topazPreparedPath, topazOutputPath, registerStaging, releaseTopazStaging, cleanupTopazStaging, cleanupOrphanTopazStaging } = await import('./topazStaging.js');
+const { assertNoPendingTopaz, enqueueTopazUpscale, runVideoUpscale, cancel, recoverTopazResult, reconcileTopazStatus } = await import('./topazJob.js');
 const { videoGenEvents } = await import('./events.js');
 const sourceId = '11111111-1111-4111-8111-111111111111';
 const requestId = '22222222-2222-4222-8222-222222222222';
@@ -66,7 +66,10 @@ beforeEach(async () => {
     state.fetches.push([url, opts.method || 'GET']);
     if (url === 'https://api.topazlabs.com/video/') return response({ requestId, estimates: { cost: [4, 6] } });
     if (url.endsWith('/accept')) return response({ urls: ['https://bucket.s3.amazonaws.com/upload'] });
-    if (url === 'https://bucket.s3.amazonaws.com/upload') return new Response('', { status: 200 });
+    if (url === 'https://bucket.s3.amazonaws.com/upload') {
+      await new Response(opts.body).arrayBuffer();
+      return new Response('', { status: 200 });
+    }
     if (url.endsWith('/complete-upload/')) return response({});
     if (url.endsWith('/status')) return response({ status: 'complete', download: { url: 'https://bucket.s3.amazonaws.com/output' } });
     if (url === 'https://bucket.s3.amazonaws.com/output') return new Response('rendered');
@@ -203,6 +206,97 @@ describe('Topaz job boundary', () => {
     expect(state.result.topazUncertain).toBe(true);
     expect(state.rows).toHaveLength(1);
     await expect(stat(topazPreparedPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  describe('signed transfers', () => {
+    const deadline = 10 * 60 * 1000;
+    const signedUrl = 'https://bucket.s3.amazonaws.com/output?signature=private';
+
+    afterEach(() => vi.useRealTimers());
+
+    it('times out a stalled upload, releases the worker, and retains the uncertain request', async () => {
+      const { params } = await queued();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { promise: started, resolve: start } = Promise.withResolvers();
+      const base = fetch;
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (opts?.method !== 'PUT') return base(url, opts);
+        return new Promise((_resolve, reject) => {
+          opts.signal.addEventListener('abort', () => reject(new Error(signedUrl)), { once: true });
+          start();
+        });
+      }));
+      const failed = vi.fn();
+      videoGenEvents.once('failed', failed);
+      const running = runVideoUpscale(params);
+      await started;
+      await vi.advanceTimersByTimeAsync(deadline);
+      await expect(running).resolves.toBeNull();
+      expect(failed).toHaveBeenCalledExactlyOnceWith({
+        generationId: jobId, error: 'Topaz video transfer timed out.', remoteCancellationConfirmed: false,
+      });
+      expect(state.result).toMatchObject({ topazPhase: 'accepted', topazUncertain: true });
+      expect(cancel(jobId)).toBe(false);
+      state.related = [{ ...state.job, result: state.result }];
+      expect(() => assertNoPendingTopaz(sourceId)).toThrow(/uncertain outcome/);
+      await expect(stat(topazPreparedPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('shares the download deadline across the response headers and body and leaves the result recoverable', async () => {
+      const { params } = await queued();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const { promise: requested, resolve: requestStarted } = Promise.withResolvers();
+      const { promise: streaming, resolve: bodyStarted } = Promise.withResolvers();
+      const { promise: headers, resolve: sendHeaders } = Promise.withResolvers();
+      const cancelBody = vi.fn();
+      const base = fetch;
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (url.endsWith('/status')) return response({ status: 'complete', download: { url: signedUrl } });
+        if (url !== signedUrl) return base(url, opts);
+        requestStarted();
+        await headers;
+        videoGenEvents.once('activity', bodyStarted);
+        return new Response(new ReadableStream({
+          start: controller => controller.enqueue(new Uint8Array([1, 2, 3])),
+          cancel: cancelBody,
+        }));
+      }));
+      const failed = vi.fn();
+      videoGenEvents.once('failed', failed);
+      const running = runVideoUpscale(params);
+      await requested;
+      await vi.advanceTimersByTimeAsync(deadline - 1000);
+      sendHeaders();
+      await streaming;
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(running).resolves.toBeNull();
+      expect(failed).toHaveBeenCalledExactlyOnceWith({
+        generationId: jobId, error: 'Topaz video transfer timed out.', remoteCancellationConfirmed: false,
+      });
+      expect(cancelBody).toHaveBeenCalledOnce();
+      expect(cancel(jobId)).toBe(false);
+      expect(state.result).toMatchObject({ topazUncertain: false, topazRecoveryAvailable: true });
+      state.related = [{ ...state.job, result: state.result }];
+      expect(() => assertNoPendingTopaz(sourceId)).not.toThrow();
+      expect(state.rows).toHaveLength(1);
+      await expect(stat(topazOutputPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('redacts signed URL errors that surface while consuming the response body', async () => {
+      const { params } = await queued();
+      const base = fetch;
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+        if (url.endsWith('/status')) return response({ status: 'complete', download: { url: signedUrl } });
+        if (url !== signedUrl) return base(url, opts);
+        return new Response(new ReadableStream({
+          start: controller => controller.error(new Error(signedUrl)),
+        }));
+      }));
+      const failed = vi.fn();
+      videoGenEvents.once('failed', failed);
+      await runVideoUpscale(params);
+      expect(failed.mock.calls[0][0].error).toBe('Topaz video transfer failed.');
+    });
   });
 
   describe('status poll resilience', () => {
@@ -370,6 +464,7 @@ describe('Topaz job boundary', () => {
     expect(cancel(jobId)).toBe(true);
     await running;
     expect(failed.mock.calls[0][0].remoteCancellationConfirmed).toBe(confirmed);
+    if (confirmed) expect(failed.mock.calls[0][0].error).toBe('Topaz video transfer was canceled.');
     expect(state.result.topazUncertain).toBe(uncertain);
     expect(state.result.topazRecoveryAvailable === true).toBe(recoverable);
   });

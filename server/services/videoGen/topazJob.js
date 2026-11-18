@@ -12,6 +12,7 @@ import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, p
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
 import { omitDerivedRenderFields } from '../../lib/renderTiming.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
+import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { enqueueJob, getJob, listJobs, updateJobResult } from '../mediaJobQueue/index.js';
 import { HISTORY_UNCHANGED, loadHistory, mutateVideoHistory } from './history.js';
 import { finalizeUpscaleOutput } from './upscaleFfmpeg.js';
@@ -21,6 +22,7 @@ import { videoGenEvents } from './events.js';
 import { ServerError } from '../../lib/errorHandler.js';
 
 const safeError = message => Object.assign(new Error(message), { safeTopaz: true });
+const TOPAZ_TRANSFER_TIMEOUT_MS = 10 * 60 * 1000;
 const active = new Map();
 const admitting = new Set();
 const safeSignedUrl = value => {
@@ -31,11 +33,23 @@ const safeSignedUrl = value => {
   }
   return url.href;
 };
-const transfer = async (url, options) => {
-  const response = await fetch(safeSignedUrl(url), { ...options, redirect: 'error' }).catch(() => { throw safeError('Topaz video transfer failed.'); });
-  if (!response.ok) throw safeError(`Topaz video transfer failed (HTTP ${response.status}).`);
-  return response;
-};
+const transfer = (url, { signal: jobSignal, ...options }, consume) => withAbortTimeout(TOPAZ_TRANSFER_TIMEOUT_MS, async timeoutSignal => {
+  const signedUrl = safeSignedUrl(url);
+  const signal = AbortSignal.any([jobSignal, timeoutSignal]);
+  const redactFailure = () => {
+    if (signal.aborted) {
+      if (signal.reason === timeoutSignal.reason) throw safeError('Topaz video transfer timed out.');
+      throw safeError('Topaz video transfer was canceled.');
+    }
+    throw safeError('Topaz video transfer failed.');
+  };
+  const response = await fetch(signedUrl, { ...options, signal, redirect: 'error' }).catch(redactFailure);
+  if (!response.ok) {
+    void response.body?.cancel().catch(() => {});
+    throw safeError(`Topaz video transfer failed (HTTP ${response.status}).`);
+  }
+  return await consume(response, signal).catch(redactFailure);
+});
 const receipt = async (jobId, phase) => {
   if (!await updateJobResult(jobId, { topazPhase: phase, topazUncertain: true })) throw safeError('Could not persist Topaz job state.');
 };
@@ -122,11 +136,19 @@ async function uploadParts(urls, path, size, signal, jobId) {
     const start = i * partSize;
     const end = Math.min(size, start + partSize) - 1;
     if (end < start) throw safeError('Topaz provided an invalid upload plan.');
-    const stream = createReadStream(path, { start, end });
     const progress = activityStream(jobId);
-    stream.on('error', error => progress.destroy(error));
-    const response = await transfer(urls[i], { method: 'PUT', signal, duplex: 'half', headers: { 'content-type': 'video/mp4', 'content-length': String(end - start + 1) }, body: stream.pipe(progress) });
-    const eTag = urls.length === 1 ? 'unused' : response.headers.get('etag');
+    // The fetch observes errors through its request body. The pipeline also
+    // waits for the source to close before run cleanup unlinks the staged file.
+    const upload = pipeline(createReadStream(path, { start, end }), progress).catch(() => {});
+    const eTag = await transfer(urls[i], {
+      method: 'PUT', signal, duplex: 'half', headers: { 'content-type': 'video/mp4', 'content-length': String(end - start + 1) }, body: progress,
+    }, async response => {
+      void response.body?.cancel().catch(() => {});
+      return urls.length === 1 ? 'unused' : response.headers.get('etag');
+    }).finally(async () => {
+      progress.destroy();
+      await upload;
+    });
     if (!eTag) throw safeError('Topaz upload did not return a part receipt.');
     results.push({ partNum: i + 1, eTag });
   }
@@ -336,8 +358,9 @@ export async function runVideoUpscale(params) {
       videoGenEvents.emit('progress', { generationId: jobId, progress: Number.isFinite(status.progress) ? Math.max(0, Math.min(1, status.progress / 100)) : 0, message: `Topaz: ${status.status}` });
       await wait();
     }
-    const response = await transfer(status.download?.url, { signal: entry.abort.signal });
-    await pipeline(Readable.fromWeb(response.body), activityStream(jobId), createWriteStream(downloadPath));
+    await transfer(status.download?.url, { signal: entry.abort.signal }, async (response, signal) => {
+      await pipeline(Readable.fromWeb(response.body), activityStream(jobId), createWriteStream(downloadPath), { signal });
+    });
     const downloaded = await probeVideoStreamInfo(downloadPath);
     if (downloaded.width !== target.width || downloaded.height !== target.height) throw safeError('Topaz returned unexpected output dimensions.');
     if (!await sourceUnchanged(path, { size, mtimeMs, sourceDigest: params.sourceDigest })) throw safeError('The source changed while Topaz was processing.');
