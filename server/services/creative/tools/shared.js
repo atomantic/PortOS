@@ -8,13 +8,7 @@
  * overwrite) are excluded from the default spec set an agent prompt sees.
  */
 
-export const COST_FREE = 'free';
-export const COST_LLM = 'llm';
-export const COST_RENDER = 'render';
-export const COST_CLASSES = [COST_FREE, COST_LLM, COST_RENDER];
-
-// Cost classes that consume the daily autonomous-action budget on execute.
-export const BUDGETED_COST_CLASSES = new Set([COST_LLM, COST_RENDER]);
+export { COST_FREE, COST_LLM, COST_RENDER, COST_CLASSES, BUDGETED_COST_CLASSES } from '../../../lib/creativeDirectorPresets.js';
 
 /**
  * Owner tag for a media job enqueued through the orchestrator. Free-form string

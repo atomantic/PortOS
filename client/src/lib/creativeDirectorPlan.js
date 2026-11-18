@@ -9,6 +9,10 @@
 // timing, and blocked-step triage. These helpers keep that presentation logic
 // pure + unit-tested so the component stays a thin renderer. No React, no I/O.
 
+import {
+  BUDGETED_COST_CLASSES, COST_CLASSES, COST_FREE, COST_LLM, COST_RENDER, PLAN_STEP_STATUSES,
+} from '../../../server/lib/creativeDirectorPresets.js';
+
 // The directive `goal` cap is the server's own (server/lib/creativeBriefLimits.js),
 // used as the composer's `maxLength`.
 export { CREATIVE_DIRECTOR_GOAL_MAX } from '../../../server/lib/creativeBriefLimits.js';
@@ -25,7 +29,7 @@ export const DELIVERABLE_OPTIONS = Object.freeze([
   { id: 'music-bed', label: 'Music bed' },
 ]);
 
-// Plan-step lifecycle → display metadata. Mirrors server PLAN_STEP_STATUSES.
+// Plan-step lifecycle → display metadata.
 export const PLAN_STEP_STATUS_META = Object.freeze({
   pending: { label: 'Pending', tone: 'muted' },
   running: { label: 'Running', tone: 'accent' },
@@ -35,17 +39,12 @@ export const PLAN_STEP_STATUS_META = Object.freeze({
   skipped: { label: 'Skipped', tone: 'muted' },
 });
 
-// Cost class → display metadata. Mirrors server COST_CLASSES.
+// Cost class → display metadata.
 export const COST_CLASS_META = Object.freeze({
-  free: { label: 'Free', tone: 'muted' },
-  llm: { label: 'LLM', tone: 'accent' },
-  render: { label: 'Render', tone: 'warning' },
+  [COST_FREE]: { label: 'Free', tone: 'muted' },
+  [COST_LLM]: { label: 'LLM', tone: 'accent' },
+  [COST_RENDER]: { label: 'Render', tone: 'warning' },
 });
-
-// Cost classes that consume the daily autonomous-action budget (mirror of the
-// server's BUDGETED_COST_CLASSES) — a step in one of these is gated when the
-// shared budget is exhausted.
-const BUDGETED = new Set(['llm', 'render']);
 
 // A tone token → Tailwind badge classes (port design tokens). Central so status
 // and cost badges stay visually consistent.
@@ -69,7 +68,7 @@ export const TONE_BADGE = Object.freeze({
 export function stepRequiresApproval(meta, { withinBudget } = {}) {
   if (!meta) return false;
   if (meta.destructive) return true;
-  if (BUDGETED.has(meta.costClass) && withinBudget === false) return true;
+  if (BUDGETED_COST_CLASSES.has(meta.costClass) && withinBudget === false) return true;
   return false;
 }
 
@@ -121,18 +120,18 @@ export function annotatePlanSteps(steps, runs, toolMap, { withinBudget } = {}) {
 
 /** Count annotated steps by cost class (for the plan summary header). */
 export function planCostSummary(annotated) {
-  const counts = { free: 0, llm: 0, render: 0 };
+  const counts = Object.fromEntries(COST_CLASSES.map((costClass) => [costClass, 0]));
   for (const s of annotated || []) {
-    if (s.costClass && counts[s.costClass] != null) counts[s.costClass] += 1;
+    if (Object.hasOwn(counts, s.costClass)) counts[s.costClass] += 1;
   }
   return counts;
 }
 
 /** Count annotated steps by lifecycle status (for the progress header). */
 export function planStatusSummary(annotated) {
-  const counts = { pending: 0, running: 0, blocked: 0, done: 0, failed: 0, skipped: 0 };
+  const counts = Object.fromEntries(PLAN_STEP_STATUSES.map((status) => [status, 0]));
   for (const s of annotated || []) {
-    if (counts[s.status] != null) counts[s.status] += 1;
+    if (Object.hasOwn(counts, s.status)) counts[s.status] += 1;
   }
   return counts;
 }
