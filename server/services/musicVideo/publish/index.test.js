@@ -26,6 +26,10 @@ afterAll(() => cleanupTempDataRoots());
 function fakeBrowser({ pageError } = {}) {
   const pages = [];
   const browsers = [];
+  const newCDPSession = vi.fn(async (page) => ({
+    send: async () => ({ targetInfo: { targetId: page.targetId } }),
+    detach: async () => {},
+  }));
   const connect = vi.fn(async () => {
     const browser = { close: vi.fn(async () => {}) };
     browsers.push(browser);
@@ -33,6 +37,7 @@ function fakeBrowser({ pageError } = {}) {
       browser,
       context: {
         pages: () => pages.filter((page) => !page.closed),
+        newCDPSession,
         newPage: async () => {
           if (pageError) throw pageError;
           const handlers = [];
@@ -40,7 +45,7 @@ function fakeBrowser({ pageError } = {}) {
           const frame = {};
           const page = {
             closed: false, bringToFront: vi.fn(async () => {}), screenshot: vi.fn(async () => Buffer.from('jpg')),
-            href: null, text: '',
+            targetId: `target-${pages.length}`, href: null, text: '',
             url: () => page.href || `https://example.com/post/${pages.indexOf(page)}`,
             once: (_event, fn) => handlers.push(fn),
             on: (event, fn) => { if (event === 'framenavigated') navigated.push(fn); },
@@ -57,7 +62,7 @@ function fakeBrowser({ pageError } = {}) {
       },
     };
   });
-  return { connect, pages, browsers };
+  return { connect, pages, browsers, newCDPSession };
 }
 
 const adapter = (over = {}) => ({
@@ -339,25 +344,76 @@ describe('publish drafts (#9282)', () => {
     }
   });
 
-  it('keeps the replacement open when a closed detached draft had the same composer URL', async () => {
+  it.each(['discard', 'fill again'])('targets only the intended detached draft on %s with duplicate composer URLs', async (action) => {
+    vi.useFakeTimers();
+    try {
+      const otherProject = await readyProject();
+      const id = await readyProject();
+      const { connect, pages } = fakeBrowser();
+      const composer = 'https://example.com/composer';
+      const stackerNews = adapter({ prepare: async (page) => { page.href = composer; return {}; } });
+      const deps = { connect, adapters: { stackerNews }, platforms };
+      const other = await preparePublishDraft(otherProject, 'stackerNews', {}, deps);
+      const draft = await preparePublishDraft(id, 'stackerNews', {}, deps);
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+      if (action === 'discard') {
+        expect(await discardPublishDraft(id, draft.draftId, deps)).toBe(true);
+        expect(await listPublishDrafts(id, deps)).toEqual([]);
+      } else {
+        const replacement = await preparePublishDraft(id, 'stackerNews', {}, deps);
+        expect(pages[2].closed).toBe(false);
+        expect(await listPublishDrafts(id, deps)).toEqual([replacement]);
+      }
+      expect(pages[0].closed).toBe(false);
+      expect(pages[1].closed).toBe(true);
+      expect(await listPublishDrafts(otherProject, deps)).toEqual([other]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['discard', 'fill again'])('reports a hand-closed original and preserves a manual composer on %s', async (action) => {
     vi.useFakeTimers();
     try {
       const id = await readyProject();
       const { connect, pages, browsers } = fakeBrowser();
-      const stackerNews = adapter({ prepare: vi.fn(async (page) => {
-        page.href = 'https://example.com/composer';
-        return {};
-      }) });
+      const composer = 'https://example.com/composer';
+      const stackerNews = adapter({ prepare: async (page) => { page.href = composer; return {}; } });
       const deps = { connect, adapters: { stackerNews }, platforms };
-      await preparePublishDraft(id, 'stackerNews', {}, deps);
+      const original = await preparePublishDraft(id, 'stackerNews', {}, deps);
+      const { context } = await connect();
+      const manual = await context.newPage();
+      manual.href = composer;
       await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
-      pages[0].closed = true;
+      await pages[0].close();
+      expect(await listPublishDrafts(id, deps)).toEqual([{ ...original, state: 'closed' }]);
 
-      const replacement = await preparePublishDraft(id, 'stackerNews', {}, deps);
+      if (action === 'discard') {
+        expect(await discardPublishDraft(id, original.draftId, deps)).toBe(true);
+        expect(await listPublishDrafts(id, deps)).toEqual([]);
+      } else {
+        const replacement = await preparePublishDraft(id, 'stackerNews', {}, deps);
+        expect(pages[2].closed).toBe(false);
+        expect(browsers.at(-1).close).not.toHaveBeenCalled();
+        expect(await listPublishDrafts(id, deps)).toEqual([replacement]);
+      }
+      expect(manual.closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-      expect(pages[1].closed).toBe(false);
-      expect(browsers[1].close).not.toHaveBeenCalled();
-      expect(await listPublishDrafts(id)).toEqual([replacement]);
+  it('lists the original detached tab after it moves to another URL', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages } = fakeBrowser();
+      const deps = { connect, adapters: { stackerNews: adapter() }, platforms };
+      const draft = await preparePublishDraft(id, 'stackerNews', {}, deps);
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      pages[0].href = 'https://example.net/elsewhere';
+      expect(await listPublishDrafts(id, deps)).toEqual([draft]);
     } finally {
       vi.useRealTimers();
     }
@@ -381,15 +437,16 @@ describe('publish drafts (#9282)', () => {
     vi.useFakeTimers();
     try {
       const id = await readyProject();
-      const { connect, pages, browsers } = fakeBrowser();
+      const { connect, pages, browsers, newCDPSession } = fakeBrowser();
       const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters: { stackerNews: adapter() }, platforms });
       await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
 
       const tab = pages[0];
       const finishClose = Promise.withResolvers();
-      const listSession = { browser: { close: vi.fn(async () => {}) }, context: { pages: () => [tab] } };
+      const listSession = { browser: { close: vi.fn(async () => {}) }, context: { pages: () => [tab], newCDPSession } };
       const discardBrowser = { close: vi.fn(async () => {}) };
       const discardPage = {
+        targetId: tab.targetId,
         url: tab.url,
         close: vi.fn(async () => {
           await finishClose.promise;
@@ -397,7 +454,7 @@ describe('publish drafts (#9282)', () => {
           await tab.close();
         }),
       };
-      const discardSession = { browser: discardBrowser, context: { pages: () => [discardPage] } };
+      const discardSession = { browser: discardBrowser, context: { pages: () => [discardPage], newCDPSession } };
 
       const listing = listPublishDrafts(id, { connect: async () => listSession });
       const discarding = discardPublishDraft(id, draft.draftId, { connect: async () => discardSession });

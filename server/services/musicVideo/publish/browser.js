@@ -64,6 +64,21 @@ export async function connectPortosBrowser({ launch = true } = {}) {
   return { browser, context };
 }
 
+/** Read Chromium's page target ID without consulting the document or its URL. */
+export async function pageTargetId(context, page) {
+  // A tab may close while the session is being opened or queried.
+  let session;
+  try {
+    session = await context.newCDPSession(page);
+    const { targetInfo } = await session.send('Target.getTargetInfo');
+    return targetInfo.targetId;
+  } catch {
+    return null;
+  } finally {
+    await session?.detach().catch(() => {});
+  }
+}
+
 /** A platform needs the user to sign in, in the PortOS Browser, before a draft can be filled. */
 export const loginRequired = (label, url) => new ServerError(`Sign in to ${label} in the PortOS Browser, then fill the draft again`, {
   status: 409, code: 'PUBLISH_LOGIN_REQUIRED', context: { platform: label, url },
