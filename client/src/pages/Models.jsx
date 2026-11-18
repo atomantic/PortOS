@@ -6,20 +6,13 @@ import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import ModelsTabsHeader, { ModelsSectionLayout, TABS } from '../components/models/ModelsTabsHeader';
 import { NAV_PRESENTATION } from '../lib/navPresentation.js';
-import Image3dRuntimes from '../components/models/Image3dRuntimes';
-import ModelStatusTab from '../components/models/ModelStatusTab';
-import SubscriptionsTab from '../components/models/SubscriptionsTab';
-import CodeReviewersTab from '../components/settings/CodeReviewersTab';
-import EmbeddingsTab from '../components/settings/EmbeddingsTab';
-import LocalModelAssessments from '../components/settings/LocalModelAssessments.jsx';
-import { LocalLlmTab } from '../components/settings/LocalLlmTab';
-import LocalLlmRuntimesView from '../components/settings/LocalLlmRuntimesView.jsx';
 import { lazyWithReload } from '../utils/lazyWithReload';
 
 // The media-model panels moved in from the Media Gen tabs were each their own route
 // chunk before the move (#4728) — keep them split, or landing on Performance
 // downloads the whole LoRA manager and HF-cache browser to render an
-// assessments table. The small always-on tabs above stay static.
+// assessments table. Every tab is lazy so a tab never ships its siblings (or the
+// chart library behind Performance) with it.
 const Loras = lazyWithReload(() => import('./Loras'));
 const MediaModels = lazyWithReload(() => import('./MediaModels'));
 
@@ -54,18 +47,18 @@ const MediaModels = lazyWithReload(() => import('./MediaModels'));
  */
 const TAB_CONTENT = {
   comparison: lazyWithReload(() => import('../components/models/ModelComparison')),
-  '3d': Image3dRuntimes,
-  'code-reviewers': CodeReviewersTab,
+  '3d': lazyWithReload(() => import('../components/models/Image3dRuntimes')),
+  'code-reviewers': lazyWithReload(() => import('../components/settings/CodeReviewersTab')),
   'decision-classifiers': lazyWithReload(() => import('../components/models/DecisionClassifiers')),
-  embeddings: EmbeddingsTab,
+  embeddings: lazyWithReload(() => import('../components/settings/EmbeddingsTab')),
   fallbacks: lazyWithReload(() => import('../components/models/ProviderFallbacks')),
-  llms: LocalLlmTab,
-  'llms-runtimes': LocalLlmRuntimesView,
+  llms: lazyWithReload(() => import('../components/settings/LocalLlmTab').then((m) => ({ default: m.LocalLlmTab }))),
+  'llms-runtimes': lazyWithReload(() => import('../components/settings/LocalLlmRuntimesView.jsx')),
   loras: Loras,
   media: MediaModels,
-  performance: LocalModelAssessments,
-  status: ModelStatusTab,
-  subscriptions: SubscriptionsTab,
+  performance: lazyWithReload(() => import('../components/settings/LocalModelAssessments.jsx')),
+  status: lazyWithReload(() => import('../components/models/ModelStatusTab')),
+  subscriptions: lazyWithReload(() => import('../components/models/SubscriptionsTab')),
 };
 
 export default function Models({ fixedTab, fixedRecordId } = {}) {

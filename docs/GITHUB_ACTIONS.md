@@ -188,6 +188,13 @@ and `CI Gate` passes once the impact job's diff scan does. Two kinds of test qua
   to the planner and the source has no import edge to the guard, so a docs-only
   PR is exactly the one that could document a removed endpoint and merge green.
 
+**Gate-tooling suites ride owner paths (#16798).** The nine tests of the CI and
+pregate machinery (`TOOLING_TESTS`) can never earn a memo record, so `related`
+selection used to pick them for every diff. The planner now adds them only when a
+changed path matches `TOOLING_OWNER_RE`, and `planTestMemo` keeps one from the walk
+only when a changed source reaches its closure ([TEST_MEMO.md](./TEST_MEMO.md#related-selection)).
+Full plans and pushes to `main` run all of them.
+
 **A tree guard registers by its filename.** The planner selects every tracked
 `*.guard.test.js` (`getGuardTests()`: one `git ls-files`, no test source
 read): a guard outside `client/src` joins every plan, and a client guard rides

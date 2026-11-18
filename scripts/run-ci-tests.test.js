@@ -33,7 +33,8 @@ import { readTestProcesses } from './lib/testOwnedProcesses.js';
 import { OWNER_FILE, STALE_ROOT_AGE_MS, sweepStaleRunRoots } from './lib/vitestStaleRunRoots.js';
 import { readCiJobs } from './lib/ciWorkflowJobs.js';
 import { workflowJobs } from './lib/workflowJobs.js';
-import { buildCiTestPlan, collectPlanInputs, getAlwaysRunTests } from './ci-test-plan.js';
+import { getAlwaysRunTests } from './ci-test-plan.js';
+import { REPORTING_NPM, installFakeNpm } from './lib/fakeNpmFixture.js';
 
 // Synthetic crash/retry cases must not print a fabricated crash as a real
 // Actions annotation. Duration/summary tests retain real I/O.
@@ -65,17 +66,6 @@ describe('parseShard', () => {
     expect(() => parseShard('2')).toThrow(/<index>\/<count>/);
   });
 });
-
-/** A fake `npm` on PATH that prints its arguments and the selection file it was handed. */
-function installFakeNpm(fixture, body) {
-  const npmScript = join(fixture, 'npm.js');
-  writeFileSync(npmScript, body);
-  writeFileSync(join(fixture, 'npm'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
-  writeFileSync(join(fixture, 'npm.cmd'), `@"${process.execPath}" "${npmScript}" %*\r\n`);
-}
-
-const REPORTING_NPM = 'process.stdout.write(JSON.stringify({ args: process.argv.slice(2), '
-  + 'selection: JSON.parse(require("fs").readFileSync(process.env.PORTOS_CI_TEST_SELECTION, "utf8")) }) + "\\n");';
 
 it('hands Vitest the selection as a file, sliced by the runner for the matrix shard, never as --shard', () => {
   const fixture = mkdtempSync(join(tmpdir(), 'portos-related-shard-'));
@@ -111,54 +101,6 @@ it('hands Vitest the selection as a file, sliced by the runner for the matrix sh
       expect(selection.include, `${mode} ${shard}`).toEqual(expect.arrayContaining(expected));
       if (mode === 'files') expect(selection.include, shard).toHaveLength(expected.length);
     }
-  } finally {
-    rmSync(fixture, { recursive: true, force: true });
-  }
-}, 150_000);
-
-it('hands only real client fixture consumers to Vitest for a shared browser cleanup change', () => {
-  const fixture = mkdtempSync(join(tmpdir(), 'portos-client-helper-selection-'));
-  try {
-    installFakeNpm(fixture, REPORTING_NPM);
-    const unused = 'scripts/lib/releaseTitle.js';
-    const source = 'scripts/lib/ownedBrowserCleanup.js';
-    // One whole-repository walk for both plans: the collected maps are keyed per
-    // source/test/suite, so each single-source plan reads only its own entries.
-    const inputs = collectPlanInputs({ baseSha: 'HEAD', changedFiles: [unused, source], cwd: join(import.meta.dirname, '..') });
-    expect(buildCiTestPlan([unused], inputs)).toMatchObject({
-      full: false, build: false, client: { mode: 'skip', files: [] },
-    });
-    const plan = buildCiTestPlan([source], inputs);
-    expect(plan.full).toBe(false);
-    expect(plan.build).toBe(false);
-    expect(plan.server.mode).toBe('related');
-    expect(plan.server.sources).toContain(source);
-    expect(plan.browserFiles.length).toBeGreaterThan(0);
-    expect(plan.client.mode).toBe('files');
-    // Real comment-heavy consumers and fixture templates must resolve without
-    // retaining hundreds of unrelated files in the actual runner handoff.
-    for (const test of ['client/src/components/sprites/WalkWorkflow.test.jsx', 'client/src/components/sprites/TrackWorkflow.test.jsx',
-      'client/src/services/apiRounds.test.js', 'client/src/a11y/controlNames.conventions.test.js']) {
-      expect(inputs.clientTestDependencies[test], test).toEqual(expect.any(Array));
-      expect(plan.client.files, test).not.toContain(test);
-    }
-    const result = spawnSync(process.execPath, [join(import.meta.dirname, 'run-ci-tests.js'), 'client'], {
-      encoding: 'utf8', timeout: 120000,
-      env: { ...process.env, PATH: `${fixture}${delimiter}${process.env.PATH}`,
-        CI_TEST_MODE: plan.client.mode, CI_SHARD: '', PORTOS_TEST_MEMO: 'off',
-        CI_TEST_SOURCES: JSON.stringify(plan.client.sources), CI_TEST_FILES: JSON.stringify(plan.client.files),
-        PORTOS_PREGATE_GUARDS: '', GITHUB_ENV: '', GITHUB_STEP_SUMMARY: '' },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    const { selection } = JSON.parse(result.stdout.split('\n').find(line => line.startsWith('{"args"')));
-    expect(selection.include).toEqual(expect.arrayContaining([
-      'src/test/browserFixture.test.js',
-      'src/components/ThemeSwitcher.browser.test.js',
-      'src/components/goals/GoalsTreeView.browser.test.js',
-      'src/components/ui/OverflowMenu.browser.test.js',
-    ]));
-    expect(selection.include.sort()).toEqual(plan.client.files.map(file => toWorkspacePath('client', file)).sort());
   } finally {
     rmSync(fixture, { recursive: true, force: true });
   }

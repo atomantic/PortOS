@@ -34,6 +34,8 @@ import {
   splitByRunner,
   structuralTestsFor,
   SUPERCOLLIDER_LIVE_ENTRIES,
+  TOOLING_OWNER_RE,
+  TOOLING_TESTS,
   DOCKER_CONTAINMENT_LIVE_ENTRIES,
   MACOS_NATIVE_TESTS,
   WINDOWS_CONTRACT_TESTS,
@@ -57,6 +59,7 @@ const REAL_TREE_SOURCES = [
   'client/src/components/catalog/GreyboxPanel.jsx', 'client/src/pages/CatalogIngredient.jsx', 'server/lib/greyboxCapture.js',
   'client/src/lib/musicVideoFrameCapture.js', 'client/src/components/musicVideo/FrameStepper.jsx',
   'client/src/components/musicVideo/PreviewVideo.jsx', 'client/src/components/musicVideo/ProductionReviewPanel.jsx',
+  'server/services/maintenanceRun.js', 'scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js',
 ];
 let realTreeInputs;
 const realTree = () => (realTreeInputs ??= collectPlanInputs({ baseSha: 'HEAD', changedFiles: REAL_TREE_SOURCES, cwd: REPO_ROOT }));
@@ -389,6 +392,72 @@ describe('real shared-source import chains', () => {
     expect(staticImportClosure(join(cwd, 'server/lib/validation.test.js')).files)
       .toContain(join(cwd, source));
   });
+});
+
+// The nine gate-tooling suites spawn git or carry `test-memo: never`, so none can earn a
+// narrowing record and `related` selection used to fail closed into every plan (#16798).
+describe('gate-tooling tests in a related plan', () => {
+  const inputs = realTree();
+  const relatedPlan = (path) => {
+    const plan = buildCiTestPlan([path], inputs);
+    expect(plan.full, path).toBe(false);
+    expect(plan.server.mode, path).toBe('related');
+    return plan;
+  };
+
+  it('lists nine existing suites, each under an owner path', () => {
+    expect(TOOLING_TESTS).toHaveLength(9);
+    for (const test of TOOLING_TESTS) {
+      expect(existsSync(join(REPO_ROOT, test)), test).toBe(true);
+      expect(TOOLING_OWNER_RE.test(test), test).toBe(true);
+    }
+  });
+
+  it('adds none of them for a diff that touches no tooling', () => {
+    const plan = relatedPlan('server/services/maintenanceRun.js');
+    expect(plan.server.files.filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
+  });
+
+  it.each(['scripts/lib/guardBudget.js', 'scripts/pregate.js', 'server/test/admissionSetup.js'])(
+    'selects all nine for a diff of %s, an owner path', (path) => {
+      const plan = relatedPlan(path);
+      expect(plan.server.files).toEqual(expect.arrayContaining(TOOLING_TESTS));
+    });
+
+  it.each([
+    ['server/vitest.config.js', 'a Vitest config'],
+    ['.github/workflows/ci.yml', 'a workflow'],
+    ['server/package.json', 'a dependency manifest'],
+  ])('still runs everything for %s (%s), which forces a full plan', (path) => {
+    expect(buildCiTestPlan([path], inputs)).toMatchObject({ full: true, server: { mode: 'full' } });
+  });
+
+  it('matches every dependency manifest and Vitest config owner and nothing broader', () => {
+    for (const path of ['package.json', 'package-lock.json', 'client/package.json', 'autofixer/package-lock.json', 'server/.npmrc', 'client/vitest.config.js', 'server/vitest.setup.js']) {
+      expect(TOOLING_OWNER_RE.test(path), path).toBe(true);
+    }
+    for (const path of ['server/services/maintenanceRun.js', 'server/lib/vitestHelper.js', 'client/src/vitest.js', 'docs/package.json.md', 'server/test/browserFixture.js']) {
+      expect(TOOLING_OWNER_RE.test(path), path).toBe(false);
+    }
+  });
+
+  // End to end through the memo walk: the planner's list plus planTestMemo, over the real
+  // tree. Without the runner's narrowing, pregate.test.js (an open read) and
+  // run-ci-tests.test.js (an unresolved edge) are selected for this diff.
+  it('keeps them out of the memo-resolved selection for an unrelated diff', async () => {
+    const { planTestMemo } = await import('./lib/testMemoRunner.js');
+    const { toWorkspacePath } = await import('./lib/workspaceTests.js');
+    const resolve = (path) => {
+      const plan = relatedPlan(path);
+      return planTestMemo({
+        scope: 'server', mode: plan.server.mode, repoFiles: plan.server.files, repoSources: plan.server.sources,
+        memoDir: null, repoRoot: REPO_ROOT, env: process.env, platform: process.platform, arch: process.arch, nodeVersion: process.version,
+        // Only the tooling suites need analysis here; the rest of the inventory adds time, not coverage.
+        listTests: () => TOOLING_TESTS.map((test) => toWorkspacePath('server', test)),
+      }).selected;
+    };
+    expect(resolve('server/services/maintenanceRun.js').filter((path) => TOOLING_TESTS.includes(path))).toEqual([]);
+  }, 120_000);
 });
 
 it('keeps exact-file selection for a test-only diff and traverses a nested feature leaf for a differently named consumer', () => {
