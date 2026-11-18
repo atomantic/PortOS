@@ -2072,6 +2072,23 @@ describe('contextual unlock in Create libraries', () => {
 
 
 describe('Casting lean first render', () => {
+  it('updates the open profile cover for an asset change and keeps the unsaved draft', async () => {
+    const ingredient = { ...CHAR_FIXTURE, updatedAt: '2026-01-01T00:00:00.000Z' };
+    const { media: _media, missingMedia: _missingMedia, ...profile } = detailsOf(ingredient);
+    getCatalogIngredientDetails.mockClear().mockResolvedValue({ ...profile, coverMedia: { portraitKey: 'before.png' } });
+    await renderPage('/casting/cat-chr-1/profile');
+    const name = await screen.findByLabelText('Name');
+    fireEvent.change(name, { target: { value: 'Unsaved name' } });
+    expect(screen.getByAltText(`${ingredient.name} cover`)).toHaveAttribute('src', '/data/image-thumbnails/before.webp');
+
+    getCatalogIngredientDetails.mockResolvedValue({ ...profile, coverMedia: { portraitKey: 'after.png' } });
+    await act(async () => emitSocket('catalog:assets-changed', { ingredientId: 'cat-chr-other' }));
+    expect(getCatalogIngredientDetails).toHaveBeenCalledTimes(1);
+    await act(async () => emitSocket('catalog:assets-changed', { ingredientId: ingredient.id }));
+    expect(screen.getByAltText(`${ingredient.name} cover`)).toHaveAttribute('src', '/data/image-thumbnails/after.webp');
+    expect(name).toHaveValue('Unsaved name');
+  });
+
   it('keeps loaded sheet selection mounted and updates its cover during a background identity refresh', async () => {
     const api = await import('../services/apiCatalog');
     api.listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'standard', label: 'Standard' }, { id: 'expressions', label: 'Expressions' }] });

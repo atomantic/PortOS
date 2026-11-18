@@ -54,6 +54,7 @@ import {
 import { compareSchemaVersions, scopeVersionDiff, formatVersionGap, catalogEnvelopeHasLiveRows, PORTOS_SCHEMA_VERSIONS } from '../../lib/schemaVersions.js';
 import { friendlifyUniverseTags, LEGACY_UNIVERSE_MARKER_TAG } from '../../lib/catalog/catalogUniverseTags.js';
 import { canonicalTagKey, setUserCatalogTypes, INGREDIENT_TYPE_IDS } from '../../lib/catalog/catalogTypes.js';
+import { catalogEvents } from './catalogEvents.js';
 import { readUserTypes as readUserTypeSlice, updateUserTypes } from '../catalogUserTypes/store.js';
 
 const CURSOR_KEYS = ['scraps', 'ingredients', 'sources', 'refs', 'relations', 'tags', 'media'];
@@ -172,16 +173,19 @@ export async function applyRemoteChanges(envelope = {}) {
     console.error(`❌ catalog sync ${kind} ${id || '?'} failed: ${err?.message || err}`);
   };
 
+  const changedIngredients = new Map();
+  const markAssetsChanged = ({ ingredientId }) => {
+    if (!changedIngredients.has(ingredientId)) changedIngredients.set(ingredientId, 'assets-changed');
+  };
+
   // Apply one envelope kind. Every row runs in its own try/catch so a single
   // malformed row can't abort the batch. Two stats shapes: LWW kinds
   // (tags/scraps/ingredients) read `{ applied, isInsert }` from the upsert into
   // inserted/updated/skipped; tuple-unique kinds (sources/refs/relations/media)
-  // have no result and tally `applied`. `prepare(item)` may return a REPLACEMENT
+  // retain their processed-row tally. `prepare(item)` may return a REPLACEMENT
   // row to upsert (used to clean legacy tags in-place so the row lands in its
-  // final shape in ONE write); `onApplied(item, res)` runs after a successful
-  // upsert. Both run in their OWN guard, so a hook failure can't be miscounted
-  // as an upsert failure — a failed `prepare` falls back to the raw row rather
-  // than dropping it.
+  // final shape in ONE write). A failed prepare falls back to the raw row.
+  // Only actual committed writes contribute to local invalidation.
   const applyKind = async ({ items, upsertFn, tally, lww, errLabel, idFor, prepare, onApplied }) => {
     for (const raw of items || []) {
       let item = raw;
@@ -208,10 +212,7 @@ export async function applyRemoteChanges(envelope = {}) {
         recordFailure(errLabel, idFor(item), err);
         continue;
       }
-      if (onApplied && !res?.protectedIdentity) {
-        try { await onApplied(item, res); }
-        catch (err) { recordFailure(`${errLabel}-postapply`, idFor(item), err); }
-      }
+      if (res?.applied) onApplied?.(item);
     }
   };
 
@@ -318,6 +319,7 @@ export async function applyRemoteChanges(envelope = {}) {
   await applyKind({
     items: envelope.ingredients, upsertFn: upsertIngredientFromPeer, tally: stats.ingredients, lww: true,
     errLabel: 'ingredient', idFor: (i) => i?.id, prepare: friendlifyIngredientTagsBeforeApply,
+    onApplied: ({ id }) => changedIngredients.set(id, 'primitive-changed'),
   });
 
   await applyKind({
@@ -328,6 +330,7 @@ export async function applyRemoteChanges(envelope = {}) {
   await applyKind({
     items: envelope.refs, upsertFn: upsertRefFromPeer, tally: stats.refs, lww: false,
     errLabel: 'ref', idFor: (r) => `${r?.ingredientId}/${r?.refKind}/${r?.refId}`,
+    onApplied: markAssetsChanged,
   });
 
   // Relations FK BOTH ids to catalog_ingredients, so they land after the
@@ -346,6 +349,9 @@ export async function applyRemoteChanges(envelope = {}) {
   await applyKind({
     items: envelope.media, upsertFn: upsertMediaFromPeer, tally: stats.media, lww: false,
     errLabel: 'media', idFor: (m) => `${m?.ingredientId}/${m?.kind}/${m?.mediaKey}`,
+    onApplied: (media) => {
+      if (media.kind === 'portrait' || media.kind === 'reference') markAssetsChanged(media);
+    },
   });
 
   // User-defined type definitions (catalog v8). LWW-merge the incoming
@@ -363,6 +369,12 @@ export async function applyRemoteChanges(envelope = {}) {
       stats.catalogTypes = { applied: 0, skipped: 0, failed: envelope.catalogTypes.length };
       recordFailure('catalogTypes', null, err);
     }
+  }
+
+  // Let listeners read the whole applied envelope. An ingredient change also
+  // refreshes the asset consumers, so it takes precedence over an asset event.
+  for (const [ingredientId, event] of changedIngredients) {
+    catalogEvents.emit(event, { ingredientId });
   }
 
   return stats;
