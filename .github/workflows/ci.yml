@@ -209,18 +209,6 @@ jobs:
         with:
           vitest-key-suffix: -${{ matrix.shard }}of${{ strategy.job-total }}
 
-      # Recognition facts are blob-addressed, not cached guard verdicts. Each run
-      # still checks working bytes and resolves imports against the current tree.
-      - name: Restore floating-async summaries
-        id: floating-async-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/floating-async/summaries.json
-          key: floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-${{ github.event.pull_request.base.sha || github.sha }}-${{ github.sha }}
-          restore-keys: |
-            floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-${{ github.event.pull_request.base.sha || github.sha }}-
-            floating-async-v1-${{ runner.os }}-${{ matrix.shard }}-
-
       # The server runner also globs ../autofixer/**/*.test.js (ui.js imports
       # express, resolved from autofixer/node_modules). Shards are separate
       # checkouts, so the impact job's resolution check does not reach them.
@@ -284,13 +272,6 @@ jobs:
           # isolated test file without changing DB selection or credentials.
           PGPASSWORD: portos
         run: node scripts/run-ci-tests.js server
-
-      - name: Save floating-async summaries
-        if: steps.server-tests.outcome == 'success' && steps.floating-async-cache.outputs.cache-hit != 'true' && hashFiles('.cache/floating-async/summaries.json') != ''
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .cache/floating-async/summaries.json
-          key: ${{ steps.floating-async-cache.outputs.cache-primary-key }}
 
       # Only trusted runs on the default/release branches seed the memo, and
       # only from a green test step: the runner writes no entry from a red
