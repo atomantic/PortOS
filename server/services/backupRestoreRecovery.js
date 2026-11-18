@@ -294,7 +294,7 @@ export async function withDatabaseRestoreAdmission(resource, work, { related = [
     });
   }
   catch (err) {
-    if (err?.restoreWorkNotStarted === true) started = false;
+    if (err?.restoreWorkNotStarted === true || err?.code === 'DATABASE_RESTORE_BUSY') started = false;
     throw err;
   }
   finally {

@@ -173,6 +173,45 @@ describe('withTransaction non-test database write guard', () => {
 
 
 describe('database restore admission', () => {
+  it('applies one drain deadline even when a held transaction starts nested work', async () => {
+    pool.client = makeClient(vi.fn().mockResolvedValue({}));
+    const releaseParent = Promise.withResolvers();
+    const releaseNested = Promise.withResolvers();
+    const entered = Promise.withResolvers();
+    pool.query.mockImplementationOnce(() => releaseNested.promise);
+    let nested;
+    const parent = withTransaction(async () => {
+      entered.resolve();
+      await releaseParent.promise;
+      nested = query('SELECT nested');
+    });
+    await entered.promise;
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const replay = vi.fn();
+    let outcome;
+    const attempted = Promise.allSettled([withDatabaseMaintenance(replay)]).then(([result]) => { outcome = result; });
+    try {
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(outcome).toBeUndefined();
+      await expect(query('SELECT ordinary')).rejects.toMatchObject({ code: 'DATABASE_MAINTENANCE', status: 503 });
+      releaseParent.resolve();
+      await parent;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toMatchObject({ status: 'rejected', reason: { code: 'DATABASE_RESTORE_BUSY', status: 409 } });
+      expect(replay).not.toHaveBeenCalled();
+      await expect(query('SELECT ordinary')).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      releaseParent.resolve();
+      releaseNested.resolve();
+      await parent;
+      await Promise.allSettled([nested, attempted]);
+    }
+    await withDatabaseMaintenance(replay);
+    expect(replay).toHaveBeenCalledOnce();
+  });
+
   it('drains detached nested work that outlives its admitted parent', async () => {
     pool.client = makeClient(vi.fn().mockResolvedValue({}));
     let releaseQuery;
@@ -187,17 +226,17 @@ describe('database restore admission', () => {
       nestedQuery = query('SELECT 1');
     });
     await entered;
-    let enteredMaintenance = false;
-    const maintenance = withDatabaseMaintenance(async () => { enteredMaintenance = true; });
+    const replay = vi.fn();
+    const maintenance = withDatabaseMaintenance(replay);
     releaseParent();
     await parent;
     await Promise.resolve();
     await Promise.resolve();
-    expect(enteredMaintenance).toBe(false);
+    expect(replay).not.toHaveBeenCalled();
     releaseQuery();
     await nestedQuery;
     await maintenance;
-    expect(enteredMaintenance).toBe(true);
+    expect(replay).toHaveBeenCalledOnce();
   });
 
   it('drains whole transactions, rejects new work, permits recovery, and releases after failure', async () => {

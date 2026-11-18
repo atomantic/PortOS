@@ -229,7 +229,9 @@ const GUARDED_CLIENT_HANDLER = {
 // closes admission and drains existing operations (including whole transactions)
 // before touching the schema. Only its async context can run reconciliation.
 const databaseContext = new AsyncLocalStorage();
-const activeOperations = new Set();
+const DATABASE_DRAIN_TIMEOUT_MS = 120_000;
+let activeOperations = 0;
+let resolveDatabaseDrain;
 let maintenanceActive = false;
 // Durable fence for a committed snapshot restore whose repair is pending
 // (#9725). It outlives this process: while the journal exists, only the
@@ -241,6 +243,12 @@ export const databaseRestoreRecovery = restoreRecovery;
 function maintenanceError() {
   return Object.assign(new Error('Database restore in progress; retry after it finishes.'), {
     status: 503, code: 'DATABASE_MAINTENANCE',
+  });
+}
+
+function databaseRestoreBusyError() {
+  return Object.assign(new Error('Timed out waiting for active database work. Wait for active queries and transactions to finish, then retry.'), {
+    status: 409, code: 'DATABASE_RESTORE_BUSY',
   });
 }
 
@@ -258,18 +266,35 @@ async function databaseOperation(fn) {
   const restoreRecoveryId = restoreRecoveryContext(parent);
   if (!restoreRecoveryId) restoreRecovery.assertAdmission();
   const context = { active: true, restoreRecoveryId };
-  const pending = databaseContext.run(context, async () => fn());
-  activeOperations.add(pending);
+  activeOperations += 1;
   try {
-    return await pending;
+    return await databaseContext.run(context, () => fn());
   } finally {
     context.active = false;
-    activeOperations.delete(pending);
+    activeOperations -= 1;
+    if (activeOperations === 0) resolveDatabaseDrain?.();
+  }
+}
+
+async function drainDatabaseOperations() {
+  const { promise, resolve, reject } = Promise.withResolvers();
+  resolveDatabaseDrain = resolve;
+  const deadline = performance.now() + DATABASE_DRAIN_TIMEOUT_MS;
+  const timer = setTimeout(() => reject(databaseRestoreBusyError()), DATABASE_DRAIN_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    await promise;
+    // Promise continuations can run ahead of an overdue timer after a stall.
+    if (performance.now() >= deadline) throw databaseRestoreBusyError();
+  } finally {
+    clearTimeout(timer);
+    resolveDatabaseDrain = undefined;
   }
 }
 
 /**
- * Drain admitted database work and reject new work until restore completes.
+ * Drain admitted database work within one deadline and reject new work until
+ * restore completes or the drain is refused.
  *
  * A pending restore recovery journal refuses entry unless `restoreRecoveryId`
  * names that same operation. `fn` receives `{ adoptRestoreRecovery(id) }`, which
@@ -290,10 +315,9 @@ export async function withDatabaseMaintenance(fn, { restoreRecoveryId } = {}) {
     context.restoreRecoveryId = id;
   };
   try {
-    // An admitted transaction can start nested work while draining. Track it
-    // separately and repeat until that work also settles, even when its parent
-    // did not await it. Async descendants lose admission when their operation ends.
-    while (activeOperations.size) await Promise.allSettled([...activeOperations]);
+    // Each nested operation counts independently, including work that outlives
+    // its admitting transaction. It must settle within the same drain deadline.
+    if (activeOperations > 0) await drainDatabaseOperations();
     return await databaseContext.run(context, () => fn({ adoptRestoreRecovery }));
   } finally {
     context.active = false;
