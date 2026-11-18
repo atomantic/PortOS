@@ -108,16 +108,13 @@ async function closeDraft(draft, deps, replacement) {
  * tab go: it now shows their post, so it stays open with no session attached.
  */
 async function recordDetectedPost(draft, url) {
-  if (!drafts.has(draft.id)) return;
-  drafts.delete(draft.id);
-  draft.state = 'posted';
-  // A record that fails to save leaves the draft as it was: the card keeps it, and the link can still be pasted.
-  const { project } = await recordPublishPost(draft.projectId, draft.target, { url, links: draft.payload?.crossLinks }).catch((err) => {
-    draft.state = 'open';
-    drafts.set(draft.id, draft);
-    throw err;
-  });
-  await detachDraft(draft);
+  if (drafts.get(draft.id) !== draft) return;
+  // Keep the draft available for replacement or manual recovery while the write is pending.
+  const { project } = await recordPublishPost(draft.projectId, draft.target, { url, links: draft.payload?.crossLinks });
+  if (drafts.get(draft.id) === draft) {
+    drafts.delete(draft.id);
+    await detachDraft(draft);
+  }
   musicVideoEvents.emit('publish-draft', { projectId: draft.projectId, draftId: draft.id, target: draft.target, state: 'posted', url, project });
   console.log(`🔗 ${draft.target} post recorded for music-video ${draft.projectId.slice(0, 8)}: ${url}`);
 }
