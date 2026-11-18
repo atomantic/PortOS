@@ -1,6 +1,6 @@
 // Exercise both native-file-tool and API prompt assembly paths.
 
-import { MANDATORY_DISPATCH_HINT_GUIDANCE } from '../../lib/dispatchLabels.js';
+import { MANDATORY_DISPATCH_HINT_GUIDANCE, mandatoryDispatchHintGuidance } from '../../lib/dispatchLabels.js';
 import { buildIssueFilingSection } from '../promptSections/plannerAttribution.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
 import { buildMergeAdmissionSection } from '../promptSections/completion.js';
@@ -4962,6 +4962,8 @@ describe('planner attribution', () => {
     const embedded = buildIssueFilingSection({ forgeCli: 'glab', taskBody: [MANDATORY_DISPATCH_HINT_GUIDANCE] });
     expect(embedded).toContain('DOUBLE colon');
     expect(embedded).not.toContain('REQUIRED on every issue you file');
+    // The shipped claim-issue-gitlab template embeds the GitLab form: nothing is appended.
+    expect(buildIssueFilingSection({ forgeCli: 'glab', taskBody: [mandatoryDispatchHintGuidance({ cli: 'glab' })] })).toBe('');
     const bare = buildIssueFilingSection({ forgeCli: 'glab', taskBody: ['File issues.'] });
     expect(bare).toContain('REQUIRED on every issue you file');
     expect(bare).toContain('DOUBLE colon');
