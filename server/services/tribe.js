@@ -21,10 +21,9 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cadenceStatus, DEFAULT_RING_CADENCE } from '../lib/tribeCadence.js';
-import { buildPersonMatchIndex, calendarTouchpointDedupeKey, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { buildPersonMatchIndex, matchPeople, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import { toUserDayKey } from '../lib/activeDays.js';
 import { getUserTimezone } from './userTimezone.js';
-import * as calendarSync from './calendarSync.js';
 
 export function isoDate(value) {
   if (!value) return null;
