@@ -117,6 +117,37 @@ describe('music-video publishing project boundary', () => {
     expect(screen.getByText('Example A')).toBeInTheDocument();
   });
 
+  it('keeps the draft visible on discard failure and removes it after a successful retry', async () => {
+    const discard = deferred();
+    const retry = deferred();
+    api.getMusicVideoPublishDrafts.mockResolvedValueOnce({
+      drafts: [{ draftId: 'draft-a', target: 'youtube', state: 'open', summary: { title: 'Example A' } }],
+    });
+    api.discardMusicVideoPublishDraft.mockReturnValueOnce(discard.promise).mockReturnValueOnce(retry.promise);
+    render(<Posting id="project-a" />);
+    expect(await screen.findByText('Example A')).toBeInTheDocument();
+    const youtube = within(row('YouTube'));
+    const confirmDiscard = () => {
+      fireEvent.click(youtube.getByRole('button', { name: 'Discard' }));
+      fireEvent.click(youtube.getByRole('button', { name: 'Confirm discard YouTube draft' }));
+    };
+
+    confirmDiscard();
+    expect(api.discardMusicVideoPublishDraft).toHaveBeenCalledWith('project-a', 'draft-a', { silent: true });
+    expect(youtube.getByText('Example A')).toBeInTheDocument();
+    expect(youtube.getByRole('button', { name: 'Discard' })).toBeDisabled();
+
+    await act(async () => { discard.reject(new Error('Could not discard the draft')); });
+    expect(youtube.getByRole('alert')).toHaveTextContent('Could not discard the draft');
+    expect(youtube.getByText('Example A')).toBeInTheDocument();
+    expect(youtube.getByRole('button', { name: 'Discard' })).toBeEnabled();
+
+    confirmDiscard();
+    expect(youtube.queryByRole('alert')).toBeNull();
+    await act(async () => { retry.resolve(true); });
+    expect(youtube.queryByText('Example A')).toBeNull();
+  });
+
   it('ignores a late old-project preparation without clearing the current preparation', async () => {
     const first = deferred();
     const second = deferred();

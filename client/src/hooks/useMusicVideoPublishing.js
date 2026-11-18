@@ -65,6 +65,13 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
     else next[target] = value;
     return { ...state, [field]: next };
   });
+  const removeDraft = (target, draftId) => setPosting((prev) => {
+    const current = selection.current === scope && prev.scope === scope ? prev.drafts[target] : null;
+    if (!current || current.draftId !== draftId) return prev;
+    const next = { ...prev.drafts };
+    delete next[target];
+    return { ...prev, drafts: next };
+  });
   const fail = (target, err) => {
     setFor('errors', target, { message: err?.message || 'Failed', code: err?.code || null, url: err?.context?.url || null });
   };
@@ -95,13 +102,7 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
         loadPlatforms();
       }
       if (e.state === 'discarded' || e.state === 'posted') {
-        setPosting((prev) => {
-          const current = prev.scope === scope ? prev.drafts[e.target] : null;
-          if (!current || current.draftId !== e.draftId) return prev;
-          const next = { ...prev.drafts };
-          delete next[e.target];
-          return { ...prev, drafts: next };
-        });
+        removeDraft(e.target, e.draftId);
       } else if (e.state === 'closed') {
         setPosting((prev) => {
           const current = prev.scope === scope ? prev.drafts[e.target] : null;
@@ -129,8 +130,13 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
 
   const discard = (target) => {
     const draft = drafts[target];
-    setFor('drafts', target, null);
-    if (draft) discardMusicVideoPublishDraft(projectId, draft.draftId, { silent: true }).catch(() => {});
+    if (!draft || busy[target]) return;
+    setFor('busy', target, 'discard');
+    setFor('errors', target, null);
+    return discardMusicVideoPublishDraft(projectId, draft.draftId, { silent: true })
+      .then(() => removeDraft(target, draft.draftId))
+      .catch((err) => fail(target, err))
+      .finally(() => setFor('busy', target, null));
   };
 
   const setPlatform = (target, change) => {
