@@ -50,7 +50,7 @@ For endpoint overrides and readiness checks, see
 # or: .\setup.ps1         # Windows PowerShell
 ```
 
-`npm run setup` is the non-wrapper equivalent. All three paths install dependencies, provision PostgreSQL, prepare runtime data and the managed browser, ask about a local LLM when an interactive terminal is available, safely attempt Tailscale certificate provisioning, and print the remaining setup walkthrough.
+`npm run setup` is the non-wrapper equivalent. `setup.sh` and `setup.ps1` only add their own prompts (Ghostty, and in `setup.sh` the Tailscale CLI fix and starting PortOS) around `node scripts/setup.js`, so all three paths run the same steps: they install dependencies, ffmpeg and the pinned slash-do commands (the last two are fail-soft), provision PostgreSQL, prepare runtime data and the managed browser, ask about a local LLM when an interactive terminal is available, safely attempt Tailscale certificate provisioning, and print the remaining setup walkthrough.
 
 On macOS, setup also adds fixed-path Time Machine exclusions for regenerable caches, agent worktrees, cloned repos, training runs, model weights, runtimes, dependencies, and scratch directories. Creative media, deployed LoRAs, personal records, and checkout recovery archives stay eligible for backup. This uses `sudo tmutil addexclusion -p` (macOS also requires Full Disk Access for the invoking terminal); if sudo is declined or unavailable, setup warns and continues, retrying on the next setup (or `node scripts/setup-timemachine.js`). Set `PORTOS_SKIP_TIMEMACHINE_EXCLUDE=1` to opt out. Existing user exclusions are never removed; an already-excluded creative directory must be restored to backup by the operator.
 

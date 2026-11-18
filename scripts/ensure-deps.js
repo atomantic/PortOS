@@ -98,15 +98,16 @@ export function cleanWorkspaceDeps(dir) {
 }
 
 // The trusted install-script allowlist lives in scripts/trusted-rebuilds.js —
-// shared with the root `setup` script, setup.ps1, update.sh, update.ps1 and CI so
-// the list has exactly one home.
+// shared with scripts/setup.js (which installs through installWorkspace below),
+// update.sh, update.ps1 and CI so the list has exactly one home.
 // Every workspace pins `ignore-scripts=true` in its own .npmrc, so a plain
 // `npm install` leaves these native deps unbuilt and the server crashes on a
 // missing node-pty binding. Run after every (re)install — not just the
 // clean-reinstall path — so a fresh install into a missing node_modules is
 // equally whole.
-
-function install(dir, label) {
+// Exported so scripts/setup.js runs the same cwd-based install and clean retry
+// as startup repair instead of keeping a second copy of the loop.
+export function installWorkspace(dir, label) {
   try {
     // This repairs an installed tree; it never authors dependencies. Keep the
     // committed lockfile byte-stable even when the local npm writer is older.
@@ -173,7 +174,7 @@ function main() {
       } else {
         console.log(`📦 Missing node_modules for ${label} — installing...`);
       }
-      if (!install(dir, label)) process.exit(1);
+      if (!installWorkspace(dir, label)) process.exit(1);
       needed = true;
     }
 
@@ -203,7 +204,7 @@ function main() {
     if (!missing.length) continue;
 
     console.log(`📦 Missing ${missing.map(p => p.split('/')[0]).join(', ')} in ${label} — reinstalling deps...`);
-    if (!install(dir, label)) process.exit(1);
+    if (!installWorkspace(dir, label)) process.exit(1);
     needed = true;
 
     const stillMissing = pkgs.filter(pkg => !existsSync(join(dir, 'node_modules', ...pkg.split('/'))));
