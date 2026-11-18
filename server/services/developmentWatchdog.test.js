@@ -46,10 +46,10 @@ vi.mock('./codeReview.js', () => ({ resolveReviewLoopOptions: async () => ({ rev
 vi.mock('./agent/agentWorktreeCleanup.js', () => ({ spawnReviewLoopFollowUp: async options => { m.adds.push(options); return { id: 'resolution' }; } }));
 vi.mock('./userActions.js', () => ({ listUserActions: async () => [] }));
 vi.mock('./reviewQueue.js', () => ({ buildQueue: async () => ({ sources: {}, partial: false, nextCursor: null }) }));
-vi.mock('./persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
-vi.mock('./persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
+vi.mock('./persistent/persistentMindVisibility.js', () => ({ readPersistentMindVisibility: async () => ({}) }));
+vi.mock('./persistent/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({}) }));
 import { runDevelopmentWatchdog, readDevelopmentWatchdogSnapshot } from './developmentWatchdog.js';
-import { readPersistentMindMaintenanceContext } from './persistentMindMaintenanceContext.js';
+import { readPersistentMindMaintenanceContext } from './persistent/persistentMindMaintenanceContext.js';
 
 beforeEach(() => {
   m.state = { config: { improvementEnabled: true, persistentMindMaintainer: { enabled: true, appIds: ['app'] }, persistentMindCapabilities: { readPortos: true, createTasks: true }, maxConcurrentAgents: 3 }, agents: {} };

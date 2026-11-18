@@ -59,7 +59,7 @@ const {
   MAX_EVENT_AGE_DAYS
 } = await import('./agentRunEventLog.js');
 const { buildRunEvent } = await import('../../lib/agent/agentRunEvents.js');
-const { persistentMindEventCursor } = await import('../../lib/persistentMindTrajectory.js');
+const { persistentMindEventCursor } = await import('../../lib/persistent/persistentMindTrajectory.js');
 
 const ACTIVE = join(LEDGER_DIR, 'run-events.jsonl');
 const ARCHIVE = join(LEDGER_DIR, 'run-events.1.jsonl');

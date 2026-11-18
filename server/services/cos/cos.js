@@ -1,6 +1,6 @@
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { isHostShuttingDown } from '../../lib/hostShutdown.js';
-import { mergePersistentMindMaintainer } from '../../lib/persistentMindMaintainer.js';
+import { mergePersistentMindMaintainer } from '../../lib/persistent/persistentMindMaintainer.js';
 /**
  * Chief of Staff (CoS) Service
  *
@@ -39,11 +39,11 @@ import { todayInTimezone } from '../../lib/timezone.js';
 import { getUserTimezone } from '../userTimezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../../lib/domainAutonomy.js';
 import { normalizeDomainBudgets } from '../../lib/domainBudgets.js';
-import { mergePersistentMindCapabilities } from '../../lib/persistentMindCapabilities.js';
-import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../../lib/persistentMindProfile.js';
-import { mergePersistentMindPrompt } from '../../lib/persistentMindPrompt.js';
-import { mergePersistentMindPlaybook } from '../../lib/persistentMindPlaybook.js';
-import { mergePersistentMindThinkingPresets } from '../../lib/persistentMindThinkingPresets.js';
+import { mergePersistentMindCapabilities } from '../../lib/persistent/persistentMindCapabilities.js';
+import { mergePersistentMindProfile, normalizePersistentMindProfile } from '../../lib/persistent/persistentMindProfile.js';
+import { mergePersistentMindPrompt } from '../../lib/persistent/persistentMindPrompt.js';
+import { mergePersistentMindPlaybook } from '../../lib/persistent/persistentMindPlaybook.js';
+import { mergePersistentMindThinkingPresets } from '../../lib/persistent/persistentMindThinkingPresets.js';
 // Dependency-free leaf holding the shared agent maps + the runner-mode flag,
 // read by `isRunnerHolding` below.
 import { useRunner, spawningTasks, hasActiveTaskOwner } from '../agent/agentState.js';
@@ -134,11 +134,11 @@ import {
   refreshPersistentMindWakeCadence,
   registerPersistentMindTurnAdapter,
   unregisterPersistentMindTurnAdapter,
-} from '../persistentMindSupervisor.js';
+} from '../persistent/persistentMindSupervisor.js';
 import { closeStalePreflightCard, isPreflightCard, isStalePreflightCard } from '../preflightTaskCard.js';
 import { cleanupZombieAgents } from './cosAgentLifecycle.js';
-import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistentMindThinkingRequests.js';
-// `../persistentMindAdapter.js` is imported lazily where the daemon registers the
+import { approvePersistentMindThinkingPresets, cancelPersistentMindThinkingRequest } from '../persistent/persistentMindThinkingRequests.js';
+// `../persistent/persistentMindAdapter.js` is imported lazily where the daemon registers the
 // adapter, NOT here. It pulls in the whole CoS tool registry — and through it the
 // voice tool surface, ask service and image-gen backends — a graph the daemon only
 // executes once it is actually running, but that a static edge instantiated in
@@ -498,7 +498,7 @@ async function bootDaemon(state) {
   emitLog('info', 'Running initial task evaluation...');
   await evaluateTasks({ initialStartup: true });
   await runHealthCheck();
-  const { createPersistentMindTurnAdapter } = await import('../persistentMindAdapter.js');
+  const { createPersistentMindTurnAdapter } = await import('../persistent/persistentMindAdapter.js');
   await registerPersistentMindTurnAdapter(createPersistentMindTurnAdapter());
   await initializePersistentMindSupervisor();
 

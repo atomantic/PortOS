@@ -10,7 +10,7 @@ import { readGitCommonDirectory } from '../../lib/gitRepositoryIdentity.js';
 import { recoverCompletionTaskHandoff } from './agentCompletionTaskHandoff.js';
 import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SIZE } from './agentDeliveryActivity.js';
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../../lib/mergeGateContract.js';
-import { processAuditFingerprint } from '../../lib/persistentMindProcessAudit.js';
+import { processAuditFingerprint } from '../../lib/persistent/persistentMindProcessAudit.js';
 import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, readCompletedCheckoutIdentity } from '../completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../../lib/retirementCheckoutObservation.js';
 import { resolveRetirementApp } from '../retirementAppScope.js';

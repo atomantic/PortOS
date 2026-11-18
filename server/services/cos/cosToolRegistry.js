@@ -1,4 +1,4 @@
-import { processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../../lib/persistentMindProcessAudit.js';
+import { processAuditNextSchema, processAuditReadSchema, processAuditOutcomeSchema, processAuditFixSchema } from '../../lib/persistent/persistentMindProcessAudit.js';
 /**
  * Capability-oriented tool registry shared by HTTP, voice adapters, and the
  * Persistent Mind. Raw routes are deliberately not callable through it.
@@ -21,7 +21,7 @@ import {
   normalizePersistentMindCapabilities,
   persistentMindCleanupRequestSchema,
   persistentMindTaskRequestSchema,
-} from '../../lib/persistentMindCapabilities.js';
+} from '../../lib/persistent/persistentMindCapabilities.js';
 import {
   TOOL_ACTIVATION_FAMILIES,
   activatePersistentMindToolActivationFamilies,
@@ -31,11 +31,11 @@ import {
   renewPersistentMindToolActivationFamily,
   toolsActivateInputSchema,
   toolsDeactivateInputSchema,
-} from '../../lib/persistentMindToolActivation.js';
+} from '../../lib/persistent/persistentMindToolActivation.js';
 import {
   persistentMindIssueFileSchema,
   persistentMindIssueListSchema,
-} from '../../lib/persistentMindIssues.js';
+} from '../../lib/persistent/persistentMindIssues.js';
 import {
   eidoverseWorldAugmentSchema,
   eidoverseWorldSaySchema,
@@ -53,13 +53,13 @@ import {
   eidoverseDraftFoundationInputSchema,
   eidoversePlaceLayoutInputSchema,
 } from '../../lib/eidoverseCreativeToolkit.js';
-import { persistentMindChooseNameSchema } from '../../lib/persistentMindChosenName.js';
-import { persistentMindProtectMemorySchema, persistentMindReviewMemorySchema } from '../../lib/persistentMindMemory.js';
-import { persistentMindThinkingRequestSchema } from '../../lib/persistentMindThinkingPresets.js';
+import { persistentMindChooseNameSchema } from '../../lib/persistent/persistentMindChosenName.js';
+import { persistentMindProtectMemorySchema, persistentMindReviewMemorySchema } from '../../lib/persistent/persistentMindMemory.js';
+import { persistentMindThinkingRequestSchema } from '../../lib/persistent/persistentMindThinkingPresets.js';
 import { USER_ACTION_ACTORS, USER_ACTION_TYPES } from '../../lib/userActionTypes.js';
 import { dispatchTool, getToolSpecs, getToolSpecsForIntent } from '../voice/tools.js';
-import { executePersistentMindTaskRequests } from '../persistentMindTaskCapability.js';
-import { cleanupPersistentMind } from '../persistentMindMaintenance.js';
+import { executePersistentMindTaskRequests } from '../persistent/persistentMindTaskCapability.js';
+import { cleanupPersistentMind } from '../persistent/persistentMindMaintenance.js';
 
 import {
   currentAgentAuthority,
@@ -72,8 +72,8 @@ import {
   resolveRecipeInvocation,
 } from '../mindToolRecipeRuntime.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
-import { choosePersistentMindName, reviewPersistentMindMemory, protectPersistentMindMemory } from '../persistentMindContext.js';
-import { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } from '../persistentMindThinkingRequests.js';
+import { choosePersistentMindName, reviewPersistentMindMemory, protectPersistentMindMemory } from '../persistent/persistentMindContext.js';
+import { getPersistentMindThinkingRequestCatalog, requestPersistentMindThinkingPreset } from '../persistent/persistentMindThinkingRequests.js';
 import { loadState, saveState, withStateLock } from './cosState.js';
 import { listUserActions } from '../userActions.js';
 import { scrubSecretTokens, scrubSecretTokensDeep } from '../../lib/secretText.js';
@@ -869,7 +869,7 @@ export const buildPersistentMindToolPrompt = async (capabilities, recipes = [], 
 } = {}) => {
   const grants = normalizePersistentMindCapabilities(capabilities);
   const reportAccess = grants.auditReports && grants.readPortos
-    ? await import('../persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
+    ? await import('../persistent/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities, recipes, reportAccess });
   const granted = catalog.tools.filter((tool) => tool.granted);
   // tools.activate/tools.deactivate are withheld along with everything else
@@ -1037,7 +1037,7 @@ const runSandboxTool = async (tool, args, context) => {
 };
 
 const runReportsTool = async (tool, args, context) => {
-  const audit = await import('../persistentMindProcessAudit.js');
+  const audit = await import('../persistent/persistentMindProcessAudit.js');
   const handler = { 'reports.fix': audit.recordProcessAuditFix, 'reports.next': audit.nextProcessAuditBatch, 'reports.read': audit.readProcessAuditExcerpt, 'reports.record': audit.recordProcessAuditOutcome }[tool.adapter.kind];
   return handler(args, context);
 };
@@ -1046,7 +1046,7 @@ const resolveTargetFamilies = async (targeted, args, authority) => {
   const recipes = targeted.some((name) => name.startsWith('recipe.'))
     ? await readPersistentMindRecipeCatalog(authority?.capabilities) : [];
   const reportAccess = targeted.some(name => name.startsWith('reports.'))
-    ? await import('../persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
+    ? await import('../persistent/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess()) : undefined;
   const catalog = getCosToolCatalog({ scope: 'mind', capabilities: authority?.capabilities, recipes, reportAccess });
   if (targeted.some((name) => !catalog.tools.some((entry) => entry.name === name
     && entry.granted && args.families.includes(entry.family)))) {
@@ -1084,7 +1084,7 @@ const runThinkingTool = async (tool, args, context) => {
 };
 
 const runLocalContextTool = async (tool, args, context) => {
-  const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('../persistentMindLocalContext.js');
+  const { getPersistentMindLocalContextCatalog, adjustPersistentMindLocalContext } = await import('../persistent/persistentMindLocalContext.js');
   return tool.adapter.kind === 'local-context-catalog'
     ? getPersistentMindLocalContextCatalog()
     : adjustPersistentMindLocalContext(args, context);
@@ -1099,7 +1099,7 @@ const runVoiceTool = (tool, args, context, authority) => dispatchTool(tool.adapt
 });
 
 const runMindIssueTool = async (tool, args) => {
-  const { filePersistentMindIssue, listPersistentMindIssues } = await import('../persistentMindIssueCapability.js');
+  const { filePersistentMindIssue, listPersistentMindIssues } = await import('../persistent/persistentMindIssueCapability.js');
   return tool.adapter.kind === 'persistent-mind-issue-list'
     ? listPersistentMindIssues(args)
     : filePersistentMindIssue(args);
@@ -1125,7 +1125,7 @@ const runMindMaintenance = (tool, args, context) => cleanupPersistentMind({
 });
 
 const readDevelopmentMaintenance = async () => {
-  const { readPersistentMindMaintenanceContext } = await import('../persistentMindMaintenanceContext.js');
+  const { readPersistentMindMaintenanceContext } = await import('../persistent/persistentMindMaintenanceContext.js');
   return readPersistentMindMaintenanceContext();
 };
 
@@ -1423,7 +1423,7 @@ export const executeCosToolCall = async ({ call, authority, context = {} }) => {
   validateAuthority(tool, authority);
   const args = validateArguments(tool, parsedCall.arguments);
   if (tool.adapter.kind.startsWith('reports.')) {
-    const { assertProcessAuditAccess } = await import('../persistentMindProcessAudit.js');
+    const { assertProcessAuditAccess } = await import('../persistent/persistentMindProcessAudit.js');
     await assertProcessAuditAccess(args.appId);
   }
   const fingerprint = sha256Text(canonicalStringify({ name: tool.name, arguments: args, scope: authority?.scope || 'ui', ...(tool.adapter.kind.startsWith('reports.') ? { turnId: context.turnId || null } : {}), ...(tool.adapter.kind === 'recipe' ? { recipeId: tool.adapter.recipe.id, revision: tool.adapter.recipe.activeRevision } : {}) }));
@@ -1484,7 +1484,7 @@ export const getCosToolCall = async (requestId) => {
   if (!entry) return null;
   const result = await entry.promise;
   if (entry.reportAppId) {
-    const { assertProcessAuditAccess } = await import('../persistentMindProcessAudit.js');
+    const { assertProcessAuditAccess } = await import('../persistent/persistentMindProcessAudit.js');
     await assertProcessAuditAccess(entry.reportAppId);
   }
   return result;

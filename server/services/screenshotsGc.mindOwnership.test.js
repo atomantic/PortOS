@@ -22,7 +22,7 @@ vi.mock('./cos/cosState.js', () => ({
 vi.mock('./updateChecker.js', () => ({ isUpdateInProgress: () => false }));
 vi.mock('./cos/cosTaskStore.js', () => ({ getAllTasks: async () => ({ user: { tasks: [] }, cos: { tasks: [] } }) }));
 
-const { createPersistentMindAttachment, cleanupPersistentMindAttachments } = await import('./persistentMindAttachments.js');
+const { createPersistentMindAttachment, cleanupPersistentMindAttachments } = await import('./persistent/persistentMindAttachments.js');
 const { _sweepScreenshots } = await import('./screenshotsGc.js');
 const { purgeCategory } = await import('./dataManager.js');
 

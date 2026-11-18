@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mindToolRecipeDefinitionSchema, validateMindToolRecipe, resolveMindToolRecipeBinding } from './mindToolRecipes.js';
-import { createDefaultPersistentMindCapabilities, mergePersistentMindCapabilities, persistentMindCapabilitiesSchema } from './persistentMindCapabilities.js';
+import { createDefaultPersistentMindCapabilities, mergePersistentMindCapabilities, persistentMindCapabilitiesSchema } from './persistent/persistentMindCapabilities.js';
 
 const tool = (name, properties = {}, required = [], output = { type: 'object', additionalProperties: true }) => ({
   name, aliases: [`alias_${name}`], policy: { scopes: ['mind'], sideEffect: 'read' },

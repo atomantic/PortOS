@@ -6,7 +6,7 @@ const deps = vi.hoisted(() => ({ loaded: vi.fn(), loadedError: vi.fn(), runs: vi
 vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: async () => ({ status: 'absent', gpus: [] }) }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({ listJobs: () => [], getRunningJob: () => null, getQueueCapacity: () => ({ byKind: {} }) }));
 vi.mock('../services/imageTo3d/models.js', () => ({ listGeneratingModelSummaries: async () => [], getActiveModelOperationCount: () => 0 }));
-vi.mock('../services/persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: () => false }));
+vi.mock('../services/persistent/persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: () => false }));
 vi.mock('../services/cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: async () => [] }));
 vi.mock('../services/ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: deps.loadedError }));
 vi.mock('../services/cos/cos.js', () => ({}));

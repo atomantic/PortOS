@@ -1,4 +1,4 @@
-import { normalizePersistentMindMaintainer } from '../../lib/persistentMindMaintainer.js';
+import { normalizePersistentMindMaintainer } from '../../lib/persistent/persistentMindMaintainer.js';
 import { RETIRED_CONFIG_KEYS } from '../../lib/cos/cosRetiredConfigKeys.js';
 /**
  * CoS State Module
@@ -15,15 +15,15 @@ import { ensureDirs, safeJSONParse, readJSONFileStrict, PATHS, atomicWrite } fro
 import { isPlainObject } from '../../lib/objects.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../../lib/domainAutonomy.js';
 import { normalizeDomainBudgets } from '../../lib/domainBudgets.js';
-import { createDefaultPersistentMindState, normalizePersistentMindState } from '../../lib/persistentMind.js';
-import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../../lib/persistentMindCapabilities.js';
-import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../../lib/persistentMindProfile.js';
-import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../../lib/persistentMindPrompt.js';
-import { createDefaultPersistentMindPlaybook, normalizePersistentMindPlaybook } from '../../lib/persistentMindPlaybook.js';
+import { createDefaultPersistentMindState, normalizePersistentMindState } from '../../lib/persistent/persistentMind.js';
+import { createDefaultPersistentMindCapabilities, normalizePersistentMindCapabilities } from '../../lib/persistent/persistentMindCapabilities.js';
+import { createDefaultPersistentMindProfile, normalizePersistentMindProfile } from '../../lib/persistent/persistentMindProfile.js';
+import { createDefaultPersistentMindPrompt, normalizePersistentMindPrompt } from '../../lib/persistent/persistentMindPrompt.js';
+import { createDefaultPersistentMindPlaybook, normalizePersistentMindPlaybook } from '../../lib/persistent/persistentMindPlaybook.js';
 import {
   createDefaultPersistentMindThinkingPresets,
   normalizePersistentMindThinkingPresets,
-} from '../../lib/persistentMindThinkingPresets.js';
+} from '../../lib/persistent/persistentMindThinkingPresets.js';
 import { cosEvents } from './cosEvents.js';
 import { planAgentSave } from '../../lib/cos/cosAgentRows.js';
 import { applyAgentSave, loadAgentRows } from './cosAgentRepository.js';

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './348-persistent-mind-self-thinking.js';
-import { PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION } from '../../server/lib/persistentMindCapabilities.js';
+import { PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMindCapabilities.js';
 let rootDir;
 afterEach(async () => { if (rootDir) await rm(rootDir, { recursive: true, force: true }); });
 it('adds disabled grants and durable state while preserving old preferences, unrelated fields and existing allowance', async () => {

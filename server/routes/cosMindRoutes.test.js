@@ -1,4 +1,4 @@
-import { resolvePersistentMindChosenName } from '../lib/persistentMindChosenName.js';
+import { resolvePersistentMindChosenName } from '../lib/persistent/persistentMindChosenName.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
@@ -43,7 +43,7 @@ vi.mock('../services/agent/agentRunEventLog.js', () => ({
   readPersistentMindHistory: mocks.readPersistentMindHistory,
 }));
 vi.mock('../services/cos/cosState.js', () => ({ loadState: mocks.loadState }));
-vi.mock('../services/persistentMindContext.js', () => ({
+vi.mock('../services/persistent/persistentMindContext.js', () => ({
   appendPersistentMindAnnotation: mocks.appendPersistentMindAnnotation,
   createPersistentMindMemory: mocks.createPersistentMindMemory,
   preparePersistentMindContext: mocks.preparePersistentMindContext,
@@ -54,13 +54,13 @@ vi.mock('../services/persistentMindContext.js', () => ({
   readPersistentMindRollups: mocks.readPersistentMindRollups,
   updatePersistentMindMemory: mocks.updatePersistentMindMemory,
 }));
-vi.mock('../services/persistentMindJournal.js', () => ({
+vi.mock('../services/persistent/persistentMindJournal.js', () => ({
   readPersistentMindJournal: mocks.readPersistentMindJournal,
   correctPersistentMindJournalEvent: mocks.correctPersistentMindJournalEvent,
 }));
-vi.mock('../services/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true }) }));
+vi.mock('../services/persistent/persistentMindProfile.js', () => ({ resolvePersistentMindProfile: async () => ({ ok: true }) }));
 vi.mock('../services/providers.js', () => ({ getProviderById: mocks.getProviderById }));
-vi.mock('../services/persistentMindAdapter.js', () => ({
+vi.mock('../services/persistent/persistentMindAdapter.js', () => ({
   persistentMindHarnessInfo: (provider) => ({
     type: provider?.type || null,
     label: provider?.type === 'api' ? 'Direct API' : 'Headless CLI',
@@ -68,26 +68,26 @@ vi.mock('../services/persistentMindAdapter.js', () => ({
     detail: 'Structured provider harness.',
   }),
 }));
-vi.mock('../services/persistentMindImageCapability.js', () => ({
+vi.mock('../services/persistent/persistentMindImageCapability.js', () => ({
   resolvePersistentMindImageCapability: (...args) => mocks.resolveImageCapability(...args),
 }));
-vi.mock('../services/persistentMindMaintenance.js', () => ({
+vi.mock('../services/persistent/persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupPersistentMind(...args),
 }));
-vi.mock('../services/persistentMindTaskCapability.js', () => ({
+vi.mock('../services/persistent/persistentMindTaskCapability.js', () => ({
   readPersistentMindTaskCatalog: mocks.readPersistentMindTaskCatalog,
 }));
-vi.mock('../services/persistentMindManagedApps.js', () => ({
+vi.mock('../services/persistent/persistentMindManagedApps.js', () => ({
   readPersistentMindManagedApps: mocks.readPersistentMindManagedApps,
 }));
 vi.mock('../services/mindToolRecipes.js', () => ({
   listRecipes: mocks.listMindToolRecipes,
 }));
-vi.mock('../services/persistentMindAttachments.js', () => ({
+vi.mock('../services/persistent/persistentMindAttachments.js', () => ({
   createPersistentMindAttachment: mocks.createPersistentMindAttachment,
   deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
 }));
-vi.mock('../services/persistentMindSupervisor.js', () => ({
+vi.mock('../services/persistent/persistentMindSupervisor.js', () => ({
   createPersistentMindAttachment: mocks.createPersistentMindAttachment,
   deletePersistentMindAttachment: mocks.deletePersistentMindAttachment,
   getPersistentMindState: mocks.getPersistentMindState,
@@ -99,10 +99,10 @@ vi.mock('../services/persistentMindSupervisor.js', () => ({
   stopPersistentMind: mocks.stopPersistentMind,
   persistentMindUsageLimitRetryAt: mocks.persistentMindUsageLimitRetryAt,
 }));
-vi.mock('../services/persistentMindRuntime.js', () => ({
+vi.mock('../services/persistent/persistentMindRuntime.js', () => ({
   inspectPersistentMindRuntime: mocks.inspectPersistentMindRuntime,
 }));
-vi.mock('../services/persistentMindVisibility.js', () => ({
+vi.mock('../services/persistent/persistentMindVisibility.js', () => ({
   readPersistentMindVisibility: mocks.readPersistentMindVisibility,
 }));
 

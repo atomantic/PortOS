@@ -35,7 +35,7 @@ import { redactOutput } from '../commandSecurity.js';
 import {
   PERSISTENT_MIND_EVENT_KINDS,
   isPersistentMindEventKind,
-} from '../persistentMindTrajectory.js';
+} from '../persistent/persistentMindTrajectory.js';
 
 /**
  * Envelope schema version. Bump when the envelope SHAPE changes in a way a

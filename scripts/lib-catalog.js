@@ -26,6 +26,7 @@ export const CATALOG_DIRS = Object.freeze([
   'server/lib/agent',
   'server/lib/cos',
   'server/lib/musicVideo',
+  'server/lib/persistent',
   'client/src/lib',
   'client/src/hooks',
   'client/src/utils',

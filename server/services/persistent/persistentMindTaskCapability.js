@@ -1,0 +1,472 @@
+/**
+ * Supervised CoS-task capability for the persistent mind.
+ *
+ * The model receives a bounded catalog and may return typed task requests. This
+ * service re-checks the user's grant after inference, validates every selected
+ * app/provider/model/effort against current configuration, records the request
+ * and outcome in the mind trajectory, and only then queues an internal task.
+ */
+
+import { isProcessProvider } from '../../lib/providerTypes.js';
+import {
+  PERSISTENT_MIND_TASK_LIMITS,
+  isPersistentMindTaskModelAllowed,
+  normalizePersistentMindCapabilities,
+  persistentMindTaskRequestSchema,
+} from '../../lib/persistent/persistentMindCapabilities.js';
+import { PERSISTENT_MIND_ID } from '../../lib/persistent/persistentMindTrajectory.js';
+import { boundedByJsonChars, canonicalStringify } from '../../lib/objects.js';
+import { antigravityBaseModels, effortLevelsForProvider, filterSelectableModels } from '../../lib/providerModels.js';
+import { PR_COMPLETIONS } from '../../lib/prDisposition.js';
+import { sha256Text } from '../../lib/fileUtils.js';
+import { boundedErrorMessage } from '../../lib/errorHandler.js';
+import { MANAGED_ASSESSMENT_BACKENDS, localRuntimeKind } from '../../lib/localProviderRuntime.js';
+import { PORTOS_APP_ID } from '../../lib/appIdentity.js';
+import { normalizePersistentMindMaintainer } from '../../lib/persistent/persistentMindMaintainer.js';
+import { getActiveApps, getAppWorkTracker } from '../apps.js';
+import { readPersistentMindManagedApps } from './persistentMindManagedApps.js';
+import { loadState } from '../cos/cosState.js';
+import { addTask, firstLine, getCosTasks, getTaskById } from '../cos/cosTaskStore.js';
+import { getProviderPrerequisiteReadinessMap } from '../providerPrerequisites.js';
+import { listManagedBackendModels } from '../localLlm.js';
+// listSelectableProviders, not listProviders: both reads below OFFER models
+// — the task catalog's per-provider allowlist and the choice validator that
+// accepts or refuses a submitted model — so they must see the install's
+// entitlement, not the vendor's whole advertised catalog (docs/MODEL_ACCESS.md).
+import { listSelectableProviders } from '../providers.js';
+import {
+  assessPersistentMindWorkspaceReadiness,
+  readPersistentMindWorkspacePreflight,
+} from './persistentMindWorkspacePreflight.js';
+
+const MAX_CATALOG_PROVIDERS = 50;
+const MAX_CATALOG_MODELS = 60;
+const MAX_CATALOG_PROMPT_CHARS = 16_000;
+const MAX_CATALOG_APP_PROMPT_CHARS = 4_000;
+const MIND_TASK_ID_PREFIX = 'sys-mind-';
+const MAX_INVENTORY_TASKS = 25;
+const MAX_INVENTORY_PROMPT_CHARS = 4_000;
+const MAX_INVENTORY_DESCRIPTION_CHARS = 160;
+const ISSUE_TRACKERS = new Set(['github', 'gitlab']);
+
+// The queue path still walks raw app records; the catalog path gets its apps
+// pre-filtered from the shared managed-app roster.
+const isRunnableApp = (app) => typeof app?.repoPath === 'string' && app.repoPath.trim().length > 0;
+const isRunnableAgentProvider = (provider) => provider?.enabled !== false
+  && isProcessProvider(provider);
+
+const boundedProviderCandidates = (providers) => providers
+  .filter((provider) => isRunnableAgentProvider(provider)
+    && typeof provider?.id === 'string' && provider.id
+    && provider.id.length <= PERSISTENT_MIND_TASK_LIMITS.providerIdChars)
+  .slice(0, MAX_CATALOG_PROVIDERS);
+
+const providerReadinessSummary = (providers, readiness) => {
+  const summary = {
+    blockedCount: 0,
+    blockedReasonCodes: [],
+    unknownCount: 0,
+    unknownReasonCodes: [],
+  };
+  for (const provider of providers) {
+    const verdict = readiness[provider.id];
+    if (verdict?.status !== 'blocked' && verdict?.status !== 'unknown') continue;
+    const prefix = verdict.status;
+    summary[`${prefix}Count`] += 1;
+    summary[`${prefix}ReasonCodes`].push(...(verdict.reasonCodes || []));
+  }
+  summary.blockedReasonCodes = [...new Set(summary.blockedReasonCodes)].sort();
+  summary.unknownReasonCodes = [...new Set(summary.unknownReasonCodes)].sort();
+  return summary;
+};
+
+const boundedReadinessReasonCodes = (value) => (Array.isArray(value) ? value : [])
+  .filter((code) => typeof code === 'string' && /^[a-z][a-zA-Z0-9-]{0,49}$/.test(code))
+  .slice(0, 10);
+
+/**
+ * The ids a LOCAL provider can actually be dispatched against, from the daemon
+ * rather than the record.
+ *
+ * A provider backed by Ollama or LM Studio carries a `models` array that is only
+ * a cached snapshot — the daemon on this machine is the authority, and every
+ * model picker in PortOS already offers what it reports. Building the persistent
+ * mind's allowed-model list from the record instead means a model the user
+ * pulled after the record was last refreshed is rejected as "not configured",
+ * even though it is installed and serving.
+ *
+ * `null` (not readable) must NOT collapse to `[]` (no models installed): both
+ * managers cache an empty array on a failed read, so a daemon that is merely
+ * down would otherwise wipe every model off the catalog. `listManagedBackendModels`
+ * carries that sentinel; when it reports one, the caller keeps the record's list.
+ *
+ * Other local runtimes (llama.cpp, MTPLX, vLLM, SGLang, Slotstream) have no
+ * cached catalog inside PortOS — reading them means a live `GET /v1/models`
+ * probe, which this catalog builder runs on every wake and must not pay for.
+ * They keep the record's list.
+ *
+ * @returns {Promise<string[]|null>} `null` when no daemon list applies or it
+ *   could not be read.
+ */
+const daemonModelIds = async (provider) => {
+  // `localRuntimeKind`, not `localBackendForProvider`: the marker-based lookup is
+  // what resolves a `claude-ollama`-shaped provider, which carries `ollamaBacked`
+  // without naming Ollama in its id, name, or endpoint.
+  const backend = localRuntimeKind(provider);
+  if (!MANAGED_ASSESSMENT_BACKENDS.includes(backend)) return null;
+  const { models, error } = await listManagedBackendModels(backend)
+    .catch(() => ({ models: null, error: 'model list failed' }));
+  if (error || !Array.isArray(models)) return null;
+  return models.map((model) => model?.id).filter((id) => typeof id === 'string' && id.trim());
+};
+
+const boundedModelIds = (models) => filterSelectableModels(antigravityBaseModels(models))
+  .filter((model) => typeof model === 'string' && model.trim()
+    && model.trim().length <= PERSISTENT_MIND_TASK_LIMITS.modelChars)
+  .map((model) => model.trim());
+
+const selectableModelIds = async (provider) => {
+  const stored = boundedModelIds((await daemonModelIds(provider)) ?? provider?.models);
+  const configuredDefault = filterSelectableModels([provider?.defaultModel])[0];
+  const withDefault = typeof configuredDefault === 'string' && configuredDefault.trim()
+    && configuredDefault.trim().length <= PERSISTENT_MIND_TASK_LIMITS.modelChars
+    ? [configuredDefault.trim(), ...stored]
+    : stored;
+  return [...new Set(withDefault)].slice(0, MAX_CATALOG_MODELS);
+};
+
+const providerCatalogEntry = async (provider, capabilities) => {
+  const policy = normalizePersistentMindCapabilities(capabilities);
+  const models = (await selectableModelIds(provider))
+    .filter((model) => isPersistentMindTaskModelAllowed(capabilities, provider.id, model));
+  if ((policy.taskModelAllowlist.length > 0 || policy.taskModelAllowlistInvalid) && models.length === 0) return null;
+  return {
+    id: provider.id,
+    name: String(provider.name || provider.id).slice(0, 100),
+    type: provider.type || null,
+    models: models.map((model) => ({
+      id: model,
+      efforts: effortLevelsForProvider(provider, model) || [],
+    })),
+  };
+};
+
+const appCatalogEntry = (app) => ({
+  id: app.id,
+  name: app.name,
+  planOnly: app.planOnly,
+  // Only the baseline entry carries the flag, so the prompt catalog stays
+  // small and the mind has one unambiguous answer to "which repo is mine".
+  ...(app.id === PORTOS_APP_ID ? { self: true } : {}),
+});
+
+export async function readPersistentMindTaskCatalog({ allowedAppIds, includeAllApps = false } = {}) {
+  const [managedApps, providers, root] = await Promise.all([
+    readPersistentMindManagedApps({ allowedAppIds }),
+    listSelectableProviders(),
+    loadState(),
+  ]);
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const candidates = boundedProviderCandidates(providers);
+  const readiness = await getProviderPrerequisiteReadinessMap(providers, {
+    candidates,
+    deferCwdDependent: true,
+  });
+  return {
+    // The tools settings page needs to see revoked apps so it can restore them;
+    // the model-facing catalog remains narrowed to the granted set.
+    apps: (includeAllApps ? managedApps : managedApps.filter((app) => app.granted)).map(appCatalogEntry),
+    providers: (await Promise.all(candidates
+      .filter((provider) => readiness[provider.id]?.status === 'ready')
+      .map((provider) => providerCatalogEntry(provider, capabilities))))
+      .filter(Boolean),
+    providerReadiness: providerReadinessSummary(candidates, readiness),
+  };
+}
+
+const boundedPromptCatalog = (catalog) => {
+  const bounded = {
+    apps: [],
+    providers: [],
+    providerReadiness: {
+      blockedCount: Number.isSafeInteger(catalog?.providerReadiness?.blockedCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.blockedCount))
+        : 0,
+      blockedReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.blockedReasonCodes),
+      unknownCount: Number.isSafeInteger(catalog?.providerReadiness?.unknownCount)
+        ? Math.max(0, Math.min(MAX_CATALOG_PROVIDERS, catalog.providerReadiness.unknownCount))
+        : 0,
+      unknownReasonCodes: boundedReadinessReasonCodes(catalog?.providerReadiness?.unknownReasonCodes),
+    },
+  };
+  bounded.apps = boundedByJsonChars(catalog?.apps, MAX_CATALOG_APP_PROMPT_CHARS, (apps) => ({ apps }));
+  for (const provider of Array.isArray(catalog?.providers) ? catalog.providers : []) {
+    const kept = { ...provider, models: [] };
+    bounded.providers.push(kept);
+    if (JSON.stringify(bounded).length > MAX_CATALOG_PROMPT_CHARS) {
+      bounded.providers.pop();
+      break;
+    }
+    // Measured through `bounded`, so each model counts against the whole
+    // catalog's budget rather than its own provider's slice.
+    kept.models = boundedByJsonChars(provider.models, MAX_CATALOG_PROMPT_CHARS, (models) => {
+      kept.models = models;
+      return bounded;
+    });
+  }
+  return bounded;
+};
+
+/**
+ * The internal CoS queue a mind task request lands in, newest first.
+ *
+ * `addTask` already refuses a duplicate of an OPEN task, so the value here is
+ * the part it cannot cover: work that is already **completed**. Without it a
+ * wake only sees its own trajectory, re-derives an idea it already shipped, and
+ * queues the same task again. Descriptions are the machine-local queue labels
+ * the mind itself wrote, so nothing new crosses a privacy boundary.
+ */
+export async function readPersistentMindTaskInventory() {
+  const { tasks } = await getCosTasks();
+  // A copy, not the store's array: `getCosTasks` serves a cached parse.
+  return [...(Array.isArray(tasks) ? tasks : [])]
+    // `metadata.updatedAt` is stamped at creation and on every content edit, so
+    // it orders the queue by recency. An unstamped legacy task sorts oldest
+    // rather than dropping out of the list.
+    .sort((a, b) => String(b?.metadata?.updatedAt || '').localeCompare(String(a?.metadata?.updatedAt || '')))
+    .slice(0, MAX_INVENTORY_TASKS)
+    .map((task) => ({
+      id: String(task?.id || ''),
+      status: String(task?.status || 'unknown'),
+      description: firstLine(task?.description).slice(0, MAX_INVENTORY_DESCRIPTION_CHARS),
+      appId: typeof task?.metadata?.app === 'string' ? task.metadata.app : null,
+      queuedByMind: typeof task?.id === 'string' && task.id.startsWith(MIND_TASK_ID_PREFIX),
+    }))
+    .filter((entry) => entry.id && entry.description);
+}
+
+const boundedPromptInventory = (inventory) => boundedByJsonChars(inventory, MAX_INVENTORY_PROMPT_CHARS);
+
+export function buildPersistentMindTaskCapabilityPrompt({ enabled, catalog = { apps: [], providers: [] }, inventory = [] } = {}) {
+  if (!enabled) {
+    return `# CoS agent task capability
+Task creation access is OFF. Return an empty taskRequests array. You may recommend a task conversationally, but must not claim it was queued.`;
+  }
+  const promptCatalog = boundedPromptCatalog(catalog);
+  return `# CoS agent task capability
+Task creation access is ON. You may request up to ${PERSISTENT_MIND_TASK_LIMITS.maxPerTurn} internal CoS agent tasks when the current wake calls for concrete delegated work. Implementation tasks run in an isolated worktree, open a pull request, and are auto-approved into the normal CoS scheduler. Plan-only tasks use the issue-only planning contract described below. The scheduler still enforces capacity, autonomy, and budget gates.
+
+For each task, choose one configured app, provider, model, supported effort (or "" for the provider default), and exactly one PR completion policy. If the task model allowlist below is non-empty, only its exact provider/model pairs are permitted; do not use a provider default or another model:
+- "review-then-merge": run the configured code-review loop, then merge only when its gate passes.
+- "merge-on-green": skip code review and merge after CI is green.
+- "leave-open": open the PR and wait for a human to review and merge it.
+Set 'planOnly' to true to use the issue-only "Plan & File Issue" mode, but only
+for an app whose catalog entry has 'planOnly: true'; that mode investigates the
+repository and files one GitHub/GitLab issue without editing code or opening a
+PR. In plan-only mode, 'prCompletion' may be omitted. Otherwise set
+'planOnly' to false and choose one PR completion policy.
+Use 'requiredValidation' only when the task's acceptance criteria require those
+workspace checks before queueing. Supported checks are 'dependencies',
+'engines', 'submodules', 'forge', and 'reviewers'. An omitted or empty list
+keeps workspace diagnostics advisory, including for setup repair and docs-only work. Agents can install dependencies and resolve runtime setup as part of the task; do not require a failing check before queueing its repair. Required checks remain enforced when explicitly requested.
+
+Choosing the app: pick the repository that will hold the change, not the subject
+the work is about. PortOS owns every integration it ships — the connector,
+projection, routes, UI, and settings for another app all live in the PortOS repo,
+whose catalog entry, when you are granted it, is marked 'self: true'. Target
+another app's repo only when the change must land in that repo's own source. When
+PortOS work looks like it needs something another project does not expose yet,
+still target PortOS: the task can establish from PortOS's own integration what is
+genuinely missing there before anyone proposes a change to that project.
+
+Configured choices (ids are authoritative; do not invent ids):
+${JSON.stringify(promptCatalog)}
+
+Recent CoS queue (newest first; a 'completed' entry already ran, so do not re-queue it):
+${JSON.stringify(boundedPromptInventory(inventory))}
+
+Use taskRequests only for specific, non-duplicate work. Before requesting a task, check the recent queue above and the trajectory: if the same work is already there in any state, say so instead of queueing it again. Put the complete agent instructions in prompt and a concise queue label in description. In your conversational message describe the request as pending; do not claim the task was created or completed because the capability outcome is recorded only after inference.`;
+}
+
+const wakeIdentity = (wake, turnId) => (
+  wake?.kind === 'message' ? wake.message?.id : wake?.id
+) || turnId;
+
+const requestFingerprint = (request) => sha256Text(canonicalStringify(request));
+
+const taskIdFor = (wakeId, fingerprint) => (
+  `${MIND_TASK_ID_PREFIX}${sha256Text(`${PERSISTENT_MIND_ID}:${wakeId}:${fingerprint}`).slice(0, 24)}`
+);
+
+const boundedError = (error) => boundedErrorMessage(error, 'Task creation failed');
+
+const readinessError = (providerId, verdict) => {
+  const reasonCodes = (verdict?.reasonCodes || []).slice(0, 5).join(', ') || 'prerequisites';
+  if (verdict?.status === 'unknown') {
+    return `Provider '${providerId}' readiness is still being checked (${reasonCodes}); retry shortly or check Settings > AI Providers`;
+  }
+  return `Provider '${providerId}' is not ready (${reasonCodes}); check Settings > AI Providers`;
+};
+
+const validateChoice = async (request, apps, providers, capabilities) => {
+  const app = apps.find((candidate) => candidate.id === request.appId && isRunnableApp(candidate));
+  if (!app) return { error: `App '${request.appId}' has no configured repository` };
+  const provider = providers.find((candidate) => (
+    candidate.id === request.providerId && isRunnableAgentProvider(candidate)
+  ));
+  if (!provider) return { error: `Provider '${request.providerId}' is not an enabled CLI/TUI coding provider` };
+  const providerReadiness = (await getProviderPrerequisiteReadinessMap(providers, {
+    candidates: [provider],
+    cwd: app.repoPath,
+  }))[provider.id];
+  if (providerReadiness?.status !== 'ready') return { error: readinessError(provider.id, providerReadiness) };
+  const models = await selectableModelIds(provider);
+  if (request.model && !models.includes(request.model)) {
+    return { error: `Model '${request.model}' is not configured for provider '${request.providerId}'` };
+  }
+  if (!isPersistentMindTaskModelAllowed(capabilities, request.providerId, request.model)) {
+    return { error: `Model '${request.model}' is not allowed for persistent mind tasks on provider '${request.providerId}'` };
+  }
+  const efforts = effortLevelsForProvider(provider, request.model || null) || [];
+  if (request.effort && !efforts.includes(request.effort)) {
+    return { error: `Effort '${request.effort}' is not supported by provider '${request.providerId}'` };
+  }
+  if (request.planOnly) {
+    const tracker = await getAppWorkTracker(request.appId);
+    if (!ISSUE_TRACKERS.has(tracker?.resolved)) {
+      return { error: `Plan-and-file tasks require a GitHub or GitLab issue tracker for app '${request.appId}'` };
+    }
+  }
+  const preflight = await readPersistentMindWorkspacePreflight(app);
+  const readiness = assessPersistentMindWorkspaceReadiness(preflight, request.requiredValidation);
+  if (readiness.blockers.length) {
+    return {
+      error: `Workspace preflight blocked task '${request.description}': ${readiness.blockers.map((blocker) => blocker.message).join(' ')}`,
+      preflight,
+      readiness,
+    };
+  }
+  return { app, provider, preflight, readiness };
+};
+
+async function queueOneTask({ request, taskId, apps, allowedAppIds }) {
+  if (Array.isArray(allowedAppIds) && !allowedAppIds.includes(request.appId)) {
+    return { success: false, error: `Managed app '${request.appId}' is not authorized for Persistent Mind tasks; update Persistent Mind Tools permissions` };
+  }
+  const existing = await getTaskById(taskId);
+  if (existing) return { success: true, duplicate: true, task: existing };
+  const [providers, root] = await Promise.all([listSelectableProviders(), loadState()]);
+  const capabilities = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  if (!capabilities.createTasks) return { success: false, error: 'Persistent mind task creation access is disabled' };
+  const maintainer = normalizePersistentMindMaintainer(root.config?.persistentMindMaintainer);
+  if (maintainer.enabled && maintainer.appIds.includes(request.appId)) {
+    return { success: false, error: 'Maintainer repository work must use a tracked issue and maintenance.refresh so the watchdog can enforce ownership. File a deduplicated issue through the granted issue or report tools.' };
+  }
+  const choice = await validateChoice(request, apps, providers, capabilities);
+  if (choice.error) return { success: false, error: choice.error };
+  const planOnly = request.planOnly === true;
+  const task = await addTask({
+    id: taskId,
+    description: request.description,
+    prompt: request.prompt,
+    priority: request.priority,
+    app: request.appId,
+    provider: request.providerId,
+    model: request.model || undefined,
+    effort: request.effort || undefined,
+    ...(planOnly ? {
+      planOnly: true,
+    } : {
+      useWorktree: true,
+      openPR: true,
+      prCompletion: request.prCompletion,
+      simplify: true,
+      worktreeChangesExpected: true,
+    }),
+    approvalRequired: false,
+  }, 'internal');
+  return { success: true, duplicate: task.duplicate === true, task };
+}
+
+const eventDataFor = (request, outcome, displayText) => ({
+  displayText,
+  appId: request.appId,
+  providerId: request.providerId,
+  model: request.model || null,
+  effort: request.effort || null,
+  planOnly: request.planOnly === true,
+  prCompletion: request.prCompletion || null,
+  requiredValidation: request.requiredValidation || [],
+  ...(outcome ? {
+    success: outcome.success === true,
+    duplicate: outcome.duplicate === true,
+    taskId: outcome.task?.id || null,
+  } : {}),
+  ...(outcome?.error ? { status: boundedError(outcome.error) } : {}),
+});
+
+/**
+ * Execute model-returned requests sequentially so capability events preserve
+ * request order. A stable wake+index id makes a replay after a crash at-most-once.
+ */
+export async function executePersistentMindTaskRequests({
+  taskRequests,
+  turnId,
+  wake,
+  signal,
+  recordCapabilityEvent,
+} = {}) {
+  const requests = Array.isArray(taskRequests)
+    ? taskRequests.slice(0, PERSISTENT_MIND_TASK_LIMITS.maxPerTurn)
+    : [];
+  if (requests.length === 0) return [];
+
+  const [root, apps] = await Promise.all([loadState(), getActiveApps()]);
+  const taskAccess = normalizePersistentMindCapabilities(root.config?.persistentMindCapabilities);
+  const enabled = taskAccess.createTasks;
+  const record = typeof recordCapabilityEvent === 'function'
+    ? recordCapabilityEvent
+    : () => Promise.resolve();
+  const sourceWakeId = wakeIdentity(wake, turnId);
+  const results = [];
+
+  for (const [index, candidate] of requests.entries()) {
+    const parsed = persistentMindTaskRequestSchema.safeParse(candidate);
+    if (!parsed.success) {
+      const capabilityId = `cos-task-${sha256Text(`${sourceWakeId}:invalid:${index}`).slice(0, 24)}`;
+      const outcome = { success: false, error: 'Task request failed validation' };
+      await record({
+        kind: 'result',
+        id: capabilityId,
+        data: { displayText: `CoS task request ${index + 1} was rejected`, success: false, status: outcome.error },
+      });
+      results.push(outcome);
+      continue;
+    }
+
+    const request = parsed.data;
+    const fingerprint = requestFingerprint(request);
+    const capabilityId = `cos-task-${sha256Text(`${sourceWakeId}:${fingerprint}`).slice(0, 24)}`;
+    await record({
+      kind: 'request',
+      id: capabilityId,
+      data: eventDataFor(request, null, `Requested CoS task ${index + 1} for ${request.appId}`),
+    });
+    const taskId = taskIdFor(sourceWakeId, fingerprint);
+    const outcome = signal?.aborted
+      ? { success: false, error: 'Persistent mind turn was interrupted before task creation' }
+      : enabled
+      ? await Promise.resolve()
+        .then(() => queueOneTask({ request, taskId, apps, allowedAppIds: taskAccess.allowedAppIds }))
+        .then((value) => value, (error) => ({ success: false, error: boundedError(error) }))
+      : { success: false, error: 'Persistent mind task creation access is disabled' };
+    const displayText = outcome.success
+      ? `${outcome.duplicate ? 'Reused' : 'Queued'} CoS task ${outcome.task.id}`
+      : `CoS task request ${index + 1} was not queued`;
+    await record({ kind: 'result', id: capabilityId, data: eventDataFor(request, outcome, displayText) });
+    results.push(outcome);
+  }
+  return results;
+}
+
+export const PERSISTENT_MIND_TASK_PR_COMPLETIONS = PR_COMPLETIONS;

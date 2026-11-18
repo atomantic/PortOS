@@ -166,7 +166,7 @@ This audit was performed against the current source tree, without reading live p
 - `client/src/services/api*.js` for the client-facing endpoint contract.
 - `server/services/voice/tools/*.js` for the existing direct function-tool registry.
 - `server/lib/agent/agentContextValidation.js` and `server/routes/agentContextMcp.js` for the existing MCP surface.
-- `server/lib/persistentMindCapabilities.js`, `server/services/persistentMindTaskCapability.js`, and the Persistent Mind routes for the current authority boundary.
+- `server/lib/persistent/persistentMindCapabilities.js`, `server/services/persistent/persistentMindTaskCapability.js`, and the Persistent Mind routes for the current authority boundary.
 - `server/lib/apiRegistry.js` and `server/lib/openapiSpec.js` for the intentionally exposed external API subset.
 
 The static inventory contains 146 `app.use` mounts, 214 non-test route modules, and 2,042 non-test route-handler declarations. These are declaration counts, not a claim that every route is independently safe or intended for model exposure. Nested routers, dynamic toolkit routes, aliases, binary responses, and Socket.IO/SSE transports are called out below.

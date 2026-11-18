@@ -16,7 +16,7 @@ import {
   localPersistentMindRecommendation,
   matchesLocalPersistentMindModel,
 } from '../lib/localPersistentMindRecommendation.js';
-import { normalizePersistentMindProfile } from '../lib/persistentMindProfile.js';
+import { normalizePersistentMindProfile } from '../lib/persistent/persistentMindProfile.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
 import { getNavPageForPath } from '../lib/navManifest.js';
 import { getProviderById, updateProvider } from './providers.js';

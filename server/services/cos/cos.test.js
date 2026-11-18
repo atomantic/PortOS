@@ -53,7 +53,7 @@ import {
   readEndpointCapacity,
 } from './cosLocalEndpointSlots.js';
 import { PENDING_MERGE_SWEEP_INTERVAL_MS, MAX_PENDING_MERGE_TICKS } from '../prWatcher.js';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../lib/persistentMind.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../lib/persistent/persistentMind.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');

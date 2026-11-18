@@ -8,7 +8,7 @@ vi.mock('./providers.js', () => ({
 vi.mock('./promptRunner.js', () => ({ runPromptThroughProvider: (...args) => mock.run(...args) }));
 vi.mock('./runner.js', () => ({ stopRun: (...args) => mock.stop(...args) }));
 import { delegateSandbox, describeSandboxDelegation } from './sandboxDelegation.js';
-import { mergePersistentMindCapabilities, normalizePersistentMindCapabilities, persistentMindCapabilitiesSchema } from '../lib/persistentMindCapabilities.js';
+import { mergePersistentMindCapabilities, normalizePersistentMindCapabilities, persistentMindCapabilitiesSchema } from '../lib/persistent/persistentMindCapabilities.js';
 
 const worker = { providerId: 'free-api', model: 'openrouter/free' };
 const evaluator = { providerId: 'trusted-api', model: 'example-evaluator' };

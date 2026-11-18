@@ -20,7 +20,7 @@
  * provider did NOT render (and so did not charge): the caller decides which
  * of its errors qualify through `isTransient`.
  */
-import { isHardProviderUsageLimitError } from './persistentMindUsageLimit.js';
+import { isHardProviderUsageLimitError } from './persistent/persistentMindUsageLimit.js';
 
 /** Waits before each resend: about 15 minutes in all before the lane gives up. */
 export const TRANSIENT_RETRY_DELAYS_MS = Object.freeze([60_000, 2 * 60_000, 4 * 60_000, 8 * 60_000]);

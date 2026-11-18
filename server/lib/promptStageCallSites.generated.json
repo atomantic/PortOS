@@ -28,7 +28,7 @@
     "server/services/creativeDirectorPrompts.js"
   ],
   "cos-task-enhance": [
-    "server/services/persistentMindTaskCapability.js",
+    "server/services/persistent/persistentMindTaskCapability.js",
     "server/services/taskEnhancer.js"
   ],
   "fableloom-branch-node": [

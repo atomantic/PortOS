@@ -1,0 +1,871 @@
+/**
+ * Pure persistent-mind trajectory helpers: vocabulary, sequence cursor parsing, replay projection,
+ * rollup validation and bounded allowlisted per-provider-call execution receipts.
+ *
+ * Pure persistent-mind trajectory vocabulary, sequence cursor parsing, replay projection,
+ * provenance-tagged rollup validation, bounded strictly-allowlisted per-provider-call execution
+ * receipts (route, run id, elapsed time, outcome, usage that stays `unknown` rather than zero) with
+ * their safe public projection, and hard-budget context assembly with explicit
+ * empty/missing/failed/stale summary states.
+ */
+
+import { selectPersistentMindContextEvents, renderPersistentMindContextEvent } from './persistentMindContextEvents.js';
+import { fenceBlock, UNTRUSTED_REFERENCE_NOTICE } from '../promptFencing.js';
+/**
+ * Pure persistent-mind trajectory helpers.
+ *
+ * The machine-local run-event ledger owns persistence and ordering. This module
+ * owns the mind-specific vocabulary, cursor shape, replay projection, rollup
+ * record validation, per-provider-call execution receipts, and bounded context
+ * rendering so restart replay and live reads use the same deterministic rules.
+ */
+
+import { z } from 'zod';
+import { comparePersistentMindMemories, persistentMindMemoryProtection } from './persistentMindMemory.js';
+import { PERSISTENT_MIND_PROMPT_LIMITS } from './persistentMindPrompt.js';
+
+export const PERSISTENT_MIND_ID = 'cos-persistent-mind';
+// v2 seals from the decision journal rather than from the raw range, so a v1
+// rollup reads as stale and the next wake re-seals it from typed events.
+export const PERSISTENT_MIND_ROLLUP_PROMPT_VERSION = 2;
+
+export const PERSISTENT_MIND_EVENT_KINDS = Object.freeze([
+  'mind.message.accepted',
+  'mind.annotation.accepted',
+  'mind.wake',
+  'mind.model.request',
+  // One bounded receipt per PROVIDER CALL — the context summary, the turn, and
+  // each tool round are separate attempts with their own run id, elapsed time,
+  // outcome and usage provenance. `mind.model.result` still marks the turn's
+  // overall answer. Older builds fold this kind as a no-op, so adding it is not
+  // an envelope change.
+  'mind.model.call',
+  'mind.maintainer.reservation',
+  'mind.model.result',
+  'mind.thought',
+  'mind.reply',
+  'mind.memory.candidate',
+  'mind.memory.created',
+  'mind.memory.failed',
+  'mind.capability.request',
+  'mind.capability.result',
+  'mind.summary',
+  'mind.paused',
+  'mind.failed',
+  'mind.turn.completed',
+  'mind.memory.promoted',
+  'mind.maintenance.completed',
+  // Outbound FaceTime Audio calls. Every decision is written down, including
+  // the ones that placed no call, so "why didn't it call me?" is answerable
+  // from the trajectory alone. The dialed handle is never recorded.
+  'mind.call.requested',
+  'mind.call.placed',
+  'mind.call.suppressed',
+  // Provenance for the continuation note: who wrote which wording. The note's
+  // text lives in the versioned memory record, never in the ledger or prompt
+  // events, so it cannot be compacted into a rollup.
+  'mind.continuation.updated',
+  'mind.continuation.cleared',
+  'mind.continuation.refused',
+]);
+
+const MIND_KIND_SET = new Set(PERSISTENT_MIND_EVENT_KINDS);
+
+export const PERSISTENT_MIND_TRAJECTORY_LIMITS = Object.freeze({
+  defaultPageSize: 100,
+  maxPageSize: 500,
+  recentContextEvents: 60,
+  maxContextChars: 32_000,
+  maxIdentityChars: PERSISTENT_MIND_PROMPT_LIMITS.identityChars,
+  maxInstructionsChars: PERSISTENT_MIND_PROMPT_LIMITS.instructionsChars,
+  maxMemoriesChars: 8_000,
+  // Share of the memory budget ordinary importance-ranked records cannot crowd
+  // out of a human message's recalled memories.
+  recalledMemoryBudgetShare: 0.25,
+  // The journal is what the mind still owes the user. It is short by design
+  // (one line per live commitment), so a small slice buys the answer to "what
+  // is still open?" that no amount of rollup prose could give.
+  maxJournalChars: 4_000,
+  maxSummaryChars: 6_000,
+  maxStoredRollups: 100,
+  maxProjectedTurns: 100,
+  maxProjectedInputs: 200,
+  // A turn is capped at one summary call, one journal extraction and
+  // MAX_TOOL_PROVIDER_ROUNDS provider rounds, so this holds every receipt a
+  // healthy turn can produce with room for the denied/failed attempts a
+  // contested one adds.
+  maxProjectedCallsPerTurn: 13,
+});
+
+export const persistentMindRollupSchema = z.object({
+  schemaVersion: z.literal(1),
+  id: z.string().min(1).max(160),
+  mindId: z.string().min(1).max(128),
+  status: z.enum(['ready', 'failed']),
+  summary: z.string().max(PERSISTENT_MIND_TRAJECTORY_LIMITS.maxSummaryChars).nullable(),
+  error: z.string().max(500).nullable(),
+  source: z.object({
+    fromSequence: z.number().int().nonnegative(),
+    toSequence: z.number().int().nonnegative(),
+    fromEventId: z.string().min(1).max(128),
+    toEventId: z.string().min(1).max(128),
+  }).strict(),
+  provenance: z.object({
+    providerId: z.string().max(128).nullable(),
+    model: z.string().max(500).nullable(),
+    promptVersion: z.number().int().positive(),
+    createdAt: z.string().datetime(),
+  }).strict(),
+}).strict().superRefine((value, ctx) => {
+  if (value.source.toSequence < value.source.fromSequence) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['source', 'toSequence'], message: 'must not precede fromSequence' });
+  }
+  if (value.status === 'ready' && value.summary === null) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['summary'], message: 'ready rollups require a summary string' });
+  }
+  if (value.status === 'failed' && !value.error) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['error'], message: 'failed rollups require an error' });
+  }
+});
+
+export function isPersistentMindEventKind(kind) {
+  return MIND_KIND_SET.has(kind);
+}
+
+const orderedMindEvents = (events, mindId = PERSISTENT_MIND_ID) => {
+  const seen = new Set();
+  return (Array.isArray(events) ? events : [])
+    .filter((event) => event?.mindId === mindId && isPersistentMindEventKind(event.kind))
+    .filter((event) => {
+      if (!event.eventId || seen.has(event.eventId)) return false;
+      seen.add(event.eventId);
+      return true;
+    })
+    .sort((a, b) => {
+      const sequenceDelta = (Number.isSafeInteger(a.sequence) ? a.sequence : Number.MAX_SAFE_INTEGER)
+        - (Number.isSafeInteger(b.sequence) ? b.sequence : Number.MAX_SAFE_INTEGER);
+      if (sequenceDelta !== 0) return sequenceDelta;
+      const timeDelta = String(a.at).localeCompare(String(b.at));
+      return timeDelta || String(a.eventId).localeCompare(String(b.eventId));
+    });
+};
+
+export function persistentMindEventCursor(event) {
+  if (!Number.isSafeInteger(event?.sequence) || event.sequence < 0 || typeof event?.eventId !== 'string') return null;
+  return `${event.sequence}:${event.eventId}`;
+}
+
+export function parsePersistentMindCursor(cursor) {
+  if (typeof cursor !== 'string') return null;
+  // Event ids commonly contain namespace colons (`mind-message:<id>`). The
+  // first colon separates the numeric sequence; the remainder is opaque.
+  const match = /^(\d+):(.{1,128})$/.exec(cursor);
+  if (!match) return null;
+  const sequence = Number(match[1]);
+  return Number.isSafeInteger(sequence) ? { sequence, eventId: match[2] } : null;
+}
+
+const displayText = (event) => (
+  typeof event?.data?.displayText === 'string' ? event.data.displayText
+    : typeof event?.data?.summaryText === 'string' ? event.data.summaryText
+      : null
+);
+
+const emptyMindProjection = (mindId) => ({
+  mindId,
+  status: 'idle',
+  activeTurnId: null,
+  lastCompletedTurnId: null,
+  lastEventAt: null,
+  lastSequence: null,
+  eventCount: 0,
+  messages: [],
+  annotations: [],
+  turns: [],
+});
+
+/** Replay retained mind events into a stable, bounded visible projection. */
+export function projectPersistentMind(events, mindId = PERSISTENT_MIND_ID) {
+  const ordered = orderedMindEvents(events, mindId);
+  const projection = emptyMindProjection(mindId);
+  const turns = new Map();
+
+  for (const event of ordered) {
+    projection.eventCount += 1;
+    projection.lastEventAt = event.at;
+    projection.lastSequence = event.sequence;
+    if (event.turnId && !turns.has(event.turnId)) {
+      turns.set(event.turnId, {
+        id: event.turnId,
+        status: 'queued',
+        startedAt: null,
+        completedAt: null,
+        providerId: null,
+        model: null,
+        effort: null,
+        thinkingPresetId: null,
+        // Empty for a turn from before per-call receipts existed, and for one
+        // that never reached a provider. Absent telemetry stays absent.
+        calls: [],
+        eventCount: 0,
+      });
+    }
+    const turn = event.turnId ? turns.get(event.turnId) : null;
+    if (turn) turn.eventCount += 1;
+
+    switch (event.kind) {
+      case 'mind.message.accepted':
+        projection.messages.push({
+          eventId: event.eventId,
+          messageId: event.data?.messageId || null,
+          turnId: event.turnId,
+          at: event.at,
+          text: displayText(event),
+        });
+        break;
+      case 'mind.annotation.accepted':
+        projection.annotations.push({
+          eventId: event.eventId,
+          annotationId: event.data?.annotationId || null,
+          turnId: event.turnId,
+          targetEventId: event.data?.targetEventId || null,
+          at: event.at,
+          text: displayText(event),
+        });
+        break;
+      case 'mind.wake':
+        projection.status = event.data?.status || 'thinking';
+        projection.activeTurnId = event.turnId;
+        if (turn) {
+          turn.status = projection.status;
+          turn.startedAt = turn.startedAt || event.at;
+        }
+        break;
+      case 'mind.model.request':
+        projection.status = 'thinking';
+        projection.activeTurnId = event.turnId;
+        if (turn) {
+          turn.status = 'thinking';
+          turn.startedAt = turn.startedAt || event.at;
+          turn.providerId = event.data?.providerId || turn.providerId;
+          turn.model = event.data?.model || turn.model;
+          turn.effort = event.data?.effort || turn.effort;
+          turn.thinkingPresetId = event.data?.thinkingPresetId || turn.thinkingPresetId;
+        }
+        break;
+      case 'mind.model.call':
+        if (turn) {
+          // The receipt names the route the call ACTUALLY ran on, so it wins
+          // over the request event's announced route.
+          turn.providerId = event.data?.providerId || turn.providerId;
+          turn.model = event.data?.model || turn.model;
+          turn.effort = event.data?.effort || turn.effort;
+          turn.thinkingPresetId = event.data?.thinkingPresetId || turn.thinkingPresetId;
+          turn.calls = [...turn.calls, publicPersistentMindCallReceipt(event)]
+            .slice(-PERSISTENT_MIND_TRAJECTORY_LIMITS.maxProjectedCallsPerTurn);
+        }
+        break;
+      case 'mind.paused':
+        projection.status = event.data?.status || 'paused';
+        projection.activeTurnId = null;
+        if (turn) turn.status = projection.status;
+        break;
+      case 'mind.failed':
+        projection.status = event.data?.status || 'failed';
+        projection.activeTurnId = null;
+        if (turn) {
+          turn.status = projection.status;
+          turn.completedAt = event.at;
+        }
+        break;
+      case 'mind.turn.completed':
+        projection.status = event.data?.status || 'idle';
+        projection.activeTurnId = null;
+        projection.lastCompletedTurnId = event.turnId;
+        if (turn) {
+          turn.status = 'completed';
+          turn.completedAt = event.at;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  projection.messages = projection.messages.slice(-PERSISTENT_MIND_TRAJECTORY_LIMITS.maxProjectedInputs);
+  projection.annotations = projection.annotations.slice(-PERSISTENT_MIND_TRAJECTORY_LIMITS.maxProjectedInputs);
+  projection.turns = [...turns.values()].slice(-PERSISTENT_MIND_TRAJECTORY_LIMITS.maxProjectedTurns);
+  return projection;
+}
+
+export function isStoredPersistentMindRollup(value) {
+  return persistentMindRollupSchema.safeParse(value).success;
+}
+
+const bounded = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '');
+
+export function buildPersistentMindRollup({
+  id,
+  mindId = PERSISTENT_MIND_ID,
+  status,
+  summary = null,
+  error = null,
+  source,
+  providerId = null,
+  model = null,
+  promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
+  createdAt = new Date().toISOString(),
+}) {
+  return persistentMindRollupSchema.parse({
+    schemaVersion: 1,
+    id,
+    mindId,
+    status,
+    summary: summary === null ? null : bounded(summary, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxSummaryChars),
+    error: error === null ? null : bounded(error, 500),
+    source,
+    provenance: {
+      providerId: providerId ? bounded(providerId, 128) : null,
+      model: model ? bounded(model, 500) : null,
+      promptVersion,
+      createdAt,
+    },
+  });
+}
+
+// Longer than any backtick run in the body, so exact text cannot close its fence.
+const fenceFor = (body) => '`'.repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((match) => match[0].length + 1)));
+
+const continuationNoteAttribution = ({ provenance, updatedAt }) => (provenance
+  ? `Written by this mind at ${provenance.at}, turn ${provenance.turnId || 'unknown'}, on ${provenance.providerId || 'unknown'}/${provenance.model || 'default'}.`
+  : `Author unknown: no retained runtime event attests this wording. Last changed ${updatedAt || 'at an unknown time'}.`);
+
+// Exact stored wording inside its own fence. No clamp or fence rewrite: it is
+// admitted whole or reported as omitted.
+const renderContinuationNote = (note) => {
+  const fence = fenceFor(note.content);
+  return `# Continuation note\nYour note to your next wake, kept outside compaction. ${continuationNoteAttribution(note)}\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}text\n${note.content}\n${fence}`;
+};
+
+const renderOmittedContinuationNote = (note) => `# Continuation note\n(omitted due to context budget: ${note.content.length} chars. The stored note is unchanged. Omit continuationNote to keep it.)`;
+
+/**
+ * Render stable identity + older rollups + recent verbatim events into a hard
+ * character budget. Unavailable/failed/stale summary state is explicit;
+ * a real empty history is `summaryState: "empty"`, never conflated with one.
+ */
+export function assemblePersistentMindContext({
+  mindId = PERSISTENT_MIND_ID,
+  identity = '',
+  instructions = '',
+  memories = [],
+  continuationNote = null,
+  memoryRecall = null,
+  reflection = null,
+  events = [],
+  rollups = [],
+  journalDigest = null,
+  maxChars = PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars,
+  recentEventLimit = PERSISTENT_MIND_TRAJECTORY_LIMITS.recentContextEvents,
+  promptVersion = PERSISTENT_MIND_ROLLUP_PROMPT_VERSION,
+  coverageGap = null,
+} = {}) {
+  const cap = Math.max(1_000, Math.min(Number(maxChars) || PERSISTENT_MIND_TRAJECTORY_LIMITS.maxContextChars, 100_000));
+  const ordered = orderedMindEvents(events, mindId);
+  const meaningful = selectPersistentMindContextEvents(ordered, mindId);
+  const recent = meaningful.slice(-Math.max(1, recentEventLimit));
+  const older = recent.length ? ordered.filter(event => event.sequence < recent[0].sequence) : [];
+  const validRollups = (Array.isArray(rollups) ? rollups : [])
+    .filter(isStoredPersistentMindRollup)
+    .filter((rollup) => rollup.mindId === mindId)
+    .sort((a, b) => a.source.fromSequence - b.source.fromSequence);
+
+  // A rollup can outlive every raw event it summarizes. Select every sealed
+  // range, including overlap with the expanded meaningful-event window. The
+  // cumulative summary may be the only surviving record of earlier decisions;
+  // bounded overlap is preferable to silently dropping that durable context.
+  const selectedRollups = validRollups;
+  const currentReadyRollups = selectedRollups
+    .filter((rollup) => rollup.status === 'ready' && rollup.provenance.promptVersion === promptVersion);
+  // Incremental summaries are cumulative. Keep only ranges that are not fully
+  // superseded by another ready range so context never repeats every prior
+  // version of the same life summary.
+  const effectiveReadyRollups = currentReadyRollups.filter((candidate) => !currentReadyRollups.some((other) => (
+    other.id !== candidate.id
+      && other.source.fromSequence <= candidate.source.fromSequence
+      && other.source.toSequence >= candidate.source.toSequence
+  )));
+  const hasOmittedHistory = older.length > 0 || selectedRollups.length > 0;
+  let summaryState = !hasOmittedHistory
+    ? (ordered.length === 0 ? 'empty' : 'not-needed')
+    : 'unavailable';
+  if (coverageGap) {
+    summaryState = 'gap';
+  } else if (hasOmittedHistory) {
+    const stale = selectedRollups.some((rollup) => rollup.provenance.promptVersion !== promptVersion);
+    const failed = selectedRollups.some((rollup) => rollup.status === 'failed');
+    const everyOlderEventCovered = older.every((event) => effectiveReadyRollups.some((rollup) => (
+      event.sequence >= rollup.source.fromSequence && event.sequence <= rollup.source.toSequence
+    )));
+    const everySelectedRangeCovered = selectedRollups.every((selected) => effectiveReadyRollups.some((rollup) => (
+      selected.source.fromSequence >= rollup.source.fromSequence
+        && selected.source.toSequence <= rollup.source.toSequence
+    )));
+    if (effectiveReadyRollups.length > 0 && everyOlderEventCovered && everySelectedRangeCovered) summaryState = 'ready';
+    else if (failed) summaryState = 'failed';
+    else if (stale) summaryState = 'stale';
+  }
+
+  const identityText = bounded(
+    typeof identity === 'string' ? identity : JSON.stringify(identity),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxIdentityChars
+  );
+  const instructionsText = bounded(
+    typeof instructions === 'string' ? instructions : JSON.stringify(instructions),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxInstructionsChars
+  );
+  const seenMemoryContent = new Set();
+  let coreIdentityChars = 0;
+  const renderMemory = (memory, note = '') => {
+    const content = typeof memory.content === 'string' && memory.content.trim()
+      ? memory.content.trim()
+      : typeof memory.summary === 'string' ? memory.summary.trim() : '';
+    const key = content.replace(/\s+/g, ' ');
+    if (!content || seenMemoryContent.has(key)) return null;
+    const label = [memory.type, memory.category].filter(Boolean).join('/') || 'memory';
+    const protection = persistentMindMemoryProtection(memory);
+    return { key, line: `- [${label}; id=${memory.id || 'unknown'}${protection === 'standard' ? '' : `; protected=${protection}`}${note}] ${content}` };
+  };
+  const renderBaseline = (records) => records.flatMap((memory) => {
+    const rendered = renderMemory(memory);
+    if (!rendered) return [];
+    seenMemoryContent.add(rendered.key);
+    if (persistentMindMemoryProtection(memory) === 'core-identity') coreIdentityChars += rendered.line.length + 1;
+    return [rendered.line];
+  });
+  const isProtected = (memory) => persistentMindMemoryProtection(memory) !== 'standard';
+  const baseline = (Array.isArray(memories) ? memories : [])
+    .filter((memory) => memory && typeof memory === 'object')
+    .sort(comparePersistentMindMemories);
+  const protectedLines = renderBaseline(baseline.filter(isProtected));
+  // Superseded wording never reaches the prompt: the digest carries only what
+  // is still true plus the settled history that explains it. The caller renders
+  // it — this module is reached by ~300 suites for its id/kind constants alone,
+  // so importing the journal renderer here would pull that leaf into every one
+  // of them (server suite import budget, #6156).
+  const journalSummary = journalDigest && typeof journalDigest === 'object'
+    ? journalDigest
+    : { text: '', activeCount: 0, resolvedCount: 0, supersededCount: 0 };
+  const journalText = bounded(journalSummary.text, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxJournalChars);
+  // Identity, instructions, protected identity memories, and the newest human
+  // input outrank the note. Whatever is left admits it whole or not at all.
+  const latestInput = recent.findLast((event) => ['mind.message.accepted', 'mind.annotation.accepted'].includes(event.kind));
+  const requiredChars = identityText.length + instructionsText.length + mindId.length + 500
+    + Math.min(coreIdentityChars, PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars)
+    + (latestInput ? renderPersistentMindContextEvent(latestInput).length : 0);
+  const fullNoteSection = continuationNote ? renderContinuationNote(continuationNote) : '';
+  const noteAdmitted = Boolean(continuationNote) && fullNoteSection.length <= cap - requiredChars;
+  const noteSection = !continuationNote ? ''
+    : noteAdmitted ? fullNoteSection : renderOmittedContinuationNote(continuationNote);
+  // Leave room for the full delimiter even with a small context budget.
+  // Truncating the assembled prefix must never cut through a memory fence.
+  const memoryBudget = Math.max(0, Math.min(
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars,
+    cap - identityText.length - instructionsText.length - mindId.length - 500 - noteSection.length,
+  ));
+
+  // Order is the priority: protected identity, recalled records, then ordinary
+  // records. The final bound can therefore only cut ordinary context, so a
+  // recalled record is either whole in the prompt or reported as omitted.
+  const usedByProtected = protectedLines.length ? protectedLines.join('\n').length + 1 : 0;
+  let recallRoom = Math.min(
+    Math.floor(memoryBudget * PERSISTENT_MIND_TRAJECTORY_LIMITS.recalledMemoryBudgetShare),
+    memoryBudget - usedByProtected,
+  );
+  const recalledLines = [];
+  const includedIds = [];
+  const omittedIds = [];
+  for (const memory of Array.isArray(memoryRecall?.memories) ? memoryRecall.memories : []) {
+    if (isProtected(memory)) continue;
+    const rendered = renderMemory(memory, '; recalled=current-message');
+    if (!rendered) continue;
+    const needed = rendered.line.length + (recalledLines.length ? 1 : 0);
+    if (needed > recallRoom) {
+      omittedIds.push(memory.id);
+      continue;
+    }
+    recallRoom -= needed;
+    seenMemoryContent.add(rendered.key);
+    recalledLines.push(rendered.line);
+    includedIds.push(memory.id);
+  }
+  const ordinaryLines = renderBaseline(baseline.filter((memory) => !isProtected(memory)));
+  const memoryLines = [...protectedLines, ...recalledLines, ...ordinaryLines];
+  const memoryText = bounded(
+    memoryLines.join('\n'),
+    PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars
+  );
+  const recallState = memoryRecall?.state === 'matched'
+    ? (includedIds.length ? 'included' : omittedIds.length ? 'omitted-budget' : 'already-in-baseline')
+    : memoryRecall?.state || 'none';
+  const memoryBlock = memoryBudget > 0
+    ? fenceBlock('Curated memory reference data', memoryText || '(none)', memoryBudget)
+    : '(omitted due to context budget)';
+  const prefix = [
+    `# Persistent mind identity\nmindId=${mindId}${identityText ? `\n${identityText}` : ''}`,
+    `# Operating instructions\n${instructionsText || '(none)'}`,
+    // Ahead of the sections the final slice can cut, so an admitted note stays whole.
+    ...(noteSection ? [noteSection] : []),
+    `# Curated memories\n${UNTRUSTED_REFERENCE_NOTICE}\n${memoryBlock}`,
+    `# Decision journal\n${journalText || '(none)'}`,
+  ].join('\n\n');
+  const summaryLines = effectiveReadyRollups
+    .map((rollup) => `[events ${rollup.source.fromSequence}-${rollup.source.toSequence}; ${rollup.provenance.providerId || 'unknown'}/${rollup.provenance.model || 'default'}; prompt v${rollup.provenance.promptVersion}]\n${rollup.summary}`);
+  const omittedStarts = [selectedRollups[0]?.source.fromSequence, older[0]?.sequence].filter(Number.isSafeInteger);
+  const omittedEnds = [older.at(-1)?.sequence, selectedRollups.at(-1)?.source.toSequence].filter(Number.isSafeInteger);
+  const omittedStart = omittedStarts.length ? Math.min(...omittedStarts) : null;
+  const omittedEnd = omittedEnds.length ? Math.max(...omittedEnds) : null;
+  const statusLine = hasOmittedHistory
+    ? `summary-cache=${summaryState}; omitted-events=${omittedStart}-${omittedEnd}`
+    : `summary-cache=${summaryState}`;
+
+  // Keep recent raw events available even if many large rollups exist. Older
+  // summaries receive at most 45% of the post-header budget; newest summaries
+  // win inside that bound, while recent events consume the remainder.
+  const sectionOverhead = `\n\n# Older context\n${statusLine}\n\n# Recent trajectory\n`;
+  const contentBudget = Math.max(0, cap - prefix.length - sectionOverhead.length);
+  const summaryBudget = summaryLines.length ? Math.floor(contentBudget * 0.45) : 0;
+  const keptSummaryLines = [];
+  let summaryChars = 0;
+  for (const line of [...summaryLines].reverse()) {
+    const separator = keptSummaryLines.length ? 1 : 0;
+    if (summaryChars + separator + line.length > summaryBudget) continue;
+    keptSummaryLines.unshift(line);
+    summaryChars += separator + line.length;
+  }
+  const recentBudget = contentBudget - summaryChars;
+  const recentLines = [];
+  let recentChars = 0;
+  for (const event of [...recent].reverse()) {
+    const line = renderPersistentMindContextEvent(event);
+    const separator = recentLines.length ? 1 : 0;
+    if (recentChars + separator + line.length > recentBudget) continue;
+    recentLines.unshift(line);
+    recentChars += separator + line.length;
+  }
+  const sections = [
+    prefix,
+    `# Older context\n${statusLine}${keptSummaryLines.length ? `\n${keptSummaryLines.join('\n')}` : ''}`,
+    `# Recent trajectory\n${recentLines.join('\n')}`,
+  ];
+  let text = sections.join('\n\n').slice(0, cap);
+  let reflectionState = reflection?.state || 'disabled';
+  let reflectionBlock = '';
+  if (reflectionState === 'pending' && reflection.source) {
+    const source = reflection.source;
+    const body = JSON.stringify({ memoryId: source.id, expectedVersion: source.version ?? 1, content: source.content });
+    const fence = fenceFor(body);
+    const invitation = `\n\n# Optional memory reflection\nYou may revisit this fading experience with mind.review-memory (memoryId and expectedVersion below; verdict keep, learn, archive, or defer), or ignore it. A lesson does not authorize archival. No follow-up wake or maintenance quota is requested.\n${UNTRUSTED_REFERENCE_NOTICE}\n${fence}json\n${body}\n${fence}`;
+    if (body.length <= PERSISTENT_MIND_TRAJECTORY_LIMITS.maxMemoriesChars && text.length + invitation.length <= cap) {
+      reflectionBlock = invitation;
+      text += invitation;
+    } else {
+      reflectionState = 'omitted-budget';
+    }
+  }
+  return {
+    mindId,
+    text,
+    chars: text.length,
+    approximateTokens: Math.ceil(text.length / 4),
+    summaryState,
+    coverageGap,
+    omittedRange: hasOmittedHistory ? {
+      fromSequence: omittedStart,
+      toSequence: omittedEnd,
+      fromEventId: selectedRollups[0]?.source.fromEventId ?? older[0]?.eventId ?? null,
+      toEventId: older.at(-1)?.eventId ?? selectedRollups.at(-1)?.source.toEventId ?? null,
+    } : null,
+    recentEventCount: recentLines.length,
+    memoryCount: memoryLines.length,
+    continuationNote: continuationNote
+      ? { ...continuationNote, state: noteAdmitted ? 'included' : 'omitted-budget' }
+      : { state: 'none' },
+    memoryRecall: { state: recallState, includedIds, omittedIds },
+    reflection: { ...reflection, state: reflectionState, block: reflectionBlock },
+    journalActiveCount: journalSummary.activeCount,
+    identityChars: identityText.length,
+    instructionsChars: instructionsText.length,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Per-call execution receipts
+// ---------------------------------------------------------------------------
+
+/**
+ * A turn is not one provider call: the optional context summary is one, the
+ * turn itself is another, and every tool round after it is another again. These
+ * are the vocabulary and SHAPE of what each of those attempts is allowed to
+ * write into the machine-local trajectory — the same job `buildPersistentMindRollup`
+ * does for a sealed summary range.
+ *
+ * A receipt is built from named fields only and parsed through a `.strict()`
+ * schema, so a caller cannot widen it by handing over a provider record, a
+ * prompt, a response, or a hidden reasoning trace — an unknown key throws at the
+ * call site rather than reaching the ledger. That matters because the inputs are
+ * the live provider object and a raw error message.
+ *
+ * Missing telemetry is `unknown`, never zero. A provider that reports nothing
+ * and a provider that genuinely used zero tokens are different facts, and
+ * collapsing them would make the ledger claim a free call.
+ */
+export const PERSISTENT_MIND_CALL_PURPOSES = Object.freeze(['summary', 'journal', 'turn', 'tool-round']);
+
+export const PERSISTENT_MIND_CALL_OUTCOMES = Object.freeze(['completed', 'failed', 'denied', 'interrupted']);
+
+export const PERSISTENT_MIND_CALL_USAGE_STATES = Object.freeze(['reported', 'unknown']);
+
+export const PERSISTENT_MIND_CALL_RECEIPT_LIMITS = Object.freeze({
+  idChars: 128,
+  modelChars: 200,
+  effortChars: 32,
+  labelChars: 120,
+  // The ledger scrubs and bounds ordinary strings at RUN_EVENT_LIMITS.maxStringChars
+  // (200). Building a longer reason would only be truncated on write, so the two
+  // bounds are kept equal and the stored receipt matches the built one.
+  reasonChars: 200,
+  displayChars: 300,
+  maxRound: 64,
+});
+
+// Distinct from `bounded` above, which yields '' for a missing rollup field.
+// A receipt field that was never present must serialize as null: '' would read
+// as an empty provider id or model rather than as absent.
+const nullableBounded = (value, max) => {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text ? text.slice(0, max) : null;
+};
+
+// A token count or price is only real when the provider reported a finite,
+// non-negative number. Anything else — absent, NaN, a string, a negative — is
+// unknown, and must not be coerced into 0.
+const reportedNumber = (value) => (
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+);
+
+const firstReported = (...values) => {
+  for (const value of values) {
+    const reported = reportedNumber(value);
+    if (reported !== null) return reported;
+  }
+  return null;
+};
+
+const usageSchema = z.object({
+  state: z.enum(PERSISTENT_MIND_CALL_USAGE_STATES),
+  source: z.enum(['provider-reported', 'unavailable']),
+  inputTokens: z.number().nonnegative().nullable(),
+  outputTokens: z.number().nonnegative().nullable(),
+  totalTokens: z.number().nonnegative().nullable(),
+  costUsd: z.number().nonnegative().nullable(),
+}).strict();
+
+export const persistentMindCallReceiptSchema = z.object({
+  schemaVersion: z.literal(1),
+  purpose: z.enum(PERSISTENT_MIND_CALL_PURPOSES),
+  round: z.number().int().nonnegative().max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.maxRound).nullable(),
+  turnId: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+  runId: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars).nullable(),
+  providerId: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars).nullable(),
+  providerType: z.enum(['api', 'cli', 'tui']).nullable(),
+  model: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.modelChars).nullable(),
+  effort: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.effortChars).nullable(),
+  thinkingPresetId: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars).nullable(),
+  thinkingPresetLabel: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.labelChars).nullable(),
+  temporaryRoute: z.boolean(),
+  elapsedMs: z.number().int().nonnegative().nullable(),
+  outcome: z.enum(PERSISTENT_MIND_CALL_OUTCOMES),
+  reason: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.reasonChars).nullable(),
+  usage: usageSchema,
+  displayText: z.string().min(1).max(PERSISTENT_MIND_CALL_RECEIPT_LIMITS.displayChars),
+}).strict();
+
+/**
+ * Normalize whatever a provider result carried into an explicit usage record.
+ *
+ * @param {*} raw - a provider `usage` block, or nothing at all
+ * @returns {{state: string, source: string, inputTokens: number|null,
+ *   outputTokens: number|null, totalTokens: number|null, costUsd: number|null}}
+ */
+export function normalizePersistentMindCallUsage(raw) {
+  const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const inputTokens = firstReported(source.inputTokens, source.input_tokens, source.promptTokens, source.prompt_tokens);
+  const outputTokens = firstReported(source.outputTokens, source.output_tokens, source.completionTokens, source.completion_tokens);
+  const reportedTotal = firstReported(source.totalTokens, source.total_tokens);
+  const totalTokens = reportedTotal ?? (
+    inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null
+  );
+  // Only explicitly-denominated fields: a bare `cost` could be cents, and a
+  // misread price is worse than an unknown one.
+  const costUsd = firstReported(source.costUsd, source.cost_usd);
+  const reported = [inputTokens, outputTokens, reportedTotal, costUsd].some((value) => value !== null);
+  return {
+    state: reported ? 'reported' : 'unknown',
+    source: reported ? 'provider-reported' : 'unavailable',
+    inputTokens,
+    outputTokens,
+    totalTokens: reported ? totalTokens : null,
+    costUsd,
+  };
+}
+
+/**
+ * A refusal thrown by the per-call boundary — the call NEVER reached a
+ * provider. It lives here rather than in the guard because several readers must
+ * tell it apart from a provider failure without importing the guard's own
+ * dependency graph: a refused summary must leave its range UNATTEMPTED, while a
+ * summarizer that really ran and failed seals a failed rollup.
+ */
+export function buildPersistentMindCallDenial({ reason, status, code = 'policy', disposition = 'hold', retryAt = null, requiresResubmission = false }) {
+  return Object.assign(new Error(reason), {
+    persistentMindCallDenied: true,
+    deniedStatus: status,
+    denialCode: code,
+    retryDisposition: disposition,
+    retryAt,
+    requiresResubmission: requiresResubmission === true,
+  });
+}
+
+/** Was this thrown by the boundary refusing a call, rather than by the call? */
+export function isPersistentMindCallDenial(error) {
+  return error?.persistentMindCallDenied === true;
+}
+
+const receiptDisplayText = ({ purpose, round, providerId, model, outcome, elapsedMs, usage }) => {
+  const route = [providerId || 'unknown-provider', model || 'default-model'].join('/');
+  const roundLabel = round === null ? '' : ` round ${round}`;
+  const elapsed = elapsedMs === null ? 'elapsed unknown' : `${elapsedMs}ms`;
+  const tokens = usage.state === 'reported' && usage.totalTokens !== null
+    ? `${usage.totalTokens} tokens`
+    : 'usage unknown';
+  return `${purpose}${roundLabel} on ${route} — ${outcome} (${elapsed}, ${tokens})`
+    .slice(0, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.displayChars);
+};
+
+/**
+ * Build one validated receipt for a provider call attempt.
+ *
+ * Every field is read by name. `route` is a plain descriptor, never the live
+ * provider record — passing a provider object here would only contribute its
+ * `id`/`type`, and any extra key fails the strict parse.
+ *
+ * @param {object} input
+ * @param {string} input.turnId
+ * @param {string} [input.purpose] - one of PERSISTENT_MIND_CALL_PURPOSES
+ * @param {number} [input.round] - provider round within the turn, when it has one
+ * @param {string} [input.runId] - the concrete run id the provider call created
+ * @param {object} [input.route] - { providerId, providerType, model, effort,
+ *   thinkingPresetId, thinkingPresetLabel, temporary }
+ * @param {number} [input.elapsedMs] - wall time of the attempt; null when it never started
+ * @param {string} input.outcome - one of PERSISTENT_MIND_CALL_OUTCOMES
+ * @param {string} [input.reason] - denial/failure reason
+ * @param {*} [input.usage] - raw provider usage block, if any
+ * @returns {object} validated receipt payload
+ */
+export function buildPersistentMindCallReceipt({
+  turnId,
+  purpose,
+  round = null,
+  runId = null,
+  route = {},
+  elapsedMs = null,
+  outcome,
+  reason = null,
+  usage = null,
+} = {}) {
+  const usageRecord = normalizePersistentMindCallUsage(usage);
+  const providerType = route.providerType === 'api' || route.providerType === 'cli' || route.providerType === 'tui'
+    ? route.providerType
+    : null;
+  const core = {
+    schemaVersion: 1,
+    purpose,
+    round: Number.isSafeInteger(round) && round >= 0 ? round : null,
+    turnId: nullableBounded(turnId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    runId: nullableBounded(runId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    providerId: nullableBounded(route.providerId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    providerType,
+    model: nullableBounded(route.model, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.modelChars),
+    effort: nullableBounded(route.effort, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.effortChars),
+    thinkingPresetId: nullableBounded(route.thinkingPresetId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    thinkingPresetLabel: nullableBounded(route.thinkingPresetLabel, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.labelChars),
+    temporaryRoute: route.temporary === true,
+    elapsedMs: Number.isFinite(elapsedMs) && elapsedMs >= 0 ? Math.round(elapsedMs) : null,
+    outcome,
+    reason: nullableBounded(reason, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.reasonChars),
+    usage: usageRecord,
+  };
+  return persistentMindCallReceiptSchema.parse({
+    ...core,
+    displayText: receiptDisplayText(core),
+  });
+}
+
+/**
+ * Project one stored receipt into the safe public shape the Mind history
+ * endpoint serves. Reads named fields only, so a ledger line written by a newer
+ * build cannot smuggle an unknown key through the projection.
+ */
+export function publicPersistentMindCallReceipt(event) {
+  const data = event?.data && typeof event.data === 'object' ? event.data : {};
+  const usage = normalizePersistentMindCallUsage(data.usage);
+  return {
+    eventId: typeof event?.eventId === 'string' ? event.eventId : null,
+    at: typeof event?.at === 'string' ? event.at : null,
+    purpose: PERSISTENT_MIND_CALL_PURPOSES.includes(data.purpose) ? data.purpose : null,
+    round: Number.isSafeInteger(data.round) ? data.round : null,
+    runId: nullableBounded(data.runId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    providerId: nullableBounded(data.providerId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    model: nullableBounded(data.model, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.modelChars),
+    effort: nullableBounded(data.effort, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.effortChars),
+    thinkingPresetId: nullableBounded(data.thinkingPresetId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+    thinkingPresetLabel: nullableBounded(data.thinkingPresetLabel, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.labelChars),
+    temporaryRoute: data.temporaryRoute === true,
+    elapsedMs: Number.isSafeInteger(data.elapsedMs) && data.elapsedMs >= 0 ? data.elapsedMs : null,
+    outcome: PERSISTENT_MIND_CALL_OUTCOMES.includes(data.outcome) ? data.outcome : null,
+    reason: nullableBounded(data.reason, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.reasonChars),
+    usage,
+  };
+}
+
+/**
+ * The per-turn execution summary the Mind history endpoint serves.
+ *
+ * Deliberately narrower than the full replay projection: turn identity, the
+ * route the turn actually ran on, and its receipts. No message bodies, no
+ * annotations, no free-form model text — a caller asking "what did this turn
+ * spend, on what, and how did it end" gets exactly that.
+ *
+ * Turns with no receipts are omitted rather than served as empty rows: a turn
+ * from before per-call receipts existed has unknown telemetry, and an empty
+ * `calls` array would read as "it made no provider calls".
+ */
+export function publicPersistentMindTurnExecutions(projection, limit = 25) {
+  const turns = Array.isArray(projection?.turns) ? projection.turns : [];
+  return turns
+    .filter((turn) => Array.isArray(turn?.calls) && turn.calls.length > 0)
+    .slice(-Math.max(1, limit))
+    .map((turn) => ({
+      turnId: nullableBounded(turn.id, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+      status: nullableBounded(turn.status, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.effortChars),
+      startedAt: typeof turn.startedAt === 'string' ? turn.startedAt : null,
+      completedAt: typeof turn.completedAt === 'string' ? turn.completedAt : null,
+      providerId: nullableBounded(turn.providerId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+      model: nullableBounded(turn.model, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.modelChars),
+      effort: nullableBounded(turn.effort, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.effortChars),
+      thinkingPresetId: nullableBounded(turn.thinkingPresetId, PERSISTENT_MIND_CALL_RECEIPT_LIMITS.idChars),
+      calls: turn.calls,
+    }));
+}

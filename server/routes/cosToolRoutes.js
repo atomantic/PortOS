@@ -32,7 +32,7 @@ router.get('/tools', asyncHandler(async (req, res) => {
     : state.config?.persistentMindCapabilities;
   const recipes = await readCosToolRecipeCatalog({ scope: query.scope });
   const reportAccess = query.scope === 'mind'
-    ? await import('../services/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root: state })) : undefined;
+    ? await import('../services/persistent/persistentMindProcessAudit.js').then(({ readProcessAuditAccess }) => readProcessAuditAccess({ root: state })) : undefined;
   const catalog = getCosToolCatalog({
     scope: query.scope,
     intent: query.intent,

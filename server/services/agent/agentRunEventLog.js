@@ -64,7 +64,7 @@ import {
   parsePersistentMindCursor,
   persistentMindEventCursor,
   projectPersistentMind,
-} from '../../lib/persistentMindTrajectory.js';
+} from '../../lib/persistent/persistentMindTrajectory.js';
 
 const ACTIVE_PATH = join(PATHS.cos, 'run-events.jsonl');
 const ARCHIVE_PATH = join(PATHS.cos, 'run-events.1.jsonl');

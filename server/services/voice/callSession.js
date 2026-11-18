@@ -83,18 +83,18 @@ export const callStateEvents = new EventEmitter();
 // Imported lazily: the persistent-mind supervisor pulls in a large service
 // graph, and a call the mind did not place — or answer — never needs it.
 const enqueueMindMessage = async (text) => {
-  const { enqueuePersistentMindMessage } = await import('../persistentMindSupervisor.js');
+  const { enqueuePersistentMindMessage } = await import('../persistent/persistentMindSupervisor.js');
   return enqueuePersistentMindMessage({ text });
 };
 
 const isMindEnabled = async () => {
-  const { getPersistentMindState } = await import('../persistentMindSupervisor.js');
+  const { getPersistentMindState } = await import('../persistent/persistentMindSupervisor.js');
   const state = await getPersistentMindState();
   return Boolean(state?.enabled);
 };
 
 const buildInboundContext = async () => {
-  const { buildInboundCallContext } = await import('../persistentMindCallCapability.js');
+  const { buildInboundCallContext } = await import('../persistent/persistentMindCallCapability.js');
   return buildInboundCallContext();
 };
 

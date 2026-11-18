@@ -14,7 +14,7 @@ import { getPendingTaskIds } from './cos/cosTaskStore.js';
 import { getStatus } from './cos/cos.js';
 import { getDirectProviderCallCount } from '../lib/providerCallActivity.js';
 import { activeAgents, spawningTasks } from './agent/agentState.js';
-import { isPersistentMindTurnRunning } from './persistentMindSupervisor.js';
+import { isPersistentMindTurnRunning } from './persistent/persistentMindSupervisor.js';
 
 // Lazy — NOT a static top-level import. `services/runner.js` and
 // `services/backup.js` both drag heavy subtrees (provider CLI spawning;
