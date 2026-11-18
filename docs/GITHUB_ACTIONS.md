@@ -85,7 +85,6 @@ as composite actions under `.github/actions/`:
 | `test-memo` | `server`, `client`, `database`, `browser`, `windows-server` | The memo restore and its key lineage; jobs save with `steps.test-memo.outputs.key` |
 | `diff-base` | `server`, `client`, `windows-server` | `scripts/ci-base-sha.js` (the `impact` job wraps the same script in its stage diagnostics) |
 | `db-tools` | `database`, `browser` | The APT download cache and `scripts/ci-install-db-tools.sh` for a given `pg-major` |
-| `candidate-evidence` | the five test jobs | The frozen release-candidate evidence upload |
 
 Every `run:` step in an action names `shell: bash`, as composite actions
 require. On `windows-latest` that replaces the pwsh default for the server
@@ -1339,40 +1338,12 @@ permissions. Private repositories that cannot read the PR with that grant remain
 held rather than expanding authority. No PR checkout or code executes in this
 privileged observer; both scripts run from the default branch's sparse checkout.
 
-## Bounded frozen release-candidate failure collection
+## Test runs report every failure
 
-CI explicitly sets `PORTOS_CI_TEST_POLICY=release-candidate` only for same-repository
-`codex/release-*` pull requests targeting `release`. Ordinary PRs, nightly runs,
-release pushes and local `test:ci` keep bail=1. The shared CI command entry point supplies one
-bail flag, raises it to five for that policy, and disables both Vitest retries
-and the launcher's native-crash retry. Nested bare Vitest runs retain their own bail policy rather than inheriting the
-outer npm lifecycle setting. Existing worker caps, shard selection,
-quiet groups, database isolation and deadlines do not change.
-
-The lifecycle reporter records up to five assertion failures, preserving the
-first. Failed hooks (including assertion failures in hooks), collection errors,
-non-assertion errors, unhandled errors and process teardown timeouts stop safe
-collection. Vitest receives graceful cancellation; the launcher independently
-monitors atomic reporter evidence and cancels its owned process tree on unsafe
-or malformed evidence, using existing escalation and settlement guards. Already
-running work can finish during cancellation; its later output is **unverified**,
-not additional independent regressions. Failed assertions are candidates for
-investigation, not proof that failures are independent or predate an amendment.
-Capped, interrupted, unsafe or missing-evidence runs remain red and cannot write
-green memo entries. First-cause run evidence
-and process-settlement refusals remain in each attempt's diagnostics directory.
-
-`invocation.json` binds policy, candidate head, tested checkout, actual checkout
-base, shard, selection digest, workflow run ID/attempt and start/finish times.
-`run.json` contains the bounded assertion list, stop reason and coverage status;
-the ordinary JSON report and process evidence remain available. Report coverage
-as unverified after any stop, including tests that never ran. A successful shard
-alone is not evidence that the whole candidate passed.
-
-For hosted before/after comparisons, group workflow rounds by exact candidate
-head/base and selection digest. Use Actions job queued/start/completion times to
-separate queue time from execution time; sum job execution minutes for
-runner-minutes and report failures collected per invocation. Keep non-reproducing
-failures and classify amendment-introduced regressions separately from failures
-shown to exist at the original cutoff. No hosted duration improvement is claimed
-by this implementation; a local synthetic collection test cannot measure it.
+`npm run test:ci` and `test:db:ci` run Vitest without `--bail`, so one CI round names
+every failing test file instead of stopping at the first. This applies to every run
+alike: ordinary PRs, release PRs, nightly and local. A red run still writes no
+test-memo entry, and the launcher's one-file retry of a native worker crash is kept
+(a recovered crash never masks a real failure elsewhere in the same run). Each attempt's
+`invocation.json`, `run.json`, `failures.json` and `processes.json` stay in the job's
+diagnostics directory for the failure summary. Job timeouts bound a badly broken PR.
