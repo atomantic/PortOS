@@ -12,6 +12,7 @@ import {
   TEST_MEMO_NEVER,
   computeTestMemoKeys,
   extractFileFacts,
+  literalExports,
   relatedTests,
   tokenize,
 } from './testMemo.js';
@@ -822,30 +823,23 @@ describe('a read whose variable segment can leave the directory the source names
       .toMatchObject({ memoizable: false, reason: `${test}: relies on randomUUID(), which server/lib/sibling.test.js mocks` });
   });
 
-  it('refuses the recorded key too, and a script the test imports, but not a product module', () => {
+  it('refuses the recorded key too, a script the test imports, and a product module', () => {
     const open = "const read = (p) => readFileSync(join(HERE, p), 'utf8');\nread(process.argv[2]);";
     const recorded = keyOf(tree(open), test, { records: new Map([[test, [test]]]) }).recorded;
     expect(recorded).toMatchObject({ memoizable: false, reason: through('read', 'server/lib') });
     const member = (rel) => ({ [rel]: "export const read = (p) => readFileSync(new URL(`./fixtures/${p}`, import.meta.url));\n" });
     const tooling = floorOf("import { read } from '../../scripts/tool.js';", { ...member('scripts/tool.js'), 'scripts/fixtures/s0.json': '{}' });
     expect(tooling).toMatchObject({ memoizable: false, reason: 'scripts/tool.js: reads a path with a variable segment that can leave scripts/fixtures' });
-    // A library module builds the path from what its caller passes and reads it only when a test
-    // calls it: it keeps the prefix it was keyed with, as it keeps an oversized read (`gather`).
+    // A library module reads such a path wherever its caller's name or its own data lands, which no
+    // key line follows: until #16660 it kept the prefix as a guess, so a test was skipped after the
+    // file the module really read changed.
     const library = "import { read } from './reader.js';";
-    expect(floorOf(library, member('server/lib/reader.js')).memoizable).toBe(true);
-    expect(keyedOn(library, 'server/lib/fixtures/f0.json')).toBe(false);
-    const withModule = (extra, module = member('server/lib/reader.js')) => keyOf(tree(library, { ...module, ...extra }), test).floor.key;
-    expect(withModule({ 'server/lib/fixtures/f0.json': 'changed\n' })).not.toBe(withModule({}));
-    // A library helper whose parameter is named like its own directory constant is called from elsewhere:
-    // the read is no longer taken for the constant, and is not dropped either.
+    expect(floorOf(library, member('server/lib/reader.js'))).toMatchObject({ memoizable: false, reason: 'server/lib/reader.js: reads a path with a variable segment that can leave server/lib/fixtures' });
+    const recordedLibrary = keyOf(tree(library, member('server/lib/reader.js')), test, { records: new Map([[test, [test, 'server/lib/reader.js']]]) }).recorded;
+    expect(recordedLibrary).toMatchObject({ memoizable: false, reason: 'server/lib/reader.js: reads a path with a variable segment that can leave server/lib/fixtures' });
+    // An unresolved path in a helper still fails closed when its parameter shadows a directory constant.
     const shadowing = { 'server/lib/reader.js': "const HERE = dirname(fileURLToPath(import.meta.url));\nexport function read(HERE) { return readFileSync(join(HERE, 'fixtures/f0.json')); }\n" };
-    expect(withModule({ 'server/lib/fixtures/f0.json': 'changed\n' }, shadowing)).not.toBe(withModule({}, shadowing));
-    // Never a narrower guess: the literal directory is added to the importing file's directory, which
-    // is what such a template was keyed with before, and a template that names another directory keys that too.
-    expect(withModule({ 'server/lib/unrelated.js': 'export const unrelated = 2;\n' })).not.toBe(withModule({}));
-    const elsewhere = { 'server/lib/reader.js': 'export const read = (p) => readFileSync(new URL(`../../data.reference/templates/${p}`, import.meta.url));\n' };
-    expect(withModule({ 'data.reference/templates/a.png': 'changed\n' }, elsewhere)).not.toBe(withModule({}, elsewhere));
-    expect(withModule({ 'server/lib/unrelated.js': 'export const unrelated = 2;\n' }, elsewhere)).not.toBe(withModule({}, elsewhere));
+    expect(floorOf(library, shadowing)).toMatchObject({ memoizable: false, reason: 'server/lib/reader.js: reads a path with a variable segment that can leave server/lib' });
   });
 
   it('follows a variable module path only as far as it is bounded', () => {
@@ -856,6 +850,137 @@ describe('a read whose variable segment can leave the directory the source names
     expect(floorOf(listed, { 'server/lib/mods/m0.js': 'export const m = 1;\n' }).key).not.toBe(floorOf(listed, mods).key);
     // Unbounded, the module may be anywhere: an edge the floor key does not know.
     expect(floorOf(load('load(process.argv[2]);'), mods)).toMatchObject({ memoizable: false, reason: `${test}: import() with a non-literal specifier` });
+  });
+
+  // #16660: a library module's unbounded read now refuses its importers too, so each shape a module
+  // names a file with must be read exactly: another module's literal, a guarded join, a search path.
+  describe('a name from another module, and the rule for every closure member', () => {
+    const NAMES = 'server/lib/names.js';
+    const READER = 'server/lib/reader.js';
+    const importNames = "import { NAME, NAMES } from './names.js';";
+
+    it('reads an imported string constant and an imported frozen array as the files they name', () => {
+      const names = { [NAMES]: "export const NAME = 'f0.json';\nexport const NAMES = Object.freeze(['f0.json', `f1.json`]);\n" };
+      for (const body of [`${importNames}\nreadFileSync(join(FIXTURES, NAME));`, `${importNames}\nconst read = (p) => readFileSync(join(FIXTURES, p));\nread(NAME);`]) {
+        // Without the exporting module the name is unknown, as any other import is.
+        expect(floorOf(body).reasons, body).toContain(body.includes('read(') ? through('read', 'server/lib/fixtures') : leaves('server/lib/fixtures'));
+        expect(floorOf(body, names), body).toMatchObject({ memoizable: true });
+        expect(floorOf(body, { ...names, 'server/lib/fixtures/f0.json': 'changed\n' }).key, body).not.toBe(floorOf(body, names).key);
+        expect(floorOf(body, { ...names, 'server/lib/fixtures/f1.json': 'changed\n' }).key, body).toBe(floorOf(body, names).key);
+      }
+      const each = `${importNames}\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));`;
+      for (const file of ['server/lib/fixtures/f0.json', 'server/lib/fixtures/f1.json']) {
+        expect(floorOf(each, { ...names, [file]: 'changed\n' }).key, file).not.toBe(floorOf(each, names).key);
+      }
+      // Exact files: a new neighbour is not an input.
+      expect(floorOf(each, { ...names, 'server/lib/fixtures/f2.json': '{}' }).key).toBe(floorOf(each, names).key);
+      // A library module the test imports names the file it reads the same way.
+      const reader = { ...names, [READER]: "import { NAME } from './names.js';\nexport const read = () => readFileSync(new URL(`./fixtures/${NAME}`, import.meta.url));\n" };
+      const library = "import { read } from './reader.js';";
+      expect(floorOf(library, reader).memoizable).toBe(true);
+      expect(floorOf(library, { ...reader, 'server/lib/fixtures/f0.json': 'changed\n' }).key).not.toBe(floorOf(library, reader).key);
+    });
+
+    it('refuses an exported array that is not frozen and any initializer that is not the literal alone', () => {
+      const cases = {
+        'an exported array that is not frozen': "export const NAMES = ['f0.json'];\n",
+        'a frozen array with a computed element': "export const NAMES = Object.freeze(['f0.json', pick()]);\n",
+        'a frozen array with a hole': "export const NAMES = Object.freeze(['f0.json', , 'f1.json']);\n",
+        'a frozen array of something more': "export const NAMES = Object.freeze(['f0.json']).concat(extra);\n",
+        'a frozen variable': 'export const NAMES = Object.freeze(names);\n',
+        'a re-export': "export { NAMES } from './other.js';\n",
+      };
+      const body = `${importNames}\nfor (const name of NAMES) readFileSync(join(FIXTURES, name));`;
+      for (const [label, module] of Object.entries(cases)) {
+        expect(floorOf(body, { [NAMES]: module }).reasons, label).toContain(leaves('server/lib/fixtures'));
+      }
+      const one = `${importNames}\nreadFileSync(join(FIXTURES, NAME));`;
+      for (const module of ["export const NAME = 'f0' + '.json';\n", "export const NAME = 'xf0.json'.slice(1);\n", "export let NAME = 'f0.json';\n", 'export const NAME = `${stem}.json`;\n']) {
+        expect(floorOf(one, { [NAMES]: module }).reasons, module).toContain(leaves('server/lib/fixtures'));
+      }
+      // A name the file binds again, and a module the file mocks, are not the export.
+      const names = { [NAMES]: "export const NAME = 'f0.json';\n" };
+      expect(floorOf(`${importNames}\nfunction run(NAME) { return readFileSync(join(FIXTURES, NAME)); }\nrun(pick());`, names).reasons).toContain(through('run', 'server/lib/fixtures'));
+      expect(floorOf(`${importNames}\nvi.mock('./names.js', () => ({ NAME: '../../a.js' }));\nreadFileSync(join(FIXTURES, NAME));`, names).reasons).toContain(leaves('server/lib/fixtures'));
+    });
+
+    it('voids a library module\'s reading when the test mocks the module it relied on', () => {
+      const reads = {
+        'an imported constant': { [NAMES]: "export const NAME = 'f0.json';\n", [READER]: "import { NAME } from './names.js';\nexport const read = () => readFileSync(join(import.meta.dirname, 'fixtures', NAME));\n" },
+        'a guarded join': {
+          'lib/pathWithin.js': 'export const pathWithin = (dir, ...segments) => join(dir, ...segments);\n',
+          [READER]: "import { pathWithin } from '../../lib/pathWithin.js';\nexport const read = (p) => readFileSync(pathWithin(join(import.meta.dirname, 'fixtures'), p));\n",
+        },
+      };
+      const mocks = { 'an imported constant': ['./names.js', 'server/lib/names.js'], 'a guarded join': ['../../lib/pathWithin.js', 'lib/pathWithin.js'] };
+      for (const [label, files] of Object.entries(reads)) {
+        const library = "import { read } from './reader.js';";
+        expect(floorOf(library, files), label).toMatchObject({ memoizable: true });
+        expect(floorOf(library, { ...files, 'server/lib/fixtures/f0.json': 'changed\n' }).key, label).not.toBe(floorOf(library, files).key);
+        const [spec, target] = mocks[label];
+        expect(floorOf(`${library}\nvi.mock('${spec}', () => ({}));`, files).reasons, label).toContain(label === 'a guarded join'
+          ? `${READER}: relies on pathWithin(), which ${test} mocks`
+          : `${READER}: names a path through ${target}, which the test mocks`);
+      }
+      const setup = {
+        ...reads['an imported constant'],
+        'server/vitest.setup.js': "vi.mock('./lib/names', () => ({ NAME: 'f1.json' }));",
+      };
+      expect(floorOf("import { read } from './reader.js';", setup).reasons).toContain(
+        `${READER}: names a path through ${NAMES}, which the test mocks`,
+      );
+      // A module the test mocks that names no read is no reason: only a keyed value depends on it.
+      const unrelated = { [NAMES]: "export const NAME = 'f0.json';\n", [READER]: "import { NAME } from './names.js';\nexport const label = () => NAME.toUpperCase();\n" };
+      expect(floorOf("import { label } from './reader.js';\nvi.mock('./names.js', () => ({}));", unrelated).memoizable).toBe(true);
+    });
+
+    it('keys a directory put on a search path, and refuses one glued to anything else', () => {
+      const guard = (delimiter) => ({
+        'server/lib/bin/tool': 'tool v1\n',
+        [READER]: [`${delimiter}`, 'const HERE = dirname(fileURLToPath(import.meta.url));', "export const BIN = join(HERE, 'bin');", 'export const env = (base) => ({ PATH: `${BIN}${delimiter}${base}` });', ''].join('\n'),
+      });
+      const imported = guard("import { delimiter, dirname, join } from 'node:path';");
+      const library = "import { env } from './reader.js';";
+      expect(floorOf(library, imported).memoizable).toBe(true);
+      expect(floorOf(library, { ...imported, 'server/lib/bin/tool': 'tool v2\n' }).key).not.toBe(floorOf(library, imported).key);
+      const multiple = {
+        ...imported,
+        [READER]: imported[READER].replace('${delimiter}${base}', "${delimiter}${join(HERE, 'tools')}${delimiter}${base}"),
+        'server/lib/tools/other': 'tool v1\n',
+      };
+      expect(floorOf(library, multiple).memoizable).toBe(true);
+      expect(floorOf(library, { ...multiple, 'server/lib/tools/other': 'tool v2\n' }).key).not.toBe(floorOf(library, multiple).key);
+      // Any other `delimiter` may be a separator that continues the directory's path.
+      expect(floorOf(library, guard('const delimiter = pick();')).reasons).toContain(`${READER}: reads a path with a variable segment that can leave server/lib/bin`);
+    });
+
+    it('takes a source reader\'s read from its callers, and refuses a reader that is not called by name', () => {
+      const helper = { 'server/lib/testHelper.js': [
+        "import { readFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "const SERVER_DIR = join(import.meta.dirname, '..');",
+        'export function readServerSource(rel) {',
+        "  return readFileSync(join(SERVER_DIR, rel), 'utf8');",
+        '}',
+        '',
+      ].join('\n') };
+      const imported = "import { readServerSource } from './testHelper.js';";
+      const called = `${imported}\nreadServerSource('lib/fixtures/f0.json');`;
+      expect(floorOf(called, helper).memoizable).toBe(true);
+      expect(floorOf(called, { ...helper, 'server/lib/fixtures/f0.json': 'changed\n' }).key).not.toBe(floorOf(called, helper).key);
+      expect(floorOf(called, { ...helper, 'server/lib/fixtures/f1.json': 'changed\n' }).key).toBe(floorOf(called, helper).key);
+      const templated = imported + "\nconst message = `source: ${readServerSource('lib/fixtures/f0.json')}`;";
+      expect(floorOf(templated, { ...helper, 'server/lib/fixtures/f0.json': 'changed\n' }).key).not.toBe(floorOf(templated, helper).key);
+      expect(floorOf(imported + '\nconst message = `source: ${readServerSource(pick())}`;', helper).reasons)
+        .toContain(`${test}: readServerSource() with a non-literal path`);
+
+      // The same body anywhere else is an ordinary unbounded read.
+      const elsewhere = { 'server/lib/reader.js': helper['server/lib/testHelper.js'] };
+      expect(floorOf("import { readServerSource } from './reader.js';", elsewhere).reasons).toContain('server/lib/reader.js: reads a path with a variable segment that can leave server');
+      for (const body of [`${imported}\nconst all = ['lib/fixtures/f0.json'].map(readServerSource);`, "import { readServerSource as read } from './testHelper.js';\nread('lib/fixtures/f0.json');"]) {
+        expect(floorOf(body, helper).reasons, body).toContain(`${test}: readServerSource used other than by a direct call`);
+      }
+    });
   });
 });
 
@@ -1290,12 +1415,15 @@ describe('record-aware related selection (#16424)', () => {
       'server/lib/templates/page.js': 'export const page = (name) => import(name);\n',
       'server/lib/worker.js': "export const run = (name) => import(name);\nimport './helper.js';\n",
       'server/lib/helper.js': 'export const h = 1;\n',
+      'lib/pathWithin.js': 'export const pathWithin = (dir, ...segments) => join(dir, ...segments);\n',
       'server/lib/hub.js': [
         "import { readdir } from 'node:fs/promises';",
         "import { spawn } from 'node:child_process';",
         "import { join } from 'node:path';",
+        "import { pathWithin } from '../../lib/pathWithin.js';",
         "import { u } from './util.js';",
-        "export const copy = (id) => readdir(join(import.meta.dirname, 'templates', id));",
+        // Joined with pathWithin(): a library module's unbounded read refuses its importers too (#16660).
+        "export const copy = (id) => readdir(pathWithin(join(import.meta.dirname, 'templates'), id));",
         "export const start = () => spawn(process.execPath, [new URL('./worker.js', import.meta.url).pathname]);",
         'export const hub = u;',
       ].join('\n'),
@@ -1354,6 +1482,29 @@ describe('record-aware related selection (#16424)', () => {
 });
 
 describe('extractFileFacts', () => {
+  it('reads a module\'s literal string and frozen array exports, and nothing else', () => {
+    const exported = literalExports([
+      "export const A = 'a.json';",
+      'export const B = `b.json`',
+      "export const C = Object.freeze(['c0', `c1`,]);",
+      "export const D = ['d'];",
+      "export const E = 'e' + suffix;",
+      'export const F = Object.freeze([]);',
+      "export let G = 'g';",
+      "const H = 'h';",
+    ].join('\n'), 'server/lib/x.js');
+    expect(Object.fromEntries(exported)).toEqual({
+      A: { k: 'str', v: 'a.json' },
+      B: { k: 'str', v: 'b.json' },
+      C: { k: 'array', values: ['c0', 'c1'] },
+      F: { k: 'array', values: [] },
+    });
+  });
+
+  it('does not treat an array passed to a local Object.freeze as a frozen export', () => {
+    expect(literalExports("const Object = getHelpers();\nexport const NAMES = Object.freeze(['f0.json']);", 'server/lib/x.js').has('NAMES')).toBe(false);
+  });
+
   it('resolves anchored literals, directories, templates and spawned scripts', () => {
     const src = [
       "const here = dirname(fileURLToPath(import.meta.url));",

@@ -63,7 +63,7 @@ const { runStreamingCommand } = await import('../lib/streamingSpawn.js');
 const { claimHeavyLocalJob } = await import('../lib/heavyJobClaim.js');
 const {
   getCapabilityTestReport, getCapabilityTestResult, runCapabilityTest,
-  resolveModelCapabilities, SANDBOX_FILES, __resetFixtureCaches,
+  resolveModelCapabilities, SANDBOX_FILES, __resetFixtureCaches, sandboxFixturePath,
 } = await import('./modelCapabilityTests.js');
 const { loadResults, saveResult, deleteResult } = await import('./modelCapabilityTestStore.js');
 const { RHETORIC_REFERENCE_SET } = await import('../lib/postRhetoric.js');
@@ -100,6 +100,14 @@ afterEach(async () => {
 // subdirectories the per-test hooks above clean (#9032).
 afterAll(async () => {
   await rm(TEST_ROOT, { recursive: true, force: true });
+});
+
+describe('sandboxFixturePath', () => {
+  // Joined with pathWithin(): a name that climbs out of the shipped fixture throws instead of being hashed.
+  it('names a shipped sandbox file and refuses a name that climbs out of the fixture', async () => {
+    expect(await readFile(sandboxFixturePath(SANDBOX_FILES.data), 'utf8')).toMatch(/\S/);
+    expect(() => sandboxFixturePath('../../vision/bicycle-bench.svg')).toThrow(RangeError);
+  });
 });
 
 describe('resolveModelCapabilities', () => {

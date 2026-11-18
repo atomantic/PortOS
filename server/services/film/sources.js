@@ -12,6 +12,7 @@ import { copyFile, lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { constants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { pathWithin } from '../../../lib/pathWithin.js';
 import { atomicWrite } from '../../lib/fileCore.js';
 import { MUSIC_VIDEO_BLENDER_TEXT_MAX_BYTES, blenderSourceFileKind } from '../../lib/musicVideo/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderSrcDir, blenderWorkspaceDir, resolveBlenderSourceFile } from './workspace.js';
@@ -94,6 +95,9 @@ export async function deleteBlenderFile(owner, path) {
   return { path };
 }
 
+/** A shipped starter file by its `/`-separated path; a path that climbs out of the starter throws (`pathWithin`). */
+export const starterSourcePath = (path) => pathWithin(STARTER_DIR, ...path.split('/'));
+
 async function starterFiles(directory = STARTER_DIR, prefix = '') {
   const files = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -118,7 +122,7 @@ export async function scaffoldBlenderWorkspace(owner) {
   for (const path of await starterFiles()) {
     const { absolute } = await resolveBlenderSourceFile(owner, path);
     await mkdir(dirname(absolute), { recursive: true });
-    const placed = await copyFile(join(STARTER_DIR, ...path.split('/')), absolute, constants.COPYFILE_EXCL).then(() => true, (error) => {
+    const placed = await copyFile(starterSourcePath(path), absolute, constants.COPYFILE_EXCL).then(() => true, (error) => {
       if (error.code === 'EEXIST') return false;
       throw error;
     });
