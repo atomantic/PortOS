@@ -121,14 +121,22 @@ export default function MusicVideo() {
   // once wanted they stay loaded (disabling the hook would reset its items).
   const [summariesWanted, setSummariesWanted] = useState(false);
   const [statusFilter, setStatusFilter] = useState('in-progress');
+  // The name query is searched server-side before paging; typing debounces so each keystroke is not a request.
+  const nameQuery = searchParams.get('q') || '';
+  const trimmedQuery = nameQuery.trim();
+  const [serverQuery, setServerQuery] = useState(trimmedQuery);
+  useEffect(() => {
+    const timer = setTimeout(() => setServerQuery(trimmedQuery), 250);
+    return () => clearTimeout(timer);
+  }, [trimmedQuery]);
   const fetchSummariesPage = useCallback(
     ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30 }, { signal, silent: true }),
     [],
   );
   const summaries = usePagedCollection(fetchSummariesPage, { enabled: summariesWanted || !!stageOnlyParam });
   const fetchIndexPage = useCallback(
-    ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30, statusFilter: statusFilter === 'all' ? undefined : statusFilter }, { signal, silent: true }),
-    [statusFilter],
+    ({ cursor, signal }) => listMusicVideoProjectSummaries({ cursor, limit: 30, statusFilter: statusFilter === 'all' ? undefined : statusFilter, q: serverQuery || undefined }, { signal, silent: true }),
+    [statusFilter, serverQuery],
   );
   const indexSummaries = usePagedCollection(fetchIndexPage, { enabled: !selectedId && !stageOnlyParam });
   // Same stickiness for the list: the banner outlives the retry that clears `summaries.error`.
@@ -282,12 +290,15 @@ export default function MusicVideo() {
 
   // Index: name filter lives in the URL (?q=); the picked fork version per root
   // outlives opening a project; cards patch in place from run events.
-  const nameQuery = searchParams.get('q') || '';
   const setNameQuery = (value) => setSearchParams((prev) => {
     const next = new URLSearchParams(prev);
     if (value) next.set('q', value); else next.delete('q');
     return next;
   }, { replace: true });
+  // Once the index has rendered, a reload (new name or status filter) keeps it mounted so the search box keeps focus.
+  const indexShown = useRef(false);
+  useEffect(() => { if (indexSummaries.loaded) indexShown.current = true; }, [indexSummaries.loaded]);
+  const nameMatches = (project) => !serverQuery || String(project.name || '').toLowerCase().includes(serverQuery.toLowerCase());
   const [pickedVersion, setPickedVersion] = useState({}); // rootId -> project id
   const indexRef = useRef(indexSummaries);
   indexRef.current = indexSummaries;
@@ -299,7 +310,7 @@ export default function MusicVideo() {
       const index = indexRef.current;
       const previous = index.items.find((p) => p.id === data.project.id);
       if (!previous) return;
-      if (statusFilter !== 'all' && (previous.status === 'complete') !== (data.project.status === 'complete')) {
+      if ((statusFilter !== 'all' && (previous.status === 'complete') !== (data.project.status === 'complete')) || !nameMatches(data.project)) {
         index.setItems((items) => items.filter((p) => p.id !== data.project.id));
         index.reconcileFirst();
       }
@@ -316,7 +327,7 @@ export default function MusicVideo() {
       events.forEach((e) => socket.off(e, onRunEvent));
       socket.off('music-video:render-spend', onRenderSpend);
     };
-  }, [selectedId, stageOnlyParam, statusFilter]);
+  }, [selectedId, stageOnlyParam, statusFilter, serverQuery]);
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
   const unsavedSceneFields = useRef(new Map());
@@ -407,7 +418,7 @@ export default function MusicVideo() {
   // above ignores every other id, and the first page is newest-created-first, so
   // a blanket refresh cannot update an older card or drop a deleted one.
   useProjectSummarySync({ summaries, selectedId, enabled: summariesWanted });
-  useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, resetOnMembershipChange: statusFilter !== 'all' });
+  useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, resetOnMembershipChange: statusFilter !== 'all', matches: nameMatches });
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -622,7 +633,7 @@ export default function MusicVideo() {
               ))}
             </div>
 
-            {loading ? (
+            {loading && (stageOnlyParam || !indexShown.current) ? (
               <div className="text-center py-8 text-sm text-port-text-muted">
                 Loading projects…
               </div>

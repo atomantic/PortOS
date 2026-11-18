@@ -1094,7 +1094,10 @@ export function createRunnerService(config = {}) {
       const runDir = existingRunDir(runId);
       if (!runDir) return false;
 
-      await withAssetPublication(() => rm(runDir, { recursive: true }));
+      // A live run's finalizer can still be flushing a file into the directory
+      // when the recursive remove lists it; ENOTEMPTY then means "retry", not
+      // "the delete failed" (flaked the live-delete cancellation test, #16657).
+      await withAssetPublication(() => rm(runDir, { recursive: true, maxRetries: 5, retryDelay: 20 }));
       runRecordCache.delete(runId);
       return true;
     },

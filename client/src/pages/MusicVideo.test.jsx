@@ -138,6 +138,47 @@ describe('MusicVideo project status filter', () => {
   });
 });
 
+describe('MusicVideo name search spans every page (#16651)', () => {
+  const alpha = { ...PROJECT_WITH_CLIP, id: 'mv-alpha', name: 'Alpha', status: 'ready' };
+  const later = { ...PROJECT_NO_CLIP, id: 'mv-later', name: 'Zebra Finale', status: 'ready' };
+  const done = { ...PROJECT_NO_CLIP, id: 'mv-done', name: 'Zebra Archive', status: 'complete' };
+  const mockServer = () => listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter, q }) => {
+    const items = [alpha, later, done]
+      .filter(p => !statusFilter || (p.status === 'complete') === (statusFilter === 'completed'))
+      .filter(p => !q || p.name.toLowerCase().includes(q.toLowerCase()));
+    // Without a query only the first page (Alpha) is loaded; the Zebra projects sit on a later page.
+    const page = q ? items : items.filter(p => p.id === 'mv-alpha' || p.id === 'mv-done');
+    return { items: page, total: items.length, nextCursor: q ? null : (page.length < items.length ? '1' : null) };
+  });
+  const queryCalls = () => listMusicVideoProjectSummaries.mock.calls.map(([args]) => args).filter(args => args.q);
+
+  it('sends the typed query to the server with the status filter and keeps the box focused', async () => {
+    mockServer();
+    render(<MemoryRouter initialEntries={['/music-video']}><LocationProbe />{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: 'Alpha' });
+    const box = screen.getByLabelText('Filter projects by name');
+    box.focus();
+    fireEvent.change(box, { target: { value: 'zebra' } });
+    expect(await screen.findByRole('heading', { name: 'Zebra Finale' })).toBeInTheDocument();
+    expect(queryCalls().at(-1)).toMatchObject({ q: 'zebra', statusFilter: 'in-progress' });
+    expect(screen.queryByRole('heading', { name: 'Alpha' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Filter projects by name')).toBe(box);
+    expect(document.activeElement).toBe(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    expect(await screen.findByRole('heading', { name: 'Zebra Archive' })).toBeInTheDocument();
+    expect(queryCalls().at(-1)).toMatchObject({ q: 'zebra', statusFilter: 'completed' });
+  });
+
+  it('opens from a ?q= URL, shows the empty state, and clears back to the full list', async () => {
+    mockServer();
+    render(<MemoryRouter initialEntries={['/music-video?q=nomatch']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByText(/No projects match/)).toBeInTheDocument();
+    expect(queryCalls().every(args => args.q === 'nomatch')).toBe(true);
+    fireEvent.change(screen.getByLabelText('Filter projects by name'), { target: { value: '' } });
+    expect(await screen.findByRole('heading', { name: 'Alpha' })).toBeInTheDocument();
+  });
+});
+
 describe('MusicVideo stage-only nav URLs (#10303)', () => {
   it('/music-video/board redirects to the newest project at that stage', async () => {
     listMusicVideoProjects.mockResolvedValue([

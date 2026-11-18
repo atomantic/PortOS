@@ -7,10 +7,17 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readdir, readFile, rm } from 'fs/promises';
 import { join } from 'path';
-import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { createTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { mockJsonResponse, mockTextResponse } from '../lib/testHelper.js';
 
-const { tempRoot, makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-completion-runs-' });
+// Every test owns a run-store root of its own (allocated in beforeEach, removed
+// in afterEach once its runs have settled), so a late write from one test can
+// never land in, or be deleted from under, another test's store.
+// Module-load reads (before the first beforeEach) need a valid root too.
+const loadRoot = createTempDataRoot('portos-completion-runs-');
+let tempRoot = loadRoot;
+let runsDir = null;
+const makeProxy = actual => makePathsProxy(actual, { dataRoot: () => tempRoot });
 const { statusOp, usage } = vi.hoisted(() => ({
   statusOp: { update: vi.fn(), complete: vi.fn(), error: vi.fn() },
   usage: { recordSession: vi.fn(async () => {}), recordRunUsage: vi.fn(async () => {}) },
@@ -43,7 +50,6 @@ const { CREATIVE_LATITUDE_CLAUSE, CREATIVE_LATITUDE_HEADING } = await import('..
 
 const { withLocalConcurrencyGate, LOCAL_LLM_MAX_CONCURRENCY, isLocalEndpointBusy } = await import('../lib/localLlmConcurrency.js');
 
-const runsDir = join(tempRoot, 'runs');
 // The same wiring `services/bootstrap.js` gives the toolkit: a usage session on
 // create, the usage ledger on completion, activity notes on every edge.
 const spies = {
@@ -98,7 +104,8 @@ const sent = (fetch, call = 0) => {
 };
 
 beforeEach(async () => {
-  await rm(runsDir, { recursive: true, force: true });
+  tempRoot = createTempDataRoot('portos-completion-runs-');
+  runsDir = join(tempRoot, 'runs');
   vi.clearAllMocks();
   drainActivityNotesForTests();
   loadToolkit();
@@ -111,12 +118,27 @@ const usageSettled = async () => {
     if (metadata.success === true) expect(metadata.usageReconciled).toBe(true);
   }
 };
+// A cancelled call resolves before its finalizer's hook has run; wait for the
+// run to leave the active set and for every cancelled record's hook to fire
+// before the store is removed.
+const cancellationSettled = async () => {
+  expect(await runnerService.getActiveRunCount()).toBe(0);
+  for (const id of await runIds()) {
+    const metadata = JSON.parse(await readFile(join(runsDir, id, 'metadata.json'), 'utf8'));
+    if (metadata.canceled) expect(spies.onRunCanceled).toHaveBeenCalledWith({ runId: id });
+  }
+};
 afterEach(async () => {
-  await vi.waitFor(usageSettled);
-  vi.unstubAllGlobals();
-  setAIToolkitInstance(null);
+  try {
+    await vi.waitFor(usageSettled);
+    await vi.waitFor(cancellationSettled);
+  } finally {
+    vi.unstubAllGlobals();
+    setAIToolkitInstance(null);
+    await rm(tempRoot, { recursive: true, force: true });
+  }
 });
-afterAll(cleanup);
+afterAll(() => rm(loadRoot, { recursive: true, force: true }));
 
 describe('the request a tracked call sends', () => {
   it.each([

@@ -2661,6 +2661,8 @@ export const musicVideoProductionFeedbackResolutionSchema = z.object({
 export const musicVideoProjectListQuerySchema = z.object({
   summary: z.enum(['1', 'true', '0', 'false']).optional(),
   statusFilter: z.enum(['completed', 'in-progress']).optional(),
+  // Case-insensitive name substring, applied before paging so a match on a later page is found.
+  q: z.string().max(200).optional(),
   limit: z.string().optional(),
   offset: z.string().optional(),
   cursor: z.string().max(64).optional(),

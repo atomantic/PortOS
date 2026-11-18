@@ -8,9 +8,10 @@ import { getMusicVideoProject } from '../../services/apiMusicVideo.js';
  * again by id (dropped on a 404), an unlisted one refreshes the first page. The
  * open project and this tab's own writes are skipped; the page follows those.
  */
-export default function useProjectSummarySync({ summaries, selectedId, enabled, resetOnMembershipChange = false }) {
+export default function useProjectSummarySync({ summaries, selectedId, enabled, resetOnMembershipChange = false, matches = null }) {
   const summarySyncRef = useRef(null);
   summarySyncRef.current = {
+    matches,
     selectedId,
     resetOnMembershipChange,
     reconcileFirst: summaries.reconcileFirst,
@@ -32,7 +33,7 @@ export default function useProjectSummarySync({ summaries, selectedId, enabled, 
           if (!active || !fresh) return;
           const current = summarySyncRef.current;
           const previous = current.items.find((p) => p.id === id);
-          if (current.resetOnMembershipChange && previous && (previous.status === 'complete') !== (fresh.status === 'complete')) {
+          if (previous && ((current.resetOnMembershipChange && (previous.status === 'complete') !== (fresh.status === 'complete')) || (current.matches && !current.matches(fresh)))) {
             current.setItems((items) => items.filter((p) => p.id !== id));
             current.reconcileFirst();
           } else current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
