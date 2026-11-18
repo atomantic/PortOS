@@ -324,6 +324,8 @@ describe('publish drafts (#9282)', () => {
       expect(browsers[0].close).toHaveBeenCalled(); // CDP session dropped
 
       expect(await listPublishDrafts(id, { connect })).toMatchObject([{ draftId: draft.draftId, state: 'open', summary: { title: 'Song' } }]);
+      expect(browsers[1].close).toHaveBeenCalledOnce();
+      expect(pages[0].closed).toBe(false);
       expect(await listPublishDrafts('other-project', { connect })).toEqual([]);
 
       pages[0].closed = true; // the human closed the tab
@@ -370,6 +372,46 @@ describe('publish drafts (#9282)', () => {
       await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
       expect(await discardPublishDraft(id, draft.draftId, { connect })).toBe(true);
       expect(pages[0].closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disconnects each detached lookup once while listing overlaps a pending discard', async () => {
+    vi.useFakeTimers();
+    try {
+      const id = await readyProject();
+      const { connect, pages, browsers } = fakeBrowser();
+      const draft = await preparePublishDraft(id, 'stackerNews', {}, { connect, adapters: { stackerNews: adapter() }, platforms });
+      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+      const tab = pages[0];
+      const finishClose = Promise.withResolvers();
+      const listSession = { browser: { close: vi.fn(async () => {}) }, context: { pages: () => [tab] } };
+      const discardBrowser = { close: vi.fn(async () => {}) };
+      const discardPage = {
+        url: tab.url,
+        close: vi.fn(async () => {
+          await finishClose.promise;
+          if (discardBrowser.close.mock.calls.length) throw new Error('Discard session disconnected');
+          await tab.close();
+        }),
+      };
+      const discardSession = { browser: discardBrowser, context: { pages: () => [discardPage] } };
+
+      const listing = listPublishDrafts(id, { connect: async () => listSession });
+      const discarding = discardPublishDraft(id, draft.draftId, { connect: async () => discardSession });
+      const listed = await listing;
+      const tabOpenAfterListing = !tab.closed;
+      finishClose.resolve();
+
+      expect(await discarding).toBe(true);
+      expect(listed).toEqual([draft]);
+      expect(tabOpenAfterListing).toBe(true);
+      expect(tab.closed).toBe(true);
+      expect(browsers[0].close).toHaveBeenCalledOnce();
+      expect(listSession.browser.close).toHaveBeenCalledOnce();
+      expect(discardBrowser.close).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
