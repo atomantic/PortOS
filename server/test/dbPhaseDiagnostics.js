@@ -1,4 +1,4 @@
-import { createTestPhaseDiagnostics } from './testPhaseDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../lib/testPhaseDiagnostics.js';
 import { DB_RUN_ADVISORY_LOCK_KEY } from './dbRunExclusivity.js';
 
 // No SQL text, identities, addresses or record values leave the test database.

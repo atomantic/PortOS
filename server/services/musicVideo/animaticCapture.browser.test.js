@@ -7,7 +7,7 @@ import express from 'express';
 import sharp from 'sharp';
 import { chromium } from 'playwright-core';
 import { startOwnedBrowserFixture } from '../../test/browserFixture.js';
-import { createTestPhaseDiagnostics } from '../../test/testPhaseDiagnostics.js';
+import { createTestPhaseDiagnostics } from '../../../lib/testPhaseDiagnostics.js';
 import { createOwnedFixtureSetup } from '../../test/ownedFixtureSetup.js';
 import { browserSuiteCanRun, resolveTestChrome, resolveClientBundler } from '../../lib/browserSuiteGate.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
