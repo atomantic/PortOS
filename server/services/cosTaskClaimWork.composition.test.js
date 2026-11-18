@@ -8,6 +8,7 @@ vi.mock('./taskSchedule.js', async (importActual) => ({
 vi.mock('./apps.js', async (importActual) => ({
   ...(await importActual()),
   getAppTaskTypeOverrides: vi.fn(async () => ({})),
+  getAppById: vi.fn(async () => ({ useAutoMerge: true, mergeHandoffMinQueuedRuns: 3 })),
 }));
 vi.mock('../lib/workTracker.js', async (importActual) => ({
   ...(await importActual()),
@@ -20,7 +21,7 @@ vi.mock('./codeReview.js', async (importActual) => ({
 vi.mock('./claimReviewerPreflight.js', () => ({ preflightClaimReviewers: vi.fn(async () => '') }));
 
 import { buildClaimWorkTask } from './cosTaskClaimWork.js';
-import { buildLightContextPrompt } from './agentPromptBuilder.js';
+import { buildAgentPrompt, buildLightContextPrompt } from './agentPromptBuilder.js';
 import { getTaskPrompt, DEFAULT_TASK_PROMPTS } from './taskPromptService.js';
 import { buildImprovementTaskDescription } from './cosTaskPreStepBlocks.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
@@ -241,6 +242,51 @@ describe('assembled forge claim prompts', () => {
     expect(result.composed).toBe(false);
     expect(result.prompt).toContain('## Phase 1 — Pick the target issue');
     expect(result.prompt).toContain('Run each LOCAL reviewer');
+  });
+});
+
+describe('assembled claim merge authority', () => {
+  const render = async (providerType, options = {}) => {
+    state.prompts['claim-work'] = { taskMetadata: { swarmCount: 6 } };
+    const claim = await buildClaimWorkTask(app, options);
+    return buildAgentPrompt({
+      id: 'task-fixture', description: 'Claim the selected issues',
+      metadata: {
+        ...claim.taskMetadata, app: app.id, prompt: claim.prompt,
+        forgeWorkflowScope: { status: 'unknown' },
+      },
+    }, {}, '/fixture', null, { providerType, providerId: 'codex', providerCommand: 'codex', agentId: 'agent-fixture' });
+  };
+
+  it.each([
+    ['github', 'cli', 'gh pr merge <PR_URL> --match-head-commit <ci-verified-sha>'],
+    ['github', 'api', 'gh pr merge <PR_URL> --match-head-commit <ci-verified-sha>'],
+    ['gitlab', 'cli', 'glab mr merge <MR_IID> --sha <ci-verified-sha>'],
+  ])('keeps phase C as the only multi-issue merge path for %s with %s', async (tracker, providerType, mergeCommand) => {
+    state.tracker = tracker;
+    const prompt = await render(providerType);
+    expect(prompt).toContain('--swarm=6');
+    expect(prompt).toContain('Hosting-provider merge authority');
+    expect(prompt).toContain('CI CONCURRENTLY for each exact published head');
+    expect(prompt).toContain('Only the parent merges, ONE AT A TIME');
+    expect(prompt).toContain('Do not enable native auto-merge or hand pending merges to PortOS');
+    expect(prompt).toContain(mergeCommand);
+    expect(prompt).not.toMatch(/acquires the repository merge admission|releases its own lease|\/api\/cos\/merge-admission/);
+    expect(prompt).not.toMatch(/## Use auto-merge|Native (?:GitHub|provider) auto-merge is allowed|\/api\/cos\/merge-handoff/);
+  });
+
+  it('keeps native auto-merge for a pinned GitHub claim with the same app setting', async () => {
+    const prompt = await render('cli', { target: '42' });
+    expect(prompt).not.toContain('## Phase C');
+    expect(prompt).toContain('## Use auto-merge');
+    expect(prompt).toContain('gh pr merge <PR_URL> --auto --merge --match-head-commit');
+  });
+
+  it.each([undefined, '42'])('renders no merge authority for a leave-open claim (target %s)', async target => {
+    const prompt = await render('cli', { target, prCompletion: 'leave-open' });
+    expect(prompt).toContain('PR completion policy: LEAVE OPEN');
+    if (!target) expect(prompt).toContain('## Phase C — Verify open handoffs');
+    expect(prompt).not.toMatch(/Hosting-provider merge authority|## Use auto-merge|Only the parent merges|gh pr merge|\/api\/cos\/merge-handoff/);
   });
 });
 

@@ -20,7 +20,7 @@
 
 import { sanitizeTaskMetadata, resolveClaimReviewerConfig, reviewerConfigMetadata, hasReviewerOverride } from '../lib/cosValidation.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
-import { resolveAppPrCompletion } from '../lib/prDisposition.js';
+import { prStaysOpen, resolveAppPrCompletion } from '../lib/prDisposition.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getAppTaskTypeOverrides } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -243,7 +243,8 @@ export async function buildClaimWorkTask(app, {
   // isn't a forge issue tracker. {reviewers} inside the block is substituted by
   // the same replacer below. A pinned target claims exactly one item, so the
   // swarm wrapper (claim N in parallel) is suppressed — the two are exclusive.
-  const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount);
+  const leaveOpen = prStaysOpen({ metadata: { prCompletion: effectivePrCompletion } });
+  const swarmBlock = targetRef ? '' : resolveSwarmBlock(promptTaskType, metadata.swarmCount, { leaveOpen });
 
   const policyHeader = composed ? '' : `## Claim target and completion policy\n\nTarget: ${targetRef || 'selected from the configured tracker'}. Effective PR completion policy: ${effectivePrCompletion}. Follow the runtime safety and completion contracts for this run.\n\n`;
   const prompt = policyHeader + applyAppPlaceholders(`${swarmBlock}${template}`, app)
