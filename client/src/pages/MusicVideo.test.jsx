@@ -4,7 +4,7 @@
  * preview and the attention row. Each step's own wiring is covered beside its
  * container in `components/musicVideo/stages/use*StageWiring.test.jsx`.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { beforeAll, describe, it, expect, vi } from 'vitest';
 // The scaffold registers the mocks, so it loads before any mocked module.
 import {
   PROJECT_WITH_CLIP,
@@ -27,10 +27,17 @@ import {
 import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, useNavigate } from 'react-router';
-import { listMusicVideoProjects, listMusicVideoProjectSummaries, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit } from '../services/apiMusicVideo.js';
+import { listMusicVideoProjects, listMusicVideoProjectSummaries, cloneMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject, deleteMusicVideoProject, analyzeMusicVideoProject, importMusicVideoTrackLyrics, getMusicVideoProject, resumeMusicVideoRevision, cancelMusicVideoRevision, approveMusicVideoCastAndSets, stopMusicVideoProduction, buildMusicVideoPublishKit, getMusicVideoCatalogCompletion } from '../services/apiMusicVideo.js';
 import { listTracks } from '../services/apiTracks.js';
 
 installMusicVideoPageHooks();
+beforeAll(async () => {
+  // Keep cold Vite transforms out of interaction waits on a loaded test host.
+  await Promise.all([
+    import('../components/musicVideo/ProjectWorkspace.jsx'),
+    import('../components/musicVideo/stages/ReviewStage.jsx'),
+  ]);
+});
 
 describe('MusicVideo project load recovery (#9761)', () => {
   it.each(['/music-video', '/music-video/mv-2/board'])('keeps failures visible and recovers without changing %s', async (path) => {
@@ -94,6 +101,74 @@ describe('MusicVideo project load recovery (#9761)', () => {
 });
 
 describe('MusicVideo project status filter', () => {
+  it('batches linked catalog updates, adds an unlisted match and removes a match from a loaded later page', async () => {
+    const first = { ...PROJECT_WITH_CLIP, id: 'mv-first', name: 'First Page' };
+    const second = { ...PROJECT_NO_CLIP, id: 'mv-second', name: 'Second Page', status: 'complete', isCompleted: false };
+    const kept = { ...first, id: 'mv-kept', name: 'Kept Page' };
+    const hidden = { ...second, id: 'mv-hidden', name: 'Previously Completed', isCompleted: true };
+    let projects = [hidden, first, second, kept];
+    listMusicVideoProjectSummaries.mockImplementation(async ({ cursor, statusFilter }) => {
+      const matching = projects.filter(project => !statusFilter || project.isCompleted !== true);
+      const offset = Number(cursor ?? 0);
+      return { items: matching.slice(offset, offset + 1), total: matching.length,
+        nextCursor: offset + 1 < matching.length ? String(offset + 1) : null };
+    });
+    const filteredReads = () => listMusicVideoProjectSummaries.mock.calls.filter(([args]) => args.statusFilter);
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { name: first.name });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more projects' }));
+    await screen.findByRole('heading', { name: second.name });
+    fireEvent.click(screen.getByRole('button', { name: 'Load more projects' }));
+    await screen.findByRole('heading', { name: kept.name });
+    const reads = filteredReads().length;
+
+    const unrelated = vi.fn(async () => []);
+    getMusicVideoCatalogCompletion.mockImplementationOnce(unrelated);
+    await pushSocket('catalog:assets-changed', { ingredientId: 'cat-unrelated' });
+    await waitFor(() => expect(unrelated).toHaveBeenCalledTimes(1));
+    expect(filteredReads()).toHaveLength(reads);
+
+    const entering = { ...hidden, isCompleted: false };
+    const leaving = { ...second, isCompleted: true };
+    projects = [entering, first, leaving, kept];
+    const completionRead = vi.fn(async () => [entering, leaving]);
+    getMusicVideoCatalogCompletion.mockImplementationOnce(completionRead);
+    await act(async () => {
+      await pushSocket('catalog:assets-changed', { ingredientId: 'cat-first' });
+      await pushSocket('catalog:primitive-changed', { ingredientId: 'cat-first' });
+      await pushSocket('catalog:assets-changed', { ingredientId: 'cat-second' });
+    });
+    expect(await screen.findByRole('heading', { name: entering.name })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: leaving.name })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: kept.name })).toBeInTheDocument();
+    expect(completionRead).toHaveBeenCalledExactlyOnceWith(['cat-first', 'cat-second'], expect.objectContaining({ silent: true }));
+    expect(filteredReads()).toHaveLength(reads + 1);
+    expect(getMusicVideoProject).not.toHaveBeenCalled();
+  });
+
+  it('keeps the grid on a failed catalog lookup and retries the same ingredients', async () => {
+    const completed = { ...PROJECT_NO_CLIP, status: 'complete', isCompleted: true };
+    const stale = { ...completed, isCompleted: false };
+    let current = completed;
+    listMusicVideoProjectSummaries.mockImplementation(async ({ statusFilter }) => {
+      const items = !statusFilter || current.isCompleted === (statusFilter === 'completed') ? [current] : [];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Completed' }));
+    await screen.findByRole('heading', { name: completed.name });
+    current = stale;
+    getMusicVideoCatalogCompletion.mockRejectedValueOnce(new Error('Catalog temporarily unavailable')).mockResolvedValueOnce([stale]);
+    await pushSocket('catalog:assets-changed', { ingredientId: 'cat-temporary' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Catalog temporarily unavailable');
+    expect(screen.getByRole('heading', { name: completed.name })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading' }));
+    await screen.findByText('No completed projects.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: completed.name })).not.toBeInTheDocument();
+    expect(getMusicVideoCatalogCompletion.mock.calls.map(([ids]) => ids)).toEqual([['cat-temporary'], ['cat-temporary']]);
+  });
+
   it('keeps index options available while the unfiltered picker loads', async () => {
     let resolvePicker;
     listMusicVideoProjectSummaries.mockImplementation(({ statusFilter }) => statusFilter

@@ -85,7 +85,7 @@ export function createProjectDbStore({ table, kind, idPrefix, logEmoji, logLabel
   // detail JSONB. Timestamp fallbacks need not match the mirrored SQL columns.
   async function listProjectPage({ includeDeleted = false, limit = 50, offset = 0, compare, filter } = {}) {
     const where = includeDeleted ? '' : ' WHERE deleted = FALSE';
-    const { rows } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt", data->>'status' AS status
+    const { rows } = await query(`SELECT id, data->'createdAt' AS "createdAt", data->'updatedAt' AS "updatedAt", data->>'status' AS status, data->>'name' AS name
       FROM ${table}${where} ORDER BY created_at ASC`);
     const headers = filter ? rows.filter(filter) : rows;
     if (compare) headers.sort(compare);

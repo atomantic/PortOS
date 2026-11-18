@@ -29,6 +29,10 @@ export const listMusicVideoProjectSummaries = ({ cursor, limit, statusFilter, q 
   if (q) query.set('q', q);
   return request(`/music-video?${query}`, options);
 };
+export const getMusicVideoCatalogCompletion = (ingredientIds, options = {}) => {
+  const query = new URLSearchParams(ingredientIds.map(id => ['ingredientId', id]));
+  return request(`/music-video/catalog-completion?${query}`, options);
+};
 // Live `{ id, name }` rows for the sidebar's Music Video sub-nav.
 export { listMusicVideoProjectNames } from './apiNavNames.js';
 // Built-in character styles a project loads through `concept.characterStyleId`,

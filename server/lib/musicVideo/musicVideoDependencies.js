@@ -502,6 +502,12 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
     current: captureMusicVideoEvidence(project) }), shots, evidence, estimate };
 }
 
+/** The final render's validity without projecting every historical take and review. */
+export function musicVideoRenderDependencyState(project) {
+  if (!project?.renderHistoryId || !project.renderDependencies) return project?.renderDependencyState;
+  return dependencyStateFromChanges(dependencyChanges(project.renderDependencies, createDependencyReader(project)));
+}
+
 /**
  * Bounded projection for readers: retain verdicts/assets, expose their validity separately.
  * A selected take's `characterReferenceState` (#16473) is advice beside `dependencyState`, never part of it,

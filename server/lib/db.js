@@ -371,10 +371,28 @@ export async function getServerMajorVersion() {
  * @returns {Promise<T>}
  */
 export async function withTransaction(fn) {
-  return databaseOperation(() => runTransaction(fn));
+  const callbacks = [];
+  const result = await databaseOperation(() => runTransaction(fn, callbacks));
+  for (const callback of callbacks) {
+    try {
+      callback();
+    } catch (err) {
+      console.error(`❌ Post-commit database notification failed: ${err?.message || err}`);
+    }
+  }
+  return result;
 }
 
-async function runTransaction(fn) {
+const transactionCallbacks = new WeakMap();
+
+/** Register a synchronous notification on the outer transaction that owns a write. */
+export function afterTransactionCommit(client, callback) {
+  const callbacks = transactionCallbacks.get(client);
+  if (!callbacks) throw new Error('Expected an active withTransaction client');
+  callbacks.push(callback);
+}
+
+async function runTransaction(fn, callbacks) {
   const client = await pool.connect();
   client.on('error', logCheckedOutClientError);
   // Guard the client's row writes with the same backstop as query(). The raw
@@ -390,8 +408,12 @@ async function runTransaction(fn) {
   try {
     await client.query('BEGIN');
     began = true;
+    transactionCallbacks.set(guardedClient, callbacks);
     const result = await fn(guardedClient);
-    await client.query('COMMIT');
+    const commit = await client.query('COMMIT');
+    // PostgreSQL reports ROLLBACK if the handler caught a failed SQL statement
+    // but left the transaction aborted.
+    if (commit?.command === 'ROLLBACK') callbacks.length = 0;
     return result;
   } catch (err) {
     // Swallow a secondary ROLLBACK failure (closed socket, statement_timeout
@@ -403,6 +425,7 @@ async function runTransaction(fn) {
     if (began) await client.query('ROLLBACK').catch(() => {});
     throw err;
   } finally {
+    transactionCallbacks.delete(guardedClient);
     client.removeListener('error', logCheckedOutClientError);
     client.release(releaseErr);
   }

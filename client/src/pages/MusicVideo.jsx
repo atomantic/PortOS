@@ -32,6 +32,7 @@ import useMusicVideoJobSlots from '../components/musicVideo/useMusicVideoJobSlot
 import useProjectSummarySync from '../components/musicVideo/useProjectSummarySync.js';
 import { resolveStageParam, compareMusicVideoProjectsNewestFirst } from '../lib/musicVideoStages.js';
 import { applyMusicVideoEdit } from '../lib/musicVideoEditResult.js';
+import { isMusicVideoCompleted } from '../../../server/lib/musicVideo/musicVideoSummary.js';
 
 // The open-project workspace (and, through it, every stage) is its own chunk, so
 // the project list never downloads it (#16565).
@@ -148,7 +149,8 @@ export default function MusicVideo() {
   const selectedLoaded = selectedProject?.id === selectedId;
   const fault = selectedFault?.id === selectedId ? selectedFault : null;
   const loading = selectedId ? !selectedLoaded && (selectedFetching || !fault) : (stageOnlyParam ? (summaries.loading || !summaries.loaded) && !summaries.error : !indexSummaries.loaded && !indexSummaries.error);
-  const projectsError = selectedId ? (fault?.notFound ? null : fault?.message) : stageOnlyParam ? summaries.error?.message : (indexSummaries.error?.message || listError);
+  const projectsError = selectedId ? (fault?.notFound ? null : fault?.message) : stageOnlyParam ? summaries.error?.message
+    : !indexSummaries.loaded ? (indexSummaries.error?.message || listError) : null;
 
   useEffect(() => {
     if (!selectedId) return undefined;
@@ -310,7 +312,7 @@ export default function MusicVideo() {
       const index = indexRef.current;
       const previous = index.items.find((p) => p.id === data.project.id);
       if (!previous) return;
-      if ((statusFilter !== 'all' && (previous.status === 'complete') !== (data.project.status === 'complete')) || !nameMatches(data.project)) {
+      if ((statusFilter !== 'all' && isMusicVideoCompleted(previous) !== isMusicVideoCompleted(data.project)) || !nameMatches(data.project)) {
         index.setItems((items) => items.filter((p) => p.id !== data.project.id));
         index.reconcileFirst();
       }
@@ -418,7 +420,7 @@ export default function MusicVideo() {
   // above ignores every other id, and the first page is newest-created-first, so
   // a blanket refresh cannot update an older card or drop a deleted one.
   useProjectSummarySync({ summaries, selectedId, enabled: summariesWanted });
-  useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, resetOnMembershipChange: statusFilter !== 'all', matches: nameMatches });
+  const catalogSync = useProjectSummarySync({ summaries: indexSummaries, selectedId, enabled: !selectedId && !stageOnlyParam, statusFilter, matches: nameMatches });
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -662,11 +664,12 @@ export default function MusicVideo() {
               </div>
             ) : projectsError ? null : (
               <ProjectIndex
-                projects={indexSummaries.items.filter((project) => statusFilter === 'all' || (project.status === 'complete') === (statusFilter === 'completed'))}
+                projects={indexSummaries.items.filter((project) => statusFilter === 'all' || isMusicVideoCompleted(project) === (statusFilter === 'completed'))}
                 statusFilter={statusFilter}
                 nameQuery={nameQuery}
                 onNameQueryChange={setNameQuery}
                 summaries={indexSummaries}
+                catalogSync={catalogSync}
                 pickedVersion={pickedVersion}
                 onPickVersion={(rootId, id) => setPickedVersion((prev) => ({ ...prev, [rootId]: id }))}
                 trackName={trackName}
