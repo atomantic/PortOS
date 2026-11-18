@@ -1,73 +1,30 @@
 // @vitest-environment node
 
 import { describe, it, expect } from 'vitest';
+import { createLayoutSwitcher } from '../lib/layoutSwitch.js';
 
-// Faithful inline model of Dashboard.jsx's active-layout switch+revert state
-// machine (selectLayout + serverConfirmedLayoutIdRef + switchGenerationRef).
-// The real Dashboard page renders lazy Suspense widgets and a live socket,
-// which makes the optimistic-set / async-revert timing hard to assert
-// deterministically — so this models just the switch logic. Keep it in sync
-// with Dashboard.jsx:
-//   - increment switchGenerationRef and capture the generation up front
-//   - optimistic setActiveLayoutId(id)
-//   - on PUT success: ALWAYS stamp serverConfirmedLayoutIdRef = id (the
-//     write-tail serializes PUTs + responses, so the last success to resolve
-//     is the server's final active layout — superseded successes still count)
-//   - on PUT failure: revert ONLY if still the latest generation (a newer
-//     switch — even to the same id — owns the display) AND current === id
-function createLayoutSwitcher(serverActiveId) {
-  let displayed = serverActiveId;                       // activeLayoutId
-  const serverConfirmed = { current: serverActiveId };  // serverConfirmedLayoutIdRef
-  const generation = { current: 0 };                    // switchGenerationRef
-
-  // Mirrors: await api.setActiveDashboardLayout(id).then(...).catch(...)
-  // `put` is a promise the caller resolves/rejects to stand in for the PUT.
-  const selectLayout = (id, put) => {
-    const myGen = ++generation.current;
-    displayed = id; // optimistic
-    return put
-      .then(() => {
-        // always record the server's acceptance — the write-tail serializes
-        // PUTs + responses, so the last success to resolve is the server's
-        // final active layout (a superseded success must still be recorded)
-        serverConfirmed.current = id;
-      })
-      .catch(() => {
-        // only the latest switch may revert — a newer switch (even to the
-        // same id) supersedes this one and owns the displayed state
-        if (generation.current !== myGen) return;
-        // functional setState — only revert if still showing the failed id
-        displayed = displayed === id ? serverConfirmed.current : displayed;
-      });
-  };
-
-  // Mirrors duplicateLayout: a save step (savePut) precedes the active-layout
-  // switch. The generation must bump only AFTER savePut resolves — at the real
-  // switch — so a save in flight (or one that rejects) can't prematurely
-  // supersede an in-flight selectLayout's failure revert.
-  const duplicateLayout = (id, savePut, setActivePut) =>
-    savePut.then(() => {
-      const myGen = ++generation.current;
-      displayed = id;
-      return setActivePut
-        .then(() => { serverConfirmed.current = id; })
-        .catch(() => {
-          if (generation.current !== myGen) return;
-          displayed = displayed === id ? serverConfirmed.current : displayed;
-        });
-    });
-
+// Drives the real createLayoutSwitcher that Dashboard.jsx uses for its initial
+// auto-switch, selectLayout and duplicateLayout. The page renders lazy Suspense
+// widgets and a live socket, so the switch logic is tested at its own seam.
+// duplicateLayout is modelled exactly as Dashboard calls it: the save resolves
+// first, and only then does switchTo (the generation bump) run.
+function createHarness(serverActiveId) {
+  let displayed = serverActiveId;
+  const setDisplayed = (next) => { displayed = typeof next === 'function' ? next(displayed) : next; };
+  const switcher = createLayoutSwitcher({ setDisplayed });
+  switcher.confirm(serverActiveId);
   return {
-    selectLayout,
-    duplicateLayout,
+    selectLayout: (id, put) => switcher.switchTo(id, put),
+    duplicateLayout: (id, savePut, setActivePut) =>
+      savePut.then(() => switcher.switchTo(id, setActivePut)),
     get displayed() { return displayed; },
-    get confirmed() { return serverConfirmed.current; },
+    get confirmed() { return switcher.confirmed; },
   };
 }
 
 describe('Dashboard active-layout revert', () => {
   it('reverts to the server-confirmed id on a single failed switch', async () => {
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     await sw.selectLayout('B', Promise.reject(new Error('boom')));
     expect(sw.displayed).toBe('A');
     expect(sw.confirmed).toBe('A');
@@ -78,7 +35,7 @@ describe('Dashboard active-layout revert', () => {
     // switch's previousId was 'B' (the 1st switch's optimistic-but-uncommitted
     // value), so a double failure snapped the UI to 'B' — a layout the server
     // never accepted. Tracking the last *server-confirmed* id fixes it.
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     const pB = sw.selectLayout('B', Promise.reject(new Error('boom'))); // displayed -> B
     const pC = sw.selectLayout('C', Promise.reject(new Error('boom'))); // displayed -> C
     await Promise.allSettled([pB, pC]);
@@ -87,7 +44,7 @@ describe('Dashboard active-layout revert', () => {
   });
 
   it('advances the confirmed baseline on a successful switch, then reverts to it on a later failure', async () => {
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     await sw.selectLayout('B', Promise.resolve());            // server now active = B
     expect(sw.confirmed).toBe('B');
     await sw.selectLayout('C', Promise.reject(new Error('boom')));
@@ -101,7 +58,7 @@ describe('Dashboard active-layout revert', () => {
     // advance to B — so when C then fails, the display reverts to B, not back
     // to the stale A. (If the success path were generation-gated, B's success
     // would be dropped and C's failure would wrongly revert to A.)
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     let resolveB;
     let failC;
     const pB = sw.selectLayout('B', new Promise((r) => { resolveB = r; }));            // gen 1
@@ -116,7 +73,7 @@ describe('Dashboard active-layout revert', () => {
   });
 
   it('a stale failure does not clobber a later in-flight selection', async () => {
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     let failB;
     const pB = sw.selectLayout('B', new Promise((_, reject) => { failB = reject; }));
     const pC = sw.selectLayout('C', Promise.resolve()); // C selected + confirmed first
@@ -133,14 +90,17 @@ describe('Dashboard active-layout revert', () => {
     // first PUT then fails. `current === id` is still true (same id shown), so
     // the `current === id` guard alone would wrongly revert — but the newer
     // switch (higher generation) owns the display and its PUT may yet succeed.
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     let failB1;
     const pB1 = sw.selectLayout('B', new Promise((_, reject) => { failB1 = reject; })); // gen 1
-    const pB2 = sw.selectLayout('B', Promise.resolve()); // gen 2, re-select same id
-    await pB2; // newer switch confirms B
-    failB1(new Error('boom')); // older switch's PUT fails late
+    let resolveB2;
+    const pB2 = sw.selectLayout('B', new Promise((r) => { resolveB2 = r; })); // gen 2, re-select same id, still in flight
+    failB1(new Error('boom')); // older switch's PUT fails while the newer one is pending
     await pB1;
-    expect(sw.displayed).toBe('B'); // NOT reverted to A
+    expect(sw.displayed).toBe('B'); // NOT reverted to A (confirmed is still A here)
+    resolveB2(); // newer switch confirms B
+    await pB2;
+    expect(sw.displayed).toBe('B');
     expect(sw.confirmed).toBe('B');
   });
 
@@ -149,7 +109,7 @@ describe('Dashboard active-layout revert', () => {
     // generation must bump only at that later switch — not at function entry.
     // While the save is in flight, an unrelated selectLayout that fails must
     // still revert (it's still the latest switch until the duplicate commits).
-    const sw = createLayoutSwitcher('A');
+    const sw = createHarness('A');
     let failX;
     let resolveSave;
     const pX = sw.selectLayout('X', new Promise((_, reject) => { failX = reject; })); // gen 1, displayed X
