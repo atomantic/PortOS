@@ -14,8 +14,6 @@ import {
   readReferencePromptHashes,
   readShippedHashes,
 } from './shippedPromptHashes.js';
-import { declaresPromptHashes, isNumberedMigrationFile } from './shippedPromptHistory.js';
-
 const migrationsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(migrationsDir, '..', '..');
 const REGEN = 'run `node scripts/regen-shipped-prompt-hashes.js`';
@@ -137,14 +135,21 @@ const FROZEN_PROMPT_HASH_MIGRATIONS = new Set([
   '453-writers-room-cd-bridge-continue-from-prior.js',
 ]);
 
-/** Retired hashes present at `base` and missing from `current`, as `key: hash`. */
-export const missingRetiredHashes = (base, current) => Object.entries(base).flatMap(([key, entry]) => {
-  const kept = new Set([...(current[key]?.retired || []), current[key]?.current].filter(Boolean));
-  return (entry.retired || []).filter((hash) => !kept.has(hash)).map((hash) => `${key}: ${hash}`);
+const recordedHashes = (entry) =>
+  new Set([...(entry?.retired || []), entry?.current].filter(Boolean));
+
+/** Shipped hashes present at `base` and missing from `current`, as `key: hash`. */
+const missingRetiredHashes = (base, current) => Object.entries(base).flatMap(([key, entry]) => {
+  const kept = recordedHashes(current[key]);
+  return [...recordedHashes(entry)].filter((hash) => !kept.has(hash)).map((hash) => `${key}: ${hash}`);
 });
 
+const isNumberedMigrationFile = (file) =>
+  /^\d.*\.js$/.test(file) && !file.endsWith('.test.js');
+
+// Only the frozen pre-#16090 migrations may declare prompt hashes.
 const usesPromptHashMigration = (source) =>
-  declaresPromptHashes(source) || source.includes('makePromptReplaceMigration');
+  ['ACCEPTED_OLD_MD5', 'NEW_SHIPPED_MD5', 'makePromptReplaceMigration'].some((marker) => source.includes(marker));
 
 describe('shipped prompt hash table', () => {
   it('records the current hash of every live reference prompt', () => {
@@ -172,30 +177,31 @@ describe('shipped prompt hash table', () => {
     expect(bad).toEqual([]);
   });
 
-  it('keeps every retired hash present at the merge base', (context) => {
+  it('keeps every current or retired hash present at the comparison base', (context) => {
     let base;
     const explicitBase = process.env.CI_BASE_SHA?.trim();
     if (explicitBase) {
       base = git('rev-parse', '--verify', `${explicitBase}^{commit}`);
+    } else if (process.env.GITHUB_ACTIONS === 'true') {
+      // Push, schedule and dispatch never get CI_BASE_SHA from diff-base.
+      base = git('rev-parse', '--verify', 'HEAD^1^{commit}');
     } else {
       try {
         base = git('merge-base', 'origin/main', 'HEAD');
       } catch {
-        context.skip('No merge base available; fetch origin/main to check retired prompt hashes.');
+        context.skip('No merge base available; fetch origin/main to check shipped prompt hashes.');
         return;
       }
     }
     const path = `data.reference/${SHIPPED_HASHES_RELPATH}`;
-    let previous;
-    try {
-      previous = git('show', `${base}:${path}`);
-    } catch {
-      // Only the commit that introduces the table has a base without it.
+    if (!git('ls-tree', base, '--', path)) {
+      // A base predating the table has no recorded hashes to retain.
       context.skip(`${path} does not exist at ${base}`);
       return;
     }
+    const previous = git('show', `${base}:${path}`);
     expect(missingRetiredHashes(JSON.parse(previous), table),
-      `Retired prompt hashes removed since ${base}; restore them — every install holding that body is stranded otherwise`,
+      `Shipped prompt hashes removed since ${base}; restore them — every install holding that body is stranded otherwise`,
     ).toEqual([]);
   });
 
@@ -235,8 +241,9 @@ describe('missingRetiredHashes', () => {
   const base = { 'stages/a.md': { current: 'c', retired: ['x', 'y'] } };
 
   it.each([
-    ['one hash', { 'stages/a.md': { current: 'c', retired: ['y'] } }, ['stages/a.md: x']],
-    ['the entire entry', {}, ['stages/a.md: x', 'stages/a.md: y']],
+    ['a retired hash', { 'stages/a.md': { current: 'c', retired: ['y'] } }, ['stages/a.md: x']],
+    ['the formerly current hash', { 'stages/a.md': { current: 'd', retired: ['x', 'y'] } }, ['stages/a.md: c']],
+    ['the entire entry', {}, ['stages/a.md: x', 'stages/a.md: y', 'stages/a.md: c']],
   ])('detects deletion of %s', (_name, current, missing) => {
     expect(missingRetiredHashes(base, current)).toEqual(missing);
   });

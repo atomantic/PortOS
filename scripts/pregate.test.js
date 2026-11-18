@@ -54,7 +54,6 @@ const planWith = (overrides = {}) => ({
   windows: false,
   build: false,
   smoke: false,
-  promptHistory: false,
   linuxContainment: false,
   supercolliderLive: false,
   dockerContainmentLive: false,
@@ -153,16 +152,6 @@ describe('resolvePlanStages', () => {
     for (const stage of stages.filter((item) => item.script === 'run-ci-tests.js')) {
       expect(stage.env.CI_BASE_SHA).toBe('resolved-base');
     }
-  });
-
-  it('runs the shipped prompt-history guard right after the scan, only when the plan selects it', () => {
-    expect(resolvePlanStages(planWith({ promptHistory: false })).map((stage) => stage.name))
-      .not.toContain('shipped prompt history');
-    const stages = resolvePlanStages(planWith({ promptHistory: true, lint: { mode: 'full', files: [] } }));
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'shipped prompt history', 'client/server lint', 'workflow lint (actionlint)', 'server tests']);
-    expect(stages[1]).toEqual({
-      name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {},
-    });
   });
 
   it('drops the lint stage under --skip-lint but keeps the test stages', () => {

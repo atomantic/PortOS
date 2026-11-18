@@ -169,9 +169,7 @@ export function describeStageCommand(stage) {
  *
  * Pure, so the plan -> stage mapping is testable without spawning anything.
  * The hidden-content scan always runs first, even if lint/tests select no
- * work, and the shipped prompt-history guard (CI's `prompt-history` job: one
- * git-history read, seconds locally) follows it when selected. Order after
- * that runs the shared structural guards first, then CI's dependency order:
+ * work. The shared structural guards follow it, then CI's dependency order:
  * lint, unit tests, the client build and its bundle pin, the boot smoke, the browser suites, and the DB suite
  * last and alone. `skip` holds the suites that stay with CI
  * (see `uncoveredSuites`); `databaseEnv` is the pinned `portos_test`
@@ -186,10 +184,6 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
     args: ['--base', baseSha, '--worktree'],
     env: {},
   }];
-
-  if (plan.promptHistory) {
-    stages.push({ name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {} });
-  }
 
   const guardedFiles = { server: new Set(), client: new Set() };
   // Single owner of each unit scope's env: guards, scoped runs and every full
@@ -908,7 +902,6 @@ function pregatePlanFromRaw(raw) {
     windows: raw.windows,
     build: raw.build,
     smoke: raw.smoke,
-    promptHistory: raw.prompt_history,
     linuxContainment: raw.linux_containment,
     supercolliderLive: raw.supercollider_live,
     dockerContainmentLive: raw.docker_containment_live,
@@ -986,7 +979,7 @@ async function main() {
   const guardPlan = downgradeFullPlan(plan, git(['ls-files', '-z']).split('\0').filter(Boolean), changedFiles);
   if (options.guardsOnly) {
     plan = guardPlan;
-    Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, promptHistory: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false, macosNative: false });
+    Object.assign(plan, { lint: { mode: 'skip', files: [] }, browser: { files: [] }, db: false, windows: false, build: false, smoke: false, linuxContainment: false, supercolliderLive: false, dockerContainmentLive: false, macosNative: false });
   }
   if (downgraded) {
     plan = focusedLocalPlan(plan, git(['ls-files', '--cached', '--others', '--exclude-standard', '-z']).split('\0').filter(path => path && existsSync(join(REPO_ROOT, path))), changedFiles);
@@ -1071,7 +1064,7 @@ async function main() {
     let result = results[index];
     // Even prerequisite probes may start Chrome. Defer them until every early
     // guard has passed, retaining not-run resource stages on an early failure.
-    if (!probed && !result.guard && !['scan', 'prompt-history'].includes(result.suite)) {
+    if (!probed && !result.guard && result.suite !== 'scan') {
       const { prerequisites, databaseEnv } = await probeResourceSuites(plan, { options, downgraded });
       ({ uncovered, stages } = planStages(prerequisites, databaseEnv));
       announceUncovered(uncovered);

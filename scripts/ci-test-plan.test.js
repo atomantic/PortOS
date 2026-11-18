@@ -2365,25 +2365,23 @@ describe('path-gated single-purpose jobs', () => {
   // The gates read only the static input lists, which do not depend on the
   // diff; walking the repository once per case exceeded the 5 s test timeout (#12461).
   const realPlan = (changedFiles) => {
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
-    return buildCiTestPlan(changedFiles, { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
+    const { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
+    return buildCiTestPlan(changedFiles, { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs });
   };
   const gates = (plan) => ({
-    promptHistory: plan.promptHistory, linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
+    linuxContainment: plan.linuxContainment, supercolliderLive: plan.supercolliderLive,
   });
 
   it('runs each job only when the real diff reaches its inputs', () => {
     expect(gates(realPlan(['docs/README.md'])))
-      .toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
-    // Reached only through the hash-declaring migrations' import closure.
-    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ promptHistory: true, linuxContainment: true });
+      .toEqual({ linuxContainment: false, supercolliderLive: false });
+    // Shared helper reached through the containment suite's import closure.
+    expect(gates(realPlan(['server/lib/fileUtils.js']))).toMatchObject({ linuxContainment: true });
     expect(gates(realPlan(['server/lib/codeAnimationContainment.js'])))
-      .toEqual({ promptHistory: false, linuxContainment: true, supercolliderLive: false });
-    expect(gates(realPlan(['data.reference/prompts/stages/example.md'])))
-      .toEqual({ promptHistory: true, linuxContainment: false, supercolliderLive: false });
+      .toEqual({ linuxContainment: true, supercolliderLive: false });
     expect(gates(realPlan(['server/package-lock.json']))).toMatchObject({ linuxContainment: true, supercolliderLive: true });
     expect(gates(realPlan(['.github/workflows/ci.yml'])))
-      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      .toEqual({ linuxContainment: true, supercolliderLive: true });
   });
 
   it('selects the SuperCollider live job for the spawn plumbing its containment cases depend on, not for unrelated files (#12612)', () => {
@@ -2435,13 +2433,13 @@ describe('path-gated single-purpose jobs', () => {
 
   it('runs every gated job when forced full or when an input walk is inconclusive', () => {
     expect(gates(buildCiTestPlan(['docs/README.md'], { forceFull: true })))
-      .toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      .toEqual({ linuxContainment: true, supercolliderLive: true });
     expect(gates(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: null, linuxContainmentInputs: null, supercolliderLiveInputs: null,
-    }))).toEqual({ promptHistory: true, linuxContainment: true, supercolliderLive: true });
+      linuxContainmentInputs: null, supercolliderLiveInputs: null,
+    }))).toEqual({ linuxContainment: true, supercolliderLive: true });
     expect(gates(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
-    }))).toEqual({ promptHistory: false, linuxContainment: false, supercolliderLive: false });
+      linuxContainmentInputs: [], supercolliderLiveInputs: [],
+    }))).toEqual({ linuxContainment: false, supercolliderLive: false });
   });
 
   it('still runs a job when the diff deletes one of its entry points', () => {
@@ -2461,23 +2459,20 @@ describe('path-gated single-purpose jobs', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       emitGitHubPlan(buildCiTestPlan(['docs/README.md'], {
-        promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+        linuxContainmentInputs: [], supercolliderLiveInputs: [],
       }));
       const outputs = JSON.parse(log.mock.calls.at(-1)[0]);
-      expect(outputs).toMatchObject({ prompt_history: false, linux_containment: false, supercollider_live: false });
+      expect(outputs).toMatchObject({ linux_containment: false, supercollider_live: false });
     } finally {
       log.mockRestore();
     }
 
     const jobs = workflowJobs(readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8'));
-    expect(jobs['prompt-history']).toContain('needs: impact');
-    expect(jobs['prompt-history']).toContain('if: fromJSON(needs.impact.outputs.plan).prompt_history\n');
     expect(jobs['linux-containment']).toContain('if: fromJSON(needs.impact.outputs.plan).linux_containment\n');
     // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
     const run = jobs['linux-containment'].match(/run: bash scripts\/ci-install-containment-tools\.sh npm test --prefix server -- --run (.*)/)[1];
     expect(run.split(' ').map((path) => posix.normalize(posix.join('server', path)))).toEqual(LINUX_CONTAINMENT_TESTS);
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
-    expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');
 
     // The native SuperCollider matrix lives in ci.yml, is planner-gated, and a
@@ -2502,7 +2497,7 @@ describe('path-gated single-purpose jobs', () => {
   // the job (or, in a gate's `!…` test, silently passes it) instead of failing.
   it('emits every plan key ci.yml reads, with JSON types the expressions compare correctly', () => {
     const output = githubPlanOutput(buildCiTestPlan(['docs/README.md'], {
-      promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [],
+      linuxContainmentInputs: [], supercolliderLiveInputs: [],
     }));
     const ci = readFileSync(join(repo, '.github/workflows/ci.yml'), 'utf8');
     const reads = [...ci.matchAll(/fromJSON\(needs\.impact\.outputs\.plan\)\.(\w+)(\s*[!=]=\s*'[^']*')?/g)];
@@ -2526,7 +2521,7 @@ describe('path-gated single-purpose jobs', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       Object.assign(process.env, env);
-      const plan = buildCiTestPlan(['docs/README.md'], { promptHistoryInputs: [], linuxContainmentInputs: [], supercolliderLiveInputs: [] });
+      const plan = buildCiTestPlan(['docs/README.md'], { linuxContainmentInputs: [], supercolliderLiveInputs: [] });
       emitGitHubPlan(plan, { gatedBaseSha: 'a'.repeat(40) });
       const lines = readFileSync(env.GITHUB_OUTPUT, 'utf8').trim().split('\n');
       const outputs = Object.fromEntries(lines.map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]));
@@ -2603,17 +2598,16 @@ describe('path-gated single-purpose jobs', () => {
 // single-purpose jobs follow the tree diff since the last green push or
 // schedule run (CI_GATED_BASE_SHA from scripts/ci-base-sha.js), so a client
 // change no longer queues the macOS, Windows and SuperCollider runners.
-// Prompt history is history-sensitive and stays unconditional.
 describe('native jobs on a push to main', () => {
   const NATIVE_OUTPUTS = ['linux_containment', 'supercollider_live', 'docker_containment_live',
     'macos_native', 'node_minimum', 'windows'];
   const nativeOutputs = (outputs) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, outputs[name]]));
   const allNative = (value) => Object.fromEntries(NATIVE_OUTPUTS.map((name) => [name, value]));
   const gatedPlan = (gatedChangedFiles, extra = {}) => {
-    const { promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
+    const { linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs } = realTree();
     return buildCiTestPlan([], {
       forceFull: true, forceFullReason: 'full CI requested', trackedFiles: WINDOWS_CONTRACT_TESTS, gatedChangedFiles,
-      promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, ...extra,
+      linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, ...extra,
     });
   };
   const gates = (plan) => ({
@@ -2658,8 +2652,8 @@ describe('native jobs on a push to main', () => {
       expect(clientOnly).toMatchObject({ full: true, server_mode: 'full', client_mode: 'full', db: true, build: true, smoke: true });
       expect(nativeOutputs(clientOnly)).toEqual(allNative(false));
       expect(clientOnly.windows_mode).toBe('skip');
-      // Gated, so not complete-run evidence; prompt history still runs.
-      expect(clientOnly).toMatchObject({ native_gated: true, prompt_history: true });
+      // Native gating withholds the Full CI Gate.
+      expect(clientOnly.native_gated).toBe(true);
 
       write('server/lib/darwinAgentSupervisor.py', 'print("changed")\n');
       commit();
@@ -2668,7 +2662,7 @@ describe('native jobs on a push to main', () => {
       // A base git cannot diff against (a failed fetch) fails open.
       const unresolvable = plan('0'.repeat(40));
       expect(nativeOutputs(unresolvable)).toEqual(allNative(true));
-      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false, prompt_history: true });
+      expect(unresolvable).toMatchObject({ windows_mode: 'files', native_gated: false });
       // As does a push whose lookup exported nothing.
       expect(nativeOutputs(plan(''))).toEqual(allNative(true));
     } finally {
@@ -2703,12 +2697,6 @@ describe('native jobs on a push to main', () => {
     expect(gatedPlan([LOCK], { gatedDependencyChanges: { [LOCK]: sensitive } }).windows).toBe(true);
     // No comparison available fails closed.
     expect(gatedPlan([LOCK]).windows).toBe(true);
-  });
-
-  it('always runs prompt history on a push, because a reverted prompt change leaves no tree diff', () => {
-    for (const files of [[], ['client/src/App.jsx'], ['data.reference/prompts/stages/example.md']]) {
-      expect(gatedPlan(files).promptHistory, files.join()).toBe(true);
-    }
   });
 
   it('runs every native job when forced full without a gated diff', () => {

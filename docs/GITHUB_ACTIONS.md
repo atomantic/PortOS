@@ -499,8 +499,7 @@ own.
 
 ### Shallow checkouts
 
-Only the path-gated **Shipped prompt history** job clones full history (it
-reads every past stage-prompt body). `actions/checkout` runs at `fetch-depth: 2`
+`actions/checkout` runs at `fetch-depth: 2`
 in every job that diffs against the base. The two gate jobs set no depth at all
 (the action's own default is 1) and pass `sparse-checkout: scripts` instead:
 they check out only to run `scripts/ci-gate-report.js`, never look at history,
@@ -510,7 +509,10 @@ first parent *is* the base-branch commit the pull request is diffed against.
 `scripts/ci-base-sha.js` reads it (`HEAD^1`) and exports `CI_BASE_SHA` for the
 rest of the job, so the planner's `git diff <base>...HEAD` resolves without
 deeper history. The planner passes the resulting source paths to the runner,
-which resolves them through its own module graph.
+which resolves them through its own module graph. The always-run shipped
+prompt hash guard compares with `CI_BASE_SHA` on pull requests and the first
+parent on other hosted runs. Every current or retired hash in that base must
+remain current or retired in `data.reference/prompts/shipped-hashes.json`.
 
 Reading the base off the checkout rather than `github.event.pull_request.base.sha`
 is also more correct: GitHub rebuilds the merge ref when the base branch moves,
@@ -590,17 +592,6 @@ The selected work is split across parallel jobs:
   when a `package.json`, a lockfile, an `.npmrc`, `.nvmrc`, the gate script or
   its `directInvocation.js` import, its drift test or `ci.yml` changed, since nothing else can change its answer
   (`NODE_MINIMUM_PATH_RE`). Non-push full runs always run it; a push gates it.
-- **Shipped prompt history** — the one job with a full-history clone; it checks
-  that every prompt body ever shipped is current or retired in
-  `data.reference/prompts/shipped-hashes.json`.
-  On a pull request it runs only when the impact planner's `prompt_history`
-  plan key is true: the diff touches `scripts/migrations/`,
-  `data.reference/prompts/`, `server/services/taskPromptDefaults`, either
-  prompt-hash regenerator, `ci.yml`, or any module the guard statically
-  imports (`PROMPT_HISTORY_PATH_RE` and `collectPromptHistoryInputs()` in
-  `scripts/ci-test-plan.js`). Non-PR runs
-  and pull requests into `release` always run it, and `npm run pregate` runs
-  it locally when selected.
 - **Linux worker containment** — runs `LINUX_CONTAINMENT_TESTS` against real
   bubblewrap namespaces on ubuntu-22.04. On a pull request it runs only when
   the `linux_containment` plan key is true: the diff touches the static import
@@ -878,9 +869,8 @@ The complete server, client, DB, lint, build, and smoke suite runs:
 
 ### Native jobs on a push to `main`
 
-A push to `main` runs the primary suites and prompt history complete (its
-guard reads every committed body, which a tree diff cannot see), but the six
-native job families (SuperCollider, Windows, macOS, Linux and Docker
+A push to `main` runs the complete primary suites. The six native job
+families (SuperCollider, Windows, macOS, Linux and Docker
 containment, Node minimum) follow the tree diff since the last green `main`
 run, decided as a pull request with that diff would be. `scripts/ci-base-sha.js`
 (opted in by `CI_GATED_BASE_LOOKUP`, never on a release `workflow_call`) makes

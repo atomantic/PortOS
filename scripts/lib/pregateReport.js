@@ -333,7 +333,6 @@ export function buildPregateReport({
       build: plan.build,
       smoke: plan.smoke,
       windows: plan.windows,
-      promptHistory: plan.promptHistory,
       linuxContainment: plan.linuxContainment,
       supercolliderLive: plan.supercolliderLive,
       dockerContainmentLive: plan.dockerContainmentLive,

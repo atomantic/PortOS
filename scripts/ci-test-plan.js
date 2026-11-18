@@ -544,21 +544,15 @@ export const needsSlashdoSubmodule = (plan) => Boolean(
 // The narrow CI jobs below observe a small, enumerable input set, so a pull
 // request that touches none of it skips them, and so does a push to `main`
 // whose tree diff against the last green push or schedule run touches none of
-// it (CI_GATED_BASE_SHA), except prompt history (see buildCiTestPlan). Schedule,
-// dispatch, workflow_call and release-base runs always run every one. A gate takes one of two forms:
+// it (CI_GATED_BASE_SHA). Schedule, dispatch, workflow_call and release-base
+// runs always run every one. A gate takes one of two forms:
 // - the head tree's static import closure of the job's entry points, computed
 //   per run so it cannot drift from a hand-kept list, plus the non-module
-//   inputs named by the job's pattern (prompt-history, linux-containment,
-//   supercollider-live, docker-containment-live);
+//   inputs named by the job's pattern (linux-containment, supercollider-live,
+//   docker-containment-live);
 // - an explicit path list alone, when the closure would select the job on most
 //   diffs (macos-native; see its note).
 // Every pattern names ci.yml so a workflow edit proves the job still runs.
-export const PROMPT_HISTORY_GUARD = 'scripts/migrations/check-shipped-prompt-history.js';
-// The guard reads git history of data.reference/prompts against
-// data.reference/prompts/shipped-hashes.json, which the hash regenerator writes.
-// taskPromptDefaults and the snapshot regenerator are the other half of a
-// prompt-default bump.
-export const PROMPT_HISTORY_PATH_RE = /^(?:scripts\/migrations\/|data\.reference\/prompts\/|server\/services\/taskPromptDefaults(?:\/|\.js$)|scripts\/regen-(?:prompt-integrity-snapshot|shipped-prompt-hashes)(?:\.test)?\.js$|\.github\/workflows\/ci\.yml$)/;
 // The files the `linux-containment` job passes to `npm test --prefix server`.
 export const LINUX_CONTAINMENT_TESTS = [
   'autofixer/sandbox.verify.test.js',
@@ -639,9 +633,6 @@ const staticClosureOf = (entries, cwd) => {
     return null;
   }
 };
-
-/** Static closure of the prompt-history guard. */
-export const collectPromptHistoryInputs = (cwd) => staticClosureOf([PROMPT_HISTORY_GUARD], cwd);
 
 /** Static closure of the linux-containment tests and their Vitest harness. */
 export const collectLinuxContainmentInputs = (cwd) => staticClosureOf(LINUX_CONTAINMENT_ENTRIES, cwd);
@@ -969,26 +960,22 @@ const suiteReasonsFor = (plan, { appRouteOnly = false } = {}) => ({
  */
 /**
  * The CI plan for a diff: the test-suite selection plus whether each
- * path-gated job (prompt history, Linux containment, SuperCollider live,
- * Docker containment live, macOS native, Node minimum) runs.
+ * path-gated job (Linux containment, SuperCollider live, Docker containment
+ * live, macOS native, Node minimum) runs.
  *
- * `promptHistoryInputs` / `linuxContainmentInputs` / `supercolliderLiveInputs` are the jobs' static
- * import closures from collectPlanInputs(); null (the default) runs the job.
+ * The static import closures of the single-purpose jobs come from
+ * collectPlanInputs(). A missing closure (null) runs its job.
  *
  * A forced-full plan runs every gated job, except when `gatedChangedFiles` is
  * an array: a push to `main` whose diff against the last green push or
  * schedule run is known (`CI_GATED_BASE_SHA`). Then the gated jobs and the
  * Windows native job are decided from that diff exactly as a pull request
  * would decide them, while the primary suites stay full. null keeps them all.
- * Prompt history is the exception: its guard reads every committed prompt
- * body, so a change reverted between the base and HEAD leaves no trace in a
- * tree diff yet still needs checking, and the shallow impact clone cannot
- * walk the intervening commits. It always runs on a forced-full plan.
  */
 export function buildCiTestPlan(changedFiles, options = {}) {
   const plan = buildSuitePlan(changedFiles, options);
   const {
-    forceFull = false, promptHistoryInputs = null, linuxContainmentInputs = null, supercolliderLiveInputs = null,
+    forceFull = false, linuxContainmentInputs = null, supercolliderLiveInputs = null,
     dockerContainmentLiveInputs = null, serverReach = null, trackedFiles = [],
     gatedChangedFiles = null, gatedDependencyChanges = {},
   } = options;
@@ -1018,7 +1005,6 @@ export function buildCiTestPlan(changedFiles, options = {}) {
     // A gated push still is not complete-run evidence: ci.yml withholds the
     // Full CI Gate marker that release reuse trusts (scripts/verify-ci-status.js).
     nativeGated: gatedFull,
-    promptHistory: forceFull || touchesJobInputs(plan.changedFiles, promptHistoryInputs, PROMPT_HISTORY_PATH_RE),
     linuxContainment: gate((files) => touchesJobInputs(files, linuxContainmentInputs, LINUX_CONTAINMENT_PATH_RE)),
     supercolliderLive: gate((files) => touchesJobInputs(files, supercolliderLiveInputs, SUPERCOLLIDER_LIVE_PATH_RE)),
     dockerContainmentLive: gate((files) => touchesJobInputs(files, dockerContainmentLiveInputs, DOCKER_CONTAINMENT_LIVE_PATH_RE)),
@@ -1451,7 +1437,6 @@ export function githubPlanOutput(plan) {
     build: plan.build,
     smoke: plan.smoke,
     slashdo: plan.slashdo,
-    prompt_history: plan.promptHistory,
     linux_containment: plan.linuxContainment,
     supercollider_live: plan.supercolliderLive,
     docker_containment_live: plan.dockerContainmentLive,
@@ -1482,7 +1467,6 @@ export function formatPlanSummary(output, shards, gatedBaseSha) {
     `- Client build: ${code(output.build)}`,
     `- Server smoke: ${code(output.smoke)}`,
     `- Slashdo submodule: ${code(output.slashdo)}`,
-    `- Shipped prompt history: ${code(output.prompt_history)}`,
     `- Linux worker containment: ${code(output.linux_containment)}`,
     `- SuperCollider live containment: ${code(output.supercollider_live)}`,
     `- Docker containment live: ${code(output.docker_containment_live)}`,
@@ -1781,14 +1765,13 @@ export function collectPlanInputs({ baseSha, forceFull = false, changedFiles, ga
 
   // A forced-full run with no gated diff runs every gated job, so it skips the walks.
   const walkGates = !forceFull || gatedChangedFiles !== null;
-  const promptHistoryInputs = walkGates ? collectPromptHistoryInputs(cwd) : null;
   const linuxContainmentInputs = walkGates ? collectLinuxContainmentInputs(cwd) : null;
   const supercolliderLiveInputs = walkGates ? collectSuperColliderLiveInputs(cwd) : null;
   const dockerContainmentLiveInputs = walkGates ? collectDockerContainmentLiveInputs(cwd) : null;
 
   return { changedFiles: collectedChangedFiles, trackedFiles: presentFiles, appDiff, pathContractTests,
-    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs,
-    dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
+    clientDependencies, clientTestDependencies, dbDependencies, browserDependencies, dependencyChanges,
+    linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach, gatedChangedFiles, gatedDependencyChanges };
 }
 
 function main() {
@@ -1815,7 +1798,7 @@ function main() {
   const gatedBaseSha = process.env.CI_GATED_BASE_SHA || undefined;
   const {
     changedFiles, trackedFiles, appDiff, pathContractTests, clientDependencies, clientTestDependencies, dbDependencies, browserDependencies,
-    dependencyChanges, promptHistoryInputs, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
+    dependencyChanges, linuxContainmentInputs, supercolliderLiveInputs, dockerContainmentLiveInputs, serverReach,
     gatedChangedFiles, gatedDependencyChanges,
   } = collectPlanInputs({
     baseSha: base,
@@ -1836,7 +1819,6 @@ function main() {
     dbDependencies,
     browserDependencies,
     dependencyChanges,
-    promptHistoryInputs,
     linuxContainmentInputs,
     supercolliderLiveInputs,
     dockerContainmentLiveInputs,

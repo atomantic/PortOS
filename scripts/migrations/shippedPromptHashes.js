@@ -10,8 +10,8 @@
  * is left alone. A template edit therefore needs no numbered migration: edit
  * the `.md`, then run `node scripts/regen-shipped-prompt-hashes.js`, which
  * retires the outgoing hash. `shippedPromptHashes.guard.test.js` fails on a
- * body changed without the regen and on any retired hash removed since the
- * merge base: a dropped hash strands every install still holding that body.
+ * body changed without the regen and on any current or retired hash lost
+ * since the comparison base: a dropped hash strands installs still holding it.
  *
  * `prompts/skills/jobs/` is excluded: the autonomous-job store keeps its own
  * `.shipped` snapshot for those templates (`syncSkillTemplatesFromSample`).

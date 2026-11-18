@@ -135,12 +135,10 @@ describe('ci.yml checkout depth', () => {
   // The diff-base step lives in a composite action; read the expanded jobs.
   const jobs = readCiJobs();
 
-  it('fetches full history only for the shipped prompt guard', () => {
+  it('keeps every CI job on a shallow checkout', () => {
     expect(Object.keys(jobs).length).toBeGreaterThan(0);
-    expect(jobs['prompt-history']).toBeDefined();
-    expect(jobs['prompt-history']).toMatch(/fetch-depth:\s*0\b/);
     for (const [id, body] of Object.entries(jobs)) {
-      if (id !== 'prompt-history') expect(body, id).not.toMatch(/fetch-depth:\s*0\b/);
+      expect(body, id).not.toMatch(/fetch-depth:\s*0\b/);
     }
   });
 
