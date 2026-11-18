@@ -167,7 +167,9 @@ A variable segment is now one of three things:
   it was before parameters were modelled.
   A resolved value is then read by JavaScript's own rules: text after a path
   continues its last segment unless a separator is written, `join()` keeps a
-  trailing separator and `resolve()` does not, a URL spec is parsed (`%20` is
+  trailing separator and `resolve()` does not, `resolve()` restarts at the
+  rightmost proven absolute anchor (ignoring preceding segments such as
+  environment expressions) while `join()` does not, a URL spec is parsed (`%20` is
   a space, `?raw` is not part of the path), a module path is completed the
   way the loader completes it, and a glob pattern keys the directory in front
   of its first wildcard. A value that names different files on Windows
