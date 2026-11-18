@@ -9,13 +9,13 @@
  */
 
 import { hasCanonDescriptorContent } from './canonPrompt.js';
-import { getCategoryKeys } from './universeBuilderShared.js';
+import { getCategoryKeys, normalizeCategoryKey } from './universeBuilderShared.js';
 import { isNonBlankStr } from './textUtils';
 
 // Pure prompt-count helpers for the Universe Builder (#2374). They mirror the
 // server's compile/skip rules so inline "Render N images" buttons can advertise
 // the exact number the server will enqueue, without a round trip. The server
-// copy in server/services/universeBuilder.js (compilePrompts /
+// copy in server/services/universeBuilder/compile.js (compilePrompts /
 // synthesizeCanonPrompt) is authoritative — keep these in sync.
 
 export function totalVariationCount(world) {
@@ -57,7 +57,7 @@ export function renderPromptCount(world, promptMode = 'variations') {
 // so an inline "Render" button can disable itself + show an accurate count
 // without a round trip.
 //
-// Defaulting rules — mirror server/services/universeBuilder.js compilePrompts:
+// Defaulting rules — mirror server/services/universeBuilder/compile.js compilePrompts:
 //   - sheets/all + no sheetSelection → render every sheet (server defaults to 'all')
 //   - variations/all + no selection → render every category (server falls back
 //     to a full category map via getWorldCategoryKeys)
@@ -82,7 +82,15 @@ export function scopedPromptCount(world, scope) {
   }
   if (mode === 'variations' || mode === 'all') {
     if (scope.selection) {
-      for (const [cat, pick] of Object.entries(scope.selection)) {
+      // Match compilePrompts: later aliases replace earlier selections of the same category.
+      const normalizedSelection = {};
+      for (const [key, pick] of Object.entries(scope.selection)) {
+        const normalized = normalizeCategoryKey(key);
+        if (normalized) normalizedSelection[normalized] = pick;
+      }
+      for (const cat of getCategoryKeys(normalizedSelection)) {
+        const pick = normalizedSelection[cat];
+        if (!pick) continue;
         const vars = world?.categories?.[cat]?.variations || [];
         if (pick === 'all') n += vars.length;
         else if (Array.isArray(pick)) {

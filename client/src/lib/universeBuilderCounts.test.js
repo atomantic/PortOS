@@ -1,4 +1,6 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
+import { compilePrompts, synthesizeCanonPrompt } from '../../../server/services/universeBuilder/compile.js';
 import {
   totalVariationCount, canonEntryHasContent, countCanonWithContent,
   renderPromptCount, scopedPromptCount,
@@ -6,7 +8,7 @@ import {
 
 const world = () => ({
   categories: {
-    heroes: { variations: [{ label: 'a' }, { label: 'b' }] },
+    heroes_and_villains: { variations: [{ label: 'Arc' }, { label: 'Rival' }] },
     cities: { variations: [{ label: 'c' }] },
   },
   compositeSheets: [{ label: 'Poster' }, { label: 'Sheet' }],
@@ -33,15 +35,6 @@ describe('universeBuilderCounts — totalVariationCount', () => {
 });
 
 describe('universeBuilderCounts — canon content', () => {
-  it('counts prompt / name anchors and places slugline', () => {
-    const w = world();
-    expect(canonEntryHasContent(w.characters[0], 'characters')).toBe(true);
-    expect(canonEntryHasContent(w.characters[1], 'characters')).toBe(false);
-    expect(canonEntryHasContent(w.places[0], 'places')).toBe(true);
-    // slugline is a places-only anchor — characters ignore it.
-    expect(canonEntryHasContent({ slugline: 'X' }, 'characters')).toBe(false);
-    expect(canonEntryHasContent(null, 'objects')).toBe(false);
-  });
   it('countCanonWithContent filters empty-seed entries', () => {
     const w = world();
     expect(countCanonWithContent(w, 'characters')).toBe(1);
@@ -64,32 +57,48 @@ describe('universeBuilderCounts — scopedPromptCount', () => {
   it('returns 0 for a null scope', () => {
     expect(scopedPromptCount(world(), null)).toBe(0);
   });
-  it('counts a variation selection', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'variations', selection: { heroes: 'all' } })).toBe(2);
-  });
-  it('variations with no selection means all categories', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'variations' })).toBe(3);
-  });
-  it('sheets default to every sheet when sheetSelection omitted', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'sheets' })).toBe(2);
-  });
-  it('sheets honor a label array selection', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'sheets', sheetSelection: ['poster'] })).toBe(1);
-  });
-  it('canon selection counts only content-bearing entries', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'canon', canonSelection: { characters: 'all' } })).toBe(1);
-  });
-  it('canon with no selection renders nothing', () => {
-    expect(scopedPromptCount(world(), { promptMode: 'canon' })).toBe(0);
-  });
-  it('all-mode sums sheets + variations + canon selections', () => {
-    const scope = {
+  it.each([
+    ['default variations', {}, 3],
+    ['selected variation category', { selection: { heroes_and_villains: 'all' } }, 2],
+    ['normalized category and case-insensitive labels', { selection: { 'Heroes & Villains': ['ARC'] } }, 1],
+    ['category aliases use the last selection', { selection: { heroes_and_villains: 'all', 'Heroes & Villains': ['ARC'] } }, 1],
+    ['empty normalized category is ignored', { selection: { '!!!': 'all' } }, 0],
+    ['default sheets', { promptMode: 'sheets' }, 2],
+    ['selected sheets', { promptMode: 'sheets', sheetSelection: ['poster'] }, 1],
+    ['canon without selection', { promptMode: 'canon' }, 0],
+    ['canon with an empty-seed entry', { promptMode: 'canon', canonSelection: { characters: 'all' } }, 1],
+    ['canon selected by slugline', { promptMode: 'canon', canonSelection: { places: ['the-rift'] } }, 1],
+    ['combined selection with default sheets', {
       promptMode: 'all',
-      selection: { heroes: 'all' },
+      selection: { heroes_and_villains: 'all' },
       canonSelection: { objects: 'all' },
-    };
-    // 2 sheets (default all) + 2 hero variations + 1 object canon = 5
-    expect(scopedPromptCount(world(), scope)).toBe(5);
+    }, 5],
+    ['combined selection', {
+      promptMode: 'all',
+      selection: { 'Heroes & Villains': 'all' },
+      sheetSelection: ['sheet'],
+      canonSelection: { objects: 'all' },
+    }, 4],
+  ])('counts %s like the server', (_label, scope, expected) => {
+    const w = world();
+    const compiledCount = compilePrompts(w, scope).length;
+    expect(compiledCount).toBe(expected);
+    expect(scopedPromptCount(w, scope)).toBe(compiledCount);
   });
 });
-// @vitest-environment node
+
+describe('Universe Builder server canon seed parity', () => {
+  it.each([
+    ['characters', { prompt: 'An explorer' }, true],
+    ['characters', { name: 'Nova' }, true],
+    ['characters', { slugline: 'X' }, false],
+    ['characters', { name: ' ', prompt: ' ' }, false],
+    ['places', { slugline: 'THE-RIFT' }, true],
+    ['objects', { description: 'Brushed brass' }, true],
+    ['objects', null, false],
+  ])('matches canon seed presence for %s with %j', (kind, entry, expected) => {
+    const hasSeed = Boolean(synthesizeCanonPrompt(kind, entry));
+    expect(hasSeed).toBe(expected);
+    expect(canonEntryHasContent(entry, kind)).toBe(hasSeed);
+  });
+});
