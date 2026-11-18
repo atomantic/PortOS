@@ -377,13 +377,15 @@ full runs never seed a scoped `1of1` lineage, so an exact-partition-only lookup
 would leave those jobs permanently cold. A fallback contains only one shard's
 entries: matching content keys may skip those tests; all other selected tests
 still run. Partitioning happens before memo lookup, so changing the memo's
-source shard cannot omit or duplicate a selected test. The server and client jobs also
-restore every full-run shard lineage (`merge-shards`, equal to
-`FULL_SUITE_SHARDS` for the family and pinned by `scripts/ci-test-memo-cache.test.js`)
-and fold them in with `scripts/merge-test-memo.js`, keeping the newer record
-per test and every live entry: a shard records only its slice, and related
-selection narrows a test only through its own record. Each lineage restores to the path it was saved from (a cache version hashes the path; restoring elsewhere finds nothing) and is then moved aside before the next. Each shard saves as soon
-as its own tests pass.
+source shard cannot omit or duplicate a selected test. The server and client
+jobs restore each distinct full-run lineage once, counting the initial partition
+or family match. Their `merge-shards` input equals `FULL_SUITE_SHARDS` for the
+family and is pinned by `scripts/ci-test-memo-cache.test.js`. They fold the
+lineages in with `scripts/merge-test-memo.js`, keeping the newer record per test
+and every live entry. A shard records only its slice, and related selection
+narrows a test only through its own record. Each lineage restores to the path it
+was saved from because the cache version hashes that path. The job then moves
+it aside before the next restore. Each shard saves as soon as its own tests pass.
 Pull requests only read. Pushes to `main`, the scheduled nightly, `workflow_dispatch` and
 `workflow_call` runs on the default/release branches save a new entry keyed
 by run id, and only when the test step itself succeeded, so the cache holds
