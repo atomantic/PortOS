@@ -6,7 +6,14 @@ import { RUNNER_FAMILIES, loraCompatKey } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import ImageGenSettingsForm from '../imageGen/ImageGenSettingsForm';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow';
-import { TRUNK_TABS, humanizeCategory } from '../../lib/universeBuilderShared';
+import {
+  RENDERS_PER_PROMPT_ERROR,
+  RENDERS_PER_PROMPT_MAX,
+  RENDERS_PER_PROMPT_MIN,
+  TRUNK_TABS,
+  humanizeCategory,
+  isValidRendersPerPrompt,
+} from '../../lib/universeBuilderShared';
 import { totalVariationCount, countCanonWithContent } from '../../lib/universeBuilderCounts';
 
 // Batch-render tab for the Universe Builder. Renders the shared image-gen
@@ -51,7 +58,10 @@ export default function RenderTab({
     };
   }, [draft, bucketsByKind]);
   const { totalSheets, totalCanon, otherBuckets, totalOtherVariations, totalEverything } = counts;
-  const perPrompt = renderOpts.batchPerVariation || 1;
+  const { batchPerVariation: perPrompt = RENDERS_PER_PROMPT_MIN } = renderOpts;
+  const validPerPrompt = isValidRendersPerPrompt(perPrompt);
+  const renderDisabled = !validPerPrompt || !selectedId || availableBackends.length === 0 || rendering;
+  const imageCount = validPerPrompt ? totalEverything * perPrompt : null;
 
   return (
     <>
@@ -92,14 +102,21 @@ export default function RenderTab({
             <label htmlFor="world-render-batch" className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
             <input
               id="world-render-batch"
-              type="number" min={1} max={20}
-              value={renderOpts.batchPerVariation ?? 1}
+              type="number" min={RENDERS_PER_PROMPT_MIN} max={RENDERS_PER_PROMPT_MAX} step={1}
+              value={typeof perPrompt === 'number' || typeof perPrompt === 'string' ? perPrompt : ''}
+              aria-invalid={!validPerPrompt}
+              aria-describedby={validPerPrompt ? undefined : 'world-render-batch-error'}
               onChange={(e) => {
-                const n = Number(e.target.value);
-                setRenderOpts((r) => ({ ...r, batchPerVariation: Number.isFinite(n) && n > 0 ? n : 1 }));
+                const value = e.target.value;
+                setRenderOpts((r) => ({ ...r, batchPerVariation: value === '' ? '' : Number(value) }));
               }}
               className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
             />
+            {!validPerPrompt && (
+              <p id="world-render-batch-error" role="alert" className="mt-1 text-xs text-port-error">
+                {RENDERS_PER_PROMPT_ERROR}
+              </p>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -113,12 +130,12 @@ export default function RenderTab({
               // when a new trunk is added.
               canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
             })}
-            disabled={rendering || !selectedId || totalEverything === 0 || availableBackends.length === 0}
+            disabled={renderDisabled || totalEverything === 0}
             className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
             title="Render every canon entry + every variation + every composite board with these knobs"
           >
             {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            Render everything ({totalEverything * perPrompt} image{totalEverything * perPrompt === 1 ? '' : 's'})
+            Render everything{imageCount !== null && ` (${imageCount} image${imageCount === 1 ? '' : 's'})`}
           </button>
           <span className="text-[11px] text-gray-500">…or pick a narrower scope below.</span>
         </div>
@@ -161,7 +178,7 @@ export default function RenderTab({
                       // TrunkView's onBulkRenderTrunk for why this opt-out matters.
                       sheetSelection: [],
                     })}
-                    disabled={!selectedId || availableBackends.length === 0 || rendering}
+                    disabled={renderDisabled}
                     className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
                     title={`Render every ${trunk.label.toLowerCase()} canon entry AND every variation under this trunk`}
                   >
@@ -177,7 +194,7 @@ export default function RenderTab({
                           key={bucket}
                           type="button"
                           onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
-                          disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
+                          disabled={renderDisabled || count === 0}
                           className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
                           title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
                         >
@@ -207,7 +224,7 @@ export default function RenderTab({
                     promptMode: 'variations',
                     selection: Object.fromEntries(otherBuckets.map((b) => [b, 'all'])),
                   })}
-                  disabled={!selectedId || availableBackends.length === 0 || rendering}
+                  disabled={renderDisabled}
                   className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
                   title="Render every variation in every Other bucket"
                 >
@@ -222,7 +239,7 @@ export default function RenderTab({
                       key={bucket}
                       type="button"
                       onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
-                      disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
+                      disabled={renderDisabled || count === 0}
                       className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
                       title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
                     >
@@ -248,7 +265,7 @@ export default function RenderTab({
                   promptMode: 'canon',
                   canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
                 })}
-                disabled={!selectedId || availableBackends.length === 0 || rendering}
+                disabled={renderDisabled}
                 className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
               >
                 Bulk-render all canon
@@ -265,7 +282,7 @@ export default function RenderTab({
               <button
                 type="button"
                 onClick={() => handleRender({ promptMode: 'sheets', sheetSelection: 'all' })}
-                disabled={!selectedId || availableBackends.length === 0 || rendering}
+                disabled={renderDisabled}
                 className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
               >
                 Bulk-render composites
