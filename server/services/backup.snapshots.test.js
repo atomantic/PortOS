@@ -1,5 +1,5 @@
 /** Backup service suite: excludes, snapshot listing/deletion/streaming, dumpPostgres status, manifest generation, the subdirFilter guard and backup state persistence. Shared mocks and helpers live in backup.test.fixture.js (#16215). */
-import { testDataRoot, machineHost, fakeProc, flush, overridable, nonOverridable, assertPoolToolSpawn } from './backup.test.fixture.js';
+import { testDataRoot, machineHost, fakeProc, flush, overridable, nonOverridable, assertPoolToolSpawn, COMPLETE_DUMP } from './backup.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createReadStream, existsSync } from 'fs';
 import { tmpdir } from 'os';
@@ -859,7 +859,7 @@ describe('dumpPostgres status classification', () => {
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 4096 });
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
-    createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE public.memories (id uuid);\n')]));
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const result = dumpPostgres('/tmp/example.sql');
     await flush();
     assertPoolToolSpawn(spawn.mock.calls[0]);
@@ -902,7 +902,7 @@ describe('dumpPostgres status classification', () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     getServerMajorVersion.mockResolvedValue(17);
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
@@ -927,7 +927,7 @@ describe('dumpPostgres status classification', () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     getServerMajorVersion.mockResolvedValue(null);
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('CREATE TABLE memories (...);\n');
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     process.env.PORTOS_PGDUMP = '/custom/bin/pg_dump';
@@ -1008,7 +1008,7 @@ describe('dumpPostgres status classification', () => {
       checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
       let dumpSize = 0;
       vi.spyOn(fs, 'stat').mockImplementation(async () => ({ size: dumpSize }));
-      createReadStream.mockImplementation(() => Readable.from([Buffer.from('CREATE TABLE memories (...);\n')]));
+      createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
       const proc = fakeProc();
       spawn.mockReturnValue(proc);
 
@@ -1030,7 +1030,7 @@ describe('dumpPostgres status classification', () => {
   it('returns failed/empty_dump when exit 0 but file is 0 bytes', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 0 });
-    vi.spyOn(fs, 'readFile').mockResolvedValue('');
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
@@ -1039,15 +1039,14 @@ describe('dumpPostgres status classification', () => {
     const result = await p;
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('empty_dump');
+    expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
   });
 
   it('returns ok with streamed sizeBytes and tableCount on a good dump', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
     const readFileSpy = vi.spyOn(fs, 'readFile');
-    createReadStream.mockImplementation(() => Readable.from([Buffer.from(
-      'CREATE TABLE public.memories (\n    id uuid\n);\nCREATE TABLE public.memory_links (\n    id uuid\n);\n'
-    )]));
+    createReadStream.mockImplementation(() => Readable.from([Buffer.from(COMPLETE_DUMP)]));
     const proc = fakeProc();
     spawn.mockReturnValue(proc);
     const p = dumpPostgres('/tmp/x.sql');
@@ -1061,6 +1060,7 @@ describe('dumpPostgres status classification', () => {
   it('settles failed/inspect_error when streaming the dump fails', async () => {
     checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
     vi.spyOn(fs, 'stat').mockResolvedValue({ size: 2048 });
+    const unlinkSpy = vi.spyOn(fs, 'unlink').mockResolvedValue();
     createReadStream.mockImplementation(() => new Readable({
       read() { this.destroy(Object.assign(new Error('boom'), { code: 'EIO' })); }
     }));
@@ -1070,6 +1070,7 @@ describe('dumpPostgres status classification', () => {
     await flush();
     proc.emit('close', 0);
     await expect(p).resolves.toMatchObject({ status: 'failed', reason: 'inspect_error' });
+    expect(unlinkSpy).toHaveBeenCalledWith('/tmp/x.sql');
   });
 });
 
