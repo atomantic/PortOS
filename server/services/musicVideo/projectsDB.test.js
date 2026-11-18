@@ -23,7 +23,7 @@ import { getSyncBaseHash, __resetBaseHashCacheForTests } from '../../lib/conflic
 
 const testState = vi.hoisted(() => ({ dataRoot: null, writeCounter: { baseHash: 0 } }));
 
-vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+vi.mock('../../lib/paths.js', async (importOriginal) => {
   const actual = await importOriginal();
   const { mkdtempSync } = await import('node:fs');
   const { tmpdir } = await import('node:os');
@@ -31,6 +31,13 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return {
     ...actual,
     PATHS: { ...actual.PATHS, data: testState.dataRoot, images: join(testState.dataRoot, 'images') },
+  };
+});
+
+vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
     atomicWrite: async (path, data) => {
       if (typeof path === 'string' && path.endsWith('sync_base_hashes.json')) testState.writeCounter.baseHash += 1;
       return actual.atomicWrite(path, data);
@@ -292,6 +299,7 @@ describe.skipIf(!runDb)('music video projects DB adapter', () => {
       castAndSets: { source: 'catalog' },
     };
     const presented = await withCatalogCheckin(project);
+    expect(presented.castAndSets.catalogCheckin).toMatchObject({ problems: [], items: [{ images: ['original.png'] }] });
     scene.clipReferenceIds = [musicVideoClipReferenceChoices(presented, scene)[0].id];
     scene.takes = [{ kind: 'video', assetId: 'clip', dependencies: {
       version: 1, references: [captureClipReferenceDependency(presented, scene)],
