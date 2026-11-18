@@ -724,6 +724,8 @@ const ARRAY_READS = new Set([...ARRAY_ITERATORS, 'length', 'includes', 'indexOf'
   'entries', 'keys', 'values', 'toString', 'flat', 'toSorted', 'toReversed', 'toSpliced', 'with']);
 /** Matchers that compare against an array handed to them. */
 const ARRAY_MATCHERS = new Set(['toEqual', 'toStrictEqual', 'toContain', 'arrayContaining']);
+/** Matchers that only compare what `expect()` was handed: `toSatisfy(cb)` and a custom matcher are handed the array itself. */
+const COMPARING_MATCHERS = new Set(['toEqual', 'toStrictEqual', 'toContain', 'toContainEqual', 'toHaveLength', 'toBe', 'toMatchObject', 'toBeDefined', 'toBeInstanceOf', 'toMatchSnapshot', 'toMatchInlineSnapshot']);
 const READDIR_CALLEES = new Set(['readdirSync', 'readdir']);
 const FS_MODULES = new Set(['fs', 'node:fs', 'fs/promises', 'node:fs/promises']);
 const BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with']);
@@ -1218,7 +1220,13 @@ function createScopes(ctx) {
       const callee = open !== null && isPunct(arr[open], '(') ? arr[open - 1] : null;
       // Alone: a second argument can be a callback that is handed the array, or bound to it as `this`.
       if (callee?.t !== 'id' || listRanges(arr, m, open).length !== 1) return false;
-      if (!isPunct(arr[open - 2], '.')) return !shadowed(callee.v) && (callee.v === 'expect' || (callee.v === 'Set' && isWord(arr[open - 2], 'new')));
+      if (!isPunct(arr[open - 2], '.')) {
+        if (shadowed(callee.v)) return false;
+        if (callee.v === 'Set') return isWord(arr[open - 2], 'new');
+        // `expect(NAMES).toHaveLength(2)`, `expect(NAMES).not.toContain(x)`: compared, there and then.
+        const matcher = m[open] + (isPunct(arr[m[open] + 1], '.') && isWord(arr[m[open] + 2], 'not') ? 4 : 2);
+        return callee.v === 'expect' && isPunct(arr[matcher - 1], '.') && arr[matcher]?.t === 'id' && COMPARING_MATCHERS.has(arr[matcher].v) && isPunct(arr[matcher + 1], '(');
+      }
       const owner = arr[open - 3];
       const global = (name) => isWord(owner, name) && !isPunct(arr[open - 4], '.', '?.') && !shadowed(name);
       return (callee.v === 'each' && onTestApi(arr, open - 1)) || ARRAY_MATCHERS.has(callee.v)
