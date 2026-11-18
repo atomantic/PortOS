@@ -281,8 +281,9 @@ export async function recordProcessAuditOutcome(raw, context = {}) {
           const { listAppIssues } = await import('./appIssues.js');
           const listed = await listAppIssues(app);
           if (listed.transient) throw new Error('Tracker unreadable; nothing filed');
+          // The audited checkout can be on either side of the agent directory move.
           const cleanupState = args.template === 'recovery-loop' && isUpstreamFullName(app.fullName)
-            && anchors.includes('server/services/agent/agentRepoStateVerification.js')
+            && anchors.some(path => /^server\/services\/(?:agent\/)?agentRepoStateVerification\.js$/.test(path))
             ? await cleanupFixState(app, await getAgentRecord(receipt.agentId)) : null;
           if (cleanupState === 'unknown') {
             receipt.outcome = 'insufficient-evidence'; receipt.reviewedAt = new Date().toISOString();
