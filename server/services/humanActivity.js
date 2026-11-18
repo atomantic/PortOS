@@ -354,22 +354,47 @@ export async function recordEvents(candidates = []) {
 // the insert, against the holder actually present then.
 async function recordRekeyedChunk(client, entries) {
   const rekeyed = entries.filter((e) => e.legacyKey);
+  const execute = client.query.bind(client);
+  // Insert first so a concurrent import or sync that won the unique key is
+  // visible to the next statement under READ COMMITTED.
+  let inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
   const { rows: holders } = await client.query(
     `SELECT e.source, e.dedupe_key, e.account_id FROM human_activity_events e
-       JOIN unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
-         ON e.source = k.source AND e.dedupe_key = k.dedupe_key`,
-    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey)],
+       JOIN unnest($1::text[], $2::text[], $3::text[]) AS k(source, dedupe_key, account_id)
+         ON e.source = k.source AND e.dedupe_key = k.dedupe_key
+      WHERE e.account_id IS DISTINCT FROM k.account_id
+      ORDER BY e.source, e.dedupe_key FOR UPDATE OF e`,
+    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey), rekeyed.map((e) => e.row.accountId)],
   );
   const holderAccount = new Map(holders.map((h) => [`${h.source}\u0000${h.dedupe_key}`, h.account_id]));
+  const promotions = [];
+  const fallbacks = [];
   for (const e of rekeyed) {
-    const holder = holderAccount.get(`${e.row.source}\u0000${e.row.dedupeKey}`);
-    if (holder != null && holder !== e.row.accountId) {
-      e.row = { ...e.row, dedupeKey: e.legacyKey };
+    const { row } = e;
+    const key = `${row.source}\u0000${row.dedupeKey}`;
+    const holder = holderAccount.get(key);
+    if (holder === null && row.source === 'gmail' && row.accountId && row.dedupeKey === `gmail:${row.metadata.rfcMessageId}`) {
+      promotions.push(row);
+      holderAccount.set(key, row.accountId);
+    } else if (holder != null && holder !== row.accountId) {
+      fallbacks.push({ ...row, dedupeKey: e.legacyKey });
       e.legacyKey = null;
     }
   }
-  const execute = client.query.bind(client);
-  const inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
+  if (promotions.length) {
+    // Keep the Timeline row id while adopting the provider's direction,
+    // timestamp, normalized participants and mailbox-specific thread identity.
+    await client.query(
+      `UPDATE human_activity_events e SET
+         account_id = p."accountId", kind = p.kind, happened_at = p."happenedAt",
+         title = p.title, summary = p.summary, participants = p.participants, metadata = p.metadata
+       FROM jsonb_to_recordset($1::jsonb) AS p("dedupeKey" text, "accountId" text, kind text,
+         "happenedAt" timestamptz, title text, summary text, participants jsonb, metadata jsonb)
+       WHERE e.source = 'gmail' AND e.dedupe_key = p."dedupeKey" AND e.account_id IS NULL`,
+      [toPgJson(promotions)],
+    );
+  }
+  if (fallbacks.length) inserted += await insertActivityChunk(fallbacks, execute);
   const retiring = entries.filter((e) => e.legacyKey);
   if (retiring.length === 0) return inserted;
   const retired = await client.query(
@@ -377,7 +402,7 @@ async function recordRekeyedChunk(client, entries) {
       USING unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS k(source, dedupe_key, legacy_key, account_id),
             human_activity_events n
       WHERE n.source = k.source AND n.dedupe_key = k.dedupe_key
-        AND (n.account_id IS NULL OR n.account_id IS NOT DISTINCT FROM k.account_id)
+        AND n.account_id IS NOT DISTINCT FROM k.account_id
         AND e.source = k.source AND e.dedupe_key = k.legacy_key`,
     [
       retiring.map((e) => e.row.source),
