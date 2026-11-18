@@ -90,6 +90,7 @@ PortOS/
 │   │   ├── subAgentSpawner.js # Agent-cluster event wiring, runner communication, and slashdo loading
 │   │   ├── agent/             # Agent orchestration and execution
 │   │   │   ├── agentCliSpawning.js # Multi-provider CLI agent spawning
+│   │   │   ├── agentCliOutputStream.js # Headless CLI stdout/stderr pipeline and transcript persistence
 │   │   │   └── agentOrchestrator.js # Agent lifecycle-transition facade
 │   │   ├── pm2.js             # PM2 process management
 │   │   ├── runner.js          # AI execution engine
@@ -310,7 +311,7 @@ Each install pulls from its peers (`server/services/syncOrchestrator.js`).
 
 ### Sub-Agent Spawner (`server/services/subAgentSpawner.js`)
 - `initSpawner()`: CoS Runner connection + runner event handlers, the `task:ready` → spawn listener, run-directory pruning, orphan sweep
-- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
+- The work itself lives in focused siblings: `agentLifecycle.js` (spawn/completion), `agentCliSpawning.js` / `agentCliOutputStream.js` / `agentTuiSpawning.js` (process spawning), `agentModelSelection.js`, `agentPromptBuilder.js`, `agentRunTracking.js`
 
 ### Agent Orchestrator (`server/services/agent/agentOrchestrator.js`)
 - The one entry point for an agent LIFECYCLE TRANSITION (pause / kill / terminate / complete / spawn) — read its header before touching the agent cluster
