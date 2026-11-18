@@ -900,13 +900,20 @@ async function runAdmittedBackup(destPath, io, { excludePaths, disabledDefaultEx
  */
 const usesFileEscapeHatch = () => process.env.MEMORY_BACKEND === 'file' || getBackendName() === 'file';
 
+function missingDumpParts({ complete, missingTables }) {
+  return [
+    ...(complete ? [] : ['the pg_dump completion marker']),
+    ...missingTables.map(name => `table ${name}`),
+  ].join(', ');
+}
+
 /**
  * Run pg_dump to create a PostgreSQL backup alongside the rsync snapshot.
  * Returns an explicit status so the caller can distinguish the benign file
  * escape hatch from "PG required but dump failed" (data at risk):
  *   { status: 'ok', sizeBytes, tableCount }
  *   { status: 'skipped', reason: 'not_configured' }   (explicit file escape hatch only)
- *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'inspect_error'|'timeout', error }
+ *   { status: 'failed', reason: 'pg_unreachable'|'pg_dump_missing'|'version_mismatch'|'dump_error'|'empty_dump'|'inspect_error'|'dump_incomplete'|'timeout', error }
  *     (pg_unreachable fires whenever Postgres is required — i.e. not the file
  *      escape hatch — but the DB is down at backup time; version_mismatch means
  *      no installed pg_dump is new enough for the running server)
@@ -948,7 +955,15 @@ export async function dumpPostgres(outputPath) {
     console.warn(`⚠️ No installed pg_dump satisfies server major ${serverMajor} (using ${pgDumpBin})`);
   }
 
-  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
+  return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise, rejectPromise) => {
+    // A failed dump must be absent before a degraded snapshot can be
+    // published. If we cannot remove it, leave the snapshot failed instead.
+    const discardDump = (reason, error) => unlink(outputPath)
+      .catch(err => {
+        if (err.code !== 'ENOENT') throw backupFilesystemFailure('dump cleanup', err);
+      })
+      .then(() => resolvePromise({ status: 'failed', reason, error }), rejectPromise);
+
     const proc = spawn(pgDumpBin, [
       '-h', pgHost,
       '-p', pgPort,
@@ -972,40 +987,36 @@ export async function dumpPostgres(outputPath) {
       if (!watchdog.finish()) return;
       const timeoutError = watchdog.getTimeoutError();
       if (timeoutError) {
-        await unlink(outputPath).catch(() => {});
-        resolvePromise({ status: 'failed', reason: 'timeout', error: timeoutError.message });
-        return;
+        return discardDump('timeout', timeoutError.message);
       }
       if (code !== 0) {
         console.warn(`⚠️ pg_dump failed (code ${code}): ${stderr.trim()}`);
-        // pg_dump can exit non-zero after writing a partial file (e.g. mid-dump
-        // connection loss). Remove it so a later restore can't trust a truncated
-        // dump on size alone — a failed dump must leave no restorable artifact.
-        await unlink(outputPath).catch(() => {});
         // A version mismatch is a distinct, actionable failure (install a newer
         // pg_dump) — classify it so the UI can point at the fix instead of the
         // generic "is pg_dump installed / is PG reachable" hint.
         const isMismatch = !satisfies || /server version mismatch|aborting because of server version/i.test(stderr);
-        resolvePromise({ status: 'failed', reason: isMismatch ? 'version_mismatch' : 'dump_error', error: stderr.trim() });
-        return;
+        return discardDump(isMismatch ? 'version_mismatch' : 'dump_error', stderr.trim());
       }
       // Verify: a dump that exits 0 but is empty/truncated is still a failure.
       const info = await stat(outputPath).catch(() => null);
       if (!info || info.size === 0) {
         console.warn('⚠️ pg_dump produced an empty dump file');
-        resolvePromise({ status: 'failed', reason: 'empty_dump', error: 'dump file missing or 0 bytes' });
-        return;
+        return discardDump('empty_dump', 'dump file missing or 0 bytes');
       }
-      // Stream the dump for its table count — reading it whole would scale
-      // server heap with database size. Own the rejection here: this is an
-      // event callback, so a throw would leave the outer Promise unsettled.
+      // Stream the dump to check its restore envelope and count tables
+      // without holding it in memory. This callback owns stream failures.
       const inspected = await inspectDatabaseDump(outputPath).catch((err) => {
         console.warn(`⚠️ pg_dump inspection failed: ${err.code || err.message}`);
         return null;
       });
       if (!inspected) {
-        resolvePromise({ status: 'failed', reason: 'inspect_error', error: 'dump could not be read for verification' });
-        return;
+        return discardDump('inspect_error', 'dump could not be read for verification');
+      }
+      const missing = missingDumpParts(inspected);
+      if (missing) {
+        const error = `The database dump is incomplete (missing ${missing})`;
+        console.warn(`⚠️ pg_dump rejected: ${error}`);
+        return discardDump('dump_incomplete', error);
       }
       const tableCount = inspected.tableCount;
       console.log(`💾 pg_dump complete: ${Math.round(info.size / 1024)}KB, ${tableCount} tables`);
@@ -1028,9 +1039,9 @@ export async function dumpPostgres(outputPath) {
 }
 
 // Filesystem messages contain private paths; only expose the operation and errno.
-function manifestReadFailure(operation, err) {
+function backupFilesystemFailure(operation, err) {
   const code = /^E[A-Z0-9]+$/.test(err?.code) ? err.code : 'UNKNOWN';
-  return new Error(`Backup manifest ${operation} failed (${code})`);
+  return new Error(`Backup ${operation} failed (${code})`);
 }
 
 /**
@@ -1046,7 +1057,7 @@ function manifestReadFailure(operation, err) {
  */
 export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath = null, { allowMissingDump = false, assetConsistency } = {}) {
   const entries = await readdir(snapshotDataDir, { recursive: true })
-    .catch(err => { throw manifestReadFailure('data readdir', err); });
+    .catch(err => { throw backupFilesystemFailure('manifest data readdir', err); });
   const files = {};
 
   for (const entry of entries) {
@@ -1056,20 +1067,20 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       // excluded. Preserve that compatibility, but never skip a missing entry.
       if (err.code === 'ENOENT') {
         const entryInfo = await lstat(filePath)
-          .catch(entryErr => { throw manifestReadFailure('data lstat', entryErr); });
+          .catch(entryErr => { throw backupFilesystemFailure('manifest data lstat', entryErr); });
         if (entryInfo.isSymbolicLink()) return null;
       }
-      throw manifestReadFailure('data stat', err);
+      throw backupFilesystemFailure('manifest data stat', err);
     });
     if (!info || !info.isFile() || isOsMetadataFile(basename(entry))) continue;
     files[entry] = await sha256File(filePath)
-      .catch(err => { throw manifestReadFailure('data hash', err); });
+      .catch(err => { throw backupFilesystemFailure('manifest data hash', err); });
   }
 
   if (pgDumpPath) {
     const dumpInfo = await stat(pgDumpPath).catch(err => {
       if (allowMissingDump && err.code === 'ENOENT') return null;
-      throw manifestReadFailure('dump stat', err);
+      throw backupFilesystemFailure('manifest dump stat', err);
     });
     if (dumpInfo && !dumpInfo.isFile()) {
       throw new Error('Backup manifest dump stat failed (not a regular file)');
@@ -1079,7 +1090,7 @@ export async function generateManifest(snapshotDataDir, manifestPath, pgDumpPath
       // (alongside it, not inside it). A future manifest-verify must not assume
       // every key resolves under snapshotDataDir.
       files['../portos-db.sql'] = await sha256File(pgDumpPath)
-        .catch(err => { throw manifestReadFailure('dump hash', err); });
+        .catch(err => { throw backupFilesystemFailure('manifest dump hash', err); });
     }
   }
 
@@ -2416,11 +2427,8 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   // The restore resets every application table first, so a dump that parses
   // but stops early (header-only, or truncated between statements) would
   // commit an empty database. ON_ERROR_STOP cannot see that; the envelope can.
-  if (!dump.complete || dump.missingTables.length) {
-    const missing = [
-      ...(dump.complete ? [] : ['the pg_dump completion marker']),
-      ...dump.missingTables.map(name => `table ${name}`),
-    ].join(', ');
+  const missing = missingDumpParts(dump);
+  if (missing) {
     console.error(`❌ restore: incomplete dump for snapshot ${snapshotId} (missing ${missing})`);
     return { status: 'failed', reason: 'dump_incomplete', error: `The snapshot database dump is incomplete (missing ${missing}). Restore was refused without changing data.` };
   }

@@ -1,5 +1,5 @@
 /** Backup service suite: runBackup lifecycle, snapshot cut failures and retention pruning. Shared mocks and helpers live in backup.test.fixture.js (#16215). */
-import { maintenanceFence, snapshotCutSeam, machineHost, fakeProc } from './backup.test.fixture.js';
+import { maintenanceFence, snapshotCutSeam, machineHost, fakeProc, DUMP_HEADER, DUMP_TABLES, DUMP_TRAILER, COMPLETE_DUMP } from './backup.test.fixture.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { rmSync } from 'fs';
 import { tmpdir } from 'os';
@@ -143,8 +143,7 @@ describe('runBackup lifecycle', () => {
       rsync.emit('close', 0);
       if (!fileMode) {
         await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
-        await fsp.writeFile(joinPath(snapshotDir, 'portos-db.sql'),
-          'CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n-- PostgreSQL database dump complete\n');
+        await fsp.writeFile(joinPath(snapshotDir, 'portos-db.sql'), COMPLETE_DUMP);
         pgDump.emit('close', 0);
       }
       const result = await pending;
@@ -398,7 +397,7 @@ describe('runBackup lifecycle', () => {
     await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
     const capturedRow = rowFilename;
     const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
-    await fsp.writeFile(dumpPath, `CREATE TABLE public.tracks (audio_filename text);\nCOPY public.tracks (audio_filename) FROM stdin;\n${capturedRow}\n\\.\n`);
+    await fsp.writeFile(dumpPath, `${DUMP_HEADER}${DUMP_TABLES}CREATE TABLE public.tracks (audio_filename text);\nCOPY public.tracks (audio_filename) FROM stdin;\n${capturedRow}\n\\.\n${DUMP_TRAILER}`);
     pg.emit('close', 0);
     await pending;
     await newTake;
@@ -608,7 +607,7 @@ describe('runBackup lifecycle', () => {
     const dumpPath = joinPath(snapshotDir, 'portos-db.sql');
     rsync.emit('close', 0);
     await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
-    await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
+    await fsp.writeFile(dumpPath, COMPLETE_DUMP);
     // Enumeration starts only after dumpPostgres has verified and returned ok.
     vi.spyOn(fs, 'readdir').mockImplementation(async (path, ...args) => {
       if (path === joinPath(snapshotDir, 'data')) await fsp.unlink(dumpPath);
@@ -1155,10 +1154,17 @@ describe('runBackup lifecycle', () => {
       rsync.emit('close', 0);
       await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
       const dumpPath = spawn.mock.calls[1][1][spawn.mock.calls[1][1].indexOf('-f') + 1];
-      await fsp.writeFile(dumpPath, 'CREATE TABLE example (id integer);');
+      await fsp.writeFile(dumpPath, COMPLETE_DUMP);
       pgDump.emit('close', 0);
       const result = await pending;
-      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 3 });
+      expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok', tableCount: 2 }, prunedSnapshots: 3 });
+      expect(result.manifest.files['../portos-db.sql']).toMatch(/^[a-f0-9]{64}$/);
+      expect(await readJson(joinPath(dataRoot, 'backup', 'state.json')))
+        .toMatchObject({ lastSuccessfulRun: result.lastRun });
+      getServerMajorVersion.mockResolvedValueOnce(17);
+      const { restorePostgres } = await import('./backup.js');
+      await expect(restorePostgres(destRoot, result.snapshotId, { dryRun: true }))
+        .resolves.toEqual({ status: 'ok', dryRun: true, sizeBytes: Buffer.byteLength(COMPLETE_DUMP), tableCount: 2 });
 
       // Keeps the newest 2 completed snapshots on this machine: the run just
       // created and old3. old1 and old2 are pruned, and the interrupted one
@@ -1203,8 +1209,17 @@ describe('runBackup lifecycle', () => {
       }
     });
 
-    it('preserves older snapshots and reports zero pruned when the database dump fails', async () => {
+    it.each([
+      ['non-zero exit', 1, COMPLETE_DUMP, 'dump_error', ''],
+      ['missing completion marker', 0, DUMP_HEADER + DUMP_TABLES, 'dump_incomplete', 'the pg_dump completion marker'],
+      ['missing memories', 0, COMPLETE_DUMP.replace(/CREATE TABLE public\.memories [^;]+;/, ''), 'dump_incomplete', 'table memories'],
+      ['missing memory_links', 0, COMPLETE_DUMP.replace(/CREATE TABLE public\.memory_links [^;]+;/, ''), 'dump_incomplete', 'table memory_links'],
+    ])('keeps a file-only snapshot and preserves older snapshots after dump failure: %s', async (_scenario, exitCode, sql, reason, detail) => {
       const fsp = await actualFs();
+      const priorRun = '2020-01-02T00:00:00.000Z';
+      const statePath = joinPath(dataRoot, 'backup', 'state.json');
+      await fsp.mkdir(dirname(statePath), { recursive: true });
+      await fsp.writeFile(statePath, JSON.stringify({ status: 'ok', lastRun: priorRun, lastSuccessfulRun: priorRun }));
       const old1 = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
       const old2 = await seedSnapshot(machineHost, '2020-01-02T00-00-00', { generatedAt: '2020-01-02T00:00:00.000Z' });
 
@@ -1215,18 +1230,57 @@ describe('runBackup lifecycle', () => {
       spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
       const { errorEvents } = await import('../lib/errorHandler.js');
       errorEvents.once('error', () => {});
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-      const pending = runBackup(destRoot, { emit: vi.fn() }, { retentionCount: 1 });
+      const io = { emit: vi.fn() };
+      const pending = runBackup(destRoot, io, { retentionCount: 1 });
+      await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
+      const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+      const snapshotDir = joinPath(destRoot, 'snapshots', machineHost, snapshotId);
+      await fsp.writeFile(joinPath(snapshotDir, 'data', 'settings.json'), '{}');
+      rsync.emit('close', 0);
+      await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
+      const dumpPath = joinPath(snapshotDir, 'portos-db.sql');
+      await fsp.writeFile(dumpPath, sql);
+      pgDump.emit('close', exitCode);
+
+      const result = await pending;
+      expect(result).toMatchObject({ status: 'degraded', pgBackup: { status: 'failed', reason }, prunedSnapshots: 0 });
+      if (detail) expect(result.pgBackup.error).toContain(detail);
+      expect(result.manifest.files).toEqual({ 'settings.json': expect.stringMatching(/^[a-f0-9]{64}$/) });
+      await expect(fsp.access(dumpPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(await readJson(statePath)).toMatchObject({
+        status: 'degraded', lastRun: result.lastRun, lastSuccessfulRun: priorRun, pgBackup: result.pgBackup,
+      });
+      const { restorePostgres } = await import('./backup.js');
+      await expect(restorePostgres(destRoot, snapshotId)).resolves.toEqual({ status: 'skipped', reason: 'no_dump' });
+      await expect(fsp.stat(old1)).resolves.toBeDefined();
+      await expect(fsp.stat(old2)).resolves.toBeDefined();
+    });
+
+    it('leaves a failed snapshot when the rejected dump cannot be removed', async () => {
+      const fsp = await actualFs();
+      const old = await seedSnapshot(machineHost, '2020-01-01T00-00-00', { generatedAt: '2020-01-01T00:00:00.000Z' });
+      checkHealth.mockResolvedValue({ connected: true, hasSchema: true });
+      const rsync = fakeProc();
+      const pgDump = fakeProc();
+      spawn.mockReturnValueOnce(rsync).mockReturnValueOnce(pgDump);
+      const io = { emit: vi.fn() };
+      const pending = runBackup(destRoot, io, { retentionCount: 1 });
       await waitFor(() => spawn.mock.calls.length === 1, 'rsync spawn');
       rsync.emit('close', 0);
       await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
-      pgDump.emit('close', 1);
-
-      const result = await pending;
-      expect(result).toMatchObject({ status: 'degraded', pgBackup: { status: 'failed' }, prunedSnapshots: 0 });
-      await expect(fsp.stat(old1)).resolves.toBeDefined();
-      await expect(fsp.stat(old2)).resolves.toBeDefined();
-      expect(log).toHaveBeenCalledWith('💾 Backup retention skipped: degraded snapshot — keeping older snapshots');
+      const snapshotId = io.emit.mock.calls.find(([event]) => event === 'backup:started')[1].snapshotId;
+      const snapshotDir = joinPath(destRoot, 'snapshots', machineHost, snapshotId);
+      const dumpPath = joinPath(snapshotDir, 'portos-db.sql');
+      await fsp.writeFile(dumpPath, DUMP_HEADER + DUMP_TABLES);
+      vi.spyOn(fs, 'unlink').mockImplementation(path => path === dumpPath
+        ? Promise.reject(Object.assign(new Error('private filesystem detail'), { code: 'EACCES' }))
+        : fsp.unlink(path));
+      const rejected = expect(pending).rejects.toThrow('Backup dump cleanup failed (EACCES)');
+      pgDump.emit('close', 0);
+      await rejected;
+      await expect(fsp.access(old)).resolves.toBeUndefined();
+      await expect(fsp.access(joinPath(snapshotDir, '.failed'))).resolves.toBeUndefined();
+      await expect(fsp.access(joinPath(snapshotDir, 'manifest.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
     it('skips a snapshot a restore is reading and still prunes the rest (#10898)', async () => {
@@ -1359,7 +1413,7 @@ describe('runBackup lifecycle', () => {
       rsync.emit('close', 0);
       await waitFor(() => spawn.mock.calls.length === 2, 'pg_dump spawn');
       const args = spawn.mock.calls[1][1];
-      await fsp.writeFile(args[args.indexOf('-f') + 1], 'CREATE TABLE example (id integer);');
+      await fsp.writeFile(args[args.indexOf('-f') + 1], COMPLETE_DUMP);
       dump.emit('close', 0);
       const result = await pending;
       expect(result).toMatchObject({ status: 'ok', pgBackup: { status: 'ok' }, prunedSnapshots: 2 });
