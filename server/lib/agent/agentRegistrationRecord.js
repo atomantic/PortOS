@@ -4,7 +4,7 @@
  */
 
 import { isTruthyMeta } from '../metadataFlags.js';
-import { processAuditRecoveryOriginSchema } from '../persistentMindProcessAudit.js';
+import { processAuditRecoveryOriginSchema } from '../persistent/persistentMindProcessAudit.js';
 /**
  * The agent record a spawn registers, projected from the task it is running.
  *

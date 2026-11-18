@@ -1,5 +1,5 @@
 /** Tool-free proposals only. Neither worker nor evaluator output is dispatched. */
-import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { normalizePersistentMindCapabilities } from '../lib/persistent/persistentMindCapabilities.js';
 import {
   SANDBOX_DELEGATION_OUTPUT_CHARS,
   sameSandboxRoute,

@@ -3,7 +3,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, safeJSONParse } from '../../server/lib/fileUtils.js';
-import { createDefaultPersistentMindPrompt } from '../../server/lib/persistentMindPrompt.js';
+import { createDefaultPersistentMindPrompt } from '../../server/lib/persistent/persistentMindPrompt.js';
 
 export default {
   async up({ rootDir }) {

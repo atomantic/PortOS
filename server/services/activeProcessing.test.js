@@ -10,7 +10,7 @@ vi.mock('../lib/cudaCapability.js', () => ({ getCudaCapability: deps.capability,
 vi.mock('./mediaJobQueue/index.js', () => ({ listJobs: deps.jobs, getRunningJob: deps.running, getQueueCapacity: deps.capacity }));
 vi.mock('./mediaJobQueue/sanitizeJob.js', () => ({ sanitizeJob: (job) => ({ id: job.id, kind: job.kind, status: job.status, params: { musicStudio: job.params.musicStudio } }) }));
 vi.mock('./imageTo3d/models.js', () => ({ listGeneratingModelSummaries: deps.models, getActiveModelOperationCount: deps.modelCount }));
-vi.mock('./persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: deps.mindRunning }));
+vi.mock('./persistent/persistentMindSupervisor.js', () => ({ isPersistentMindTurnRunning: deps.mindRunning }));
 vi.mock('./cos/cosRunnerClient.js', () => ({ getActiveAgentsFromRunner: deps.runnerAgents }));
 vi.mock('./ollamaManager.js', () => ({ getLoadedModels: deps.loaded, getLastLoadedModelsError: () => null }));
 vi.mock('./cos/cosTaskStore.js', () => ({ getPendingTaskIds: deps.tasks }));

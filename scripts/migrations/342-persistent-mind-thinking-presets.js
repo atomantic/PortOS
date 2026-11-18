@@ -19,8 +19,8 @@
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
-import { createDefaultPersistentMindThinkingPresets } from '../../server/lib/persistentMindThinkingPresets.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMind.js';
+import { createDefaultPersistentMindThinkingPresets } from '../../server/lib/persistent/persistentMindThinkingPresets.js';
 import { atomicWrite, safeJSONParse } from '../../server/lib/fileUtils.js';
 
 const readRecord = async (path) => {

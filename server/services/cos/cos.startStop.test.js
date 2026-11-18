@@ -86,8 +86,8 @@ vi.mock('./cosHealthMonitor.js', async (importOriginal) => ({
   ...(await importOriginal()),
   runHealthCheck: vi.fn(async () => {}),
 }));
-vi.mock('../persistentMindAdapter.js', () => ({ createPersistentMindTurnAdapter: () => ({}) }));
-vi.mock('../persistentMindSupervisor.js', async (importOriginal) => ({
+vi.mock('../persistent/persistentMindAdapter.js', () => ({ createPersistentMindTurnAdapter: () => ({}) }));
+vi.mock('../persistent/persistentMindSupervisor.js', async (importOriginal) => ({
   ...(await importOriginal()),
   initializePersistentMindSupervisor: vi.fn(async () => {}),
   shutdownPersistentMindSupervisor: vi.fn(async () => {}),

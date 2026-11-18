@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 import migration from './299-persistent-mind-identity.js';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMind.js';
 
 const readJson = (path) => JSON.parse(readFileSync(path, 'utf8'));
 

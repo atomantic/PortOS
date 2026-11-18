@@ -2217,7 +2217,7 @@ export async function sayInEidoverseWorld(text, { signal, verbIntervalMs } = {})
 
 async function resolveSuggestedCosId(currentCosId) {
   try {
-    const { readPersistentMindName } = await import('./persistentMindContext.js');
+    const { readPersistentMindName } = await import('./persistent/persistentMindContext.js');
     const name = await readPersistentMindName();
     if (!name) return null;
     const clean = validIdentity(name, '');

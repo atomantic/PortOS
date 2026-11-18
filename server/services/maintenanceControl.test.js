@@ -4,7 +4,7 @@ import { rmSync, watch } from 'node:fs';
 const gate = vi.hoisted(() => ({ root: null, admission: null, notify: null }));
 const resumeWork = vi.hoisted(() => ({ recover: vi.fn(async () => ({ checked: 0 })), queue: vi.fn(async () => {}), mind: vi.fn(async () => {}) }));
 vi.mock('./cos/cos.js', () => ({ resumeDeferredCompletions: (...args) => resumeWork.recover(...args), dequeueNextTask: (...args) => resumeWork.queue(...args) }));
-vi.mock('./persistentMindSupervisor.js', () => ({ recheckPersistentMindSchedule: (...args) => resumeWork.mind(...args) }));
+vi.mock('./persistent/persistentMindSupervisor.js', () => ({ recheckPersistentMindSchedule: (...args) => resumeWork.mind(...args) }));
 // The contract is the service's response to journal invalidations, not native
 // filesystem delivery timing. Keep the real journal and inject only its watcher.
 vi.mock('node:fs', async original => {

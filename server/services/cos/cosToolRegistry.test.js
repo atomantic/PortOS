@@ -36,13 +36,13 @@ const mocks = vi.hoisted(() => ({
   ].map((name) => [name, vi.fn()])),
 }));
 
-vi.mock('../persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
+vi.mock('../persistent/persistentMindManagedApps.js', () => ({ readPersistentMindManagedApps: async () => [{ id: 'example', granted: true, forge: 'github' }] }));
 
 vi.mock('../sandboxDelegation.js', () => ({
   delegateSandbox: (...args) => mocks.delegateSandbox(...args),
   describeSandboxDelegation: (...args) => mocks.adapter.describeSandbox(...args),
 }));
-vi.mock('../persistentMindProcessAudit.js', async (importOriginal) => ({
+vi.mock('../persistent/persistentMindProcessAudit.js', async (importOriginal) => ({
   ...(await importOriginal()),
   assertProcessAuditAccess: (...args) => mocks.adapter.assertAuditAccess(...args),
   recordProcessAuditFix: (...args) => mocks.adapter.auditFix(...args),
@@ -50,15 +50,15 @@ vi.mock('../persistentMindProcessAudit.js', async (importOriginal) => ({
   readProcessAuditExcerpt: (...args) => mocks.adapter.auditRead(...args),
   recordProcessAuditOutcome: (...args) => mocks.adapter.auditRecord(...args),
 }));
-vi.mock('../persistentMindThinkingRequests.js', () => ({
+vi.mock('../persistent/persistentMindThinkingRequests.js', () => ({
   getPersistentMindThinkingRequestCatalog: (...args) => mocks.adapter.thinkingCatalog(...args),
   requestPersistentMindThinkingPreset: (...args) => mocks.adapter.requestThinking(...args),
 }));
-vi.mock('../persistentMindLocalContext.js', () => ({
+vi.mock('../persistent/persistentMindLocalContext.js', () => ({
   getPersistentMindLocalContextCatalog: (...args) => mocks.adapter.localContextCatalog(...args),
   adjustPersistentMindLocalContext: (...args) => mocks.adapter.adjustLocalContext(...args),
 }));
-vi.mock('../persistentMindMaintenanceContext.js', () => ({
+vi.mock('../persistent/persistentMindMaintenanceContext.js', () => ({
   readPersistentMindMaintenanceContext: (...args) => mocks.adapter.maintenanceContext(...args),
 }));
 vi.mock('../mindToolRecipeRuntime.js', async (importOriginal) => ({
@@ -111,15 +111,15 @@ vi.mock('../voice/tools.js', () => ({
   getToolSpecsForIntent: () => ({ specs, activeGroups: new Set() }),
   dispatchTool: (...args) => mocks.dispatch(...args),
 }));
-vi.mock('../persistentMindTaskCapability.js', () => ({
+vi.mock('../persistent/persistentMindTaskCapability.js', () => ({
   executePersistentMindTaskRequests: (...args) => mocks.executeTasks(...args),
 }));
-vi.mock('../persistentMindIssueCapability.js', () => ({
+vi.mock('../persistent/persistentMindIssueCapability.js', () => ({
   filePersistentMindIssue: (...args) => mocks.fileIssue(...args),
   listPersistentMindIssues: (...args) => mocks.listIssues(...args),
 }));
-vi.mock('../persistentMindContext.js', () => ({ reviewPersistentMindMemory: (...args) => mocks.reviewMemory(...args), choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
-vi.mock('../persistentMindMaintenance.js', () => ({
+vi.mock('../persistent/persistentMindContext.js', () => ({ reviewPersistentMindMemory: (...args) => mocks.reviewMemory(...args), choosePersistentMindName: (...args) => mocks.chooseName(...args), protectPersistentMindMemory: (...args) => mocks.protectMemory(...args) }));
+vi.mock('../persistent/persistentMindMaintenance.js', () => ({
   cleanupPersistentMind: (...args) => mocks.cleanupMind(...args),
 }));
 vi.mock('../eidoverseObservationLedger.js', () => ({
@@ -171,7 +171,7 @@ vi.mock('./cosState.js', () => ({
 
 import { buildEidoverseWorldSignals } from '../../lib/eidoverseWorldSignals.js';
 import { buildEidoverseObservation } from '../../lib/eidoverseObservation.js';
-import { DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS } from '../../lib/persistentMindToolActivation.js';
+import { DEFAULT_TOOL_ACTIVATION_RETENTION_TURNS } from '../../lib/persistent/persistentMindToolActivation.js';
 import {
   __testing,
   buildPersistentMindToolPrompt,

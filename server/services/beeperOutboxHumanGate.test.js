@@ -29,7 +29,7 @@ import { describe, it, expect } from 'vitest';
 // once loaded, so nothing here needs a per-test instance.
 // Guarded by `lib/importScoping.test.js`.
 const { getCosToolCatalog } = await import('./cos/cosToolRegistry.js');
-const { PERSISTENT_MIND_TOOL_BOUNDARIES } = await import('../lib/persistentMindCapabilities.js');
+const { PERSISTENT_MIND_TOOL_BOUNDARIES } = await import('../lib/persistent/persistentMindCapabilities.js');
 
 describe('beeper outbox has no agent-initiated send path (#36)', () => {
   it('exposes no beeper tool to the CoS catalog or the voice surface', () => {

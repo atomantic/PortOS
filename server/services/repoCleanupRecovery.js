@@ -1,4 +1,4 @@
-import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
+import { processAuditFingerprint } from '../lib/persistent/persistentMindProcessAudit.js';
 import { resolvePrCompletion } from '../lib/prDisposition.js';
 
 const purposeFor = (inspection, repair) => {

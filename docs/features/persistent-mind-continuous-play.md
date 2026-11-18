@@ -13,7 +13,7 @@ Saving a playbook never starts inference. The Mind Context panel exposes the mod
 
 ### Maturity-aware phases (#7458)
 
-`continuous-play` no longer runs one fixed loop forever. Every wake, `resolvePersistentMindPlaybookPhase()` (`server/services/persistentMindPlaybookSignals.js`) reads the bounded Eidoverse world-signal projection the World Design recipe renders into districts (`buildEidoverseWorldSignals()`, `server/lib/eidoverseWorldSignals.js`) plus a non-committing observation report (`observeEidoverseWorld({ commit: false })`, `server/services/eidoverseObservationLedger.js`), reduces them to four numbers, and the pure picker in `server/lib/persistentMindPlaybookPhase.js` (`selectPersistentMindPlaybookPhase`) chooses one of four phases:
+`continuous-play` no longer runs one fixed loop forever. Every wake, `resolvePersistentMindPlaybookPhase()` (`server/services/persistent/persistentMindPlaybookSignals.js`) reads the bounded Eidoverse world-signal projection the World Design recipe renders into districts (`buildEidoverseWorldSignals()`, `server/lib/eidoverseWorldSignals.js`) plus a non-committing observation report (`observeEidoverseWorld({ commit: false })`, `server/services/eidoverseObservationLedger.js`), reduces them to four numbers, and the pure picker in `server/lib/persistent/persistentMindPlaybookPhase.js` (`selectPersistentMindPlaybookPhase`) chooses one of four phases:
 
 | Phase | When | Loop emphasis |
 |-------|------|----------------|
@@ -104,7 +104,7 @@ It lets the mind place a FaceTime Audio call to the single handle configured in
 (`callRequest: { reason, openingLine }`) carries no recipient, so a confused or
 compromised turn cannot dial anyone else.
 
-The gate lives in `server/services/persistentMindCallCapability.js` and runs
+The gate lives in `server/services/persistent/persistentMindCallCapability.js` and runs
 *after* inference. A call is placed only when all of these hold:
 
 | Check | Suppression reason |

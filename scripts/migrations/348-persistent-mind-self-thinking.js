@@ -2,8 +2,8 @@
 import { join } from 'path';
 import { readFile } from 'fs/promises';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
-import { PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION } from '../../server/lib/persistentMindCapabilities.js';
-import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistentMind.js';
+import { PERSISTENT_MIND_CAPABILITIES_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMindCapabilities.js';
+import { PERSISTENT_MIND_SCHEMA_VERSION } from '../../server/lib/persistent/persistentMind.js';
 export default {
   async up({ rootDir }) {
     let updated = 0;

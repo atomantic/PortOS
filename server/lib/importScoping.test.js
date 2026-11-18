@@ -130,7 +130,7 @@ const NARROWED = [
     'loads GPU memory management only for generation, not gallery reads'],
   ['services/imageGen/local.js', 'services/imageGen/regen.js',
     'loads pixel comparison only for a regeneration, not gallery reads'],
-  ['services/persistentMindSupervisor.js', 'services/persistentMindContext.js',
+  ['services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindContext.js',
     'loads context and memory orchestration only after a turn is admitted'],
   ['services/github.js', 'services/settings.js',
     'loads settings only for secret operations, not repository reads or sync'],
@@ -138,7 +138,7 @@ const NARROWED = [
     'loads bible asset handling only for Writers Room work pushes'],
   ['services/sharing/peerSyncReceive.js', 'services/writersRoom/bibleSync.js',
     'loads bible asset handling only for Writers Room work receives'],
-  ['services/persistentMindAttachments.js', 'services/persistentMindSupervisor.js',
+  ['services/persistent/persistentMindAttachments.js', 'services/persistent/persistentMindSupervisor.js',
     'owns screenshot attachment lifecycle without supervisor turn execution'],
   ['services/mtplxModelManager.js', 'services/huggingFaceCatalog.js',
     'reads repository ages through shared metadata without catalog selection'],
@@ -248,8 +248,8 @@ describe('narrowed imports stay narrow (#6009)', () => {
     expect(reaches('services/eidoverseWorld.test.js', 'services/eidoverseWorldProjection.js')).toBe(true);
     expect(reaches('services/eidoverseWorldSources.js', 'lib/eidoverseWorldSignals.js')).toBe(true);
     expect(reaches('services/eidoverseWorldSources.js', 'services/apps.js')).toBe(true);
-    expect(reaches('services/persistentMindSupervisor.js', 'services/persistentMindAttachments.js')).toBe(true);
-    expect(reaches('services/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindSupervisor.js', 'services/persistent/persistentMindAttachments.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindAttachments.js', 'lib/fileUtils.js')).toBe(true);
     expect(reaches('services/mtplxModelManager.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceCatalog.js', 'services/huggingFaceMetadata.js')).toBe(true);
     expect(reaches('services/huggingFaceMetadata.js', 'services/huggingFaceRepoCache.js')).toBe(true);
@@ -377,9 +377,9 @@ const DEFERRED = [
     'resolves the managed daemon only for an MTPLX review', './mtplxServerManager.js'],
   ['services/agent/agentManagement.js', 'lib/privateSecuritySandbox.js',
     'loads sandbox cleanup only for private assessments', '../../lib/privateSecuritySandbox.js'],
-  ['services/cos/cos.js', 'services/persistentMindAdapter.js',
+  ['services/cos/cos.js', 'services/persistent/persistentMindAdapter.js',
     'is registered once at daemon start, but pulls the CoS tool registry, voice tools, ask service and image-gen backends',
-    '../persistentMindAdapter.js'],
+    '../persistent/persistentMindAdapter.js'],
   ['services/promptRunner.js', 'services/providerExecutionReadiness.js',
     'runs readiness only on the TUI execution branch, not when a run is built or classified',
     './providerExecutionReadiness.js'],
@@ -433,7 +433,7 @@ describe('deferred imports stay deferred (#6156)', () => {
   it('still sees the deferred modules from their own entry points', () => {
     expect(reaches('services/ollamaSafetensorsImport.js', 'lib/openFileHolders.js')).toBe(true);
     expect(reaches('services/providerExecutionReadiness.js', 'services/ollamaManager.js')).toBe(true);
-    expect(reaches('services/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
+    expect(reaches('services/persistent/persistentMindAdapter.js', 'services/cos/cosToolRegistry.js')).toBe(true);
     expect(reaches('services/tuiPromptRunner.js', 'services/shell.js')).toBe(true);
   });
 });

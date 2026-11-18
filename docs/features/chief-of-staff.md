@@ -466,7 +466,7 @@ Rollups are sealed prose and memories are flat facts that decay on one clock, so
 - **Untrusted evidence.** Prior entries replayed into the extraction prompt are data, not instructions: every stored statement is quoted so an injected heading or directive cannot forge a prompt section, and the prompt says so in words.
 - **Correcting it.** **Mind → Journal** groups active entries by kind, collapses retired ones behind a toggle showing what replaced each, and lets the user settle or retire an entry the mind got wrong. The `history` cleanup scope clears the journal along with the messages it cites; a context-only clear does not.
 
-Storage, retention and the privacy posture are in the header of [`persistentMindJournal.js`](../../server/services/persistentMindJournal.js).
+Storage, retention and the privacy posture are in the header of [`persistentMindJournal.js`](../../server/services/persistent/persistentMindJournal.js).
 
 ## API Endpoints
 

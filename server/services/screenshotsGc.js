@@ -22,7 +22,7 @@
 import { readdir, stat } from 'fs/promises';
 import { join, basename } from 'path';
 import { PATHS, unlinkGuarded } from '../lib/fileUtils.js';
-import { isPersistentMindScreenshotEntry } from '../lib/persistentMindAttachmentOwnership.js';
+import { isPersistentMindScreenshotEntry } from '../lib/persistent/persistentMindAttachmentOwnership.js';
 import { createSweepScheduler } from './sweepScheduler.js';
 import { getAllTasks } from './cos/cosTaskStore.js';
 

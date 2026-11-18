@@ -1,8 +1,8 @@
 /** Agent-free maintenance scans. Receipts live with the existing CoS runtime state. */
 import { randomUUID } from 'node:crypto';
 import { loadState, saveState, withStateLock, isImprovementEnabled } from './cos/cosState.js';
-import { normalizePersistentMindMaintainer } from '../lib/persistentMindMaintainer.js';
-import { normalizePersistentMindCapabilities } from '../lib/persistentMindCapabilities.js';
+import { normalizePersistentMindMaintainer } from '../lib/persistent/persistentMindMaintainer.js';
+import { normalizePersistentMindCapabilities } from '../lib/persistent/persistentMindCapabilities.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
 import { DEVELOPMENT_ACTIVE_STATUSES, sameDevelopmentWork } from '../lib/developmentWorkIdentity.js';
 import { safeJSONParse } from '../lib/jsonIo.js';

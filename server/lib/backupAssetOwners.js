@@ -251,7 +251,7 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     id: 'attachments-and-catalog-media',
     status: 'admitted',
     modules: [
-      'services/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
+      'services/persistent/persistentMindAttachments.js', 'routes/brainSongbook.js', 'services/catalogMedia.js',
       'services/catalogIngestSources.js', 'services/roundReferenceAudioImport.js', 'services/catalogLookAround.js',
     ],
   },

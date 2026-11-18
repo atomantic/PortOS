@@ -7,7 +7,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite } from '../../server/lib/fileUtils.js';
-import { isPersistentMindEventKind } from '../../server/lib/persistentMindTrajectory.js';
+import { isPersistentMindEventKind } from '../../server/lib/persistent/persistentMindTrajectory.js';
 
 const readOptional = (path) => readFile(path, 'utf8').catch((error) => {
   if (error.code === 'ENOENT') return '';

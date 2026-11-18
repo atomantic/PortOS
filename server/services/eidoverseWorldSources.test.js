@@ -8,8 +8,8 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 
 const dataRoot = () => lazyTempDataRoot('portos-observation-dispatch-');
 vi.mock('../lib/fileUtils.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot }));
-vi.mock('./persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
-vi.mock('./persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
+vi.mock('./persistent/persistentMindTaskCapability.js', () => ({ executePersistentMindTaskRequests: vi.fn() }));
+vi.mock('./persistent/persistentMindMaintenance.js', () => ({ cleanupPersistentMind: vi.fn() }));
 vi.mock('./voice/tools.js', () => ({ getToolSpecs: () => [], getToolSpecsForIntent: () => ({ specs: [] }), dispatchTool: vi.fn() }));
 vi.mock('./eidoverseFoundationLedger.js', () => ({ listEidoverseFoundations: async () => ({ foundations: [], counts: {} }) }));
 vi.mock('./eidoverseControllerRuntime.js', () => ({ listEidoverseControllers: async () => ({ installs: [], counts: {} }) }));
