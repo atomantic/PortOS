@@ -28,7 +28,7 @@ export async function createGithubActorTrust({ runGh, host, repoFullName, curren
     async isTrusted(login) {
       const actor = loginKey(login);
       if (!actor) return false;
-      if (actor === self || actor === owner) return true;
+      if (actor === owner) return true;
       if (!permissions.has(actor)) {
         permissions.set(actor, read(`repos/${repoFullName}/collaborators/${encodeURIComponent(actor)}/permission`)
           .then((result) => loginKey(result?.user?.login) === actor

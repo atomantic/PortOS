@@ -233,8 +233,8 @@ async function readPrReviewerTargetScope(app, forgeExec) {
 /**
  * Whether one already-listed PR row is a pr-reviewer target, per a resolved
  * scope. Mirrors exactly what `listExternalOpenPullRequests` keeps — open
- * against the default branch, opened by someone other than the signed-in
- * account — so a UI gated on this and the route's authoritative check agree.
+ * against the default branch, opened by an author without verified repository
+ * trust — so a UI gated on this and the route's authoritative check agree.
  */
 export async function isReviewablePullRequest(scope, pullRequest) {
   const author = pullRequest?.author;
@@ -242,7 +242,6 @@ export async function isReviewablePullRequest(scope, pullRequest) {
     && pullRequest?.baseBranch === scope.defaultBranch
     && typeof author === 'string'
     && author.length > 0
-    && author.toLowerCase() !== String(scope.selfLogin).toLowerCase()
     && !(await scope.actorTrust?.isTrusted(author));
 }
 

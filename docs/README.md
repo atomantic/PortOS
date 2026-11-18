@@ -60,6 +60,7 @@ A living doc describes current behaviour and operator procedure; issue numbers, 
 | [ITERM.md](./ITERM.md) | The Shell page's iTerm2 view — requirements, status states and their fixes, why iTerm2 sessions stay separate from PortOS shells, the clean-room protocol rule |
 | [INSTANCE_FEATURES.md](./INSTANCE_FEATURES.md) | Optional per-install features — registry, client-side nav gating, feature groups, reconcile-at-toggle |
 | [PM2.md](./PM2.md) | Recommended PM2 ecosystem patterns for sub-projects |
+| [SECURITY_RISK_ASSESSMENT.md](./SECURITY_RISK_ASSESSMENT.md) | Threat boundaries, security finding dispositions and external-content screening |
 | [DEEP-AUDITS.md](./DEEP-AUDITS.md) | Persistent audit coverage, independent passes, checkpoint/resume and completion rules |
 | [DEEP-AUDITS-LEGACY.md](./DEEP-AUDITS-LEGACY.md) | Legacy (historical) exhaustive Deep audit records and their stored evidence format; new launches no longer run this workflow |
 | [QUOTA-BURN.md](./QUOTA-BURN.md) | Quota-burn automation — spending subscription-backed CLI quota before expiry |

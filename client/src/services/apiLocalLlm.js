@@ -40,6 +40,9 @@ export const getLocalLlmCatalog = (backend, q = '', { variants = false } = {}) =
 export const getModelAbuseGuardStatus = (options) =>
   request('/local-llm/security-guard/status', options);
 
+export const scanModelAbuseContent = (content, options) =>
+  request('/local-llm/security-guard/scan', { method: 'POST', body: JSON.stringify({ content }), ...options });
+
 export const installModelAbuseGuard = (options) =>
   request('/local-llm/security-guard/install', {
     method: 'POST',

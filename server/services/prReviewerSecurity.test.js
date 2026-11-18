@@ -475,6 +475,11 @@ describe('screened-content fingerprint contract', () => {
 
 
 describe('account-scoped review intake', () => {
+  it('keeps a read-only signed-in author in the external review lane', async () => {
+    const scope = { ok: true, defaultBranch: 'main', selfLogin: 'reader', actorTrust: { isTrusted: async () => false } }
+    expect(await isReviewablePullRequest(scope, { author: 'reader', baseBranch: 'main' })).toBe(true)
+  })
+
   it('keeps every forge read on the pinned account without serializing credentials', async () => {
     const { createGithubActorTrust } = await vi.importActual('./forgeActorTrust.js')
     createActorTrustMock.mockImplementation(createGithubActorTrust)
@@ -491,7 +496,7 @@ describe('account-scoped review intake', () => {
       if (args[0] === 'api' && args.includes('user')) return account
       if (args[0] === 'api' && args.at(-1).endsWith('/permission')) {
         const login = args.at(-1).split('/').at(-2)
-        return JSON.stringify({ user: { login }, permission: 'read' })
+        return JSON.stringify({ user: { login }, permission: login === account ? 'write' : 'read' })
       }
       if (args[0] === 'api') return JSON.stringify(openIssue())
       if (args[1] === 'list') return JSON.stringify([
