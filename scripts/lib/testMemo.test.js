@@ -474,6 +474,19 @@ describe('a read whose variable segment can leave the directory the source names
     expect(floorOf("import '../../scripts/load-fixture.js';", { [script]: scriptBody }).reason).toBe(`${script}: ${reason}`);
   });
 
+  it('refuses normalization that changes the spelling of a complete literal path', () => {
+    const slashPath = String.raw`join(FIXTURES, 'sub\\f0.json')`;
+    const decomposedPath = String.raw`join(FIXTURES, 'cafe\u0301.json')`;
+    const normalizations = [
+      [slashPath, String.raw`.replaceAll('\\', '/')`, '.replaceAll()'],
+      [slashPath, String.raw`.replace(/\\/g, '/')`, '.replace()'],
+      [decomposedPath, '.normalize()', '.normalize()'],
+    ];
+    for (const [path, operation, method] of normalizations) {
+      expect(refusal(`readFileSync(${path}${operation});`)).toBe(`${test}: reads a path the analyzer cannot follow through ${method}`);
+    }
+  });
+
   it('refuses an environment-derived segment under an anchor but keeps genuinely external paths', () => {
     for (const expr of ['process.env.FIXTURE', 'process.env[envKey]', 'process.env.HOME']) {
       expect(refusal(`readFileSync(join(FIXTURES, ${expr}));`), expr).toBe(leaves('server/lib/fixtures'));

@@ -736,11 +736,14 @@ const closeOf = (match, open) => (match[open] ?? open) + 1;
  */
 const wholeValue = ({ value, end }, close) => (end !== close && (isVariableText(value) || value.k === 'str') ? UNKNOWN : value);
 
-/** Exact identity spellings emitted by the repo for URL and slash handling. */
-function pathMemberIdentity(tokens, match, name, open, call) {
+/** The repository's normalization spellings preserve canonical paths. */
+function pathMemberIdentity(value, tokens, match, name, open, call) {
   if (!call) return name === 'href' || name === 'pathname';
   const close = match[open];
-  if (name === 'toString' || name === 'normalize') return close === open + 1;
+  if (name === 'toString') return close === open + 1;
+  if (name === 'normalize') return close === open + 1 && (value.partial || value.v.normalize() === value.v);
+  // A literal backslash can spell a separator on Windows or be part of a filename on POSIX.
+  if (!value.partial && value.v.includes('\\')) return false;
   const first = tokens[open + 1];
   const second = tokens[open + 3];
   if (close !== open + 4 || tokens[open + 2].v !== ',' || second.t !== 's' || second.v !== '/') return false;
@@ -763,7 +766,7 @@ function evaluatePostfix(tokens, match, start, ctx, depth) {
     const open = end + 2;
     const call = tokens[open]?.t === 'p' && tokens[open].v === '(';
     if (value.k === 'path') {
-      if (!pathMemberIdentity(tokens, match, name, open, call)) value = unfollowedPath(value, `.${name}${call ? '()' : ''}`);
+      if (!pathMemberIdentity(value, tokens, match, name, open, call)) value = unfollowedPath(value, `.${name}${call ? '()' : ''}`);
       end = call ? closeOf(match, open) : open;
       continue;
     }

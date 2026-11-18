@@ -231,8 +231,11 @@ module path is unbounded is an unresolved edge for the floor key.
 
 On a path the analyzer has already anchored, `.replaceAll('\\', '/')`,
 `.replace(/\\/g, '/')`, `.normalize()` and `.toString()` preserve its
-identity for the key. A read, spawn or unmodelled function call that takes
-the result of another member operation fails closed with
+identity for the key when the literal spelling stays canonical. A slash
+replacement on a complete path containing a literal backslash or a Unicode
+normalization that changes the literal spelling can name a different file.
+A read, spawn or unmodelled function call that takes the result of one of
+these changes or another member operation fails closed with
 `reads a path the analyzer cannot follow through .<name>()`. An assertion
 or string-only consumer can still use that result.
 
